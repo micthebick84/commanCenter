@@ -1,0 +1,70 @@
+server:
+  port: 8090
+
+spring:
+  application:
+    name: netis-maker
+  profiles:
+    # 기본 프로파일. 운영 시 'api' 또는 'worker' 중 하나 활성화
+    # api    → 사내 서버에서 사용자/관리자 REST API + 워커 수신 API
+    # worker → 운영자 macOS에서 분석 워커 데몬
+    # 둘 다 활성 가능 (단일 호스트 통합 테스트용)
+    active: api
+
+  datasource:
+    url: jdbc:postgresql://localhost:5432/postgres
+    username: postgres
+    password: ntflow
+    driver-class-name: org.postgresql.Driver
+    hikari:
+      maximum-pool-size: 10
+      minimum-idle: 5
+      idle-timeout: 300000
+      connection-timeout: 20000
+
+  jpa:
+    hibernate:
+      ddl-auto: validate
+    show-sql: false
+    properties:
+      hibernate:
+        format_sql: true
+        default_schema: com
+
+  flyway:
+    enabled: true
+    baseline-on-migrate: true
+    schemas: com
+    default-schema: com
+    locations: classpath:db/migration
+
+  security:
+    oauth2:
+      resourceserver:
+        jwt:
+          issuer-uri: http://localhost:9000
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health
+  endpoint:
+    health:
+      show-details: when-authorized
+
+app:
+  cors:
+    allowed-origins: ${CORS_ALLOWED_ORIGINS:http://localhost:3001,http://localhost:3000}
+  worker:
+    # 워커 ↔ 백엔드 공유 시크릿. 운영 환경에선 환경변수 WORKER_API_KEY로 주입
+    api-key: ${WORKER_API_KEY:dev-only-change-me}
+  task:
+    max-retry: 3
+    stale-threshold-minutes: 5
+    user-concurrent-limit: 5
+
+logging:
+  level:
+    com.hamonsoft.netismaker: DEBUG
+    org.springframework.security: INFO

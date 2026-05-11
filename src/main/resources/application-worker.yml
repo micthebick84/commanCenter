@@ -1,0 +1,58 @@
+# Worker 프로파일 — 운영자 macOS에서 활성화
+# 사용: java -jar netis-maker.jar --spring.profiles.active=worker
+
+spring:
+  # 워커는 자체 DB 풀 불필요 (백엔드에 HTTP 폴링만)
+  # 백엔드 application.yml의 datasource를 무력화
+  autoconfigure:
+    exclude:
+      - org.springframework.boot.autoconfigure.jdbc.DataSourceAutoConfiguration
+      - org.springframework.boot.autoconfigure.orm.jpa.HibernateJpaAutoConfiguration
+      - org.springframework.boot.autoconfigure.flyway.FlywayAutoConfiguration
+
+netis-maker:
+  worker:
+    id: ${WORKER_ID:mac-worker-1}
+    version: ${WORKER_VERSION:0.1.0}
+    # 사내 백엔드 외부 공개 워커 엔드포인트 (DESIGN §6 외부 공개 모델)
+    api-base-url: ${API_BASE_URL:https://worker.netis-maker.internal}
+    api-key: ${WORKER_API_KEY:dev-only-change-me}
+    poll-interval-seconds: 5
+    heartbeat-interval-seconds: 10
+    repos-dir: ${REPOS_DIR:${user.home}/netis-maker/repos}
+    claude-cli-path: ${CLAUDE_CLI:/opt/homebrew/bin/claude}
+    github-pat: ${GITHUB_PAT:}
+    # DESIGN §11: 한국어 분석 프롬프트 템플릿
+    prompt-template: |
+      당신은 코드베이스 분석 어시스턴트입니다. 모든 출력은 반드시 한국어로 작성하세요.
+
+      레포: {github_repo}
+      브랜치: {github_branch} (현재 커밋: {commit_sha})
+      요청자 작업 제목: {title}
+      요청 상세:
+      {description}
+
+      아래 형식의 마크다운 보고서를 정확히 이 섹션 구조로 출력하세요.
+      섹션 제목과 번호는 변경하지 마세요 (파서가 사용합니다).
+
+      ## 1. 요구사항 요약
+      (2~4문장으로 핵심 정리)
+
+      ## 2. 영향 범위
+      - 수정 예상 파일: (경로 목록)
+      - 추가 예상 파일: (경로 목록)
+      - 영향 받는 모듈/패키지
+
+      ## 3. 접근 방법
+      (1~3개 문단으로 구현 전략 설명)
+
+      ## 4. Subtask 분해
+      각 항목은 다음 형식 (반드시 이 구조 유지):
+      - **제목**: ...
+        - 대상 파일: `path/to/file`, `path/to/file2`
+        - 예상 LoC: 약 N줄
+        - 위험도: L | M | H
+        - 설명: ...
+
+      ## 5. 위험 요소 및 미해결 질문
+      - ...

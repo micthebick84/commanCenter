@@ -1,0 +1,40 @@
+HELP.md
+.gradle/
+build/
+!gradle/wrapper/gradle-wrapper.jar
+!**/src/main/**/build/
+!**/src/test/**/build/
+
+### STS ###
+.apt_generated
+.classpath
+.factorypath
+.project
+.settings
+.springBeans
+.sts4-cache
+
+### IntelliJ IDEA ###
+.idea/
+*.iws
+*.iml
+*.ipr
+out/
+!**/src/main/**/out/
+!**/src/test/**/out/
+
+### macOS ###
+.DS_Store
+
+### Env / Secrets ###
+.env
+.env.local
+~/netis-maker/.env
+
+### Logs ###
+*.log
+
+### Frontend (when added later) ###
+frontend/node_modules/
+frontend/.nuxt/
+frontend/.output/

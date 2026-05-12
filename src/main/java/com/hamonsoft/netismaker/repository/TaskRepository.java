@@ -29,7 +29,7 @@ public interface TaskRepository extends JpaRepository<Task, Long> {
                            com.hamonsoft.netismaker.entity.TaskStatus.COMPLETED,
                            com.hamonsoft.netismaker.entity.TaskStatus.FAILED)
     """)
-    long countActiveByRequester(@Param("requesterId") Long requesterId);
+    long countActiveByRequester(@Param("requesterId") String requesterId);
 
     /**
      * 본인 작업 목록 (deleted_at IS NULL).
@@ -40,7 +40,7 @@ public interface TaskRepository extends JpaRepository<Task, Long> {
           AND t.deletedAt IS NULL
           AND (:status IS NULL OR t.status = :status)
     """)
-    Page<Task> findByRequester(@Param("requesterId") Long requesterId,
+    Page<Task> findByRequester(@Param("requesterId") String requesterId,
                                @Param("status") TaskStatus status,
                                Pageable pageable);
 

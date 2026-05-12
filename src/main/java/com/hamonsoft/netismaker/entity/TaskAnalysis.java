@@ -41,9 +41,9 @@ public class TaskAnalysis {
     @Setter
     private boolean approved;
 
-    @Column(name = "approved_by")
+    @Column(name = "approved_by", length = 20)
     @Setter
-    private Long approvedBy;
+    private String approvedBy;
 
     @Column(name = "approved_at")
     @Setter
@@ -52,7 +52,7 @@ public class TaskAnalysis {
     @Column(name = "completed_at", nullable = false)
     private OffsetDateTime completedAt;
 
-    public static TaskAnalysis create(Long taskId, String markdownResult, String subtasksJson,
+    public static TaskAnalysis create(long taskId, String markdownResult, String subtasksJson,
                                       String claudeLog, Long durationMs) {
         TaskAnalysis a = new TaskAnalysis();
         a.taskId = taskId;

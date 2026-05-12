@@ -105,7 +105,9 @@ export const useAuthStore = defineStore('auth', {
         code_verifier: verifier,
       })
 
-      const res = await fetch(`${config.authIssuer}/oauth2/token`, {
+      // CORS 우회: dev에선 Nuxt proxy(/oauth2/token), prod에선 동일 도메인
+      const tokenUrl = '/oauth2/token'
+      const res = await fetch(tokenUrl, {
         method: 'POST',
         headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
         body: params,

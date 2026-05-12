@@ -34,6 +34,7 @@ spring:
   flyway:
     enabled: true
     baseline-on-migrate: true
+    baseline-version: 0     # com 스키마에 기존 객체 있어도 V1__부터 적용
     schemas: com
     default-schema: com
     locations: classpath:db/migration

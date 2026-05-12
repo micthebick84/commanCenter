@@ -16,15 +16,17 @@ public final class AuthContext {
 
     private AuthContext() {}
 
-    public static Long requireUserId(JwtAuthenticationToken auth) {
+    public static String requireUserId(JwtAuthenticationToken auth) {
         Jwt jwt = auth.getToken();
-        Object raw = jwt.getClaim("user_id");
+        // com."user".user_id (VARCHAR(20))와 매핑되는 비즈니스 user_id를 우선.
+        // netis-auth 발급 JWT는 username='admin', user_id='1' (내부 ID) — username이 com.user에 매핑됨.
+        Object raw = jwt.getClaim("username");
+        if (raw == null) raw = jwt.getSubject();           // 'sub'에도 username 동일
+        if (raw == null) raw = jwt.getClaim("user_id");    // 최후 폴백
         if (raw == null) {
-            throw new IllegalStateException("JWT에 user_id 클레임이 없습니다");
+            throw new IllegalStateException("JWT에 username/sub/user_id 클레임이 없습니다");
         }
-        if (raw instanceof Number n) return n.longValue();
-        if (raw instanceof String s) return Long.parseLong(s);
-        throw new IllegalStateException("user_id 클레임 형식이 잘못됨: " + raw.getClass());
+        return raw.toString();
     }
 
     public static boolean isAdmin(JwtAuthenticationToken auth) {

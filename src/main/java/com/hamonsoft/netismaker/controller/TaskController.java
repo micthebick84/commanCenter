@@ -37,7 +37,7 @@ public class TaskController {
     @PostMapping
     public ResponseEntity<TaskResponse> create(@RequestBody @Valid TaskCreateRequest req,
                                                JwtAuthenticationToken auth) {
-        Long userId = AuthContext.requireUserId(auth);
+        String userId = AuthContext.requireUserId(auth);
         Task t = taskService.create(req, userId);
         TaskResponse body = TaskResponse.of(t, null);
         return ResponseEntity.created(URI.create("/api/tasks/" + t.getId())).body(body);
@@ -48,7 +48,7 @@ public class TaskController {
                                    @RequestParam(defaultValue = "false") boolean mine,
                                    @PageableDefault(size = 20) Pageable pageable,
                                    JwtAuthenticationToken auth) {
-        Long userId = AuthContext.requireUserId(auth);
+        String userId = AuthContext.requireUserId(auth);
         boolean isAdmin = AuthContext.isAdmin(auth);
         return taskService.list(userId, isAdmin, mine, status, pageable)
                 .map(t -> TaskResponse.of(t, null));
@@ -56,7 +56,7 @@ public class TaskController {
 
     @GetMapping("/{id}")
     public TaskResponse get(@PathVariable Long id, JwtAuthenticationToken auth) {
-        Long userId = AuthContext.requireUserId(auth);
+        String userId = AuthContext.requireUserId(auth);
         boolean isAdmin = AuthContext.isAdmin(auth);
         Task t = taskService.getForView(id, userId, isAdmin);
         return TaskResponse.of(t, taskService.getAnalysis(id).orElse(null));
@@ -64,7 +64,7 @@ public class TaskController {
 
     @PostMapping("/{id}/cancel")
     public TaskResponse cancel(@PathVariable Long id, JwtAuthenticationToken auth) {
-        Long userId = AuthContext.requireUserId(auth);
+        String userId = AuthContext.requireUserId(auth);
         boolean isAdmin = AuthContext.isAdmin(auth);
         Task t = taskService.cancel(id, userId, isAdmin);
         return TaskResponse.of(t, null);
@@ -73,7 +73,7 @@ public class TaskController {
     @DeleteMapping("/{id}")
     @ResponseStatus(HttpStatus.NO_CONTENT)
     public void delete(@PathVariable Long id, JwtAuthenticationToken auth) {
-        Long userId = AuthContext.requireUserId(auth);
+        String userId = AuthContext.requireUserId(auth);
         boolean isAdmin = AuthContext.isAdmin(auth);
         taskService.softDelete(id, userId, isAdmin);
     }
@@ -81,7 +81,7 @@ public class TaskController {
     @PostMapping("/{id}/approve")
     @PreAuthorize("hasAuthority('ROLE_ADMIN')")
     public TaskResponse approve(@PathVariable Long id, JwtAuthenticationToken auth) {
-        Long adminId = AuthContext.requireUserId(auth);
+        String adminId = AuthContext.requireUserId(auth);
         taskService.approve(id, adminId);
         Task t = taskService.getForView(id, adminId, true);
         return TaskResponse.of(t, taskService.getAnalysis(id).orElse(null));
@@ -89,7 +89,7 @@ public class TaskController {
 
     @PostMapping("/{id}/retry")
     public TaskResponse retry(@PathVariable Long id, JwtAuthenticationToken auth) {
-        Long userId = AuthContext.requireUserId(auth);
+        String userId = AuthContext.requireUserId(auth);
         boolean isAdmin = AuthContext.isAdmin(auth);
         Task t = taskService.retry(id, userId, isAdmin);
         return TaskResponse.of(t, null);

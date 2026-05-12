@@ -2,19 +2,16 @@
 -- 통합 테스트에선 최소 컬럼만 만들어두고 시드.
 CREATE SCHEMA IF NOT EXISTS com;
 
+-- com."user" 실제 PK는 user_id VARCHAR(20). 테스트엔 password NOT NULL 컬럼만 만족.
 CREATE TABLE IF NOT EXISTS com."user" (
-    id          BIGSERIAL PRIMARY KEY,
-    username    VARCHAR(100) NOT NULL UNIQUE,
-    email       VARCHAR(255)
+    user_id     VARCHAR(20) PRIMARY KEY,
+    user_name   VARCHAR(30) NOT NULL,
+    password    VARCHAR(100) NOT NULL,
+    email       VARCHAR(100)
 );
 
--- 표준 테스트 사용자 시드
-INSERT INTO com."user" (id, username, email) VALUES
-    (1, 'user1',  'user1@hamonsoft.co.kr'),
-    (2, 'user2',  'user2@hamonsoft.co.kr'),
-    (9, 'admin1', 'admin1@hamonsoft.co.kr')
-ON CONFLICT (id) DO NOTHING;
-
--- 시퀀스 재정렬 (자동 ID 충돌 방지)
-SELECT setval(pg_get_serial_sequence('com."user"', 'id'),
-              (SELECT COALESCE(MAX(id), 1) FROM com."user"));
+INSERT INTO com."user" (user_id, user_name, password, email) VALUES
+    ('user1',  'User 1', 'x', 'user1@hamonsoft.co.kr'),
+    ('user2',  'User 2', 'x', 'user2@hamonsoft.co.kr'),
+    ('admin1', 'Admin',  'x', 'admin1@hamonsoft.co.kr')
+ON CONFLICT (user_id) DO NOTHING;

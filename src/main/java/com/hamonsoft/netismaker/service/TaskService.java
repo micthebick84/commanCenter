@@ -48,7 +48,7 @@ public class TaskService {
     }
 
     @Transactional
-    public Task create(TaskCreateRequest req, Long requesterId) {
+    public Task create(TaskCreateRequest req, String requesterId) {
         long active = taskRepo.countActiveByRequester(requesterId);
         if (active >= userConcurrentLimit) {
             throw TaskException.tooManyRequests(
@@ -58,12 +58,12 @@ public class TaskService {
                              req.description(), requesterId, maxRetry);
         Task saved = taskRepo.save(t);
         historyRepo.save(TaskStatusHistory.log(saved.getId(), null, TaskStatus.PENDING,
-                "user", String.valueOf(requesterId), "작업 등록"));
+                "user", requesterId, "작업 등록"));
         return saved;
     }
 
     @Transactional(readOnly = true)
-    public Task getForView(Long taskId, Long viewerId, boolean isAdmin) {
+    public Task getForView(Long taskId, String viewerId, boolean isAdmin) {
         Task t = taskRepo.findActiveById(taskId).orElseThrow(TaskException::notFound);
         if (!isAdmin && !t.isOwnedBy(viewerId)) {
             throw TaskException.forbidden();
@@ -77,7 +77,7 @@ public class TaskService {
     }
 
     @Transactional(readOnly = true)
-    public Page<Task> list(Long viewerId, boolean isAdmin, boolean mineOnly,
+    public Page<Task> list(String viewerId, boolean isAdmin, boolean mineOnly,
                            TaskStatus status, Pageable pageable) {
         if (isAdmin && !mineOnly) {
             return taskRepo.findAllActive(status, pageable);
@@ -86,7 +86,7 @@ public class TaskService {
     }
 
     @Transactional
-    public Task cancel(Long taskId, Long actorId, boolean isAdmin) {
+    public Task cancel(Long taskId, String actorId, boolean isAdmin) {
         Task t = taskRepo.findActiveById(taskId).orElseThrow(TaskException::notFound);
         if (!t.isOwnedBy(actorId) && !isAdmin) {
             throw TaskException.forbidden();
@@ -99,12 +99,12 @@ public class TaskService {
         t.setStatus(TaskStatus.CANCELLED);
         t.setUpdatedAt(OffsetDateTime.now());
         historyRepo.save(TaskStatusHistory.log(t.getId(), from, TaskStatus.CANCELLED,
-                "user", String.valueOf(actorId), "사용자 취소"));
+                "user", actorId, "사용자 취소"));
         return t;
     }
 
     @Transactional
-    public void softDelete(Long taskId, Long actorId, boolean isAdmin) {
+    public void softDelete(Long taskId, String actorId, boolean isAdmin) {
         Task t = taskRepo.findActiveById(taskId).orElseThrow(TaskException::notFound);
         if (!t.isOwnedBy(actorId) && !isAdmin) {
             throw TaskException.forbidden();
@@ -112,11 +112,11 @@ public class TaskService {
         t.setDeletedAt(OffsetDateTime.now());
         t.setUpdatedAt(OffsetDateTime.now());
         historyRepo.save(TaskStatusHistory.log(t.getId(), t.getStatus(), t.getStatus(),
-                isAdmin ? "system" : "user", String.valueOf(actorId), "삭제"));
+                isAdmin ? "system" : "user", actorId, "삭제"));
     }
 
     @Transactional
-    public TaskAnalysis approve(Long taskId, Long adminId) {
+    public TaskAnalysis approve(Long taskId, String adminId) {
         Task t = taskRepo.findActiveById(taskId).orElseThrow(TaskException::notFound);
         if (t.getStatus() != TaskStatus.COMPLETED) {
             throw TaskException.conflict("분석완료 상태에서만 승인할 수 있습니다 (현재: "
@@ -131,12 +131,12 @@ public class TaskService {
         a.setApprovedBy(adminId);
         a.setApprovedAt(OffsetDateTime.now());
         historyRepo.save(TaskStatusHistory.log(t.getId(), t.getStatus(), t.getStatus(),
-                "user", String.valueOf(adminId), "관리자 승인"));
+                "user", adminId, "관리자 승인"));
         return a;
     }
 
     @Transactional
-    public Task retry(Long taskId, Long actorId, boolean isAdmin) {
+    public Task retry(Long taskId, String actorId, boolean isAdmin) {
         Task t = taskRepo.findActiveById(taskId).orElseThrow(TaskException::notFound);
         if (!t.isOwnedBy(actorId) && !isAdmin) {
             throw TaskException.forbidden();
@@ -156,7 +156,7 @@ public class TaskService {
         t.setWorkerId(null);
         t.setUpdatedAt(OffsetDateTime.now());
         historyRepo.save(TaskStatusHistory.log(t.getId(), from, TaskStatus.PENDING,
-                isAdmin ? "system" : "user", String.valueOf(actorId),
+                isAdmin ? "system" : "user", actorId,
                 "재시도 (" + t.getRetryCount() + "/" + t.getMaxRetry() + ")"));
         return t;
     }

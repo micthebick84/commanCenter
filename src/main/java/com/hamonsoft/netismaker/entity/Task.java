@@ -40,8 +40,8 @@ public class Task {
     @Setter   // 서비스 레이어에서만 변경
     private TaskStatus status;
 
-    @Column(name = "requester_id", nullable = false)
-    private Long requesterId;
+    @Column(name = "requester_id", nullable = false, length = 20)
+    private String requesterId;
 
     @Column(name = "retry_count", nullable = false)
     @Setter
@@ -74,7 +74,7 @@ public class Task {
     private OffsetDateTime updatedAt;
 
     public static Task create(String githubRepo, String githubBranch, String title,
-                              String description, Long requesterId, int maxRetry) {
+                              String description, String requesterId, int maxRetry) {
         Task t = new Task();
         t.githubRepo = githubRepo;
         t.githubBranch = githubBranch == null || githubBranch.isBlank() ? "main" : githubBranch;
@@ -90,7 +90,7 @@ public class Task {
         return t;
     }
 
-    public boolean isOwnedBy(Long userId) {
+    public boolean isOwnedBy(String userId) {
         return requesterId.equals(userId);
     }
 

@@ -11,7 +11,7 @@ CREATE TABLE IF NOT EXISTS com.task (
     description     TEXT NOT NULL,
     status          VARCHAR(30) NOT NULL DEFAULT '작업대기',
                     -- 작업대기 | 분석중 | 분석완료 | 분석실패 | 취소됨
-    requester_id    BIGINT NOT NULL REFERENCES com."user"(id),
+    requester_id    VARCHAR(20) NOT NULL REFERENCES com."user"(user_id),
     retry_count     INT NOT NULL DEFAULT 0,
     max_retry       INT NOT NULL DEFAULT 3,
     worker_id       VARCHAR(50),
@@ -37,7 +37,7 @@ CREATE TABLE IF NOT EXISTS com.task_analysis (
     claude_log      TEXT,
     duration_ms     BIGINT,
     approved        BOOLEAN NOT NULL DEFAULT false,
-    approved_by     BIGINT REFERENCES com."user"(id),
+    approved_by     VARCHAR(20) REFERENCES com."user"(user_id),
     approved_at     TIMESTAMPTZ,
     completed_at    TIMESTAMPTZ NOT NULL DEFAULT now()
 );

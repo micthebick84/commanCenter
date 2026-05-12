@@ -47,13 +47,13 @@ class TaskApiIntegrationTest {
         taskRepo.deleteAll();
     }
 
-    private static org.springframework.test.web.servlet.request.RequestPostProcessor userJwt(long userId) {
+    private static org.springframework.test.web.servlet.request.RequestPostProcessor userJwt(String userId) {
         return jwt()
                 .jwt(b -> b.claim("user_id", userId).claim("authorities", List.of("ROLE_USER")))
                 .authorities(new SimpleGrantedAuthority("ROLE_USER"));
     }
 
-    private static org.springframework.test.web.servlet.request.RequestPostProcessor adminJwt(long userId) {
+    private static org.springframework.test.web.servlet.request.RequestPostProcessor adminJwt(String userId) {
         return jwt()
                 .jwt(b -> b.claim("user_id", userId).claim("authorities", List.of("ROLE_ADMIN")))
                 .authorities(new SimpleGrantedAuthority("ROLE_ADMIN"));
@@ -65,20 +65,20 @@ class TaskApiIntegrationTest {
 
     @Test
     void POST_tasks_happy_path_returns_201_and_pending_status() throws Exception {
-        mvc.perform(post("/api/tasks").with(userJwt(1L))
+        mvc.perform(post("/api/tasks").with(userJwt("user1"))
                         .contentType(APPLICATION_JSON)
                         .content(body("hamonsoft/netis-backend", "버그 수정", "로그인이 안 됨")))
                 .andExpect(status().isCreated())
                 .andExpect(header().exists("Location"))
                 .andExpect(jsonPath("$.status").value("PENDING"))
                 .andExpect(jsonPath("$.statusLabel").value("작업대기"))
-                .andExpect(jsonPath("$.requesterId").value(1));
+                .andExpect(jsonPath("$.requesterId").value("user1"));
         assertThat(taskRepo.count()).isEqualTo(1);
     }
 
     @Test
     void POST_tasks_invalid_github_repo_returns_400() throws Exception {
-        mvc.perform(post("/api/tasks").with(userJwt(1L))
+        mvc.perform(post("/api/tasks").with(userJwt("user1"))
                         .contentType(APPLICATION_JSON)
                         .content(body("not-a-valid-repo", "제목", "상세")))
                 .andExpect(status().isBadRequest())
@@ -88,12 +88,12 @@ class TaskApiIntegrationTest {
     @Test
     void POST_tasks_concurrent_limit_returns_429_on_sixth() throws Exception {
         for (int i = 0; i < 5; i++) {
-            mvc.perform(post("/api/tasks").with(userJwt(1L))
+            mvc.perform(post("/api/tasks").with(userJwt("user1"))
                             .contentType(APPLICATION_JSON)
                             .content(body("hamonsoft/netis-backend", "작업 " + i, "내용")))
                     .andExpect(status().isCreated());
         }
-        mvc.perform(post("/api/tasks").with(userJwt(1L))
+        mvc.perform(post("/api/tasks").with(userJwt("user1"))
                         .contentType(APPLICATION_JSON)
                         .content(body("hamonsoft/netis-backend", "6번째", "초과")))
                 .andExpect(status().isTooManyRequests());
@@ -102,43 +102,43 @@ class TaskApiIntegrationTest {
     @Test
     void GET_tasks_id_other_user_returns_403() throws Exception {
         // user 1이 작성, user 2가 조회
-        String location = mvc.perform(post("/api/tasks").with(userJwt(1L))
+        String location = mvc.perform(post("/api/tasks").with(userJwt("user1"))
                         .contentType(APPLICATION_JSON)
                         .content(body("hamonsoft/netis-backend", "제목", "내용")))
                 .andReturn().getResponse().getHeader("Location");
         assertThat(location).isNotNull();
 
-        mvc.perform(get(location).with(userJwt(2L)))
+        mvc.perform(get(location).with(userJwt("user2")))
                 .andExpect(status().isForbidden());
     }
 
     @Test
     void GET_tasks_id_admin_can_see_anyone() throws Exception {
-        String location = mvc.perform(post("/api/tasks").with(userJwt(1L))
+        String location = mvc.perform(post("/api/tasks").with(userJwt("user1"))
                         .contentType(APPLICATION_JSON)
                         .content(body("hamonsoft/netis-backend", "제목", "내용")))
                 .andReturn().getResponse().getHeader("Location");
 
-        mvc.perform(get(location).with(adminJwt(9L)))
+        mvc.perform(get(location).with(adminJwt("admin1")))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.requesterId").value(1));
+                .andExpect(jsonPath("$.requesterId").value("user1"));
     }
 
     @Test
     void POST_approve_non_admin_returns_403() throws Exception {
-        String location = mvc.perform(post("/api/tasks").with(userJwt(1L))
+        String location = mvc.perform(post("/api/tasks").with(userJwt("user1"))
                         .contentType(APPLICATION_JSON)
                         .content(body("hamonsoft/netis-backend", "제목", "내용")))
                 .andReturn().getResponse().getHeader("Location");
 
-        mvc.perform(post(location + "/approve").with(userJwt(1L)))
+        mvc.perform(post(location + "/approve").with(userJwt("user1")))
                 .andExpect(status().isForbidden());
     }
 
     @Test
     void POST_cancel_in_progress_returns_409() throws Exception {
         // 작업 등록 + DB에서 상태 강제 변경 (분석중)
-        String location = mvc.perform(post("/api/tasks").with(userJwt(1L))
+        String location = mvc.perform(post("/api/tasks").with(userJwt("user1"))
                         .contentType(APPLICATION_JSON)
                         .content(body("hamonsoft/netis-backend", "제목", "내용")))
                 .andReturn().getResponse().getHeader("Location");
@@ -147,7 +147,7 @@ class TaskApiIntegrationTest {
         t.setStatus(com.hamonsoft.netismaker.entity.TaskStatus.IN_PROGRESS);
         taskRepo.save(t);
 
-        mvc.perform(post("/api/tasks/" + id + "/cancel").with(userJwt(1L)))
+        mvc.perform(post("/api/tasks/" + id + "/cancel").with(userJwt("user1")))
                 .andExpect(status().isConflict());
     }
 }

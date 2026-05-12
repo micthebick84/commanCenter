@@ -14,7 +14,7 @@ public record TaskResponse(
         String description,
         TaskStatus status,
         String statusLabel,
-        Long requesterId,
+        String requesterId,
         int retryCount,
         int maxRetry,
         String failureReason,
@@ -27,7 +27,7 @@ public record TaskResponse(
             String subtasksJson,
             Long durationMs,
             boolean approved,
-            Long approvedBy,
+            String approvedBy,
             OffsetDateTime approvedAt,
             OffsetDateTime completedAt
     ) {}

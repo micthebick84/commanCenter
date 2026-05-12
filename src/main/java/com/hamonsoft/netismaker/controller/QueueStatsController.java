@@ -2,6 +2,7 @@ package com.hamonsoft.netismaker.controller;
 
 import com.hamonsoft.netismaker.dto.QueueStats;
 import com.hamonsoft.netismaker.repository.QueueStatsRepository;
+import org.springframework.context.annotation.Profile;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
@@ -12,6 +13,7 @@ import org.springframework.web.bind.annotation.RestController;
  */
 @RestController
 @RequestMapping("/api/queue")
+@Profile("api")
 public class QueueStatsController {
 
     private final QueueStatsRepository repo;

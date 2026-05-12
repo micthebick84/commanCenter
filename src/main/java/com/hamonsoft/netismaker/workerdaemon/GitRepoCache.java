@@ -45,7 +45,7 @@ public class GitRepoCache {
         Files.createDirectories(target.getParent());
 
         if (!Files.exists(target.resolve(".git"))) {
-            String url = "https://oauth2:" + safePat() + "@github.com/" + githubRepo + ".git";
+            String url = repoUrl(githubRepo);
             run(target.getParent().toFile(), "git", "clone", "--depth=1", "--branch", branch, url, target.getFileName().toString());
         } else {
             run(target.toFile(), "git", "fetch", "--all", "--prune");
@@ -57,9 +57,14 @@ public class GitRepoCache {
         return new CheckedOutRepo(target.toFile(), sha);
     }
 
-    private String safePat() {
+    // PAT가 있으면 인증 URL, 없으면 익명 URL (public repo).
+    // 빈 비밀번호 형태 'https://oauth2:@github.com/...'는 GitHub가 거부하므로 plain URL로 폴백.
+    private String repoUrl(String githubRepo) {
         String pat = props.githubPat();
-        return pat == null ? "" : pat;
+        if (pat == null || pat.isBlank()) {
+            return "https://github.com/" + githubRepo + ".git";
+        }
+        return "https://oauth2:" + pat + "@github.com/" + githubRepo + ".git";
     }
 
     private void run(File dir, String... command) throws IOException, InterruptedException {

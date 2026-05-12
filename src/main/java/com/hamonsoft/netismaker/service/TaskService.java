@@ -8,6 +8,7 @@ import com.hamonsoft.netismaker.entity.TaskStatusHistory;
 import com.hamonsoft.netismaker.repository.TaskAnalysisRepository;
 import com.hamonsoft.netismaker.repository.TaskRepository;
 import com.hamonsoft.netismaker.repository.TaskStatusHistoryRepository;
+import org.springframework.context.annotation.Profile;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
@@ -27,6 +28,7 @@ import java.util.Optional;
  *   retry    ─► FAILED → PENDING + retry_count++  (retry_count < max_retry)
  */
 @Service
+@Profile("api")
 public class TaskService {
 
     private final TaskRepository taskRepo;

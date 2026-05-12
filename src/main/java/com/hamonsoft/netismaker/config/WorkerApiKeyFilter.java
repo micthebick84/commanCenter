@@ -4,6 +4,7 @@ import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
+import org.springframework.context.annotation.Profile;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.core.authority.SimpleGrantedAuthority;
@@ -22,6 +23,7 @@ import java.util.List;
  * 공유 시크릿 모델 (DESIGN §6 P11). V2에서 mTLS로 강화 예정.
  */
 @Component
+@Profile("api")
 public class WorkerApiKeyFilter extends OncePerRequestFilter {
 
     public static final String HEADER = "X-Worker-API-Key";

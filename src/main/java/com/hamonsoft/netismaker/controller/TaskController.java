@@ -6,6 +6,7 @@ import com.hamonsoft.netismaker.entity.Task;
 import com.hamonsoft.netismaker.entity.TaskStatus;
 import com.hamonsoft.netismaker.service.TaskService;
 import jakarta.validation.Valid;
+import org.springframework.context.annotation.Profile;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.web.PageableDefault;
@@ -26,6 +27,7 @@ import java.net.URI;
  */
 @RestController
 @RequestMapping("/api/tasks")
+@Profile("api")
 public class TaskController {
 
     private final TaskService taskService;

@@ -1,5 +1,6 @@
 package com.hamonsoft.netismaker.controller;
 
+import org.springframework.context.annotation.Profile;
 import org.springframework.security.core.GrantedAuthority;
 import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.security.oauth2.server.resource.authentication.JwtAuthenticationToken;
@@ -23,6 +24,7 @@ import java.util.stream.Collectors;
  */
 @RestController
 @RequestMapping("/api/me")
+@Profile("api")
 public class MeController {
 
     @GetMapping

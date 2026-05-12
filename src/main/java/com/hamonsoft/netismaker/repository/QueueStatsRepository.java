@@ -2,6 +2,7 @@ package com.hamonsoft.netismaker.repository;
 
 import com.hamonsoft.netismaker.dto.QueueStats;
 import jakarta.persistence.EntityManager;
+import org.springframework.context.annotation.Profile;
 import org.springframework.stereotype.Repository;
 
 import java.util.Map;
@@ -10,6 +11,7 @@ import java.util.Map;
  * com.task_queue_stats 뷰를 native 쿼리로 조회. 단일 행 반환.
  */
 @Repository
+@Profile("api")
 public class QueueStatsRepository {
 
     private final EntityManager em;

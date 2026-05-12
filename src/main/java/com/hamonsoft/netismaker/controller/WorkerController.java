@@ -6,6 +6,7 @@ import com.hamonsoft.netismaker.dto.WorkerTaskResponse;
 import com.hamonsoft.netismaker.entity.Task;
 import com.hamonsoft.netismaker.service.WorkerService;
 import jakarta.validation.Valid;
+import org.springframework.context.annotation.Profile;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
@@ -23,6 +24,7 @@ import java.util.Optional;
 @RestController
 @RequestMapping("/worker")
 @PreAuthorize("hasAuthority('ROLE_WORKER')")
+@Profile("api")
 public class WorkerController {
 
     private final WorkerService workerService;

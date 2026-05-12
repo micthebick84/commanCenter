@@ -7,6 +7,7 @@ import com.hamonsoft.netismaker.repository.TaskAnalysisRepository;
 import com.hamonsoft.netismaker.repository.TaskRepository;
 import com.hamonsoft.netismaker.repository.TaskStatusHistoryRepository;
 import com.hamonsoft.netismaker.repository.WorkerHeartbeatRepository;
+import org.springframework.context.annotation.Profile;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
@@ -28,6 +29,7 @@ import java.util.Optional;
  *                       자기가 잡은 작업만 가능 (worker_id 일치)
  */
 @Service
+@Profile("api")
 public class WorkerService {
 
     private final TaskRepository taskRepo;

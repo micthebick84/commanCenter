@@ -1,5 +1,6 @@
 package com.hamonsoft.netismaker.service;
 
+import org.springframework.context.annotation.Profile;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.MethodArgumentNotValidException;
@@ -10,6 +11,7 @@ import java.util.HashMap;
 import java.util.Map;
 
 @RestControllerAdvice
+@Profile("api")
 public class GlobalExceptionHandler {
 
     @ExceptionHandler(TaskException.class)

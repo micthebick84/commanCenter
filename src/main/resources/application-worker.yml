@@ -9,6 +9,9 @@ spring:
       - org.springframework.boot.autoconfigure.jdbc.DataSourceAutoConfiguration
       - org.springframework.boot.autoconfigure.orm.jpa.HibernateJpaAutoConfiguration
       - org.springframework.boot.autoconfigure.flyway.FlywayAutoConfiguration
+  # 워커는 HTTP 서버를 띄우지 않음 (단방향 폴링 클라이언트)
+  main:
+    web-application-type: none
 
 netis-maker:
   worker:

@@ -95,6 +95,7 @@ function statusClass(status: string) {
 
 <template>
   <q-page padding>
+    <QueueStatsBar />
     <div class="row items-center q-mb-md">
       <div class="text-h5">작업 목록</div>
       <q-space />

@@ -1,8 +1,19 @@
 <script setup lang="ts">
+import { useQuasar } from 'quasar'
+
 const auth = useAuthStore()
+const $q = useQuasar()
 
 function handleLogout() {
-  auth.logout()
+  $q.dialog({
+    title: '로그아웃',
+    message: '정말로 로그아웃 하시겠습니까?',
+    ok: { label: '로그아웃', color: 'negative', unelevated: true },
+    cancel: { label: '취소', flat: true },
+    persistent: true,
+  }).onOk(() => {
+    auth.logout()
+  })
 }
 </script>
 

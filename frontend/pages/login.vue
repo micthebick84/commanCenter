@@ -1,10 +1,19 @@
 <script setup lang="ts">
+import { useQuasar } from 'quasar'
+
 definePageMeta({ layout: 'default' })
 
 const auth = useAuthStore()
+const route = useRoute()
+const $q = useQuasar()
 
 onMounted(() => {
   auth.restore()
+  // RP-Initiated Logout 복귀 시 ?logout=true. 토큰은 이미 비어있으니 자동 이동 없음.
+  if (route.query.logout === 'true') {
+    $q.notify({ type: 'positive', message: '로그아웃되었습니다.', timeout: 2500 })
+    return
+  }
   if (auth.isAuthenticated) navigateTo('/tasks')
 })
 

@@ -30,6 +30,10 @@ export const useAuthStore = defineStore('auth', {
   state: () => ({
     accessToken: null as string | null,
     refreshToken: null as string | null,
+    // OIDC RP-Initiated Logout(/connect/logout)에 id_token_hint로 필요.
+    // 이게 없으면 SPA 토큰만 지워지고 netis-auth 세션 쿠키가 살아남아
+    // 재로그인 시 SSO로 자동 통과됨.
+    idToken: null as string | null,
     expiresAt: 0 as number,
     me: null as MeResponse | null,
   }),
@@ -47,6 +51,7 @@ export const useAuthStore = defineStore('auth', {
         const parsed = JSON.parse(raw)
         this.accessToken = parsed.accessToken ?? null
         this.refreshToken = parsed.refreshToken ?? null
+        this.idToken = parsed.idToken ?? null
         this.expiresAt = parsed.expiresAt ?? 0
         this.me = parsed.me ?? null
       } catch {
@@ -60,6 +65,7 @@ export const useAuthStore = defineStore('auth', {
         JSON.stringify({
           accessToken: this.accessToken,
           refreshToken: this.refreshToken,
+          idToken: this.idToken,
           expiresAt: this.expiresAt,
           me: this.me,
         }),
@@ -117,6 +123,7 @@ export const useAuthStore = defineStore('auth', {
 
       this.accessToken = json.access_token
       this.refreshToken = json.refresh_token ?? null
+      this.idToken = json.id_token ?? null
       this.expiresAt = Date.now() + json.expires_in * 1000
       this.persist()
       await this.refreshMe()
@@ -130,13 +137,29 @@ export const useAuthStore = defineStore('auth', {
       this.persist()
     },
 
+    /**
+     * OIDC RP-Initiated Logout.
+     *
+     * SPA 토큰 + netis-auth 세션 쿠키를 모두 종료시킨다.
+     * id_token_hint가 있으면 netis-auth가 확인 화면 없이 post_logout_redirect_uri로 자동 복귀.
+     * (post_logout_redirect_uri는 client 등록값과 EXACT MATCH 필요 — 현재: /login?logout=true)
+     */
     logout() {
+      const config = useRuntimeConfig().public
+      const hint = this.idToken
       this.accessToken = null
       this.refreshToken = null
+      this.idToken = null
       this.expiresAt = 0
       this.me = null
       if (process.client) localStorage.removeItem(STORAGE_KEY)
-      navigateTo('/login')
+
+      if (process.server) return navigateTo('/login')
+
+      const postLogout = `${window.location.origin}/login?logout=true`
+      const params = new URLSearchParams({ post_logout_redirect_uri: postLogout })
+      if (hint) params.set('id_token_hint', hint)
+      window.location.href = `${config.authIssuer}/connect/logout?${params}`
     },
   },
 })

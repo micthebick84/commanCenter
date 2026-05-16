@@ -100,6 +100,11 @@ public class WorkerMcpSupport {
         }
     }
 
+    /** UI 노출용 — 워커가 사용 가능한 MCP 서버 이름 목록 (예: "local-db", "obsidian-vault"). */
+    public List<String> getServerNames() {
+        return serverNames;
+    }
+
     /** claude -p 인자에 prepend할 리스트. MCP 없으면 빈 리스트. */
     public List<String> buildClaudeArgs() {
         if (mergedConfigPath == null || serverNames.isEmpty()) return List.of();

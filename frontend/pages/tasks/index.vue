@@ -42,6 +42,11 @@ const showCreate = ref(false)
 const draft = reactive({ githubRepo: '', githubBranch: '', title: '', description: '' })
 const submitting = ref(false)
 
+// 살아있는 워커들이 보고한 MCP 합집합 (다이얼로그 열 때 1회 조회)
+const availableMcps = ref<string[]>([])
+const aliveWorkerCount = ref(0)
+const mcpsLoading = ref(false)
+
 // 브랜치 동기화 상태 (Phase 1: repo 입력 → /api/repos/branches 자동 호출)
 type RepoStatus = 'empty' | 'invalid' | 'loading' | 'ok' | 'notfound' | 'error'
 const repoStatus = ref<RepoStatus>('empty')
@@ -163,6 +168,22 @@ function onBranchFilter(val: string, update: (cb: () => void) => void) {
   })
 }
 
+async function loadAvailableMcps() {
+  mcpsLoading.value = true
+  try {
+    const res = await useApi<{ mcps: string[]; aliveWorkerCount: number }>(
+      '/api/workers/mcps/available',
+    )
+    availableMcps.value = res.mcps ?? []
+    aliveWorkerCount.value = res.aliveWorkerCount ?? 0
+  } catch {
+    availableMcps.value = []
+    aliveWorkerCount.value = 0
+  } finally {
+    mcpsLoading.value = false
+  }
+}
+
 function openCreate() {
   draft.githubRepo = ''
   draft.githubBranch = ''
@@ -170,6 +191,7 @@ function openCreate() {
   draft.description = ''
   resetBranchState()
   showCreate.value = true
+  loadAvailableMcps()
 }
 
 const canSubmit = computed(
@@ -311,6 +333,56 @@ function statusClass(status: string) {
           <div class="text-h6">새 작업 등록</div>
         </q-card-section>
         <q-card-section class="q-gutter-md">
+          <q-banner
+            v-if="!mcpsLoading"
+            :class="
+              aliveWorkerCount === 0
+                ? 'bg-orange-1 text-orange-10'
+                : availableMcps.length === 0
+                  ? 'bg-grey-2 text-grey-9'
+                  : 'bg-indigo-1 text-indigo-10'
+            "
+            dense
+            rounded
+          >
+            <template #avatar>
+              <q-icon
+                :name="
+                  aliveWorkerCount === 0
+                    ? 'warning'
+                    : availableMcps.length === 0
+                      ? 'info'
+                      : 'bolt'
+                "
+              />
+            </template>
+            <template v-if="aliveWorkerCount === 0">
+              살아있는 워커가 없습니다. 작업 등록은 가능하지만 워커가 시작될 때까지 대기 상태로 남습니다.
+            </template>
+            <template v-else-if="availableMcps.length === 0">
+              워커 {{ aliveWorkerCount }}개 활성 · 등록된 MCP 없음 (기본 Claude 도구만 사용)
+            </template>
+            <template v-else>
+              <div class="q-mb-xs">
+                이 분석에서 사용 가능한 MCP 도구
+                <span class="text-caption">(워커 {{ aliveWorkerCount }}개 활성)</span>
+              </div>
+              <div>
+                <q-chip
+                  v-for="m in availableMcps"
+                  :key="m"
+                  color="white"
+                  text-color="indigo-10"
+                  icon="bolt"
+                  size="sm"
+                  dense
+                  :label="m"
+                  class="q-mr-xs q-mb-xs"
+                />
+              </div>
+            </template>
+          </q-banner>
+
           <div>
             <q-input
               v-model="draft.githubRepo"

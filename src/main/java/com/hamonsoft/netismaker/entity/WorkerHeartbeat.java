@@ -5,8 +5,12 @@ import lombok.AccessLevel;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
 import lombok.Setter;
+import org.hibernate.annotations.JdbcTypeCode;
+import org.hibernate.type.SqlTypes;
 
 import java.time.OffsetDateTime;
+import java.util.ArrayList;
+import java.util.List;
 
 @Entity
 @Table(name = "worker_heartbeat", schema = "com")
@@ -33,4 +37,8 @@ public class WorkerHeartbeat {
 
     @Column(name = "vpn_status", length = 20)
     private String vpnStatus;
+
+    @JdbcTypeCode(SqlTypes.JSON)
+    @Column(name = "mcps", nullable = false, columnDefinition = "jsonb")
+    private List<String> mcps = new ArrayList<>();
 }

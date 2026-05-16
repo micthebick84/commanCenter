@@ -38,24 +38,27 @@ public class WorkerMainLoop {
     private final GitRepoCache repos;
     private final ClaudeExecAdapter claude;
     private final PromptResultParser parser;
+    private final WorkerMcpSupport mcps;
 
     public WorkerMainLoop(WorkerProperties props,
                           WorkerHttpClient http,
                           GitRepoCache repos,
                           ClaudeExecAdapter claude,
-                          PromptResultParser parser) {
+                          PromptResultParser parser,
+                          WorkerMcpSupport mcps) {
         this.props = props;
         this.http = http;
         this.repos = repos;
         this.claude = claude;
         this.parser = parser;
+        this.mcps = mcps;
     }
 
     @Scheduled(fixedRateString = "#{${netis-maker.worker.heartbeat-interval-seconds:10} * 1000}")
     public void sendHeartbeat() {
         try {
             http.heartbeat(new WorkerHeartbeatRequest(
-                    props.id(), hostname(), props.version(), null, null));
+                    props.id(), hostname(), props.version(), null, null, mcps.getServerNames()));
         } catch (RestClientException e) {
             log.warn("heartbeat 실패: {}", e.getMessage());
         }

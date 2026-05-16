@@ -58,6 +58,7 @@ public class WorkerService {
         h.setVersion(req.version());
         h.setClaudeSessionOk(req.claudeSessionOk());
         h.setVpnStatus(req.vpnStatus());
+        h.setMcps(req.mcps() == null ? List.of() : req.mcps());
         h.setLastSeenAt(OffsetDateTime.now());
         heartbeatRepo.save(h);
     }

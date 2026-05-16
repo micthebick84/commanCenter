@@ -9,6 +9,7 @@ interface WorkerHealth {
   alive: boolean
   claudeSessionOk: boolean | null
   vpnStatus: string | null
+  mcps: string[]
 }
 
 const { data, loading } = useTaskPolling<WorkerHealth[]>(() => useApi('/api/workers/health'))
@@ -61,6 +62,7 @@ function bool(b: boolean | null): string {
         { name: 'lastSeenAt', label: '마지막 응답', field: 'lastSeenAt', align: 'left' },
         { name: 'claudeSession', label: 'Claude OAuth', field: (r) => bool(r.claudeSessionOk), align: 'center' },
         { name: 'vpnStatus', label: '네트워크', field: 'vpnStatus', align: 'center' },
+        { name: 'mcps', label: 'MCP 도구', field: 'mcps', align: 'left' },
       ]"
     >
       <template #body-cell-status="props">
@@ -95,6 +97,24 @@ function bool(b: boolean | null): string {
             :label="bool(props.row.claudeSessionOk)"
           />
           <span v-else>—</span>
+        </q-td>
+      </template>
+      <template #body-cell-mcps="props">
+        <q-td :props="props">
+          <template v-if="props.row.mcps && props.row.mcps.length">
+            <q-chip
+              v-for="m in props.row.mcps"
+              :key="m"
+              color="indigo-1"
+              text-color="indigo-9"
+              icon="bolt"
+              size="sm"
+              dense
+              :label="m"
+              class="q-mr-xs q-mb-xs"
+            />
+          </template>
+          <span v-else class="text-grey-6">—</span>
         </q-td>
       </template>
     </q-table>

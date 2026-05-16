@@ -1,0 +1,36 @@
+{
+  "_comment": "이 hooks 블록을 ~/.claude/settings.json의 hooks 필드에 병합하세요. 기존 SessionStart 등 다른 hook이 있으면 보존하면서 추가.",
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 /Users/REPLACE_ME/.claude/hooks/log-git-to-obsidian.py"
+          }
+        ]
+      }
+    ],
+    "PreCompact": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 /Users/REPLACE_ME/.claude/hooks/summarize-to-obsidian.py"
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 /Users/REPLACE_ME/.claude/hooks/summarize-to-obsidian.py"
+          }
+        ]
+      }
+    ]
+  }
+}

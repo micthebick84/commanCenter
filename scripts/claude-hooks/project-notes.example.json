@@ -1,0 +1,9 @@
+{
+  "_comment": "프로젝트 root path → 옵시디언 진행상황 노트 prefix 매핑. cwd가 root로 startswith 일치하면 ${note_prefix}YYYY-MM-DD.md에 append. 본인 경로로 수정 후 ~/.claude/hooks/project-notes.json 으로 복사하세요.",
+  "projects": {
+    "/Users/REPLACE_ME/IdeaProjects/netisMaker": {
+      "note_prefix": "Andy/netisMaker-진행상황-",
+      "title": "netisMaker"
+    }
+  }
+}

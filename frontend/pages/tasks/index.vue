@@ -39,20 +39,162 @@ const tasks = computed<TaskResponse[]>(() => page.value?.content ?? [])
 
 // 등록 다이얼로그 상태
 const showCreate = ref(false)
-const draft = reactive({ githubRepo: '', githubBranch: 'main', title: '', description: '' })
+const draft = reactive({ githubRepo: '', githubBranch: '', title: '', description: '' })
 const submitting = ref(false)
+
+// 브랜치 동기화 상태 (Phase 1: repo 입력 → /api/repos/branches 자동 호출)
+type RepoStatus = 'empty' | 'invalid' | 'loading' | 'ok' | 'notfound' | 'error'
+const repoStatus = ref<RepoStatus>('empty')
+const repoStatusMsg = ref('')
+interface BranchEntry { name: string; sha: string }
+const branches = ref<BranchEntry[]>([])
+const defaultBranch = ref<string | null>(null)
+const branchOptions = computed(() =>
+  branches.value.map((b) => ({
+    label: b.name === defaultBranch.value ? `${b.name} (기본)` : b.name,
+    value: b.name,
+  })),
+)
+const filteredBranchOptions = ref<{ label: string; value: string }[]>([])
+
+const repoStatusColor: Record<RepoStatus, string> = {
+  empty: 'grey-7',
+  invalid: 'orange-9',
+  loading: 'grey-7',
+  ok: 'positive',
+  notfound: 'negative',
+  error: 'warning',
+}
+const repoStatusIcon: Record<RepoStatus, string> = {
+  empty: '',
+  invalid: 'info',
+  loading: 'sync',
+  ok: 'check_circle',
+  notfound: 'cancel',
+  error: 'warning',
+}
+
+const REPO_RE = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/
+let debounceTimer: ReturnType<typeof setTimeout> | null = null
+let inflightRepo = ''  // 응답 도착 시 최신 입력과 일치하는지 가드
+
+function resetBranchState() {
+  repoStatus.value = 'empty'
+  repoStatusMsg.value = ''
+  branches.value = []
+  defaultBranch.value = null
+  filteredBranchOptions.value = []
+  draft.githubBranch = ''
+}
+
+function normalizeRepo(input: string): string {
+  // "https://github.com/owner/repo(.git)?" 또는 "owner/repo" 모두 허용
+  const trimmed = input.trim()
+  const m = trimmed.match(/(?:github\.com[\/:])?([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+?)(?:\.git)?\/?$/)
+  return m ? m[1] : trimmed
+}
+
+watch(
+  () => draft.githubRepo,
+  (val) => {
+    if (debounceTimer) clearTimeout(debounceTimer)
+    const raw = (val ?? '').trim()
+    if (!raw) {
+      resetBranchState()
+      return
+    }
+    const normalized = normalizeRepo(raw)
+    if (!REPO_RE.test(normalized)) {
+      branches.value = []
+      defaultBranch.value = null
+      draft.githubBranch = ''
+      repoStatus.value = 'invalid'
+      repoStatusMsg.value = "'owner/repo' 형식이어야 합니다"
+      return
+    }
+    debounceTimer = setTimeout(() => loadBranches(normalized), 600)
+  },
+)
+
+async function loadBranches(repo: string) {
+  inflightRepo = repo
+  repoStatus.value = 'loading'
+  repoStatusMsg.value = '브랜치 불러오는 중...'
+  try {
+    const res = await useApi<{
+      repo: string
+      defaultBranch: string | null
+      branches: BranchEntry[]
+      fetchedAt: string
+    }>('/api/repos/branches', { params: { repo } })
+    if (inflightRepo !== repo) return  // 다른 입력이 그 사이 발생, 응답 무시
+    branches.value = res.branches ?? []
+    defaultBranch.value = res.defaultBranch
+    filteredBranchOptions.value = branchOptions.value
+    draft.githubBranch = res.defaultBranch ?? (res.branches?.[0]?.name ?? '')
+    repoStatus.value = 'ok'
+    repoStatusMsg.value = `${branches.value.length}개 브랜치 · 방금 동기화`
+  } catch (e: any) {
+    if (inflightRepo !== repo) return
+    const status = e?.statusCode ?? e?.response?.status ?? e?.status
+    branches.value = []
+    defaultBranch.value = null
+    draft.githubBranch = ''
+    if (status === 404) {
+      repoStatus.value = 'notfound'
+      repoStatusMsg.value = e?.data?.message ?? '레포를 찾을 수 없거나 비공개 레포입니다'
+    } else {
+      repoStatus.value = 'error'
+      repoStatusMsg.value = e?.data?.message ?? '브랜치 동기화 실패'
+    }
+  }
+}
+
+function onBranchFilter(val: string, update: (cb: () => void) => void) {
+  update(() => {
+    if (!val) {
+      filteredBranchOptions.value = branchOptions.value
+      return
+    }
+    const lc = val.toLowerCase()
+    filteredBranchOptions.value = branchOptions.value.filter((o) =>
+      o.value.toLowerCase().includes(lc),
+    )
+  })
+}
+
+function openCreate() {
+  draft.githubRepo = ''
+  draft.githubBranch = ''
+  draft.title = ''
+  draft.description = ''
+  resetBranchState()
+  showCreate.value = true
+}
+
+const canSubmit = computed(
+  () =>
+    !submitting.value &&
+    repoStatus.value === 'ok' &&
+    !!draft.githubBranch &&
+    !!draft.title.trim() &&
+    !!draft.description.trim(),
+)
 
 async function submit() {
   submitting.value = true
   try {
     await useApi('/api/tasks', {
       method: 'POST',
-      body: { ...draft },
+      body: {
+        githubRepo: normalizeRepo(draft.githubRepo),
+        githubBranch: draft.githubBranch,
+        title: draft.title,
+        description: draft.description,
+      },
     })
     $q.notify({ type: 'positive', message: '작업 등록 완료' })
     showCreate.value = false
-    draft.title = ''
-    draft.description = ''
     refresh()
   } catch (e: any) {
     const msg = e?.data?.message ?? '등록 실패'
@@ -118,7 +260,7 @@ function statusClass(status: string) {
         class="q-ml-md"
         @update:model-value="refresh"
       />
-      <q-btn class="q-ml-md" color="primary" icon="add" label="작업 등록" @click="showCreate = true" />
+      <q-btn class="q-ml-md" color="primary" icon="add" label="작업 등록" @click="openCreate" />
     </div>
 
     <q-table
@@ -164,31 +306,80 @@ function statusClass(status: string) {
 
     <!-- 등록 다이얼로그 -->
     <q-dialog v-model="showCreate" persistent>
-      <q-card style="min-width: 500px">
+      <q-card style="min-width: 520px">
         <q-card-section>
           <div class="text-h6">새 작업 등록</div>
         </q-card-section>
-        <q-card-section class="q-gutter-sm">
-          <q-input
-            v-model="draft.githubRepo"
-            label="GitHub 레포 (owner/repo)"
-            hint="예: hamonsoft/netis-backend"
+        <q-card-section class="q-gutter-md">
+          <div>
+            <q-input
+              v-model="draft.githubRepo"
+              label="GitHub 레포"
+              placeholder="owner/repo 또는 https://github.com/owner/repo"
+              outlined
+              dense
+              autofocus
+              :loading="repoStatus === 'loading'"
+            />
+            <div
+              v-if="repoStatusMsg"
+              class="text-caption q-mt-xs row items-center q-gutter-xs"
+              :class="`text-${repoStatusColor[repoStatus]}`"
+            >
+              <q-icon
+                v-if="repoStatusIcon[repoStatus]"
+                :name="repoStatusIcon[repoStatus]"
+                size="14px"
+              />
+              <span>{{ repoStatusMsg }}</span>
+            </div>
+          </div>
+
+          <q-select
+            v-model="draft.githubBranch"
+            :options="filteredBranchOptions"
+            :disable="repoStatus !== 'ok'"
+            label="브랜치"
             outlined
             dense
-          />
-          <q-input v-model="draft.githubBranch" label="브랜치" outlined dense />
-          <q-input v-model="draft.title" label="작업 제목" outlined dense />
+            use-input
+            input-debounce="0"
+            emit-value
+            map-options
+            :hint="
+              repoStatus === 'ok'
+                ? '입력해서 검색할 수 있습니다'
+                : '레포 입력 후 브랜치 선택 가능'
+            "
+            @filter="onBranchFilter"
+          >
+            <template #no-option>
+              <q-item>
+                <q-item-section class="text-grey">결과 없음</q-item-section>
+              </q-item>
+            </template>
+          </q-select>
+
+          <q-input v-model="draft.title" label="작업 제목" outlined dense maxlength="500" />
           <q-input
             v-model="draft.description"
             label="작업 상세"
             type="textarea"
             outlined
             autogrow
+            rows="4"
           />
         </q-card-section>
         <q-card-actions align="right">
           <q-btn flat label="취소" @click="showCreate = false" />
-          <q-btn unelevated color="primary" label="등록" :loading="submitting" @click="submit" />
+          <q-btn
+            unelevated
+            color="primary"
+            label="등록"
+            :loading="submitting"
+            :disable="!canSubmit"
+            @click="submit"
+          />
         </q-card-actions>
       </q-card>
     </q-dialog>

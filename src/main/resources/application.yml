@@ -57,6 +57,9 @@ management:
 app:
   cors:
     allowed-origins: ${CORS_ALLOWED_ORIGINS:http://localhost:3001,http://localhost:3000}
+  github:
+    # 비공개 레포 브랜치 조회용 GitHub PAT (선택). 비워두면 public 레포만 동작.
+    pat: ${GITHUB_PAT:}
   worker:
     # 워커 ↔ 백엔드 공유 시크릿. 운영 환경에선 환경변수 WORKER_API_KEY로 주입
     api-key: ${WORKER_API_KEY:dev-only-change-me}

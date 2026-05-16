@@ -2,9 +2,11 @@ package com.hamonsoft.netismaker.dto;
 
 import com.hamonsoft.netismaker.entity.Task;
 import com.hamonsoft.netismaker.entity.TaskAnalysis;
+import com.hamonsoft.netismaker.entity.TaskMcpSpec;
 import com.hamonsoft.netismaker.entity.TaskStatus;
 
 import java.time.OffsetDateTime;
+import java.util.List;
 
 public record TaskResponse(
         Long id,
@@ -18,6 +20,7 @@ public record TaskResponse(
         int retryCount,
         int maxRetry,
         String failureReason,
+        List<TaskMcpSpec> mcpsExtra,
         OffsetDateTime createdAt,
         OffsetDateTime updatedAt,
         AnalysisView analysis
@@ -54,6 +57,7 @@ public record TaskResponse(
                 t.getRetryCount(),
                 t.getMaxRetry(),
                 t.getFailureReason(),
+                t.getMcpsExtra() == null ? List.of() : List.copyOf(t.getMcpsExtra()),
                 t.getCreatedAt(),
                 t.getUpdatedAt(),
                 av

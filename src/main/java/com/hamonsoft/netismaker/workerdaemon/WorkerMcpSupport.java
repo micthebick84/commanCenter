@@ -3,6 +3,7 @@ package com.hamonsoft.netismaker.workerdaemon;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import com.hamonsoft.netismaker.entity.TaskMcpSpec;
 import jakarta.annotation.PostConstruct;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.annotation.Profile;
@@ -14,8 +15,10 @@ import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.ArrayList;
 import java.util.Iterator;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 /**
  * 워커의 claude -p 호출에 사용자 글로벌·프로젝트 스코프 MCP를 모두 주입.
@@ -108,9 +111,62 @@ public class WorkerMcpSupport {
     /** claude -p 인자에 prepend할 리스트. MCP 없으면 빈 리스트. */
     public List<String> buildClaudeArgs() {
         if (mergedConfigPath == null || serverNames.isEmpty()) return List.of();
+        return assembleArgs(mergedConfigPath, serverNames);
+    }
+
+    /**
+     * 작업별 추가 MCP가 있을 때: 베이스 합본 + extras를 임시 파일에 머지 → 그 path로 args 생성.
+     * extras가 비어있으면 buildClaudeArgs()와 동일.
+     *
+     * 결과의 tempConfigPath != null이면 호출자가 exec 종료 후 Files.deleteIfExists로 정리해야 함.
+     * 충돌 정책: extras 중 베이스와 같은 name이 있으면 extras가 prevails (사용자 의도 우선).
+     */
+    public TaskClaudeArgs buildClaudeArgsForTask(List<TaskMcpSpec> extras) {
+        if (extras == null || extras.isEmpty()) {
+            return new TaskClaudeArgs(buildClaudeArgs(), null);
+        }
+        try {
+            // 베이스 mcpServers 복제 (있을 수 있고 없을 수도 있음)
+            ObjectNode merged = json.createObjectNode();
+            if (mergedConfigPath != null) {
+                JsonNode root = json.readTree(mergedConfigPath.toFile());
+                JsonNode base = root.path("mcpServers");
+                if (base.isObject()) {
+                    Iterator<Map.Entry<String, JsonNode>> it = base.fields();
+                    while (it.hasNext()) {
+                        Map.Entry<String, JsonNode> e = it.next();
+                        merged.set(e.getKey(), e.getValue());
+                    }
+                }
+            }
+            // extras 주입 — name 충돌 시 extras 우선
+            for (TaskMcpSpec spec : extras) {
+                ObjectNode server = json.createObjectNode();
+                server.put("type", spec.transport());
+                server.put("url", spec.url());
+                merged.set(spec.name(), server);
+            }
+
+            ObjectNode wrapper = json.createObjectNode();
+            wrapper.set("mcpServers", merged);
+            Path tmp = Files.createTempFile("netismaker-mcp-", ".json");
+            json.writerWithDefaultPrettyPrinter().writeValue(tmp.toFile(), wrapper);
+
+            Set<String> allNames = new LinkedHashSet<>(serverNames);
+            for (TaskMcpSpec spec : extras) allNames.add(spec.name());
+            log.info("task별 MCP config 생성: 베이스 {}개 + extras {}개 → {}",
+                    serverNames.size(), extras.size(), tmp);
+            return new TaskClaudeArgs(assembleArgs(tmp, new ArrayList<>(allNames)), tmp);
+        } catch (IOException e) {
+            log.error("task별 MCP config 작성 실패 — extras 없이 진행: {}", e.getMessage());
+            return new TaskClaudeArgs(buildClaudeArgs(), null);
+        }
+    }
+
+    private static List<String> assembleArgs(Path configPath, List<String> serverNames) {
         List<String> args = new ArrayList<>();
         args.add("--mcp-config");
-        args.add(mergedConfigPath.toString());
+        args.add(configPath.toString());
         // 합본 외 다른 MCP 소스는 무시 (예측가능성)
         args.add("--strict-mcp-config");
         // 비대화식 모드에서 MCP 도구 호출 자동 허용 (server 단위 와일드카드).
@@ -124,4 +180,9 @@ public class WorkerMcpSupport {
         args.add(allowed.toString());
         return args;
     }
+
+    /**
+     * 작업별 args + (있다면) 임시 파일 경로. 호출자가 exec 종료 후 임시 파일 삭제 책임.
+     */
+    public record TaskClaudeArgs(List<String> args, Path tempConfigPath) {}
 }

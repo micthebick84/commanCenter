@@ -103,10 +103,11 @@ public class WorkerMainLoop {
                 .replace("{title}", task.title())
                 .replace("{description}", task.description());
 
-        // 3. claude exec
+        // 3. claude exec (task별 추가 MCP 주입)
         ClaudeExecAdapter.ExecResult exec;
         try {
-            exec = claude.exec(prompt, repo.dir(), props.analysisTimeout());
+            exec = claude.exec(prompt, repo.dir(), props.analysisTimeout(),
+                    task.mcpsExtra() == null ? java.util.List.of() : task.mcpsExtra());
         } catch (Exception e) {
             safePostFailure(task.id(), "claude exec 실패: " + e.getMessage());
             return;

@@ -13,6 +13,12 @@ interface AnalysisView {
   completedAt: string
 }
 
+interface TaskMcpSpec {
+  name: string
+  url: string
+  transport: string
+}
+
 interface TaskResponse {
   id: number
   githubRepo: string
@@ -25,6 +31,7 @@ interface TaskResponse {
   retryCount: number
   maxRetry: number
   failureReason: string | null
+  mcpsExtra: TaskMcpSpec[]
   createdAt: string
   updatedAt: string
   analysis: AnalysisView | null
@@ -106,6 +113,23 @@ function statusClass(status: string) {
         <q-card-section>
           <div class="text-caption">요청 상세</div>
           <pre style="white-space: pre-wrap">{{ task.description }}</pre>
+        </q-card-section>
+        <q-separator v-if="task.mcpsExtra && task.mcpsExtra.length" />
+        <q-card-section v-if="task.mcpsExtra && task.mcpsExtra.length">
+          <div class="text-caption q-mb-xs">분석에 주입된 추가 MCP (등록 시점 스냅샷)</div>
+          <q-chip
+            v-for="m in task.mcpsExtra"
+            :key="m.name"
+            color="indigo-1"
+            text-color="indigo-9"
+            icon="extension"
+            size="sm"
+            dense
+            :label="`${m.name} (${m.transport})`"
+            class="q-mr-xs q-mb-xs"
+          >
+            <q-tooltip>{{ m.url }}</q-tooltip>
+          </q-chip>
         </q-card-section>
         <q-separator />
         <q-card-section v-if="task.failureReason">

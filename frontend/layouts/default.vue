@@ -27,6 +27,7 @@ function handleLogout() {
         <q-tabs v-if="auth.isAuthenticated" shrink>
           <q-route-tab to="/tasks" label="작업" />
           <q-route-tab v-if="auth.isAdmin" to="/admin/workers" label="워커 헬스" />
+          <q-route-tab v-if="auth.isAdmin" to="/admin/mcp-catalog" label="MCP 카탈로그" />
         </q-tabs>
         <q-space />
         <div v-if="auth.me" class="q-mr-sm">

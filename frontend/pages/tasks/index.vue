@@ -47,6 +47,32 @@ const availableMcps = ref<string[]>([])
 const aliveWorkerCount = ref(0)
 const mcpsLoading = ref(false)
 
+// 관리자 카탈로그 (작업별 추가 MCP)
+interface CatalogEntry {
+  id: number
+  name: string
+  displayName: string
+  url: string
+  transport: string
+  description: string | null
+  lastCheckStatus: string | null
+  lastCheckAt: string | null
+}
+const catalog = ref<CatalogEntry[]>([])
+const selectedCatalogIds = ref<number[]>([])
+const catalogLoading = ref(false)
+
+function statusDotColor(s: string | null): string {
+  if (!s) return 'grey-5'
+  return { HEALTHY: 'positive', DEGRADED: 'warning', DOWN: 'negative' }[s] ?? 'grey-5'
+}
+
+const selectedHasDown = computed(() =>
+  catalog.value.some(
+    (c) => selectedCatalogIds.value.includes(c.id) && c.lastCheckStatus === 'DOWN',
+  ),
+)
+
 // 브랜치 동기화 상태 (Phase 1: repo 입력 → /api/repos/branches 자동 호출)
 type RepoStatus = 'empty' | 'invalid' | 'loading' | 'ok' | 'notfound' | 'error'
 const repoStatus = ref<RepoStatus>('empty')
@@ -184,14 +210,33 @@ async function loadAvailableMcps() {
   }
 }
 
+async function loadCatalog() {
+  catalogLoading.value = true
+  try {
+    catalog.value = await useApi<CatalogEntry[]>('/api/mcp-catalog')
+  } catch {
+    catalog.value = []
+  } finally {
+    catalogLoading.value = false
+  }
+}
+
 function openCreate() {
   draft.githubRepo = ''
   draft.githubBranch = ''
   draft.title = ''
   draft.description = ''
+  selectedCatalogIds.value = []
   resetBranchState()
   showCreate.value = true
   loadAvailableMcps()
+  loadCatalog()
+}
+
+function toggleCatalog(id: number) {
+  const idx = selectedCatalogIds.value.indexOf(id)
+  if (idx >= 0) selectedCatalogIds.value.splice(idx, 1)
+  else selectedCatalogIds.value.push(id)
 }
 
 const canSubmit = computed(
@@ -213,6 +258,7 @@ async function submit() {
         githubBranch: draft.githubBranch,
         title: draft.title,
         description: draft.description,
+        mcpCatalogIds: selectedCatalogIds.value,
       },
     })
     $q.notify({ type: 'positive', message: '작업 등록 완료' })
@@ -441,6 +487,64 @@ function statusClass(status: string) {
             autogrow
             rows="4"
           />
+
+          <q-expansion-item
+            icon="extension"
+            label="이 분석에만 추가할 MCP 도구"
+            :caption="
+              catalog.length === 0
+                ? '관리자 카탈로그 비어있음'
+                : `${selectedCatalogIds.length}개 선택 · 활성 ${catalog.length}개 중`
+            "
+            header-class="text-grey-9 bg-grey-2"
+            dense
+          >
+            <q-banner
+              v-if="catalog.length === 0"
+              class="bg-grey-1 text-grey-8 q-mt-sm"
+              dense
+            >
+              <template #avatar><q-icon name="info" /></template>
+              관리자가 등록한 SSE MCP 카탈로그가 없습니다. 관리자에게 등록 요청하세요.
+            </q-banner>
+            <div v-else class="q-pa-sm">
+              <q-chip
+                v-for="entry in catalog"
+                :key="entry.id"
+                clickable
+                :color="selectedCatalogIds.includes(entry.id) ? 'indigo-6' : 'grey-3'"
+                :text-color="selectedCatalogIds.includes(entry.id) ? 'white' : 'grey-9'"
+                :icon="selectedCatalogIds.includes(entry.id) ? 'check' : 'add'"
+                @click="toggleCatalog(entry.id)"
+              >
+                <q-badge
+                  rounded
+                  :color="statusDotColor(entry.lastCheckStatus)"
+                  class="q-mr-xs"
+                  style="min-height: 8px; min-width: 8px; padding: 0"
+                />
+                {{ entry.displayName }}
+                <q-tooltip>
+                  <div><strong>{{ entry.name }}</strong> ({{ entry.transport }})</div>
+                  <div style="max-width: 360px; word-break: break-all">{{ entry.url }}</div>
+                  <div v-if="entry.description" class="q-mt-xs">{{ entry.description }}</div>
+                  <div class="q-mt-xs">
+                    헬스: <strong>{{ entry.lastCheckStatus ?? 'UNKNOWN' }}</strong>
+                  </div>
+                </q-tooltip>
+              </q-chip>
+              <div
+                v-if="selectedHasDown"
+                class="text-caption text-negative q-mt-sm row items-center q-gutter-xs"
+              >
+                <q-icon name="warning" size="14px" />
+                <span>
+                  DOWN 상태 MCP가 포함됨 — claude가 연결 실패해도 분석은 진행되지만 해당 도구는 사용
+                  안 됨. 관리자에게 확인 요청 권장.
+                </span>
+              </div>
+            </div>
+          </q-expansion-item>
         </q-card-section>
         <q-card-actions align="right">
           <q-btn flat label="취소" @click="showCreate = false" />

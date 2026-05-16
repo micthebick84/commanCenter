@@ -1,8 +1,10 @@
 package com.hamonsoft.netismaker.service;
 
 import com.hamonsoft.netismaker.dto.TaskCreateRequest;
+import com.hamonsoft.netismaker.entity.McpCatalogEntry;
 import com.hamonsoft.netismaker.entity.Task;
 import com.hamonsoft.netismaker.entity.TaskAnalysis;
+import com.hamonsoft.netismaker.entity.TaskMcpSpec;
 import com.hamonsoft.netismaker.entity.TaskStatus;
 import com.hamonsoft.netismaker.entity.TaskStatusHistory;
 import com.hamonsoft.netismaker.repository.TaskAnalysisRepository;
@@ -12,10 +14,13 @@ import org.springframework.context.annotation.Profile;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
+import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.OffsetDateTime;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Optional;
 
 /**
@@ -34,6 +39,7 @@ public class TaskService {
     private final TaskRepository taskRepo;
     private final TaskAnalysisRepository analysisRepo;
     private final TaskStatusHistoryRepository historyRepo;
+    private final McpCatalogService mcpCatalogService;
 
     @Value("${app.task.user-concurrent-limit:5}")
     private int userConcurrentLimit;
@@ -43,10 +49,12 @@ public class TaskService {
 
     public TaskService(TaskRepository taskRepo,
                        TaskAnalysisRepository analysisRepo,
-                       TaskStatusHistoryRepository historyRepo) {
+                       TaskStatusHistoryRepository historyRepo,
+                       McpCatalogService mcpCatalogService) {
         this.taskRepo = taskRepo;
         this.analysisRepo = analysisRepo;
         this.historyRepo = historyRepo;
+        this.mcpCatalogService = mcpCatalogService;
     }
 
     @Transactional
@@ -56,12 +64,35 @@ public class TaskService {
             throw TaskException.tooManyRequests(
                     "동시에 보유할 수 있는 미완료 작업 한도(" + userConcurrentLimit + ")를 초과했습니다");
         }
+        List<TaskMcpSpec> extras = resolveMcpExtras(req.mcpCatalogIds());
         Task t = Task.create(req.githubRepo(), req.githubBranch(), req.title(),
-                             req.description(), requesterId, maxRetry);
+                             req.description(), requesterId, maxRetry, extras);
         Task saved = taskRepo.save(t);
         historyRepo.save(TaskStatusHistory.log(saved.getId(), null, TaskStatus.PENDING,
                 "user", requesterId, "작업 등록"));
         return saved;
+    }
+
+    /** 카탈로그 id 리스트 → snapshot 스펙. 비활성/누락 id는 거절. */
+    private List<TaskMcpSpec> resolveMcpExtras(List<Long> catalogIds) {
+        if (catalogIds == null || catalogIds.isEmpty()) return new ArrayList<>();
+        List<McpCatalogEntry> entries = mcpCatalogService.resolveByIds(catalogIds);
+        if (entries.size() != catalogIds.size()) {
+            throw new TaskException(HttpStatus.BAD_REQUEST,
+                    "존재하지 않는 MCP 카탈로그 id 포함. 요청=" + catalogIds.size()
+                            + " 매칭=" + entries.size());
+        }
+        for (McpCatalogEntry e : entries) {
+            if (!e.isEnabled()) {
+                throw new TaskException(HttpStatus.BAD_REQUEST,
+                        "비활성화된 MCP 카탈로그 항목: " + e.getName());
+            }
+        }
+        List<TaskMcpSpec> out = new ArrayList<>(entries.size());
+        for (McpCatalogEntry e : entries) {
+            out.add(new TaskMcpSpec(e.getName(), e.getUrl(), e.getTransport()));
+        }
+        return out;
     }
 
     @Transactional(readOnly = true)

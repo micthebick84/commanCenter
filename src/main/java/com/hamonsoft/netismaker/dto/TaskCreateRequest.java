@@ -4,6 +4,8 @@ import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.Pattern;
 import jakarta.validation.constraints.Size;
 
+import java.util.List;
+
 public record TaskCreateRequest(
         @NotBlank
         @Pattern(regexp = "^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$",
@@ -19,5 +21,8 @@ public record TaskCreateRequest(
         String title,
 
         @NotBlank
-        String description
+        String description,
+
+        /** 카탈로그에서 선택된 추가 MCP id들. null/빈 배열 허용. */
+        List<Long> mcpCatalogIds
 ) {}

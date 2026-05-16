@@ -5,8 +5,12 @@ import lombok.AccessLevel;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
 import lombok.Setter;
+import org.hibernate.annotations.JdbcTypeCode;
+import org.hibernate.type.SqlTypes;
 
 import java.time.OffsetDateTime;
+import java.util.ArrayList;
+import java.util.List;
 
 /**
  *  작업 큐 메인 엔티티. DESIGN §7 com.task와 1:1 매핑.
@@ -66,6 +70,12 @@ public class Task {
     @Setter
     private OffsetDateTime deletedAt;
 
+    /** 작업 등록 시 선택된 추가 MCP 스펙 스냅샷. 워커가 claude -p에 주입. */
+    @JdbcTypeCode(SqlTypes.JSON)
+    @Column(name = "mcps_extra", nullable = false, columnDefinition = "jsonb")
+    @Setter
+    private List<TaskMcpSpec> mcpsExtra = new ArrayList<>();
+
     @Column(name = "created_at", nullable = false, updatable = false)
     private OffsetDateTime createdAt;
 
@@ -74,7 +84,8 @@ public class Task {
     private OffsetDateTime updatedAt;
 
     public static Task create(String githubRepo, String githubBranch, String title,
-                              String description, String requesterId, int maxRetry) {
+                              String description, String requesterId, int maxRetry,
+                              List<TaskMcpSpec> mcpsExtra) {
         Task t = new Task();
         t.githubRepo = githubRepo;
         t.githubBranch = githubBranch == null || githubBranch.isBlank() ? "main" : githubBranch;
@@ -84,6 +95,7 @@ public class Task {
         t.status = TaskStatus.PENDING;
         t.retryCount = 0;
         t.maxRetry = maxRetry;
+        t.mcpsExtra = mcpsExtra == null ? new ArrayList<>() : mcpsExtra;
         OffsetDateTime now = OffsetDateTime.now();
         t.createdAt = now;
         t.updatedAt = now;

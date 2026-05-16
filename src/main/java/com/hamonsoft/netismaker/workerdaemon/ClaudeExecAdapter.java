@@ -1,5 +1,6 @@
 package com.hamonsoft.netismaker.workerdaemon;
 
+import jakarta.annotation.PostConstruct;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.annotation.Profile;
 import org.springframework.stereotype.Component;
@@ -10,6 +11,8 @@ import java.io.IOException;
 import java.io.InputStreamReader;
 import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
@@ -20,6 +23,15 @@ import java.util.concurrent.TimeUnit;
  *
  *  레포 디렉토리에서 실행. stdout 캡처. timeout 만료 시 강제 종료.
  *  WorkerMcpSupport로 합본 MCP config과 도구 허용 인자를 prepend.
+ *
+ *  시작 시 claude 바이너리 경로 자동 탐색:
+ *   ① 설정값(netis-maker.worker.claude-cli-path)이 실제 실행 가능 파일이면 그대로
+ *   ② PATH 환경변수에서 "claude" 검색 (보통 셸 사용자 환경)
+ *   ③ 알려진 설치 경로(~/.local/bin, ~/.claude/local, /opt/homebrew/bin, /usr/local/bin, /usr/bin) 시도
+ *   ④ 모두 실패 시 설정값 그대로 사용 → exec 시점에 명확한 에러 발생
+ *
+ *  ②~③이 필요한 이유: GUI 런처(IntelliJ, IDE)에서 띄운 JVM은 셸 rc를 거치지 않아
+ *  사용자 PATH를 못 받는 경우가 있고, 머신마다 Homebrew prefix가 다르기 때문.
  */
 @Component
 @Profile("worker")
@@ -28,10 +40,68 @@ public class ClaudeExecAdapter {
 
     private final WorkerProperties props;
     private final WorkerMcpSupport mcp;
+    private String resolvedClaudePath;
 
     public ClaudeExecAdapter(WorkerProperties props, WorkerMcpSupport mcp) {
         this.props = props;
         this.mcp = mcp;
+    }
+
+    @PostConstruct
+    public void init() {
+        String configured = props.claudeCliPath();
+        String resolved = resolveClaudePath(configured);
+        if (resolved == null) {
+            log.error("claude CLI 실행 파일을 찾을 수 없습니다. 설정값={}. " +
+                    "PATH 및 ~/.local/bin, ~/.claude/local, /opt/homebrew/bin, /usr/local/bin, /usr/bin 모두 확인 실패. " +
+                    "claude 분석 작업은 실패합니다. CLAUDE_CLI 환경변수로 절대경로 지정 필요.", configured);
+            this.resolvedClaudePath = configured;  // exec 시점에 자연스러운 에러
+        } else if (!resolved.equals(configured)) {
+            log.info("claude CLI 자동 탐색: 설정값 '{}' 없음 → 사용: {}", configured, resolved);
+            this.resolvedClaudePath = resolved;
+        } else {
+            log.info("claude CLI 경로: {}", resolved);
+            this.resolvedClaudePath = resolved;
+        }
+    }
+
+    /** UI/디버그 노출용. */
+    public String getResolvedClaudePath() {
+        return resolvedClaudePath;
+    }
+
+    private static String resolveClaudePath(String configured) {
+        if (isExecutable(configured)) return configured;
+
+        String pathEnv = System.getenv("PATH");
+        if (pathEnv != null && !pathEnv.isBlank()) {
+            for (String dir : pathEnv.split(File.pathSeparator)) {
+                if (dir.isEmpty()) continue;
+                String candidate = dir + File.separator + "claude";
+                if (isExecutable(candidate)) return candidate;
+            }
+        }
+
+        String home = System.getProperty("user.home");
+        for (String candidate : List.of(
+                home + "/.local/bin/claude",
+                home + "/.claude/local/claude",
+                "/opt/homebrew/bin/claude",
+                "/usr/local/bin/claude",
+                "/usr/bin/claude")) {
+            if (isExecutable(candidate)) return candidate;
+        }
+        return null;
+    }
+
+    private static boolean isExecutable(String path) {
+        if (path == null || path.isBlank()) return false;
+        try {
+            Path p = Path.of(path);
+            return Files.isRegularFile(p) && Files.isExecutable(p);
+        } catch (Exception e) {
+            return false;
+        }
     }
 
     public ExecResult exec(String prompt, File workingDir, Duration timeout) throws InterruptedException, IOException {
@@ -41,7 +111,7 @@ public class ClaudeExecAdapter {
         // 2) ARG_MAX(~256KB)를 넘는 큰 프롬프트도 안전
         // 3) ps에 프롬프트 본문이 노출되지 않음 (PAT가 들어있을 경우 보호)
         List<String> cmd = new ArrayList<>();
-        cmd.add(props.claudeCliPath());
+        cmd.add(resolvedClaudePath);
         cmd.add("-p");
         cmd.addAll(mcp.buildClaudeArgs());
         ProcessBuilder pb = new ProcessBuilder(cmd)

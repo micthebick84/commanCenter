@@ -109,7 +109,9 @@ public class WorkerMainLoop {
             return;
         }
         if (exec.exitCode() != 0) {
-            safePostFailure(task.id(), "claude exit=" + exec.exitCode());
+            String tail = exec.stdout() == null ? "" : exec.stdout();
+            if (tail.length() > 2000) tail = "…" + tail.substring(tail.length() - 2000);
+            safePostFailure(task.id(), "claude exit=" + exec.exitCode() + "\n" + tail);
             return;
         }
 

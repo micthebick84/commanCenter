@@ -172,8 +172,17 @@ function randomString(len: number): string {
 
 async function sha256Base64Url(input: string): Promise<string> {
   const data = new TextEncoder().encode(input)
-  const buf = await crypto.subtle.digest('SHA-256', data)
-  return base64UrlEncode(buf)
+  // crypto.subtle은 secure context (https 또는 http://localhost) 에서만 노출.
+  // 사내망 LAN IP(http://10.1.3.19) 같은 insecure context에서는 undefined → JS fallback.
+  if (typeof crypto !== 'undefined' && crypto.subtle && crypto.subtle.digest) {
+    const buf = await crypto.subtle.digest('SHA-256', data)
+    return base64UrlEncode(buf)
+  }
+  const { sha256 } = await import('js-sha256')
+  const hex = sha256(data)
+  const bytes = new Uint8Array(hex.length / 2)
+  for (let i = 0; i < bytes.length; i++) bytes[i] = parseInt(hex.substr(i * 2, 2), 16)
+  return base64UrlEncode(bytes.buffer)
 }
 
 function base64UrlEncode(buf: ArrayBuffer): string {

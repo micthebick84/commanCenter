@@ -7,6 +7,9 @@ export default defineNuxtConfig({
 
   devServer: {
     port: 3001,
+    // 모든 인터페이스 바인딩 → 같은 LAN의 다른 머신에서 http://<this-host-ip>:3001로 접근 가능.
+    // localhost only 원하면 '127.0.0.1' 또는 이 줄 제거.
+    host: '0.0.0.0',
   },
 
   modules: ['@pinia/nuxt', 'nuxt-quasar-ui'],

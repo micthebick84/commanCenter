@@ -3,6 +3,10 @@ interface QueueStats {
   pending: number
   inProgress: number
   awaitingApproval: number
+  approved: number
+  implementing: number
+  prCreated: number
+  implementationFailed: number
   failed: number
   avgDurationMs: number | null
 }
@@ -36,6 +40,26 @@ const avgDurationLabel = computed(() => {
       </div>
       <q-separator vertical />
       <div class="stat">
+        <div class="stat-label">구현대기</div>
+        <div class="stat-value text-deep-purple-9">{{ data.approved }}</div>
+      </div>
+      <q-separator vertical />
+      <div class="stat">
+        <div class="stat-label">구현중</div>
+        <div class="stat-value text-light-blue-9">{{ data.implementing }}</div>
+      </div>
+      <q-separator vertical />
+      <div class="stat">
+        <div class="stat-label">PR생성</div>
+        <div class="stat-value text-teal-9">{{ data.prCreated }}</div>
+      </div>
+      <q-separator vertical />
+      <div class="stat">
+        <div class="stat-label">구현실패</div>
+        <div class="stat-value text-pink-9">{{ data.implementationFailed }}</div>
+      </div>
+      <q-separator vertical />
+      <div class="stat">
         <div class="stat-label">분석실패</div>
         <div class="stat-value text-red-9">{{ data.failed }}</div>
       </div>
@@ -50,7 +74,7 @@ const avgDurationLabel = computed(() => {
 
 <style scoped>
 .stat {
-  min-width: 90px;
+  min-width: 78px;
   text-align: center;
 }
 .stat-label {
@@ -59,7 +83,7 @@ const avgDurationLabel = computed(() => {
   margin-bottom: 2px;
 }
 .stat-value {
-  font-size: 1.5rem;
+  font-size: 1.4rem;
   font-weight: 600;
   line-height: 1;
 }

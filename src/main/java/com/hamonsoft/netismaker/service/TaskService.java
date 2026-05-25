@@ -148,6 +148,16 @@ public class TaskService {
                 isAdmin ? "system" : "user", actorId, "삭제"));
     }
 
+    /**
+     * 관리자 승인 (idempotent).
+     *
+     *  COMPLETED + !approved          ─► analysis.approved=true + task.status=APPROVED (1차 승인)
+     *  COMPLETED + approved           ─► task.status=APPROVED만 전이 (구 데이터 마이그레이션 / 큐 재진입)
+     *  APPROVED/IMPLEMENTING/PR_CREATED 등 ─► conflict (이미 큐/진행중)
+     *
+     * task.status 전이가 핵심 — 워커 큐가 PENDING/APPROVED 둘 다 보고 있어
+     * 승인 즉시 다음 폴링에 picked up되어 worktree 구현 → PR 생성으로 이어짐.
+     */
     @Transactional
     public TaskAnalysis approve(Long taskId, String adminId) {
         Task t = taskRepo.findActiveById(taskId).orElseThrow(TaskException::notFound);
@@ -157,14 +167,23 @@ public class TaskService {
         }
         TaskAnalysis a = analysisRepo.findById(taskId)
                 .orElseThrow(() -> TaskException.conflict("분석 결과가 없습니다"));
-        if (a.isApproved()) {
-            throw TaskException.conflict("이미 승인된 작업입니다");
+
+        String reason;
+        if (!a.isApproved()) {
+            a.setApproved(true);
+            a.setApprovedBy(adminId);
+            a.setApprovedAt(OffsetDateTime.now());
+            reason = "관리자 승인 → 구현 큐 진입";
+        } else {
+            // 이미 approved이지만 status가 COMPLETED인 경우: 구버전 데이터 또는 admin 명시적 재큐잉
+            reason = "이미 승인된 작업 → 구현 큐 재진입";
         }
-        a.setApproved(true);
-        a.setApprovedBy(adminId);
-        a.setApprovedAt(OffsetDateTime.now());
-        historyRepo.save(TaskStatusHistory.log(t.getId(), t.getStatus(), t.getStatus(),
-                "user", adminId, "관리자 승인"));
+
+        TaskStatus from = t.getStatus();
+        t.setStatus(TaskStatus.APPROVED);
+        t.setUpdatedAt(OffsetDateTime.now());
+        historyRepo.save(TaskStatusHistory.log(t.getId(), from, TaskStatus.APPROVED,
+                "user", adminId, reason));
         return a;
     }
 

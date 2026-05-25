@@ -33,3 +33,20 @@ body {
   background: #f5f5f5;
   color: #616161;
 }
+.status-approved {
+  background: #ede7f6;
+  color: #4527a0;
+}
+.status-implementing {
+  background: #e1f5fe;
+  color: #01579b;
+}
+.status-pr-created {
+  background: #e0f2f1;
+  color: #00695c;
+  font-weight: 600;
+}
+.status-impl-failed {
+  background: #fce4ec;
+  color: #ad1457;
+}

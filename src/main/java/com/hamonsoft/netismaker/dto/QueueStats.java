@@ -4,6 +4,10 @@ public record QueueStats(
         long pending,
         long inProgress,
         long awaitingApproval,
+        long approved,
+        long implementing,
+        long prCreated,
+        long implementationFailed,
         long failed,
         Double avgDurationMs
 ) {}

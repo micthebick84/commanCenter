@@ -3,6 +3,13 @@ import { useQuasar } from 'quasar'
 
 definePageMeta({ layout: 'default' })
 
+interface ImplementationView {
+  prUrl: string | null
+  prNumber: number | null
+  headBranch: string | null
+  headSha: string | null
+}
+
 interface TaskResponse {
   id: number
   githubRepo: string
@@ -17,6 +24,7 @@ interface TaskResponse {
   failureReason: string | null
   createdAt: string
   updatedAt: string
+  implementation: ImplementationView | null
 }
 
 interface PageResponse<T> {
@@ -293,13 +301,19 @@ async function remove(t: TaskResponse) {
 }
 
 function statusClass(status: string) {
-  return {
-    PENDING: 'status-chip status-pending',
-    IN_PROGRESS: 'status-chip status-in-progress',
-    COMPLETED: 'status-chip status-completed',
-    FAILED: 'status-chip status-failed',
-    CANCELLED: 'status-chip status-cancelled',
-  }[status] || 'status-chip'
+  return (
+    {
+      PENDING: 'status-chip status-pending',
+      IN_PROGRESS: 'status-chip status-in-progress',
+      COMPLETED: 'status-chip status-completed',
+      FAILED: 'status-chip status-failed',
+      APPROVED: 'status-chip status-approved',
+      IMPLEMENTING: 'status-chip status-implementing',
+      PR_CREATED: 'status-chip status-pr-created',
+      IMPLEMENTATION_FAILED: 'status-chip status-impl-failed',
+      CANCELLED: 'status-chip status-cancelled',
+    }[status] || 'status-chip'
+  )
 }
 </script>
 
@@ -318,6 +332,10 @@ function statusClass(status: string) {
           { label: '분석중', value: 'IN_PROGRESS' },
           { label: '분석완료', value: 'COMPLETED' },
           { label: '분석실패', value: 'FAILED' },
+          { label: '구현대기', value: 'APPROVED' },
+          { label: '구현중', value: 'IMPLEMENTING' },
+          { label: 'PR생성', value: 'PR_CREATED' },
+          { label: '구현실패', value: 'IMPLEMENTATION_FAILED' },
           { label: '취소됨', value: 'CANCELLED' },
         ]"
         emit-value
@@ -341,6 +359,7 @@ function statusClass(status: string) {
         { name: 'title', label: '제목', field: 'title', align: 'left' },
         { name: 'repo', label: '레포', field: 'githubRepo', align: 'left' },
         { name: 'status', label: '상태', field: 'statusLabel', align: 'left' },
+        { name: 'pr', label: 'PR', field: (r) => r.implementation?.prNumber ?? '', align: 'center' },
         { name: 'retry', label: '재시도', field: (r) => `${r.retryCount}/${r.maxRetry}`, align: 'center' },
         { name: 'createdAt', label: '등록', field: 'createdAt', align: 'left' },
         { name: 'actions', label: '', field: () => '', align: 'right' },
@@ -355,6 +374,21 @@ function statusClass(status: string) {
       <template #body-cell-status="props">
         <q-td :props="props">
           <span :class="statusClass(props.row.status)">{{ props.row.statusLabel }}</span>
+        </q-td>
+      </template>
+      <template #body-cell-pr="props">
+        <q-td :props="props">
+          <a
+            v-if="props.row.implementation?.prUrl"
+            :href="props.row.implementation.prUrl"
+            target="_blank"
+            class="text-primary"
+            @click.stop
+          >
+            #{{ props.row.implementation.prNumber }}
+            <q-icon name="open_in_new" size="14px" />
+          </a>
+          <span v-else class="text-grey-5">—</span>
         </q-td>
       </template>
       <template #body-cell-actions="props">

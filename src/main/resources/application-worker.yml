@@ -25,6 +25,13 @@ netis-maker:
     repos-dir: ${REPOS_DIR:${user.home}/netis-maker/repos}
     claude-cli-path: ${CLAUDE_CLI:/opt/homebrew/bin/claude}
     github-pat: ${GITHUB_PAT:}
+    # 구현 단계 — 분석완료 + admin 승인 후 worktree에서 코드 작성 + PR 생성
+    worktree-root: ${WORKTREE_ROOT:${user.home}/netis-maker/worktrees}
+    branch-prefix: ${BRANCH_PREFIX:netismaker/}
+    git-user-name: ${GIT_USER_NAME:netisMaker}
+    git-user-email: ${GIT_USER_EMAIL:netismaker@hamonsoft.local}
+    # 구현은 분석보다 훨씬 오래 걸림 — 큰 코드베이스의 다수 subtask 처리 가정
+    implementation-timeout: ${IMPLEMENTATION_TIMEOUT:45m}
     # DESIGN §11: 한국어 분석 프롬프트 템플릿
     prompt-template: |
       당신은 코드베이스 분석 어시스턴트입니다. 모든 출력은 반드시 한국어로 작성하세요.
@@ -59,3 +66,28 @@ netis-maker:
 
       ## 5. 위험 요소 및 미해결 질문
       - ...
+    # 구현 prompt 템플릿. {branch_name}/{analysis_markdown}/{subtasks_json} 추가 placeholder.
+    # 미설정 시 WorkerMainLoop.defaultImplementationPrompt() 사용.
+    implementation-prompt-template: |
+      당신은 코드 구현 전문가입니다. 현재 디렉토리는 새 git worktree이며
+      브랜치 '{branch_name}'가 체크아웃되어 있습니다.
+      베이스: {github_branch} @ {commit_sha}
+
+      ## 작업
+      {title}
+
+      ## 요구사항
+      {description}
+
+      ## 사전 분석 결과 (참고용 — 우선 따르세요)
+      {analysis_markdown}
+
+      ## 분석된 subtasks (JSON)
+      {subtasks_json}
+
+      ## 지시
+      위 분석에서 제시한 우선순위(H → M → L) 순으로 실제 코드를 수정/추가하세요.
+      - 현재 디렉토리에서 직접 파일을 편집·생성하세요 (cd 금지)
+      - 의미 있는 변경을 누적하세요 (커밋은 워커가 마지막에 한 번에 처리)
+      - 빌드/테스트는 가능하면 수행하되 실패 시 명확한 사유를 출력에 남기세요
+      - 종료 직전에 `git status` 결과를 출력하세요

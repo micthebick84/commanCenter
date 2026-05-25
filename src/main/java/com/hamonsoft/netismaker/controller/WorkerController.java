@@ -3,7 +3,6 @@ package com.hamonsoft.netismaker.controller;
 import com.hamonsoft.netismaker.dto.WorkerHeartbeatRequest;
 import com.hamonsoft.netismaker.dto.WorkerResultRequest;
 import com.hamonsoft.netismaker.dto.WorkerTaskResponse;
-import com.hamonsoft.netismaker.entity.Task;
 import com.hamonsoft.netismaker.service.WorkerService;
 import jakarta.validation.Valid;
 import org.springframework.context.annotation.Profile;
@@ -17,9 +16,9 @@ import java.util.Optional;
 /**
  *  워커 API (X-Worker-API-Key 인증).
  *
- *   POST /worker/heartbeat       ─► worker_heartbeat upsert
- *   GET  /worker/next-task        ─► PENDING 작업 1건 또는 204
- *   POST /worker/tasks/{id}/result ─► 분석 완료/실패 보고
+ *   POST /worker/heartbeat        ─► worker_heartbeat upsert
+ *   GET  /worker/next-task         ─► PENDING/APPROVED 작업 1건 또는 204
+ *   POST /worker/tasks/{id}/result ─► 분석/구현 완료/실패 보고
  */
 @RestController
 @RequestMapping("/worker")
@@ -41,8 +40,8 @@ public class WorkerController {
 
     @GetMapping("/next-task")
     public ResponseEntity<WorkerTaskResponse> nextTask(@RequestParam String workerId) {
-        Optional<Task> claimed = workerService.claimNextTask(workerId);
-        return claimed.map(t -> ResponseEntity.ok(WorkerTaskResponse.of(t)))
+        Optional<WorkerTaskResponse> claimed = workerService.claimNextTask(workerId);
+        return claimed.map(ResponseEntity::ok)
                       .orElseGet(() -> ResponseEntity.noContent().build());
     }
 

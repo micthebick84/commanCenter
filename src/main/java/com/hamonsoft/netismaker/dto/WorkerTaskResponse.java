@@ -1,13 +1,16 @@
 package com.hamonsoft.netismaker.dto;
 
 import com.hamonsoft.netismaker.entity.Task;
+import com.hamonsoft.netismaker.entity.TaskAnalysis;
 import com.hamonsoft.netismaker.entity.TaskMcpSpec;
 
 import java.util.List;
 
 /**
  * 워커가 작업을 claim했을 때 받는 페이로드.
- * 분석에 필요한 최소 필드 + 작업 등록 시 선택된 추가 MCP 스펙.
+ *
+ *  kind=ANALYSIS  → 분석 prompt 실행 (analysisMarkdown/subtasksJson은 null)
+ *  kind=IMPLEMENTATION → worktree에서 구현 prompt 실행 (분석 산출물 동봉, 컨텍스트로 사용)
  */
 public record WorkerTaskResponse(
         Long id,
@@ -15,16 +18,38 @@ public record WorkerTaskResponse(
         String githubBranch,
         String title,
         String description,
-        List<TaskMcpSpec> mcpsExtra
+        Kind kind,
+        List<TaskMcpSpec> mcpsExtra,
+        String analysisMarkdown,
+        String subtasksJson
 ) {
-    public static WorkerTaskResponse of(Task t) {
+    public enum Kind { ANALYSIS, IMPLEMENTATION }
+
+    public static WorkerTaskResponse forAnalysis(Task t) {
         return new WorkerTaskResponse(
                 t.getId(),
                 t.getGithubRepo(),
                 t.getGithubBranch(),
                 t.getTitle(),
                 t.getDescription(),
-                t.getMcpsExtra() == null ? List.of() : List.copyOf(t.getMcpsExtra())
+                Kind.ANALYSIS,
+                t.getMcpsExtra() == null ? List.of() : List.copyOf(t.getMcpsExtra()),
+                null,
+                null
+        );
+    }
+
+    public static WorkerTaskResponse forImplementation(Task t, TaskAnalysis a) {
+        return new WorkerTaskResponse(
+                t.getId(),
+                t.getGithubRepo(),
+                t.getGithubBranch(),
+                t.getTitle(),
+                t.getDescription(),
+                Kind.IMPLEMENTATION,
+                t.getMcpsExtra() == null ? List.of() : List.copyOf(t.getMcpsExtra()),
+                a == null ? "" : a.getMarkdownResult(),
+                a == null ? "[]" : a.getSubtasksJson()
         );
     }
 }

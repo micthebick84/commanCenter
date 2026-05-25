@@ -15,8 +15,16 @@ public record WorkerProperties(
         String reposDir,
         String claudeCliPath,
         String githubPat,
+        // 분석 prompt
         String promptTemplate,
-        Duration analysisTimeout
+        Duration analysisTimeout,
+        // 구현 단계
+        String worktreeRoot,
+        String branchPrefix,
+        String gitUserName,
+        String gitUserEmail,
+        String implementationPromptTemplate,
+        Duration implementationTimeout
 ) {
     public WorkerProperties {
         if (id == null || id.isBlank()) id = "mac-worker-1";
@@ -25,5 +33,14 @@ public record WorkerProperties(
         if (heartbeatIntervalSeconds <= 0) heartbeatIntervalSeconds = 10;
         if (claudeCliPath == null || claudeCliPath.isBlank()) claudeCliPath = "claude";
         if (analysisTimeout == null) analysisTimeout = Duration.ofMinutes(10);
+        // 구현 단계 기본값
+        if (worktreeRoot == null || worktreeRoot.isBlank()) {
+            String home = System.getProperty("user.home");
+            worktreeRoot = home + "/netis-maker/worktrees";
+        }
+        if (branchPrefix == null || branchPrefix.isBlank()) branchPrefix = "netismaker/";
+        if (gitUserName == null || gitUserName.isBlank()) gitUserName = "netisMaker";
+        if (gitUserEmail == null || gitUserEmail.isBlank()) gitUserEmail = "netismaker@hamonsoft.local";
+        if (implementationTimeout == null) implementationTimeout = Duration.ofMinutes(45);
     }
 }

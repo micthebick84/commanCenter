@@ -76,6 +76,29 @@ public class Task {
     @Setter
     private List<TaskMcpSpec> mcpsExtra = new ArrayList<>();
 
+    /** 구현 결과 PR URL. PR_CREATED 시 set. */
+    @Column(name = "pr_url", length = 500)
+    @Setter
+    private String prUrl;
+
+    @Column(name = "pr_number")
+    @Setter
+    private Integer prNumber;
+
+    /** 구현 시 푸시한 브랜치명 (예: netismaker/task-12-add-rbac). */
+    @Column(name = "head_branch", length = 255)
+    @Setter
+    private String headBranch;
+
+    @Column(name = "head_sha", length = 40)
+    @Setter
+    private String headSha;
+
+    /** 구현 시 claude/git/gh 출력 합본. 디버그 + admin 검토용. */
+    @Column(name = "implementation_log", columnDefinition = "TEXT")
+    @Setter
+    private String implementationLog;
+
     @Column(name = "created_at", nullable = false, updatable = false)
     private OffsetDateTime createdAt;
 

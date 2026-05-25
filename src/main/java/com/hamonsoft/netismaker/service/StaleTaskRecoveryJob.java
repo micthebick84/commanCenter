@@ -33,8 +33,13 @@ public class StaleTaskRecoveryJob {
     private final TaskRepository taskRepo;
     private final TaskStatusHistoryRepository historyRepo;
 
+    /** 분석은 보통 1~5분 — 5분 기본 적정 */
     @Value("${app.task.stale-threshold-minutes:5}")
-    private int staleThresholdMinutes;
+    private int analysisStaleThresholdMinutes;
+
+    /** 구현은 수십분~수시간 — 60분 기본. 5분으로 회수하면 정상 작업도 강제 종료됨 */
+    @Value("${app.task.implementation-stale-threshold-minutes:60}")
+    private int implementationStaleThresholdMinutes;
 
     public StaleTaskRecoveryJob(TaskRepository taskRepo, TaskStatusHistoryRepository historyRepo) {
         this.taskRepo = taskRepo;
@@ -44,17 +49,39 @@ public class StaleTaskRecoveryJob {
     @Scheduled(fixedRateString = "${app.task.stale-check-interval-ms:60000}")
     @Transactional
     public void recoverStale() {
-        OffsetDateTime threshold = OffsetDateTime.now().minusMinutes(staleThresholdMinutes);
-        List<Task> stale = taskRepo.findStaleInProgress(threshold);
+        // 단계별 threshold가 다름 (분석 5분 / 구현 60분).
+        // 후보를 가장 짧은 쪽으로 뽑은 다음 단계별 threshold로 후필터.
+        int tightestMinutes = Math.min(analysisStaleThresholdMinutes, implementationStaleThresholdMinutes);
+        OffsetDateTime candidateThreshold = OffsetDateTime.now().minusMinutes(tightestMinutes);
+        List<Task> stale = taskRepo.findStaleInProgress(candidateThreshold);
         if (stale.isEmpty()) return;
+
+        OffsetDateTime analysisThreshold = OffsetDateTime.now().minusMinutes(analysisStaleThresholdMinutes);
+        OffsetDateTime implementationThreshold = OffsetDateTime.now().minusMinutes(implementationStaleThresholdMinutes);
 
         for (Task t : stale) {
             TaskStatus from = t.getStatus();
+            // 단계별 threshold로 후필터: 후보엔 들었지만 자기 단계 threshold 안 넘었으면 skip
+            OffsetDateTime myThreshold = (from == TaskStatus.IMPLEMENTING)
+                    ? implementationThreshold : analysisThreshold;
+            if (t.getClaimedAt() != null && !t.getClaimedAt().isBefore(myThreshold)) {
+                continue;
+            }
             String workerId = t.getWorkerId();
             t.setWorkerId(null);
             t.setClaimedAt(null);
 
-            if (t.getRetryCount() < t.getMaxRetry()) {
+            // 구현중 stale은 partial git 변경/PR 위험 있으므로 retry 없이 IMPLEMENTATION_FAILED.
+            // 분석중 stale은 기존 정책대로 PENDING 복귀(재시도 한도 내) 또는 FAILED.
+            if (from == TaskStatus.IMPLEMENTING) {
+                t.setStatus(TaskStatus.IMPLEMENTATION_FAILED);
+                t.setFailureReason("Stale 회수: 워커 " + workerId + " 응답 없음 (구현 중단)");
+                t.setUpdatedAt(OffsetDateTime.now());
+                historyRepo.save(TaskStatusHistory.log(t.getId(), from, TaskStatus.IMPLEMENTATION_FAILED,
+                        "system", "stale-recovery",
+                        "구현중 stale → 구현실패 (partial commit 회피)"));
+                log.error("Stale 회수: task={} worker={} → IMPLEMENTATION_FAILED", t.getId(), workerId);
+            } else if (t.getRetryCount() < t.getMaxRetry()) {
                 t.setStatus(TaskStatus.PENDING);
                 t.setRetryCount(t.getRetryCount() + 1);
                 t.setUpdatedAt(OffsetDateTime.now());

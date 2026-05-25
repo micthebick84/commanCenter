@@ -106,14 +106,25 @@ public class ClaudeExecAdapter {
     }
 
     public ExecResult exec(String prompt, File workingDir, Duration timeout) throws InterruptedException, IOException {
-        return exec(prompt, workingDir, timeout, List.of());
+        return exec(prompt, workingDir, timeout, List.of(), false);
+    }
+
+    public ExecResult exec(String prompt, File workingDir, Duration timeout, List<TaskMcpSpec> extras)
+            throws InterruptedException, IOException {
+        return exec(prompt, workingDir, timeout, extras, false);
     }
 
     /**
      * task별 추가 MCP 스펙(extras)을 베이스에 머지해 임시 config로 claude 실행.
      * extras가 비어있으면 베이스 args 그대로.
+     *
+     * @param dangerouslySkipPermissions true면 --dangerously-skip-permissions 추가.
+     *   비대화식 모드(claude -p)에서 Write/Edit/Bash 같은 built-in tool 호출이
+     *   기본으로 차단되어 hang 후 종료되는 문제 회피. 구현 단계 전용.
+     *   분석 단계는 read-only라 false로 유지.
      */
-    public ExecResult exec(String prompt, File workingDir, Duration timeout, List<TaskMcpSpec> extras)
+    public ExecResult exec(String prompt, File workingDir, Duration timeout, List<TaskMcpSpec> extras,
+                           boolean dangerouslySkipPermissions)
             throws InterruptedException, IOException {
         long start = System.currentTimeMillis();
         WorkerMcpSupport.TaskClaudeArgs mcpArgs = mcp.buildClaudeArgsForTask(extras);
@@ -125,6 +136,7 @@ public class ClaudeExecAdapter {
             List<String> cmd = new ArrayList<>();
             cmd.add(resolvedClaudePath);
             cmd.add("-p");
+            if (dangerouslySkipPermissions) cmd.add("--dangerously-skip-permissions");
             cmd.addAll(mcpArgs.args());
             ProcessBuilder pb = new ProcessBuilder(cmd)
                     .directory(workingDir)

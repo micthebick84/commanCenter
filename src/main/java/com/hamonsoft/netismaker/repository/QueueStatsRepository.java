@@ -22,7 +22,9 @@ public class QueueStatsRepository {
 
     public QueueStats fetch() {
         Object[] row = (Object[]) em.createNativeQuery("""
-                SELECT pending, in_progress, awaiting_approval, failed, avg_duration_ms
+                SELECT pending, in_progress, awaiting_approval,
+                       approved, implementing, pr_created, implementation_failed,
+                       failed, avg_duration_ms
                 FROM com.task_queue_stats
                 """).getSingleResult();
         return new QueueStats(
@@ -30,7 +32,11 @@ public class QueueStatsRepository {
                 ((Number) row[1]).longValue(),
                 ((Number) row[2]).longValue(),
                 ((Number) row[3]).longValue(),
-                row[4] == null ? null : ((Number) row[4]).doubleValue()
+                ((Number) row[4]).longValue(),
+                ((Number) row[5]).longValue(),
+                ((Number) row[6]).longValue(),
+                ((Number) row[7]).longValue(),
+                row[8] == null ? null : ((Number) row[8]).doubleValue()
         );
     }
 }

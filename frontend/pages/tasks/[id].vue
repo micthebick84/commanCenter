@@ -19,6 +19,14 @@ interface TaskMcpSpec {
   transport: string
 }
 
+interface ImplementationView {
+  prUrl: string | null
+  prNumber: number | null
+  headBranch: string | null
+  headSha: string | null
+  implementationLog: string | null
+}
+
 interface TaskResponse {
   id: number
   githubRepo: string
@@ -35,6 +43,7 @@ interface TaskResponse {
   createdAt: string
   updatedAt: string
   analysis: AnalysisView | null
+  implementation: ImplementationView | null
 }
 
 const route = useRoute()
@@ -56,10 +65,15 @@ const subtasks = computed(() => {
 })
 
 async function approve() {
-  if (!confirm('이 분석 결과를 승인하시겠습니까?')) return
+  if (
+    !confirm(
+      '이 분석 결과를 승인하시겠습니까?\n승인 즉시 워커가 worktree에서 구현 + Draft PR 생성합니다.',
+    )
+  )
+    return
   try {
     await useApi(`/api/tasks/${taskId.value}/approve`, { method: 'POST' })
-    $q.notify({ type: 'positive', message: '승인 완료' })
+    $q.notify({ type: 'positive', message: '승인 완료 — 구현 큐에 진입했습니다' })
     refresh()
   } catch (e: any) {
     $q.notify({ type: 'negative', message: e?.data?.message ?? '승인 실패' })
@@ -77,13 +91,19 @@ async function retry() {
 }
 
 function statusClass(status: string) {
-  return {
-    PENDING: 'status-chip status-pending',
-    IN_PROGRESS: 'status-chip status-in-progress',
-    COMPLETED: 'status-chip status-completed',
-    FAILED: 'status-chip status-failed',
-    CANCELLED: 'status-chip status-cancelled',
-  }[status] || 'status-chip'
+  return (
+    {
+      PENDING: 'status-chip status-pending',
+      IN_PROGRESS: 'status-chip status-in-progress',
+      COMPLETED: 'status-chip status-completed',
+      FAILED: 'status-chip status-failed',
+      APPROVED: 'status-chip status-approved',
+      IMPLEMENTING: 'status-chip status-implementing',
+      PR_CREATED: 'status-chip status-pr-created',
+      IMPLEMENTATION_FAILED: 'status-chip status-impl-failed',
+      CANCELLED: 'status-chip status-cancelled',
+    }[status] || 'status-chip'
+  )
 }
 </script>
 
@@ -146,25 +166,111 @@ function statusClass(status: string) {
         </q-card-section>
       </q-card>
 
-      <q-card v-if="task.analysis" flat bordered>
+      <!-- 구현 결과 카드 (PR 생성 또는 구현 실패 시 노출) -->
+      <q-card
+        v-if="task.implementation"
+        flat
+        bordered
+        class="q-mb-md"
+        :class="task.status === 'PR_CREATED' ? 'bg-green-1' : 'bg-red-1'"
+      >
         <q-card-section class="row items-center">
+          <div class="text-h6">
+            <q-icon
+              :name="task.status === 'PR_CREATED' ? 'merge_type' : 'error'"
+              :color="task.status === 'PR_CREATED' ? 'positive' : 'negative'"
+              class="q-mr-sm"
+            />
+            구현 결과
+          </div>
+          <q-space />
+          <q-btn
+            v-if="task.implementation.prUrl"
+            unelevated
+            color="primary"
+            icon="open_in_new"
+            :label="`PR #${task.implementation.prNumber}`"
+            :href="task.implementation.prUrl"
+            target="_blank"
+          />
+        </q-card-section>
+        <q-separator />
+        <q-card-section v-if="task.implementation.prUrl">
+          <div class="text-caption">PR URL</div>
+          <a :href="task.implementation.prUrl" target="_blank">{{
+            task.implementation.prUrl
+          }}</a>
+          <div class="text-caption q-mt-sm">브랜치</div>
+          <code>{{ task.implementation.headBranch }}</code>
+          <span v-if="task.implementation.headSha" class="text-caption q-ml-sm">
+            @ {{ task.implementation.headSha.slice(0, 7) }}
+          </span>
+        </q-card-section>
+        <q-card-section v-else-if="task.implementation.headBranch">
+          <div class="text-caption text-negative">
+            구현 실패 — 일부 진행됨 (브랜치까지)
+          </div>
+          <div>
+            브랜치: <code>{{ task.implementation.headBranch }}</code>
+            <span v-if="task.implementation.headSha" class="text-caption q-ml-sm">
+              @ {{ task.implementation.headSha.slice(0, 7) }}
+            </span>
+          </div>
+        </q-card-section>
+        <q-expansion-item
+          v-if="task.implementation.implementationLog"
+          icon="terminal"
+          label="구현 로그 (디버그)"
+          header-class="text-grey-9"
+          dense
+        >
+          <q-card-section>
+            <pre
+              style="
+                white-space: pre-wrap;
+                max-height: 400px;
+                overflow: auto;
+                font-size: 11px;
+                font-family: 'Menlo', monospace;
+              "
+              >{{ task.implementation.implementationLog }}</pre
+            >
+          </q-card-section>
+        </q-expansion-item>
+      </q-card>
+
+      <q-card v-if="task.analysis" flat bordered>
+        <q-card-section class="row items-center q-gutter-sm">
           <div class="text-h6">분석 결과</div>
           <q-space />
+          <!-- 승인 상태 chip -->
           <q-chip
             v-if="task.analysis.approved"
             color="positive"
             text-color="white"
-            label="승인됨"
+            icon="check"
+            :label="task.status === 'APPROVED' ? '승인됨 (구현 대기)' : '승인됨'"
             dense
           />
+          <!-- 구현 승인/시작 버튼: admin이고 status=COMPLETED일 때 (승인 여부 무관) -->
+          <!-- - 미승인: 1차 승인 + 큐잉 → '구현 승인' -->
+          <!-- - 이미 승인됨(구 데이터): status만 APPROVED로 전이 → '구현 시작' -->
           <q-btn
-            v-else-if="auth.isAdmin"
+            v-if="auth.isAdmin && task.status === 'COMPLETED'"
             unelevated
             color="positive"
-            icon="check"
-            label="승인"
+            icon="rocket_launch"
+            :label="task.analysis.approved ? '구현 시작' : '구현 승인'"
             @click="approve"
-          />
+          >
+            <q-tooltip>
+              {{
+                task.analysis.approved
+                  ? '이미 승인된 작업입니다. 클릭하면 즉시 구현 큐에 진입합니다.'
+                  : '승인 시 즉시 워커가 worktree에서 구현 + Draft PR 생성'
+              }}
+            </q-tooltip>
+          </q-btn>
         </q-card-section>
         <q-separator />
         <q-card-section>

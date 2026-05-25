@@ -12,6 +12,13 @@ spring:
   # 워커는 HTTP 서버를 띄우지 않음 (단방향 폴링 클라이언트)
   main:
     web-application-type: none
+  # @Scheduled 스레드 풀. 기본 1이라 heartbeat(10s)과 pollAndProcess(5s, 블로킹 N분)가
+  # 같은 thread를 공유 → task 처리 중 heartbeat 못 보내서 UI에서 DOWN 오인.
+  # 4로 늘려 heartbeat/poll/stale-recovery 등이 독립 스레드에서 동작.
+  task:
+    scheduling:
+      pool:
+        size: 4
 
 netis-maker:
   worker:

@@ -82,7 +82,9 @@ public class WorkerMcpSupport {
 
         ObjectNode wrapper = json.createObjectNode();
         wrapper.set("mcpServers", merged);
-        Path target = Paths.get(props.reposDir()).resolveSibling("worker-mcp.json");
+        // 워커별 파일명: 같은 머신에서 두 워커가 동시에 실행될 때 파일 충돌 방지.
+        // 예: worker-mcp-mac-worker-1.json, worker-mcp-mac-worker-2.json
+        Path target = Paths.get(props.reposDir()).resolveSibling("worker-mcp-" + props.id() + ".json");
         Files.createDirectories(target.getParent());
         json.writerWithDefaultPrettyPrinter().writeValue(target.toFile(), wrapper);
 

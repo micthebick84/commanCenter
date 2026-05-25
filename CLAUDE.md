@@ -41,6 +41,26 @@ WORKER_ID=mac-worker-1 \
 - **MCP 자동 주입**: `WorkerMcpSupport`가 `~/.claude.json`의 글로벌+프로젝트 mcpServers를 머지해 `~/netis-maker/worker-mcp.json` 생성. claude -p 호출 시 `--mcp-config + --strict-mcp-config + --allowedTools` prepend.
 - **프롬프트는 stdin으로 전달**: `--allowedTools <tools...>` variadic이 뒤따라오는 prompt arg를 삼키므로 arg 대신 stdin 사용. ARG_MAX/ps 노출 동시 회피.
 
+## 다중 워커 운영 (V1.2)
+
+같은 머신에서 워커 N 프로세스를 동시에 띄울 수 있다 (공유 큐 + SKIP LOCKED).
+
+```bash
+# 터미널 1
+WORKER_ID=mac-worker-1 ./gradlew bootRun --args='--spring.profiles.active=worker'
+
+# 터미널 2 (같은 머신, 다른 WORKER_ID)
+WORKER_ID=mac-worker-2 ./gradlew bootRun --args='--spring.profiles.active=worker'
+```
+
+자동 격리 사항:
+- **MCP config**: `worker-mcp-{WORKER_ID}.json` 으로 파일 충돌 방지
+- **GitRepoCache**: `~/netis-maker/repos/{owner}/{repo}.lock` FileLock으로 cross-process fetch 직렬화
+- **WorktreeService.create**: 같은 락 안에서 worktree add → `.git/worktrees/` 메타 race 방지
+- **heartbeat**: worker_id별로 별도 row, admin/workers UI에 둘 다 표시
+
+**진짜 천장은 Anthropic quota**. 워커가 N대지만 같은 user 구독을 공유 → 시간당 메시지 cap에 빨리 도달하면 모든 워커가 retry/backoff로 자연 직렬화. Max 5x 이상 권장.
+
 ## 작업 상태머신 (V1.1 — 구현 파이프라인)
 
 ```

@@ -33,13 +33,19 @@ public class WorktreeService {
     private static final long GIT_TIMEOUT_SECONDS = 600;
 
     private final WorkerProperties props;
+    private final GitRepoCache repos;
 
-    public WorktreeService(WorkerProperties props) {
+    public WorktreeService(WorkerProperties props, GitRepoCache repos) {
         this.props = props;
+        this.repos = repos;
     }
 
     /**
      * task용 worktree를 새 브랜치로 생성. 기존 path/branch가 있으면 강제로 정리 후 재생성.
+     *
+     * 다중 워커 동시성: GitRepoCache.withRepoLock으로 보호.
+     * 같은 머신의 두 워커가 동일 repo의 다른 task를 동시에 처리할 때
+     * `.git/worktrees/` 메타 파일 동시 수정 race 방지.
      *
      * @param repoCacheDir GitRepoCache.ensureFresh가 반환한 디렉토리 (origin/{baseBranch} 최신화 상태)
      * @param githubRepo   "owner/repo" — worktree path 구성용
@@ -50,6 +56,13 @@ public class WorktreeService {
      */
     public CreatedWorktree create(File repoCacheDir, String githubRepo,
                                   String baseBranch, long taskId, String title)
+            throws IOException, InterruptedException {
+        return repos.withRepoLock(githubRepo,
+                () -> doCreate(repoCacheDir, githubRepo, baseBranch, taskId, title));
+    }
+
+    private CreatedWorktree doCreate(File repoCacheDir, String githubRepo,
+                                     String baseBranch, long taskId, String title)
             throws IOException, InterruptedException {
         String slug = sanitizeForBranch(title);
         String branchName = props.branchPrefix() + "task-" + taskId

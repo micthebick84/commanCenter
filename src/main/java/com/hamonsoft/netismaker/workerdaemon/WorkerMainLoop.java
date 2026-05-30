@@ -154,6 +154,7 @@ public class WorkerMainLoop {
                 exec.stdout(),
                 exec.durationMs(),
                 null,
+                null, null, null, null, null,
                 null, null, null, null, null
         ));
         log.info("분석 완료: id={} duration={}ms warnings={}",
@@ -238,7 +239,8 @@ public class WorkerMainLoop {
                 props.id(),
                 TaskStatus.PR_CREATED,
                 null, null, null, exec.durationMs(), null,
-                pr.url(), pr.number(), wt.branchName(), headSha, exec.stdout()
+                pr.url(), pr.number(), wt.branchName(), headSha, exec.stdout(),
+                null, null, null, null, null
         ));
         log.info("구현 완료 + PR 생성: task={} pr=#{} {}", task.id(), pr.number(), pr.url());
     }
@@ -303,6 +305,7 @@ public class WorkerMainLoop {
             http.postResult(taskId, new WorkerResultRequest(
                     props.id(), TaskStatus.FAILED,
                     null, null, null, null, reason,
+                    null, null, null, null, null,
                     null, null, null, null, null
             ));
         } catch (RestClientException e) {
@@ -316,7 +319,8 @@ public class WorkerMainLoop {
             http.postResult(taskId, new WorkerResultRequest(
                     props.id(), TaskStatus.IMPLEMENTATION_FAILED,
                     null, null, null, null, reason,
-                    null, null, headBranch, headSha, log_
+                    null, null, headBranch, headSha, log_,
+                    null, null, null, null, null
             ));
         } catch (RestClientException e) {
             log.error("구현 실패 보고도 실패함 task={} reason={}", taskId, reason, e);

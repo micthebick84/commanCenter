@@ -100,6 +100,50 @@ public class WorktreeService {
     }
 
     /**
+     * 배포용 worktree 생성. 구현용 create와 달리 새 브랜치를 만들지 않고
+     * 기존 head 브랜치(origin/{headBranch})를 detached 체크아웃한다 (빌드만 필요).
+     * 멱등: 기존 deploy worktree 있으면 강제 제거 후 재생성.
+     *
+     * @param repoCacheDir GitRepoCache.ensureFresh가 반환한 디렉토리 (origin/{headBranch} fetch 상태)
+     * @param githubRepo   "owner/repo"
+     * @param headBranch   배포 대상 브랜치 (PR head)
+     * @param taskId       worktree 경로 구성용
+     * @return 생성된 worktree 디렉토리 (브랜치명은 의미 없어 dir만 사용)
+     */
+    public File createForDeploy(File repoCacheDir, String githubRepo,
+                                String headBranch, long taskId)
+            throws IOException, InterruptedException {
+        return repos.withRepoLock(githubRepo,
+                () -> doCreateForDeploy(repoCacheDir, githubRepo, headBranch, taskId));
+    }
+
+    private File doCreateForDeploy(File repoCacheDir, String githubRepo,
+                                   String headBranch, long taskId)
+            throws IOException, InterruptedException {
+        Path worktreeDir = Paths.get(props.worktreeRoot(), githubRepo, "deploy-" + taskId);
+        Files.createDirectories(worktreeDir.getParent());
+
+        if (Files.exists(worktreeDir)) {
+            log.warn("기존 deploy worktree 발견, 강제 제거: {}", worktreeDir);
+            try {
+                ProcessRunner.run(repoCacheDir, List.of("git", "worktree", "remove", "--force",
+                        worktreeDir.toString()), GIT_TIMEOUT_SECONDS);
+            } catch (Exception e) {
+                log.warn("worktree remove 실패 (계속): {}", e.getMessage());
+            }
+            deleteRecursively(worktreeDir.toFile());
+        }
+
+        ProcessRunner.requireSuccess(repoCacheDir,
+                List.of("git", "worktree", "add", "--force", "--detach",
+                        worktreeDir.toString(), "origin/" + headBranch),
+                GIT_TIMEOUT_SECONDS);
+
+        log.info("deploy worktree 생성: task={} branch={} dir={}", taskId, headBranch, worktreeDir);
+        return worktreeDir.toFile();
+    }
+
+    /**
      * worktree 제거. 실패해도 예외 던지지 않음 (보존 우선, 호출자가 best-effort 정리 시 사용).
      */
     public void remove(File repoCacheDir, File worktreeDir) {

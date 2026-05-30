@@ -40,4 +40,4 @@ if [ -n "$leftover" ]; then
   echo "$leftover" | xargs kill 2>/dev/null || true
 fi
 
-echo "완료 ($stopped개 종료)."
+echo "완료 (${stopped}개 종료)."

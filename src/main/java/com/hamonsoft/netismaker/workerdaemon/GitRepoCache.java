@@ -56,6 +56,35 @@ public class GitRepoCache {
         return withRepoLock(githubRepo, () -> doEnsureFresh(githubRepo, branch));
     }
 
+    /**
+     * 브랜치 checkout 없이 fetch만 수행 (배포용).
+     *
+     * ensureFresh는 {@code git checkout <branch>}를 하는데, 배포 대상 head 브랜치는
+     * 보통 구현 단계의 보존된 worktree가 이미 점유 중이라 checkout이 거부된다
+     * ("already used by worktree"). 배포는 {@code git worktree add --detach origin/<head>}로
+     * 분리 체크아웃하므로 공유 클론에서 브랜치를 checkout할 필요가 없다 — fetch만 하면 된다.
+     *
+     * @return 캐시 디렉토리 (commitSha는 캐시의 현재 HEAD — 배포에선 의미 없음)
+     */
+    public CheckedOutRepo fetchOnly(String githubRepo) throws IOException, InterruptedException {
+        if (!githubRepo.matches("^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")) {
+            throw new IllegalArgumentException("invalid github_repo: " + githubRepo);
+        }
+        return withRepoLock(githubRepo, () -> {
+            Path target = Paths.get(props.reposDir(), githubRepo);
+            Files.createDirectories(target.getParent());
+            if (!Files.exists(target.resolve(".git"))) {
+                // 배포는 분석/구현을 거친 repo 대상이라 보통 이미 캐시됨. 없으면 기본 브랜치로 clone.
+                run(target.getParent().toFile(), "git", "clone",
+                        repoUrl(githubRepo), target.getFileName().toString());
+            } else {
+                run(target.toFile(), "git", "fetch", "--all", "--prune");
+            }
+            String sha = capture(target.toFile(), "git", "rev-parse", "HEAD").trim();
+            return new CheckedOutRepo(target.toFile(), sha);
+        });
+    }
+
     private CheckedOutRepo doEnsureFresh(String githubRepo, String branch) throws IOException, InterruptedException {
         Path target = Paths.get(props.reposDir(), githubRepo);
         Files.createDirectories(target.getParent());

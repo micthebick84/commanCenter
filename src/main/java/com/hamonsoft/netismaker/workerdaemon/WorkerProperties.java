@@ -24,8 +24,30 @@ public record WorkerProperties(
         String gitUserName,
         String gitUserEmail,
         String implementationPromptTemplate,
-        Duration implementationTimeout
+        Duration implementationTimeout,
+        // 배포 단계
+        Deploy deploy
 ) {
+    /** 배포 설정. target=local 만 MVP 구현. */
+    public record Deploy(
+            String target,
+            String portRange,           // 예: "19000-19099"
+            int defaultContainerPort,
+            String publicHost,
+            Duration buildTimeout,
+            String dockerfilePromptTemplate
+    ) {
+        public Deploy {
+            if (target == null || target.isBlank()) target = "local";
+            if (portRange == null || portRange.isBlank()) portRange = "19000-19099";
+            if (defaultContainerPort <= 0) defaultContainerPort = 8080;
+            if (publicHost == null || publicHost.isBlank()) publicHost = "localhost";
+            if (buildTimeout == null) buildTimeout = Duration.ofMinutes(10);
+        }
+        public int portFrom() { return Integer.parseInt(portRange.split("-")[0].trim()); }
+        public int portTo()   { return Integer.parseInt(portRange.split("-")[1].trim()); }
+    }
+
     public WorkerProperties {
         if (id == null || id.isBlank()) id = "mac-worker-1";
         if (apiBaseUrl == null) apiBaseUrl = "http://localhost:8090";
@@ -42,5 +64,6 @@ public record WorkerProperties(
         if (gitUserName == null || gitUserName.isBlank()) gitUserName = "netisMaker";
         if (gitUserEmail == null || gitUserEmail.isBlank()) gitUserEmail = "netismaker@hamonsoft.local";
         if (implementationTimeout == null) implementationTimeout = Duration.ofMinutes(45);
+        if (deploy == null) deploy = new Deploy(null, null, 0, null, null, null);
     }
 }

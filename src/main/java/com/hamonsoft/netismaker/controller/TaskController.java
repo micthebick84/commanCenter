@@ -1,5 +1,6 @@
 package com.hamonsoft.netismaker.controller;
 
+import com.hamonsoft.netismaker.dto.DeployRequest;
 import com.hamonsoft.netismaker.dto.TaskCreateRequest;
 import com.hamonsoft.netismaker.dto.TaskResponse;
 import com.hamonsoft.netismaker.entity.Task;
@@ -99,18 +100,22 @@ public class TaskController {
 
     @PostMapping("/{id}/deploy")
     @PreAuthorize("hasAuthority('ROLE_ADMIN')")
-    public TaskResponse deploy(@PathVariable Long id, JwtAuthenticationToken auth) {
+    public TaskResponse deploy(@PathVariable Long id,
+                               @RequestBody(required = false) DeployRequest body,
+                               JwtAuthenticationToken auth) {
         String adminId = AuthContext.requireUserId(auth);
-        taskService.deploy(id, adminId, null);
+        taskService.deploy(id, adminId, body == null ? null : body.envVars());
         Task t = taskService.getForView(id, adminId, true);
         return TaskResponse.of(t, taskService.getAnalysis(id).orElse(null));
     }
 
     @PostMapping("/{id}/redeploy")
     @PreAuthorize("hasAuthority('ROLE_ADMIN')")
-    public TaskResponse redeploy(@PathVariable Long id, JwtAuthenticationToken auth) {
+    public TaskResponse redeploy(@PathVariable Long id,
+                                 @RequestBody(required = false) DeployRequest body,
+                                 JwtAuthenticationToken auth) {
         String adminId = AuthContext.requireUserId(auth);
-        taskService.redeploy(id, adminId, null);
+        taskService.redeploy(id, adminId, body == null ? null : body.envVars());
         Task t = taskService.getForView(id, adminId, true);
         return TaskResponse.of(t, taskService.getAnalysis(id).orElse(null));
     }

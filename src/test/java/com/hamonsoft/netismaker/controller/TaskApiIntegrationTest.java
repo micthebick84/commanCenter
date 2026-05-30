@@ -60,7 +60,7 @@ class TaskApiIntegrationTest {
     }
 
     private String body(String repo, String title, String desc) throws Exception {
-        return json.writeValueAsString(new TaskCreateRequest(repo, "main", title, desc));
+        return json.writeValueAsString(new TaskCreateRequest(repo, "main", title, desc, java.util.List.of()));
     }
 
     @Test

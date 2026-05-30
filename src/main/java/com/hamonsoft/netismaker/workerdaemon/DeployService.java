@@ -85,6 +85,10 @@ public class DeployService {
                     r.image(), log + r.log());
         } catch (DeployException e) {
             throw e;
+        } catch (com.hamonsoft.netismaker.workerdaemon.deploy.DeployFailedException e) {
+            // 타깃이 빌드/헬스체크 실패를 진단 로그와 함께 보고 — 컨테이너 로그까지 보존.
+            throw new DeployException(e.getMessage(),
+                    log + (e.getLog() == null ? "" : e.getLog()));
         } catch (Exception e) {
             throw new DeployException(e.getClass().getSimpleName() + ": " + e.getMessage(),
                     log.toString());

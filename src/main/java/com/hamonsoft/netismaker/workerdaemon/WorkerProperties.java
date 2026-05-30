@@ -35,7 +35,8 @@ public record WorkerProperties(
             int defaultContainerPort,
             String publicHost,
             Duration buildTimeout,
-            String dockerfilePromptTemplate
+            String dockerfilePromptTemplate,
+            int healthCheckSeconds
     ) {
         public Deploy {
             if (target == null || target.isBlank()) target = "local";
@@ -43,6 +44,7 @@ public record WorkerProperties(
             if (defaultContainerPort <= 0) defaultContainerPort = 8080;
             if (publicHost == null || publicHost.isBlank()) publicHost = "localhost";
             if (buildTimeout == null) buildTimeout = Duration.ofMinutes(10);
+            if (healthCheckSeconds <= 0) healthCheckSeconds = 15;
         }
         public int portFrom() { return Integer.parseInt(portRange.split("-")[0].trim()); }
         public int portTo()   { return Integer.parseInt(portRange.split("-")[1].trim()); }
@@ -64,6 +66,6 @@ public record WorkerProperties(
         if (gitUserName == null || gitUserName.isBlank()) gitUserName = "netisMaker";
         if (gitUserEmail == null || gitUserEmail.isBlank()) gitUserEmail = "netismaker@hamonsoft.local";
         if (implementationTimeout == null) implementationTimeout = Duration.ofMinutes(45);
-        if (deploy == null) deploy = new Deploy(null, null, 0, null, null, null);
+        if (deploy == null) deploy = new Deploy(null, null, 0, null, null, null, 0);
     }
 }

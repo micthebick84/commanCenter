@@ -1,6 +1,7 @@
 package com.hamonsoft.netismaker.workerdaemon;
 
 import com.hamonsoft.netismaker.dto.WorkerTaskResponse;
+import com.hamonsoft.netismaker.entity.EnvVar;
 import com.hamonsoft.netismaker.workerdaemon.deploy.DeployTarget;
 import com.hamonsoft.netismaker.workerdaemon.deploy.DockerfileSupport;
 import lombok.extern.slf4j.Slf4j;
@@ -10,6 +11,7 @@ import org.springframework.stereotype.Component;
 import java.io.File;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.LinkedHashMap;
 import java.util.Map;
 
 /**
@@ -72,12 +74,22 @@ public class DeployService {
 
             String shortSha = task.headSha() == null ? "latest"
                     : task.headSha().substring(0, Math.min(7, task.headSha().length()));
+
+            // env_vars → docker -e 주입용 Map. 빈 key는 제외. LocalDockerTarget이 spec.env()를 -e로 푼다.
+            Map<String, String> env = new LinkedHashMap<>();
+            if (task.envVars() != null) {
+                for (EnvVar ev : task.envVars()) {
+                    if (ev.key() != null && !ev.key().isBlank()) env.put(ev.key(), ev.value());
+                }
+            }
+            log.append("[env 주입: ").append(env.size()).append("개 키]\n");
+
             DeployTarget.DeploySpec spec = new DeployTarget.DeploySpec(
                     wt.toPath(),
                     "netis-task-" + task.id() + ":" + shortSha,
                     "netis-task-" + task.id(),
                     containerPort,
-                    Map.of(),
+                    env,
                     Map.of("netis-maker.task", String.valueOf(task.id())));
 
             DeployTarget.DeployResult r = target.deploy(spec);

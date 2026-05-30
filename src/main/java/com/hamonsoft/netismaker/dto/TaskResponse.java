@@ -24,7 +24,8 @@ public record TaskResponse(
         OffsetDateTime createdAt,
         OffsetDateTime updatedAt,
         AnalysisView analysis,
-        ImplementationView implementation
+        ImplementationView implementation,
+        DeploymentView deployment
 ) {
     public record AnalysisView(
             String markdownResult,
@@ -43,6 +44,15 @@ public record TaskResponse(
             String headBranch,
             String headSha,
             String implementationLog
+    ) {}
+
+    /** DEPLOYED 또는 배포 시도 이후에만 의미 있음. null은 배포 이력 없음. */
+    public record DeploymentView(
+            String deployUrl,
+            Integer deployHostPort,
+            String deployImage,
+            OffsetDateTime deployedAt,
+            String deployLog
     ) {}
 
     public static TaskResponse of(Task t, TaskAnalysis a) {
@@ -65,6 +75,17 @@ public record TaskResponse(
                         t.getHeadSha(),
                         t.getImplementationLog()
                 );
+        boolean hasDeploy = t.getDeployUrl() != null || t.getDeployLog() != null
+                || t.getStatus() == TaskStatus.DEPLOYING
+                || t.getStatus() == TaskStatus.DEPLOY_PENDING
+                || t.getStatus() == TaskStatus.UNDEPLOY_PENDING;
+        DeploymentView dv = !hasDeploy ? null : new DeploymentView(
+                t.getDeployUrl(),
+                t.getDeployHostPort(),
+                t.getDeployImage(),
+                t.getDeployedAt(),
+                t.getDeployLog()
+        );
         return new TaskResponse(
                 t.getId(),
                 t.getGithubRepo(),
@@ -81,7 +102,8 @@ public record TaskResponse(
                 t.getCreatedAt(),
                 t.getUpdatedAt(),
                 av,
-                iv
+                iv,
+                dv
         );
     }
 }

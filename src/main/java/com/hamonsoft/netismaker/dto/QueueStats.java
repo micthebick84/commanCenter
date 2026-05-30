@@ -9,5 +9,9 @@ public record QueueStats(
         long prCreated,
         long implementationFailed,
         long failed,
+        long deployPending,
+        long deploying,
+        long deployed,
+        long deployFailed,
         Double avgDurationMs
 ) {}

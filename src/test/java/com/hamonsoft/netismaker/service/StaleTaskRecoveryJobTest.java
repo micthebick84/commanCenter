@@ -34,7 +34,8 @@ class StaleTaskRecoveryJobTest {
         taskRepo = mock(TaskRepository.class);
         historyRepo = mock(TaskStatusHistoryRepository.class);
         job = new StaleTaskRecoveryJob(taskRepo, historyRepo);
-        ReflectionTestUtils.setField(job, "staleThresholdMinutes", 5);
+        ReflectionTestUtils.setField(job, "analysisStaleThresholdMinutes", 5);
+        ReflectionTestUtils.setField(job, "implementationStaleThresholdMinutes", 5);
     }
 
     @Test
@@ -46,7 +47,7 @@ class StaleTaskRecoveryJobTest {
 
     @Test
     void stale_under_max_retry_returns_to_pending_and_increments() {
-        Task t = Task.create("hamonsoft/repo", "main", "T1", "desc", "user1", 3);
+        Task t = Task.create("hamonsoft/repo", "main", "T1", "desc", "user1", 3, java.util.List.of());
         ReflectionTestUtils.setField(t, "id", 100L);
         t.setStatus(TaskStatus.IN_PROGRESS);
         t.setWorkerId("mac-worker-1");
@@ -66,7 +67,7 @@ class StaleTaskRecoveryJobTest {
 
     @Test
     void stale_at_max_retry_transitions_to_failed() {
-        Task t = Task.create("hamonsoft/repo", "main", "T2", "desc", "user1", 3);
+        Task t = Task.create("hamonsoft/repo", "main", "T2", "desc", "user1", 3, java.util.List.of());
         ReflectionTestUtils.setField(t, "id", 101L);
         t.setStatus(TaskStatus.IN_PROGRESS);
         t.setWorkerId("mac-worker-1");
@@ -85,14 +86,14 @@ class StaleTaskRecoveryJobTest {
 
     @Test
     void multiple_stale_processed_independently() {
-        Task t1 = Task.create("a/b", "main", "T1", "d", "user1", 3);
+        Task t1 = Task.create("a/b", "main", "T1", "d", "user1", 3, java.util.List.of());
         ReflectionTestUtils.setField(t1, "id", 1L);
         t1.setStatus(TaskStatus.IN_PROGRESS);
         t1.setRetryCount(0);
         t1.setClaimedAt(OffsetDateTime.now().minusMinutes(10));
         t1.setWorkerId("w1");
 
-        Task t2 = Task.create("a/b", "main", "T2", "d", "user1", 3);
+        Task t2 = Task.create("a/b", "main", "T2", "d", "user1", 3, java.util.List.of());
         ReflectionTestUtils.setField(t2, "id", 2L);
         t2.setStatus(TaskStatus.IN_PROGRESS);
         t2.setRetryCount(3);

@@ -27,6 +27,14 @@ interface ImplementationView {
   implementationLog: string | null
 }
 
+interface DeploymentView {
+  deployUrl: string | null
+  deployHostPort: number | null
+  deployImage: string | null
+  deployedAt: string | null
+  deployLog: string | null
+}
+
 interface TaskResponse {
   id: number
   githubRepo: string
@@ -44,6 +52,7 @@ interface TaskResponse {
   updatedAt: string
   analysis: AnalysisView | null
   implementation: ImplementationView | null
+  deployment: DeploymentView | null
 }
 
 const route = useRoute()
@@ -80,6 +89,43 @@ async function approve() {
   }
 }
 
+async function deploy() {
+  try {
+    await useApi(`/api/tasks/${taskId.value}/deploy`, { method: 'POST' })
+    $q.notify({ type: 'positive', message: '배포 큐 등록' })
+    refresh()
+  } catch (e: any) {
+    $q.notify({ type: 'negative', message: e?.data?.message ?? '배포 실패' })
+  }
+}
+
+async function redeploy() {
+  try {
+    await useApi(`/api/tasks/${taskId.value}/redeploy`, { method: 'POST' })
+    $q.notify({ type: 'positive', message: '재배포 큐 등록' })
+    refresh()
+  } catch (e: any) {
+    $q.notify({ type: 'negative', message: e?.data?.message ?? '재배포 실패' })
+  }
+}
+
+function undeploy() {
+  $q.dialog({
+    title: '배포 중지',
+    message: '실행 중인 컨테이너를 중지하고 제거합니다. 계속할까요?',
+    cancel: true,
+    persistent: true,
+  }).onOk(async () => {
+    try {
+      await useApi(`/api/tasks/${taskId.value}/undeploy`, { method: 'POST' })
+      $q.notify({ type: 'positive', message: '배포 중지 요청 등록' })
+      refresh()
+    } catch (e: any) {
+      $q.notify({ type: 'negative', message: e?.data?.message ?? '배포 중지 실패' })
+    }
+  })
+}
+
 async function retry() {
   try {
     await useApi(`/api/tasks/${taskId.value}/retry`, { method: 'POST' })
@@ -101,6 +147,11 @@ function statusClass(status: string) {
       IMPLEMENTING: 'status-chip status-implementing',
       PR_CREATED: 'status-chip status-pr-created',
       IMPLEMENTATION_FAILED: 'status-chip status-impl-failed',
+      DEPLOY_PENDING: 'status-chip status-deploy-pending',
+      DEPLOYING: 'status-chip status-deploying',
+      DEPLOYED: 'status-chip status-deployed',
+      DEPLOY_FAILED: 'status-chip status-deploy-failed',
+      UNDEPLOY_PENDING: 'status-chip status-deploying',
       CANCELLED: 'status-chip status-cancelled',
     }[status] || 'status-chip'
   )
@@ -239,6 +290,69 @@ function statusClass(status: string) {
         </q-expansion-item>
       </q-card>
 
+      <!-- 배포 카드 -->
+      <q-card v-if="task.status === 'PR_CREATED' || task.deployment" flat bordered class="q-mb-md">
+        <q-card-section class="row items-center q-gutter-sm">
+          <q-icon name="rocket_launch" color="primary" size="sm" />
+          <div class="text-h6">배포</div>
+          <q-space />
+          <q-btn
+            v-if="auth.isAdmin && task.status === 'PR_CREATED'"
+            unelevated
+            color="primary"
+            icon="rocket_launch"
+            label="배포"
+            @click="deploy"
+          />
+          <q-chip
+            v-if="
+              task.status === 'DEPLOYING' ||
+              task.status === 'DEPLOY_PENDING' ||
+              task.status === 'UNDEPLOY_PENDING'
+            "
+            color="orange"
+            text-color="white"
+            >{{ task.statusLabel }}</q-chip
+          >
+          <template
+            v-if="auth.isAdmin && (task.status === 'DEPLOYED' || task.status === 'DEPLOY_FAILED')"
+          >
+            <q-btn unelevated color="primary" icon="refresh" label="재배포" @click="redeploy" />
+            <q-btn
+              v-if="task.status === 'DEPLOYED'"
+              color="negative"
+              icon="stop"
+              label="중지"
+              outline
+              @click="undeploy"
+            />
+          </template>
+        </q-card-section>
+
+        <q-separator v-if="task.deployment && task.deployment.deployUrl" />
+        <q-card-section v-if="task.deployment && task.deployment.deployUrl">
+          <div class="text-caption text-grey-7">접속 URL</div>
+          <a :href="task.deployment.deployUrl" target="_blank" rel="noopener">{{
+            task.deployment.deployUrl
+          }}</a>
+          <div class="text-caption q-mt-xs">
+            포트 <code>{{ task.deployment.deployHostPort }}</code> · 이미지
+            <code>{{ task.deployment.deployImage }}</code>
+            <span v-if="task.deployment.deployedAt">
+              · {{ new Date(task.deployment.deployedAt).toLocaleString() }}</span
+            >
+          </div>
+        </q-card-section>
+
+        <q-separator v-if="task.status === 'DEPLOY_FAILED'" />
+        <q-card-section v-if="task.status === 'DEPLOY_FAILED'">
+          <q-banner class="bg-red-1 text-red-9">배포 실패: {{ task.failureReason }}</q-banner>
+          <pre v-if="task.deployment && task.deployment.deployLog" class="deploy-log">{{
+            task.deployment.deployLog
+          }}</pre>
+        </q-card-section>
+      </q-card>
+
       <q-card v-if="task.analysis" flat bordered>
         <q-card-section class="row items-center q-gutter-sm">
           <div class="text-h6">분석 결과</div>
@@ -301,3 +415,16 @@ function statusClass(status: string) {
     </template>
   </q-page>
 </template>
+
+<style scoped>
+.deploy-log {
+  max-height: 240px;
+  overflow: auto;
+  background: #1e1e1e;
+  color: #d4d4d4;
+  padding: 8px;
+  border-radius: 4px;
+  font-size: 0.75rem;
+  white-space: pre-wrap;
+}
+</style>

@@ -85,9 +85,11 @@ public class WorkerService {
             t.setStatus(TaskStatus.IN_PROGRESS);
         } else if (from == TaskStatus.APPROVED) {
             t.setStatus(TaskStatus.IMPLEMENTING);
+        } else if (from == TaskStatus.DEPLOY_PENDING || from == TaskStatus.UNDEPLOY_PENDING) {
+            t.setStatus(TaskStatus.DEPLOYING);
         } else {
             throw new TaskException(HttpStatus.INTERNAL_SERVER_ERROR,
-                    "claim 후보가 PENDING/APPROVED가 아님: " + from);
+                    "claim 후보가 처리 가능한 상태가 아님: " + from);
         }
         t.setWorkerId(workerId);
         t.setClaimedAt(OffsetDateTime.now());
@@ -99,6 +101,12 @@ public class WorkerService {
             TaskAnalysis a = analysisRepo.findById(t.getId()).orElse(null);
             return Optional.of(WorkerTaskResponse.forImplementation(t, a));
         }
+        if (from == TaskStatus.DEPLOY_PENDING) {
+            return Optional.of(WorkerTaskResponse.forDeploy(t));
+        }
+        if (from == TaskStatus.UNDEPLOY_PENDING) {
+            return Optional.of(WorkerTaskResponse.forUndeploy(t));
+        }
         return Optional.of(WorkerTaskResponse.forAnalysis(t));
     }
 
@@ -108,13 +116,21 @@ public class WorkerService {
                 .orElseThrow(TaskException::notFound);
 
         TaskStatus current = t.getStatus();
-        if (current != TaskStatus.IN_PROGRESS && current != TaskStatus.IMPLEMENTING) {
+        if (current != TaskStatus.IN_PROGRESS
+                && current != TaskStatus.IMPLEMENTING
+                && current != TaskStatus.DEPLOYING) {
             throw new TaskException(HttpStatus.CONFLICT,
                     "현재 처리중 상태가 아닙니다 (현재: " + current.dbValue() + ")");
         }
         if (t.getWorkerId() != null && !t.getWorkerId().equals(req.workerId())) {
             throw new TaskException(HttpStatus.CONFLICT,
                     "다른 워커가 잡은 작업입니다 (소유: " + t.getWorkerId() + ")");
+        }
+
+        // 배포 단계는 별도 처리 (분석/구현 검증 로직과 분리).
+        if (current == TaskStatus.DEPLOYING) {
+            recordDeployResult(t, req);
+            return;
         }
 
         // 단계별 허용 상태 검증 — 잘못된 보고를 일찍 차단
@@ -184,6 +200,47 @@ public class WorkerService {
             case COMPLETED -> "분석 완료";
             default -> "처리 완료";
         };
+        historyRepo.save(TaskStatusHistory.log(t.getId(), from, t.getStatus(),
+                "worker", req.workerId(), reason));
+    }
+
+    private void recordDeployResult(Task t, WorkerResultRequest req) {
+        TaskStatus from = t.getStatus();
+        String reason;
+        switch (req.status()) {
+            case DEPLOYED -> {
+                if (req.deployUrl() == null || req.deployUrl().isBlank()) {
+                    throw new TaskException(HttpStatus.BAD_REQUEST, "배포완료 시 deployUrl 필수");
+                }
+                t.setStatus(TaskStatus.DEPLOYED);
+                t.setDeployUrl(req.deployUrl());
+                t.setDeployContainerId(req.deployContainerId());
+                t.setDeployHostPort(req.deployHostPort());
+                t.setDeployImage(req.deployImage());
+                t.setDeployedAt(OffsetDateTime.now());
+                t.setDeployLog(req.deployLog());
+                reason = "배포 완료: " + req.deployUrl();
+            }
+            case DEPLOY_FAILED -> {
+                t.setStatus(TaskStatus.DEPLOY_FAILED);
+                t.setFailureReason(req.failureReason() == null ? "원인 미상" : req.failureReason());
+                t.setDeployLog(req.deployLog());
+                reason = t.getFailureReason();
+            }
+            case PR_CREATED -> {
+                t.setStatus(TaskStatus.PR_CREATED);
+                t.setDeployUrl(null);
+                t.setDeployContainerId(null);
+                t.setDeployHostPort(null);
+                t.setDeployImage(null);
+                t.setDeployedAt(null);
+                t.setDeployLog(req.deployLog());
+                reason = "배포 중지 → PR생성 복귀";
+            }
+            default -> throw new TaskException(HttpStatus.BAD_REQUEST,
+                    "배포 단계에서 허용되지 않는 status: " + req.status());
+        }
+        t.setUpdatedAt(OffsetDateTime.now());
         historyRepo.save(TaskStatusHistory.log(t.getId(), from, t.getStatus(),
                 "worker", req.workerId(), reason));
     }

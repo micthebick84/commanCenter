@@ -98,3 +98,22 @@ netis-maker:
       - 의미 있는 변경을 누적하세요 (커밋은 워커가 마지막에 한 번에 처리)
       - 빌드/테스트는 가능하면 수행하되 실패 시 명확한 사유를 출력에 남기세요
       - 종료 직전에 `git status` 결과를 출력하세요
+    deploy:
+      target: ${DEPLOY_TARGET:local}
+      port-range: ${DEPLOY_PORT_RANGE:19000-19099}
+      default-container-port: ${DEPLOY_DEFAULT_PORT:8080}
+      public-host: ${DEPLOY_PUBLIC_HOST:localhost}
+      build-timeout: 10m
+      # 컨테이너 기동 후 생존 확인 grace 기간(초). 이 안에 종료되면 배포실패 + 컨테이너 로그 첨부.
+      health-check-seconds: ${DEPLOY_HEALTHCHECK_SECONDS:15}
+      dockerfile-prompt-template: |
+        당신은 DevOps 엔지니어입니다. 현재 디렉토리는 '{github_repo}'의 '{branch}' 브랜치 체크아웃입니다.
+        이 프로젝트를 컨테이너로 실행하기 위한 production용 Dockerfile을 현재 디렉토리 루트에 생성하세요.
+
+        지침:
+        - 프로젝트 타입(빌드 도구/런타임)을 먼저 감지하세요 (예: Gradle/Maven+JDK, Node, Python 등).
+        - 멀티스테이지 빌드로 최종 이미지를 작게 유지하세요.
+        - 애플리케이션이 LISTEN하는 포트를 EXPOSE 지시어로 반드시 명시하세요.
+        - 외부 DB/서비스 의존은 환경변수로 주입받도록 두고, 빌드 시 필수 단계만 수행하세요.
+        - Dockerfile 외 다른 파일은 만들지 마세요.
+        - 완료 직전에 생성한 Dockerfile 전체 내용을 출력하세요.

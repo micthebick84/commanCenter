@@ -1,0 +1,45 @@
+package com.hamonsoft.netismaker.workerdaemon.deploy;
+
+import java.nio.file.Path;
+import java.util.Map;
+
+/**
+ * 배포 호스트 추상화. 워커는 docker를 직접 호출하지 않고 이 인터페이스만 사용한다.
+ *
+ *  MVP 구현: {@link LocalDockerTarget} (워커 로컬 docker 데몬).
+ *  확장: RemoteSshDockerTarget / RegistryDeployTarget — 같은 인터페이스로 교체.
+ *        설정 netis-maker.worker.deploy.target 으로 주입 선택.
+ */
+public interface DeployTarget {
+
+    /** 빌드 + 실행. hostPort는 타깃이 할당해 DeployResult로 반환. */
+    DeployResult deploy(DeploySpec spec) throws Exception;
+
+    /** 컨테이너 중지 + 제거 (멱등 — 없으면 무시). */
+    void stop(String containerName) throws Exception;
+
+    /** 컨테이너 상태 조회 (보고용). */
+    DeployStatus status(String containerName);
+
+    /**
+     * @param contextDir    빌드 컨텍스트(Dockerfile 포함 worktree)
+     * @param imageName     예: netis-task-7:abcdef1
+     * @param containerName 예: netis-task-7
+     * @param containerPort 컨테이너 내부 LISTEN 포트
+     * @param env           컨테이너 환경변수
+     * @param labels        docker 라벨 (예: netis-maker.task=7)
+     */
+    record DeploySpec(
+            Path contextDir,
+            String imageName,
+            String containerName,
+            int containerPort,
+            Map<String, String> env,
+            Map<String, String> labels
+    ) {}
+
+    /** @param log build+run 합본 출력 tail. */
+    record DeployResult(String url, String containerId, int hostPort, String image, String log) {}
+
+    enum DeployStatus { RUNNING, STOPPED, UNKNOWN }
+}

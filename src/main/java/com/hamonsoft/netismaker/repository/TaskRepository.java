@@ -73,7 +73,9 @@ public interface TaskRepository extends JpaRepository<Task, Long> {
     @Query("""
         SELECT t FROM Task t
         WHERE t.status IN (com.hamonsoft.netismaker.entity.TaskStatus.PENDING,
-                           com.hamonsoft.netismaker.entity.TaskStatus.APPROVED)
+                           com.hamonsoft.netismaker.entity.TaskStatus.APPROVED,
+                           com.hamonsoft.netismaker.entity.TaskStatus.DEPLOY_PENDING,
+                           com.hamonsoft.netismaker.entity.TaskStatus.UNDEPLOY_PENDING)
           AND t.deletedAt IS NULL
         ORDER BY t.createdAt ASC
     """)

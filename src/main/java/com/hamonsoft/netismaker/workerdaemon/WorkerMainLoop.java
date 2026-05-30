@@ -45,6 +45,7 @@ public class WorkerMainLoop {
     private final WorkerMcpSupport mcps;
     private final WorktreeService worktrees;
     private final GitOpsService gitOps;
+    private final DeployService deployService;
 
     public WorkerMainLoop(WorkerProperties props,
                           WorkerHttpClient http,
@@ -53,7 +54,8 @@ public class WorkerMainLoop {
                           PromptResultParser parser,
                           WorkerMcpSupport mcps,
                           WorktreeService worktrees,
-                          GitOpsService gitOps) {
+                          GitOpsService gitOps,
+                          DeployService deployService) {
         this.props = props;
         this.http = http;
         this.repos = repos;
@@ -62,6 +64,7 @@ public class WorkerMainLoop {
         this.mcps = mcps;
         this.worktrees = worktrees;
         this.gitOps = gitOps;
+        this.deployService = deployService;
     }
 
     @Scheduled(fixedRateString = "#{${netis-maker.worker.heartbeat-interval-seconds:10} * 1000}")
@@ -89,19 +92,21 @@ public class WorkerMainLoop {
         log.info("작업 claim: id={} kind={} repo={}/{}", task.id(), task.kind(),
                 task.githubRepo(), task.githubBranch());
         try {
-            if (task.kind() == WorkerTaskResponse.Kind.IMPLEMENTATION) {
-                processImplementation(task);
-            } else {
-                processAnalysis(task);
+            switch (task.kind()) {
+                case IMPLEMENTATION -> processImplementation(task);
+                case DEPLOY -> processDeploy(task);
+                case UNDEPLOY -> processUndeploy(task);
+                default -> processAnalysis(task);
             }
         } catch (Throwable t) {
             log.error("작업 처리 중 예외 task={}", task.id(), t);
-            if (task.kind() == WorkerTaskResponse.Kind.IMPLEMENTATION) {
-                safePostImplementationFailure(task.id(),
+            switch (task.kind()) {
+                case IMPLEMENTATION -> safePostImplementationFailure(task.id(),
                         "처리 중 예외: " + t.getClass().getSimpleName() + ": " + t.getMessage(),
                         null, null, null);
-            } else {
-                safePostAnalysisFailure(task.id(),
+                case DEPLOY, UNDEPLOY -> safePostDeployFailure(task.id(),
+                        "처리 중 예외: " + t.getClass().getSimpleName() + ": " + t.getMessage(), null);
+                default -> safePostAnalysisFailure(task.id(),
                         "처리 중 예외: " + t.getClass().getSimpleName() + ": " + t.getMessage());
             }
         }
@@ -154,6 +159,7 @@ public class WorkerMainLoop {
                 exec.stdout(),
                 exec.durationMs(),
                 null,
+                null, null, null, null, null,
                 null, null, null, null, null
         ));
         log.info("분석 완료: id={} duration={}ms warnings={}",
@@ -238,9 +244,46 @@ public class WorkerMainLoop {
                 props.id(),
                 TaskStatus.PR_CREATED,
                 null, null, null, exec.durationMs(), null,
-                pr.url(), pr.number(), wt.branchName(), headSha, exec.stdout()
+                pr.url(), pr.number(), wt.branchName(), headSha, exec.stdout(),
+                null, null, null, null, null
         ));
         log.info("구현 완료 + PR 생성: task={} pr=#{} {}", task.id(), pr.number(), pr.url());
+    }
+
+    private void processDeploy(WorkerTaskResponse task) {
+        long start = System.currentTimeMillis();
+        com.hamonsoft.netismaker.workerdaemon.deploy.DeployTarget.DeployResult result;
+        try {
+            result = deployService.deploy(task);
+        } catch (DeployService.DeployException e) {
+            safePostDeployFailure(task.id(), e.getMessage(), e.getDeployLog());
+            return;
+        }
+        long durationMs = System.currentTimeMillis() - start;
+        http.postResult(task.id(), WorkerResultRequest.deployed(
+                props.id(), result.url(), result.containerId(), result.hostPort(),
+                result.image(), durationMs, result.log()));
+        log.info("배포 완료: task={} url={}", task.id(), result.url());
+    }
+
+    private void processUndeploy(WorkerTaskResponse task) {
+        try {
+            deployService.undeploy(task.id());
+        } catch (DeployService.DeployException e) {
+            safePostDeployFailure(task.id(), "중지 실패: " + e.getMessage(), e.getDeployLog());
+            return;
+        }
+        http.postResult(task.id(), WorkerResultRequest.undeployed(
+                props.id(), "container netis-task-" + task.id() + " 중지/제거"));
+        log.info("배포 중지 완료: task={}", task.id());
+    }
+
+    private void safePostDeployFailure(Long taskId, String reason, String deployLog) {
+        try {
+            http.postResult(taskId, WorkerResultRequest.deployFailed(props.id(), reason, deployLog));
+        } catch (RestClientException e) {
+            log.error("배포 실패 보고도 실패함 task={} reason={}", taskId, reason, e);
+        }
     }
 
     private String renderImplementationPrompt(WorkerTaskResponse task, String baseSha, String branchName) {
@@ -303,6 +346,7 @@ public class WorkerMainLoop {
             http.postResult(taskId, new WorkerResultRequest(
                     props.id(), TaskStatus.FAILED,
                     null, null, null, null, reason,
+                    null, null, null, null, null,
                     null, null, null, null, null
             ));
         } catch (RestClientException e) {
@@ -316,7 +360,8 @@ public class WorkerMainLoop {
             http.postResult(taskId, new WorkerResultRequest(
                     props.id(), TaskStatus.IMPLEMENTATION_FAILED,
                     null, null, null, null, reason,
-                    null, null, headBranch, headSha, log_
+                    null, null, headBranch, headSha, log_,
+                    null, null, null, null, null
             ));
         } catch (RestClientException e) {
             log.error("구현 실패 보고도 실패함 task={} reason={}", taskId, reason, e);

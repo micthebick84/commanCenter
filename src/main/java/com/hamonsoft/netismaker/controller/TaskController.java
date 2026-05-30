@@ -96,4 +96,31 @@ public class TaskController {
         Task t = taskService.retry(id, userId, isAdmin);
         return TaskResponse.of(t, null);
     }
+
+    @PostMapping("/{id}/deploy")
+    @PreAuthorize("hasAuthority('ROLE_ADMIN')")
+    public TaskResponse deploy(@PathVariable Long id, JwtAuthenticationToken auth) {
+        String adminId = AuthContext.requireUserId(auth);
+        taskService.deploy(id, adminId);
+        Task t = taskService.getForView(id, adminId, true);
+        return TaskResponse.of(t, taskService.getAnalysis(id).orElse(null));
+    }
+
+    @PostMapping("/{id}/redeploy")
+    @PreAuthorize("hasAuthority('ROLE_ADMIN')")
+    public TaskResponse redeploy(@PathVariable Long id, JwtAuthenticationToken auth) {
+        String adminId = AuthContext.requireUserId(auth);
+        taskService.redeploy(id, adminId);
+        Task t = taskService.getForView(id, adminId, true);
+        return TaskResponse.of(t, taskService.getAnalysis(id).orElse(null));
+    }
+
+    @PostMapping("/{id}/undeploy")
+    @PreAuthorize("hasAuthority('ROLE_ADMIN')")
+    public TaskResponse undeploy(@PathVariable Long id, JwtAuthenticationToken auth) {
+        String adminId = AuthContext.requireUserId(auth);
+        taskService.undeploy(id, adminId);
+        Task t = taskService.getForView(id, adminId, true);
+        return TaskResponse.of(t, taskService.getAnalysis(id).orElse(null));
+    }
 }

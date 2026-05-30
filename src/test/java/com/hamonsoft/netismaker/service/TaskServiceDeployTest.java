@@ -9,6 +9,8 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.test.util.ReflectionTestUtils;
 
+import com.hamonsoft.netismaker.entity.EnvVar;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
 
@@ -49,7 +51,7 @@ class TaskServiceDeployTest {
     void deploy_from_pr_created_moves_to_deploy_pending() {
         Task t = taskWithStatus(TaskStatus.PR_CREATED);
         when(taskRepo.findActiveById(42L)).thenReturn(Optional.of(t));
-        Task result = service.deploy(42L, "admin");
+        Task result = service.deploy(42L, "admin", null);
         assertThat(result.getStatus()).isEqualTo(TaskStatus.DEPLOY_PENDING);
         assertThat(result.getWorkerId()).isNull();
         verify(historyRepo).save(any());
@@ -59,7 +61,7 @@ class TaskServiceDeployTest {
     void deploy_from_wrong_status_throws() {
         Task t = taskWithStatus(TaskStatus.COMPLETED);
         when(taskRepo.findActiveById(42L)).thenReturn(Optional.of(t));
-        assertThatThrownBy(() -> service.deploy(42L, "admin"))
+        assertThatThrownBy(() -> service.deploy(42L, "admin", null))
                 .isInstanceOf(TaskException.class)
                 .hasMessageContaining("PR생성");
     }
@@ -68,7 +70,7 @@ class TaskServiceDeployTest {
     void redeploy_from_deployed_moves_to_deploy_pending() {
         Task t = taskWithStatus(TaskStatus.DEPLOYED);
         when(taskRepo.findActiveById(42L)).thenReturn(Optional.of(t));
-        assertThat(service.redeploy(42L, "admin").getStatus())
+        assertThat(service.redeploy(42L, "admin", null).getStatus())
                 .isEqualTo(TaskStatus.DEPLOY_PENDING);
     }
 
@@ -76,7 +78,7 @@ class TaskServiceDeployTest {
     void redeploy_from_deploy_failed_is_allowed() {
         Task t = taskWithStatus(TaskStatus.DEPLOY_FAILED);
         when(taskRepo.findActiveById(42L)).thenReturn(Optional.of(t));
-        assertThat(service.redeploy(42L, "admin").getStatus())
+        assertThat(service.redeploy(42L, "admin", null).getStatus())
                 .isEqualTo(TaskStatus.DEPLOY_PENDING);
     }
 
@@ -94,5 +96,26 @@ class TaskServiceDeployTest {
         when(taskRepo.findActiveById(42L)).thenReturn(Optional.of(t));
         assertThatThrownBy(() -> service.undeploy(42L, "admin"))
                 .isInstanceOf(TaskException.class);
+    }
+
+    @Test
+    void deploy_persists_env_vars() {
+        Task t = taskWithStatus(TaskStatus.PR_CREATED);
+        when(taskRepo.findActiveById(42L)).thenReturn(Optional.of(t));
+        List<EnvVar> env = List.of(new EnvVar("JWT_SECRET", "s3cr3t", true));
+        Task result = service.deploy(42L, "admin", env);
+        assertThat(result.getStatus()).isEqualTo(TaskStatus.DEPLOY_PENDING);
+        assertThat(result.getEnvVars()).hasSize(1);
+        assertThat(result.getEnvVars().get(0).key()).isEqualTo("JWT_SECRET");
+    }
+
+    @Test
+    void deploy_with_null_env_keeps_existing() {
+        Task t = taskWithStatus(TaskStatus.PR_CREATED);
+        t.setEnvVars(new ArrayList<>(List.of(new EnvVar("A", "1", false))));
+        when(taskRepo.findActiveById(42L)).thenReturn(Optional.of(t));
+        Task result = service.deploy(42L, "admin", null);
+        assertThat(result.getEnvVars()).hasSize(1);
+        assertThat(result.getEnvVars().get(0).key()).isEqualTo("A");
     }
 }

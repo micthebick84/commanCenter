@@ -101,7 +101,7 @@ public class TaskController {
     @PreAuthorize("hasAuthority('ROLE_ADMIN')")
     public TaskResponse deploy(@PathVariable Long id, JwtAuthenticationToken auth) {
         String adminId = AuthContext.requireUserId(auth);
-        taskService.deploy(id, adminId);
+        taskService.deploy(id, adminId, null);
         Task t = taskService.getForView(id, adminId, true);
         return TaskResponse.of(t, taskService.getAnalysis(id).orElse(null));
     }
@@ -110,7 +110,7 @@ public class TaskController {
     @PreAuthorize("hasAuthority('ROLE_ADMIN')")
     public TaskResponse redeploy(@PathVariable Long id, JwtAuthenticationToken auth) {
         String adminId = AuthContext.requireUserId(auth);
-        taskService.redeploy(id, adminId);
+        taskService.redeploy(id, adminId, null);
         Task t = taskService.getForView(id, adminId, true);
         return TaskResponse.of(t, taskService.getAnalysis(id).orElse(null));
     }

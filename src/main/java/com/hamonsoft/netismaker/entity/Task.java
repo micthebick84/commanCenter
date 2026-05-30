@@ -99,6 +99,35 @@ public class Task {
     @Setter
     private String implementationLog;
 
+    /** 배포 접속 URL. DEPLOYED 시 set. 예: http://localhost:19000 */
+    @Column(name = "deploy_url", length = 500)
+    @Setter
+    private String deployUrl;
+
+    /** 실행 중인 docker 컨테이너 ID (또는 이름 netis-task-{id}). */
+    @Column(name = "deploy_container_id", length = 100)
+    @Setter
+    private String deployContainerId;
+
+    /** 호스트에 게시된 포트. */
+    @Column(name = "deploy_host_port")
+    @Setter
+    private Integer deployHostPort;
+
+    /** 빌드된 이미지 태그 netis-task-{id}:{shortsha}. */
+    @Column(name = "deploy_image", length = 200)
+    @Setter
+    private String deployImage;
+
+    @Column(name = "deployed_at")
+    @Setter
+    private OffsetDateTime deployedAt;
+
+    /** docker build/run 출력 tail (실패 디버깅 + 성공 기록). */
+    @Column(name = "deploy_log", columnDefinition = "TEXT")
+    @Setter
+    private String deployLog;
+
     @Column(name = "created_at", nullable = false, updatable = false)
     private OffsetDateTime createdAt;
 

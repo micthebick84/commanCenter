@@ -1,5 +1,6 @@
 package com.hamonsoft.netismaker.dto;
 
+import com.hamonsoft.netismaker.entity.EnvVar;
 import com.hamonsoft.netismaker.entity.Task;
 import com.hamonsoft.netismaker.entity.TaskAnalysis;
 import com.hamonsoft.netismaker.entity.TaskMcpSpec;
@@ -21,6 +22,7 @@ public record TaskResponse(
         int maxRetry,
         String failureReason,
         List<TaskMcpSpec> mcpsExtra,
+        List<EnvVar> envVars,
         OffsetDateTime createdAt,
         OffsetDateTime updatedAt,
         AnalysisView analysis,
@@ -99,6 +101,7 @@ public record TaskResponse(
                 t.getMaxRetry(),
                 t.getFailureReason(),
                 t.getMcpsExtra() == null ? List.of() : List.copyOf(t.getMcpsExtra()),
+                t.getEnvVars() == null ? List.of() : List.copyOf(t.getEnvVars()),
                 t.getCreatedAt(),
                 t.getUpdatedAt(),
                 av,

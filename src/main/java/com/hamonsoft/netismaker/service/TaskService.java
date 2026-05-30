@@ -212,4 +212,55 @@ public class TaskService {
                 "재시도 (" + t.getRetryCount() + "/" + t.getMaxRetry() + ")"));
         return t;
     }
+
+    /** PR생성 → 배포대기. admin 한정. 워커가 다음 폴링에 claim해 배포 수행. */
+    @Transactional
+    public Task deploy(Long taskId, String adminId) {
+        Task t = taskRepo.findActiveById(taskId).orElseThrow(TaskException::notFound);
+        if (t.getStatus() != TaskStatus.PR_CREATED) {
+            throw TaskException.conflict("PR생성 상태에서만 배포할 수 있습니다 (현재: "
+                    + t.getStatus().dbValue() + ")");
+        }
+        return toDeployPending(t, adminId, "관리자 배포 요청 → 배포 큐 진입");
+    }
+
+    /** 배포완료/배포실패 → 배포대기 (기존 컨테이너는 배포 시 stop 후 교체). */
+    @Transactional
+    public Task redeploy(Long taskId, String adminId) {
+        Task t = taskRepo.findActiveById(taskId).orElseThrow(TaskException::notFound);
+        if (t.getStatus() != TaskStatus.DEPLOYED && t.getStatus() != TaskStatus.DEPLOY_FAILED) {
+            throw TaskException.conflict("배포완료/배포실패 상태에서만 재배포할 수 있습니다 (현재: "
+                    + t.getStatus().dbValue() + ")");
+        }
+        return toDeployPending(t, adminId, "관리자 재배포 요청 → 배포 큐 진입");
+    }
+
+    /** 배포완료/배포실패 → 배포중지대기. 워커가 claim해 컨테이너 stop 후 PR생성 복귀. */
+    @Transactional
+    public Task undeploy(Long taskId, String adminId) {
+        Task t = taskRepo.findActiveById(taskId).orElseThrow(TaskException::notFound);
+        if (t.getStatus() != TaskStatus.DEPLOYED && t.getStatus() != TaskStatus.DEPLOY_FAILED) {
+            throw TaskException.conflict("배포완료/배포실패 상태에서만 중지할 수 있습니다 (현재: "
+                    + t.getStatus().dbValue() + ")");
+        }
+        TaskStatus from = t.getStatus();
+        t.setStatus(TaskStatus.UNDEPLOY_PENDING);
+        t.setClaimedAt(null);
+        t.setWorkerId(null);
+        t.setUpdatedAt(OffsetDateTime.now());
+        historyRepo.save(TaskStatusHistory.log(t.getId(), from, TaskStatus.UNDEPLOY_PENDING,
+                "user", adminId, "관리자 배포 중지 요청"));
+        return t;
+    }
+
+    private Task toDeployPending(Task t, String adminId, String reason) {
+        TaskStatus from = t.getStatus();
+        t.setStatus(TaskStatus.DEPLOY_PENDING);
+        t.setClaimedAt(null);
+        t.setWorkerId(null);
+        t.setUpdatedAt(OffsetDateTime.now());
+        historyRepo.save(TaskStatusHistory.log(t.getId(), from, TaskStatus.DEPLOY_PENDING,
+                "user", adminId, reason));
+        return t;
+    }
 }

@@ -76,6 +76,12 @@ public class Task {
     @Setter
     private List<TaskMcpSpec> mcpsExtra = new ArrayList<>();
 
+    /** 배포 시 컨테이너에 주입할 환경변수 (key/value/secret). 배포 다이얼로그에서 set. */
+    @JdbcTypeCode(SqlTypes.JSON)
+    @Column(name = "env_vars", nullable = false, columnDefinition = "jsonb")
+    @Setter
+    private List<EnvVar> envVars = new ArrayList<>();
+
     /** 구현 결과 PR URL. PR_CREATED 시 set. */
     @Column(name = "pr_url", length = 500)
     @Setter

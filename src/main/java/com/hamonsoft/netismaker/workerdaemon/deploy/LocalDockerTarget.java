@@ -69,31 +69,29 @@ public class LocalDockerTarget implements DeployTarget {
         logBuf.append(runOut);
         String containerId = runOut.trim();
 
-        // 5. 헬스체크: grace 기간 동안 컨테이너 생존 확인.
-        //    기동 직후(앱 부팅 실패 등) 종료되면 배포실패로 간주하고 컨테이너 로그를 첨부한다.
-        //    grace 안에 포트가 열리면 정상 기동으로 보고 조기 종료. 끝까지 살아있으면(느린 기동)
-        //    배포완료로 처리(포트 미확인은 false-negative 회피).
+        // 5. 헬스체크: grace 기간 동안 컨테이너가 계속 살아있는지 확인.
+        //    앱 부팅 실패로 기동 직후 종료되면 배포실패로 간주하고 컨테이너 로그를 첨부한다.
+        //    NOTE: TCP 포트 연결 체크는 쓰지 않는다 — docker는 컨테이너 앱이 LISTEN하기 전에
+        //    호스트 포트를 즉시 바인딩(docker-proxy)하므로 포트 연결이 false-positive가 된다.
+        //    따라서 "grace 기간 내내 컨테이너 프로세스 생존"만으로 판정한다(크래시 감지에 충분).
         int graceSec = cfg.healthCheckSeconds();
         if (graceSec > 0) {
-            logBuf.append("\n[헬스체크: 최대 ").append(graceSec).append("초 컨테이너 생존 확인]\n");
+            logBuf.append("\n[헬스체크: ").append(graceSec).append("초 동안 컨테이너 생존 확인]\n");
             for (int i = 0; i < graceSec; i++) {
                 Thread.sleep(1000);
                 ContainerState st = inspectState(spec.containerName());
                 if (!st.running()) {
                     String clog = dockerLogsTail(spec.containerName(), 4000);
                     logBuf.append("[헬스체크 실패: 컨테이너가 기동 직후 종료 (exit=")
-                          .append(st.exitCode()).append(")]\n")
+                          .append(st.exitCode()).append(", ").append(i + 1).append("초)]\n")
                           .append("--- container logs ---\n").append(clog).append('\n');
                     throw new DeployFailedException(
                             "컨테이너가 기동 직후 종료됨 (exit=" + st.exitCode()
                                     + "). 앱 부팅 실패 가능 — 컨테이너 로그 확인.",
                             tail(logBuf.toString(), 8000));
                 }
-                if (isPortOpen(hostPort)) {
-                    logBuf.append("[포트 ").append(hostPort).append(" 응답 — 정상 기동 확인]\n");
-                    break;
-                }
             }
+            logBuf.append("[헬스체크 통과: ").append(graceSec).append("초간 생존]\n");
         }
 
         String url = "http://" + cfg.publicHost() + ":" + hostPort;
@@ -152,16 +150,6 @@ public class LocalDockerTarget implements DeployTarget {
             return new ContainerState(running, exit);
         } catch (Exception e) {
             return new ContainerState(false, -1);
-        }
-    }
-
-    /** hostPort에 TCP 연결 가능한지 (앱이 LISTEN 시작했는지) 빠르게 확인. */
-    private boolean isPortOpen(int port) {
-        try (java.net.Socket s = new java.net.Socket()) {
-            s.connect(new java.net.InetSocketAddress("127.0.0.1", port), 500);
-            return true;
-        } catch (Exception e) {
-            return false;
         }
     }
 

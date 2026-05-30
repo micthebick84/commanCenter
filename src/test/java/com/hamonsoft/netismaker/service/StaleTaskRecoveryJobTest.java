@@ -34,7 +34,8 @@ class StaleTaskRecoveryJobTest {
         taskRepo = mock(TaskRepository.class);
         historyRepo = mock(TaskStatusHistoryRepository.class);
         job = new StaleTaskRecoveryJob(taskRepo, historyRepo);
-        ReflectionTestUtils.setField(job, "staleThresholdMinutes", 5);
+        ReflectionTestUtils.setField(job, "analysisStaleThresholdMinutes", 5);
+        ReflectionTestUtils.setField(job, "implementationStaleThresholdMinutes", 5);
     }
 
     @Test

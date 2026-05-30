@@ -51,7 +51,7 @@ public class DeployService {
         try {
             // fetch만 — head 브랜치 checkout은 구현 worktree와 충돌하므로 금지.
             // createForDeploy가 origin/{head}를 --detach로 분리 체크아웃한다.
-            GitRepoCache.CheckedOutRepo repo = repos.fetchOnly(task.githubRepo());
+            GitRepoCache.CheckedOutRepo repo = repos.fetchOnly(task.githubRepo(), task.headBranch());
             File wt = worktrees.createForDeploy(repo.dir(), task.githubRepo(),
                     task.headBranch(), task.id());
             Path dockerfile = wt.toPath().resolve("Dockerfile");

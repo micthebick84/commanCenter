@@ -64,9 +64,14 @@ public class GitRepoCache {
      * ("already used by worktree"). 배포는 {@code git worktree add --detach origin/<head>}로
      * 분리 체크아웃하므로 공유 클론에서 브랜치를 checkout할 필요가 없다 — fetch만 하면 된다.
      *
+     * 캐시는 보통 {@code --depth=1 --branch <base>} 단일 브랜치 shallow clone이라
+     * {@code git fetch --all}만으로는 head 브랜치의 remote-tracking ref가 생기지 않는다.
+     * 따라서 head 브랜치를 명시적 refspec으로 fetch해 {@code origin/<head>}를 만든다.
+     * (이후 createForDeploy가 {@code git worktree add --detach origin/<head>} 사용.)
+     *
      * @return 캐시 디렉토리 (commitSha는 캐시의 현재 HEAD — 배포에선 의미 없음)
      */
-    public CheckedOutRepo fetchOnly(String githubRepo) throws IOException, InterruptedException {
+    public CheckedOutRepo fetchOnly(String githubRepo, String headBranch) throws IOException, InterruptedException {
         if (!githubRepo.matches("^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")) {
             throw new IllegalArgumentException("invalid github_repo: " + githubRepo);
         }
@@ -74,11 +79,13 @@ public class GitRepoCache {
             Path target = Paths.get(props.reposDir(), githubRepo);
             Files.createDirectories(target.getParent());
             if (!Files.exists(target.resolve(".git"))) {
-                // 배포는 분석/구현을 거친 repo 대상이라 보통 이미 캐시됨. 없으면 기본 브랜치로 clone.
-                run(target.getParent().toFile(), "git", "clone",
-                        repoUrl(githubRepo), target.getFileName().toString());
+                // 배포는 분석/구현을 거친 repo 대상이라 보통 이미 캐시됨. 없으면 head 브랜치로 clone.
+                run(target.getParent().toFile(), "git", "clone", "--depth=1",
+                        "--branch", headBranch, repoUrl(githubRepo), target.getFileName().toString());
             } else {
-                run(target.toFile(), "git", "fetch", "--all", "--prune");
+                // head 브랜치를 origin/<head> tracking ref로 명시적 fetch (단일 브랜치 클론 대비).
+                run(target.toFile(), "git", "fetch", "--force", "origin",
+                        headBranch + ":refs/remotes/origin/" + headBranch);
             }
             String sha = capture(target.toFile(), "git", "rev-parse", "HEAD").trim();
             return new CheckedOutRepo(target.toFile(), sha);

@@ -11,7 +11,6 @@ import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.jpa.repository.QueryHints;
 import org.springframework.data.repository.query.Param;
 
-import java.time.OffsetDateTime;
 import java.util.List;
 import java.util.Optional;
 
@@ -87,16 +86,17 @@ public interface TaskRepository extends JpaRepository<Task, Long> {
     }
 
     /**
-     * Stale 회수 잡: 분석중/구현중 상태 + threshold 이상 업데이트 없음.
-     * 회수 시 구현중(IMPLEMENTING)은 IMPLEMENTATION_FAILED로 (재시도하면 partial 변경 위험),
-     * 분석중(IN_PROGRESS)은 기존 정책대로 PENDING으로 (recovery job 참고).
+     * Stale 회수 잡: 워커가 claim해 처리중인(in-flight) 모든 작업.
+     * 회수 여부(워커 사망/행업)는 StaleTaskRecoveryJob이 heartbeat + claimed_at로 판정한다.
      */
     @Query("""
         SELECT t FROM Task t
         WHERE t.status IN (com.hamonsoft.netismaker.entity.TaskStatus.IN_PROGRESS,
-                           com.hamonsoft.netismaker.entity.TaskStatus.IMPLEMENTING)
-          AND t.claimedAt < :threshold
+                           com.hamonsoft.netismaker.entity.TaskStatus.IMPLEMENTING,
+                           com.hamonsoft.netismaker.entity.TaskStatus.DEPLOYING,
+                           com.hamonsoft.netismaker.entity.TaskStatus.UNDEPLOYING)
+          AND t.workerId IS NOT NULL
           AND t.deletedAt IS NULL
     """)
-    List<Task> findStaleInProgress(@Param("threshold") OffsetDateTime threshold);
+    List<Task> findInFlightClaimed();
 }

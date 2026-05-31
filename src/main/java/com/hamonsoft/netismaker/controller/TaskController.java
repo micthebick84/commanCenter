@@ -101,7 +101,7 @@ public class TaskController {
     @PostMapping("/{id}/deploy")
     @PreAuthorize("hasAuthority('ROLE_ADMIN')")
     public TaskResponse deploy(@PathVariable Long id,
-                               @RequestBody(required = false) DeployRequest body,
+                               @Valid @RequestBody(required = false) DeployRequest body,
                                JwtAuthenticationToken auth) {
         String adminId = AuthContext.requireUserId(auth);
         taskService.deploy(id, adminId, body == null ? null : body.envVars());
@@ -112,7 +112,7 @@ public class TaskController {
     @PostMapping("/{id}/redeploy")
     @PreAuthorize("hasAuthority('ROLE_ADMIN')")
     public TaskResponse redeploy(@PathVariable Long id,
-                                 @RequestBody(required = false) DeployRequest body,
+                                 @Valid @RequestBody(required = false) DeployRequest body,
                                  JwtAuthenticationToken auth) {
         String adminId = AuthContext.requireUserId(auth);
         taskService.redeploy(id, adminId, body == null ? null : body.envVars());

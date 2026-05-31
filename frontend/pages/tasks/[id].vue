@@ -194,6 +194,41 @@ async function retry() {
   }
 }
 
+const liveLog = ref('')
+let logSource: EventSource | null = null
+
+function closeLog() {
+  if (logSource) {
+    logSource.close()
+    logSource = null
+  }
+}
+
+function openLog() {
+  closeLog()
+  liveLog.value = ''
+  const token = auth.accessToken
+  if (!token) return
+  const url = `/api/tasks/${taskId.value}/logs/stream?access_token=${encodeURIComponent(token)}`
+  logSource = new EventSource(url)
+  logSource.addEventListener('log', (e) => {
+    liveLog.value += (e as MessageEvent).data + '\n'
+  })
+  logSource.addEventListener('done', () => closeLog())
+  logSource.onerror = () => closeLog()
+}
+
+// in-flight 진입 시 SSE 열고, 벗어나면 닫는다.
+watch(
+  () => task.value?.status,
+  (s) => {
+    if (s === 'DEPLOYING' || s === 'UNDEPLOYING') openLog()
+    else closeLog()
+  },
+)
+
+onUnmounted(() => closeLog())
+
 function statusClass(status: string) {
   return (
     {
@@ -439,16 +474,23 @@ function statusClass(status: string) {
           </div>
         </q-card-section>
 
+        <q-separator v-if="task.status === 'DEPLOYING' || task.status === 'UNDEPLOYING'" />
+        <q-card-section v-if="task.status === 'DEPLOYING' || task.status === 'UNDEPLOYING'">
+          <div class="text-caption text-grey-7 q-mb-xs">실시간 로그</div>
+          <pre class="deploy-log">{{ liveLog || '로그 대기 중…' }}</pre>
+        </q-card-section>
+
         <q-separator v-if="task.status === 'DEPLOY_FAILED'" />
         <q-card-section v-if="task.status === 'DEPLOY_FAILED'">
-          <q-banner class="bg-red-1 text-red-9"
-            >배포 실패: {{ task.failureReason }}</q-banner
-          >
-          <pre
-            v-if="task.deployment && task.deployment.deployLog"
-            class="deploy-log"
-            >{{ task.deployment.deployLog }}</pre
-          >
+          <q-banner class="bg-red-1 text-red-9">배포 실패: {{ task.failureReason }}</q-banner>
+          <pre v-if="task.deployment && task.deployment.deployLog" class="deploy-log">{{ task.deployment.deployLog }}</pre>
+        </q-card-section>
+
+        <q-separator v-if="task.status === 'DEPLOYED' && task.deployment && task.deployment.deployLog" />
+        <q-card-section v-if="task.status === 'DEPLOYED' && task.deployment && task.deployment.deployLog">
+          <q-expansion-item dense label="배포 로그" icon="article">
+            <pre class="deploy-log">{{ task.deployment.deployLog }}</pre>
+          </q-expansion-item>
         </q-card-section>
       </q-card>
 

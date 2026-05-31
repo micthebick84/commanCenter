@@ -25,6 +25,7 @@ public class QueueStatsRepository {
                 SELECT pending, in_progress, awaiting_approval,
                        approved, implementing, pr_created, implementation_failed, failed,
                        deploy_pending, deploying, deployed, deploy_failed,
+                       undeploy_pending, undeploying,
                        avg_duration_ms
                 FROM com.task_queue_stats
                 """).getSingleResult();
@@ -41,7 +42,9 @@ public class QueueStatsRepository {
                 ((Number) row[9]).longValue(),
                 ((Number) row[10]).longValue(),
                 ((Number) row[11]).longValue(),
-                row[12] == null ? null : ((Number) row[12]).doubleValue()
+                ((Number) row[12]).longValue(),
+                ((Number) row[13]).longValue(),
+                row[14] == null ? null : ((Number) row[14]).doubleValue()
         );
     }
 }

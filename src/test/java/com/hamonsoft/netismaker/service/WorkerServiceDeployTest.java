@@ -59,13 +59,25 @@ class WorkerServiceDeployTest {
     }
 
     @Test
-    void claim_undeploy_pending_yields_undeploy_kind_and_sets_deploying() {
+    void claim_undeploy_pending_yields_undeploy_kind_and_sets_undeploying() {
         Task t = taskWithStatus(TaskStatus.UNDEPLOY_PENDING);
         when(taskRepo.findClaimableForUpdateSkipLocked(any(Pageable.class))).thenReturn(List.of(t));
         Optional<WorkerTaskResponse> claimed = service.claimNextTask("mac-worker-1");
         assertThat(claimed).isPresent();
         assertThat(claimed.get().kind()).isEqualTo(WorkerTaskResponse.Kind.UNDEPLOY);
-        assertThat(t.getStatus()).isEqualTo(TaskStatus.DEPLOYING);
+        assertThat(t.getStatus()).isEqualTo(TaskStatus.UNDEPLOYING);
+    }
+
+    @Test
+    void record_undeploy_success_from_undeploying_returns_pr_created() {
+        Task t = taskWithStatus(TaskStatus.UNDEPLOYING);
+        t.setWorkerId("mac-worker-1");
+        t.setDeployUrl("http://localhost:19000");
+        t.setDeployHostPort(19000);
+        when(taskRepo.findById(7L)).thenReturn(Optional.of(t));
+        service.recordResult(7L, WorkerResultRequest.undeployed("mac-worker-1", "중지/제거"));
+        assertThat(t.getStatus()).isEqualTo(TaskStatus.PR_CREATED);
+        assertThat(t.getDeployUrl()).isNull();
     }
 
     @Test

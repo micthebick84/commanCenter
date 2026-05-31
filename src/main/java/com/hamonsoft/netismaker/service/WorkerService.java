@@ -23,9 +23,11 @@ import java.util.Optional;
  *
  *   heartbeat       ─► worker_heartbeat upsert
  *   claimNextTask   ─► PENDING/APPROVED 작업 1건 atomic claim (SKIP LOCKED)
- *                       PENDING  → IN_PROGRESS (kind=ANALYSIS)
- *                       APPROVED → IMPLEMENTING (kind=IMPLEMENTATION, analysis 동봉)
- *   recordResult    ─► 워커가 분석/구현 완료/실패 보고. worker_id 일치 필수.
+ *                       PENDING         → IN_PROGRESS  (kind=ANALYSIS)
+ *                       APPROVED        → IMPLEMENTING  (kind=IMPLEMENTATION, analysis 동봉)
+ *                       DEPLOY_PENDING  → DEPLOYING     (kind=DEPLOY)
+ *                       UNDEPLOY_PENDING → UNDEPLOYING  (kind=UNDEPLOY)
+ *   recordResult    ─► 워커가 분석/구현/배포 완료/실패 보고. worker_id 일치 필수.
  *                       COMPLETED           : task_analysis upsert + status=COMPLETED
  *                       FAILED              : failure_reason + status=FAILED
  *                       PR_CREATED          : pr_url/pr_number/head_* + status=PR_CREATED
@@ -85,8 +87,10 @@ public class WorkerService {
             t.setStatus(TaskStatus.IN_PROGRESS);
         } else if (from == TaskStatus.APPROVED) {
             t.setStatus(TaskStatus.IMPLEMENTING);
-        } else if (from == TaskStatus.DEPLOY_PENDING || from == TaskStatus.UNDEPLOY_PENDING) {
+        } else if (from == TaskStatus.DEPLOY_PENDING) {
             t.setStatus(TaskStatus.DEPLOYING);
+        } else if (from == TaskStatus.UNDEPLOY_PENDING) {
+            t.setStatus(TaskStatus.UNDEPLOYING);
         } else {
             throw new TaskException(HttpStatus.INTERNAL_SERVER_ERROR,
                     "claim 후보가 처리 가능한 상태가 아님: " + from);
@@ -118,7 +122,8 @@ public class WorkerService {
         TaskStatus current = t.getStatus();
         if (current != TaskStatus.IN_PROGRESS
                 && current != TaskStatus.IMPLEMENTING
-                && current != TaskStatus.DEPLOYING) {
+                && current != TaskStatus.DEPLOYING
+                && current != TaskStatus.UNDEPLOYING) {
             throw new TaskException(HttpStatus.CONFLICT,
                     "현재 처리중 상태가 아닙니다 (현재: " + current.dbValue() + ")");
         }
@@ -127,8 +132,8 @@ public class WorkerService {
                     "다른 워커가 잡은 작업입니다 (소유: " + t.getWorkerId() + ")");
         }
 
-        // 배포 단계는 별도 처리 (분석/구현 검증 로직과 분리).
-        if (current == TaskStatus.DEPLOYING) {
+        // 배포/중지 단계는 별도 처리 (분석/구현 검증 로직과 분리).
+        if (current == TaskStatus.DEPLOYING || current == TaskStatus.UNDEPLOYING) {
             recordDeployResult(t, req);
             return;
         }

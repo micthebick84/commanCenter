@@ -123,4 +123,17 @@ class StaleTaskRecoveryJobTest {
         assertThat(t.getStatus()).isEqualTo(TaskStatus.PENDING);
         assertThat(t.getRetryCount()).isEqualTo(1);
     }
+
+    @Test
+    void stale_at_max_retry_transitions_to_failed() {
+        // retry==maxRetry(3) → FAILED, retry_count 변경 없음, failureReason에 "한도 초과" 포함
+        Task t = task(7L, TaskStatus.IN_PROGRESS, "w1", 6, 3); // retryCount=3 == maxRetry=3
+        when(taskRepo.findInFlightClaimed()).thenReturn(List.of(t));
+        when(heartbeatRepo.findAllById(any())).thenReturn(List.of(hb("w1", 300))); // 사망 워커
+        job.recoverStale();
+        assertThat(t.getStatus()).isEqualTo(TaskStatus.FAILED);
+        assertThat(t.getRetryCount()).isEqualTo(3); // 증가 없음
+        assertThat(t.getFailureReason()).contains("한도 초과");
+        verify(historyRepo).save(any());
+    }
 }

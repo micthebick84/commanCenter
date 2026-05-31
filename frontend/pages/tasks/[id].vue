@@ -210,6 +210,7 @@ function statusClass(status: string) {
       DEPLOYED: 'status-chip status-deployed',
       DEPLOY_FAILED: 'status-chip status-deploy-failed',
       UNDEPLOY_PENDING: 'status-chip status-deploying',
+      UNDEPLOYING: 'status-chip status-deploying',
       CANCELLED: 'status-chip status-cancelled',
     }[status] || 'status-chip'
   )
@@ -381,7 +382,8 @@ function statusClass(status: string) {
             v-if="
               task.status === 'DEPLOYING' ||
               task.status === 'DEPLOY_PENDING' ||
-              task.status === 'UNDEPLOY_PENDING'
+              task.status === 'UNDEPLOY_PENDING' ||
+              task.status === 'UNDEPLOYING'
             "
             color="orange"
             text-color="white"

@@ -10,6 +10,7 @@ import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.TimeUnit;
+import java.util.function.Consumer;
 
 /**
  * 워커가 사용하는 외부 프로세스 실행 공통 헬퍼.
@@ -51,6 +52,35 @@ public final class ProcessRunner {
             p.destroyForcibly();
             throw new IOException("process timeout (" + timeoutSeconds + "s): "
                     + String.join(" ", command));
+        }
+        return new Result(p.exitValue(), out.toString());
+    }
+
+    /**
+     * run과 동일하나 stdout을 라인 단위로 onLine 콜백에 흘리며 누적도 함께 반환한다.
+     * 빌드처럼 오래 걸리는 명령의 실시간 로그 스트리밍용.
+     */
+    public static Result runStreaming(File workingDir, List<String> command,
+                                      long timeoutSeconds, Consumer<String> onLine)
+            throws IOException, InterruptedException {
+        log.debug("exec-stream ({}): {}", workingDir, String.join(" ", command));
+        ProcessBuilder pb = new ProcessBuilder(command)
+                .directory(workingDir)
+                .redirectErrorStream(true);
+        Process p = pb.start();
+        StringBuilder out = new StringBuilder();
+        try (BufferedReader br = new BufferedReader(
+                new InputStreamReader(p.getInputStream(), StandardCharsets.UTF_8))) {
+            String line;
+            while ((line = br.readLine()) != null) {
+                out.append(line).append('\n');
+                try { onLine.accept(line); } catch (Exception ignore) { /* 콜백 실패가 빌드를 막지 않음 */ }
+            }
+        }
+        boolean finished = p.waitFor(timeoutSeconds, TimeUnit.SECONDS);
+        if (!finished) {
+            p.destroyForcibly();
+            throw new IOException("process timeout (" + timeoutSeconds + "s): " + String.join(" ", command));
         }
         return new Result(p.exitValue(), out.toString());
     }

@@ -35,6 +35,12 @@ interface DeploymentView {
   deployLog: string | null
 }
 
+interface EnvVar {
+  key: string
+  value: string
+  secret: boolean
+}
+
 interface TaskResponse {
   id: number
   githubRepo: string
@@ -48,6 +54,7 @@ interface TaskResponse {
   maxRetry: number
   failureReason: string | null
   mcpsExtra: TaskMcpSpec[]
+  envVars: EnvVar[]
   createdAt: string
   updatedAt: string
   analysis: AnalysisView | null
@@ -67,7 +74,9 @@ const { data: task, refresh } = useTaskPolling<TaskResponse>(() =>
 const subtasks = computed(() => {
   if (!task.value?.analysis?.subtasksJson) return []
   try {
-    return JSON.parse(task.value.analysis.subtasksJson) as Array<Record<string, string>>
+    return JSON.parse(task.value.analysis.subtasksJson) as Array<
+      Record<string, string>
+    >
   } catch {
     return []
   }
@@ -82,30 +91,76 @@ async function approve() {
     return
   try {
     await useApi(`/api/tasks/${taskId.value}/approve`, { method: 'POST' })
-    $q.notify({ type: 'positive', message: '승인 완료 — 구현 큐에 진입했습니다' })
+    $q.notify({
+      type: 'positive',
+      message: '승인 완료 — 구현 큐에 진입했습니다',
+    })
     refresh()
   } catch (e: any) {
     $q.notify({ type: 'negative', message: e?.data?.message ?? '승인 실패' })
   }
 }
 
-async function deploy() {
-  try {
-    await useApi(`/api/tasks/${taskId.value}/deploy`, { method: 'POST' })
-    $q.notify({ type: 'positive', message: '배포 큐 등록' })
-    refresh()
-  } catch (e: any) {
-    $q.notify({ type: 'negative', message: e?.data?.message ?? '배포 실패' })
-  }
+// 편집용 행: 와이어 포맷(EnvVar)에 UI 전용 상태(reveal) + 안정적 key(id)를 더한다.
+// id는 v-for의 stable key로 써서 행 삭제 시 입력/마스킹 상태가 어긋나지 않게 한다.
+interface EnvRow extends EnvVar {
+  id: number
+  reveal: boolean
 }
 
-async function redeploy() {
+const envDialog = ref(false)
+const envMode = ref<'deploy' | 'redeploy'>('deploy')
+const envRows = ref<EnvRow[]>([])
+let envRowSeq = 0
+
+function openDeployDialog(mode: 'deploy' | 'redeploy') {
+  envMode.value = mode
+  envRows.value = (task.value?.envVars ?? []).map((e) => ({
+    ...e,
+    id: envRowSeq++,
+    reveal: false,
+  }))
+  envDialog.value = true
+}
+
+function addEnvRow() {
+  envRows.value.push({
+    key: '',
+    value: '',
+    secret: false,
+    id: envRowSeq++,
+    reveal: false,
+  })
+}
+
+function removeEnvRow(id: number) {
+  envRows.value = envRows.value.filter((r) => r.id !== id)
+}
+
+async function submitDeploy() {
+  const endpoint = envMode.value === 'deploy' ? 'deploy' : 'redeploy'
+  // UI 전용 필드(id/reveal)는 제외하고 와이어 포맷만 전송.
+  const envVars = envRows.value
+    .map((r) => ({ key: r.key.trim(), value: r.value, secret: r.secret }))
+    .filter((r) => r.key !== '')
   try {
-    await useApi(`/api/tasks/${taskId.value}/redeploy`, { method: 'POST' })
-    $q.notify({ type: 'positive', message: '재배포 큐 등록' })
+    await useApi(`/api/tasks/${taskId.value}/${endpoint}`, {
+      method: 'POST',
+      body: { envVars },
+    })
+    $q.notify({
+      type: 'positive',
+      message: envMode.value === 'deploy' ? '배포 큐 등록' : '재배포 큐 등록',
+    })
+    envDialog.value = false
     refresh()
   } catch (e: any) {
-    $q.notify({ type: 'negative', message: e?.data?.message ?? '재배포 실패' })
+    $q.notify({
+      type: 'negative',
+      message:
+        e?.data?.message ??
+        (envMode.value === 'deploy' ? '배포 실패' : '재배포 실패'),
+    })
   }
 }
 
@@ -121,7 +176,10 @@ function undeploy() {
       $q.notify({ type: 'positive', message: '배포 중지 요청 등록' })
       refresh()
     } catch (e: any) {
-      $q.notify({ type: 'negative', message: e?.data?.message ?? '배포 중지 실패' })
+      $q.notify({
+        type: 'negative',
+        message: e?.data?.message ?? '배포 중지 실패',
+      })
     }
   })
 }
@@ -178,7 +236,10 @@ function statusClass(status: string) {
       <q-card flat bordered class="q-mb-md">
         <q-card-section>
           <div class="text-caption">레포</div>
-          <div>{{ task.githubRepo }} <q-chip dense size="sm" :label="task.githubBranch" /></div>
+          <div>
+            {{ task.githubRepo }}
+            <q-chip dense size="sm" :label="task.githubBranch" />
+          </div>
         </q-card-section>
         <q-separator />
         <q-card-section>
@@ -187,7 +248,9 @@ function statusClass(status: string) {
         </q-card-section>
         <q-separator v-if="task.mcpsExtra && task.mcpsExtra.length" />
         <q-card-section v-if="task.mcpsExtra && task.mcpsExtra.length">
-          <div class="text-caption q-mb-xs">분석에 주입된 추가 MCP (등록 시점 스냅샷)</div>
+          <div class="text-caption q-mb-xs">
+            분석에 주입된 추가 MCP (등록 시점 스냅샷)
+          </div>
           <q-chip
             v-for="m in task.mcpsExtra"
             :key="m.name"
@@ -205,7 +268,9 @@ function statusClass(status: string) {
         <q-separator />
         <q-card-section v-if="task.failureReason">
           <div class="text-caption text-negative">실패 사유</div>
-          <pre style="white-space: pre-wrap; color: #c62828">{{ task.failureReason }}</pre>
+          <pre style="white-space: pre-wrap; color: #c62828">{{
+            task.failureReason
+          }}</pre>
           <q-btn
             unelevated
             color="warning"
@@ -263,7 +328,10 @@ function statusClass(status: string) {
           </div>
           <div>
             브랜치: <code>{{ task.implementation.headBranch }}</code>
-            <span v-if="task.implementation.headSha" class="text-caption q-ml-sm">
+            <span
+              v-if="task.implementation.headSha"
+              class="text-caption q-ml-sm"
+            >
               @ {{ task.implementation.headSha.slice(0, 7) }}
             </span>
           </div>
@@ -291,7 +359,12 @@ function statusClass(status: string) {
       </q-card>
 
       <!-- 배포 카드 -->
-      <q-card v-if="task.status === 'PR_CREATED' || task.deployment" flat bordered class="q-mb-md">
+      <q-card
+        v-if="task.status === 'PR_CREATED' || task.deployment"
+        flat
+        bordered
+        class="q-mb-md"
+      >
         <q-card-section class="row items-center q-gutter-sm">
           <q-icon name="rocket_launch" color="primary" size="sm" />
           <div class="text-h6">배포</div>
@@ -302,7 +375,7 @@ function statusClass(status: string) {
             color="primary"
             icon="rocket_launch"
             label="배포"
-            @click="deploy"
+            @click="openDeployDialog('deploy')"
           />
           <q-chip
             v-if="
@@ -315,9 +388,18 @@ function statusClass(status: string) {
             >{{ task.statusLabel }}</q-chip
           >
           <template
-            v-if="auth.isAdmin && (task.status === 'DEPLOYED' || task.status === 'DEPLOY_FAILED')"
+            v-if="
+              auth.isAdmin &&
+              (task.status === 'DEPLOYED' || task.status === 'DEPLOY_FAILED')
+            "
           >
-            <q-btn unelevated color="primary" icon="refresh" label="재배포" @click="redeploy" />
+            <q-btn
+              unelevated
+              color="primary"
+              icon="refresh"
+              label="재배포"
+              @click="openDeployDialog('redeploy')"
+            />
             <q-btn
               v-if="task.status === 'DEPLOYED'"
               color="negative"
@@ -339,19 +421,102 @@ function statusClass(status: string) {
             포트 <code>{{ task.deployment.deployHostPort }}</code> · 이미지
             <code>{{ task.deployment.deployImage }}</code>
             <span v-if="task.deployment.deployedAt">
-              · {{ new Date(task.deployment.deployedAt).toLocaleString() }}</span
+              ·
+              {{ new Date(task.deployment.deployedAt).toLocaleString() }}</span
             >
+          </div>
+        </q-card-section>
+
+        <q-separator v-if="task.envVars && task.envVars.length" />
+        <q-card-section v-if="task.envVars && task.envVars.length">
+          <div class="text-caption text-grey-7 q-mb-xs">환경변수</div>
+          <div v-for="(e, i) in task.envVars" :key="i" class="text-body2">
+            <code>{{ e.key }}</code> =
+            <span v-if="e.secret" class="text-grey">••••••</span>
+            <code v-else>{{ e.value }}</code>
           </div>
         </q-card-section>
 
         <q-separator v-if="task.status === 'DEPLOY_FAILED'" />
         <q-card-section v-if="task.status === 'DEPLOY_FAILED'">
-          <q-banner class="bg-red-1 text-red-9">배포 실패: {{ task.failureReason }}</q-banner>
-          <pre v-if="task.deployment && task.deployment.deployLog" class="deploy-log">{{
-            task.deployment.deployLog
-          }}</pre>
+          <q-banner class="bg-red-1 text-red-9"
+            >배포 실패: {{ task.failureReason }}</q-banner
+          >
+          <pre
+            v-if="task.deployment && task.deployment.deployLog"
+            class="deploy-log"
+            >{{ task.deployment.deployLog }}</pre
+          >
         </q-card-section>
       </q-card>
+
+      <q-dialog v-model="envDialog">
+        <q-card style="min-width: 480px; max-width: 90vw">
+          <q-card-section class="row items-center">
+            <div class="text-h6">
+              {{ envMode === 'deploy' ? '배포' : '재배포' }} — 환경변수
+            </div>
+            <q-space />
+            <q-btn v-close-popup flat round dense icon="close" />
+          </q-card-section>
+          <q-card-section class="text-caption text-grey-7">
+            컨테이너에 <code>-e KEY=VALUE</code>로 주입됩니다. DB 접속
+            정보·시크릿을 여기에 입력하세요. (예:
+            <code>SPRING_DATASOURCE_URL</code>, <code>JWT_SECRET</code>) 비밀
+            값은 마스킹 표시되지만 평문 저장됩니다.
+          </q-card-section>
+          <q-card-section class="q-gutter-sm">
+            <div
+              v-for="row in envRows"
+              :key="row.id"
+              class="row items-center q-gutter-xs no-wrap"
+            >
+              <q-input
+                v-model="row.key"
+                dense
+                outlined
+                placeholder="KEY"
+                style="flex: 1"
+              />
+              <q-input
+                v-model="row.value"
+                dense
+                outlined
+                placeholder="value"
+                style="flex: 2"
+                :type="row.secret && !row.reveal ? 'password' : 'text'"
+              >
+                <template v-if="row.secret" #append>
+                  <q-icon
+                    :name="row.reveal ? 'visibility_off' : 'visibility'"
+                    class="cursor-pointer"
+                    @click="row.reveal = !row.reveal"
+                  />
+                </template>
+              </q-input>
+              <q-toggle v-model="row.secret" label="비밀" dense />
+              <q-btn
+                flat
+                round
+                dense
+                icon="delete"
+                color="grey"
+                @click="removeEnvRow(row.id)"
+              />
+            </div>
+            <q-btn flat dense icon="add" label="변수 추가" @click="addEnvRow" />
+          </q-card-section>
+          <q-card-actions align="right">
+            <q-btn v-close-popup flat label="취소" />
+            <q-btn
+              unelevated
+              color="primary"
+              :label="envMode === 'deploy' ? '배포' : '재배포'"
+              @click="submitDeploy"
+            />
+          </q-card-actions>
+        </q-card>
+      </q-dialog>
 
       <q-card v-if="task.analysis" flat bordered>
         <q-card-section class="row items-center q-gutter-sm">
@@ -363,7 +528,9 @@ function statusClass(status: string) {
             color="positive"
             text-color="white"
             icon="check"
-            :label="task.status === 'APPROVED' ? '승인됨 (구현 대기)' : '승인됨'"
+            :label="
+              task.status === 'APPROVED' ? '승인됨 (구현 대기)' : '승인됨'
+            "
             dense
           />
           <!-- 구현 승인/시작 버튼: admin이고 status=COMPLETED일 때 (승인 여부 무관) -->
@@ -388,10 +555,13 @@ function statusClass(status: string) {
         </q-card-section>
         <q-separator />
         <q-card-section>
-          <div class="text-caption">소요 시간: {{ task.analysis.durationMs }} ms</div>
-          <pre style="white-space: pre-wrap; font-family: 'Pretendard', sans-serif">{{
-            task.analysis.markdownResult
-          }}</pre>
+          <div class="text-caption">
+            소요 시간: {{ task.analysis.durationMs }} ms
+          </div>
+          <pre
+            style="white-space: pre-wrap; font-family: 'Pretendard', sans-serif"
+            >{{ task.analysis.markdownResult }}</pre
+          >
         </q-card-section>
         <q-separator />
         <q-card-section v-if="subtasks.length">
@@ -402,8 +572,7 @@ function statusClass(status: string) {
                 <q-item-label>{{ idx + 1 }}. {{ s.title }}</q-item-label>
                 <q-item-label caption>{{ s.summary }}</q-item-label>
                 <q-item-label caption>
-                  파일: <code>{{ s.files }}</code>
-                  · LoC: {{ s.estimatedLoc }}
+                  파일: <code>{{ s.files }}</code> · LoC: {{ s.estimatedLoc }}
                   · 위험도:
                   <q-chip dense size="sm" :label="s.risk" />
                 </q-item-label>

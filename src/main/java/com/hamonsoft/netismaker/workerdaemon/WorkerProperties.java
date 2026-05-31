@@ -36,7 +36,11 @@ public record WorkerProperties(
             String publicHost,
             Duration buildTimeout,
             String dockerfilePromptTemplate,
-            int healthCheckSeconds
+            int healthCheckSeconds,
+            // HTTP readiness: 기동 후 이 시간(초) 안에 readinessPath가 HTTP 응답하면 즉시 배포완료로 본다.
+            // 끝까지 응답이 없어도 컨테이너가 살아있으면 (비-HTTP 앱 가능성) liveness 기준으로 완료 처리.
+            int readinessSeconds,
+            String readinessPath
     ) {
         public Deploy {
             if (target == null || target.isBlank()) target = "local";
@@ -45,6 +49,8 @@ public record WorkerProperties(
             if (publicHost == null || publicHost.isBlank()) publicHost = "localhost";
             if (buildTimeout == null) buildTimeout = Duration.ofMinutes(10);
             if (healthCheckSeconds <= 0) healthCheckSeconds = 15;
+            if (readinessSeconds <= 0) readinessSeconds = 40;
+            if (readinessPath == null || readinessPath.isBlank()) readinessPath = "/";
         }
         public int portFrom() { return Integer.parseInt(portRange.split("-")[0].trim()); }
         public int portTo()   { return Integer.parseInt(portRange.split("-")[1].trim()); }
@@ -66,6 +72,6 @@ public record WorkerProperties(
         if (gitUserName == null || gitUserName.isBlank()) gitUserName = "netisMaker";
         if (gitUserEmail == null || gitUserEmail.isBlank()) gitUserEmail = "netismaker@hamonsoft.local";
         if (implementationTimeout == null) implementationTimeout = Duration.ofMinutes(45);
-        if (deploy == null) deploy = new Deploy(null, null, 0, null, null, null, 0);
+        if (deploy == null) deploy = new Deploy(null, null, 0, null, null, null, 0, 0, null);
     }
 }

@@ -69,15 +69,22 @@ public class LocalDockerTarget implements DeployTarget {
         logBuf.append(runOut);
         String containerId = runOut.trim();
 
-        // 5. 헬스체크: grace 기간 동안 컨테이너가 계속 살아있는지 확인.
-        //    앱 부팅 실패로 기동 직후 종료되면 배포실패로 간주하고 컨테이너 로그를 첨부한다.
-        //    NOTE: TCP 포트 연결 체크는 쓰지 않는다 — docker는 컨테이너 앱이 LISTEN하기 전에
-        //    호스트 포트를 즉시 바인딩(docker-proxy)하므로 포트 연결이 false-positive가 된다.
-        //    따라서 "grace 기간 내내 컨테이너 프로세스 생존"만으로 판정한다(크래시 감지에 충분).
+        // 5. 헬스체크: (a) 컨테이너 생존(크래시 감지) + (b) HTTP readiness(실제 서빙 확인).
+        //    매초 컨테이너 생존을 확인하다 기동 직후 종료되면 배포실패로 간주하고 로그를 첨부한다.
+        //    동시에 readinessPath로 HTTP 요청을 보내, 응답이 오면(어떤 상태코드든) 즉시 배포완료.
+        //    NOTE: bare TCP 연결 체크가 아니라 실제 HTTP 라운드트립을 쓴다 — docker-proxy가 컨테이너
+        //    앱 LISTEN 전에 호스트 포트를 바인딩해도, 업스트림 포트가 닫혀 있으면 HTTP는 reset되어
+        //    false-positive가 아니다. 끝까지 HTTP 응답이 없어도 컨테이너가 살아있으면(비-HTTP 앱
+        //    가능성) liveness 기준으로 배포완료 처리한다(false-negative 회피).
         int graceSec = cfg.healthCheckSeconds();
-        if (graceSec > 0) {
-            logBuf.append("\n[헬스체크: ").append(graceSec).append("초 동안 컨테이너 생존 확인]\n");
-            for (int i = 0; i < graceSec; i++) {
+        int readySec = cfg.readinessSeconds();
+        String readyPath = cfg.readinessPath();
+        int limitSec = Math.max(graceSec, readySec);
+        if (limitSec > 0) {
+            logBuf.append("\n[헬스체크: 최대 ").append(limitSec)
+                  .append("초 — 생존 확인 + HTTP readiness(").append(readyPath).append(")]\n");
+            boolean httpReady = false;
+            for (int i = 0; i < limitSec; i++) {
                 Thread.sleep(1000);
                 ContainerState st = inspectState(spec.containerName());
                 if (!st.running()) {
@@ -90,8 +97,17 @@ public class LocalDockerTarget implements DeployTarget {
                                     + "). 앱 부팅 실패 가능 — 컨테이너 로그 확인.",
                             tail(logBuf.toString(), 8000));
                 }
+                if (httpProbe(hostPort, readyPath)) {
+                    httpReady = true;
+                    logBuf.append("[헬스체크 통과: ").append(i + 1)
+                          .append("초 — HTTP readiness 확인(").append(readyPath).append(")]\n");
+                    break;
+                }
             }
-            logBuf.append("[헬스체크 통과: ").append(graceSec).append("초간 생존]\n");
+            if (!httpReady) {
+                logBuf.append("[헬스체크: ").append(limitSec)
+                      .append("초간 생존했으나 HTTP 응답 미확인 — liveness 기준으로 배포완료 처리(비-HTTP 앱 가능)]\n");
+            }
         }
 
         String url = "http://" + cfg.publicHost() + ":" + hostPort;
@@ -136,6 +152,29 @@ public class LocalDockerTarget implements DeployTarget {
             log.warn("docker ps 포트 조회 실패 (계속): {}", e.getMessage());
         }
         return ports;
+    }
+
+    /**
+     * 호스트 포트에서 실제 HTTP 응답이 오는지(=서빙 준비됨) 확인.
+     * 어떤 상태코드든(200/302/401/404/500…) 응답을 받으면 서버가 떠서 서빙 중이라는 뜻.
+     * 연결 거부/리셋/타임아웃은 아직 준비 안 됨으로 본다(예외 → false).
+     */
+    private boolean httpProbe(int hostPort, String path) {
+        String p = path.startsWith("/") ? path : "/" + path;
+        java.net.HttpURLConnection c = null;
+        try {
+            c = (java.net.HttpURLConnection) java.net.URI
+                    .create("http://" + cfg.publicHost() + ":" + hostPort + p).toURL().openConnection();
+            c.setConnectTimeout(2000);
+            c.setReadTimeout(2000);
+            c.setRequestMethod("GET");
+            c.setInstanceFollowRedirects(false);
+            return c.getResponseCode() > 0;
+        } catch (Exception e) {
+            return false;
+        } finally {
+            if (c != null) c.disconnect();
+        }
     }
 
     /** docker inspect로 컨테이너 실행 상태 + 종료코드 조회. */

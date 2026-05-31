@@ -41,6 +41,7 @@ public class StaleTaskRecoveryJob {
     private final TaskRepository taskRepo;
     private final TaskStatusHistoryRepository historyRepo;
     private final WorkerHeartbeatRepository heartbeatRepo;
+    private final DeployLogStreamService deployLogStream;
 
     @Value("${app.task.stale-threshold-minutes:5}")
     private int analysisStaleThresholdMinutes;
@@ -56,10 +57,12 @@ public class StaleTaskRecoveryJob {
 
     public StaleTaskRecoveryJob(TaskRepository taskRepo,
                                 TaskStatusHistoryRepository historyRepo,
-                                WorkerHeartbeatRepository heartbeatRepo) {
+                                WorkerHeartbeatRepository heartbeatRepo,
+                                DeployLogStreamService deployLogStream) {
         this.taskRepo = taskRepo;
         this.historyRepo = historyRepo;
         this.heartbeatRepo = heartbeatRepo;
+        this.deployLogStream = deployLogStream;
     }
 
     @Scheduled(fixedRateString = "${app.task.stale-check-interval-ms:60000}")
@@ -109,11 +112,14 @@ public class StaleTaskRecoveryJob {
                 case DEPLOYING -> {
                     t.setStatus(TaskStatus.DEPLOY_FAILED);
                     t.setFailureReason("Stale 회수: " + why + " (배포 중단)");
+                    deployLogStream.consolidate(t.getId()).ifPresent(t::setDeployLog); // 부분 로그 보존
+                    deployLogStream.finish(t.getId());
                     logTransition(t, from, TaskStatus.DEPLOY_FAILED, "배포중 stale → 배포실패");
                     log.error("Stale 회수: task={} {} → DEPLOY_FAILED", t.getId(), why);
                 }
                 case UNDEPLOYING -> {
                     t.setStatus(TaskStatus.UNDEPLOY_PENDING);
+                    deployLogStream.finish(t.getId()); // 진행중 청크 정리(재큐잉되면 새로 스트리밍)
                     logTransition(t, from, TaskStatus.UNDEPLOY_PENDING, "배포중지중 stale → 재큐잉(idempotent)");
                     log.warn("Stale 회수: task={} {} → UNDEPLOY_PENDING(재큐잉)", t.getId(), why);
                 }

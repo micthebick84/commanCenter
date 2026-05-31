@@ -41,15 +41,18 @@ public class WorkerService {
     private final TaskAnalysisRepository analysisRepo;
     private final TaskStatusHistoryRepository historyRepo;
     private final WorkerHeartbeatRepository heartbeatRepo;
+    private final DeployLogStreamService deployLogStream;
 
     public WorkerService(TaskRepository taskRepo,
                          TaskAnalysisRepository analysisRepo,
                          TaskStatusHistoryRepository historyRepo,
-                         WorkerHeartbeatRepository heartbeatRepo) {
+                         WorkerHeartbeatRepository heartbeatRepo,
+                         DeployLogStreamService deployLogStream) {
         this.taskRepo = taskRepo;
         this.analysisRepo = analysisRepo;
         this.historyRepo = historyRepo;
         this.heartbeatRepo = heartbeatRepo;
+        this.deployLogStream = deployLogStream;
     }
 
     @Transactional
@@ -248,5 +251,13 @@ public class WorkerService {
         t.setUpdatedAt(OffsetDateTime.now());
         historyRepo.save(TaskStatusHistory.log(t.getId(), from, t.getStatus(),
                 "worker", req.workerId(), reason));
+        // 배포/중지 종료 → 스트림 구독자에 done 통지 + 청크 정리
+        deployLogStream.finish(t.getId());
+    }
+
+    /** 워커가 배포 중 올리는 증분 로그 청크. 상태 검증 없이 best-effort 영속/중계. */
+    @Transactional
+    public void appendDeployLog(Long taskId, com.hamonsoft.netismaker.dto.DeployLogChunkRequest req) {
+        deployLogStream.ingestChunk(taskId, req.seq() == null ? 0 : req.seq(), req.content());
     }
 }

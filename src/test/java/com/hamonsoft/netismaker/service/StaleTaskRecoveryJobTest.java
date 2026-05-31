@@ -25,6 +25,7 @@ class StaleTaskRecoveryJobTest {
     private TaskRepository taskRepo;
     private TaskStatusHistoryRepository historyRepo;
     private WorkerHeartbeatRepository heartbeatRepo;
+    private DeployLogStreamService deployLogStream;
     private StaleTaskRecoveryJob job;
 
     @BeforeEach
@@ -32,7 +33,9 @@ class StaleTaskRecoveryJobTest {
         taskRepo = mock(TaskRepository.class);
         historyRepo = mock(TaskStatusHistoryRepository.class);
         heartbeatRepo = mock(WorkerHeartbeatRepository.class);
-        job = new StaleTaskRecoveryJob(taskRepo, historyRepo, heartbeatRepo);
+        deployLogStream = mock(DeployLogStreamService.class);
+        when(deployLogStream.consolidate(any())).thenReturn(java.util.Optional.empty());
+        job = new StaleTaskRecoveryJob(taskRepo, historyRepo, heartbeatRepo, deployLogStream);
         ReflectionTestUtils.setField(job, "analysisStaleThresholdMinutes", 5);
         ReflectionTestUtils.setField(job, "implementationStaleThresholdMinutes", 60);
         ReflectionTestUtils.setField(job, "deployStaleThresholdMinutes", 15);

@@ -26,6 +26,7 @@ class WorkerServiceDeployTest {
     private TaskAnalysisRepository analysisRepo;
     private TaskStatusHistoryRepository historyRepo;
     private WorkerHeartbeatRepository heartbeatRepo;
+    private DeployLogStreamService deployLogStream;
     private WorkerService service;
 
     private Task taskWithStatus(TaskStatus status) {
@@ -43,7 +44,8 @@ class WorkerServiceDeployTest {
         analysisRepo = mock(TaskAnalysisRepository.class);
         historyRepo = mock(TaskStatusHistoryRepository.class);
         heartbeatRepo = mock(WorkerHeartbeatRepository.class);
-        service = new WorkerService(taskRepo, analysisRepo, historyRepo, heartbeatRepo);
+        deployLogStream = mock(DeployLogStreamService.class);
+        service = new WorkerService(taskRepo, analysisRepo, historyRepo, heartbeatRepo, deployLogStream);
         when(historyRepo.save(any())).thenAnswer(i -> i.getArgument(0));
     }
 

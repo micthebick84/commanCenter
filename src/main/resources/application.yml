@@ -66,6 +66,10 @@ app:
   task:
     max-retry: 3
     stale-threshold-minutes: 5
+    implementation-stale-threshold-minutes: 60
+    deploy-stale-threshold-minutes: 15
+    worker-dead-threshold-seconds: 60
+    stale-check-interval-ms: 60000
     user-concurrent-limit: 5
 
 logging:

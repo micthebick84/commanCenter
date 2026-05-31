@@ -1,5 +1,6 @@
 package com.hamonsoft.netismaker.controller;
 
+import com.hamonsoft.netismaker.dto.DeployLogChunkRequest;
 import com.hamonsoft.netismaker.dto.WorkerHeartbeatRequest;
 import com.hamonsoft.netismaker.dto.WorkerResultRequest;
 import com.hamonsoft.netismaker.dto.WorkerTaskResponse;
@@ -49,5 +50,11 @@ public class WorkerController {
     @ResponseStatus(HttpStatus.NO_CONTENT)
     public void result(@PathVariable Long id, @RequestBody @Valid WorkerResultRequest req) {
         workerService.recordResult(id, req);
+    }
+
+    @PostMapping("/tasks/{id}/deploy-log")
+    @ResponseStatus(HttpStatus.NO_CONTENT)
+    public void deployLog(@PathVariable Long id, @RequestBody @Valid DeployLogChunkRequest req) {
+        workerService.appendDeployLog(id, req);
     }
 }

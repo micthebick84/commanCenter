@@ -38,15 +38,22 @@ public class LocalDockerTarget implements DeployTarget {
     }
 
     @Override
-    public DeployResult deploy(DeploySpec spec) throws Exception {
+    public DeployResult deploy(DeploySpec spec, java.util.function.Consumer<String> logSink) throws Exception {
         StringBuilder logBuf = new StringBuilder();
+        java.util.function.Consumer<String> sink = logSink == null ? (s -> {}) : logSink;
 
         // 1. build (이미지에도 라벨 부착 → GC가 소유 이미지를 식별 가능)
         List<String> build = new ArrayList<>(List.of(DOCKER, "build", "-t", spec.imageName()));
         spec.labels().forEach((k, v) -> { build.add("--label"); build.add(k + "=" + v); });
         build.add(".");
         logBuf.append("$ ").append(String.join(" ", build)).append('\n');
-        logBuf.append(ProcessRunner.requireSuccess(spec.contextDir().toFile(), build, buildTimeoutSec));
+        sink.accept("$ " + String.join(" ", build));
+        ProcessRunner.Result buildRes = ProcessRunner.runStreaming(
+                spec.contextDir().toFile(), build, buildTimeoutSec, line -> { logBuf.append(line).append('\n'); sink.accept(line); });
+        if (buildRes.exitCode() != 0) {
+            throw new DeployFailedException("docker build 실패 (exit=" + buildRes.exitCode() + ")",
+                    tail(logBuf.toString(), 8000));
+        }
 
         // 2. 기존 동일 컨테이너 제거 (교체)
         try {
@@ -67,8 +74,10 @@ public class LocalDockerTarget implements DeployTarget {
         run.add(spec.imageName());
 
         logBuf.append("\n$ ").append(String.join(" ", run)).append('\n');
+        sink.accept("\n$ " + String.join(" ", run));
         String runOut = ProcessRunner.requireSuccess(spec.contextDir().toFile(), run, 120);
         logBuf.append(runOut);
+        sink.accept(runOut);
         String containerId = runOut.trim();
 
         // 5. 헬스체크: (a) 컨테이너 생존(크래시 감지) + (b) HTTP readiness(실제 서빙 확인).
@@ -83,17 +92,21 @@ public class LocalDockerTarget implements DeployTarget {
         String readyPath = cfg.readinessPath();
         int limitSec = Math.max(graceSec, readySec);
         if (limitSec > 0) {
-            logBuf.append("\n[헬스체크: 최대 ").append(limitSec)
-                  .append("초 — 생존 확인 + HTTP readiness(").append(readyPath).append(")]\n");
+            String healthStart = "\n[헬스체크: 최대 " + limitSec
+                    + "초 — 생존 확인 + HTTP readiness(" + readyPath + ")]\n";
+            logBuf.append(healthStart);
+            sink.accept(healthStart);
             boolean httpReady = false;
             for (int i = 0; i < limitSec; i++) {
                 Thread.sleep(1000);
                 ContainerState st = inspectState(spec.containerName());
                 if (!st.running()) {
                     String clog = dockerLogsTail(spec.containerName(), 4000);
-                    logBuf.append("[헬스체크 실패: 컨테이너가 기동 직후 종료 (exit=")
-                          .append(st.exitCode()).append(", ").append(i + 1).append("초)]\n")
-                          .append("--- container logs ---\n").append(clog).append('\n');
+                    String failMsg = "[헬스체크 실패: 컨테이너가 기동 직후 종료 (exit="
+                            + st.exitCode() + ", " + (i + 1) + "초)]\n"
+                            + "--- container logs ---\n" + clog + '\n';
+                    logBuf.append(failMsg);
+                    sink.accept(failMsg);
                     throw new DeployFailedException(
                             "컨테이너가 기동 직후 종료됨 (exit=" + st.exitCode()
                                     + "). 앱 부팅 실패 가능 — 컨테이너 로그 확인.",
@@ -101,16 +114,24 @@ public class LocalDockerTarget implements DeployTarget {
                 }
                 if (httpProbe(hostPort, readyPath)) {
                     httpReady = true;
-                    logBuf.append("[헬스체크 통과: ").append(i + 1)
-                          .append("초 — HTTP readiness 확인(").append(readyPath).append(")]\n");
+                    String passMsg = "[헬스체크 통과: " + (i + 1)
+                            + "초 — HTTP readiness 확인(" + readyPath + ")]\n";
+                    logBuf.append(passMsg);
+                    sink.accept(passMsg);
                     break;
                 }
             }
             if (!httpReady) {
-                logBuf.append("[헬스체크: ").append(limitSec)
-                      .append("초간 생존했으나 HTTP 응답 미확인 — liveness 기준으로 배포완료 처리(비-HTTP 앱 가능)]\n");
+                String liveMsg = "[헬스체크: " + limitSec
+                        + "초간 생존했으나 HTTP 응답 미확인 — liveness 기준으로 배포완료 처리(비-HTTP 앱 가능)]\n";
+                logBuf.append(liveMsg);
+                sink.accept(liveMsg);
             }
         }
+
+        // 헬스 성공 종료 직후 앱 기동 로그 1회 push
+        String startupLog = dockerLogsTail(spec.containerName(), 4000);
+        sink.accept("--- container logs ---\n" + startupLog);
 
         String url = "http://" + cfg.publicHost() + ":" + hostPort;
         log.info("배포 완료: container={} url={}", spec.containerName(), url);

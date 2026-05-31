@@ -22,6 +22,12 @@ public interface DeployTarget {
     DeployStatus status(String containerName);
 
     /**
+     * 자가정리: grace 지난 비실행 owned 컨테이너 + 보존 외 owned 이미지 제거.
+     * 원격 타깃 등 미지원 구현은 no-op (default).
+     */
+    default void gc(int orphanGraceMinutes, int keepImagesPerTask) { }
+
+    /**
      * @param contextDir    빌드 컨텍스트(Dockerfile 포함 worktree)
      * @param imageName     예: netis-task-7:abcdef1
      * @param containerName 예: netis-task-7

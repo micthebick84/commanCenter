@@ -8,6 +8,7 @@ import org.springframework.context.annotation.Profile;
 import org.springframework.stereotype.Component;
 
 import java.io.File;
+import java.time.OffsetDateTime;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
@@ -122,6 +123,89 @@ public class LocalDockerTarget implements DeployTarget {
         ProcessRunner.run(new File("."),
                 List.of(DOCKER, "rm", "-f", containerName), 60);
         log.info("컨테이너 중지/제거: {}", containerName);
+    }
+
+    @Override
+    public void gc(int orphanGraceMinutes, int keepImagesPerTask) {
+        try {
+            List<DockerGcPlanner.ContainerInfo> containers = listOwnedContainers();
+            List<DockerGcPlanner.ImageInfo> images = listOwnedImages();
+            DockerGcPlanner.GcPlan plan = DockerGcPlanner.plan(
+                    containers, images, OffsetDateTime.now(), orphanGraceMinutes, keepImagesPerTask);
+            for (String name : plan.containersToRemove()) {
+                safeRun(List.of(DOCKER, "rm", "-f", name), "컨테이너 제거 " + name);
+            }
+            for (String img : plan.imagesToRemove()) {
+                safeRun(List.of(DOCKER, "rmi", img), "이미지 제거 " + img);
+            }
+            // owned dangling 이미지 prune (build 태그 재사용으로 남은 것)
+            safeRun(List.of(DOCKER, "image", "prune", "-f", "--filter", "label=netis-maker.task"), "dangling prune");
+            log.info("GC: 컨테이너 {}개, 이미지 {}개 제거", plan.containersToRemove().size(), plan.imagesToRemove().size());
+        } catch (Exception e) {
+            log.warn("GC 실패 (다음 주기 재시도): {}", e.getMessage());
+        }
+    }
+
+    /** label=netis-maker.task 컨테이너 목록 (비실행은 inspect로 생성 시각 보강). */
+    private List<DockerGcPlanner.ContainerInfo> listOwnedContainers() {
+        List<DockerGcPlanner.ContainerInfo> out = new ArrayList<>();
+        try {
+            ProcessRunner.Result r = ProcessRunner.run(new File("."),
+                    List.of(DOCKER, "ps", "-a", "--filter", "label=netis-maker.task",
+                            "--format", "{{.Names}}|{{.State}}|{{.Image}}"), 30);
+            if (r.exitCode() != 0) return out;
+            for (String line : r.stdout().split("\\R")) {
+                if (line.isBlank()) continue;
+                String[] p = line.split("\\|", -1);
+                if (p.length < 3) continue;
+                String name = p[0].trim(), state = p[1].trim(), image = p[2].trim();
+                OffsetDateTime created = "running".equalsIgnoreCase(state) ? null : inspectCreated(name);
+                out.add(new DockerGcPlanner.ContainerInfo(name, state, created, image));
+            }
+        } catch (Exception e) {
+            log.warn("docker ps 조회 실패: {}", e.getMessage());
+        }
+        return out;
+    }
+
+    /** netis-task-* 이미지 목록 (docker 기본 최신순 유지). */
+    private List<DockerGcPlanner.ImageInfo> listOwnedImages() {
+        List<DockerGcPlanner.ImageInfo> out = new ArrayList<>();
+        try {
+            ProcessRunner.Result r = ProcessRunner.run(new File("."),
+                    List.of(DOCKER, "images", "--format", "{{.Repository}}:{{.Tag}}|{{.ID}}"), 30);
+            if (r.exitCode() != 0) return out;
+            for (String line : r.stdout().split("\\R")) {
+                if (line.isBlank()) continue;
+                String[] p = line.split("\\|", -1);
+                if (p.length < 2) continue;
+                String repoTag = p[0].trim();
+                if (!repoTag.startsWith(DockerGcPlanner.OWN_PREFIX)) continue;
+                out.add(new DockerGcPlanner.ImageInfo(repoTag, p[1].trim()));
+            }
+        } catch (Exception e) {
+            log.warn("docker images 조회 실패: {}", e.getMessage());
+        }
+        return out;
+    }
+
+    private OffsetDateTime inspectCreated(String name) {
+        try {
+            ProcessRunner.Result r = ProcessRunner.run(new File("."),
+                    List.of(DOCKER, "inspect", "-f", "{{.Created}}", name), 30);
+            if (r.exitCode() != 0) return null;
+            return OffsetDateTime.parse(r.stdout().trim()); // RFC3339
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    private void safeRun(List<String> cmd, String what) {
+        try {
+            ProcessRunner.run(new File("."), cmd, 60);
+        } catch (Exception e) {
+            log.warn("GC {} 실패: {}", what, e.getMessage());
+        }
     }
 
     @Override

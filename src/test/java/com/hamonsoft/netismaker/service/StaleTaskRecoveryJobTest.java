@@ -86,6 +86,24 @@ class StaleTaskRecoveryJobTest {
         assertThat(t.getStatus()).isEqualTo(TaskStatus.DEPLOY_FAILED);
         assertThat(t.getWorkerId()).isNull();
         verify(historyRepo).save(any());
+        // consolidate must be called to preserve partial logs in deployLog before finish
+        verify(deployLogStream).consolidate(2L);
+        // deployLog is set from consolidate result (mock returns empty so deployLog stays null — wiring verified via consolidate call)
+        // finish must be called so SSE emitters receive done and chunks are deleted
+        verify(deployLogStream).finish(2L);
+    }
+
+    @Test
+    void dead_worker_deploying_consolidates_partial_log_into_deploy_log() {
+        Task t = task(2L, TaskStatus.DEPLOYING, "w1", 5, 0);
+        when(taskRepo.findInFlightClaimed()).thenReturn(List.of(t));
+        when(heartbeatRepo.findAllById(any())).thenReturn(List.of(hb("w1", 300)));
+        when(deployLogStream.consolidate(2L)).thenReturn(java.util.Optional.of("partial build output"));
+        job.recoverStale();
+        assertThat(t.getStatus()).isEqualTo(TaskStatus.DEPLOY_FAILED);
+        // consolidate result must be written to deployLog so it is persisted on the task
+        assertThat(t.getDeployLog()).isEqualTo("partial build output");
+        verify(deployLogStream).finish(2L);
     }
 
     @Test
@@ -96,6 +114,8 @@ class StaleTaskRecoveryJobTest {
         job.recoverStale();
         assertThat(t.getStatus()).isEqualTo(TaskStatus.UNDEPLOY_PENDING);
         assertThat(t.getClaimedAt()).isNull();
+        // finish must be called to clean up any partial chunks before the task is re-queued
+        verify(deployLogStream).finish(3L);
     }
 
     @Test

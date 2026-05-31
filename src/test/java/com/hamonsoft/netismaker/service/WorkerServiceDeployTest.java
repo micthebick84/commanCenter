@@ -1,5 +1,6 @@
 package com.hamonsoft.netismaker.service;
 
+import com.hamonsoft.netismaker.dto.DeployLogChunkRequest;
 import com.hamonsoft.netismaker.dto.WorkerResultRequest;
 import com.hamonsoft.netismaker.dto.WorkerTaskResponse;
 import com.hamonsoft.netismaker.entity.Task;
@@ -18,6 +19,7 @@ import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.*;
 
 class WorkerServiceDeployTest {
@@ -94,6 +96,8 @@ class WorkerServiceDeployTest {
         assertThat(t.getDeployUrl()).isEqualTo("http://localhost:19000");
         assertThat(t.getDeployHostPort()).isEqualTo(19000);
         assertThat(t.getDeployedAt()).isNotNull();
+        // finish must be called so SSE subscribers receive done event and chunks are cleaned up
+        verify(deployLogStream).finish(7L);
     }
 
     @Test
@@ -107,5 +111,24 @@ class WorkerServiceDeployTest {
         assertThat(t.getStatus()).isEqualTo(TaskStatus.PR_CREATED);
         assertThat(t.getDeployUrl()).isNull();
         assertThat(t.getDeployHostPort()).isNull();
+        // finish must be called so SSE subscribers receive done event and chunks are cleaned up
+        verify(deployLogStream).finish(7L);
+    }
+
+    @Test
+    void record_undeploy_result_calls_finish_on_stream() {
+        Task t = taskWithStatus(TaskStatus.UNDEPLOYING);
+        t.setWorkerId("mac-worker-1");
+        when(taskRepo.findById(7L)).thenReturn(Optional.of(t));
+        service.recordResult(7L, WorkerResultRequest.undeployed("mac-worker-1", "중지/제거"));
+        // finish must be called for UNDEPLOYING result as well
+        verify(deployLogStream).finish(7L);
+    }
+
+    @Test
+    void append_deploy_log_delegates_to_ingest_chunk() {
+        // appendDeployLog is a best-effort pass-through to deployLogStream.ingestChunk
+        service.appendDeployLog(7L, new DeployLogChunkRequest(3, "step 3 done\n"));
+        verify(deployLogStream).ingestChunk(eq(7L), eq(3), eq("step 3 done\n"));
     }
 }

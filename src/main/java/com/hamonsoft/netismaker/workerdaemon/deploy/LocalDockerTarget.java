@@ -40,11 +40,12 @@ public class LocalDockerTarget implements DeployTarget {
     public DeployResult deploy(DeploySpec spec) throws Exception {
         StringBuilder logBuf = new StringBuilder();
 
-        // 1. build
-        logBuf.append("$ docker build -t ").append(spec.imageName()).append('\n');
-        logBuf.append(ProcessRunner.requireSuccess(spec.contextDir().toFile(),
-                List.of(DOCKER, "build", "-t", spec.imageName(), "."),
-                buildTimeoutSec));
+        // 1. build (이미지에도 라벨 부착 → GC가 소유 이미지를 식별 가능)
+        List<String> build = new ArrayList<>(List.of(DOCKER, "build", "-t", spec.imageName()));
+        spec.labels().forEach((k, v) -> { build.add("--label"); build.add(k + "=" + v); });
+        build.add(".");
+        logBuf.append("$ ").append(String.join(" ", build)).append('\n');
+        logBuf.append(ProcessRunner.requireSuccess(spec.contextDir().toFile(), build, buildTimeoutSec));
 
         // 2. 기존 동일 컨테이너 제거 (교체)
         try {

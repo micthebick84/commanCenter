@@ -9,6 +9,7 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.http.HttpHeaders;
 import org.springframework.security.core.authority.SimpleGrantedAuthority;
 import org.springframework.test.context.ContextConfiguration;
 import org.springframework.test.web.servlet.MockMvc;
@@ -16,6 +17,7 @@ import org.springframework.test.web.servlet.MockMvc;
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.hamcrest.Matchers.containsString;
 import static org.springframework.http.MediaType.APPLICATION_JSON;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.jwt;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.*;
@@ -149,5 +151,52 @@ class TaskApiIntegrationTest {
 
         mvc.perform(post("/api/tasks/" + id + "/cancel").with(userJwt("user1")))
                 .andExpect(status().isConflict());
+    }
+
+    // ── Task 16: SSE 스트림 엔드포인트 접근 제어 ──────────────────────────────
+
+    @Test
+    void GET_logs_stream_non_owner_returns_403() throws Exception {
+        // user1이 작성한 작업을 user2(비관리자)가 스트림 구독 시도 → 403
+        String location = mvc.perform(post("/api/tasks").with(userJwt("user1"))
+                        .contentType(APPLICATION_JSON)
+                        .content(body("hamonsoft/netis-backend", "스트림 테스트", "내용")))
+                .andReturn().getResponse().getHeader("Location");
+        assertThat(location).isNotNull();
+
+        mvc.perform(get(location + "/logs/stream").with(userJwt("user2")))
+                .andExpect(status().isForbidden());
+    }
+
+    @Test
+    void GET_logs_stream_owner_returns_200_text_event_stream() throws Exception {
+        // 작업 소유자는 자신의 스트림을 구독할 수 있어야 함
+        String location = mvc.perform(post("/api/tasks").with(userJwt("user1"))
+                        .contentType(APPLICATION_JSON)
+                        .content(body("hamonsoft/netis-backend", "오너 스트림", "내용")))
+                .andReturn().getResponse().getHeader("Location");
+        assertThat(location).isNotNull();
+
+        mvc.perform(get(location + "/logs/stream").with(userJwt("user1")))
+                .andExpect(status().isOk())
+                .andExpect(header().string(
+                        HttpHeaders.CONTENT_TYPE,
+                        containsString("text/event-stream")));
+    }
+
+    @Test
+    void GET_logs_stream_admin_returns_200() throws Exception {
+        // 관리자는 모든 작업의 스트림을 구독할 수 있어야 함
+        String location = mvc.perform(post("/api/tasks").with(userJwt("user1"))
+                        .contentType(APPLICATION_JSON)
+                        .content(body("hamonsoft/netis-backend", "관리자 스트림", "내용")))
+                .andReturn().getResponse().getHeader("Location");
+        assertThat(location).isNotNull();
+
+        mvc.perform(get(location + "/logs/stream").with(adminJwt("admin1")))
+                .andExpect(status().isOk())
+                .andExpect(header().string(
+                        HttpHeaders.CONTENT_TYPE,
+                        containsString("text/event-stream")));
     }
 }

@@ -73,8 +73,15 @@ public class LocalDockerTarget implements DeployTarget {
         spec.env().forEach((k, v) -> { run.add("-e"); run.add(k + "=" + v); });
         run.add(spec.imageName());
 
-        logBuf.append("\n$ ").append(String.join(" ", run)).append('\n');
-        sink.accept("\n$ " + String.join(" ", run));
+        // run 명령 echo는 env 시크릿 값이 로그/SSE 스트림에 노출되지 않도록 -e 값을 마스킹한다.
+        // (정책: 주입 env 값은 출력하지 않고 키만 노출 — UI 마스킹과 일관). 실행 커맨드 run은 실제 값 유지.
+        StringBuilder runEcho = new StringBuilder(DOCKER + " run -d --name " + spec.containerName()
+                + " -p " + hostPort + ":" + spec.containerPort());
+        spec.labels().forEach((k, v) -> runEcho.append(" --label ").append(k).append('=').append(v));
+        spec.env().forEach((k, v) -> runEcho.append(" -e ").append(k).append("=•••"));
+        runEcho.append(' ').append(spec.imageName());
+        logBuf.append("\n$ ").append(runEcho).append('\n');
+        sink.accept("\n$ " + runEcho);
         String runOut = ProcessRunner.requireSuccess(spec.contextDir().toFile(), run, 120);
         logBuf.append(runOut);
         sink.accept(runOut);

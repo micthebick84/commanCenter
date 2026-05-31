@@ -110,6 +110,11 @@ netis-maker:
       # 끝까지 응답 없어도 컨테이너가 살아있으면 liveness 기준으로 완료 처리(비-HTTP 앱 대비).
       readiness-seconds: ${DEPLOY_READINESS_SECONDS:40}
       readiness-path: ${DEPLOY_READINESS_PATH:/}
+      # GC 리퍼 (C2): docker 상태 기반 자가정리. label=netis-maker.task / netis-task- 접두사만 대상.
+      gc-enabled: ${DEPLOY_GC_ENABLED:true}
+      gc-interval-minutes: ${DEPLOY_GC_INTERVAL_MIN:60}
+      gc-orphan-grace-minutes: ${DEPLOY_GC_ORPHAN_GRACE_MIN:60}
+      gc-keep-images-per-task: ${DEPLOY_GC_KEEP_IMAGES:1}
       dockerfile-prompt-template: |
         당신은 DevOps 엔지니어입니다. 현재 디렉토리는 '{github_repo}'의 '{branch}' 브랜치 체크아웃입니다.
         이 프로젝트를 컨테이너로 실행하기 위한 production용 Dockerfile을 현재 디렉토리 루트에 생성하세요.

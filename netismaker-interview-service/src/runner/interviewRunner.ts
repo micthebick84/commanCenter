@@ -7,6 +7,7 @@ import { harvestPlan, HarvestError } from './planHarvest.js';
 import { relay } from './messageRelay.js';
 import { ensureRepo as defaultEnsureRepo, type RepoInput } from './repoPrepare.js';
 import { buildWritingPlansSplice, detectHandoff } from './skillDispatch.js';
+import { HeartbeatTicker } from './heartbeat.js';
 
 export interface RunnerDeps {
   superpowersPluginPath: string;
@@ -18,6 +19,7 @@ export interface RunnerDeps {
   ensureRepo?: (input: RepoInput) => Promise<void>;
   /** Injectable SKILL.md reader for the writing-plans splice fallback (defaults to real fs read). */
   spliceRead?: (path: string, enc: 'utf8') => string;
+  heartbeatIntervalMs?: number;
 }
 
 /** One async-iterable user prompt for the turn. Fresh => kickoff text; resume => the injected answer. */
@@ -52,6 +54,8 @@ export class InterviewRunner {
   }
 
   async run(claim: InterviewClaimResponse): Promise<void> {
+    const ticker = new HeartbeatTicker(this.client, claim.sessionId, this.deps.heartbeatIntervalMs ?? 15000);
+    ticker.start();
     // CostGuard is seeded from 0: the claim carries no prior shadow total (LOCKED CONTRACT
     // InterviewClaimResponse has no totalCostUsd). The guard caps a single runaway turn;
     // server-side accumulates the per-session shadow total from /question + /plan costUsd.
@@ -138,6 +142,8 @@ export class InterviewRunner {
         return;
       }
       await this.client.fail(claim.sessionId, `interview turn failed: ${(err as Error).message}`);
+    } finally {
+      ticker.stop();
     }
   }
 }

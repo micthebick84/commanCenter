@@ -2,7 +2,9 @@ package com.hamonsoft.netismaker.service;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.hamonsoft.netismaker.dto.DesignEvent;
 import com.hamonsoft.netismaker.dto.PlanReadyEvent;
+import com.hamonsoft.netismaker.dto.QuestionEvent;
 import com.hamonsoft.netismaker.entity.InterviewStatus;
 import com.hamonsoft.netismaker.entity.InterviewTurn;
 import com.hamonsoft.netismaker.repository.InterviewTurnRepository;
@@ -56,9 +58,17 @@ public class InterviewStreamService {
             // 1) 지금까지의 assistant turn replay (재연결 시 누락 복구)
             for (InterviewTurn t : turnRepo.findBySessionIdOrderBySeqAsc(sessionId)) {
                 if ("user".equals(t.getRole())) continue; // 사용자 답변은 클라가 이미 가짐
-                String event = "design".equals(t.getKind()) ? "design" : "question";
-                emitter.send(SseEmitter.event().name(event)
-                        .data(t.getContent() == null ? "" : t.getContent()));
+                String content = t.getContent() == null ? "" : t.getContent();
+                // 라이브와 동일한 JSON 객체 포맷으로 replay (프론트는 question={seq,content},
+                // design={key,title,body,approved}를 JSON.parse한다). writeValueAsString의
+                // JsonProcessingException은 IOException 하위라 아래 catch가 함께 처리한다.
+                if ("design".equals(t.getKind())) {
+                    emitter.send(SseEmitter.event().name("design").data(
+                            json.writeValueAsString(new DesignEvent("design-" + t.getSeq(), "설계", content, false))));
+                } else {
+                    emitter.send(SseEmitter.event().name("question").data(
+                            json.writeValueAsString(new QuestionEvent(t.getSeq(), content))));
+                }
             }
         } catch (IOException e) {
             emitter.completeWithError(e);
@@ -72,8 +82,15 @@ public class InterviewStreamService {
         return emitter;
     }
 
-    public void pushQuestion(Long sessionId, String content) { send(sessionId, "question", content); }
-    public void pushDesign(Long sessionId, String content)   { send(sessionId, "design", content); }
+    /** question 페이로드 = {seq, content} JSON 객체 (프론트가 seq로 dedup). */
+    public void pushQuestion(Long sessionId, int seq, String content) {
+        sendJson(sessionId, "question", new QuestionEvent(seq, content == null ? "" : content));
+    }
+
+    /** design 페이로드 = {key, title, body, approved} JSON 객체 (프론트가 key로 섹션 upsert). */
+    public void pushDesign(Long sessionId, int seq, String content) {
+        sendJson(sessionId, "design", new DesignEvent("design-" + seq, "설계", content == null ? "" : content, false));
+    }
 
     /** status 페이로드 = 영문 enum name (예 "AWAITING_INPUT"). 한글 dbValue 절대 아님. */
     public void pushStatus(Long sessionId, InterviewStatus status) {
@@ -88,6 +105,15 @@ public class InterviewStreamService {
             send(sessionId, "plan_ready", payload);
         } catch (JsonProcessingException e) {
             log.error("plan_ready 직렬화 실패 session={}", sessionId, e);
+        }
+    }
+
+    /** 객체를 JSON으로 직렬화해 라이브 fan-out. 직렬화 실패는 로깅만(이벤트 누락). */
+    private void sendJson(Long sessionId, String event, Object payload) {
+        try {
+            send(sessionId, event, json.writeValueAsString(payload));
+        } catch (JsonProcessingException e) {
+            log.error("{} 직렬화 실패 session={}", event, sessionId, e);
         }
     }
 

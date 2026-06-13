@@ -108,6 +108,7 @@ async function cancelInterview() {
   } catch {
     /* 취소 실패는 무시 — 세션은 어차피 닫는다 */
   }
+  status.value = 'CANCELLED' // 닫히기 전 UI 상태 정합 (배너/터미널 판정)
   stream.close()
   emit('close')
 }
@@ -246,6 +247,11 @@ onUnmounted(() => stream.close())
               <q-item-section class="text-grey-6">아직 설계 섹션이 없습니다.</q-item-section>
             </q-item>
           </q-list>
+
+          <div v-if="plan && plan.designMarkdown" class="q-mt-md">
+            <div class="text-subtitle2 q-mb-sm">설계 문서</div>
+            <pre class="plan-md">{{ plan.designMarkdown }}</pre>
+          </div>
 
           <div v-if="plan" class="q-mt-md">
             <div class="text-subtitle2 q-mb-sm">구현 플랜</div>

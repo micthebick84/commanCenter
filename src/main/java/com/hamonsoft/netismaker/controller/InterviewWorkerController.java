@@ -52,8 +52,8 @@ public class InterviewWorkerController {
     public void question(@PathVariable Long id, @RequestParam String workerId,
                          @RequestBody @Valid WorkerQuestionRequest req) {
         InterviewTurn turn = interviewService.recordQuestion(id, workerId, req);
-        if ("design".equals(turn.getKind())) interviewStream.pushDesign(id, turn.getContent());
-        else interviewStream.pushQuestion(id, turn.getContent());
+        if ("design".equals(turn.getKind())) interviewStream.pushDesign(id, turn.getSeq(), turn.getContent());
+        else interviewStream.pushQuestion(id, turn.getSeq(), turn.getContent());
         interviewStream.pushStatus(id, InterviewStatus.AWAITING_INPUT); // 영문 enum name
     }
 

@@ -1,6 +1,9 @@
 package com.hamonsoft.netismaker.service;
 
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.hamonsoft.netismaker.dto.DesignEvent;
+import com.hamonsoft.netismaker.dto.QuestionEvent;
 import com.hamonsoft.netismaker.entity.InterviewStatus;
 import com.hamonsoft.netismaker.entity.InterviewTurn;
 import com.hamonsoft.netismaker.repository.InterviewTurnRepository;
@@ -29,9 +32,27 @@ class InterviewStreamServiceTest {
         SseEmitter e = svc.subscribe(42L);
         assertThat(e).isNotNull();
         // 라이브 푸시가 등록된 emitter에 도달 — 예외 없이 호출되면 통과
-        svc.pushQuestion(42L, "다음 질문?");
+        svc.pushQuestion(42L, 2, "다음 질문?");
+        svc.pushDesign(42L, 3, "# 설계 초안");
         svc.pushStatus(42L, InterviewStatus.AWAITING_INPUT);          // 영문 enum name 전달
         svc.pushPlanReady(42L, "# 설계", "# 플랜", "[]");              // JSON 객체 전달
+    }
+
+    /**
+     * 와이어 계약 잠금: question/design 이벤트는 프론트(useInterviewStream)가 JSON.parse하는
+     * 객체여야 한다 — bare 문자열이면 프론트가 드롭한다. (status는 별개로 bare 영문 enum.)
+     */
+    @Test
+    void question_and_design_events_serialize_to_frontend_json_contract() throws Exception {
+        JsonNode q = json.readTree(json.writeValueAsString(new QuestionEvent(3, "어떤 인증?")));
+        assertThat(q.get("seq").asInt()).isEqualTo(3);
+        assertThat(q.get("content").asText()).isEqualTo("어떤 인증?");
+
+        JsonNode d = json.readTree(json.writeValueAsString(new DesignEvent("design-5", "설계", "본문", false)));
+        assertThat(d.get("key").asText()).isEqualTo("design-5");
+        assertThat(d.get("title").asText()).isEqualTo("설계");
+        assertThat(d.get("body").asText()).isEqualTo("본문");
+        assertThat(d.get("approved").asBoolean()).isFalse();
     }
 
     @Test

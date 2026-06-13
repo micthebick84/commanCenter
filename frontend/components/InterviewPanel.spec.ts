@@ -92,6 +92,21 @@ describe('InterviewPanel — register flow', () => {
   })
 })
 
+describe('InterviewPanel — plan_ready design display', () => {
+  it('renders plan.designMarkdown when plan_ready arrives', async () => {
+    const w = mountPanel(9)
+    FakeEventSource.last().emit('plan_ready', {
+      designMarkdown: '# 설계본문XYZ',
+      planMarkdown: '# 플랜',
+      planJson: JSON.stringify([]),
+    })
+    await flushPromises()
+    expect(w.text()).toContain('설계본문XYZ')
+    expect(w.text()).toContain('설계 문서')
+    w.unmount()
+  })
+})
+
 describe('InterviewPanel — terminal states', () => {
   it('shows an expired banner from the bare EXPIRED status', async () => {
     const w = mountPanel(9)

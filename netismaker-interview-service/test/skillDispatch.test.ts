@@ -8,6 +8,11 @@ describe('detectHandoff', () => {
     expect(detectHandoff(text)).toBe(true);
   });
 
+  it('detects progressive / first-person phrasings too', () => {
+    expect(detectHandoff('I am invoking writing-plans now.')).toBe(true);
+    expect(detectHandoff('Transitioning to implementation.')).toBe(true);
+  });
+
   it('does not fire on ordinary brainstorming questions', () => {
     expect(detectHandoff('Which columns should the CSV include?')).toBe(false);
   });

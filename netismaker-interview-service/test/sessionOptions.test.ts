@@ -44,4 +44,15 @@ describe('buildOptions', () => {
     expect(o.cwd).toBe('/tmp/repo');
     expect(typeof o.canUseTool).toBe('function');
   });
+
+  it('maps claim.mcpsExtra (TaskMcpSpec[]) to options.mcpServers; omits when empty/absent', () => {
+    expect(buildOptions({ ...base, claudeSessionId: null }).mcpServers).toBeUndefined();
+    expect(buildOptions({ ...base, claudeSessionId: null, mcpsExtra: [] }).mcpServers).toBeUndefined();
+    const o = buildOptions({
+      ...base,
+      claudeSessionId: null,
+      mcpsExtra: [{ name: 'ctx7', url: 'https://ctx7', transport: 'http' }],
+    });
+    expect(o.mcpServers).toEqual({ ctx7: { type: 'http', url: 'https://ctx7' } });
+  });
 });

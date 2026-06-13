@@ -24,6 +24,11 @@ export class JavaApiClient {
     return `${this.cfg.apiBaseUrl}${path}`;
   }
 
+  /** workerId 쿼리파라미터 — Java 워커 엔드포인트는 모두 @RequestParam String workerId(필수)를 받는다. */
+  private wq(): string {
+    return `workerId=${encodeURIComponent(this.cfg.workerId)}`;
+  }
+
   async claim(): Promise<InterviewClaimResponse | null> {
     // workerId is a QUERY param (LOCKED CONTRACT); auth is the X-Worker-API-Key header.
     const res = await this.fetchFn(
@@ -39,7 +44,7 @@ export class JavaApiClient {
   }
 
   async postQuestion(id: number, body: WorkerQuestionRequest): Promise<void> {
-    const res = await this.fetchFn(this.url(`/worker/interviews/${id}/question`), {
+    const res = await this.fetchFn(this.url(`/worker/interviews/${id}/question?${this.wq()}`), {
       method: 'POST',
       headers: this.headers(),
       body: JSON.stringify(body),
@@ -48,7 +53,7 @@ export class JavaApiClient {
   }
 
   async postPlan(id: number, body: WorkerPlanRequest): Promise<void> {
-    const res = await this.fetchFn(this.url(`/worker/interviews/${id}/plan`), {
+    const res = await this.fetchFn(this.url(`/worker/interviews/${id}/plan?${this.wq()}`), {
       method: 'POST',
       headers: this.headers(),
       body: JSON.stringify(body),
@@ -57,18 +62,19 @@ export class JavaApiClient {
   }
 
   async heartbeat(id: number): Promise<void> {
-    await this.fetchFn(this.url(`/worker/interviews/${id}/heartbeat`), {
+    // workerId는 쿼리파라미터(Java @RequestParam). 바디 없음.
+    await this.fetchFn(this.url(`/worker/interviews/${id}/heartbeat?${this.wq()}`), {
       method: 'POST',
       headers: this.headers(),
-      body: JSON.stringify({ workerId: this.cfg.workerId }),
     });
   }
 
   async fail(id: number, reason: string): Promise<void> {
-    await this.fetchFn(this.url(`/worker/interviews/${id}/fail`), {
+    // workerId(필수) + reason(선택) 모두 쿼리파라미터(Java @RequestParam). 바디 없음.
+    const reasonQs = reason ? `&reason=${encodeURIComponent(reason)}` : '';
+    await this.fetchFn(this.url(`/worker/interviews/${id}/fail?${this.wq()}${reasonQs}`), {
       method: 'POST',
       headers: this.headers(),
-      body: JSON.stringify({ reason }),
     });
   }
 }

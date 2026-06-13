@@ -73,6 +73,7 @@ export class InterviewRunner {
         workDir: claim.workDir,
         claudeCliPath: this.deps.claudeCliPath,
         claudeSessionId: claim.claudeSessionId,
+        mcpsExtra: claim.mcpsExtra,
       });
       const stream: AsyncIterable<SdkMessage> = this.query({
         prompt: promptFor(claim),
@@ -103,6 +104,7 @@ export class InterviewRunner {
               workDir: claim.workDir,
               claudeCliPath: this.deps.claudeCliPath,
               claudeSessionId: sessionId,
+              mcpsExtra: claim.mcpsExtra,
             }),
           }),
         );

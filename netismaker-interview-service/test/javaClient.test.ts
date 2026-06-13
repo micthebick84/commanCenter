@@ -29,7 +29,7 @@ describe('JavaApiClient', () => {
     expect(await client.claim()).toBeNull();
   });
 
-  it('postQuestion PUTs body to /worker/interviews/{id}/question', async () => {
+  it('postQuestion POSTs body to /worker/interviews/{id}/question?workerId=...', async () => {
     const fetchMock = vi.fn().mockResolvedValue(new Response(null, { status: 200 }));
     const client = new JavaApiClient(cfg, fetchMock);
     await client.postQuestion(42, {
@@ -39,8 +39,20 @@ describe('JavaApiClient', () => {
       costUsd: 0.1,
     });
     const [url, init] = fetchMock.mock.calls[0]!;
-    expect(url).toBe('http://api:8090/worker/interviews/42/question');
+    // Java @RequestParam String workerId is REQUIRED on every worker endpoint (query, not body).
+    expect(url).toBe('http://api:8090/worker/interviews/42/question?workerId=iw-1');
+    expect(init.method).toBe('POST');
     expect(JSON.parse(init.body).content).toBe('What columns?');
+  });
+
+  it('heartbeat POSTs to /worker/interviews/{id}/heartbeat?workerId=... (no body)', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(null, { status: 200 }));
+    const client = new JavaApiClient(cfg, fetchMock);
+    await client.heartbeat(42);
+    const [url, init] = fetchMock.mock.calls[0]!;
+    expect(url).toBe('http://api:8090/worker/interviews/42/heartbeat?workerId=iw-1');
+    expect(init.method).toBe('POST');
+    expect(init.headers['X-Worker-API-Key']).toBe('KEY');
   });
 
   it('postPlan sends planJson as a STRING (Java stores as text; frontend parses on use)', async () => {
@@ -55,15 +67,18 @@ describe('JavaApiClient', () => {
       durationMs: 5000,
     });
     const [url, init] = fetchMock.mock.calls[0]!;
-    expect(url).toBe('http://api:8090/worker/interviews/42/plan');
+    expect(url).toBe('http://api:8090/worker/interviews/42/plan?workerId=iw-1');
     // planJson must be a string on the wire — Java stores it as text, frontend parses on use
     expect(typeof JSON.parse(init.body).planJson).toBe('string');
   });
 
-  it('fail POSTs reason to /worker/interviews/{id}/fail', async () => {
+  it('fail POSTs workerId + reason as QUERY params to /worker/interviews/{id}/fail', async () => {
     const fetchMock = vi.fn().mockResolvedValue(new Response(null, { status: 200 }));
     const client = new JavaApiClient(cfg, fetchMock);
     await client.fail(42, 'cost cap exceeded');
-    expect(fetchMock.mock.calls[0]![0]).toBe('http://api:8090/worker/interviews/42/fail');
+    // Java reads workerId (@RequestParam, required) + reason (@RequestParam, optional) from the query.
+    expect(fetchMock.mock.calls[0]![0]).toBe(
+      'http://api:8090/worker/interviews/42/fail?workerId=iw-1&reason=cost%20cap%20exceeded',
+    );
   });
 });

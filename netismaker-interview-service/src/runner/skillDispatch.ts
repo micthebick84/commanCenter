@@ -3,7 +3,8 @@ import { readFileSync } from 'node:fs';
 type ReadFn = (path: string, enc: 'utf8') => string;
 
 // brainstorming checklist item 9 wording: "Transition to implementation — invoke writing-plans".
-const HANDOFF = /(invoke\s+writing-plans|transition\s+to\s+(implementation|writing-plans))/i;
+// 명령형(invoke/transition)뿐 아니라 진행형/1인칭(invoking/transitioning)도 잡는다.
+const HANDOFF = /(invok(e|ing)\s+writing-plans|transition(ing)?\s+to\s+(implementation|writing-plans))/i;
 
 /** True when the assistant text announces the brainstorming -> writing-plans handoff. */
 export function detectHandoff(assistantText: string): boolean {

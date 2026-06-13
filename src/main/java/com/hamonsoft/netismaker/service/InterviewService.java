@@ -251,16 +251,18 @@ public class InterviewService {
     public InterviewSession submitAnswer(Long sessionId, String actorId, boolean isAdmin, AnswerRequest req) {
         InterviewSession s = requireSession(sessionId);
         requireOwner(s, actorId, isAdmin);
-        if (s.getStatus() != InterviewStatus.AWAITING_INPUT) {
-            throw TaskException.conflict("입력대기 상태에서만 답변할 수 있습니다 (현재: "
-                    + s.getStatus().dbValue() + ")");
-        }
-        // idempotency: 같은 replyToSeq에 대한 user answer 턴이 이미 있으면 중복 → 무시
+        // idempotency: 같은 replyToSeq에 대한 user answer 턴이 이미 있으면 중복 → 무시 (상태 무관).
+        // status 가드보다 먼저 검사해야 한다 — 1차 답변이 이미 AWAITING_INPUT→QUEUED로 전이시킨 뒤
+        // 동일 답변이 재제출되면(클라 재시도/더블서밋) conflict가 아니라 no-op 성공이어야 하기 때문.
         if (req.replyToSeq() != null) {
             boolean already = turnRepo.findBySessionIdOrderBySeqAsc(sessionId).stream()
                     .anyMatch(t -> "user".equals(t.getRole()) && "answer".equals(t.getKind())
                             && req.replyToSeq().equals(t.getReplyToSeq()));
             if (already) return s; // no-op, 상태 유지
+        }
+        if (s.getStatus() != InterviewStatus.AWAITING_INPUT) {
+            throw TaskException.conflict("입력대기 상태에서만 답변할 수 있습니다 (현재: "
+                    + s.getStatus().dbValue() + ")");
         }
         appendTurn(sessionId, "user", "answer", req.answer(), req.replyToSeq());
         s.setStatus(InterviewStatus.QUEUED);

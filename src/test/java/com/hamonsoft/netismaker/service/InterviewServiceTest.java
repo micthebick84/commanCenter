@@ -209,6 +209,22 @@ class InterviewServiceTest {
     }
 
     @Test
+    void submitAnswer_duplicate_after_requeue_is_idempotent_noop() {
+        // 회귀 가드: 1차 답변으로 이미 QUEUED가 된 뒤(그 답변 턴 reply_to_seq=2 존재) 동일 답변을
+        // 재제출하면 conflict가 아니라 no-op이어야 한다 — idempotency 검사가 status 가드보다 우선.
+        // (e2e InterviewAnswerIdempotencyTest와 동일 시나리오를 Docker 없이 잠금.)
+        InterviewSession s = session(10L, InterviewStatus.QUEUED);
+        when(sessionRepo.findActiveById(10L)).thenReturn(Optional.of(s));
+        com.hamonsoft.netismaker.entity.InterviewTurn existing =
+                com.hamonsoft.netismaker.entity.InterviewTurn.of(10L, 3, "user", "answer", "이전 답변", 2);
+        when(turnRepo.findBySessionIdOrderBySeqAsc(10L)).thenReturn(List.of(existing));
+        InterviewSession result = service.submitAnswer(10L, "u1", false,
+                new com.hamonsoft.netismaker.dto.AnswerRequest("중복 재시도", 2));
+        verify(turnRepo, never()).save(any());
+        assertThat(result.getStatus()).isEqualTo(InterviewStatus.QUEUED); // no-op, 상태 유지
+    }
+
+    @Test
     void submitAnswer_to_expired_session_throws_conflict() {
         InterviewSession s = session(10L, InterviewStatus.EXPIRED);
         when(sessionRepo.findActiveById(10L)).thenReturn(Optional.of(s));

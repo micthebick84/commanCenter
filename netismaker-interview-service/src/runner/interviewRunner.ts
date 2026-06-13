@@ -22,18 +22,31 @@ export interface RunnerDeps {
   heartbeatIntervalMs?: number;
 }
 
+/**
+ * SDK stream-json user message. The claude CLI (>=2.1) `--input-format stream-json`
+ * parser requires `message:{role,content}` and throws on the legacy `{type,text}` shape
+ * (`undefined is not an object (evaluating '_.message.role')` → process exits 1).
+ */
+type UserTurn = { type: 'user'; message: { role: 'user'; content: string } };
+function userTurn(content: string): UserTurn {
+  return { type: 'user', message: { role: 'user', content } };
+}
+
 /** One async-iterable user prompt for the turn. Fresh => kickoff text; resume => the injected answer. */
-async function* promptFor(claim: InterviewClaimResponse): AsyncIterable<{ type: 'user'; text: string }> {
+async function* promptFor(claim: InterviewClaimResponse): AsyncIterable<UserTurn> {
   if (!claim.claudeSessionId) {
-    yield {
-      type: 'user',
-      text:
-        `I want to add a feature to the repo at ${claim.githubRepo} (branch ${claim.githubBranch}).\n` +
+    yield userTurn(
+      `I want to add a feature to the repo at ${claim.githubRepo} (branch ${claim.githubBranch}).\n` +
         `Title: ${claim.title}\nRequest: ${claim.description}\n\n` +
+        'IMPORTANT — this is a PLANNING-ONLY interview. Your only deliverable is a written ' +
+        'implementation PLAN (via brainstorming → writing-plans), NOT code. Do NOT implement the ' +
+        'feature: do not create or modify source files, do not run builds/installs/tests, do not ' +
+        'git commit or push. Reading the repo for context is fine. Stop once the plan is written — ' +
+        'a human reviews and approves it, and implementation happens later in a separate step.\n\n' +
         'Use the brainstorming skill: read the project context, then ask me one clarifying question at a time.',
-    };
+    );
   } else {
-    yield { type: 'user', text: claim.lastAnswer ?? '' };
+    yield userTurn(claim.lastAnswer ?? '');
   }
 }
 
@@ -97,7 +110,7 @@ export class InterviewRunner {
         const second = await relay(
           this.query({
             prompt: (async function* () {
-              yield { type: 'user', text: splice };
+              yield userTurn(splice);
             })(),
             options: buildOptions({
               superpowersPluginPath: this.deps.superpowersPluginPath,

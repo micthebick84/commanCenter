@@ -14,8 +14,10 @@ const workDir = process.argv[2] ?? process.cwd();
 const superpowersPluginPath = process.env.SUPERPOWERS_PLUGIN_PATH ?? '';
 const claudeCliPath = resolveClaudeCli(process.env.CLAUDE_CLI);
 
-async function* prompt(text: string): AsyncIterable<{ type: 'user'; text: string }> {
-  yield { type: 'user', text };
+async function* prompt(
+  text: string,
+): AsyncIterable<{ type: 'user'; message: { role: 'user'; content: string } }> {
+  yield { type: 'user', message: { role: 'user', content: text } };
 }
 
 async function spike(): Promise<void> {

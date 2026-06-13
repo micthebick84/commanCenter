@@ -50,10 +50,11 @@ describe('InterviewRunner', () => {
   it('resume claim: passes options.resume + identical cwd, and injects lastAnswer into the prompt', async () => {
     const client = makeClient();
     let seenPrompt = '';
-    const fakeQuery = vi.fn((args: { prompt: AsyncIterable<{ text: string }>; options: { resume?: string; cwd?: string } }) => {
-      // eagerly drain prompt to assert the injected answer
+    const fakeQuery = vi.fn((args: { prompt: AsyncIterable<{ message?: { content?: string } }>; options: { resume?: string; cwd?: string } }) => {
+      // eagerly drain prompt to assert the injected answer.
+      // Shape is the SDK stream-json user message {type,message:{role,content}} (claude CLI >=2.1).
       (async () => {
-        for await (const p of args.prompt) seenPrompt += (p as { text?: string }).text ?? '';
+        for await (const p of args.prompt) seenPrompt += (p as { message?: { content?: string } }).message?.content ?? '';
       })();
       return questionStream();
     });

@@ -36,15 +36,20 @@ function toMcpServers(mcpsExtra: unknown): Record<string, { type: string; url: s
  *   settingSources (settingSources:['user','project'] would load ALL user plugins, spike 04 caveat 2).
  *   'Skill' is whitelisted so the Skill tool appears in init.tools.
  * - cwd = workDir; resume reuses the identical cwd (the on-disk session store is cwd-hashed, spike 02).
- * - PERMISSIONS are enforced via canUseTool — allowedTools does NOT constrain skill-internal
- *   tool calls (spike 04 caveat 1: brainstorming ran Bash despite not being whitelisted).
+ * - PERMISSIONS: Write/Bash/Edit MUST NOT be in allowedTools. Tools listed in allowedTools are
+ *   PRE-APPROVED by the CLI and skip the canUseTool callback entirely — so listing Write/Bash there
+ *   made buildCanUseTool's confinement (Write→docs/superpowers, Bash read-only) dead code and let the
+ *   interview agent implement arbitrary code / run arbitrary shell (RCE). Only read-only/inspection
+ *   tools are pre-approved here; Write/Bash/Edit fall through to canUseTool, which confines them.
+ *   ('Skill' stays so the Skill tool appears in init.tools; skill-internal Write/Bash still route
+ *   through canUseTool because they are no longer pre-approved.)
  */
 export function buildOptions(input: SessionOptionsInput): Record<string, unknown> {
   const mcpServers = toMcpServers(input.mcpsExtra);
   return {
     pathToClaudeCodeExecutable: input.claudeCliPath,
     plugins: [{ type: 'local', path: input.superpowersPluginPath }],
-    allowedTools: ['Skill', 'Read', 'Grep', 'Glob', 'Write', 'Bash'],
+    allowedTools: ['Skill', 'Read', 'Grep', 'Glob'],
     cwd: input.workDir,
     permissionMode: 'default',
     ...(input.claudeSessionId ? { resume: input.claudeSessionId } : {}),

@@ -23,6 +23,8 @@ export function buildWritingPlansSplice(
   const skill = readFn(skillPath, 'utf8');
   return (
     'Now follow the writing-plans skill to turn the approved spec into an implementation plan. ' +
+    'Produce the PLAN DOCUMENT ONLY — do NOT implement it: no source edits, no builds/installs/tests, ' +
+    'no git commit or push. The plan is reviewed and approved by a human before any implementation. ' +
     'Apply this skill exactly:\n\n' +
     skill
   );

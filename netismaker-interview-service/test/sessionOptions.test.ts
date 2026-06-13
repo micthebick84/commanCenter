@@ -22,11 +22,17 @@ describe('buildOptions', () => {
     expect(o.env).toBeUndefined();
   });
 
-  it('allows Skill + read tools + Write + Bash (Skill must be present so the tool appears in init.tools)', () => {
+  it('pre-approves ONLY Skill + read/inspection tools; Write/Bash/Edit must fall through to canUseTool', () => {
     const o = buildOptions({ ...base, claudeSessionId: null });
-    expect(o.allowedTools).toEqual(
-      expect.arrayContaining(['Skill', 'Read', 'Grep', 'Glob', 'Write', 'Bash']),
-    );
+    const allowed = o.allowedTools as string[];
+    // Skill must be present so the tool appears in init.tools; Read/Grep/Glob are read-only.
+    expect(allowed).toEqual(expect.arrayContaining(['Skill', 'Read', 'Grep', 'Glob']));
+    // SECURITY INVARIANT: tools in allowedTools are PRE-APPROVED and skip canUseTool. Listing
+    // Write/Bash/Edit here would make buildCanUseTool's confinement dead code (RCE / agent
+    // implements during the interview). They must be gated by canUseTool, not pre-approved.
+    expect(allowed).not.toContain('Write');
+    expect(allowed).not.toContain('Bash');
+    expect(allowed).not.toContain('Edit');
   });
 
   it('omits resume on a fresh start', () => {

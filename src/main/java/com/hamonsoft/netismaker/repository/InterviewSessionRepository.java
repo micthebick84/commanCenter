@@ -10,6 +10,7 @@ import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.jpa.repository.QueryHints;
 import org.springframework.data.repository.query.Param;
 
+import java.time.OffsetDateTime;
 import java.util.List;
 import java.util.Optional;
 
@@ -71,4 +72,20 @@ public interface InterviewSessionRepository extends JpaRepository<InterviewSessi
     """)
     List<InterviewSession> findByRequester(@Param("requesterId") String requesterId,
                                            @Param("status") InterviewStatus status);
+
+    /** RUNNING이면서 claimed_at이 cutoff 이전(=stale) — 회수 후보. */
+    @Query("""
+        SELECT s FROM InterviewSession s
+        WHERE s.status = com.hamonsoft.netismaker.entity.InterviewStatus.RUNNING
+          AND s.claimedAt IS NOT NULL AND s.claimedAt < :cutoff
+    """)
+    List<InterviewSession> findStaleRunning(@Param("cutoff") OffsetDateTime cutoff);
+
+    /** AWAITING_INPUT이면서 last_activity_at이 cutoff 이전(=idle TTL 초과) — 만료 후보. */
+    @Query("""
+        SELECT s FROM InterviewSession s
+        WHERE s.status = com.hamonsoft.netismaker.entity.InterviewStatus.AWAITING_INPUT
+          AND s.lastActivityAt < :cutoff
+    """)
+    List<InterviewSession> findIdleAwaitingInput(@Param("cutoff") OffsetDateTime cutoff);
 }

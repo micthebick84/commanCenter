@@ -1,6 +1,6 @@
 import { config } from '@vue/test-utils'
 import * as QuasarPkg from 'quasar'
-import { Quasar } from 'quasar'
+import { Quasar, Notify, Dialog, Loading } from 'quasar'
 import { vi, beforeEach } from 'vitest'
 import * as vue from 'vue'
 import { FakeEventSource } from './mocks/eventsource'
@@ -36,8 +36,11 @@ const quasarComponents = Object.fromEntries(
   ),
 )
 
-// Quasar components (q-input, q-btn, ...) available in mounts.
-config.global.plugins = [[Quasar, { components: quasarComponents }]]
+// Quasar components (q-input, q-btn, ...) available in mounts, plus the same plugins
+// nuxt.config.ts registers (Notify/Dialog/Loading) so $q.notify(...) is callable.
+config.global.plugins = [
+  [Quasar, { components: quasarComponents, plugins: { Notify, Dialog, Loading } }],
+]
 config.global.components = quasarComponents
 
 beforeEach(() => {

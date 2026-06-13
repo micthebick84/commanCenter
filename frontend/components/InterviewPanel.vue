@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { useQuasar } from 'quasar'
 import { useInterviewStream } from '~/composables/useInterviewStream'
+import type { InterviewStatus } from '~/composables/useInterviewStream'
 
 const props = defineProps<{ sessionId: number }>()
 const emit = defineEmits<{ (e: 'registered', taskId: number): void; (e: 'close'): void }>()
@@ -63,12 +64,103 @@ async function sendAnswer() {
   }
 }
 
+// 화면 표시 전용 한글 라벨. 상태 비교/터미널 판정은 영문 enum 이름으로만 한다.
+const STATUS_LABELS: Record<InterviewStatus, string> = {
+  QUEUED: '대기 중',
+  RUNNING: '분석 중',
+  AWAITING_INPUT: '입력 대기',
+  PLAN_READY: '플랜 완료',
+  REGISTERED: '등록됨',
+  CANCELLED: '취소됨',
+  EXPIRED: '만료됨',
+  FAILED: '실패',
+}
+const statusLabel = computed(() =>
+  status.value ? (STATUS_LABELS[status.value] ?? status.value) : '연결 중',
+)
+
+const registering = ref(false)
+
+const isTerminal = computed(() =>
+  ['REGISTERED', 'CANCELLED', 'EXPIRED', 'FAILED'].includes(status.value as string),
+)
+
+async function register() {
+  if (status.value !== 'PLAN_READY' || registering.value) return
+  registering.value = true
+  try {
+    const res = await useApi<{ taskId: number }>(
+      `/api/interviews/${props.sessionId}/register`,
+      { method: 'POST' },
+    )
+    $q.notify({ type: 'positive', message: '작업 등록 완료' })
+    emit('registered', res.taskId)
+  } catch (e: any) {
+    $q.notify({ type: 'negative', message: e?.data?.message ?? '작업 등록 실패' })
+  } finally {
+    registering.value = false
+  }
+}
+
+async function cancelInterview() {
+  try {
+    await useApi(`/api/interviews/${props.sessionId}/cancel`, { method: 'POST' })
+  } catch {
+    /* 취소 실패는 무시 — 세션은 어차피 닫는다 */
+  }
+  stream.close()
+  emit('close')
+}
+
 onMounted(() => stream.open(props.sessionId))
 onUnmounted(() => stream.close())
 </script>
 
 <template>
   <div class="interview-panel column no-wrap">
+    <div class="status-bar row items-center q-pa-sm q-gutter-sm">
+      <q-spinner
+        v-if="connState === 'connecting' || connState === 'reconnecting'"
+        size="18px"
+        color="primary"
+      />
+      <!-- 색상/터미널 판정은 영문 enum(status), 표시는 한글(statusLabel). -->
+      <q-badge :color="status === 'PLAN_READY' ? 'positive' : 'primary'" :label="statusLabel" />
+      <q-banner
+        v-if="status === 'EXPIRED'"
+        dense
+        class="bg-orange-1 text-orange-10 col"
+        >세션이 만료되었습니다. 다시 인터뷰를 시작해 주세요.</q-banner
+      >
+      <q-banner
+        v-else-if="status === 'CANCELLED'"
+        dense
+        class="bg-grey-2 text-grey-9 col"
+        >인터뷰가 취소되었습니다.</q-banner
+      >
+      <q-banner
+        v-else-if="status === 'FAILED'"
+        dense
+        class="bg-red-1 text-red-9 col"
+        >인터뷰 실패: {{ error ?? '알 수 없는 오류가 발생했습니다' }}</q-banner
+      >
+      <q-banner
+        v-else-if="error"
+        dense
+        class="bg-red-1 text-red-9 col"
+        >{{ error }}</q-banner
+      >
+      <q-space />
+      <q-btn
+        v-if="!isTerminal"
+        flat
+        dense
+        color="grey-7"
+        label="취소"
+        @click="cancelInterview"
+      />
+    </div>
+
     <!-- 좁은 화면 탭 전환 -->
     <q-tabs
       v-model="activeTab"
@@ -158,6 +250,19 @@ onUnmounted(() => stream.close())
           <div v-if="plan" class="q-mt-md">
             <div class="text-subtitle2 q-mb-sm">구현 플랜</div>
             <pre class="plan-md">{{ plan.planMarkdown }}</pre>
+          </div>
+
+          <div class="row justify-end q-mt-md">
+            <q-btn
+              data-test="register"
+              unelevated
+              color="positive"
+              icon="task_alt"
+              label="작업 등록"
+              :loading="registering"
+              :disable="status !== 'PLAN_READY' || registering"
+              @click="register"
+            />
           </div>
         </div>
       </section>

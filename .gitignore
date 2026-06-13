@@ -41,3 +41,7 @@ frontend/.output/
 
 ### netisMaker runtime
 .run/
+
+# superpowers brainstorming mockups + throwaway SDK spikes
+.superpowers/
+spikes/

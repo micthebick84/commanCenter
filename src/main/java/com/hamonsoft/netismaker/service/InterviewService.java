@@ -242,6 +242,111 @@ public class InterviewService {
         return s;
     }
 
+    /**
+     * 사용자 답변 → AWAITING_INPUT → QUEUED 재큐. idempotent:
+     * 같은 replyToSeq에 응답하는 user answer 턴이 이미 있으면 무시 (reply_to_seq 컬럼이 키).
+     */
+    @Transactional
+    public InterviewSession submitAnswer(Long sessionId, String actorId, boolean isAdmin, AnswerRequest req) {
+        InterviewSession s = requireSession(sessionId);
+        requireOwner(s, actorId, isAdmin);
+        if (s.getStatus() != InterviewStatus.AWAITING_INPUT) {
+            throw TaskException.conflict("입력대기 상태에서만 답변할 수 있습니다 (현재: "
+                    + s.getStatus().dbValue() + ")");
+        }
+        // idempotency: 같은 replyToSeq에 대한 user answer 턴이 이미 있으면 중복 → 무시
+        if (req.replyToSeq() != null) {
+            boolean already = turnRepo.findBySessionIdOrderBySeqAsc(sessionId).stream()
+                    .anyMatch(t -> "user".equals(t.getRole()) && "answer".equals(t.getKind())
+                            && req.replyToSeq().equals(t.getReplyToSeq()));
+            if (already) return s; // no-op, 상태 유지
+        }
+        appendTurn(sessionId, "user", "answer", req.answer(), req.replyToSeq());
+        s.setStatus(InterviewStatus.QUEUED);
+        touch(s);
+        return s;
+    }
+
+    /** 사용자 취소 — QUEUED/RUNNING/AWAITING_INPUT/PLAN_READY에서만. */
+    @Transactional
+    public InterviewSession cancel(Long sessionId, String actorId, boolean isAdmin) {
+        InterviewSession s = requireSession(sessionId);
+        requireOwner(s, actorId, isAdmin);
+        InterviewStatus st = s.getStatus();
+        if (st != InterviewStatus.QUEUED && st != InterviewStatus.RUNNING
+                && st != InterviewStatus.AWAITING_INPUT && st != InterviewStatus.PLAN_READY) {
+            throw TaskException.conflict("진행중 인터뷰만 취소할 수 있습니다 (현재: " + st.dbValue() + ")");
+        }
+        appendTurn(sessionId, "system", "note", "사용자 취소");
+        s.setStatus(InterviewStatus.CANCELLED);
+        s.setWorkerId(null);
+        s.setClaimedAt(null);
+        touch(s);
+        return s;
+    }
+
+    /** idle TTL 초과 → EXPIRED. AWAITING_INPUT(사람 미복귀) 한정. */
+    @Transactional
+    public InterviewSession expire(Long sessionId, String reason) {
+        InterviewSession s = requireSession(sessionId);
+        if (s.getStatus() != InterviewStatus.AWAITING_INPUT) {
+            throw TaskException.conflict("입력대기 상태에서만 만료할 수 있습니다 (현재: "
+                    + s.getStatus().dbValue() + ")");
+        }
+        appendTurn(sessionId, "system", "note", "만료: " + (reason == null ? "idle TTL 초과" : reason));
+        s.setStatus(InterviewStatus.EXPIRED);
+        touch(s);
+        return s;
+    }
+
+    /**
+     * "작업 등록" — PLAN_READY → REGISTERED. Task(COMPLETED) + TaskAnalysis 프리필 생성.
+     * 기존 승인 게이트(COMPLETED→APPROVED)는 유지(거버넌스). task는 인터뷰 완료 후에만 생성.
+     * 반환: 생성된 taskId.
+     */
+    @Transactional
+    public Long register(Long sessionId, String actorId, boolean isAdmin) {
+        InterviewSession s = requireSession(sessionId);
+        requireOwner(s, actorId, isAdmin);
+        if (s.getStatus() != InterviewStatus.PLAN_READY) {
+            throw TaskException.conflict("플랜완료 상태에서만 작업 등록할 수 있습니다 (현재: "
+                    + s.getStatus().dbValue() + ")");
+        }
+        InterviewPlan plan = planRepo.findById(sessionId)
+                .orElseThrow(() -> TaskException.conflict("인터뷰 플랜이 없습니다"));
+
+        // Task(COMPLETED) 생성 — 인터뷰가 분석을 대체. mcps_extra 스냅샷 승계.
+        Task t = Task.create(s.getGithubRepo(), s.getGithubBranch(), s.getTitle(),
+                s.getDescription(), s.getRequesterId(), maxRetry,
+                new ArrayList<>(s.getMcpsExtra() == null ? List.of() : s.getMcpsExtra()));
+        t.setStatus(TaskStatus.COMPLETED);
+        Task saved = taskRepo.save(t);
+
+        // TaskAnalysis 프리필 (계약 고정):
+        //   markdown_result = design_markdown ONLY (합본 X),
+        //   subtasks_json   = plan_json,
+        //   claude_log      = null,
+        //   duration_ms     = plan.durationMs.
+        TaskAnalysis a = TaskAnalysis.create(saved.getId(), plan.getDesignMarkdown(),
+                plan.getPlanJson(), null, plan.getDurationMs());
+        analysisRepo.save(a);
+
+        historyRepo.save(TaskStatusHistory.log(saved.getId(), null, TaskStatus.COMPLETED,
+                "system", actorId, "대화형 분석 등록 (interview_session " + sessionId + ")"));
+
+        // 세션 마감.
+        s.setTaskId(saved.getId());
+        s.setStatus(InterviewStatus.REGISTERED);
+        touch(s);
+        return saved.getId();
+    }
+
+    private void requireOwner(InterviewSession s, String actorId, boolean isAdmin) {
+        if (!s.isOwnedBy(actorId) && !isAdmin) {
+            throw TaskException.forbidden();
+        }
+    }
+
     private InterviewSession requireSession(Long sessionId) {
         return sessionRepo.findActiveById(sessionId).orElseThrow(TaskException::notFound);
     }

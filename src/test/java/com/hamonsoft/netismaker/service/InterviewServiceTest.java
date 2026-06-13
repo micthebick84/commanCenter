@@ -181,4 +181,129 @@ class InterviewServiceTest {
         assertThatThrownBy(() -> service.fail(4L, "w1", "x"))
                 .isInstanceOf(TaskException.class);
     }
+
+    @Test
+    void submitAnswer_moves_awaiting_to_queued_and_logs_user_turn() {
+        InterviewSession s = session(10L, InterviewStatus.AWAITING_INPUT);
+        when(sessionRepo.findActiveById(10L)).thenReturn(Optional.of(s));
+        when(turnRepo.findMaxSeq(10L)).thenReturn(2);  // last question at seq 2
+        service.submitAnswer(10L, "u1", false,
+                new com.hamonsoft.netismaker.dto.AnswerRequest("좌측 패널에 추가", 2));
+        assertThat(s.getStatus()).isEqualTo(InterviewStatus.QUEUED);
+        verify(turnRepo).save(any());
+    }
+
+    @Test
+    void submitAnswer_duplicate_replyToSeq_is_ignored() {
+        InterviewSession s = session(10L, InterviewStatus.AWAITING_INPUT);
+        when(sessionRepo.findActiveById(10L)).thenReturn(Optional.of(s));
+        // an answer turn already exists at seq 3 replying to question seq 2 (reply_to_seq=2)
+        com.hamonsoft.netismaker.entity.InterviewTurn existing =
+                com.hamonsoft.netismaker.entity.InterviewTurn.of(10L, 3, "user", "answer", "이전 답변", 2);
+        when(turnRepo.findBySessionIdOrderBySeqAsc(10L)).thenReturn(List.of(existing));
+        service.submitAnswer(10L, "u1", false,
+                new com.hamonsoft.netismaker.dto.AnswerRequest("중복", 2));
+        // no new turn, status unchanged (still AWAITING_INPUT)
+        verify(turnRepo, never()).save(any());
+        assertThat(s.getStatus()).isEqualTo(InterviewStatus.AWAITING_INPUT);
+    }
+
+    @Test
+    void submitAnswer_to_expired_session_throws_conflict() {
+        InterviewSession s = session(10L, InterviewStatus.EXPIRED);
+        when(sessionRepo.findActiveById(10L)).thenReturn(Optional.of(s));
+        assertThatThrownBy(() -> service.submitAnswer(10L, "u1", false,
+                new com.hamonsoft.netismaker.dto.AnswerRequest("늦은 답변", 1)))
+                .isInstanceOf(TaskException.class)
+                .hasMessageContaining("입력대기");
+    }
+
+    @Test
+    void submitAnswer_by_non_owner_throws_forbidden() {
+        InterviewSession s = session(10L, InterviewStatus.AWAITING_INPUT);
+        when(sessionRepo.findActiveById(10L)).thenReturn(Optional.of(s));
+        assertThatThrownBy(() -> service.submitAnswer(10L, "intruder", false,
+                new com.hamonsoft.netismaker.dto.AnswerRequest("x", 1)))
+                .isInstanceOf(TaskException.class)
+                .hasMessageContaining("권한");
+    }
+
+    @Test
+    void cancel_from_awaiting_input_moves_to_cancelled() {
+        InterviewSession s = session(11L, InterviewStatus.AWAITING_INPUT);
+        when(sessionRepo.findActiveById(11L)).thenReturn(Optional.of(s));
+        service.cancel(11L, "u1", false);
+        assertThat(s.getStatus()).isEqualTo(InterviewStatus.CANCELLED);
+    }
+
+    @Test
+    void cancel_from_registered_throws() {
+        InterviewSession s = session(11L, InterviewStatus.REGISTERED);
+        when(sessionRepo.findActiveById(11L)).thenReturn(Optional.of(s));
+        assertThatThrownBy(() -> service.cancel(11L, "u1", false))
+                .isInstanceOf(TaskException.class);
+    }
+
+    @Test
+    void expire_from_awaiting_input_moves_to_expired() {
+        InterviewSession s = session(12L, InterviewStatus.AWAITING_INPUT);
+        when(sessionRepo.findActiveById(12L)).thenReturn(Optional.of(s));
+        service.expire(12L, "idle TTL 초과");
+        assertThat(s.getStatus()).isEqualTo(InterviewStatus.EXPIRED);
+    }
+
+    @Test
+    void expire_from_running_throws() {
+        InterviewSession s = session(12L, InterviewStatus.RUNNING);
+        when(sessionRepo.findActiveById(12L)).thenReturn(Optional.of(s));
+        assertThatThrownBy(() -> service.expire(12L, "x"))
+                .isInstanceOf(TaskException.class)
+                .hasMessageContaining("입력대기");
+    }
+
+    @Test
+    void register_creates_completed_task_and_analysis_then_marks_registered() {
+        InterviewSession s = session(20L, InterviewStatus.PLAN_READY);
+        when(sessionRepo.findActiveById(20L)).thenReturn(Optional.of(s));
+        InterviewPlan plan = InterviewPlan.create(20L, "# 설계", "# 플랜",
+                "[{\"title\":\"sub1\"}]", 1000L, new BigDecimal("0.5"));
+        when(planRepo.findById(20L)).thenReturn(Optional.of(plan));
+
+        Long taskId = service.register(20L, "u1", false);
+
+        assertThat(taskId).isEqualTo(999L);
+        assertThat(s.getStatus()).isEqualTo(InterviewStatus.REGISTERED);
+        assertThat(s.getTaskId()).isEqualTo(999L);
+        // task saved as COMPLETED
+        org.mockito.ArgumentCaptor<Task> taskCap = org.mockito.ArgumentCaptor.forClass(Task.class);
+        verify(taskRepo).save(taskCap.capture());
+        assertThat(taskCap.getValue().getStatus()).isEqualTo(TaskStatus.COMPLETED);
+        // analysis prefilled: markdown_result = design_markdown ONLY (합본 X), subtasks_json = plan_json, claude_log = null
+        org.mockito.ArgumentCaptor<TaskAnalysis> aCap = org.mockito.ArgumentCaptor.forClass(TaskAnalysis.class);
+        verify(analysisRepo).save(aCap.capture());
+        assertThat(aCap.getValue().getMarkdownResult()).isEqualTo("# 설계");
+        assertThat(aCap.getValue().getMarkdownResult()).doesNotContain("# 플랜");
+        assertThat(aCap.getValue().getSubtasksJson()).isEqualTo("[{\"title\":\"sub1\"}]");
+        assertThat(aCap.getValue().getClaudeLog()).isNull();
+        // history logged: null → COMPLETED
+        verify(historyRepo).save(any());
+    }
+
+    @Test
+    void register_not_plan_ready_throws() {
+        InterviewSession s = session(20L, InterviewStatus.AWAITING_INPUT);
+        when(sessionRepo.findActiveById(20L)).thenReturn(Optional.of(s));
+        assertThatThrownBy(() -> service.register(20L, "u1", false))
+                .isInstanceOf(TaskException.class)
+                .hasMessageContaining("플랜완료");
+    }
+
+    @Test
+    void register_by_non_owner_throws_forbidden() {
+        InterviewSession s = session(20L, InterviewStatus.PLAN_READY);
+        when(sessionRepo.findActiveById(20L)).thenReturn(Optional.of(s));
+        assertThatThrownBy(() -> service.register(20L, "intruder", false))
+                .isInstanceOf(TaskException.class)
+                .hasMessageContaining("권한");
+    }
 }

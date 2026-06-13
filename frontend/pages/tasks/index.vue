@@ -50,6 +50,11 @@ const showCreate = ref(false)
 const draft = reactive({ githubRepo: '', githubBranch: '', title: '', description: '' })
 const submitting = ref(false)
 
+// 다이얼로그 단계: 'form' = 입력(Phase 1), 'interview' = 분할 뷰(Phase 2)
+const dialogPhase = ref<'form' | 'interview'>('form')
+const interviewSessionId = ref<number | null>(null)
+const starting = ref(false)
+
 // 살아있는 워커들이 보고한 MCP 합집합 (다이얼로그 열 때 1회 조회)
 const availableMcps = ref<string[]>([])
 const aliveWorkerCount = ref(0)
@@ -236,6 +241,8 @@ function openCreate() {
   draft.description = ''
   selectedCatalogIds.value = []
   resetBranchState()
+  dialogPhase.value = 'form'
+  interviewSessionId.value = null
   showCreate.value = true
   loadAvailableMcps()
   loadCatalog()
@@ -278,6 +285,43 @@ async function submit() {
   } finally {
     submitting.value = false
   }
+}
+
+// Phase 1 제출: 작업이 아니라 인터뷰 세션을 생성하고 Phase 2(분할 뷰)로 전환한다.
+// task는 인터뷰 완료(PLAN_READY) 후 '작업 등록'에서만 생성된다.
+async function startInterview() {
+  starting.value = true
+  try {
+    const res = await useApi<{ sessionId: number }>('/api/interviews', {
+      method: 'POST',
+      body: {
+        githubRepo: normalizeRepo(draft.githubRepo),
+        githubBranch: draft.githubBranch,
+        title: draft.title,
+        description: draft.description,
+        mcpCatalogIds: selectedCatalogIds.value,
+      },
+    })
+    interviewSessionId.value = res.sessionId
+    dialogPhase.value = 'interview'
+  } catch (e: any) {
+    $q.notify({ type: 'negative', message: e?.data?.message ?? '인터뷰 시작 실패' })
+  } finally {
+    starting.value = false
+  }
+}
+
+// Phase 2에서 '작업 등록' 성공 시: 다이얼로그 닫고 목록 갱신.
+function onRegistered(_taskId: number) {
+  $q.notify({ type: 'positive', message: '작업이 등록되었습니다' })
+  closeDialog()
+  refresh()
+}
+
+function closeDialog() {
+  showCreate.value = false
+  dialogPhase.value = 'form'
+  interviewSessionId.value = null
 }
 
 async function cancel(t: TaskResponse) {
@@ -408,11 +452,19 @@ function statusClass(status: string) {
 
     <!-- 등록 다이얼로그 -->
     <q-dialog v-model="showCreate" persistent>
-      <q-card style="min-width: 520px">
+      <q-card
+        :style="
+          dialogPhase === 'interview'
+            ? 'min-width: 90vw; max-width: 1200px'
+            : 'min-width: 520px'
+        "
+      >
         <q-card-section>
-          <div class="text-h6">새 작업 등록</div>
+          <div class="text-h6">
+            {{ dialogPhase === 'form' ? '대화형 분석 시작' : '대화형 분석' }}
+          </div>
         </q-card-section>
-        <q-card-section class="q-gutter-md">
+        <q-card-section v-if="dialogPhase === 'form'" class="q-gutter-md">
           <q-banner
             v-if="!mcpsLoading"
             :class="
@@ -580,17 +632,27 @@ function statusClass(status: string) {
             </div>
           </q-expansion-item>
         </q-card-section>
-        <q-card-actions align="right">
-          <q-btn flat label="취소" @click="showCreate = false" />
+        <q-card-actions v-if="dialogPhase === 'form'" align="right">
+          <q-btn flat label="취소" @click="closeDialog" />
           <q-btn
             unelevated
             color="primary"
-            label="등록"
-            :loading="submitting"
+            icon="forum"
+            label="인터뷰 시작"
+            :loading="starting"
             :disable="!canSubmit"
-            @click="submit"
+            @click="startInterview"
           />
         </q-card-actions>
+
+        <q-card-section v-else class="q-pa-none">
+          <InterviewPanel
+            v-if="interviewSessionId"
+            :session-id="interviewSessionId"
+            @registered="onRegistered"
+            @close="closeDialog"
+          />
+        </q-card-section>
       </q-card>
     </q-dialog>
   </q-page>

@@ -30,7 +30,7 @@ Object.assign(globalThis as any, {
 
 // Register every Quasar component (QInput, QBtn, ...) globally so they resolve to real
 // DOM nodes in mounts — the Quasar Vue plugin alone does not auto-register components.
-const quasarComponents = Object.fromEntries(
+const quasarComponents: Record<string, any> = Object.fromEntries(
   Object.entries(QuasarPkg as Record<string, unknown>).filter(
     ([name, val]) => /^Q[A-Z]/.test(name) && val != null && typeof val === 'object',
   ),

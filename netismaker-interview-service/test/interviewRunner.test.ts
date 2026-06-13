@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { InterviewRunner } from '../src/runner/interviewRunner.js';
 import { freshClaim, resumeClaim } from './fixtures/claims.js';
 import { planCompleteStream, questionStream } from './fixtures/sdkMessages.js';
+import { detectHandoff } from '../src/runner/skillDispatch.js';
 
 function makeClient() {
   return {
@@ -98,5 +99,37 @@ describe('InterviewRunner', () => {
 
     expect(client.fail).toHaveBeenCalledWith(42, expect.stringContaining('quota'));
     expect(client.postQuestion).not.toHaveBeenCalled();
+  });
+});
+
+describe('InterviewRunner handoff shim', () => {
+  it('on handoff announcement without a plan, re-queries the same session with the writing-plans splice', async () => {
+    const client = makeClient();
+    async function* handoffThenQuestion() {
+      yield { type: 'system', subtype: 'init', session_id: 'sess-h' };
+      yield {
+        type: 'assistant',
+        message: { content: [{ type: 'text', text: 'Spec approved. Invoke writing-plans skill now.' }] },
+      };
+      yield { type: 'result', subtype: 'success', usage: { total_cost_usd: 0.05 }, duration_ms: 100 };
+    }
+    // first call returns handoff announcement; second (after splice) returns a plan
+    const fakeQuery = vi
+      .fn()
+      .mockImplementationOnce(() => handoffThenQuestion())
+      .mockImplementationOnce(() => planCompleteStream());
+    const spliceRead = vi.fn().mockReturnValue('# Writing Plans\n\nbreak into tasks');
+    const runner = new InterviewRunner(client as never, fakeQuery as never, {
+      ...deps,
+      spliceRead,
+    } as never);
+
+    await runner.run({ ...resumeClaim, currentPhase: 'brainstorming' });
+
+    expect(detectHandoff('Invoke writing-plans skill now.')).toBe(true);
+    expect(fakeQuery).toHaveBeenCalledTimes(2);
+    // second query reuses the SAME session via resume and carries the spliced SKILL.md
+    expect(fakeQuery.mock.calls[1][0].options.resume).toBe('sess-h');
+    expect(client.postPlan).toHaveBeenCalledTimes(1);
   });
 });

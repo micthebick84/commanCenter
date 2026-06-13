@@ -6,6 +6,7 @@ import { QuotaGuardExceeded, CostGuard } from './costGuard.js';
 import { harvestPlan, HarvestError } from './planHarvest.js';
 import { relay } from './messageRelay.js';
 import { ensureRepo as defaultEnsureRepo, type RepoInput } from './repoPrepare.js';
+import { buildWritingPlansSplice, detectHandoff } from './skillDispatch.js';
 
 export interface RunnerDeps {
   superpowersPluginPath: string;
@@ -15,6 +16,8 @@ export interface RunnerDeps {
   quotaGuard: number;
   /** Injectable repo prepare (defaults to the real git clone/fetch). */
   ensureRepo?: (input: RepoInput) => Promise<void>;
+  /** Injectable SKILL.md reader for the writing-plans splice fallback (defaults to real fs read). */
+  spliceRead?: (path: string, enc: 'utf8') => string;
 }
 
 /** One async-iterable user prompt for the turn. Fresh => kickoff text; resume => the injected answer. */
@@ -74,24 +77,56 @@ export class InterviewRunner {
       const result = await relay(stream);
       guard.add(result.costUsd);
 
-      if (claim.currentPhase === 'writing-plans' && /Implementation Plan/m.test(result.assistantText)) {
-        const harvest = harvestPlan(result.assistantText);
+      let assistantText = result.assistantText;
+      let sessionId = result.sessionId ?? claim.claudeSessionId ?? '';
+      let costUsd = result.costUsd;
+      let durationMs = result.durationMs;
+
+      // Skill-dispatch shim: if brainstorming announced the writing-plans handoff
+      // but no plan was produced, splice the writing-plans SKILL.md into the SAME
+      // session and run one more turn (fallback when 'Skill' did not auto-fire).
+      const handoff = detectHandoff(assistantText);
+      const hasPlan = /Implementation Plan/m.test(assistantText);
+      if (handoff && !hasPlan && sessionId) {
+        const splice = buildWritingPlansSplice(this.deps.superpowersPluginPath, this.deps.spliceRead);
+        const second = await relay(
+          this.query({
+            prompt: (async function* () {
+              yield { type: 'user', text: splice };
+            })(),
+            options: buildOptions({
+              superpowersPluginPath: this.deps.superpowersPluginPath,
+              workDir: claim.workDir,
+              claudeCliPath: this.deps.claudeCliPath,
+              claudeSessionId: sessionId,
+            }),
+          }),
+        );
+        guard.add(second.costUsd);
+        assistantText = second.assistantText;
+        sessionId = second.sessionId ?? sessionId;
+        costUsd = second.costUsd;
+        durationMs = second.durationMs;
+      }
+
+      if (/Implementation Plan/m.test(assistantText)) {
+        const harvest = harvestPlan(assistantText);
         // planJson is sent as a JSON STRING — Java stores it as text/JSONB; frontend parses on use.
         await this.client.postPlan(claim.sessionId, {
           designMarkdown: harvest.designMarkdown,
           planMarkdown: harvest.planMarkdown,
           planJson: JSON.stringify(harvest.planJson),
-          costUsd: result.costUsd,
-          durationMs: result.durationMs,
+          costUsd,
+          durationMs,
         });
         return;
       }
 
       await this.client.postQuestion(claim.sessionId, {
-        content: result.assistantText,
-        claudeSessionId: result.sessionId ?? claim.claudeSessionId ?? '',
+        content: assistantText,
+        claudeSessionId: sessionId,
         kind: 'question',
-        costUsd: result.costUsd,
+        costUsd,
       });
     } catch (err) {
       if (err instanceof QuotaGuardExceeded) {

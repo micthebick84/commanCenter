@@ -121,4 +121,147 @@ public class InterviewService {
         return turnRepo.save(
                 InterviewTurn.of(sessionId, nextSeq(sessionId), role, kind, content, replyToSeq));
     }
+
+    /**
+     * QUEUED 1건을 atomic claim → RUNNING. 없으면 Optional.empty.
+     * SELECT FOR UPDATE SKIP LOCKED, last_activity_at ASC (TaskRepository.claim 패턴).
+     *
+     * 첫 claim 시 work_dir를 결정적 경로로 배정/영속화하고,
+     * resume claim에서는 저장된 값을 그대로 반환 (Claude Code 세션 스토어가 cwd 종속, 스파이크 02).
+     */
+    @Transactional
+    public Optional<InterviewClaimResponse> claim(String workerId) {
+        List<InterviewSession> candidates =
+                sessionRepo.findClaimableForUpdateSkipLocked(PageRequest.of(0, 1));
+        if (candidates.isEmpty()) return Optional.empty();
+        InterviewSession s = candidates.get(0);
+        if (s.getStatus() != InterviewStatus.QUEUED) {
+            throw new TaskException(HttpStatus.INTERNAL_SERVER_ERROR,
+                    "claim 후보가 처리 가능한 상태가 아님: " + s.getStatus());
+        }
+        s.setStatus(InterviewStatus.RUNNING);
+        s.setWorkerId(workerId);
+        s.setClaimedAt(OffsetDateTime.now());
+        // 첫 claim에만 work_dir 배정. resume이면 기존 값 유지.
+        if (s.getWorkDir() == null || s.getWorkDir().isBlank()) {
+            s.setWorkDir(deriveWorkDir(s.getGithubRepo(), s.getId()));
+        }
+        touch(s);
+        List<InterviewTurn> turns = turnRepo.findBySessionIdOrderBySeqAsc(s.getId());
+        return Optional.of(InterviewClaimResponse.of(s, turns));
+    }
+
+    /**
+     * 결정적 체크아웃 경로: ~/netis-maker/interviews/{owner}/{repo}/session-{id}.
+     * 단일 호스트/공유 FS 전제. 같은 세션은 resume마다 항상 같은 경로 → 동일 cwd 보장.
+     */
+    private String deriveWorkDir(String githubRepo, Long sessionId) {
+        String[] parts = githubRepo.split("/", 2);
+        String owner = parts.length == 2 ? parts[0] : "_";
+        String repo = parts.length == 2 ? parts[1] : githubRepo;
+        String home = System.getProperty("user.home");
+        return home + "/netis-maker/interviews/" + owner + "/" + repo + "/session-" + sessionId;
+    }
+
+    /**
+     * 워커가 질문(평문) emit → AWAITING_INPUT, 워커 반납.
+     * turn(role=assistant) 저장 + claude_session_id 캡처 + 비용 누적.
+     */
+    @Transactional
+    public InterviewTurn recordQuestion(Long sessionId, String workerId, WorkerQuestionRequest req) {
+        InterviewSession s = requireSession(sessionId);
+        if (s.getStatus() != InterviewStatus.RUNNING) {
+            throw TaskException.conflict("인터뷰중 상태에서만 질문을 보고할 수 있습니다 (현재: "
+                    + s.getStatus().dbValue() + ")");
+        }
+        requireWorker(s, workerId);
+        if (req.claudeSessionId() != null && !req.claudeSessionId().isBlank()) {
+            s.setClaudeSessionId(req.claudeSessionId());
+        }
+        addCost(s, req.costUsd());
+        String kind = req.kind() == null || req.kind().isBlank() ? "question" : req.kind();
+        InterviewTurn turn = appendTurn(sessionId, "assistant", kind,
+                req.content() == null ? "" : req.content());
+        s.setStatus(InterviewStatus.AWAITING_INPUT);
+        s.setWorkerId(null);
+        s.setClaimedAt(null);
+        s.setCurrentPhase("brainstorming");
+        touch(s);
+        return turn;
+    }
+
+    /**
+     * writing-plans 완료 → PLAN_READY. design+plan 영속화, 비용 누적, 워커 반납.
+     */
+    @Transactional
+    public InterviewPlan recordPlan(Long sessionId, String workerId, WorkerPlanRequest req) {
+        InterviewSession s = requireSession(sessionId);
+        if (s.getStatus() != InterviewStatus.RUNNING) {
+            throw TaskException.conflict("인터뷰중 상태에서만 플랜을 보고할 수 있습니다 (현재: "
+                    + s.getStatus().dbValue() + ")");
+        }
+        requireWorker(s, workerId);
+        addCost(s, req.costUsd());
+        InterviewPlan plan = planRepo.save(InterviewPlan.create(sessionId,
+                req.designMarkdown(), req.planMarkdown(), req.planJson(),
+                req.durationMs(), s.getTotalCostUsd()));
+        appendTurn(sessionId, "assistant", "design",
+                req.designMarkdown() == null ? "" : req.designMarkdown());
+        s.setStatus(InterviewStatus.PLAN_READY);
+        s.setWorkerId(null);
+        s.setClaimedAt(null);
+        s.setCurrentPhase("writing-plans");
+        touch(s);
+        return plan;
+    }
+
+    /** 워커가 idle heartbeat 시 last_activity 갱신 (회수 오탐 방지용 best-effort). */
+    @Transactional
+    public void heartbeat(Long sessionId, String workerId) {
+        InterviewSession s = requireSession(sessionId);
+        requireWorker(s, workerId);
+        s.setClaimedAt(OffsetDateTime.now());
+        touch(s);
+    }
+
+    /** clone/SDK/parse/비용상한 등 오류 → FAILED. terminal 상태에선 거부. */
+    @Transactional
+    public InterviewSession fail(Long sessionId, String actor, String reason) {
+        InterviewSession s = requireSession(sessionId);
+        InterviewStatus st = s.getStatus();
+        if (st != InterviewStatus.QUEUED && st != InterviewStatus.RUNNING
+                && st != InterviewStatus.AWAITING_INPUT) {
+            throw TaskException.conflict("진행중 인터뷰만 실패 처리할 수 있습니다 (현재: "
+                    + st.dbValue() + ")");
+        }
+        appendTurn(sessionId, "system", "note", "인터뷰 실패: " + (reason == null ? "원인 미상" : reason));
+        s.setStatus(InterviewStatus.FAILED);
+        s.setWorkerId(null);
+        s.setClaimedAt(null);
+        touch(s);
+        return s;
+    }
+
+    private InterviewSession requireSession(Long sessionId) {
+        return sessionRepo.findActiveById(sessionId).orElseThrow(TaskException::notFound);
+    }
+
+    private void requireWorker(InterviewSession s, String workerId) {
+        if (s.getWorkerId() != null && !s.getWorkerId().equals(workerId)) {
+            throw TaskException.conflict("다른 워커가 잡은 인터뷰입니다 (소유: " + s.getWorkerId() + ")");
+        }
+    }
+
+    private void addCost(InterviewSession s, BigDecimal cost) {
+        if (cost != null) {
+            BigDecimal base = s.getTotalCostUsd() == null ? BigDecimal.ZERO : s.getTotalCostUsd();
+            s.setTotalCostUsd(base.add(cost));
+        }
+    }
+
+    private void touch(InterviewSession s) {
+        OffsetDateTime now = OffsetDateTime.now();
+        s.setUpdatedAt(now);
+        s.setLastActivityAt(now);
+    }
 }

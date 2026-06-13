@@ -23,7 +23,7 @@ const deps = {
 describe('InterviewRunner', () => {
   it('fresh claim: prepares the repo at workDir, starts brainstorming, relays the question, posts session_id + cost', async () => {
     const client = makeClient();
-    const fakeQuery = vi.fn(() => questionStream());
+    const fakeQuery = vi.fn((_args: { prompt: AsyncIterable<unknown>; options: { resume?: string; cwd?: string } }) => questionStream());
     const runner = new InterviewRunner(client as never, fakeQuery as never, deps as never);
 
     await runner.run(freshClaim);
@@ -33,8 +33,8 @@ describe('InterviewRunner', () => {
       expect.objectContaining({ githubRepo: 'acme/widgets', githubBranch: 'main', workDir: freshClaim.workDir }),
     );
     // cwd = workDir; fresh => no resume option
-    expect(fakeQuery.mock.calls[0][0].options.cwd).toBe(freshClaim.workDir);
-    expect(fakeQuery.mock.calls[0][0].options.resume).toBeUndefined();
+    expect(fakeQuery.mock.calls[0]![0].options.cwd).toBe(freshClaim.workDir);
+    expect(fakeQuery.mock.calls[0]![0].options.resume).toBeUndefined();
     expect(client.postQuestion).toHaveBeenCalledWith(
       42,
       expect.objectContaining({
@@ -65,8 +65,8 @@ describe('InterviewRunner', () => {
     expect(ensureRepo).toHaveBeenCalledWith(
       expect.objectContaining({ workDir: resumeClaim.workDir }),
     );
-    expect(fakeQuery.mock.calls[0][0].options.resume).toBe('sess-abc-123');
-    expect(fakeQuery.mock.calls[0][0].options.cwd).toBe(resumeClaim.workDir);
+    expect(fakeQuery.mock.calls[0]![0].options.resume).toBe('sess-abc-123');
+    expect(fakeQuery.mock.calls[0]![0].options.cwd).toBe(resumeClaim.workDir);
     expect(seenPrompt).toContain('visible columns only');
   });
 
@@ -129,7 +129,7 @@ describe('InterviewRunner handoff shim', () => {
     expect(detectHandoff('Invoke writing-plans skill now.')).toBe(true);
     expect(fakeQuery).toHaveBeenCalledTimes(2);
     // second query reuses the SAME session via resume and carries the spliced SKILL.md
-    expect(fakeQuery.mock.calls[1][0].options.resume).toBe('sess-h');
+    expect(fakeQuery.mock.calls[1]![0].options.resume).toBe('sess-h');
     expect(client.postPlan).toHaveBeenCalledTimes(1);
   });
 });

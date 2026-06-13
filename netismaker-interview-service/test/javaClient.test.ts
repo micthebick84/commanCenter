@@ -38,7 +38,7 @@ describe('JavaApiClient', () => {
       kind: 'question',
       costUsd: 0.1,
     });
-    const [url, init] = fetchMock.mock.calls[0];
+    const [url, init] = fetchMock.mock.calls[0]!;
     expect(url).toBe('http://api:8090/worker/interviews/42/question');
     expect(JSON.parse(init.body).content).toBe('What columns?');
   });
@@ -54,7 +54,7 @@ describe('JavaApiClient', () => {
       costUsd: 0.3,
       durationMs: 5000,
     });
-    const [url, init] = fetchMock.mock.calls[0];
+    const [url, init] = fetchMock.mock.calls[0]!;
     expect(url).toBe('http://api:8090/worker/interviews/42/plan');
     // planJson must be a string on the wire — Java stores it as text, frontend parses on use
     expect(typeof JSON.parse(init.body).planJson).toBe('string');
@@ -64,6 +64,6 @@ describe('JavaApiClient', () => {
     const fetchMock = vi.fn().mockResolvedValue(new Response(null, { status: 200 }));
     const client = new JavaApiClient(cfg, fetchMock);
     await client.fail(42, 'cost cap exceeded');
-    expect(fetchMock.mock.calls[0][0]).toBe('http://api:8090/worker/interviews/42/fail');
+    expect(fetchMock.mock.calls[0]![0]).toBe('http://api:8090/worker/interviews/42/fail');
   });
 });

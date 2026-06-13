@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
 import { useInterviewStream } from './useInterviewStream'
 import { FakeEventSource } from '../test/mocks/eventsource'
 import { authStub } from '../test/mocks/nuxt'
@@ -79,5 +79,84 @@ describe('useInterviewStream — status events', () => {
     es.emit('status', '없는상태') // a stray Korean label must NOT clobber state
     expect(s.status.value).toBe('RUNNING')
     s.close()
+  })
+})
+
+describe('useInterviewStream — design events', () => {
+  it('upserts design sections by key and tracks approved', () => {
+    authStub.accessToken = 'jwt'
+    const s = useInterviewStream()
+    s.open(1)
+    const es = FakeEventSource.last()
+    es.emit('design', { key: 'overview', title: '개요', body: '초안', approved: false })
+    expect(s.designSections.value).toHaveLength(1)
+    es.emit('design', { key: 'overview', title: '개요', body: '확정', approved: true })
+    expect(s.designSections.value).toHaveLength(1)
+    expect(s.designSections.value[0]).toMatchObject({ body: '확정', approved: true })
+    es.emit('design', { key: 'data', title: '데이터', body: 'x', approved: false })
+    expect(s.designSections.value).toHaveLength(2)
+    s.close()
+  })
+})
+
+describe('useInterviewStream — plan_ready/done', () => {
+  it('captures the plan OBJECT and sets PLAN_READY on plan_ready event', () => {
+    authStub.accessToken = 'jwt'
+    const s = useInterviewStream()
+    s.open(1)
+    // Canonical wire payload: a JSON OBJECT { designMarkdown, planMarkdown, planJson }
+    // where planJson is itself a JSON STRING (the SDK service sends JSON.stringify(array)).
+    // The composable parses the outer object, then JSON.parses the inner planJson string.
+    FakeEventSource.last().emit('plan_ready', {
+      designMarkdown: '# 설계',
+      planMarkdown: '# 플랜',
+      planJson: JSON.stringify([{ title: 'T1' }]), // planJson arrives as a JSON STRING
+    })
+    expect(s.status.value).toBe('PLAN_READY')
+    expect(s.plan.value).toMatchObject({
+      designMarkdown: '# 설계',
+      planMarkdown: '# 플랜',
+    })
+    // planJson is parsed from the string into an array on receipt
+    expect(Array.isArray(s.plan.value!.planJson)).toBe(true)
+    expect(s.plan.value!.planJson).toEqual([{ title: 'T1' }])
+    s.close()
+  })
+
+  it('closes the stream on done', () => {
+    authStub.accessToken = 'jwt'
+    const s = useInterviewStream()
+    s.open(1)
+    const es = FakeEventSource.last()
+    es.emit('done', {})
+    expect(s.connState.value).toBe('closed')
+  })
+})
+
+describe('useInterviewStream — reconnect', () => {
+  it('reconnects after a transient error', () => {
+    vi.useFakeTimers()
+    authStub.accessToken = 'jwt'
+    const s = useInterviewStream()
+    s.open(1)
+    expect(FakeEventSource.instances).toHaveLength(1)
+    FakeEventSource.last().triggerError()
+    expect(s.connState.value).toBe('reconnecting')
+    vi.advanceTimersByTime(1000)
+    expect(FakeEventSource.instances).toHaveLength(2)
+    s.close()
+    vi.useRealTimers()
+  })
+
+  it('stops reconnecting after close()', () => {
+    vi.useFakeTimers()
+    authStub.accessToken = 'jwt'
+    const s = useInterviewStream()
+    s.open(1)
+    FakeEventSource.last().triggerError()
+    s.close()
+    vi.advanceTimersByTime(30000)
+    expect(FakeEventSource.instances).toHaveLength(1)
+    vi.useRealTimers()
   })
 })

@@ -96,6 +96,9 @@ export function useInterviewStream() {
     }
     es.addEventListener('status', (e) => onStatus(e as MessageEvent))
     es.addEventListener('question', (e) => onQuestion(e as MessageEvent))
+    es.addEventListener('design', (e) => onDesign(e as MessageEvent))
+    es.addEventListener('plan_ready', (e) => onPlanReady(e as MessageEvent))
+    es.addEventListener('done', () => close())
     es.onerror = () => onError()
   }
 
@@ -119,6 +122,46 @@ export function useInterviewStream() {
       content: data.content,
     })
     status.value = 'AWAITING_INPUT'
+  }
+
+  function onDesign(e: MessageEvent) {
+    const data = parse(e)
+    if (!data || !data.key) return
+    const idx = designSections.value.findIndex((d) => d.key === data.key)
+    const section: DesignSection = {
+      key: data.key,
+      title: data.title ?? data.key,
+      body: data.body ?? '',
+      approved: !!data.approved,
+    }
+    if (idx >= 0) {
+      const next = designSections.value.slice()
+      next[idx] = section
+      designSections.value = next
+    } else {
+      designSections.value = [...designSections.value, section]
+    }
+  }
+
+  function onPlanReady(e: MessageEvent) {
+    // The plan_ready event data is a JSON object {designMarkdown, planMarkdown, planJson}
+    // where planJson is itself a JSON STRING (the SDK service sends JSON.stringify(array)).
+    // Parse the outer object first, then parse the inner planJson string into an array.
+    const obj = parse(e)
+    if (!obj) return
+    let parsedPlanJson: unknown = null
+    try {
+      parsedPlanJson =
+        typeof obj.planJson === 'string' ? JSON.parse(obj.planJson) : (obj.planJson ?? null)
+    } catch {
+      parsedPlanJson = null // guard against malformed JSON in planJson
+    }
+    plan.value = {
+      designMarkdown: obj.designMarkdown ?? '',
+      planMarkdown: obj.planMarkdown ?? '',
+      planJson: parsedPlanJson,
+    }
+    status.value = 'PLAN_READY'
   }
 
   // Dedup by seq so SSE replay-on-reconnect does not duplicate turns.

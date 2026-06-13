@@ -3,6 +3,7 @@ package com.hamonsoft.netismaker.service;
 import com.hamonsoft.netismaker.dto.AnswerRequest;
 import com.hamonsoft.netismaker.dto.CreateInterviewRequest;
 import com.hamonsoft.netismaker.dto.InterviewClaimResponse;
+import com.hamonsoft.netismaker.dto.InterviewResponse;
 import com.hamonsoft.netismaker.dto.WorkerPlanRequest;
 import com.hamonsoft.netismaker.dto.WorkerQuestionRequest;
 import com.hamonsoft.netismaker.entity.*;
@@ -339,6 +340,23 @@ public class InterviewService {
         s.setStatus(InterviewStatus.REGISTERED);
         touch(s);
         return saved.getId();
+    }
+
+    /** ACL 검증 후 세션 반환 (소유자/관리자만). 스트림 구독 전 권한 체크에도 사용. */
+    @Transactional(readOnly = true)
+    public InterviewSession getForView(Long id, String viewerId, boolean isAdmin) {
+        InterviewSession s = sessionRepo.findActiveById(id).orElseThrow(TaskException::notFound);
+        requireOwner(s, viewerId, isAdmin);
+        return s;
+    }
+
+    /** 상세 뷰 조립 (status + turns + plan). ACL은 getForView가 강제. */
+    @Transactional(readOnly = true)
+    public InterviewResponse getResponse(Long id, String viewerId, boolean isAdmin) {
+        InterviewSession s = getForView(id, viewerId, isAdmin);
+        return InterviewResponse.of(s,
+                turnRepo.findBySessionIdOrderBySeqAsc(id),
+                planRepo.findById(id).orElse(null));
     }
 
     private void requireOwner(InterviewSession s, String actorId, boolean isAdmin) {

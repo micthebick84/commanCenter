@@ -1,4 +1,5 @@
 import { config } from '@vue/test-utils'
+import * as QuasarPkg from 'quasar'
 import { Quasar } from 'quasar'
 import { vi, beforeEach } from 'vitest'
 import * as vue from 'vue'
@@ -27,8 +28,17 @@ Object.assign(globalThis as any, {
   useRuntimeConfig: useRuntimeConfigMock,
 })
 
+// Register every Quasar component (QInput, QBtn, ...) globally so they resolve to real
+// DOM nodes in mounts — the Quasar Vue plugin alone does not auto-register components.
+const quasarComponents = Object.fromEntries(
+  Object.entries(QuasarPkg as Record<string, unknown>).filter(
+    ([name, val]) => /^Q[A-Z]/.test(name) && val != null && typeof val === 'object',
+  ),
+)
+
 // Quasar components (q-input, q-btn, ...) available in mounts.
-config.global.plugins = [[Quasar, {}]]
+config.global.plugins = [[Quasar, { components: quasarComponents }]]
+config.global.components = quasarComponents
 
 beforeEach(() => {
   resetNuxtMocks()

@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { useQuasar } from 'quasar'
 import { useInterviewStream } from '~/composables/useInterviewStream'
 
 const props = defineProps<{ sessionId: number }>()
@@ -9,6 +10,58 @@ const { connState, status, turns, designSections, plan, error } = stream
 
 // Narrow-screen tab fallback ('chat' | 'design').
 const activeTab = ref<'chat' | 'design'>('chat')
+
+const $q = useQuasar()
+const answer = ref('')
+const sending = ref(false)
+
+// 마지막 미답변 assistant 질문의 seq (idempotency용 replyToSeq).
+const lastQuestionSeq = computed(() => {
+  for (let i = turns.value.length - 1; i >= 0; i--) {
+    if (turns.value[i].role === 'assistant' && turns.value[i].kind === 'question') {
+      return turns.value[i].seq
+    }
+  }
+  return null
+})
+
+const canAnswer = computed(
+  () => status.value === 'AWAITING_INPUT' && !sending.value && !!answer.value.trim(),
+)
+
+async function sendAnswer() {
+  const text = answer.value.trim()
+  if (!text || status.value !== 'AWAITING_INPUT') return
+  const replyToSeq = lastQuestionSeq.value
+  sending.value = true
+  try {
+    await useApi(`/api/interviews/${props.sessionId}/answer`, {
+      method: 'POST',
+      body: { answer: text, replyToSeq },
+    })
+    // 낙관적 추가: 서버 재큐 후 다음 질문이 새 seq로 도착한다.
+    turns.value = [
+      ...turns.value,
+      {
+        seq: (replyToSeq ?? turns.value.length) + 0.5,
+        role: 'user',
+        kind: 'answer',
+        content: text,
+      },
+    ]
+    answer.value = ''
+    status.value = 'QUEUED'
+  } catch (e: any) {
+    const st = e?.statusCode ?? e?.response?.status ?? e?.status
+    if (st === 409) {
+      $q.notify({ type: 'warning', message: '세션이 만료되었거나 이미 처리된 답변입니다' })
+    } else {
+      $q.notify({ type: 'negative', message: e?.data?.message ?? '답변 전송 실패' })
+    }
+  } finally {
+    sending.value = false
+  }
+}
 
 onMounted(() => stream.open(props.sessionId))
 onUnmounted(() => stream.close())
@@ -47,6 +100,30 @@ onUnmounted(() => stream.close())
           </div>
           <div v-if="turns.length === 0" class="text-grey-6 q-pa-md text-center">
             인터뷰를 시작합니다… 첫 질문을 준비 중입니다.
+          </div>
+        </div>
+        <div class="answer-bar q-pa-sm">
+          <q-input
+            v-model="answer"
+            type="textarea"
+            outlined
+            dense
+            autogrow
+            :disable="status !== 'AWAITING_INPUT' || sending"
+            placeholder="답변을 입력하세요…"
+            @keydown.enter.exact.prevent="sendAnswer"
+          />
+          <div class="row justify-end q-mt-xs">
+            <q-btn
+              data-test="send-answer"
+              unelevated
+              color="primary"
+              icon="send"
+              label="전송"
+              :loading="sending"
+              :disable="!canAnswer"
+              @click="sendAnswer"
+            />
           </div>
         </div>
       </section>

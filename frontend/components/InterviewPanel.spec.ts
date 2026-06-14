@@ -251,4 +251,16 @@ describe('InterviewPanel — refresh resume (snapshot hydration)', () => {
     expect(useApiMock).toHaveBeenCalledWith('/api/interviews/9')
     w.unmount()
   })
+
+  it('still opens the stream and renders live events when the snapshot fetch fails', async () => {
+    authStub.accessToken = 'jwt'
+    useApiMock.mockRejectedValueOnce(new Error('500')) // 마운트 스냅샷 GET 실패(비치명)
+    const w = mount(InterviewPanel, { props: { sessionId: 9 } })
+    await flushPromises()
+    // 스냅샷 실패에도 stream.open은 호출되어 라이브 질문을 받는다
+    FakeEventSource.last().emit('question', { seq: 1, content: '폴백 질문' })
+    await flushPromises()
+    expect(w.text()).toContain('폴백 질문')
+    w.unmount()
+  })
 })

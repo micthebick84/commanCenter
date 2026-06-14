@@ -4,14 +4,17 @@ import InterviewPanel from './InterviewPanel.vue'
 import { FakeEventSource } from '../test/mocks/eventsource'
 import { authStub, useApiMock } from '../test/mocks/nuxt'
 
-function mountPanel(sessionId = 5) {
+async function mountPanel(sessionId = 5, snapshot: any = { statusName: null, turns: [], plan: null }) {
   authStub.accessToken = 'jwt'
-  return mount(InterviewPanel, { props: { sessionId } })
+  useApiMock.mockResolvedValueOnce(snapshot) // onMounted의 GET /{id}가 소비
+  const w = mount(InterviewPanel, { props: { sessionId } })
+  await flushPromises() // 마운트 스냅샷 GET 해소 + hydrate 완료
+  return w
 }
 
 describe('InterviewPanel — transcript', () => {
   it('renders assistant question turns from the stream', async () => {
-    const w = mountPanel()
+    const w = await mountPanel()
     FakeEventSource.last().emit('question', { seq: 1, content: '트리거가 뭔가요?' })
     await flushPromises()
     expect(w.text()).toContain('트리거가 뭔가요?')
@@ -21,7 +24,7 @@ describe('InterviewPanel — transcript', () => {
 
 describe('InterviewPanel — design sections', () => {
   it('shows a check icon for approved sections', async () => {
-    const w = mountPanel()
+    const w = await mountPanel()
     FakeEventSource.last().emit('design', {
       key: 'overview',
       title: '개요',
@@ -37,8 +40,7 @@ describe('InterviewPanel — design sections', () => {
 
 describe('InterviewPanel — answer flow', () => {
   it('POSTs the answer with replyToSeq, optimistically appends a user turn, clears input', async () => {
-    useApiMock.mockResolvedValueOnce({})
-    const w = mountPanel(9)
+    const w = await mountPanel(9)
     FakeEventSource.last().emit('question', { seq: 3, content: '범위는?' })
     await flushPromises()
 
@@ -56,7 +58,7 @@ describe('InterviewPanel — answer flow', () => {
   })
 
   it('disables send when not AWAITING_INPUT', async () => {
-    const w = mountPanel(9)
+    const w = await mountPanel(9)
     // Canonical wire payload: bare English enum name.
     FakeEventSource.last().emit('status', 'RUNNING')
     await flushPromises()
@@ -68,8 +70,7 @@ describe('InterviewPanel — answer flow', () => {
 
 describe('InterviewPanel — register flow', () => {
   it('enables 작업 등록 only at PLAN_READY and emits registered with taskId', async () => {
-    useApiMock.mockResolvedValueOnce({ taskId: 123 })
-    const w = mountPanel(9)
+    const w = await mountPanel(9)
     const es = FakeEventSource.last()
 
     // Before plan_ready: button is disabled.
@@ -83,6 +84,7 @@ describe('InterviewPanel — register flow', () => {
     reg = w.find('[data-test="register"]')
     expect(reg.attributes('disabled')).toBeUndefined()
 
+    useApiMock.mockResolvedValueOnce({ taskId: 123 }) // 이제 다음 useApi 호출(register POST)이 소비
     await reg.trigger('click')
     await flushPromises()
 
@@ -94,7 +96,7 @@ describe('InterviewPanel — register flow', () => {
 
 describe('InterviewPanel — plan_ready design display', () => {
   it('renders plan.designMarkdown when plan_ready arrives', async () => {
-    const w = mountPanel(9)
+    const w = await mountPanel(9)
     FakeEventSource.last().emit('plan_ready', {
       designMarkdown: '# 설계본문XYZ',
       planMarkdown: '# 플랜',
@@ -109,7 +111,7 @@ describe('InterviewPanel — plan_ready design display', () => {
 
 describe('InterviewPanel — terminal states', () => {
   it('shows an expired banner from the bare EXPIRED status', async () => {
-    const w = mountPanel(9)
+    const w = await mountPanel(9)
     // Canonical wire payload: bare English enum name.
     FakeEventSource.last().emit('status', 'EXPIRED')
     await flushPromises()
@@ -118,7 +120,7 @@ describe('InterviewPanel — terminal states', () => {
   })
 
   it('renders the Korean badge label (not the raw English enum) for AWAITING_INPUT', async () => {
-    const w = mountPanel(9)
+    const w = await mountPanel(9)
     FakeEventSource.last().emit('status', 'AWAITING_INPUT')
     await flushPromises()
     const txt = w.text()
@@ -128,7 +130,7 @@ describe('InterviewPanel — terminal states', () => {
   })
 
   it('shows a failed banner from the bare FAILED status', async () => {
-    const w = mountPanel(9)
+    const w = await mountPanel(9)
     FakeEventSource.last().emit('status', 'FAILED')
     await flushPromises()
     expect(w.text()).toContain('인터뷰 실패')
@@ -138,7 +140,7 @@ describe('InterviewPanel — terminal states', () => {
 
 describe('InterviewPanel — typing indicator', () => {
   it('shows the typing indicator while RUNNING and hides it once AWAITING_INPUT', async () => {
-    const w = mountPanel()
+    const w = await mountPanel()
     FakeEventSource.last().emit('status', 'RUNNING')
     await flushPromises()
     expect(w.find('[data-test="typing-indicator"]').exists()).toBe(true)
@@ -150,7 +152,7 @@ describe('InterviewPanel — typing indicator', () => {
   })
 
   it('hides the typing indicator at PLAN_READY and on terminal states', async () => {
-    const w = mountPanel()
+    const w = await mountPanel()
     FakeEventSource.last().emit('plan_ready', {
       designMarkdown: 'd',
       planMarkdown: 'p',
@@ -173,8 +175,7 @@ describe('InterviewPanel — cancel flow', () => {
   })
 
   it('opens a confirm dialog and only cancels after 취소하기', async () => {
-    useApiMock.mockResolvedValueOnce({})
-    const w = mountPanel(7)
+    const w = await mountPanel(7)
     FakeEventSource.last().emit('status', 'RUNNING')
     await flushPromises()
 
@@ -191,7 +192,7 @@ describe('InterviewPanel — cancel flow', () => {
   })
 
   it('does not cancel when 계속하기 is chosen', async () => {
-    const w = mountPanel(7)
+    const w = await mountPanel(7)
     FakeEventSource.last().emit('status', 'RUNNING')
     await flushPromises()
 
@@ -202,7 +203,7 @@ describe('InterviewPanel — cancel flow', () => {
 
     keep!.click()
     await flushPromises()
-    expect(useApiMock).not.toHaveBeenCalled()
+    expect(useApiMock).not.toHaveBeenCalledWith('/api/interviews/7/cancel', { method: 'POST' })
     expect(w.emitted('close')).toBeFalsy()
     w.unmount()
   })
@@ -210,13 +211,44 @@ describe('InterviewPanel — cancel flow', () => {
 
 describe('InterviewPanel — terminal close', () => {
   it('shows a 닫기 button on FAILED that emits close', async () => {
-    const w = mountPanel()
+    const w = await mountPanel()
     FakeEventSource.last().emit('status', 'FAILED')
     await flushPromises()
     const close = w.find('[data-test="close-interview"]')
     expect(close.exists()).toBe(true)
     await close.trigger('click')
     expect(w.emitted('close')).toBeTruthy()
+    w.unmount()
+  })
+})
+
+describe('InterviewPanel — refresh resume (snapshot hydration)', () => {
+  it('fetches GET /{id} on mount and renders prior conversation incl. my answers', async () => {
+    const w = await mountPanel(9, {
+      statusName: 'AWAITING_INPUT',
+      turns: [
+        { seq: 1, role: 'assistant', kind: 'question', content: '인증 방식은?' },
+        { seq: 2, role: 'user', kind: 'answer', content: 'OAuth2 입니다' },
+        { seq: 3, role: 'assistant', kind: 'question', content: '토큰 TTL은?' },
+      ],
+      plan: null,
+    })
+    expect(useApiMock).toHaveBeenCalledWith('/api/interviews/9')
+    expect(w.text()).toContain('인증 방식은?')
+    expect(w.text()).toContain('OAuth2 입니다')
+    expect(w.text()).toContain('토큰 TTL은?')
+    expect(w.text()).toContain('입력 대기')
+    w.unmount()
+  })
+
+  it('shows a non-cancelling 나중에 button on a non-terminal session that emits close', async () => {
+    const w = await mountPanel(9, { statusName: 'AWAITING_INPUT', turns: [], plan: null })
+    const later = w.find('[data-test="later-interview"]')
+    expect(later.exists()).toBe(true)
+    await later.trigger('click')
+    expect(w.emitted('close')).toBeTruthy()
+    expect(useApiMock).toHaveBeenCalledTimes(1)
+    expect(useApiMock).toHaveBeenCalledWith('/api/interviews/9')
     w.unmount()
   })
 })

@@ -161,6 +161,14 @@ function closePanel() {
 }
 
 onMounted(async () => {
+  // 새로고침 복원: SSE replay는 어시스턴트 질문/설계만 주므로, 내 답변·status·plan은
+  // REST 스냅샷으로 먼저 시드한 뒤 스트림을 연다(seq dedup으로 중복 없음). 스냅샷 실패는 비치명적.
+  try {
+    const snapshot = await useApi(`/api/interviews/${props.sessionId}`)
+    stream.hydrate(snapshot as any)
+  } catch {
+    /* 스냅샷 실패 — 스트림만으로 진행 */
+  }
   stream.open(props.sessionId)
   await nextTick()
   scrollToBottom('auto')
@@ -189,6 +197,17 @@ onUnmounted(() => stream.close())
       >
       <q-banner v-else-if="error" dense class="bg-red-1 text-red-9 col">{{ error }}</q-banner>
       <q-space />
+      <q-btn
+        v-if="!isTerminal"
+        data-test="later-interview"
+        flat
+        dense
+        no-caps
+        color="grey-7"
+        icon="schedule"
+        label="나중에"
+        @click="closePanel"
+      />
       <q-btn
         v-if="!isTerminal"
         data-test="cancel-interview"

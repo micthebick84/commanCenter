@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { useQuasar } from 'quasar'
 import { decideResume, type InterviewSummary } from '~/composables/interviewResume'
+import { MODEL_OPTIONS, DEFAULT_MODEL, DEFAULT_EFFORT, effortsForModel, coerceEffort } from '~/composables/modelEffort'
 
 definePageMeta({ layout: 'default' })
 
@@ -48,7 +49,9 @@ const tasks = computed<TaskResponse[]>(() => page.value?.content ?? [])
 
 // 등록 다이얼로그 상태
 const showCreate = ref(false)
-const draft = reactive({ githubRepo: '', githubBranch: '', title: '', description: '' })
+const draft = reactive({ githubRepo: '', githubBranch: '', title: '', description: '', model: DEFAULT_MODEL, effort: DEFAULT_EFFORT })
+const effortOptions = computed(() => effortsForModel(draft.model))
+watch(() => draft.model, (m) => { draft.effort = coerceEffort(m, draft.effort) })
 const submitting = ref(false)
 
 // 다이얼로그 단계: 'form' = 입력(Phase 1), 'interview' = 분할 뷰(Phase 2)
@@ -244,6 +247,8 @@ function openCreate() {
   draft.githubBranch = ''
   draft.title = ''
   draft.description = ''
+  draft.model = DEFAULT_MODEL
+  draft.effort = DEFAULT_EFFORT
   selectedCatalogIds.value = []
   resetBranchState()
   dialogPhase.value = 'form'
@@ -279,6 +284,8 @@ async function submit() {
         title: draft.title,
         description: draft.description,
         mcpCatalogIds: selectedCatalogIds.value,
+        model: draft.model,
+        effort: draft.effort,
       },
     })
     $q.notify({ type: 'positive', message: '작업 등록 완료' })
@@ -305,6 +312,8 @@ async function startInterview() {
         title: draft.title,
         description: draft.description,
         mcpCatalogIds: selectedCatalogIds.value,
+        model: draft.model,
+        effort: draft.effort,
       },
     })
     openInterview(res.sessionId)
@@ -610,6 +619,30 @@ function statusClass(status: string) {
             rows="4"
           />
 
+          <div class="row q-col-gutter-md">
+            <div class="col">
+              <q-select
+                v-model="draft.model"
+                :options="MODEL_OPTIONS"
+                label="모델"
+                emit-value
+                map-options
+                dense
+                outlined
+              />
+            </div>
+            <div class="col">
+              <q-select
+                v-model="draft.effort"
+                :options="effortOptions"
+                label="effort"
+                dense
+                outlined
+                :hint="draft.model === 'claude-haiku-4-5' ? 'Haiku는 low/medium/high만 지원' : ''"
+              />
+            </div>
+          </div>
+
           <q-expansion-item
             icon="extension"
             label="이 분석에만 추가할 MCP 도구"
@@ -685,6 +718,8 @@ function statusClass(status: string) {
           <InterviewPanel
             v-if="interviewSessionId"
             :session-id="interviewSessionId"
+            :model="draft.model"
+            :effort="draft.effort"
             @registered="onRegistered"
             @close="closeDialog"
           />

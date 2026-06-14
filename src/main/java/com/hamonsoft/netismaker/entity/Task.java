@@ -76,6 +76,16 @@ public class Task {
     @Setter
     private List<TaskMcpSpec> mcpsExtra = new ArrayList<>();
 
+    /** 작업 등록 시 선택된 Claude 모델. 워커가 claude --model에 사용. */
+    @Column(name = "model", nullable = false, length = 64)
+    @Setter
+    private String model = "claude-opus-4-8";
+
+    /** 추론 effort (low/medium/high/xhigh/max). 워커가 claude --effort에 사용. */
+    @Column(name = "effort", nullable = false, length = 16)
+    @Setter
+    private String effort = "high";
+
     /** 배포 시 컨테이너에 주입할 환경변수 (key/value/secret). 배포 다이얼로그에서 set. */
     @JdbcTypeCode(SqlTypes.JSON)
     @Column(name = "env_vars", nullable = false, columnDefinition = "jsonb")
@@ -143,7 +153,7 @@ public class Task {
 
     public static Task create(String githubRepo, String githubBranch, String title,
                               String description, String requesterId, int maxRetry,
-                              List<TaskMcpSpec> mcpsExtra) {
+                              List<TaskMcpSpec> mcpsExtra, String model, String effort) {
         Task t = new Task();
         t.githubRepo = githubRepo;
         t.githubBranch = githubBranch == null || githubBranch.isBlank() ? "main" : githubBranch;
@@ -154,6 +164,8 @@ public class Task {
         t.retryCount = 0;
         t.maxRetry = maxRetry;
         t.mcpsExtra = mcpsExtra == null ? new ArrayList<>() : mcpsExtra;
+        t.model = (model == null || model.isBlank()) ? "claude-opus-4-8" : model;
+        t.effort = (effort == null || effort.isBlank()) ? "high" : effort;
         OffsetDateTime now = OffsetDateTime.now();
         t.createdAt = now;
         t.updatedAt = now;

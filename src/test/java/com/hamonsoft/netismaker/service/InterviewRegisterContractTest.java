@@ -33,7 +33,7 @@ class InterviewRegisterContractTest {
         taskRepo.deleteAll();
         InterviewSession s = InterviewSession.create("hamonsoft/netis-backend", "feat/rbac",
                 "RBAC 추가", "역할 기반 권한", "user1",
-                List.of(new TaskMcpSpec("ctx7", "https://ctx7", "http")));
+                List.of(new TaskMcpSpec("ctx7", "https://ctx7", "http")), "claude-opus-4-8", "high");
         sid = sessionRepo.save(s).getId();
     }
 

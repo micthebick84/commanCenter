@@ -12,7 +12,7 @@ class InterviewSessionTest {
     void create_initializes_queued_with_defaults() {
         InterviewSession s = InterviewSession.create(
                 "owner/repo", "  ", "제목", "기능 요구", "user1",
-                List.of(new TaskMcpSpec("ctx7", "https://x", "http")));
+                List.of(new TaskMcpSpec("ctx7", "https://x", "http")), "claude-opus-4-8", "high");
         assertThat(s.getStatus()).isEqualTo(InterviewStatus.QUEUED);
         assertThat(s.getGithubBranch()).isEqualTo("main");            // blank → main
         assertThat(s.getRequesterId()).isEqualTo("user1");
@@ -27,7 +27,7 @@ class InterviewSessionTest {
 
     @Test
     void is_owned_by_matches_requester() {
-        InterviewSession s = InterviewSession.create("o/r", "main", "t", "d", "u1", List.of());
+        InterviewSession s = InterviewSession.create("o/r", "main", "t", "d", "u1", List.of(), "claude-opus-4-8", "high");
         assertThat(s.isOwnedBy("u1")).isTrue();
         assertThat(s.isOwnedBy("u2")).isFalse();
     }

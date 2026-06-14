@@ -46,7 +46,7 @@ class InterviewAnswerIdempotencyTest {
 
     @BeforeEach void seed() {
         sessionRepo.deleteAll();
-        sid = sessionRepo.save(InterviewSession.create("a/b", "main", "T", "D", "user1", List.of())).getId();
+        sid = sessionRepo.save(InterviewSession.create("a/b", "main", "T", "D", "user1", List.of(), "claude-opus-4-8", "high")).getId();
     }
 
     @Test

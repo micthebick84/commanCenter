@@ -91,6 +91,16 @@ public class InterviewSession {
     @Setter
     private List<TaskMcpSpec> mcpsExtra = new ArrayList<>();
 
+    /** 작업 등록 시 선택된 Claude 모델. 워커가 claude --model에 사용. */
+    @Column(name = "model", nullable = false, length = 64)
+    @Setter
+    private String model = "claude-opus-4-8";
+
+    /** 추론 effort (low/medium/high/xhigh/max). 워커가 claude --effort에 사용. */
+    @Column(name = "effort", nullable = false, length = 16)
+    @Setter
+    private String effort = "high";
+
     /** 등록 시 생성된 Task id. PLAN_READY → REGISTERED 전이에서 set. */
     @Column(name = "task_id")
     @Setter
@@ -110,7 +120,7 @@ public class InterviewSession {
 
     public static InterviewSession create(String githubRepo, String githubBranch, String title,
                                           String description, String requesterId,
-                                          List<TaskMcpSpec> mcpsExtra) {
+                                          List<TaskMcpSpec> mcpsExtra, String model, String effort) {
         InterviewSession s = new InterviewSession();
         s.githubRepo = githubRepo;
         s.githubBranch = githubBranch == null || githubBranch.isBlank() ? "main" : githubBranch;
@@ -120,6 +130,8 @@ public class InterviewSession {
         s.status = InterviewStatus.QUEUED;
         s.totalCostUsd = BigDecimal.ZERO;
         s.mcpsExtra = mcpsExtra == null ? new ArrayList<>() : mcpsExtra;
+        s.model = (model == null || model.isBlank()) ? "claude-opus-4-8" : model;
+        s.effort = (effort == null || effort.isBlank()) ? "high" : effort;
         OffsetDateTime now = OffsetDateTime.now();
         s.createdAt = now;
         s.updatedAt = now;

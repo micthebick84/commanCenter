@@ -79,8 +79,11 @@ public class InterviewService {
                     "동시에 진행할 수 있는 인터뷰 한도(" + userConcurrentLimit + ")를 초과했습니다");
         }
         List<TaskMcpSpec> extras = resolveMcpExtras(req.mcpCatalogIds());
+        String model = ModelEffortPolicy.resolveModel(req.model());
+        String effort = ModelEffortPolicy.resolveEffort(req.effort());
+        ModelEffortPolicy.validate(model, effort);
         InterviewSession s = InterviewSession.create(req.githubRepo(), req.githubBranch(),
-                req.title(), req.description(), requesterId, extras);
+                req.title(), req.description(), requesterId, extras, model, effort);
         return sessionRepo.save(s);
     }
 
@@ -322,7 +325,8 @@ public class InterviewService {
         // Task(COMPLETED) 생성 — 인터뷰가 분석을 대체. mcps_extra 스냅샷 승계.
         Task t = Task.create(s.getGithubRepo(), s.getGithubBranch(), s.getTitle(),
                 s.getDescription(), s.getRequesterId(), maxRetry,
-                new ArrayList<>(s.getMcpsExtra() == null ? List.of() : s.getMcpsExtra()));
+                new ArrayList<>(s.getMcpsExtra() == null ? List.of() : s.getMcpsExtra()),
+                s.getModel(), s.getEffort());
         t.setStatus(TaskStatus.COMPLETED);
         Task saved = taskRepo.save(t);
 

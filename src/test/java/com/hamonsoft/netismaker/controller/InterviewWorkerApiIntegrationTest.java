@@ -39,7 +39,7 @@ class InterviewWorkerApiIntegrationTest {
     @BeforeEach void seed() {
         sessionRepo.deleteAll();
         InterviewSession s = InterviewSession.create("hamonsoft/netis-backend", "main",
-                "RBAC", "권한 추가", "user1", List.of());
+                "RBAC", "권한 추가", "user1", List.of(), "claude-opus-4-8", "high");
         sid = sessionRepo.save(s).getId();
     }
 

@@ -66,8 +66,11 @@ public class TaskService {
                     "동시에 보유할 수 있는 미완료 작업 한도(" + userConcurrentLimit + ")를 초과했습니다");
         }
         List<TaskMcpSpec> extras = resolveMcpExtras(req.mcpCatalogIds());
+        String model = ModelEffortPolicy.resolveModel(req.model());
+        String effort = ModelEffortPolicy.resolveEffort(req.effort());
+        ModelEffortPolicy.validate(model, effort);
         Task t = Task.create(req.githubRepo(), req.githubBranch(), req.title(),
-                             req.description(), requesterId, maxRetry, extras);
+                             req.description(), requesterId, maxRetry, extras, model, effort);
         Task saved = taskRepo.save(t);
         historyRepo.save(TaskStatusHistory.log(saved.getId(), null, TaskStatus.PENDING,
                 "user", requesterId, "작업 등록"));

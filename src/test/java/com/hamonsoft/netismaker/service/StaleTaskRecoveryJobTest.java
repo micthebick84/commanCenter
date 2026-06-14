@@ -44,7 +44,7 @@ class StaleTaskRecoveryJobTest {
     }
 
     private Task task(long id, TaskStatus status, String worker, int claimedMinAgo, int retry) {
-        Task t = Task.create("a/b", "main", "T", "d", "u", 3, List.of());
+        Task t = Task.create("a/b", "main", "T", "d", "u", 3, List.of(), "claude-opus-4-8", "high");
         ReflectionTestUtils.setField(t, "id", id);
         t.setStatus(status);
         t.setWorkerId(worker);

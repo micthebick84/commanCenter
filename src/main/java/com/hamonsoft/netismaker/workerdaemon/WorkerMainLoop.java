@@ -131,7 +131,8 @@ public class WorkerMainLoop {
         ClaudeExecAdapter.ExecResult exec;
         try {
             exec = claude.exec(prompt, repo.dir(), props.analysisTimeout(),
-                    task.mcpsExtra() == null ? java.util.List.of() : task.mcpsExtra());
+                    task.mcpsExtra() == null ? java.util.List.of() : task.mcpsExtra(),
+                    false, task.model(), task.effort());
         } catch (Exception e) {
             safePostAnalysisFailure(task.id(), "claude exec 실패: " + e.getMessage());
             return;
@@ -196,7 +197,7 @@ public class WorkerMainLoop {
         try {
             exec = claude.exec(prompt, wt.dir(), props.implementationTimeout(),
                     task.mcpsExtra() == null ? java.util.List.of() : task.mcpsExtra(),
-                    true);
+                    true, task.model(), task.effort());
         } catch (Exception e) {
             safePostImplementationFailure(task.id(),
                     "claude exec 실패: " + e.getMessage(),

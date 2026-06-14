@@ -24,5 +24,11 @@ public record TaskCreateRequest(
         String description,
 
         /** 카탈로그에서 선택된 추가 MCP id들. null/빈 배열 허용. */
-        List<Long> mcpCatalogIds
+        List<Long> mcpCatalogIds,
+
+        /** Claude 모델 id. blank면 서버 기본값(claude-opus-4-8). */
+        String model,
+
+        /** 추론 effort. blank면 서버 기본값(high). */
+        String effort
 ) {}

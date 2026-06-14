@@ -43,7 +43,7 @@ class InterviewClaimConcurrencyTest {
         // init-test-schema.sql seeds com."user"(user_id='user1'); reuse it as requester.
         for (int i = 0; i < n; i++) {
             service.create(new CreateInterviewRequest(
-                    "owner/repo" + i, "main", "T" + i, "desc", List.of()), "user1");
+                    "owner/repo" + i, "main", "T" + i, "desc", List.of(), null, null), "user1");
         }
 
         ExecutorService pool = Executors.newFixedThreadPool(n);

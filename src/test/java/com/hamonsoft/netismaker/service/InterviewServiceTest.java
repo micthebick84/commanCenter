@@ -55,7 +55,7 @@ class InterviewServiceTest {
     }
 
     private CreateInterviewRequest req() {
-        return new CreateInterviewRequest("owner/repo", "main", "제목", "기능 요구", List.of());
+        return new CreateInterviewRequest("owner/repo", "main", "제목", "기능 요구", List.of(), null, null);
     }
 
     @Test

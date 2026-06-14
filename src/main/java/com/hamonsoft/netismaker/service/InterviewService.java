@@ -4,6 +4,7 @@ import com.hamonsoft.netismaker.dto.AnswerRequest;
 import com.hamonsoft.netismaker.dto.CreateInterviewRequest;
 import com.hamonsoft.netismaker.dto.InterviewClaimResponse;
 import com.hamonsoft.netismaker.dto.InterviewResponse;
+import com.hamonsoft.netismaker.dto.InterviewSummary;
 import com.hamonsoft.netismaker.dto.WorkerPlanRequest;
 import com.hamonsoft.netismaker.dto.WorkerQuestionRequest;
 import com.hamonsoft.netismaker.entity.*;
@@ -359,6 +360,14 @@ public class InterviewService {
         return InterviewResponse.of(s,
                 turnRepo.findBySessionIdOrderBySeqAsc(id),
                 planRepo.findById(id).orElse(null));
+    }
+
+    /** 요청자 본인의 비종료 인터뷰 목록(경량). 새로고침 후 디스커버리/재오픈용. */
+    @Transactional(readOnly = true)
+    public List<InterviewSummary> listActiveForRequester(String requesterId) {
+        return sessionRepo.findActiveByRequester(requesterId).stream()
+                .map(InterviewSummary::of)
+                .toList();
     }
 
     private void requireOwner(InterviewSession s, String actorId, boolean isAdmin) {

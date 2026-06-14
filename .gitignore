@@ -45,3 +45,4 @@ frontend/.output/
 # superpowers brainstorming mockups + throwaway SDK spikes
 .superpowers/
 spikes/
+.gstack/

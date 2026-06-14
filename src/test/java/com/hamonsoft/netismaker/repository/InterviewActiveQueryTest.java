@@ -12,6 +12,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.test.context.ContextConfiguration;
 
+import java.time.OffsetDateTime;
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -52,9 +53,17 @@ class InterviewActiveQueryTest {
     void orders_by_last_activity_desc() {
         InterviewSession a = create("user1", "owner/a");
         InterviewSession b = create("user1", "owner/b");
+        // 명확한 순서 검증을 위해 lastActivityAt에 간격: a가 더 오래됨, b가 더 최근.
+        OffsetDateTime now = OffsetDateTime.now();
+        a.setLastActivityAt(now.minusSeconds(60));
+        b.setLastActivityAt(now);
+        sessionRepo.save(a);
+        sessionRepo.save(b);
+
         List<InterviewSession> active = sessionRepo.findActiveByRequester("user1");
+
+        // DESC: 최근 활동(b)이 먼저
         assertThat(active).extracting(InterviewSession::getId)
-                .containsExactlyInAnyOrder(a.getId(), b.getId());
-        assertThat(active).hasSize(2);
+                .containsExactly(b.getId(), a.getId());
     }
 }

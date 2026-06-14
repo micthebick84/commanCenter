@@ -118,9 +118,10 @@ class InterviewApiIntegrationTest {
                         .contentType(APPLICATION_JSON).content(body("a/c", "취소할 인터뷰", "내용")))
                 .andReturn().getResponse().getHeader("Location");
         mvc.perform(post(loc2 + "/cancel").with(userJwt("user1"))).andExpect(status().isOk());
-        // user2의 세션은 user1 목록에 안 나와야
+        // user2의 세션은 user1 목록에 안 나와야 (생성 성공을 확인해 무음 실패 방지)
         mvc.perform(post("/api/interviews").with(userJwt("user2"))
-                .contentType(APPLICATION_JSON).content(body("a/d", "남의 인터뷰", "내용")));
+                        .contentType(APPLICATION_JSON).content(body("a/d", "남의 인터뷰", "내용")))
+                .andExpect(status().isCreated());
 
         mvc.perform(get("/api/interviews/active").with(userJwt("user1")))
                 .andExpect(status().isOk())

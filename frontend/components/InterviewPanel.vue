@@ -58,10 +58,12 @@ const isTerminal = computed(() =>
 // (스펙 §5.2 정밀화: AWAITING_INPUT·PLAN_READY를 먼저 제외해 PLAN_READY+턴0 경계 버그 방지.)
 const waitingForAi = computed(() => {
   if (isTerminal.value) return false
+  // 스트림이 종료됐는데 터미널 status가 안 온 경우(done-without-status 레이스): 스피너를 무한정 돌리지 않는다.
+  if (connState.value === 'closed') return false
   if (status.value === 'AWAITING_INPUT' || status.value === 'PLAN_READY') return false
   if (status.value === 'QUEUED' || status.value === 'RUNNING') return true
   // status가 아직 없음(연결 직후, 첫 질문 전): 스트림이 살아있고 턴이 없으면 준비 중 표시.
-  return turns.value.length === 0 && connState.value !== 'closed' && connState.value !== 'idle'
+  return turns.value.length === 0 && connState.value !== 'idle'
 })
 
 // 스마트 자동 스크롤.
@@ -229,6 +231,13 @@ onUnmounted(() => stream.close())
         >
           <ChatBubble v-for="t in turns" :key="t.seq" :role="t.role" :content="t.content" />
           <TypingIndicator v-if="waitingForAi" data-test="typing-indicator" />
+          <div
+            v-if="turns.length === 0 && waitingForAi"
+            class="text-grey-6 q-mt-xs text-center"
+            style="font-size: 12px"
+          >
+            첫 질문을 준비 중입니다…
+          </div>
           <div
             v-if="turns.length === 0 && !waitingForAi"
             class="text-grey-6 q-pa-md text-center"

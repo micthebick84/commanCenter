@@ -121,13 +121,15 @@ export function useInterviewStream() {
   function onQuestion(e: MessageEvent) {
     const data = parse(e)
     if (!data) return
-    pushTurn({
+    const added = pushTurn({
       seq: data.seq,
       role: 'assistant',
       kind: 'question',
       content: data.content,
     })
-    status.value = 'AWAITING_INPUT'
+    // 새로 도착한 질문일 때만 입력 대기로 전환. replay된(이미 있는 seq) 질문은
+    // hydrate가 복원한 status(PLAN_READY/QUEUED/RUNNING)를 덮어쓰지 않는다.
+    if (added) status.value = 'AWAITING_INPUT'
   }
 
   function onDesign(e: MessageEvent) {
@@ -205,9 +207,11 @@ export function useInterviewStream() {
   }
 
   // Dedup by seq so SSE replay-on-reconnect does not duplicate turns.
-  function pushTurn(t: Turn) {
-    if (turns.value.some((x) => x.seq === t.seq)) return
+  // Returns true if a new turn was appended, false if it was a duplicate (already-present seq).
+  function pushTurn(t: Turn): boolean {
+    if (turns.value.some((x) => x.seq === t.seq)) return false
     turns.value = [...turns.value, t].sort((a, b) => a.seq - b.seq)
+    return true
   }
 
   function onError() {

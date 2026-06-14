@@ -123,7 +123,7 @@ DEFAULT_EFFORT = "high"
 
 "선택한 모델을 서브에이전트/팀에이전트도 따르는가"에 대한 확정:
 
-- **인터뷰(SDK)**: `sessionOptions.ts`의 `allowedTools=['Skill','Read','Grep','Glob']`에 Task/Agent 도구가 없어 **인터뷰 에이전트는 서브에이전트를 생성할 수 없다**. 단일 인터뷰 에이전트가 선택 모델로 동작 — 서브에이전트 모델 질문 무관.
+- **인터뷰(SDK)**: 실무상 단일 인터뷰 에이전트가 선택 모델로 동작 — brainstorming→writing-plans 흐름이 서브에이전트(Task/Agent)를 띄우지 않기 때문. ⚠️ 단, Task가 *하드 블록*된 것은 아니다: `allowedTools=['Skill','Read','Grep','Glob']`에 Task가 없어 pre-approve는 아니지만, `permissions.ts:54`의 canUseTool catch-all이 Write/Bash/Edit가 아닌 모든 도구를 `allow`하므로 Task가 호출되면 허용된다. "서브에이전트 안 생김"은 흐름+pre-approve 미포함의 결과이지 명시적 deny가 아니다. (확정: planning-only 격리의 하드닝[canUseTool에 Task deny 추가]은 본 기능 범위 밖, 현행 유지.) model/effort 관점에선 어느 쪽이든 인터뷰 단일 에이전트가 선택 모델을 쓰는 결론은 동일.
 - **워커(`claude -p`)**: 서브에이전트 model 결정 순서 = `CLAUDE_CODE_SUBAGENT_MODEL` env → 호출 model 파라미터 → agent 정의 `model` frontmatter → **세션 메인 모델(`--model`)**. 따라서 `--model`만 전달해도 자기 model 미명시 서브에이전트는 **선택 모델을 상속**한다. `effort`도 동일하게 기본 상속(서브에이전트 정의에서 override 시 우선).
 - **예외**: 빌트인 **Explore** 서브에이전트는 Haiku 고정(세션 모델 무관). 대상 레포의 `.claude/agents/*.md`에 model이 박힌 에이전트는 그 값을 따름.
 - **결정**: `CLAUDE_CODE_SUBAGENT_MODEL` env 강제는 **하지 않는다**(기본 상속만). Explore 등 경량 검색은 저렴한 Haiku 유지(쿼터 절약). 따라서 `ClaudeExecAdapter`는 `--model`/`--effort` 플래그만 추가하고 `ProcessBuilder.environment()`는 건드리지 않는다.

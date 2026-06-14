@@ -25,7 +25,9 @@ public record InterviewClaimResponse(
         String lastAnswer,
         Integer replyToSeq,
         List<TaskMcpSpec> mcpsExtra,
-        List<Turn> turns
+        List<Turn> turns,
+        String model,
+        String effort
 ) {
     public record Turn(int seq, String role, String kind, String content, Integer replyToSeq) {}
 
@@ -44,12 +46,10 @@ public record InterviewClaimResponse(
                 .map(t -> new Turn(t.getSeq(), t.getRole(), t.getKind(), t.getContent(), t.getReplyToSeq()))
                 .toList();
         return new InterviewClaimResponse(
-                s.getId(), s.getGithubRepo(), s.getGithubBranch(),
-                s.getTitle(), s.getDescription(),
+                s.getId(), s.getGithubRepo(), s.getGithubBranch(), s.getTitle(), s.getDescription(),
                 s.getClaudeSessionId(), s.getCurrentPhase(), s.getWorkDir(),
                 lastAnswer, replyToSeq,
                 s.getMcpsExtra() == null ? List.of() : List.copyOf(s.getMcpsExtra()),
-                mapped
-        );
+                mapped, s.getModel(), s.getEffort());
     }
 }

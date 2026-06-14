@@ -130,8 +130,9 @@ public class InterviewSession {
         s.status = InterviewStatus.QUEUED;
         s.totalCostUsd = BigDecimal.ZERO;
         s.mcpsExtra = mcpsExtra == null ? new ArrayList<>() : mcpsExtra;
-        s.model = (model == null || model.isBlank()) ? "claude-opus-4-8" : model;
-        s.effort = (effort == null || effort.isBlank()) ? "high" : effort;
+        // blank이면 필드 초기자 기본값(s.model/s.effort) 유지 — 리터럴 중복 제거.
+        if (model != null && !model.isBlank()) s.model = model;
+        if (effort != null && !effort.isBlank()) s.effort = effort;
         OffsetDateTime now = OffsetDateTime.now();
         s.createdAt = now;
         s.updatedAt = now;

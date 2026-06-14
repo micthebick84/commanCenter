@@ -164,8 +164,9 @@ public class Task {
         t.retryCount = 0;
         t.maxRetry = maxRetry;
         t.mcpsExtra = mcpsExtra == null ? new ArrayList<>() : mcpsExtra;
-        t.model = (model == null || model.isBlank()) ? "claude-opus-4-8" : model;
-        t.effort = (effort == null || effort.isBlank()) ? "high" : effort;
+        // blank이면 필드 초기자 기본값(t.model/t.effort) 유지 — 리터럴 중복 제거.
+        if (model != null && !model.isBlank()) t.model = model;
+        if (effort != null && !effort.isBlank()) t.effort = effort;
         OffsetDateTime now = OffsetDateTime.now();
         t.createdAt = now;
         t.updatedAt = now;

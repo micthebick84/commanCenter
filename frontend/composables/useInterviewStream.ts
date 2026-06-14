@@ -153,24 +153,29 @@ export function useInterviewStream() {
     }
   }
 
-  function onPlanReady(e: MessageEvent) {
-    // The plan_ready event data is a JSON object {designMarkdown, planMarkdown, planJson}
-    // where planJson is itself a JSON STRING (the SDK service sends JSON.stringify(array)).
-    // Parse the outer object first, then parse the inner planJson string into an array.
-    const obj = parse(e)
-    if (!obj) return
+  // plan_ready 이벤트와 REST 스냅샷의 plan은 동일 형태({designMarkdown,planMarkdown,planJson})다.
+  // 두 경로가 드리프트하지 않도록 파싱을 공유한다. planJson은 JSON 문자열일 수 있다(SDK가 JSON.stringify(array)).
+  function toPlan(raw: { designMarkdown?: string; planMarkdown?: string; planJson?: unknown }): InterviewPlan {
     let parsedPlanJson: unknown = null
     try {
       parsedPlanJson =
-        typeof obj.planJson === 'string' ? JSON.parse(obj.planJson) : (obj.planJson ?? null)
+        typeof raw.planJson === 'string' ? JSON.parse(raw.planJson) : (raw.planJson ?? null)
     } catch {
       parsedPlanJson = null // guard against malformed JSON in planJson
     }
-    plan.value = {
-      designMarkdown: obj.designMarkdown ?? '',
-      planMarkdown: obj.planMarkdown ?? '',
+    return {
+      designMarkdown: raw.designMarkdown ?? '',
+      planMarkdown: raw.planMarkdown ?? '',
       planJson: parsedPlanJson,
     }
+  }
+
+  function onPlanReady(e: MessageEvent) {
+    // plan_ready 데이터는 {designMarkdown, planMarkdown, planJson} JSON 객체이며 planJson은
+    // 그 자체로 JSON 문자열이다. toPlan이 외부 객체+내부 planJson 문자열을 함께 처리한다.
+    const obj = parse(e)
+    if (!obj) return
+    plan.value = toPlan(obj)
     status.value = 'PLAN_READY'
   }
 
@@ -184,6 +189,9 @@ export function useInterviewStream() {
     if (KNOWN_STATUSES.includes(name)) status.value = name
     for (const t of snapshot.turns ?? []) {
       if (t.kind === 'design') {
+        // 백엔드 SSE replay(InterviewStreamService)와 동일한 DesignEvent 형태로 시드:
+        // key=design-{seq}, title='설계', approved=false. 직후 open() replay가 같은 값으로 upsert하므로
+        // 정보 손실 없음(백엔드는 design 턴에 별도 title/approved를 저장하지 않는다).
         upsertDesign({ key: `design-${t.seq}`, title: '설계', body: t.content, approved: false })
       } else if (t.role === 'user') {
         pushTurn({ seq: t.seq, role: 'user', kind: 'answer', content: t.content })
@@ -192,20 +200,7 @@ export function useInterviewStream() {
       }
     }
     if (snapshot.plan) {
-      let parsedPlanJson: unknown = null
-      try {
-        parsedPlanJson =
-          typeof snapshot.plan.planJson === 'string'
-            ? JSON.parse(snapshot.plan.planJson)
-            : (snapshot.plan.planJson ?? null)
-      } catch {
-        parsedPlanJson = null
-      }
-      plan.value = {
-        designMarkdown: snapshot.plan.designMarkdown ?? '',
-        planMarkdown: snapshot.plan.planMarkdown ?? '',
-        planJson: parsedPlanJson,
-      }
+      plan.value = toPlan(snapshot.plan)
     }
   }
 

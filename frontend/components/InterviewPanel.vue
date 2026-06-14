@@ -2,6 +2,9 @@
 import { useQuasar } from 'quasar'
 import { useInterviewStream } from '~/composables/useInterviewStream'
 import type { InterviewStatus } from '~/composables/useInterviewStream'
+import { useAutoScroll } from '~/composables/useAutoScroll'
+import ChatBubble from '~/components/chat/ChatBubble.vue'
+import TypingIndicator from '~/components/chat/TypingIndicator.vue'
 
 const props = defineProps<{ sessionId: number }>()
 const emit = defineEmits<{ (e: 'registered', taskId: number): void; (e: 'close'): void }>()
@@ -30,6 +33,58 @@ const canAnswer = computed(
   () => status.value === 'AWAITING_INPUT' && !sending.value && !!answer.value.trim(),
 )
 
+// 화면 표시 전용 한글 라벨. 상태 비교/터미널 판정은 영문 enum 이름으로만 한다.
+const STATUS_LABELS: Record<InterviewStatus, string> = {
+  QUEUED: '대기 중',
+  RUNNING: '분석 중',
+  AWAITING_INPUT: '입력 대기',
+  PLAN_READY: '플랜 완료',
+  REGISTERED: '등록됨',
+  CANCELLED: '취소됨',
+  EXPIRED: '만료됨',
+  FAILED: '실패',
+}
+const statusLabel = computed(() =>
+  status.value ? (STATUS_LABELS[status.value] ?? status.value) : '연결 중',
+)
+
+const registering = ref(false)
+
+const isTerminal = computed(() =>
+  ['REGISTERED', 'CANCELLED', 'EXPIRED', 'FAILED'].includes(status.value as string),
+)
+
+// AI 응답을 기다리는 중이면 타이핑 표시. 입력 차례/플랜 완료/종료에는 숨긴다.
+// (스펙 §5.2 정밀화: AWAITING_INPUT·PLAN_READY를 먼저 제외해 PLAN_READY+턴0 경계 버그 방지.)
+const waitingForAi = computed(() => {
+  if (isTerminal.value) return false
+  // 스트림이 종료됐는데 터미널 status가 안 온 경우(done-without-status 레이스): 스피너를 무한정 돌리지 않는다.
+  if (connState.value === 'closed') return false
+  if (status.value === 'AWAITING_INPUT' || status.value === 'PLAN_READY') return false
+  if (status.value === 'QUEUED' || status.value === 'RUNNING') return true
+  // status가 아직 없음(연결 직후, 첫 질문 전): 스트림이 살아있고 턴이 없으면 준비 중 표시.
+  return turns.value.length === 0 && connState.value !== 'idle'
+})
+
+// 스마트 자동 스크롤.
+const transcriptEl = ref<HTMLElement | null>(null)
+const { nearBottom, unread, onScroll, scrollToBottom, notifyNewContent } = useAutoScroll(transcriptEl)
+
+// 새 턴이 도착하면 스크롤 정책 적용: 하단 근처면 따라가고, 위로 읽는 중이면 unread++.
+watch(
+  () => turns.value.length,
+  async () => {
+    await nextTick()
+    notifyNewContent()
+  },
+)
+// 타이핑 표시 등장은 '새 메시지'가 아니다 — 하단 근처일 때만 따라 내려가고 unread는 올리지 않는다.
+watch(waitingForAi, async (v) => {
+  if (!v) return
+  await nextTick()
+  if (nearBottom.value) scrollToBottom()
+})
+
 async function sendAnswer() {
   const text = answer.value.trim()
   if (!text || status.value !== 'AWAITING_INPUT') return
@@ -52,6 +107,8 @@ async function sendAnswer() {
     ]
     answer.value = ''
     status.value = 'QUEUED'
+    await nextTick()
+    scrollToBottom() // 내가 보낸 답변은 항상 하단으로
   } catch (e: any) {
     const st = e?.statusCode ?? e?.response?.status ?? e?.status
     if (st === 409) {
@@ -64,35 +121,13 @@ async function sendAnswer() {
   }
 }
 
-// 화면 표시 전용 한글 라벨. 상태 비교/터미널 판정은 영문 enum 이름으로만 한다.
-const STATUS_LABELS: Record<InterviewStatus, string> = {
-  QUEUED: '대기 중',
-  RUNNING: '분석 중',
-  AWAITING_INPUT: '입력 대기',
-  PLAN_READY: '플랜 완료',
-  REGISTERED: '등록됨',
-  CANCELLED: '취소됨',
-  EXPIRED: '만료됨',
-  FAILED: '실패',
-}
-const statusLabel = computed(() =>
-  status.value ? (STATUS_LABELS[status.value] ?? status.value) : '연결 중',
-)
-
-const registering = ref(false)
-
-const isTerminal = computed(() =>
-  ['REGISTERED', 'CANCELLED', 'EXPIRED', 'FAILED'].includes(status.value as string),
-)
-
 async function register() {
   if (status.value !== 'PLAN_READY' || registering.value) return
   registering.value = true
   try {
-    const res = await useApi<{ taskId: number }>(
-      `/api/interviews/${props.sessionId}/register`,
-      { method: 'POST' },
-    )
+    const res = await useApi<{ taskId: number }>(`/api/interviews/${props.sessionId}/register`, {
+      method: 'POST',
+    })
     $q.notify({ type: 'positive', message: '작업 등록 완료' })
     emit('registered', res.taskId)
   } catch (e: any) {
@@ -101,6 +136,9 @@ async function register() {
     registering.value = false
   }
 }
+
+// 대화 취소: 확인 다이얼로그를 거친 뒤에만 실제 취소.
+const showCancelConfirm = ref(false)
 
 async function cancelInterview() {
   try {
@@ -113,7 +151,20 @@ async function cancelInterview() {
   emit('close')
 }
 
-onMounted(() => stream.open(props.sessionId))
+function confirmCancel() {
+  showCancelConfirm.value = false
+  cancelInterview()
+}
+
+function closePanel() {
+  emit('close')
+}
+
+onMounted(async () => {
+  stream.open(props.sessionId)
+  await nextTick()
+  scrollToBottom('auto')
+})
 onUnmounted(() => stream.close())
 </script>
 
@@ -127,72 +178,79 @@ onUnmounted(() => stream.close())
       />
       <!-- 색상/터미널 판정은 영문 enum(status), 표시는 한글(statusLabel). -->
       <q-badge :color="status === 'PLAN_READY' ? 'positive' : 'primary'" :label="statusLabel" />
-      <q-banner
-        v-if="status === 'EXPIRED'"
-        dense
-        class="bg-orange-1 text-orange-10 col"
+      <q-banner v-if="status === 'EXPIRED'" dense class="bg-orange-1 text-orange-10 col"
         >세션이 만료되었습니다. 다시 인터뷰를 시작해 주세요.</q-banner
       >
-      <q-banner
-        v-else-if="status === 'CANCELLED'"
-        dense
-        class="bg-grey-2 text-grey-9 col"
+      <q-banner v-else-if="status === 'CANCELLED'" dense class="bg-grey-2 text-grey-9 col"
         >인터뷰가 취소되었습니다.</q-banner
       >
-      <q-banner
-        v-else-if="status === 'FAILED'"
-        dense
-        class="bg-red-1 text-red-9 col"
+      <q-banner v-else-if="status === 'FAILED'" dense class="bg-red-1 text-red-9 col"
         >인터뷰 실패: {{ error ?? '알 수 없는 오류가 발생했습니다' }}</q-banner
       >
-      <q-banner
-        v-else-if="error"
-        dense
-        class="bg-red-1 text-red-9 col"
-        >{{ error }}</q-banner
-      >
+      <q-banner v-else-if="error" dense class="bg-red-1 text-red-9 col">{{ error }}</q-banner>
       <q-space />
       <q-btn
         v-if="!isTerminal"
+        data-test="cancel-interview"
+        outline
+        dense
+        no-caps
+        color="grey-7"
+        icon="stop_circle"
+        label="대화 취소"
+        class="cancel-btn"
+        @click="showCancelConfirm = true"
+      />
+      <q-btn
+        v-if="isTerminal && status !== 'REGISTERED'"
+        data-test="close-interview"
         flat
         dense
+        no-caps
         color="grey-7"
-        label="취소"
-        @click="cancelInterview"
+        icon="close"
+        label="닫기"
+        @click="closePanel"
       />
     </div>
 
     <!-- 좁은 화면 탭 전환 -->
-    <q-tabs
-      v-model="activeTab"
-      class="lt-md text-primary interview-tabs"
-      dense
-      align="justify"
-    >
+    <q-tabs v-model="activeTab" class="lt-md text-primary interview-tabs" dense align="justify">
       <q-tab name="chat" icon="forum" label="대화" />
       <q-tab name="design" icon="design_services" label="설계·플랜" />
     </q-tabs>
 
     <div class="interview-body row no-wrap">
       <!-- 좌: 대화 트랜스크립트 -->
-      <section
-        class="chat-col column no-wrap"
-        :class="{ 'mobile-hidden': activeTab !== 'chat' }"
-      >
-        <div class="transcript col scroll q-pa-sm">
+      <section class="chat-col column no-wrap" :class="{ 'mobile-hidden': activeTab !== 'chat' }">
+        <div
+          ref="transcriptEl"
+          class="transcript col scroll q-pa-sm"
+          aria-live="polite"
+          @scroll="onScroll"
+        >
+          <ChatBubble v-for="t in turns" :key="t.seq" :role="t.role" :content="t.content" />
+          <TypingIndicator v-if="waitingForAi" data-test="typing-indicator" />
           <div
-            v-for="t in turns"
-            :key="t.seq"
-            class="turn q-mb-sm"
-            :class="`turn-${t.role}`"
+            v-if="turns.length === 0 && waitingForAi"
+            class="text-grey-6 q-mt-xs text-center"
+            style="font-size: 12px"
           >
-            <div class="turn-role text-caption text-grey-7">
-              {{ t.role === 'assistant' ? 'AI' : t.role === 'user' ? '나' : '시스템' }}
-            </div>
-            <div class="turn-content" style="white-space: pre-wrap">{{ t.content }}</div>
+            첫 질문을 준비 중입니다…
           </div>
-          <div v-if="turns.length === 0" class="text-grey-6 q-pa-md text-center">
-            인터뷰를 시작합니다… 첫 질문을 준비 중입니다.
+          <div
+            v-if="turns.length === 0 && !waitingForAi"
+            class="text-grey-6 q-pa-md text-center"
+          >
+            인터뷰를 시작합니다…
+          </div>
+          <div
+            v-if="unread > 0"
+            data-test="new-msg-pill"
+            class="new-msg-pill"
+            @click="scrollToBottom()"
+          >
+            ↓ 새 메시지 {{ unread }}
           </div>
         </div>
         <div class="answer-bar q-pa-sm">
@@ -223,7 +281,7 @@ onUnmounted(() => stream.close())
 
       <q-separator vertical class="gt-sm" />
 
-      <!-- 우: 설계 섹션 + 플랜 -->
+      <!-- 우: 설계 섹션 + 플랜 (기능 동일) -->
       <section
         class="design-col column no-wrap"
         :class="{ 'mobile-hidden': activeTab !== 'design' }"
@@ -273,6 +331,35 @@ onUnmounted(() => stream.close())
         </div>
       </section>
     </div>
+
+    <!-- 대화 취소 확인 -->
+    <q-dialog v-model="showCancelConfirm">
+      <q-card style="min-width: 320px">
+        <q-card-section class="text-subtitle1 text-weight-bold">
+          진행 중인 분석을 취소할까요?
+        </q-card-section>
+        <q-card-section class="q-pt-none text-grey-8">
+          지금까지의 대화와 분석 진행 상황이 사라집니다. 작업은 등록되지 않습니다.
+        </q-card-section>
+        <q-card-actions align="right">
+          <q-btn
+            data-test="cancel-keep"
+            flat
+            no-caps
+            label="계속하기"
+            @click="showCancelConfirm = false"
+          />
+          <q-btn
+            data-test="cancel-confirm"
+            unelevated
+            color="negative"
+            no-caps
+            label="취소하기"
+            @click="confirmCancel"
+          />
+        </q-card-actions>
+      </q-card>
+    </q-dialog>
   </div>
 </template>
 
@@ -293,19 +380,30 @@ onUnmounted(() => stream.close())
 }
 .transcript {
   min-height: 0;
+  position: relative;
 }
 .plan-md {
   white-space: pre-wrap;
   font-family: 'Pretendard', sans-serif;
   font-size: 0.85rem;
 }
-.turn-assistant {
-  border-left: 3px solid var(--q-primary);
-  padding-left: 8px;
+.cancel-btn:hover {
+  color: #c0392b !important;
 }
-.turn-user {
-  border-left: 3px solid #bdbdbd;
-  padding-left: 8px;
+.new-msg-pill {
+  position: sticky;
+  bottom: 8px;
+  width: fit-content;
+  margin: 4px auto 0;
+  z-index: 5;
+  background: var(--q-primary);
+  color: #fff;
+  font-size: 12px;
+  font-weight: 600;
+  padding: 5px 14px;
+  border-radius: 16px;
+  cursor: pointer;
+  box-shadow: 0 3px 10px rgba(25, 118, 210, 0.4);
 }
 @media (max-width: 1023px) {
   .mobile-hidden {

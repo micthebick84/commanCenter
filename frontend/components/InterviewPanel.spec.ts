@@ -1,5 +1,5 @@
 import { mount, flushPromises } from '@vue/test-utils'
-import { describe, it, expect, vi } from 'vitest'
+import { describe, it, expect, afterEach } from 'vitest'
 import InterviewPanel from './InterviewPanel.vue'
 import { FakeEventSource } from '../test/mocks/eventsource'
 import { authStub, useApiMock } from '../test/mocks/nuxt'
@@ -132,6 +132,91 @@ describe('InterviewPanel — terminal states', () => {
     FakeEventSource.last().emit('status', 'FAILED')
     await flushPromises()
     expect(w.text()).toContain('인터뷰 실패')
+    w.unmount()
+  })
+})
+
+describe('InterviewPanel — typing indicator', () => {
+  it('shows the typing indicator while RUNNING and hides it once AWAITING_INPUT', async () => {
+    const w = mountPanel()
+    FakeEventSource.last().emit('status', 'RUNNING')
+    await flushPromises()
+    expect(w.find('[data-test="typing-indicator"]').exists()).toBe(true)
+
+    FakeEventSource.last().emit('question', { seq: 1, content: '범위는?' })
+    await flushPromises()
+    expect(w.find('[data-test="typing-indicator"]').exists()).toBe(false)
+    w.unmount()
+  })
+
+  it('hides the typing indicator at PLAN_READY and on terminal states', async () => {
+    const w = mountPanel()
+    FakeEventSource.last().emit('plan_ready', {
+      designMarkdown: 'd',
+      planMarkdown: 'p',
+      planJson: JSON.stringify([]),
+    })
+    await flushPromises()
+    expect(w.find('[data-test="typing-indicator"]').exists()).toBe(false)
+
+    FakeEventSource.last().emit('status', 'EXPIRED')
+    await flushPromises()
+    expect(w.find('[data-test="typing-indicator"]').exists()).toBe(false)
+    w.unmount()
+  })
+})
+
+describe('InterviewPanel — cancel flow', () => {
+  // q-dialog는 <body>로 teleport되므로 잔여 노드를 정리한다.
+  afterEach(() => {
+    document.querySelectorAll('.q-dialog').forEach((n) => n.remove())
+  })
+
+  it('opens a confirm dialog and only cancels after 취소하기', async () => {
+    useApiMock.mockResolvedValueOnce({})
+    const w = mountPanel(7)
+    FakeEventSource.last().emit('status', 'RUNNING')
+    await flushPromises()
+
+    await w.find('[data-test="cancel-interview"]').trigger('click')
+    await flushPromises()
+    const confirm = document.querySelector('[data-test="cancel-confirm"]') as HTMLElement | null
+    expect(confirm).toBeTruthy()
+
+    confirm!.click()
+    await flushPromises()
+    expect(useApiMock).toHaveBeenCalledWith('/api/interviews/7/cancel', { method: 'POST' })
+    expect(w.emitted('close')).toBeTruthy()
+    w.unmount()
+  })
+
+  it('does not cancel when 계속하기 is chosen', async () => {
+    const w = mountPanel(7)
+    FakeEventSource.last().emit('status', 'RUNNING')
+    await flushPromises()
+
+    await w.find('[data-test="cancel-interview"]').trigger('click')
+    await flushPromises()
+    const keep = document.querySelector('[data-test="cancel-keep"]') as HTMLElement | null
+    expect(keep).toBeTruthy()
+
+    keep!.click()
+    await flushPromises()
+    expect(useApiMock).not.toHaveBeenCalled()
+    expect(w.emitted('close')).toBeFalsy()
+    w.unmount()
+  })
+})
+
+describe('InterviewPanel — terminal close', () => {
+  it('shows a 닫기 button on FAILED that emits close', async () => {
+    const w = mountPanel()
+    FakeEventSource.last().emit('status', 'FAILED')
+    await flushPromises()
+    const close = w.find('[data-test="close-interview"]')
+    expect(close.exists()).toBe(true)
+    await close.trigger('click')
+    expect(w.emitted('close')).toBeTruthy()
     w.unmount()
   })
 })

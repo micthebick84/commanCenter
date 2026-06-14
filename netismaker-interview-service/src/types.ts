@@ -40,6 +40,9 @@ export interface InterviewClaimResponse {
   mcpsExtra: McpSpec[];
   /** Prior turns (questions + answers) for context/logging */
   turns: InterviewTurn[];
+  /** Java가 보내는 선택 모델/effort (NOT NULL — 기본 claude-opus-4-8/high). */
+  model: string;
+  effort: 'low' | 'medium' | 'high' | 'xhigh' | 'max';
 }
 
 /** Body for POST /worker/interviews/{id}/question */

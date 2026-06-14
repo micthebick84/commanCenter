@@ -15,6 +15,8 @@ export const freshClaim: InterviewClaimResponse = {
   // Java InterviewClaimResponse.of는 null이 아니라 빈 배열을 반환한다.
   mcpsExtra: [],
   turns: [],
+  model: 'claude-opus-4-8',
+  effort: 'high',
 };
 
 export const resumeClaim: InterviewClaimResponse = {

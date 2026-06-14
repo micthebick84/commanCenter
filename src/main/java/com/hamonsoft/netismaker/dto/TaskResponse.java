@@ -25,6 +25,8 @@ public record TaskResponse(
         List<EnvVar> envVars,
         OffsetDateTime createdAt,
         OffsetDateTime updatedAt,
+        String model,
+        String effort,
         AnalysisView analysis,
         ImplementationView implementation,
         DeploymentView deployment
@@ -104,6 +106,8 @@ public record TaskResponse(
                 t.getEnvVars() == null ? List.of() : List.copyOf(t.getEnvVars()),
                 t.getCreatedAt(),
                 t.getUpdatedAt(),
+                t.getModel(),
+                t.getEffort(),
                 av,
                 iv,
                 dv

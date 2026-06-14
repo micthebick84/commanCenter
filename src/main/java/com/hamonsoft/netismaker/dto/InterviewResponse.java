@@ -19,6 +19,8 @@ public record InterviewResponse(
         String currentPhase,
         String workDir,
         Long taskId,
+        String model,
+        String effort,
         List<TurnView> turns,
         PlanView plan,
         OffsetDateTime createdAt,
@@ -41,6 +43,6 @@ public record InterviewResponse(
         return new InterviewResponse(
                 s.getId(), s.getGithubRepo(), s.getGithubBranch(), s.getTitle(), s.getDescription(),
                 s.getStatus().dbValue(), s.getStatus().name(), s.getCurrentPhase(), s.getWorkDir(), s.getTaskId(),
-                tvs, pv, s.getCreatedAt(), s.getUpdatedAt());
+                s.getModel(), s.getEffort(), tvs, pv, s.getCreatedAt(), s.getUpdatedAt());
     }
 }

@@ -15,6 +15,7 @@ public record InterviewResponse(
         String title,
         String description,
         String status,        // 한글 dbValue (사용자 표시). SSE status 이벤트는 영문 enum name 사용.
+        String statusName,     // 영문 enum name (InterviewStatus.name()). 프론트 로직/하이드레이션용.
         String currentPhase,
         String workDir,
         Long taskId,
@@ -39,7 +40,7 @@ public record InterviewResponse(
                 plan.getDurationMs(), plan.getCompletedAt());
         return new InterviewResponse(
                 s.getId(), s.getGithubRepo(), s.getGithubBranch(), s.getTitle(), s.getDescription(),
-                s.getStatus().dbValue(), s.getCurrentPhase(), s.getWorkDir(), s.getTaskId(),
+                s.getStatus().dbValue(), s.getStatus().name(), s.getCurrentPhase(), s.getWorkDir(), s.getTaskId(),
                 tvs, pv, s.getCreatedAt(), s.getUpdatedAt());
     }
 }

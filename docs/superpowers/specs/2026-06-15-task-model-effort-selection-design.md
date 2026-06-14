@@ -119,7 +119,17 @@ DEFAULT_EFFORT = "high"
 - **잘못된 조합**(Haiku+max): 서버 검증 + 프론트 동적필터 이중 방어.
 - **쿼터**: 구독 1개 공유 — 상위 effort/모델은 시간당 메시지 cap 소진을 앞당김(기존 동시성 직렬화로 자연 완화). 운영 모니터링 권고.
 
-## 9. 범위 제외 (YAGNI)
+## 9. 서브에이전트 모델 동작 (명확화 — 검증됨)
+
+"선택한 모델을 서브에이전트/팀에이전트도 따르는가"에 대한 확정:
+
+- **인터뷰(SDK)**: `sessionOptions.ts`의 `allowedTools=['Skill','Read','Grep','Glob']`에 Task/Agent 도구가 없어 **인터뷰 에이전트는 서브에이전트를 생성할 수 없다**. 단일 인터뷰 에이전트가 선택 모델로 동작 — 서브에이전트 모델 질문 무관.
+- **워커(`claude -p`)**: 서브에이전트 model 결정 순서 = `CLAUDE_CODE_SUBAGENT_MODEL` env → 호출 model 파라미터 → agent 정의 `model` frontmatter → **세션 메인 모델(`--model`)**. 따라서 `--model`만 전달해도 자기 model 미명시 서브에이전트는 **선택 모델을 상속**한다. `effort`도 동일하게 기본 상속(서브에이전트 정의에서 override 시 우선).
+- **예외**: 빌트인 **Explore** 서브에이전트는 Haiku 고정(세션 모델 무관). 대상 레포의 `.claude/agents/*.md`에 model이 박힌 에이전트는 그 값을 따름.
+- **결정**: `CLAUDE_CODE_SUBAGENT_MODEL` env 강제는 **하지 않는다**(기본 상속만). Explore 등 경량 검색은 저렴한 Haiku 유지(쿼터 절약). 따라서 `ClaudeExecAdapter`는 `--model`/`--effort` 플래그만 추가하고 `ProcessBuilder.environment()`는 건드리지 않는다.
+- 출처: SDK `sdk.d.ts` `AgentDefinition.model`("If omitted or 'inherit', uses the main model")·`AgentDefinition.effort`, `code.claude.com/docs/en/sub-agents.md`(model 해석 순서·Explore→Haiku).
+
+## 10. 범위 제외 (YAGNI)
 
 - `application-worker.yml` 전역 기본 override(폼 기본값 + Flyway DEFAULT로 충분).
 - `--fallback-model` / SDK `fallbackModel` 노출(후속 가능).

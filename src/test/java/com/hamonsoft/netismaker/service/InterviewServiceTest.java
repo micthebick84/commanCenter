@@ -333,8 +333,9 @@ class InterviewServiceTest {
 
         assertThat(out).hasSize(1);
         assertThat(out.get(0).id()).isEqualTo(30L);
-        assertThat(out.get(0).statusName()).isEqualTo("AWAITING_INPUT"); // 영문
-        assertThat(out.get(0).statusLabel()).isEqualTo("입력대기");        // 한글
+        assertThat(out.get(0).status()).isEqualTo("입력대기");        // 한글 dbValue (표시)
+        assertThat(out.get(0).statusName()).isEqualTo("AWAITING_INPUT"); // 영문 enum (로직)
+        assertThat(out.get(0).title()).isEqualTo("T");
         verify(sessionRepo).findActiveByRequester("u1");
     }
 }

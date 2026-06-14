@@ -387,7 +387,7 @@ Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>"
                 .andExpect(jsonPath("$.length()").value(1))
                 .andExpect(jsonPath("$[0].title").value("살릴 인터뷰"))
                 .andExpect(jsonPath("$[0].statusName").value("QUEUED"))
-                .andExpect(jsonPath("$[0].statusLabel").value("인터뷰대기"))
+                .andExpect(jsonPath("$[0].status").value("인터뷰대기"))
                 .andExpect(jsonPath("$[0].id").exists());
     }
 
@@ -644,8 +644,8 @@ import { decideResume, type InterviewSummary } from './interviewResume'
 function summary(id: number): InterviewSummary {
   return {
     id,
+    status: '입력대기',
     statusName: 'AWAITING_INPUT',
-    statusLabel: '입력 대기',
     title: `T${id}`,
     githubRepo: 'owner/repo',
     githubBranch: 'main',
@@ -684,8 +684,8 @@ Expected: FAIL — cannot resolve `./interviewResume`
 // 활성 인터뷰 목록 타입 + 새로고침 후 재오픈 결정(순수). GET /api/interviews/active 응답 형태.
 export interface InterviewSummary {
   id: number
-  statusName: string
-  statusLabel: string
+  status: string // 한글 dbValue (표시용) — 백엔드 InterviewSummary.status와 동일
+  statusName: string // 영문 enum (로직용)
   title: string
   githubRepo: string
   githubBranch: string
@@ -1000,7 +1000,7 @@ onMounted(discoverActiveInterviews)
             <q-item-section>
               <q-item-label>{{ c.title }}</q-item-label>
               <q-item-label caption>
-                {{ c.githubRepo }} · {{ c.githubBranch }} · {{ c.statusLabel }}
+                {{ c.githubRepo }} · {{ c.githubBranch }} · {{ c.status }}
               </q-item-label>
             </q-item-section>
             <q-item-section side>

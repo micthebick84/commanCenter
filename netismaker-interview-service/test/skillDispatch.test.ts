@@ -1,0 +1,29 @@
+import { describe, expect, it, vi } from 'vitest';
+import { detectHandoff, buildWritingPlansSplice } from '../src/runner/skillDispatch.js';
+
+describe('detectHandoff', () => {
+  it('detects when the agent announces the writing-plans transition', () => {
+    const text =
+      'The spec is approved. Transition to implementation — invoke writing-plans skill to create the plan.';
+    expect(detectHandoff(text)).toBe(true);
+  });
+
+  it('detects progressive / first-person phrasings too', () => {
+    expect(detectHandoff('I am invoking writing-plans now.')).toBe(true);
+    expect(detectHandoff('Transitioning to implementation.')).toBe(true);
+  });
+
+  it('does not fire on ordinary brainstorming questions', () => {
+    expect(detectHandoff('Which columns should the CSV include?')).toBe(false);
+  });
+});
+
+describe('buildWritingPlansSplice', () => {
+  it('reads writing-plans SKILL.md and wraps it as a user prompt to splice into the same session', () => {
+    const readFn = vi.fn().mockReturnValue('# Writing Plans\n\nBreak the spec into tasks.');
+    const out = buildWritingPlansSplice('/sp/5.1.0', readFn);
+    expect(readFn).toHaveBeenCalledWith('/sp/5.1.0/skills/writing-plans/SKILL.md', 'utf8');
+    expect(out).toContain('Break the spec into tasks');
+    expect(out.toLowerCase()).toContain('writing plans');
+  });
+});

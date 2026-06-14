@@ -71,6 +71,12 @@ app:
     worker-dead-threshold-seconds: 60
     stale-check-interval-ms: 60000
     user-concurrent-limit: 5
+  interview:
+    user-concurrent-limit: 3
+    sse-ping-interval-ms: 30000
+    idle-ttl-minutes: 1440          # AWAITING_INPUT 무응답 → EXPIRED (24h)
+    stale-running-minutes: 60       # RUNNING claimed_at 초과 → FAILED 회수
+    stale-check-interval-ms: 60000  # InterviewStaleRecoveryJob 주기
 
 logging:
   level:

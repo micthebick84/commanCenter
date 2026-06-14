@@ -9,14 +9,21 @@
     "preview": "nuxi preview",
     "postinstall": "nuxi prepare",
     "lint": "eslint \"**/*.{ts,vue}\" --fix",
-    "lint-prettier": "prettier --write \"**/*.{ts,vue,json}\""
+    "lint-prettier": "prettier --write \"**/*.{ts,vue,json}\"",
+    "test": "vitest run",
+    "test:watch": "vitest"
   },
   "devDependencies": {
+    "@nuxt/test-utils": "^3.15.1",
+    "@vitejs/plugin-vue": "^6.0.0",
+    "@vue/test-utils": "^2.4.6",
     "eslint": "^9.0.0",
+    "happy-dom": "^15.11.7",
     "nuxt": "^3.14.0",
     "nuxt-quasar-ui": "^2.1.12",
     "prettier": "^3.5.2",
     "typescript": "^5.6.0",
+    "vitest": "^3.2.0",
     "vue": "^3.5.0",
     "vue-router": "^4.4.0",
     "vue-tsc": "^2.1.0"

@@ -76,7 +76,9 @@ public class SecurityConfig {
     }
 
     /**
-     * EventSource는 Authorization 헤더를 못 실으므로 SSE용으로 ?access_token= 쿼리 파라미터를 허용.
+     * EventSource(SSE)는 Authorization 헤더를 설정할 수 없어 JWT를 ?access_token= 쿼리파라미터로 전달한다.
+     * 사용처: 대화형 분석 GET /api/interviews/{id}/stream, 배포 실시간 로그 SSE.
+     * 헤더와 쿼리에 토큰이 동시에 있으면 Spring이 거부하므로(이중 제공 방지) 헤더 기반 호출(useApi)과 안전하게 공존한다.
      * 내부도구 전제 — URL에 토큰 노출 가능성은 의도적 트레이드오프(평문 시크릿 정책과 동일 선상).
      */
     @Bean

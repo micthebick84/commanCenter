@@ -1,0 +1,31 @@
+import type { InterviewClaimResponse } from '../../src/types.js';
+
+export const freshClaim: InterviewClaimResponse = {
+  sessionId: 42,
+  githubRepo: 'acme/widgets',
+  githubBranch: 'main',
+  title: 'Add CSV export',
+  description: 'Users want to export the dashboard table as CSV.',
+  claudeSessionId: null,
+  // 갓 claim된(아직 질문 전) 세션은 Java에서 currentPhase=null (recordQuestion 전).
+  currentPhase: null,
+  workDir: '/Users/micthebick/netis-maker/interviews/acme/widgets/session-42',
+  lastAnswer: null,
+  replyToSeq: null,
+  // Java InterviewClaimResponse.of는 null이 아니라 빈 배열을 반환한다.
+  mcpsExtra: [],
+  turns: [],
+};
+
+export const resumeClaim: InterviewClaimResponse = {
+  ...freshClaim,
+  claudeSessionId: 'sess-abc-123',
+  // resume claim은 직전에 질문이 기록됐으므로 phase는 brainstorming.
+  currentPhase: 'brainstorming',
+  lastAnswer: 'Yes, scope it to the visible columns only.',
+  replyToSeq: 3,
+  turns: [
+    { seq: 1, role: 'assistant', kind: 'question', content: 'Which columns?', replyToSeq: null },
+    { seq: 2, role: 'user', kind: 'answer', content: 'Yes, scope it to the visible columns only.', replyToSeq: 1 },
+  ],
+};

@@ -7,7 +7,9 @@ const props = defineProps<{
   content: string
 }>()
 
-const avatarLabel = computed(() => (props.role === 'assistant' ? 'AI' : '나'))
+const avatarLabel = computed(() =>
+  props.role === 'assistant' ? 'AI' : props.role === 'user' ? '나' : '',
+)
 </script>
 
 <template>

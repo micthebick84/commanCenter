@@ -14,6 +14,7 @@ describe('ChatBubble', () => {
     const w = mount(ChatBubble, { props: { role: 'user', content: '네 맞아요' } })
     expect(w.find('.bubble.user').exists()).toBe(true)
     expect(w.find('.avatar.user').text()).toBe('나')
+    expect(w.find('.bubble-row.user').exists()).toBe(true)
   })
 
   it('renders a system turn as a centered note without an avatar', () => {

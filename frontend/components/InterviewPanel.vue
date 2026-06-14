@@ -66,12 +66,21 @@ const waitingForAi = computed(() => {
 
 // 스마트 자동 스크롤.
 const transcriptEl = ref<HTMLElement | null>(null)
-const { unread, onScroll, scrollToBottom, notifyNewContent } = useAutoScroll(transcriptEl)
+const { nearBottom, unread, onScroll, scrollToBottom, notifyNewContent } = useAutoScroll(transcriptEl)
 
-// 새 턴/타이핑 표시가 생기면 스크롤 정책 적용. (내가 보낸 답변은 sendAnswer가 force 스크롤.)
-watch([() => turns.value.length, waitingForAi], async () => {
+// 새 턴이 도착하면 스크롤 정책 적용: 하단 근처면 따라가고, 위로 읽는 중이면 unread++.
+watch(
+  () => turns.value.length,
+  async () => {
+    await nextTick()
+    notifyNewContent()
+  },
+)
+// 타이핑 표시 등장은 '새 메시지'가 아니다 — 하단 근처일 때만 따라 내려가고 unread는 올리지 않는다.
+watch(waitingForAi, async (v) => {
+  if (!v) return
   await nextTick()
-  notifyNewContent()
+  if (nearBottom.value) scrollToBottom()
 })
 
 async function sendAnswer() {

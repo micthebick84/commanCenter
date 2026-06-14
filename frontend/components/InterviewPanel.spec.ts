@@ -1,5 +1,5 @@
 import { mount, flushPromises } from '@vue/test-utils'
-import { describe, it, expect, vi, afterEach } from 'vitest'
+import { describe, it, expect, afterEach } from 'vitest'
 import InterviewPanel from './InterviewPanel.vue'
 import { FakeEventSource } from '../test/mocks/eventsource'
 import { authStub, useApiMock } from '../test/mocks/nuxt'

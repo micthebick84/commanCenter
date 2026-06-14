@@ -57,6 +57,8 @@ interface TaskResponse {
   envVars: EnvVar[]
   createdAt: string
   updatedAt: string
+  model: string
+  effort: string
   analysis: AnalysisView | null
   implementation: ImplementationView | null
   deployment: DeploymentView | null
@@ -267,6 +269,8 @@ function statusClass(status: string) {
         <div class="text-h5">{{ task.title }}</div>
         <q-space />
         <span :class="statusClass(task.status)">{{ task.statusLabel }}</span>
+        <q-chip dense size="sm" outline icon="smart_toy" :label="task.model" class="q-ml-sm" />
+        <q-chip dense size="sm" outline icon="tune" :label="task.effort" />
       </div>
 
       <q-card flat bordered class="q-mb-md">

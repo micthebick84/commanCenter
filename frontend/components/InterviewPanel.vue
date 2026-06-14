@@ -6,7 +6,7 @@ import { useAutoScroll } from '~/composables/useAutoScroll'
 import ChatBubble from '~/components/chat/ChatBubble.vue'
 import TypingIndicator from '~/components/chat/TypingIndicator.vue'
 
-const props = defineProps<{ sessionId: number }>()
+const props = defineProps<{ sessionId: number; model?: string; effort?: string }>()
 const emit = defineEmits<{ (e: 'registered', taskId: number): void; (e: 'close'): void }>()
 
 const stream = useInterviewStream()
@@ -186,6 +186,8 @@ onUnmounted(() => stream.close())
       />
       <!-- 색상/터미널 판정은 영문 enum(status), 표시는 한글(statusLabel). -->
       <q-badge :color="status === 'PLAN_READY' ? 'positive' : 'primary'" :label="statusLabel" />
+      <q-chip v-if="props.model" dense size="sm" outline icon="smart_toy" :label="props.model" />
+      <q-chip v-if="props.effort" dense size="sm" outline icon="tune" :label="props.effort" />
       <q-banner v-if="status === 'EXPIRED'" dense class="bg-orange-1 text-orange-10 col"
         >세션이 만료되었습니다. 다시 인터뷰를 시작해 주세요.</q-banner
       >

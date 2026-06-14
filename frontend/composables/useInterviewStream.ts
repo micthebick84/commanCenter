@@ -28,6 +28,12 @@ export interface DesignSection {
   approved: boolean
 }
 
+export interface InterviewSnapshot {
+  statusName?: string | null
+  turns?: Array<{ seq: number; role: string; kind: string; content: string }>
+  plan?: { designMarkdown?: string; planMarkdown?: string; planJson?: unknown } | null
+}
+
 export interface InterviewPlan {
   designMarkdown: string
   planMarkdown: string
@@ -127,13 +133,17 @@ export function useInterviewStream() {
   function onDesign(e: MessageEvent) {
     const data = parse(e)
     if (!data || !data.key) return
-    const idx = designSections.value.findIndex((d) => d.key === data.key)
-    const section: DesignSection = {
+    upsertDesign({
       key: data.key,
       title: data.title ?? data.key,
       body: data.body ?? '',
       approved: !!data.approved,
-    }
+    })
+  }
+
+  // key로 upsert (replay/hydrate 중복 방지). onDesign과 hydrate가 공유.
+  function upsertDesign(section: DesignSection) {
+    const idx = designSections.value.findIndex((d) => d.key === section.key)
     if (idx >= 0) {
       const next = designSections.value.slice()
       next[idx] = section
@@ -162,6 +172,41 @@ export function useInterviewStream() {
       planJson: parsedPlanJson,
     }
     status.value = 'PLAN_READY'
+  }
+
+  // REST 스냅샷(GET /api/interviews/{id})으로 상태 시드 — 새로고침 후 대화 복원.
+  // kind==='design' → designSections(key=design-{seq}, 백엔드 DesignEvent와 동일)
+  // role==='user'   → turns(user/answer) / 그 외 → turns(assistant/question)
+  // pushTurn이 seq로 dedup하므로 직후 SSE replay와 안전하게 병합된다.
+  function hydrate(snapshot: InterviewSnapshot | null | undefined) {
+    if (!snapshot) return
+    const name = (snapshot.statusName ?? '') as InterviewStatus
+    if (KNOWN_STATUSES.includes(name)) status.value = name
+    for (const t of snapshot.turns ?? []) {
+      if (t.kind === 'design') {
+        upsertDesign({ key: `design-${t.seq}`, title: '설계', body: t.content, approved: false })
+      } else if (t.role === 'user') {
+        pushTurn({ seq: t.seq, role: 'user', kind: 'answer', content: t.content })
+      } else {
+        pushTurn({ seq: t.seq, role: 'assistant', kind: 'question', content: t.content })
+      }
+    }
+    if (snapshot.plan) {
+      let parsedPlanJson: unknown = null
+      try {
+        parsedPlanJson =
+          typeof snapshot.plan.planJson === 'string'
+            ? JSON.parse(snapshot.plan.planJson)
+            : (snapshot.plan.planJson ?? null)
+      } catch {
+        parsedPlanJson = null
+      }
+      plan.value = {
+        designMarkdown: snapshot.plan.designMarkdown ?? '',
+        planMarkdown: snapshot.plan.planMarkdown ?? '',
+        planJson: parsedPlanJson,
+      }
+    }
   }
 
   // Dedup by seq so SSE replay-on-reconnect does not duplicate turns.
@@ -216,5 +261,6 @@ export function useInterviewStream() {
     error,
     open,
     close,
+    hydrate,
   }
 }

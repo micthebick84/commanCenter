@@ -1,5 +1,6 @@
 package com.hamonsoft.netismaker.service;
 
+import com.hamonsoft.netismaker.dto.DeployLogChunkRequest;
 import com.hamonsoft.netismaker.dto.WorkerResultRequest;
 import com.hamonsoft.netismaker.dto.WorkerTaskResponse;
 import com.hamonsoft.netismaker.entity.Task;
@@ -18,6 +19,7 @@ import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.*;
 
 class WorkerServiceDeployTest {
@@ -26,6 +28,7 @@ class WorkerServiceDeployTest {
     private TaskAnalysisRepository analysisRepo;
     private TaskStatusHistoryRepository historyRepo;
     private WorkerHeartbeatRepository heartbeatRepo;
+    private DeployLogStreamService deployLogStream;
     private WorkerService service;
 
     private Task taskWithStatus(TaskStatus status) {
@@ -43,7 +46,8 @@ class WorkerServiceDeployTest {
         analysisRepo = mock(TaskAnalysisRepository.class);
         historyRepo = mock(TaskStatusHistoryRepository.class);
         heartbeatRepo = mock(WorkerHeartbeatRepository.class);
-        service = new WorkerService(taskRepo, analysisRepo, historyRepo, heartbeatRepo);
+        deployLogStream = mock(DeployLogStreamService.class);
+        service = new WorkerService(taskRepo, analysisRepo, historyRepo, heartbeatRepo, deployLogStream);
         when(historyRepo.save(any())).thenAnswer(i -> i.getArgument(0));
     }
 
@@ -59,13 +63,25 @@ class WorkerServiceDeployTest {
     }
 
     @Test
-    void claim_undeploy_pending_yields_undeploy_kind_and_sets_deploying() {
+    void claim_undeploy_pending_yields_undeploy_kind_and_sets_undeploying() {
         Task t = taskWithStatus(TaskStatus.UNDEPLOY_PENDING);
         when(taskRepo.findClaimableForUpdateSkipLocked(any(Pageable.class))).thenReturn(List.of(t));
         Optional<WorkerTaskResponse> claimed = service.claimNextTask("mac-worker-1");
         assertThat(claimed).isPresent();
         assertThat(claimed.get().kind()).isEqualTo(WorkerTaskResponse.Kind.UNDEPLOY);
-        assertThat(t.getStatus()).isEqualTo(TaskStatus.DEPLOYING);
+        assertThat(t.getStatus()).isEqualTo(TaskStatus.UNDEPLOYING);
+    }
+
+    @Test
+    void record_undeploy_success_from_undeploying_returns_pr_created() {
+        Task t = taskWithStatus(TaskStatus.UNDEPLOYING);
+        t.setWorkerId("mac-worker-1");
+        t.setDeployUrl("http://localhost:19000");
+        t.setDeployHostPort(19000);
+        when(taskRepo.findById(7L)).thenReturn(Optional.of(t));
+        service.recordResult(7L, WorkerResultRequest.undeployed("mac-worker-1", "중지/제거"));
+        assertThat(t.getStatus()).isEqualTo(TaskStatus.PR_CREATED);
+        assertThat(t.getDeployUrl()).isNull();
     }
 
     @Test
@@ -80,6 +96,8 @@ class WorkerServiceDeployTest {
         assertThat(t.getDeployUrl()).isEqualTo("http://localhost:19000");
         assertThat(t.getDeployHostPort()).isEqualTo(19000);
         assertThat(t.getDeployedAt()).isNotNull();
+        // finish must be called so SSE subscribers receive done event and chunks are cleaned up
+        verify(deployLogStream).finish(7L);
     }
 
     @Test
@@ -93,5 +111,24 @@ class WorkerServiceDeployTest {
         assertThat(t.getStatus()).isEqualTo(TaskStatus.PR_CREATED);
         assertThat(t.getDeployUrl()).isNull();
         assertThat(t.getDeployHostPort()).isNull();
+        // finish must be called so SSE subscribers receive done event and chunks are cleaned up
+        verify(deployLogStream).finish(7L);
+    }
+
+    @Test
+    void record_undeploy_result_calls_finish_on_stream() {
+        Task t = taskWithStatus(TaskStatus.UNDEPLOYING);
+        t.setWorkerId("mac-worker-1");
+        when(taskRepo.findById(7L)).thenReturn(Optional.of(t));
+        service.recordResult(7L, WorkerResultRequest.undeployed("mac-worker-1", "중지/제거"));
+        // finish must be called for UNDEPLOYING result as well
+        verify(deployLogStream).finish(7L);
+    }
+
+    @Test
+    void append_deploy_log_delegates_to_ingest_chunk() {
+        // appendDeployLog is a best-effort pass-through to deployLogStream.ingestChunk
+        service.appendDeployLog(7L, new DeployLogChunkRequest(3, "step 3 done\n"));
+        verify(deployLogStream).ingestChunk(eq(7L), eq(3), eq("step 3 done\n"));
     }
 }

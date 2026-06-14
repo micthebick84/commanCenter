@@ -13,5 +13,7 @@ public record QueueStats(
         long deploying,
         long deployed,
         long deployFailed,
+        long undeployPending,
+        long undeploying,
         Double avgDurationMs
 ) {}

@@ -252,9 +252,12 @@ public class WorkerMainLoop {
 
     private void processDeploy(WorkerTaskResponse task) {
         long start = System.currentTimeMillis();
+        java.util.concurrent.atomic.AtomicInteger seq = new java.util.concurrent.atomic.AtomicInteger(0);
+        java.util.function.Consumer<String> sink =
+                line -> http.postDeployLog(task.id(), seq.getAndIncrement(), line + "\n");
         com.hamonsoft.netismaker.workerdaemon.deploy.DeployTarget.DeployResult result;
         try {
-            result = deployService.deploy(task);
+            result = deployService.deploy(task, sink);
         } catch (DeployService.DeployException e) {
             safePostDeployFailure(task.id(), e.getMessage(), e.getDeployLog());
             return;

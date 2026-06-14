@@ -5,6 +5,7 @@ import com.hamonsoft.netismaker.dto.TaskCreateRequest;
 import com.hamonsoft.netismaker.dto.TaskResponse;
 import com.hamonsoft.netismaker.entity.Task;
 import com.hamonsoft.netismaker.entity.TaskStatus;
+import com.hamonsoft.netismaker.service.DeployLogStreamService;
 import com.hamonsoft.netismaker.service.TaskService;
 import jakarta.validation.Valid;
 import org.springframework.context.annotation.Profile;
@@ -12,10 +13,12 @@ import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.web.PageableDefault;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.security.oauth2.server.resource.authentication.JwtAuthenticationToken;
 import org.springframework.web.bind.annotation.*;
+import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
 import java.net.URI;
 
@@ -32,9 +35,11 @@ import java.net.URI;
 public class TaskController {
 
     private final TaskService taskService;
+    private final DeployLogStreamService deployLogStream;
 
-    public TaskController(TaskService taskService) {
+    public TaskController(TaskService taskService, DeployLogStreamService deployLogStream) {
         this.taskService = taskService;
+        this.deployLogStream = deployLogStream;
     }
 
     @PostMapping
@@ -127,5 +132,13 @@ public class TaskController {
         taskService.undeploy(id, adminId);
         Task t = taskService.getForView(id, adminId, true);
         return TaskResponse.of(t, taskService.getAnalysis(id).orElse(null));
+    }
+
+    @GetMapping(value = "/{id}/logs/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
+    public SseEmitter logsStream(@PathVariable Long id, JwtAuthenticationToken auth) {
+        String userId = AuthContext.requireUserId(auth);
+        boolean isAdmin = AuthContext.isAdmin(auth);
+        taskService.getForView(id, userId, isAdmin); // 접근 권한 검증 (없으면 예외)
+        return deployLogStream.subscribe(id);
     }
 }

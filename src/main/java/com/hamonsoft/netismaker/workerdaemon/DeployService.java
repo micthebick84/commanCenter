@@ -45,7 +45,8 @@ public class DeployService {
     }
 
     /** 배포 수행. 실패 시 DeployException(로그 포함). */
-    public DeployTarget.DeployResult deploy(WorkerTaskResponse task) throws DeployException {
+    public DeployTarget.DeployResult deploy(WorkerTaskResponse task,
+                                            java.util.function.Consumer<String> logSink) throws DeployException {
         if (task.headBranch() == null || task.headBranch().isBlank()) {
             throw new DeployException("head 브랜치 정보 없음 (PR생성 안 된 task?)", null);
         }
@@ -92,7 +93,7 @@ public class DeployService {
                     env,
                     Map.of("netis-maker.task", String.valueOf(task.id())));
 
-            DeployTarget.DeployResult r = target.deploy(spec);
+            DeployTarget.DeployResult r = target.deploy(spec, logSink);
             return new DeployTarget.DeployResult(r.url(), r.containerId(), r.hostPort(),
                     r.image(), log + r.log());
         } catch (DeployException e) {

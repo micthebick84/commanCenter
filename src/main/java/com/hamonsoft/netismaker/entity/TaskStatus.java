@@ -18,7 +18,7 @@ package com.hamonsoft.netismaker.entity;
  *   [PR생성] ──(배포)──→ [배포대기] ──(워커 claim)──→ [배포중] ──┬→ [배포완료]
  *                                                                └→ [배포실패]
  *   [배포완료|배포실패] ──(재배포)──→ [배포대기]
- *   [배포완료|배포실패] ──(중지)──→ [배포중지대기] ──(워커)──→ [PR생성]
+ *   [배포완료|배포실패] ──(중지)──→ [배포중지대기] ──(워커 claim)──→ [배포중지중] ──→ [PR생성]
  *
  *  취소:
  *   [작업대기] ──→ [취소됨] (본인, PENDING 한정)
@@ -40,6 +40,7 @@ public enum TaskStatus {
     DEPLOYED("배포완료"),
     DEPLOY_FAILED("배포실패"),
     UNDEPLOY_PENDING("배포중지대기"),
+    UNDEPLOYING("배포중지중"),
     CANCELLED("취소됨");
 
     private final String dbValue;

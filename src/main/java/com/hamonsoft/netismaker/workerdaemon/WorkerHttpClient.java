@@ -49,4 +49,12 @@ public class WorkerHttpClient {
     public void postResult(Long taskId, WorkerResultRequest req) {
         http.post().uri("/worker/tasks/{id}/result", taskId).body(req).retrieve().toBodilessEntity();
     }
+
+    public void postDeployLog(Long taskId, int seq, String content) {
+        try {
+            http.post().uri("/worker/tasks/{id}/deploy-log", taskId)
+                    .body(new com.hamonsoft.netismaker.dto.DeployLogChunkRequest(seq, content))
+                    .retrieve().toBodilessEntity();
+        } catch (Exception ignore) { /* 로그 업로드 실패가 배포를 막지 않음 */ }
+    }
 }

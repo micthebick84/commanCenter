@@ -12,6 +12,8 @@ interface QueueStats {
   deploying: number
   deployed: number
   deployFailed: number
+  undeployPending: number
+  undeploying: number
   avgDurationMs: number | null
 }
 
@@ -86,6 +88,16 @@ const avgDurationLabel = computed(() => {
       <div class="stat">
         <div class="stat-label">배포실패</div>
         <div class="stat-value text-pink-9">{{ data.deployFailed }}</div>
+      </div>
+      <q-separator vertical />
+      <div class="stat">
+        <div class="stat-label">배포중지대기</div>
+        <div class="stat-value text-deep-orange-9">{{ data.undeployPending }}</div>
+      </div>
+      <q-separator vertical />
+      <div class="stat">
+        <div class="stat-label">배포중지중</div>
+        <div class="stat-value text-orange-9">{{ data.undeploying }}</div>
       </div>
       <q-separator vertical />
       <div class="stat">

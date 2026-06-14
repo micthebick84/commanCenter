@@ -12,14 +12,20 @@ import java.util.Map;
  */
 public interface DeployTarget {
 
-    /** 빌드 + 실행. hostPort는 타깃이 할당해 DeployResult로 반환. */
-    DeployResult deploy(DeploySpec spec) throws Exception;
+    /** 빌드 + 실행. logSink로 빌드/헬스 로그를 라인 단위 스트리밍한다(없으면 무시 가능). */
+    DeployResult deploy(DeploySpec spec, java.util.function.Consumer<String> logSink) throws Exception;
 
     /** 컨테이너 중지 + 제거 (멱등 — 없으면 무시). */
     void stop(String containerName) throws Exception;
 
     /** 컨테이너 상태 조회 (보고용). */
     DeployStatus status(String containerName);
+
+    /**
+     * 자가정리: grace 지난 비실행 owned 컨테이너 + 보존 외 owned 이미지 제거.
+     * 원격 타깃 등 미지원 구현은 no-op (default).
+     */
+    default void gc(int orphanGraceMinutes, int keepImagesPerTask) { }
 
     /**
      * @param contextDir    빌드 컨텍스트(Dockerfile 포함 worktree)

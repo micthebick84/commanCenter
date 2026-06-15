@@ -4,6 +4,7 @@ import com.hamonsoft.netismaker.dto.AnswerRequest;
 import com.hamonsoft.netismaker.dto.CreateInterviewRequest;
 import com.hamonsoft.netismaker.dto.InterviewCreatedResponse;
 import com.hamonsoft.netismaker.dto.InterviewResponse;
+import com.hamonsoft.netismaker.dto.InterviewSummary;
 import com.hamonsoft.netismaker.dto.RegisterResponse;
 import com.hamonsoft.netismaker.entity.InterviewSession;
 import com.hamonsoft.netismaker.entity.InterviewStatus;
@@ -18,6 +19,7 @@ import org.springframework.web.bind.annotation.*;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
 import java.net.URI;
+import java.util.List;
 
 /**
  * 대화형 분석 사용자 API (JWT, ROLE_USER/ADMIN). DESIGN §8 표면 그대로.
@@ -45,6 +47,13 @@ public class InterviewController {
         InterviewSession s = interviewService.create(req, userId);
         return ResponseEntity.created(URI.create("/api/interviews/" + s.getId()))
                 .body(new InterviewCreatedResponse(s.getId()));
+    }
+
+    /** 본인 비종료 인터뷰 목록 — 새로고침 후 '이어할 인터뷰' 디스커버리. 리터럴 /active가 /{id}보다 우선. */
+    @GetMapping("/active")
+    public List<InterviewSummary> listActive(JwtAuthenticationToken auth) {
+        String userId = AuthContext.requireUserId(auth);
+        return interviewService.listActiveForRequester(userId);
     }
 
     @GetMapping("/{id}")

@@ -107,4 +107,33 @@ class InterviewApiIntegrationTest {
                 .andReturn().getResponse().getHeader("Location");
         mvc.perform(post(loc + "/register").with(userJwt("user1"))).andExpect(status().isConflict());
     }
+
+    @Test
+    void GET_active_returns_only_my_active_sessions_with_statusName() throws Exception {
+        // user1: 2건 생성 후 1건 취소(terminal) → active 1건만
+        mvc.perform(post("/api/interviews").with(userJwt("user1"))
+                        .contentType(APPLICATION_JSON).content(body("a/b", "살릴 인터뷰", "내용")))
+                .andReturn().getResponse().getHeader("Location");
+        String loc2 = mvc.perform(post("/api/interviews").with(userJwt("user1"))
+                        .contentType(APPLICATION_JSON).content(body("a/c", "취소할 인터뷰", "내용")))
+                .andReturn().getResponse().getHeader("Location");
+        mvc.perform(post(loc2 + "/cancel").with(userJwt("user1"))).andExpect(status().isOk());
+        // user2의 세션은 user1 목록에 안 나와야 (생성 성공을 확인해 무음 실패 방지)
+        mvc.perform(post("/api/interviews").with(userJwt("user2"))
+                        .contentType(APPLICATION_JSON).content(body("a/d", "남의 인터뷰", "내용")))
+                .andExpect(status().isCreated());
+
+        mvc.perform(get("/api/interviews/active").with(userJwt("user1")))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.length()").value(1))
+                .andExpect(jsonPath("$[0].title").value("살릴 인터뷰"))
+                .andExpect(jsonPath("$[0].statusName").value("QUEUED"))
+                .andExpect(jsonPath("$[0].status").value("인터뷰대기"))
+                .andExpect(jsonPath("$[0].id").exists());
+    }
+
+    @Test
+    void GET_active_unauthenticated_returns_401() throws Exception {
+        mvc.perform(get("/api/interviews/active")).andExpect(status().isUnauthorized());
+    }
 }

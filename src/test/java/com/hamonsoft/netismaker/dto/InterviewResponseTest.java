@@ -1,7 +1,12 @@
 package com.hamonsoft.netismaker.dto;
 
+import com.hamonsoft.netismaker.entity.InterviewSession;
+import com.hamonsoft.netismaker.entity.InterviewStatus;
 import com.hamonsoft.netismaker.entity.InterviewTurn;
 import org.junit.jupiter.api.Test;
+import org.springframework.test.util.ReflectionTestUtils;
+
+import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -24,5 +29,17 @@ class InterviewResponseTest {
         assertThat(tv.seq()).isEqualTo(2);
         assertThat(tv.role()).isEqualTo("assistant");
         assertThat(tv.kind()).isEqualTo("question");
+    }
+
+    @Test
+    void of_exposes_both_korean_status_and_english_statusName() {
+        InterviewSession s = InterviewSession.create("owner/repo", "main", "제목", "설명", "u1", List.of());
+        ReflectionTestUtils.setField(s, "id", 7L);
+        s.setStatus(InterviewStatus.AWAITING_INPUT);
+
+        InterviewResponse r = InterviewResponse.of(s, List.of(), null);
+
+        assertThat(r.status()).isEqualTo("입력대기");          // 한글 dbValue (표시용) — 유지
+        assertThat(r.statusName()).isEqualTo("AWAITING_INPUT"); // 영문 enum name (로직용) — 신규
     }
 }

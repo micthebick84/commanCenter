@@ -160,3 +160,89 @@ describe('useInterviewStream — reconnect', () => {
     vi.useRealTimers()
   })
 })
+
+describe('useInterviewStream — hydrate (refresh resume)', () => {
+  it('seeds turns (incl. user answers), status, and plan from a REST snapshot', () => {
+    authStub.accessToken = 'jwt'
+    const s = useInterviewStream()
+    s.hydrate({
+      statusName: 'AWAITING_INPUT',
+      turns: [
+        { seq: 1, role: 'assistant', kind: 'question', content: 'Q1' },
+        { seq: 2, role: 'user', kind: 'answer', content: 'A1' },
+        { seq: 3, role: 'assistant', kind: 'question', content: 'Q2' },
+        { seq: 4, role: 'assistant', kind: 'design', content: '설계초안' },
+      ],
+      plan: { designMarkdown: '# 설계', planMarkdown: '# 플랜', planJson: JSON.stringify([{ title: 'T' }]) },
+    })
+    expect(s.turns.value.map((t) => t.content)).toEqual(['Q1', 'A1', 'Q2'])
+    expect(s.turns.value.find((t) => t.role === 'user')).toMatchObject({ content: 'A1' })
+    expect(s.designSections.value).toHaveLength(1)
+    expect(s.designSections.value[0]).toMatchObject({ key: 'design-4', title: '설계', body: '설계초안' })
+    expect(s.status.value).toBe('AWAITING_INPUT')
+    expect(s.plan.value).toMatchObject({ designMarkdown: '# 설계', planMarkdown: '# 플랜' })
+    expect(s.plan.value!.planJson).toEqual([{ title: 'T' }])
+  })
+
+  it('does not duplicate turns/designs when SSE replay re-sends the same seqs after hydrate', () => {
+    authStub.accessToken = 'jwt'
+    const s = useInterviewStream()
+    s.hydrate({
+      statusName: 'AWAITING_INPUT',
+      turns: [
+        { seq: 1, role: 'assistant', kind: 'question', content: 'Q1' },
+        { seq: 4, role: 'assistant', kind: 'design', content: '설계초안' },
+      ],
+      plan: null,
+    })
+    s.open(1)
+    const es = FakeEventSource.last()
+    es.emit('question', { seq: 1, content: 'Q1' })
+    es.emit('design', { key: 'design-4', title: '설계', body: '설계초안', approved: false })
+    expect(s.turns.value).toHaveLength(1)
+    expect(s.designSections.value).toHaveLength(1)
+    s.close()
+  })
+
+  it('no-ops on a null/empty snapshot (fresh session)', () => {
+    authStub.accessToken = 'jwt'
+    const s = useInterviewStream()
+    s.hydrate(null as any)
+    s.hydrate({})
+    expect(s.turns.value).toHaveLength(0)
+    expect(s.status.value).toBeNull()
+    expect(s.plan.value).toBeNull()
+  })
+
+  it('keeps a hydrated PLAN_READY status when SSE replay re-emits prior questions', () => {
+    authStub.accessToken = 'jwt'
+    const s = useInterviewStream()
+    s.hydrate({
+      statusName: 'PLAN_READY',
+      turns: [
+        { seq: 1, role: 'assistant', kind: 'question', content: 'Q1' },
+        { seq: 2, role: 'user', kind: 'answer', content: 'A1' },
+        { seq: 3, role: 'assistant', kind: 'design', content: '설계초안' },
+      ],
+      plan: { designMarkdown: '# 설계', planMarkdown: '# 플랜', planJson: '[]' },
+    })
+    expect(s.status.value).toBe('PLAN_READY')
+    s.open(1)
+    const es = FakeEventSource.last()
+    // open()의 replay가 이미 답변된 이전 질문(seq 1)을 재전송 — status를 덮으면 안 됨
+    es.emit('question', { seq: 1, content: 'Q1' })
+    expect(s.status.value).toBe('PLAN_READY') // 회귀 가드: AWAITING_INPUT로 떨어지면 안 됨
+    expect(s.plan.value).not.toBeNull()
+    s.close()
+  })
+
+  it('flips to AWAITING_INPUT when a genuinely new question arrives live', () => {
+    authStub.accessToken = 'jwt'
+    const s = useInterviewStream()
+    s.hydrate({ statusName: 'RUNNING', turns: [], plan: null })
+    s.open(1)
+    FakeEventSource.last().emit('question', { seq: 1, content: '새 질문' }) // 신규 seq
+    expect(s.status.value).toBe('AWAITING_INPUT')
+    s.close()
+  })
+})

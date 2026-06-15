@@ -28,6 +28,12 @@ export interface DesignSection {
   approved: boolean
 }
 
+export interface InterviewSnapshot {
+  statusName?: string | null
+  turns?: Array<{ seq: number; role: string; kind: string; content: string }>
+  plan?: { designMarkdown?: string; planMarkdown?: string; planJson?: unknown } | null
+}
+
 export interface InterviewPlan {
   designMarkdown: string
   planMarkdown: string
@@ -115,25 +121,31 @@ export function useInterviewStream() {
   function onQuestion(e: MessageEvent) {
     const data = parse(e)
     if (!data) return
-    pushTurn({
+    const added = pushTurn({
       seq: data.seq,
       role: 'assistant',
       kind: 'question',
       content: data.content,
     })
-    status.value = 'AWAITING_INPUT'
+    // 새로 도착한 질문일 때만 입력 대기로 전환. replay된(이미 있는 seq) 질문은
+    // hydrate가 복원한 status(PLAN_READY/QUEUED/RUNNING)를 덮어쓰지 않는다.
+    if (added) status.value = 'AWAITING_INPUT'
   }
 
   function onDesign(e: MessageEvent) {
     const data = parse(e)
     if (!data || !data.key) return
-    const idx = designSections.value.findIndex((d) => d.key === data.key)
-    const section: DesignSection = {
+    upsertDesign({
       key: data.key,
       title: data.title ?? data.key,
       body: data.body ?? '',
       approved: !!data.approved,
-    }
+    })
+  }
+
+  // key로 upsert (replay/hydrate 중복 방지). onDesign과 hydrate가 공유.
+  function upsertDesign(section: DesignSection) {
+    const idx = designSections.value.findIndex((d) => d.key === section.key)
     if (idx >= 0) {
       const next = designSections.value.slice()
       next[idx] = section
@@ -143,31 +155,63 @@ export function useInterviewStream() {
     }
   }
 
-  function onPlanReady(e: MessageEvent) {
-    // The plan_ready event data is a JSON object {designMarkdown, planMarkdown, planJson}
-    // where planJson is itself a JSON STRING (the SDK service sends JSON.stringify(array)).
-    // Parse the outer object first, then parse the inner planJson string into an array.
-    const obj = parse(e)
-    if (!obj) return
+  // plan_ready 이벤트와 REST 스냅샷의 plan은 동일 형태({designMarkdown,planMarkdown,planJson})다.
+  // 두 경로가 드리프트하지 않도록 파싱을 공유한다. planJson은 JSON 문자열일 수 있다(SDK가 JSON.stringify(array)).
+  function toPlan(raw: { designMarkdown?: string; planMarkdown?: string; planJson?: unknown }): InterviewPlan {
     let parsedPlanJson: unknown = null
     try {
       parsedPlanJson =
-        typeof obj.planJson === 'string' ? JSON.parse(obj.planJson) : (obj.planJson ?? null)
+        typeof raw.planJson === 'string' ? JSON.parse(raw.planJson) : (raw.planJson ?? null)
     } catch {
       parsedPlanJson = null // guard against malformed JSON in planJson
     }
-    plan.value = {
-      designMarkdown: obj.designMarkdown ?? '',
-      planMarkdown: obj.planMarkdown ?? '',
+    return {
+      designMarkdown: raw.designMarkdown ?? '',
+      planMarkdown: raw.planMarkdown ?? '',
       planJson: parsedPlanJson,
     }
+  }
+
+  function onPlanReady(e: MessageEvent) {
+    // plan_ready 데이터는 {designMarkdown, planMarkdown, planJson} JSON 객체이며 planJson은
+    // 그 자체로 JSON 문자열이다. toPlan이 외부 객체+내부 planJson 문자열을 함께 처리한다.
+    const obj = parse(e)
+    if (!obj) return
+    plan.value = toPlan(obj)
     status.value = 'PLAN_READY'
   }
 
+  // REST 스냅샷(GET /api/interviews/{id})으로 상태 시드 — 새로고침 후 대화 복원.
+  // kind==='design' → designSections(key=design-{seq}, 백엔드 DesignEvent와 동일)
+  // role==='user'   → turns(user/answer) / 그 외 → turns(assistant/question)
+  // pushTurn이 seq로 dedup하므로 직후 SSE replay와 안전하게 병합된다.
+  function hydrate(snapshot: InterviewSnapshot | null | undefined) {
+    if (!snapshot) return
+    const name = (snapshot.statusName ?? '') as InterviewStatus
+    if (KNOWN_STATUSES.includes(name)) status.value = name
+    for (const t of snapshot.turns ?? []) {
+      if (t.kind === 'design') {
+        // 백엔드 SSE replay(InterviewStreamService)와 동일한 DesignEvent 형태로 시드:
+        // key=design-{seq}, title='설계', approved=false. 직후 open() replay가 같은 값으로 upsert하므로
+        // 정보 손실 없음(백엔드는 design 턴에 별도 title/approved를 저장하지 않는다).
+        upsertDesign({ key: `design-${t.seq}`, title: '설계', body: t.content, approved: false })
+      } else if (t.role === 'user') {
+        pushTurn({ seq: t.seq, role: 'user', kind: 'answer', content: t.content })
+      } else {
+        pushTurn({ seq: t.seq, role: 'assistant', kind: 'question', content: t.content })
+      }
+    }
+    if (snapshot.plan) {
+      plan.value = toPlan(snapshot.plan)
+    }
+  }
+
   // Dedup by seq so SSE replay-on-reconnect does not duplicate turns.
-  function pushTurn(t: Turn) {
-    if (turns.value.some((x) => x.seq === t.seq)) return
+  // Returns true if a new turn was appended, false if it was a duplicate (already-present seq).
+  function pushTurn(t: Turn): boolean {
+    if (turns.value.some((x) => x.seq === t.seq)) return false
     turns.value = [...turns.value, t].sort((a, b) => a.seq - b.seq)
+    return true
   }
 
   function onError() {
@@ -216,5 +260,6 @@ export function useInterviewStream() {
     error,
     open,
     close,
+    hydrate,
   }
 }

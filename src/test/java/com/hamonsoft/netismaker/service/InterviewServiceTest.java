@@ -1,6 +1,7 @@
 package com.hamonsoft.netismaker.service;
 
 import com.hamonsoft.netismaker.dto.CreateInterviewRequest;
+import com.hamonsoft.netismaker.dto.InterviewSummary;
 import com.hamonsoft.netismaker.dto.WorkerPlanRequest;
 import com.hamonsoft.netismaker.entity.*;
 import com.hamonsoft.netismaker.repository.*;
@@ -321,5 +322,20 @@ class InterviewServiceTest {
         assertThatThrownBy(() -> service.register(20L, "intruder", false))
                 .isInstanceOf(TaskException.class)
                 .hasMessageContaining("권한");
+    }
+
+    @Test
+    void listActiveForRequester_maps_sessions_to_summaries() {
+        InterviewSession s = session(30L, InterviewStatus.AWAITING_INPUT);
+        when(sessionRepo.findActiveByRequester("u1")).thenReturn(List.of(s));
+
+        List<InterviewSummary> out = service.listActiveForRequester("u1");
+
+        assertThat(out).hasSize(1);
+        assertThat(out.get(0).id()).isEqualTo(30L);
+        assertThat(out.get(0).status()).isEqualTo("입력대기");        // 한글 dbValue (표시)
+        assertThat(out.get(0).statusName()).isEqualTo("AWAITING_INPUT"); // 영문 enum (로직)
+        assertThat(out.get(0).title()).isEqualTo("T");
+        verify(sessionRepo).findActiveByRequester("u1");
     }
 }

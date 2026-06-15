@@ -33,7 +33,7 @@ class InterviewActiveQueryTest {
     void clean() { sessionRepo.deleteAll(); }
 
     private InterviewSession create(String requester, String repo) {
-        return service.create(new CreateInterviewRequest(repo, "main", "T", "d", List.of()), requester);
+        return service.create(new CreateInterviewRequest(repo, "main", "T", "d", List.of(), null, null), requester);
     }
 
     @Test

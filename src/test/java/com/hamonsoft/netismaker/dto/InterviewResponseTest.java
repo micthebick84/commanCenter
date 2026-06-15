@@ -33,7 +33,7 @@ class InterviewResponseTest {
 
     @Test
     void of_exposes_both_korean_status_and_english_statusName() {
-        InterviewSession s = InterviewSession.create("owner/repo", "main", "제목", "설명", "u1", List.of());
+        InterviewSession s = InterviewSession.create("owner/repo", "main", "제목", "설명", "u1", List.of(), "claude-opus-4-8", "high");
         ReflectionTestUtils.setField(s, "id", 7L);
         s.setStatus(InterviewStatus.AWAITING_INPUT);
 

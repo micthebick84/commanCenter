@@ -61,4 +61,16 @@ describe('buildOptions', () => {
     });
     expect(o.mcpServers).toEqual({ ctx7: { type: 'http', url: 'https://ctx7' } });
   });
+
+  it('passes model and effort through to options when present', () => {
+    const o = buildOptions({ ...base, claudeSessionId: null, model: 'claude-sonnet-4-6', effort: 'medium' });
+    expect(o.model).toBe('claude-sonnet-4-6');
+    expect(o.effort).toBe('medium');
+  });
+
+  it('omits model/effort keys when absent', () => {
+    const o = buildOptions({ ...base, claudeSessionId: null });
+    expect('model' in o).toBe(false);
+    expect('effort' in o).toBe(false);
+  });
 });

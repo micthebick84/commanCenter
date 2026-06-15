@@ -87,6 +87,8 @@ export class InterviewRunner {
         claudeCliPath: this.deps.claudeCliPath,
         claudeSessionId: claim.claudeSessionId,
         mcpsExtra: claim.mcpsExtra,
+        model: claim.model,
+        effort: claim.effort,
       });
       const stream: AsyncIterable<SdkMessage> = this.query({
         prompt: promptFor(claim),
@@ -118,6 +120,8 @@ export class InterviewRunner {
               claudeCliPath: this.deps.claudeCliPath,
               claudeSessionId: sessionId,
               mcpsExtra: claim.mcpsExtra,
+              model: claim.model,
+              effort: claim.effort,
             }),
           }),
         );

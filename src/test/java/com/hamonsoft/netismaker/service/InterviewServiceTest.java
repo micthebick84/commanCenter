@@ -55,7 +55,7 @@ class InterviewServiceTest {
     }
 
     private CreateInterviewRequest req() {
-        return new CreateInterviewRequest("owner/repo", "main", "제목", "기능 요구", List.of());
+        return new CreateInterviewRequest("owner/repo", "main", "제목", "기능 요구", List.of(), null, null);
     }
 
     @Test
@@ -77,7 +77,8 @@ class InterviewServiceTest {
     }
 
     private InterviewSession session(long id, InterviewStatus status) {
-        InterviewSession s = InterviewSession.create("owner/repo", "main", "T", "d", "u1", List.of());
+        InterviewSession s = InterviewSession.create("owner/repo", "main", "T", "d", "u1",
+                List.of(), "claude-opus-4-8", "high");
         ReflectionTestUtils.setField(s, "id", id);
         s.setStatus(status);
         return s;
@@ -337,5 +338,41 @@ class InterviewServiceTest {
         assertThat(out.get(0).statusName()).isEqualTo("AWAITING_INPUT"); // 영문 enum (로직)
         assertThat(out.get(0).title()).isEqualTo("T");
         verify(sessionRepo).findActiveByRequester("u1");
+    }
+
+    @Test
+    void create_applies_default_model_and_effort_when_blank() {
+        when(sessionRepo.countActiveByRequester("u1")).thenReturn(0L);
+        when(mcpCatalogService.resolveByIds(any())).thenReturn(List.of());
+        InterviewSession s = service.create(req(), "u1");   // req() sends model=null, effort=null
+        assertThat(s.getModel()).isEqualTo("claude-opus-4-8");
+        assertThat(s.getEffort()).isEqualTo("high");
+    }
+
+    @Test
+    void create_rejects_incompatible_model_effort() {
+        when(sessionRepo.countActiveByRequester("u1")).thenReturn(0L);
+        var bad = new com.hamonsoft.netismaker.dto.CreateInterviewRequest(
+                "owner/repo", "main", "제목", "내용", List.of(), "claude-haiku-4-5", "max");
+        assertThatThrownBy(() -> service.create(bad, "u1"))
+                .isInstanceOf(TaskException.class)
+                .hasMessageContaining("effort");
+    }
+
+    @Test
+    void register_forwards_model_and_effort_to_created_task() {
+        InterviewSession s = session(20L, InterviewStatus.PLAN_READY);
+        s.setModel("claude-sonnet-4-6");
+        s.setEffort("medium");
+        when(sessionRepo.findActiveById(20L)).thenReturn(java.util.Optional.of(s));
+        InterviewPlan plan = InterviewPlan.create(20L, "# 설계", "# 플랜", "[]", 1000L, new java.math.BigDecimal("0.1"));
+        when(planRepo.findById(20L)).thenReturn(java.util.Optional.of(plan));
+
+        service.register(20L, "u1", false);
+
+        org.mockito.ArgumentCaptor<Task> cap = org.mockito.ArgumentCaptor.forClass(Task.class);
+        verify(taskRepo).save(cap.capture());
+        assertThat(cap.getValue().getModel()).isEqualTo("claude-sonnet-4-6");
+        assertThat(cap.getValue().getEffort()).isEqualTo("medium");
     }
 }

@@ -9,6 +9,10 @@ export interface SessionOptionsInput {
   claudeSessionId: string | null;
   /** 인터뷰별 추가 MCP 서버 스냅샷 (Java InterviewClaimResponse.mcpsExtra, TaskMcpSpec[] = {name,url,transport}). */
   mcpsExtra?: unknown;
+  /** 선택 모델 (blank/미지정이면 CLI 기본값). */
+  model?: string;
+  /** 추론 effort (blank/미지정이면 CLI 기본값). */
+  effort?: string;
 }
 
 /**
@@ -54,6 +58,8 @@ export function buildOptions(input: SessionOptionsInput): Record<string, unknown
     permissionMode: 'default',
     ...(input.claudeSessionId ? { resume: input.claudeSessionId } : {}),
     ...(mcpServers ? { mcpServers } : {}),
+    ...(input.model ? { model: input.model } : {}),
+    ...(input.effort ? { effort: input.effort } : {}),
     canUseTool: buildCanUseTool(input.workDir),
   };
 }

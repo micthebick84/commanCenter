@@ -14,7 +14,7 @@ class WorkerTaskResponseEnvTest {
 
     @Test
     void for_deploy_carries_env_vars() {
-        Task t = Task.create("owner/repo", "main", "T", "d", "user1", 3, List.of());
+        Task t = Task.create("owner/repo", "main", "T", "d", "user1", 3, List.of(), "claude-opus-4-8", "high");
         ReflectionTestUtils.setField(t, "id", 7L);
         t.setStatus(TaskStatus.DEPLOY_PENDING);
         t.setHeadBranch("netismaker/task-7");
@@ -30,7 +30,7 @@ class WorkerTaskResponseEnvTest {
 
     @Test
     void for_analysis_has_empty_env_vars() {
-        Task t = Task.create("owner/repo", "main", "T", "d", "user1", 3, List.of());
+        Task t = Task.create("owner/repo", "main", "T", "d", "user1", 3, List.of(), "claude-opus-4-8", "high");
         ReflectionTestUtils.setField(t, "id", 8L);
         WorkerTaskResponse r = WorkerTaskResponse.forAnalysis(t);
         assertThat(r.envVars()).isEmpty();

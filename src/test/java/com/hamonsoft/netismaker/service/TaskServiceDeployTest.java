@@ -31,7 +31,7 @@ class TaskServiceDeployTest {
     private TaskService service;
 
     private Task taskWithStatus(TaskStatus status) {
-        Task t = Task.create("owner/repo", "main", "T", "desc", "user1", 3, List.of());
+        Task t = Task.create("owner/repo", "main", "T", "desc", "user1", 3, List.of(), "claude-opus-4-8", "high");
         ReflectionTestUtils.setField(t, "id", 42L);
         t.setStatus(status);
         return t;

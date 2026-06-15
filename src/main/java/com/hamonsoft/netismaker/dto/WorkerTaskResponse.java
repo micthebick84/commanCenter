@@ -27,47 +27,37 @@ public record WorkerTaskResponse(
         String subtasksJson,
         String headBranch,
         String headSha,
-        List<EnvVar> envVars
+        List<EnvVar> envVars,
+        String model,
+        String effort
 ) {
     public enum Kind { ANALYSIS, IMPLEMENTATION, DEPLOY, UNDEPLOY }
 
     public static WorkerTaskResponse forAnalysis(Task t) {
-        return new WorkerTaskResponse(
-                t.getId(), t.getGithubRepo(), t.getGithubBranch(),
+        return new WorkerTaskResponse(t.getId(), t.getGithubRepo(), t.getGithubBranch(),
                 t.getTitle(), t.getDescription(), Kind.ANALYSIS,
                 t.getMcpsExtra() == null ? List.of() : List.copyOf(t.getMcpsExtra()),
-                null, null, null, null, List.of()
-        );
+                null, null, null, null, List.of(), t.getModel(), t.getEffort());
     }
 
     public static WorkerTaskResponse forImplementation(Task t, TaskAnalysis a) {
-        return new WorkerTaskResponse(
-                t.getId(), t.getGithubRepo(), t.getGithubBranch(),
+        return new WorkerTaskResponse(t.getId(), t.getGithubRepo(), t.getGithubBranch(),
                 t.getTitle(), t.getDescription(), Kind.IMPLEMENTATION,
                 t.getMcpsExtra() == null ? List.of() : List.copyOf(t.getMcpsExtra()),
-                a == null ? "" : a.getMarkdownResult(),
-                a == null ? "[]" : a.getSubtasksJson(),
-                null, null, List.of()
-        );
+                a == null ? "" : a.getMarkdownResult(), a == null ? "[]" : a.getSubtasksJson(),
+                null, null, List.of(), t.getModel(), t.getEffort());
     }
 
     public static WorkerTaskResponse forDeploy(Task t) {
-        return new WorkerTaskResponse(
-                t.getId(), t.getGithubRepo(), t.getGithubBranch(),
-                t.getTitle(), t.getDescription(), Kind.DEPLOY,
-                List.of(), null, null,
+        return new WorkerTaskResponse(t.getId(), t.getGithubRepo(), t.getGithubBranch(),
+                t.getTitle(), t.getDescription(), Kind.DEPLOY, List.of(), null, null,
                 t.getHeadBranch(), t.getHeadSha(),
-                t.getEnvVars() == null ? List.of() : List.copyOf(t.getEnvVars())
-        );
+                t.getEnvVars() == null ? List.of() : List.copyOf(t.getEnvVars()), null, null);
     }
 
     public static WorkerTaskResponse forUndeploy(Task t) {
-        return new WorkerTaskResponse(
-                t.getId(), t.getGithubRepo(), t.getGithubBranch(),
-                t.getTitle(), t.getDescription(), Kind.UNDEPLOY,
-                List.of(), null, null,
-                t.getHeadBranch(), t.getHeadSha(),
-                List.of()
-        );
+        return new WorkerTaskResponse(t.getId(), t.getGithubRepo(), t.getGithubBranch(),
+                t.getTitle(), t.getDescription(), Kind.UNDEPLOY, List.of(), null, null,
+                t.getHeadBranch(), t.getHeadSha(), List.of(), null, null);
     }
 }

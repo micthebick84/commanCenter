@@ -29,7 +29,7 @@ class InterviewStaleRecoveryJobTest {
 
     private InterviewSession session(long id, InterviewStatus status, OffsetDateTime claimedAt,
                                      OffsetDateTime lastActivity) {
-        InterviewSession s = InterviewSession.create("o/r", "main", "T", "d", "u1", List.of());
+        InterviewSession s = InterviewSession.create("o/r", "main", "T", "d", "u1", List.of(), "claude-opus-4-8", "high");
         ReflectionTestUtils.setField(s, "id", id);
         s.setStatus(status);
         s.setClaimedAt(claimedAt);

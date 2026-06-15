@@ -44,7 +44,7 @@ class InterviewApiIntegrationTest {
                 .authorities(new SimpleGrantedAuthority("ROLE_ADMIN"));
     }
     private String body(String repo, String title, String desc) throws Exception {
-        return json.writeValueAsString(new CreateInterviewRequest(repo, "main", title, desc, List.of()));
+        return json.writeValueAsString(new CreateInterviewRequest(repo, "main", title, desc, List.of(), null, null));
     }
 
     @Test

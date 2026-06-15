@@ -106,12 +106,30 @@ public class ClaudeExecAdapter {
     }
 
     public ExecResult exec(String prompt, File workingDir, Duration timeout) throws InterruptedException, IOException {
-        return exec(prompt, workingDir, timeout, List.of(), false);
+        return exec(prompt, workingDir, timeout, List.of(), false, null, null);
     }
 
     public ExecResult exec(String prompt, File workingDir, Duration timeout, List<TaskMcpSpec> extras)
             throws InterruptedException, IOException {
-        return exec(prompt, workingDir, timeout, extras, false);
+        return exec(prompt, workingDir, timeout, extras, false, null, null);
+    }
+
+    public ExecResult exec(String prompt, File workingDir, Duration timeout, List<TaskMcpSpec> extras,
+                           boolean dangerouslySkipPermissions) throws InterruptedException, IOException {
+        return exec(prompt, workingDir, timeout, extras, dangerouslySkipPermissions, null, null);
+    }
+
+    /** claude 명령 조립. --model/--effort는 -p(및 skip) 뒤, mcpArgs(--allowedTools variadic) 앞. blank면 생략. */
+    static List<String> buildCommand(String claudePath, boolean dangerouslySkipPermissions,
+                                     String model, String effort, List<String> mcpArgs) {
+        List<String> cmd = new ArrayList<>();
+        cmd.add(claudePath);
+        cmd.add("-p");
+        if (dangerouslySkipPermissions) cmd.add("--dangerously-skip-permissions");
+        if (model != null && !model.isBlank()) { cmd.add("--model"); cmd.add(model); }
+        if (effort != null && !effort.isBlank()) { cmd.add("--effort"); cmd.add(effort); }
+        cmd.addAll(mcpArgs);
+        return cmd;
     }
 
     /**
@@ -122,9 +140,11 @@ public class ClaudeExecAdapter {
      *   비대화식 모드(claude -p)에서 Write/Edit/Bash 같은 built-in tool 호출이
      *   기본으로 차단되어 hang 후 종료되는 문제 회피. 구현 단계 전용.
      *   분석 단계는 read-only라 false로 유지.
+     * @param model claude --model 플래그 값. null/blank면 생략.
+     * @param effort claude --effort 플래그 값. null/blank면 생략.
      */
     public ExecResult exec(String prompt, File workingDir, Duration timeout, List<TaskMcpSpec> extras,
-                           boolean dangerouslySkipPermissions)
+                           boolean dangerouslySkipPermissions, String model, String effort)
             throws InterruptedException, IOException {
         long start = System.currentTimeMillis();
         WorkerMcpSupport.TaskClaudeArgs mcpArgs = mcp.buildClaudeArgsForTask(extras);
@@ -133,11 +153,8 @@ public class ClaudeExecAdapter {
             // 1) --allowedTools <tools...>가 variadic이라 뒤에 위치한 prompt arg를 삼킴
             // 2) ARG_MAX(~256KB)를 넘는 큰 프롬프트도 안전
             // 3) ps에 프롬프트 본문이 노출되지 않음 (PAT가 들어있을 경우 보호)
-            List<String> cmd = new ArrayList<>();
-            cmd.add(resolvedClaudePath);
-            cmd.add("-p");
-            if (dangerouslySkipPermissions) cmd.add("--dangerously-skip-permissions");
-            cmd.addAll(mcpArgs.args());
+            List<String> cmd = buildCommand(resolvedClaudePath, dangerouslySkipPermissions,
+                    model, effort, mcpArgs.args());
             ProcessBuilder pb = new ProcessBuilder(cmd)
                     .directory(workingDir)
                     .redirectErrorStream(true);

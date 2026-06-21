@@ -112,6 +112,10 @@ export class InterviewRunner {
       });
       const stream: AsyncIterable<SdkMessage> = this.query({
         prompt:
+          // Invariant: forceFinishTurns > 0 means at least one assistant turn has been recorded,
+          // which requires a claudeSessionId (the session id is set on the FIRST assistant turn).
+          // Therefore `forceFinish && !claudeSessionId` is unreachable in production; the else
+          // branch (`promptFor`) only executes on the genuine fresh-start path (turns == 0).
           forceFinish && claim.claudeSessionId
             ? (async function* () { yield userTurn(buildPlanReformatSplice()); })()
             : promptFor(claim),

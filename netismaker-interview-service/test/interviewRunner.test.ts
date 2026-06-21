@@ -221,6 +221,29 @@ describe('InterviewRunner turn cap + force-finish', () => {
     expect(fakeQuery).toHaveBeenCalledTimes(1);
     expect(seenPrompt).toContain('### 작업 N:'); // force-finish = reformat splice
   });
+
+  it('force-finish: near-miss correction is skipped (no second query)', async () => {
+    // Verifies §4.4: when forceFinish has already sent the reformat splice, the near-miss
+    // block must NOT fire a second query even when the assistant output contains plan intent
+    // but no parseable structure (the !forceFinish gate must hold).
+    const client = makeClient();
+    async function* intentNoStructureStream() {
+      yield { type: 'system', subtype: 'init', session_id: 'sess-ff-nm' };
+      yield {
+        type: 'assistant',
+        message: { content: [{ type: 'text', text: '구현 계획을 작성합니다. 주요 작업은 다음과 같습니다.' }] },
+      }; // plan 의도(detectPlanIntent=true) O, 추출 가능 구조(### 작업 N:) X
+      yield { type: 'result', subtype: 'success', usage: { total_cost_usd: 0.1 }, duration_ms: 100 };
+    }
+    const fakeQuery = vi.fn(() => intentNoStructureStream());
+    const runner = new InterviewRunner(client as never, fakeQuery as never, deps as never); // forceFinishTurns 19
+    // 19 assistant turns → forceFinish=true; resumeClaim provides claudeSessionId='sess-abc-123'
+    await runner.run({ ...resumeClaim, currentPhase: 'brainstorming', turns: turns(19) });
+    // near-miss block must be skipped: only 1 query (the force-finish reformat splice)
+    expect(fakeQuery).toHaveBeenCalledTimes(1);
+    expect(client.postQuestion).toHaveBeenCalledTimes(1);
+    expect(client.fail).not.toHaveBeenCalled();
+  });
 });
 
 describe('InterviewRunner handoff shim', () => {

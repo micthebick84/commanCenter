@@ -14,6 +14,8 @@ async function main(): Promise<void> {
     superpowersPluginPath: cfg.superpowersPluginPath,
     claudeCliPath,
     quotaGuard: cfg.quotaGuard,
+    maxTurns: cfg.maxTurns,
+    forceFinishTurns: cfg.forceFinishTurns,
     heartbeatIntervalMs: cfg.heartbeatIntervalMs,
   });
   const loop = new ClaimLoop(client, runner, { pollIntervalMs: cfg.claimPollIntervalMs });

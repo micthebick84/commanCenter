@@ -17,6 +17,8 @@ const deps = {
   superpowersPluginPath: '/sp/5.1.0',
   claudeCliPath: '/home/me/.local/bin/claude',
   quotaGuard: 5,
+  maxTurns: 20,
+  forceFinishTurns: 19,
   ensureRepo,
 };
 
@@ -113,20 +115,35 @@ describe('InterviewRunner', () => {
     expect(client.postQuestion).not.toHaveBeenCalled();
   });
 
-  it('fresh kickoff prompt requires the final plan to use the English "Implementation Plan" header (so completion is detected even in a Korean conversation)', async () => {
+  it('fresh kickoff prompt requires the canonical plan structure (Korean header + task lines)', async () => {
     const client = makeClient();
     let seenPrompt = '';
     const fakeQuery = vi.fn((args: { prompt: AsyncIterable<{ message?: { content?: string } }> }) => {
-      (async () => {
-        for await (const p of args.prompt) seenPrompt += p.message?.content ?? '';
-      })();
+      (async () => { for await (const p of args.prompt) seenPrompt += p.message?.content ?? ''; })();
       return questionStream();
     });
     const runner = new InterviewRunner(client as never, fakeQuery as never, deps as never);
-
     await runner.run(freshClaim);
+    expect(seenPrompt).toContain('구현 계획');
+    expect(seenPrompt).toContain('### 작업 N:');
+  });
 
-    expect(seenPrompt).toContain('Implementation Plan');
+  it('harvests a KOREAN plan and POSTs /plan instead of /question', async () => {
+    const client = makeClient();
+    async function* koreanPlanStream() {
+      yield { type: 'system', subtype: 'init', session_id: 'sess-k' };
+      yield { type: 'assistant', message: { content: [{ type: 'text',
+        text: '# 설계\n\n개요.\n\n# 서버관리 구현 계획\n\n### 작업 1: DTO\n- [ ] a' }] } };
+      yield { type: 'result', subtype: 'success', usage: { total_cost_usd: 0.2 }, duration_ms: 1000 };
+    }
+    const fakeQuery = vi.fn(() => koreanPlanStream());
+    const runner = new InterviewRunner(client as never, fakeQuery as never, deps as never);
+    await runner.run({ ...resumeClaim, currentPhase: 'writing-plans' });
+    expect(client.postPlan).toHaveBeenCalledWith(42, expect.objectContaining({
+      planMarkdown: expect.stringContaining('# 서버관리 구현 계획'),
+    }));
+    expect(client.postQuestion).not.toHaveBeenCalled();
+    expect(client.fail).not.toHaveBeenCalled();
   });
 });
 

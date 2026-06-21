@@ -3,7 +3,7 @@ import type { SdkMessage, SdkQuery } from '../sdk/sdkAdapter.js';
 import type { InterviewClaimResponse } from '../types.js';
 import { buildOptions } from '../sdk/sessionOptions.js';
 import { QuotaGuardExceeded, CostGuard } from './costGuard.js';
-import { harvestPlan, HarvestError } from './planHarvest.js';
+import { tryHarvest } from './planHarvest.js';
 import { relay } from './messageRelay.js';
 import { ensureRepo as defaultEnsureRepo, type RepoInput } from './repoPrepare.js';
 import { buildWritingPlansSplice, detectHandoff } from './skillDispatch.js';
@@ -15,6 +15,10 @@ export interface RunnerDeps {
   claudeCliPath: string;
   /** SHADOW per-session quota guard (turns/quota, NOT dollars). */
   quotaGuard: number;
+  /** 세션 최대 assistant 질문 턴(초과 시 FAILED). */
+  maxTurns: number;
+  /** 이 턴 수 이상이면 force-finish 프롬프트 사용. */
+  forceFinishTurns: number;
   /** Injectable repo prepare (defaults to the real git clone/fetch). */
   ensureRepo?: (input: RepoInput) => Promise<void>;
   /** Injectable SKILL.md reader for the writing-plans splice fallback (defaults to real fs read). */
@@ -43,10 +47,10 @@ async function* promptFor(claim: InterviewClaimResponse): AsyncIterable<UserTurn
         'feature: do not create or modify source files, do not run builds/installs/tests, do not ' +
         'git commit or push. Reading the repo for context is fine. Stop once the plan is written — ' +
         'a human reviews and approves it, and implementation happens later in a separate step.\n\n' +
-        'When you finish writing-plans, the plan document MUST use a top-level markdown heading that ' +
-        'ends with the exact English words "Implementation Plan" (e.g. "# <Feature> Implementation Plan"). ' +
-        'Keep THAT heading in English even if the rest of our conversation is in Korean — the system ' +
-        'detects plan completion by this exact marker, and the interview cannot finish without it.\n\n' +
+        '최종 plan은 반드시 다음 정규 형식으로 작성하세요(설명은 한국어): ' +
+        '최상위 헤딩 `# <기능> 구현 계획`, 그 아래 각 작업을 `### 작업 N: <제목>` 형식으로. ' +
+        '영문 `# <Feature> Implementation Plan` / `### Task N:` 도 허용됩니다. ' +
+        '이 정확한 구조라야 시스템이 완료를 인식하며, 없으면 인터뷰가 끝나지 않습니다.\n\n' +
         'Use the brainstorming skill: read the project context, then ask me one clarifying question at a time.',
     );
   } else {
@@ -111,7 +115,7 @@ export class InterviewRunner {
       // but no plan was produced, splice the writing-plans SKILL.md into the SAME
       // session and run one more turn (fallback when 'Skill' did not auto-fire).
       const handoff = detectHandoff(assistantText);
-      const hasPlan = /Implementation Plan/m.test(assistantText);
+      const hasPlan = tryHarvest(assistantText).ok;
       if (handoff && !hasPlan && sessionId) {
         const splice = buildWritingPlansSplice(this.deps.superpowersPluginPath, this.deps.spliceRead);
         const second = await relay(
@@ -137,13 +141,13 @@ export class InterviewRunner {
         durationMs = second.durationMs;
       }
 
-      if (/Implementation Plan/m.test(assistantText)) {
-        const harvest = harvestPlan(assistantText);
+      const harvested = tryHarvest(assistantText);
+      if (harvested.ok) {
         // planJson is sent as a JSON STRING — Java stores it as text/JSONB; frontend parses on use.
         await this.client.postPlan(claim.sessionId, {
-          designMarkdown: harvest.designMarkdown,
-          planMarkdown: harvest.planMarkdown,
-          planJson: JSON.stringify(harvest.planJson),
+          designMarkdown: harvested.harvest.designMarkdown,
+          planMarkdown: harvested.harvest.planMarkdown,
+          planJson: JSON.stringify(harvested.harvest.planJson),
           costUsd,
           durationMs,
         });
@@ -159,10 +163,6 @@ export class InterviewRunner {
     } catch (err) {
       if (err instanceof QuotaGuardExceeded) {
         await this.client.fail(claim.sessionId, err.message);
-        return;
-      }
-      if (err instanceof HarvestError) {
-        await this.client.fail(claim.sessionId, `plan harvest failed: ${err.message}`);
         return;
       }
       await this.client.fail(claim.sessionId, `interview turn failed: ${(err as Error).message}`);

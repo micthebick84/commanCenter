@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { detectHandoff, buildWritingPlansSplice } from '../src/runner/skillDispatch.js';
+import { detectHandoff, buildWritingPlansSplice, detectPlanIntent, buildPlanReformatSplice } from '../src/runner/skillDispatch.js';
 
 describe('detectHandoff', () => {
   it('detects when the agent announces the writing-plans transition', () => {
@@ -30,5 +30,26 @@ describe('buildWritingPlansSplice', () => {
   it('requires the final plan document to use the English "Implementation Plan" header (completion marker)', () => {
     const out = buildWritingPlansSplice('/sp/5.1.0', () => '# Writing Plans\n\nbody');
     expect(out).toContain('Implementation Plan');
+  });
+});
+
+describe('detectPlanIntent', () => {
+  it('true on handoff phrasing', () => {
+    expect(detectPlanIntent('Invoke writing-plans now.')).toBe(true);
+  });
+  it('true when "구현 계획" or "Implementation Plan" appears', () => {
+    expect(detectPlanIntent('이제 구현 계획을 제시합니다')).toBe(true);
+    expect(detectPlanIntent('Here is the Implementation Plan')).toBe(true);
+  });
+  it('false on an ordinary question', () => {
+    expect(detectPlanIntent('어떤 컬럼을 포함할까요?')).toBe(false);
+  });
+});
+
+describe('buildPlanReformatSplice', () => {
+  it('demands the canonical Korean plan structure', () => {
+    const out = buildPlanReformatSplice();
+    expect(out).toContain('구현 계획');
+    expect(out).toContain('### 작업 N:');
   });
 });

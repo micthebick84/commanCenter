@@ -182,6 +182,7 @@ describe('InterviewRunner near-miss correction', () => {
     const fakeQuery = vi.fn(() => intentNoStructure()); // 매번 추출 불가
     const runner = new InterviewRunner(client as never, fakeQuery as never, deps as never);
     await runner.run({ ...resumeClaim, currentPhase: 'writing-plans' });
+    expect(fakeQuery).toHaveBeenCalledTimes(2);
     expect(client.postQuestion).toHaveBeenCalledTimes(1);
     expect(client.fail).not.toHaveBeenCalled();
   });

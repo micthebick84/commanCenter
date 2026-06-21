@@ -188,6 +188,41 @@ describe('InterviewRunner near-miss correction', () => {
   });
 });
 
+function turns(assistantCount: number) {
+  const out: { seq: number; role: string; kind: string; content: string; replyToSeq: number | null }[] = [];
+  let seq = 0;
+  for (let i = 0; i < assistantCount; i++) {
+    out.push({ seq: seq++, role: 'assistant', kind: 'question', content: `q${i}`, replyToSeq: null });
+    out.push({ seq: seq++, role: 'user', kind: 'answer', content: 'a', replyToSeq: seq - 2 });
+  }
+  return out;
+}
+
+describe('InterviewRunner turn cap + force-finish', () => {
+  it('turn cap: assistant turns >= maxTurns → fail WITHOUT running the turn', async () => {
+    const client = makeClient();
+    const fakeQuery = vi.fn(() => questionStream());
+    const runner = new InterviewRunner(client as never, fakeQuery as never, deps as never); // maxTurns 20
+    await runner.run({ ...resumeClaim, currentPhase: 'brainstorming', turns: turns(20) });
+    expect(fakeQuery).not.toHaveBeenCalled();
+    expect(client.fail).toHaveBeenCalledWith(42, expect.stringContaining('최대'));
+    expect(client.postQuestion).not.toHaveBeenCalled();
+  });
+
+  it('force-finish: assistant turns >= forceFinishTurns → prompt demands the canonical plan structure', async () => {
+    const client = makeClient();
+    let seenPrompt = '';
+    const fakeQuery = vi.fn((args: { prompt: AsyncIterable<{ message?: { content?: string } }> }) => {
+      (async () => { for await (const p of args.prompt) seenPrompt += p.message?.content ?? ''; })();
+      return questionStream();
+    });
+    const runner = new InterviewRunner(client as never, fakeQuery as never, deps as never); // forceFinishTurns 19
+    await runner.run({ ...resumeClaim, currentPhase: 'brainstorming', turns: turns(19) });
+    expect(fakeQuery).toHaveBeenCalledTimes(1);
+    expect(seenPrompt).toContain('### 작업 N:'); // force-finish = reformat splice
+  });
+});
+
 describe('InterviewRunner handoff shim', () => {
   it('on handoff announcement without a plan, re-queries the same session with the writing-plans splice', async () => {
     const client = makeClient();

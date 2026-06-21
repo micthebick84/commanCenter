@@ -83,6 +83,17 @@ export class InterviewRunner {
     // guard → fail (safety net for the "completion never detected" loop). Fresh claims carry 0.
     const guard = new CostGuard(this.deps.quotaGuard, claim.totalCostUsd ?? 0);
     try {
+      // 턴 상한: claim.turns의 assistant 턴 수로 진행도 판정(백엔드 변경 불필요).
+      const assistantTurns = claim.turns.filter((t) => t.role === 'assistant').length;
+      if (assistantTurns >= this.deps.maxTurns) {
+        await this.client.fail(
+          claim.sessionId,
+          `최대 질문 턴(${this.deps.maxTurns}) 초과 — plan 미완성`,
+        );
+        return;
+      }
+      const forceFinish = assistantTurns >= this.deps.forceFinishTurns;
+
       // CLONE: ensure the checkout exists at workDir before the (fresh OR resume) turn.
       await this.ensureRepo({
         githubRepo: claim.githubRepo,
@@ -100,7 +111,10 @@ export class InterviewRunner {
         effort: claim.effort,
       });
       const stream: AsyncIterable<SdkMessage> = this.query({
-        prompt: promptFor(claim),
+        prompt:
+          forceFinish && claim.claudeSessionId
+            ? (async function* () { yield userTurn(buildPlanReformatSplice()); })()
+            : promptFor(claim),
         options,
       });
       const result = await relay(stream);
@@ -143,7 +157,8 @@ export class InterviewRunner {
 
       let harvested = tryHarvest(assistantText);
       // near-miss 보정: 추출 실패 + plan 의도 신호 시, 같은 세션에 정규 형식 재요청 1회.
-      if (!harvested.ok && detectPlanIntent(assistantText) && sessionId) {
+      // force-finish는 이미 reformat 프롬프트이므로 이중 splice 방지.
+      if (!harvested.ok && !forceFinish && detectPlanIntent(assistantText) && sessionId) {
         const reformatSplice = buildPlanReformatSplice();
         const retry = await relay(
           this.query({

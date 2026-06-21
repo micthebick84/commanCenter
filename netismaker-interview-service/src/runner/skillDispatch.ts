@@ -25,6 +25,9 @@ export function buildWritingPlansSplice(
     'Now follow the writing-plans skill to turn the approved spec into an implementation plan. ' +
     'Produce the PLAN DOCUMENT ONLY — do NOT implement it: no source edits, no builds/installs/tests, ' +
     'no git commit or push. The plan is reviewed and approved by a human before any implementation. ' +
+    'The plan document MUST use a top-level markdown heading that ends with the exact English words ' +
+    '"Implementation Plan" (e.g. "# <Feature> Implementation Plan"), even if our conversation is in ' +
+    'Korean — the system detects completion by this exact marker. ' +
     'Apply this skill exactly:\n\n' +
     skill
   );

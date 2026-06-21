@@ -17,6 +17,8 @@ export const freshClaim: InterviewClaimResponse = {
   turns: [],
   model: 'claude-opus-4-8',
   effort: 'high',
+  // 신규 claim은 누적 비용 0. 누적 가드 시드 검증은 테스트에서 override.
+  totalCostUsd: 0,
 };
 
 export const resumeClaim: InterviewClaimResponse = {

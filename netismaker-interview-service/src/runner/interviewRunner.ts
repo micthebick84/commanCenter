@@ -43,6 +43,10 @@ async function* promptFor(claim: InterviewClaimResponse): AsyncIterable<UserTurn
         'feature: do not create or modify source files, do not run builds/installs/tests, do not ' +
         'git commit or push. Reading the repo for context is fine. Stop once the plan is written — ' +
         'a human reviews and approves it, and implementation happens later in a separate step.\n\n' +
+        'When you finish writing-plans, the plan document MUST use a top-level markdown heading that ' +
+        'ends with the exact English words "Implementation Plan" (e.g. "# <Feature> Implementation Plan"). ' +
+        'Keep THAT heading in English even if the rest of our conversation is in Korean — the system ' +
+        'detects plan completion by this exact marker, and the interview cannot finish without it.\n\n' +
         'Use the brainstorming skill: read the project context, then ask me one clarifying question at a time.',
     );
   } else {
@@ -69,10 +73,11 @@ export class InterviewRunner {
   async run(claim: InterviewClaimResponse): Promise<void> {
     const ticker = new HeartbeatTicker(this.client, claim.sessionId, this.deps.heartbeatIntervalMs ?? 15000);
     ticker.start();
-    // CostGuard is seeded from 0: the claim carries no prior shadow total (LOCKED CONTRACT
-    // InterviewClaimResponse has no totalCostUsd). The guard caps a single runaway turn;
-    // server-side accumulates the per-session shadow total from /question + /plan costUsd.
-    const guard = new CostGuard(this.deps.quotaGuard, 0);
+    // Seed the guard from the claim's accumulated session total so it is CUMULATIVE across all turns
+    // (not just one runaway turn): the server accumulates total_cost_usd on every /question + /plan
+    // and the claim carries it back, so a looping interview that never completes eventually trips the
+    // guard → fail (safety net for the "completion never detected" loop). Fresh claims carry 0.
+    const guard = new CostGuard(this.deps.quotaGuard, claim.totalCostUsd ?? 0);
     try {
       // CLONE: ensure the checkout exists at workDir before the (fresh OR resume) turn.
       await this.ensureRepo({

@@ -101,6 +101,33 @@ describe('InterviewRunner', () => {
     expect(client.fail).toHaveBeenCalledWith(42, expect.stringContaining('quota'));
     expect(client.postQuestion).not.toHaveBeenCalled();
   });
+
+  it('quota guard is CUMULATIVE across the session: seeded from claim.totalCostUsd so a cheap turn that crosses the prior session total trips fail', async () => {
+    const client = makeClient();
+    const fakeQuery = vi.fn(() => questionStream()); // this turn shadow cost 0.12
+    const runner = new InterviewRunner(client as never, fakeQuery as never, deps as never); // quotaGuard 5
+    // prior accumulated 4.95 + this turn 0.12 = 5.07 > 5 => trips. (Would NOT trip if seeded from 0.)
+    await runner.run({ ...freshClaim, totalCostUsd: 4.95 });
+
+    expect(client.fail).toHaveBeenCalledWith(42, expect.stringContaining('quota'));
+    expect(client.postQuestion).not.toHaveBeenCalled();
+  });
+
+  it('fresh kickoff prompt requires the final plan to use the English "Implementation Plan" header (so completion is detected even in a Korean conversation)', async () => {
+    const client = makeClient();
+    let seenPrompt = '';
+    const fakeQuery = vi.fn((args: { prompt: AsyncIterable<{ message?: { content?: string } }> }) => {
+      (async () => {
+        for await (const p of args.prompt) seenPrompt += p.message?.content ?? '';
+      })();
+      return questionStream();
+    });
+    const runner = new InterviewRunner(client as never, fakeQuery as never, deps as never);
+
+    await runner.run(freshClaim);
+
+    expect(seenPrompt).toContain('Implementation Plan');
+  });
 });
 
 describe('InterviewRunner handoff shim', () => {

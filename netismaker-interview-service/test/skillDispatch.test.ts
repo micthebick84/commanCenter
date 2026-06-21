@@ -26,4 +26,9 @@ describe('buildWritingPlansSplice', () => {
     expect(out).toContain('Break the spec into tasks');
     expect(out.toLowerCase()).toContain('writing plans');
   });
+
+  it('requires the final plan document to use the English "Implementation Plan" header (completion marker)', () => {
+    const out = buildWritingPlansSplice('/sp/5.1.0', () => '# Writing Plans\n\nbody');
+    expect(out).toContain('Implementation Plan');
+  });
 });

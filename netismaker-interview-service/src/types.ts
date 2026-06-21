@@ -43,6 +43,9 @@ export interface InterviewClaimResponse {
   /** Java가 보내는 선택 모델/effort (NOT NULL — 기본 claude-opus-4-8/high). */
   model: string;
   effort: 'low' | 'medium' | 'high' | 'xhigh' | 'max';
+  /** 세션 누적 SHADOW 비용(이전 턴들까지). CostGuard를 이 값으로 시드해 가드가 세션 전체에 걸쳐
+   *  누적되도록 한다(단일 턴이 아니라). Java는 NOT NULL — 신규 claim은 0. */
+  totalCostUsd: number;
 }
 
 /** Body for POST /worker/interviews/{id}/question */

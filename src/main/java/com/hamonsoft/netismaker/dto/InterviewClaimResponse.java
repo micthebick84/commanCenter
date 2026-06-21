@@ -27,7 +27,9 @@ public record InterviewClaimResponse(
         List<TaskMcpSpec> mcpsExtra,
         List<Turn> turns,
         String model,
-        String effort
+        String effort,
+        /** 세션 누적 SHADOW 비용. 워커가 CostGuard를 이 값으로 시드해 세션 전체 누적 가드로 쓴다(단일 턴 아님). */
+        double totalCostUsd
 ) {
     public record Turn(int seq, String role, String kind, String content, Integer replyToSeq) {}
 
@@ -45,11 +47,12 @@ public record InterviewClaimResponse(
         List<Turn> mapped = turns.stream()
                 .map(t -> new Turn(t.getSeq(), t.getRole(), t.getKind(), t.getContent(), t.getReplyToSeq()))
                 .toList();
+        double totalCostUsd = s.getTotalCostUsd() == null ? 0.0 : s.getTotalCostUsd().doubleValue();
         return new InterviewClaimResponse(
                 s.getId(), s.getGithubRepo(), s.getGithubBranch(), s.getTitle(), s.getDescription(),
                 s.getClaudeSessionId(), s.getCurrentPhase(), s.getWorkDir(),
                 lastAnswer, replyToSeq,
                 s.getMcpsExtra() == null ? List.of() : List.copyOf(s.getMcpsExtra()),
-                mapped, s.getModel(), s.getEffort());
+                mapped, s.getModel(), s.getEffort(), totalCostUsd);
     }
 }

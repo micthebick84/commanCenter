@@ -147,6 +147,46 @@ describe('InterviewRunner', () => {
   });
 });
 
+describe('InterviewRunner near-miss correction', () => {
+  it('near-miss: harvest fails but plan-intent present → reformat splice once → re-harvest → postPlan', async () => {
+    const client = makeClient();
+    async function* intentNoStructure() {
+      yield { type: 'system', subtype: 'init', session_id: 'sess-n' };
+      yield { type: 'assistant', message: { content: [{ type: 'text',
+        text: '이제 구현 계획을 정리하겠습니다.' }] } }; // plan 의도 O, 추출 X
+      yield { type: 'result', subtype: 'success', usage: { total_cost_usd: 0.1 }, duration_ms: 100 };
+    }
+    async function* reformattedPlan() {
+      yield { type: 'system', subtype: 'init', session_id: 'sess-n' };
+      yield { type: 'assistant', message: { content: [{ type: 'text',
+        text: '# 구현 계획\n\n### 작업 1: 가' }] } };
+      yield { type: 'result', subtype: 'success', usage: { total_cost_usd: 0.15 }, duration_ms: 200 };
+    }
+    const fakeQuery = vi.fn()
+      .mockImplementationOnce(() => intentNoStructure())
+      .mockImplementationOnce(() => reformattedPlan());
+    const runner = new InterviewRunner(client as never, fakeQuery as never, deps as never);
+    await runner.run({ ...resumeClaim, currentPhase: 'writing-plans' });
+    expect(fakeQuery).toHaveBeenCalledTimes(2); // 보정 splice 1회
+    expect(client.postPlan).toHaveBeenCalledTimes(1);
+    expect(client.fail).not.toHaveBeenCalled();
+  });
+
+  it('near-miss reformat also fails → postQuestion (no fail)', async () => {
+    const client = makeClient();
+    async function* intentNoStructure() {
+      yield { type: 'system', subtype: 'init', session_id: 'sess-n2' };
+      yield { type: 'assistant', message: { content: [{ type: 'text', text: '구현 계획 초안입니다.' }] } };
+      yield { type: 'result', subtype: 'success', usage: { total_cost_usd: 0.1 }, duration_ms: 100 };
+    }
+    const fakeQuery = vi.fn(() => intentNoStructure()); // 매번 추출 불가
+    const runner = new InterviewRunner(client as never, fakeQuery as never, deps as never);
+    await runner.run({ ...resumeClaim, currentPhase: 'writing-plans' });
+    expect(client.postQuestion).toHaveBeenCalledTimes(1);
+    expect(client.fail).not.toHaveBeenCalled();
+  });
+});
+
 describe('InterviewRunner handoff shim', () => {
   it('on handoff announcement without a plan, re-queries the same session with the writing-plans splice', async () => {
     const client = makeClient();

@@ -6,7 +6,7 @@ import { QuotaGuardExceeded, CostGuard } from './costGuard.js';
 import { tryHarvest } from './planHarvest.js';
 import { relay } from './messageRelay.js';
 import { ensureRepo as defaultEnsureRepo, type RepoInput } from './repoPrepare.js';
-import { buildWritingPlansSplice, detectHandoff } from './skillDispatch.js';
+import { buildWritingPlansSplice, buildPlanReformatSplice, detectHandoff, detectPlanIntent } from './skillDispatch.js';
 import { HeartbeatTicker } from './heartbeat.js';
 
 export interface RunnerDeps {
@@ -141,7 +141,31 @@ export class InterviewRunner {
         durationMs = second.durationMs;
       }
 
-      const harvested = tryHarvest(assistantText);
+      let harvested = tryHarvest(assistantText);
+      // near-miss 보정: 추출 실패 + plan 의도 신호 시, 같은 세션에 정규 형식 재요청 1회.
+      if (!harvested.ok && detectPlanIntent(assistantText) && sessionId) {
+        const reformatSplice = buildPlanReformatSplice();
+        const retry = await relay(
+          this.query({
+            prompt: (async function* () { yield userTurn(reformatSplice); })(),
+            options: buildOptions({
+              superpowersPluginPath: this.deps.superpowersPluginPath,
+              workDir: claim.workDir,
+              claudeCliPath: this.deps.claudeCliPath,
+              claudeSessionId: sessionId,
+              mcpsExtra: claim.mcpsExtra,
+              model: claim.model,
+              effort: claim.effort,
+            }),
+          }),
+        );
+        guard.add(retry.costUsd);
+        assistantText = retry.assistantText;
+        sessionId = retry.sessionId ?? sessionId;
+        costUsd = retry.costUsd;
+        durationMs = retry.durationMs;
+        harvested = tryHarvest(assistantText);
+      }
       if (harvested.ok) {
         // planJson is sent as a JSON STRING — Java stores it as text/JSONB; frontend parses on use.
         await this.client.postPlan(claim.sessionId, {

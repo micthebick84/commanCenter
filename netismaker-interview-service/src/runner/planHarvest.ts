@@ -19,7 +19,7 @@ const TASK_LINE = /^###\s+(?:Task|작업|태스크)\s+(\d+)\s*[:：]\s*(.+?)\s*$
 export function harvestPlan(transcript: string): Harvest {
   const match = PLAN_HEADER.exec(transcript);
   if (!match || match.index === undefined) {
-    throw new HarvestError('no "Implementation Plan" header found in transcript');
+    throw new HarvestError('no "Implementation Plan" / "구현 계획" header found in transcript');
   }
   const designMarkdown = transcript.slice(0, match.index).trim();
   const planMarkdown = transcript.slice(match.index).trim();
@@ -31,7 +31,7 @@ export function harvestPlan(transcript: string): Harvest {
     planJson.push({ task: Number(m[1]), title: m[2] ?? '' });
   }
   if (planJson.length === 0) {
-    throw new HarvestError('plan contains zero "### Task N:" entries');
+    throw new HarvestError('plan contains zero "### Task|작업|태스크 N:" entries');
   }
   return { designMarkdown, planMarkdown, planJson };
 }

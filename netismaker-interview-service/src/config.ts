@@ -9,6 +9,10 @@ export interface Config {
   superpowersPluginPath: string;
   /** Optional override for the claude CLI binary; auto-resolved by resolveClaudeCli() when unset. */
   claudeCliPath?: string;
+  /** 인터뷰 1세션 최대 assistant 질문 턴(초과 시 FAILED). 무력한 비용 가드를 대체하는 실효 백스톱. */
+  maxTurns: number;
+  /** 이 턴 수 이상이면 force-finish(정규 형식 plan 강제 요청) 프롬프트 사용. 기본 maxTurns-1. */
+  forceFinishTurns: number;
 }
 
 function req(env: Record<string, string | undefined>, key: string): string {
@@ -33,5 +37,7 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
     superpowersPluginPath: req(env, 'SUPERPOWERS_PLUGIN_PATH'),
     // Auth = subscription via the local claude CLI (Phase-0 spike 00b). No ANTHROPIC_API_KEY.
     claudeCliPath: env.CLAUDE_CLI,
+    maxTurns: num(env, 'INTERVIEW_MAX_TURNS', 20),
+    forceFinishTurns: num(env, 'INTERVIEW_FORCE_FINISH_TURNS', 19),
   };
 }

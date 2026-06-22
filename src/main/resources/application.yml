@@ -21,8 +21,15 @@ spring:
       minimum-idle: 5
       idle-timeout: 300000
       connection-timeout: 20000
+      # 커넥션을 30s 이상 빌린 채 반환 안 하면 누수 경보 로깅(조기 탐지). SSE 누수 재발 감시용.
+      leak-detection-threshold: 30000
 
   jpa:
+    # SSE 인터뷰 스트림(text/event-stream)은 장수명 async 요청이라, OSIV(기본 true)가
+    # EntityManager+DB 커넥션을 스트림 수명만큼 바인딩 → 스트림 ~10개면 Hikari 풀(max 10) 고갈,
+    # 이후 모든 DB 엔드포인트가 20s 타임아웃 500. 엔티티에 lazy 연관이 없고 컨트롤러는 DTO만
+    # 반환하므로 OSIV를 꺼도 LazyInitializationException 위험 없음.
+    open-in-view: false
     hibernate:
       ddl-auto: validate
     show-sql: false

@@ -67,6 +67,12 @@ public class ResultReporter {
                         break;
                     }
                 }
+            } catch (Exception e) {
+                // RestClientException 외 예기치 못한 예외(NPE/직렬화 등)는 transient가 아님 → 재시도 무의미.
+                // 절대 throw 안 함 보장 유지: 로그만 남기고 false 반환.
+                log.error("결과 보고 예기치 못한 예외 — task={} status={} (포기, rethrow 안 함)",
+                        taskId, req.status(), e);
+                return false;
             }
         }
         log.error("결과 보고 최종 실패 — task={} status={} (포기, rethrow 안 함)", taskId, req.status(), last);

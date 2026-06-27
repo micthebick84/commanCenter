@@ -64,4 +64,15 @@ class ResultReporterTest {
         assertThat(ok).isFalse();
         assertThat(calls.get()).isEqualTo(1); // 4xx는 재시도 안 함
     }
+
+    @Test
+    void unexpected_runtime_exception_returns_false_without_throwing() {
+        AtomicInteger calls = new AtomicInteger();
+        boolean ok = reporter((id, r) -> {
+            calls.incrementAndGet();
+            throw new IllegalStateException("boom");
+        }).reportTerminal(1L, REQ);
+        assertThat(ok).isFalse();
+        assertThat(calls.get()).isEqualTo(1); // 예기치 못한 예외는 재시도 안 함
+    }
 }

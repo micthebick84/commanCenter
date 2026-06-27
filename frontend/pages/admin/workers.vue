@@ -176,7 +176,9 @@ function bool(b: boolean | null): string {
       <template #avatar><q-icon name="info" color="primary" /></template>
       <strong>alive 기준</strong>: 마지막 heartbeat가 60초 이내. 그 이상 응답
       없으면 <strong>Stale 회수 잡</strong>(매 1분)이 자동으로 분석중 작업을
-      작업대기로 되돌립니다.
+      작업대기로 되돌립니다. <br /><strong>유실 보고</strong>: 결과 보고가 끝내
+      백엔드에 닿지 못한 횟수입니다. 워커 재시작 시 0으로 리셋되며, 유실된 결과
+      원본은 워커의 <code>~/netis-maker/dead-letter/</code>에 보존됩니다.
     </q-banner>
   </q-page>
 </template>

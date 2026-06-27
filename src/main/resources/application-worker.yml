@@ -33,6 +33,7 @@ netis-maker:
     result-report-max-retries: 5
     result-report-backoff-ms: 2000
     repos-dir: ${REPOS_DIR:${user.home}/netis-maker/repos}
+    dead-letter-dir: ${DEAD_LETTER_DIR:${user.home}/netis-maker/dead-letter}
     claude-cli-path: ${CLAUDE_CLI:/opt/homebrew/bin/claude}
     github-pat: ${GITHUB_PAT:}
     # 구현 단계 — 분석완료 + admin 승인 후 worktree에서 코드 작성 + PR 생성

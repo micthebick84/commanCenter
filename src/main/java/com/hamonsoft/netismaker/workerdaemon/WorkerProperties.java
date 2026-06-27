@@ -15,6 +15,7 @@ public record WorkerProperties(
         int resultReportMaxRetries,
         long resultReportBackoffMs,
         String reposDir,
+        String deadLetterDir,
         String claudeCliPath,
         String githubPat,
         // 분석 prompt
@@ -74,6 +75,9 @@ public record WorkerProperties(
         if (heartbeatIntervalSeconds <= 0) heartbeatIntervalSeconds = 10;
         if (resultReportMaxRetries <= 0) resultReportMaxRetries = 5;
         if (resultReportBackoffMs <= 0) resultReportBackoffMs = 2000;
+        if (deadLetterDir == null || deadLetterDir.isBlank()) {
+            deadLetterDir = System.getProperty("user.home") + "/netis-maker/dead-letter";
+        }
         if (claudeCliPath == null || claudeCliPath.isBlank()) claudeCliPath = "claude";
         if (analysisTimeout == null) analysisTimeout = Duration.ofMinutes(10);
         // 구현 단계 기본값

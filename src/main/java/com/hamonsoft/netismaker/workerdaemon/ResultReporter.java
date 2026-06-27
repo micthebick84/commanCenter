@@ -71,7 +71,7 @@ public class ResultReporter {
             } catch (RestClientException e) {
                 last = e;
                 log.warn("결과 보고 실패 (시도 {}/{}) task={} status={}: {}",
-                        attempt + 1, maxRetries + 1, taskId, req.status(), e.getMessage());
+                        attempt + 1, maxRetries + 1, taskId, req.status().dbValue(), e.getMessage());
                 if (attempt < maxRetries) {
                     try {
                         sleeper.sleep(backoffMs * (1L << attempt)); // 지수 백오프

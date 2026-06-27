@@ -129,4 +129,14 @@ class ResultReporterTest {
         assertThat(ok).isTrue();
         assertThat(sink).isEmpty();
     }
+
+    @Test
+    void listener_exception_is_swallowed_returns_false() {
+        boolean ok = new ResultReporter(
+                (id, r) -> { throw new HttpClientErrorException(HttpStatus.CONFLICT); },
+                2, 1L, ms -> {},
+                (taskId, req, permanent, reason) -> { throw new RuntimeException("listener boom"); }
+        ).reportTerminal(1L, REQ);
+        assertThat(ok).isFalse();
+    }
 }

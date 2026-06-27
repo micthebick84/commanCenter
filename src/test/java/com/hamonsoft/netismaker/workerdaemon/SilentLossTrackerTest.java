@@ -45,11 +45,12 @@ class SilentLossTrackerTest {
     }
 
     @Test
-    void multiple_losses_accumulate(@TempDir Path dir) {
+    void multiple_losses_accumulate(@TempDir Path dir) throws Exception {
         SilentLossTracker t = tracker(dir);
         t.onLost(1L, REQ, true, "4xx 409");
         t.onLost(2L, REQ, false, "소진");
         assertThat(t.currentCount()).isEqualTo(2);
+        assertThat(java.nio.file.Files.readAllLines(dir.resolve("mac-worker-1.jsonl"))).hasSize(2);
     }
 
     @Test

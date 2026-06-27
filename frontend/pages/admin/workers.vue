@@ -1,34 +1,37 @@
 <script setup lang="ts">
-definePageMeta({ layout: 'default' })
+definePageMeta({ layout: "default" });
 
 interface WorkerHealth {
-  workerId: string
-  hostname: string | null
-  version: string | null
-  lastSeenAt: string | null
-  alive: boolean
-  claudeSessionOk: boolean | null
-  vpnStatus: string | null
-  mcps: string[]
+  workerId: string;
+  hostname: string | null;
+  version: string | null;
+  lastSeenAt: string | null;
+  alive: boolean;
+  claudeSessionOk: boolean | null;
+  vpnStatus: string | null;
+  mcps: string[];
+  lostReportCount: number;
 }
 
-const { data, loading } = useTaskPolling<WorkerHealth[]>(() => useApi('/api/workers/health'))
+const { data, loading } = useTaskPolling<WorkerHealth[]>(() =>
+  useApi("/api/workers/health"),
+);
 
 function lastSeenAgo(iso: string | null): string {
-  if (!iso) return '—'
-  const t = new Date(iso).getTime()
-  const diffSec = Math.floor((Date.now() - t) / 1000)
-  if (diffSec < 60) return `${diffSec}초 전`
-  const min = Math.floor(diffSec / 60)
-  if (min < 60) return `${min}분 전`
-  const hr = Math.floor(min / 60)
-  if (hr < 24) return `${hr}시간 전`
-  return `${Math.floor(hr / 24)}일 전`
+  if (!iso) return "—";
+  const t = new Date(iso).getTime();
+  const diffSec = Math.floor((Date.now() - t) / 1000);
+  if (diffSec < 60) return `${diffSec}초 전`;
+  const min = Math.floor(diffSec / 60);
+  if (min < 60) return `${min}분 전`;
+  const hr = Math.floor(min / 60);
+  if (hr < 24) return `${hr}시간 전`;
+  return `${Math.floor(hr / 24)}일 전`;
 }
 
 function bool(b: boolean | null): string {
-  if (b === null || b === undefined) return '—'
-  return b ? 'OK' : 'NG'
+  if (b === null || b === undefined) return "—";
+  return b ? "OK" : "NG";
 }
 </script>
 
@@ -55,14 +58,51 @@ function bool(b: boolean | null): string {
       bordered
       :pagination="{ rowsPerPage: 50 }"
       :columns="[
-        { name: 'status', label: '', field: () => '', align: 'center', style: 'width:48px' },
-        { name: 'workerId', label: 'Worker ID', field: 'workerId', align: 'left' },
-        { name: 'hostname', label: 'Hostname', field: 'hostname', align: 'left' },
+        {
+          name: 'status',
+          label: '',
+          field: () => '',
+          align: 'center',
+          style: 'width:48px',
+        },
+        {
+          name: 'workerId',
+          label: 'Worker ID',
+          field: 'workerId',
+          align: 'left',
+        },
+        {
+          name: 'hostname',
+          label: 'Hostname',
+          field: 'hostname',
+          align: 'left',
+        },
         { name: 'version', label: 'Version', field: 'version', align: 'left' },
-        { name: 'lastSeenAt', label: '마지막 응답', field: 'lastSeenAt', align: 'left' },
-        { name: 'claudeSession', label: 'Claude OAuth', field: (r) => bool(r.claudeSessionOk), align: 'center' },
-        { name: 'vpnStatus', label: '네트워크', field: 'vpnStatus', align: 'center' },
+        {
+          name: 'lastSeenAt',
+          label: '마지막 응답',
+          field: 'lastSeenAt',
+          align: 'left',
+        },
+        {
+          name: 'claudeSession',
+          label: 'Claude OAuth',
+          field: (r) => bool(r.claudeSessionOk),
+          align: 'center',
+        },
+        {
+          name: 'vpnStatus',
+          label: '네트워크',
+          field: 'vpnStatus',
+          align: 'center',
+        },
         { name: 'mcps', label: 'MCP 도구', field: 'mcps', align: 'left' },
+        {
+          name: 'lostReportCount',
+          label: '유실 보고',
+          field: 'lostReportCount',
+          align: 'center',
+        },
       ]"
     >
       <template #body-cell-status="props">
@@ -117,12 +157,26 @@ function bool(b: boolean | null): string {
           <span v-else class="text-grey-6">—</span>
         </q-td>
       </template>
+      <template #body-cell-lostReportCount="props">
+        <q-td :props="props">
+          <span
+            :class="
+              props.row.lostReportCount > 0
+                ? 'text-red-9 text-weight-bold'
+                : 'text-grey-6'
+            "
+          >
+            {{ props.row.lostReportCount ?? 0 }}
+          </span>
+        </q-td>
+      </template>
     </q-table>
 
     <q-banner class="bg-blue-1 text-grey-9 q-mt-md">
       <template #avatar><q-icon name="info" color="primary" /></template>
-      <strong>alive 기준</strong>: 마지막 heartbeat가 60초 이내. 그 이상 응답 없으면
-      <strong>Stale 회수 잡</strong>(매 1분)이 자동으로 분석중 작업을 작업대기로 되돌립니다.
+      <strong>alive 기준</strong>: 마지막 heartbeat가 60초 이내. 그 이상 응답
+      없으면 <strong>Stale 회수 잡</strong>(매 1분)이 자동으로 분석중 작업을
+      작업대기로 되돌립니다.
     </q-banner>
   </q-page>
 </template>

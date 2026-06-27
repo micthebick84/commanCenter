@@ -165,7 +165,7 @@ class StaleTaskRecoveryJobTest {
     @Test
     void implementing_short_heartbeat_gap_not_recovered() {
         // 구현 작업: heartbeat 90초 전 (< 300초 임계) → 회수 안 됨
-        Task t = task(10L, TaskStatus.IMPLEMENTING, "w1", 5, 0);
+        Task t = task(10L, TaskStatus.IMPLEMENTING, "w1", 6, 0);
         when(taskRepo.findInFlightClaimed()).thenReturn(List.of(t));
         when(heartbeatRepo.findAllById(any())).thenReturn(List.of(hb("w1", 90)));
         job.recoverStale();
@@ -181,5 +181,16 @@ class StaleTaskRecoveryJobTest {
         when(heartbeatRepo.findAllById(any())).thenReturn(List.of(hb("w1", 320)));
         job.recoverStale();
         assertThat(t.getStatus()).isEqualTo(TaskStatus.IMPLEMENTATION_FAILED);
+    }
+
+    @Test
+    void deploying_short_heartbeat_gap_not_recovered() {
+        // 배포 작업: heartbeat 90초 전 (< 180초 임계) → 회수 안 됨
+        Task t = task(12L, TaskStatus.DEPLOYING, "w1", 5, 0);
+        when(taskRepo.findInFlightClaimed()).thenReturn(List.of(t));
+        when(heartbeatRepo.findAllById(any())).thenReturn(List.of(hb("w1", 90)));
+        job.recoverStale();
+        assertThat(t.getStatus()).isEqualTo(TaskStatus.DEPLOYING);
+        verifyNoInteractions(historyRepo);
     }
 }

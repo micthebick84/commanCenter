@@ -41,4 +41,7 @@ public class WorkerHeartbeat {
     @JdbcTypeCode(SqlTypes.JSON)
     @Column(name = "mcps", nullable = false, columnDefinition = "jsonb")
     private List<String> mcps = new ArrayList<>();
+
+    @Column(name = "lost_report_count", nullable = false)
+    private Integer lostReportCount = 0;
 }

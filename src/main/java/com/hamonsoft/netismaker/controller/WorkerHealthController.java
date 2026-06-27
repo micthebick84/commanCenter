@@ -71,6 +71,7 @@ public class WorkerHealthController {
         view.put("claudeSessionOk", h.getClaudeSessionOk());
         view.put("vpnStatus", h.getVpnStatus());
         view.put("mcps", h.getMcps() == null ? java.util.List.of() : h.getMcps());
+        view.put("lostReportCount", h.getLostReportCount());
         return view;
     }
 }

@@ -11,5 +11,6 @@ public record WorkerHeartbeatRequest(
         @Size(max = 50) String version,
         Boolean claudeSessionOk,
         @Size(max = 20) String vpnStatus,
-        List<String> mcps
+        List<String> mcps,
+        Integer lostReportCount
 ) {}

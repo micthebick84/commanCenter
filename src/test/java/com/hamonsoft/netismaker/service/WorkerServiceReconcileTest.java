@@ -62,7 +62,13 @@ class WorkerServiceReconcileTest {
         assertThat(t.getPrUrl()).isEqualTo("https://github.com/o/r/pull/10");
         assertThat(t.getHeadBranch()).isEqualTo("netismaker/task-16");
         assertThat(t.getFailureReason()).isNull();
-        verify(historyRepo).save(any());
+        org.mockito.ArgumentCaptor<com.hamonsoft.netismaker.entity.TaskStatusHistory> cap =
+                org.mockito.ArgumentCaptor.forClass(com.hamonsoft.netismaker.entity.TaskStatusHistory.class);
+        verify(historyRepo).save(cap.capture());
+        assertThat(cap.getValue().getFromStatus()).isEqualTo(TaskStatus.IMPLEMENTATION_FAILED.dbValue());
+        assertThat(cap.getValue().getToStatus()).isEqualTo(TaskStatus.PR_CREATED.dbValue());
+        assertThat(cap.getValue().getActorType()).isEqualTo("worker");
+        assertThat(cap.getValue().getActorId()).isEqualTo("mac-worker-1");
     }
 
     @Test

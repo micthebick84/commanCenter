@@ -40,6 +40,8 @@ class StaleTaskRecoveryJobTest {
         ReflectionTestUtils.setField(job, "implementationStaleThresholdMinutes", 60);
         ReflectionTestUtils.setField(job, "deployStaleThresholdMinutes", 15);
         ReflectionTestUtils.setField(job, "workerDeadThresholdSeconds", 60);
+        ReflectionTestUtils.setField(job, "implementationWorkerDeadThresholdSeconds", 300);
+        ReflectionTestUtils.setField(job, "deployWorkerDeadThresholdSeconds", 180);
         when(historyRepo.save(any())).thenAnswer(i -> i.getArgument(0));
     }
 
@@ -158,5 +160,26 @@ class StaleTaskRecoveryJobTest {
         assertThat(t.getRetryCount()).isEqualTo(3); // 증가 없음
         assertThat(t.getFailureReason()).contains("한도 초과");
         verify(historyRepo).save(any());
+    }
+
+    @Test
+    void implementing_short_heartbeat_gap_not_recovered() {
+        // 구현 작업: heartbeat 90초 전 (< 300초 임계) → 회수 안 됨
+        Task t = task(10L, TaskStatus.IMPLEMENTING, "w1", 5, 0);
+        when(taskRepo.findInFlightClaimed()).thenReturn(List.of(t));
+        when(heartbeatRepo.findAllById(any())).thenReturn(List.of(hb("w1", 90)));
+        job.recoverStale();
+        assertThat(t.getStatus()).isEqualTo(TaskStatus.IMPLEMENTING);
+        verifyNoInteractions(historyRepo);
+    }
+
+    @Test
+    void implementing_long_heartbeat_gap_recovered() {
+        // 구현 작업: heartbeat 320초 전 (> 300초 임계) → 회수
+        Task t = task(11L, TaskStatus.IMPLEMENTING, "w1", 6, 0);
+        when(taskRepo.findInFlightClaimed()).thenReturn(List.of(t));
+        when(heartbeatRepo.findAllById(any())).thenReturn(List.of(hb("w1", 320)));
+        job.recoverStale();
+        assertThat(t.getStatus()).isEqualTo(TaskStatus.IMPLEMENTATION_FAILED);
     }
 }

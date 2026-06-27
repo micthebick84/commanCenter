@@ -55,6 +55,12 @@ public class StaleTaskRecoveryJob {
     @Value("${app.task.worker-dead-threshold-seconds:60}")
     private int workerDeadThresholdSeconds;
 
+    @Value("${app.task.implementation-worker-dead-threshold-seconds:300}")
+    private int implementationWorkerDeadThresholdSeconds;
+
+    @Value("${app.task.deploy-worker-dead-threshold-seconds:180}")
+    private int deployWorkerDeadThresholdSeconds;
+
     public StaleTaskRecoveryJob(TaskRepository taskRepo,
                                 TaskStatusHistoryRepository historyRepo,
                                 WorkerHeartbeatRepository heartbeatRepo,
@@ -72,7 +78,6 @@ public class StaleTaskRecoveryJob {
         if (inflight.isEmpty()) return;
 
         OffsetDateTime now = OffsetDateTime.now();
-        OffsetDateTime workerDeadBefore = now.minusSeconds(workerDeadThresholdSeconds);
 
         Set<String> workerIds = inflight.stream()
                 .map(Task::getWorkerId).filter(Objects::nonNull).collect(Collectors.toSet());
@@ -84,6 +89,13 @@ public class StaleTaskRecoveryJob {
             String workerId = t.getWorkerId();
             OffsetDateTime claimedAt = t.getClaimedAt();
 
+            // 단계별 worker-dead 임계 — 긴 구현/배포 중 짧은 heartbeat 블립으로 인한 오탐 회수 방지.
+            int deadSec = switch (from) {
+                case IMPLEMENTING -> implementationWorkerDeadThresholdSeconds;
+                case DEPLOYING, UNDEPLOYING -> deployWorkerDeadThresholdSeconds;
+                default -> workerDeadThresholdSeconds; // IN_PROGRESS (분석)
+            };
+            OffsetDateTime workerDeadBefore = now.minusSeconds(deadSec);
             // 갓 claim한 작업은 워커가 첫 heartbeat 보낼 시간을 준다 (오탐 방지).
             boolean claimedLongEnough = claimedAt != null && claimedAt.isBefore(workerDeadBefore);
             OffsetDateTime hb = workerId == null ? null : lastSeen.get(workerId);

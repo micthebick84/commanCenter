@@ -46,6 +46,7 @@ public class WorkerMainLoop {
     private final WorktreeService worktrees;
     private final GitOpsService gitOps;
     private final DeployService deployService;
+    private final ResultReporter reporter;
 
     public WorkerMainLoop(WorkerProperties props,
                           WorkerHttpClient http,
@@ -55,7 +56,8 @@ public class WorkerMainLoop {
                           WorkerMcpSupport mcps,
                           WorktreeService worktrees,
                           GitOpsService gitOps,
-                          DeployService deployService) {
+                          DeployService deployService,
+                          ResultReporter reporter) {
         this.props = props;
         this.http = http;
         this.repos = repos;
@@ -65,6 +67,7 @@ public class WorkerMainLoop {
         this.worktrees = worktrees;
         this.gitOps = gitOps;
         this.deployService = deployService;
+        this.reporter = reporter;
     }
 
     @Scheduled(fixedRateString = "#{${netis-maker.worker.heartbeat-interval-seconds:10} * 1000}")
@@ -152,7 +155,7 @@ public class WorkerMainLoop {
             return;
         }
 
-        http.postResult(task.id(), new WorkerResultRequest(
+        reporter.reportTerminal(task.id(), new WorkerResultRequest(
                 props.id(),
                 TaskStatus.COMPLETED,
                 parsed.markdown(),
@@ -241,7 +244,7 @@ public class WorkerMainLoop {
         }
 
         // 6. 성공 보고
-        http.postResult(task.id(), new WorkerResultRequest(
+        reporter.reportTerminal(task.id(), new WorkerResultRequest(
                 props.id(),
                 TaskStatus.PR_CREATED,
                 null, null, null, exec.durationMs(), null,
@@ -264,7 +267,7 @@ public class WorkerMainLoop {
             return;
         }
         long durationMs = System.currentTimeMillis() - start;
-        http.postResult(task.id(), WorkerResultRequest.deployed(
+        reporter.reportTerminal(task.id(), WorkerResultRequest.deployed(
                 props.id(), result.url(), result.containerId(), result.hostPort(),
                 result.image(), durationMs, result.log()));
         log.info("배포 완료: task={} url={}", task.id(), result.url());
@@ -277,17 +280,13 @@ public class WorkerMainLoop {
             safePostDeployFailure(task.id(), "중지 실패: " + e.getMessage(), e.getDeployLog());
             return;
         }
-        http.postResult(task.id(), WorkerResultRequest.undeployed(
+        reporter.reportTerminal(task.id(), WorkerResultRequest.undeployed(
                 props.id(), "container netis-task-" + task.id() + " 중지/제거"));
         log.info("배포 중지 완료: task={}", task.id());
     }
 
     private void safePostDeployFailure(Long taskId, String reason, String deployLog) {
-        try {
-            http.postResult(taskId, WorkerResultRequest.deployFailed(props.id(), reason, deployLog));
-        } catch (RestClientException e) {
-            log.error("배포 실패 보고도 실패함 task={} reason={}", taskId, reason, e);
-        }
+        reporter.reportTerminal(taskId, WorkerResultRequest.deployFailed(props.id(), reason, deployLog));
     }
 
     private String renderImplementationPrompt(WorkerTaskResponse task, String baseSha, String branchName) {
@@ -346,30 +345,20 @@ public class WorkerMainLoop {
     }
 
     private void safePostAnalysisFailure(Long taskId, String reason) {
-        try {
-            http.postResult(taskId, new WorkerResultRequest(
-                    props.id(), TaskStatus.FAILED,
-                    null, null, null, null, reason,
-                    null, null, null, null, null,
-                    null, null, null, null, null
-            ));
-        } catch (RestClientException e) {
-            log.error("분석 실패 보고도 실패함 task={} reason={}", taskId, reason, e);
-        }
+        reporter.reportTerminal(taskId, new WorkerResultRequest(
+                props.id(), TaskStatus.FAILED,
+                null, null, null, null, reason,
+                null, null, null, null, null,
+                null, null, null, null, null));
     }
 
     private void safePostImplementationFailure(Long taskId, String reason,
                                                String headBranch, String headSha, String log_) {
-        try {
-            http.postResult(taskId, new WorkerResultRequest(
-                    props.id(), TaskStatus.IMPLEMENTATION_FAILED,
-                    null, null, null, null, reason,
-                    null, null, headBranch, headSha, log_,
-                    null, null, null, null, null
-            ));
-        } catch (RestClientException e) {
-            log.error("구현 실패 보고도 실패함 task={} reason={}", taskId, reason, e);
-        }
+        reporter.reportTerminal(taskId, new WorkerResultRequest(
+                props.id(), TaskStatus.IMPLEMENTATION_FAILED,
+                null, null, null, null, reason,
+                null, null, headBranch, headSha, log_,
+                null, null, null, null, null));
     }
 
     private static String tail(String s, int max) {

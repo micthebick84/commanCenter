@@ -123,6 +123,28 @@ public class WorkerService {
                 .orElseThrow(TaskException::notFound);
 
         TaskStatus current = t.getStatus();
+
+        // 지각 보고 정합화: stale 회수로 IMPLEMENTATION_FAILED가 됐지만 워커가 실제로는
+        // PR 생성까지 성공한 경우, 늦게 도착한 PR_CREATED 보고를 받아 정합화한다.
+        // (PR 메타가 유효할 때만 — undeploy 복귀(prUrl 없는 PR_CREATED)와 구분됨)
+        if (current == TaskStatus.IMPLEMENTATION_FAILED
+                && req.status() == TaskStatus.PR_CREATED
+                && req.prUrl() != null && !req.prUrl().isBlank()
+                && req.headBranch() != null && !req.headBranch().isBlank()) {
+            t.setStatus(TaskStatus.PR_CREATED);
+            t.setPrUrl(req.prUrl());
+            t.setPrNumber(req.prNumber());
+            t.setHeadBranch(req.headBranch());
+            t.setHeadSha(req.headSha());
+            t.setImplementationLog(req.implementationLog());
+            t.setFailureReason(null);
+            t.setUpdatedAt(OffsetDateTime.now());
+            historyRepo.save(TaskStatusHistory.log(t.getId(),
+                    TaskStatus.IMPLEMENTATION_FAILED, TaskStatus.PR_CREATED,
+                    "worker", req.workerId(), "지각 보고 정합화: stale 회수 → PR_CREATED"));
+            return;
+        }
+
         if (current != TaskStatus.IN_PROGRESS
                 && current != TaskStatus.IMPLEMENTING
                 && current != TaskStatus.DEPLOYING

@@ -12,6 +12,8 @@ public record WorkerProperties(
         String apiKey,
         long pollIntervalSeconds,
         long heartbeatIntervalSeconds,
+        int resultReportMaxRetries,
+        long resultReportBackoffMs,
         String reposDir,
         String claudeCliPath,
         String githubPat,
@@ -70,6 +72,8 @@ public record WorkerProperties(
         if (apiBaseUrl == null) apiBaseUrl = "http://localhost:8090";
         if (pollIntervalSeconds <= 0) pollIntervalSeconds = 5;
         if (heartbeatIntervalSeconds <= 0) heartbeatIntervalSeconds = 10;
+        if (resultReportMaxRetries <= 0) resultReportMaxRetries = 5;
+        if (resultReportBackoffMs <= 0) resultReportBackoffMs = 2000;
         if (claudeCliPath == null || claudeCliPath.isBlank()) claudeCliPath = "claude";
         if (analysisTimeout == null) analysisTimeout = Duration.ofMinutes(10);
         // 구현 단계 기본값

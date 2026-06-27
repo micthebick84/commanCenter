@@ -29,6 +29,9 @@ netis-maker:
     api-key: ${WORKER_API_KEY:dev-only-change-me}
     poll-interval-seconds: 5
     heartbeat-interval-seconds: 10
+    # 결과 보고 재시도 — 일시적 백엔드 장애(풀 고갈 등)에도 성공/실패 보고가 닿도록.
+    result-report-max-retries: 5
+    result-report-backoff-ms: 2000
     repos-dir: ${REPOS_DIR:${user.home}/netis-maker/repos}
     claude-cli-path: ${CLAUDE_CLI:/opt/homebrew/bin/claude}
     github-pat: ${GITHUB_PAT:}

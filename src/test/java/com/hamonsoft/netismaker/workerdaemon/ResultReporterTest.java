@@ -75,4 +75,68 @@ class ResultReporterTest {
         assertThat(ok).isFalse();
         assertThat(calls.get()).isEqualTo(1); // 예기치 못한 예외는 재시도 안 함
     }
+
+    // --- silent-loss 리스너 훅 ---
+
+    private record Lost(Long taskId, String status, boolean permanent, String reason) {}
+
+    /** 리스너를 캡처하는 5-arg reporter. */
+    private ResultReporter reporterWithListener(ResultReporter.Poster poster, java.util.List<Lost> sink) {
+        return new ResultReporter(poster, 2, 1L, ms -> {},
+                (taskId, req, permanent, reason) ->
+                        sink.add(new Lost(taskId, req.status().dbValue(), permanent, reason)));
+    }
+
+    @Test
+    void listener_invoked_on_4xx_final_failure_permanent_true() {
+        java.util.List<Lost> sink = new java.util.ArrayList<>();
+        boolean ok = reporterWithListener((id, r) -> {
+            throw new HttpClientErrorException(HttpStatus.CONFLICT);
+        }, sink).reportTerminal(1L, REQ);
+        assertThat(ok).isFalse();
+        assertThat(sink).hasSize(1);
+        assertThat(sink.get(0).permanent()).isTrue();
+        assertThat(sink.get(0).taskId()).isEqualTo(1L);
+        assertThat(sink.get(0).status()).isEqualTo(TaskStatus.PR_CREATED.dbValue());
+    }
+
+    @Test
+    void listener_invoked_on_exhausted_5xx_permanent_false() {
+        java.util.List<Lost> sink = new java.util.ArrayList<>();
+        boolean ok = reporterWithListener((id, r) -> {
+            throw new HttpServerErrorException(HttpStatus.INTERNAL_SERVER_ERROR);
+        }, sink).reportTerminal(1L, REQ);
+        assertThat(ok).isFalse();
+        assertThat(sink).hasSize(1);
+        assertThat(sink.get(0).permanent()).isFalse(); // 재시도 소진은 transient
+    }
+
+    @Test
+    void listener_invoked_on_unexpected_exception_permanent_true() {
+        java.util.List<Lost> sink = new java.util.ArrayList<>();
+        boolean ok = reporterWithListener((id, r) -> {
+            throw new IllegalStateException("boom");
+        }, sink).reportTerminal(1L, REQ);
+        assertThat(ok).isFalse();
+        assertThat(sink).hasSize(1);
+        assertThat(sink.get(0).permanent()).isTrue();
+    }
+
+    @Test
+    void listener_not_invoked_on_success() {
+        java.util.List<Lost> sink = new java.util.ArrayList<>();
+        boolean ok = reporterWithListener((id, r) -> { /* success */ }, sink).reportTerminal(1L, REQ);
+        assertThat(ok).isTrue();
+        assertThat(sink).isEmpty();
+    }
+
+    @Test
+    void listener_exception_is_swallowed_returns_false() {
+        boolean ok = new ResultReporter(
+                (id, r) -> { throw new HttpClientErrorException(HttpStatus.CONFLICT); },
+                2, 1L, ms -> {},
+                (taskId, req, permanent, reason) -> { throw new RuntimeException("listener boom"); }
+        ).reportTerminal(1L, REQ);
+        assertThat(ok).isFalse();
+    }
 }

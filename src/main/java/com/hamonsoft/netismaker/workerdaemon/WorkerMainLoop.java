@@ -47,6 +47,7 @@ public class WorkerMainLoop {
     private final GitOpsService gitOps;
     private final DeployService deployService;
     private final ResultReporter reporter;
+    private final SilentLossTracker silentLossTracker;
 
     public WorkerMainLoop(WorkerProperties props,
                           WorkerHttpClient http,
@@ -57,7 +58,8 @@ public class WorkerMainLoop {
                           WorktreeService worktrees,
                           GitOpsService gitOps,
                           DeployService deployService,
-                          ResultReporter reporter) {
+                          ResultReporter reporter,
+                          SilentLossTracker silentLossTracker) {
         this.props = props;
         this.http = http;
         this.repos = repos;
@@ -68,13 +70,15 @@ public class WorkerMainLoop {
         this.gitOps = gitOps;
         this.deployService = deployService;
         this.reporter = reporter;
+        this.silentLossTracker = silentLossTracker;
     }
 
     @Scheduled(fixedRateString = "#{${netis-maker.worker.heartbeat-interval-seconds:10} * 1000}")
     public void sendHeartbeat() {
         try {
             http.heartbeat(new WorkerHeartbeatRequest(
-                    props.id(), hostname(), props.version(), null, null, mcps.getServerNames()));
+                    props.id(), hostname(), props.version(), null, null, mcps.getServerNames(),
+                    silentLossTracker.currentCount()));
         } catch (RestClientException e) {
             log.warn("heartbeat 실패: {}", e.getMessage());
         }

@@ -53,6 +53,17 @@ export default defineNuxtConfig({
         },
       },
     },
+    // 프로덕션(node .output/server)에서는 devProxy가 적용되지 않으므로 routeRules로 프록시한다.
+    // dev에선 devProxy가 먼저 가로채고, prod에선 이 규칙이 사용된다. 타깃은 항상 같은 호스트의
+    // origin 서비스(localhost). 공개 Origin은 백엔드/auth CORS 허용목록에 이미 포함되어 재작성 불필요.
+    routeRules: {
+      '/api/**': {
+        proxy: (process.env.NUXT_API_PROXY_TARGET || 'http://localhost:8090') + '/api/**',
+      },
+      '/oauth2/**': {
+        proxy: (process.env.NUXT_AUTH_PROXY_TARGET || 'http://localhost:9000') + '/oauth2/**',
+      },
+    },
   },
 
   typescript: {

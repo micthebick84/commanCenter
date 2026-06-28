@@ -15,6 +15,7 @@ interface ImplementationView {
 interface TaskResponse {
   id: number
   githubRepo: string
+  repoAlias: string | null
   githubBranch: string
   title: string
   description: string
@@ -49,7 +50,7 @@ const tasks = computed<TaskResponse[]>(() => page.value?.content ?? [])
 
 // 등록 다이얼로그 상태
 const showCreate = ref(false)
-const draft = reactive({ githubRepo: '', githubBranch: '', title: '', description: '', model: DEFAULT_MODEL, effort: DEFAULT_EFFORT })
+const draft = reactive({ repoCatalogId: null as number | null, githubBranch: '', title: '', description: '', model: DEFAULT_MODEL, effort: DEFAULT_EFFORT })
 const effortOptions = computed(() => effortsForModel(draft.model))
 watch(() => draft.model, (m) => { draft.effort = coerceEffort(m, draft.effort) })
 const submitting = ref(false)
@@ -82,6 +83,41 @@ interface CatalogEntry {
 const catalog = ref<CatalogEntry[]>([])
 const selectedCatalogIds = ref<number[]>([])
 const catalogLoading = ref(false)
+
+// 레포 카탈로그 (작업 등록 대상 레포)
+interface RepoCatalogEntry {
+  id: number
+  alias: string
+  ownerRepo: string | null
+  defaultBranch: string | null
+}
+const repoCatalog = ref<RepoCatalogEntry[]>([])
+const repoCatalogLoading = ref(false)
+const repoOptions = computed(() =>
+  repoCatalog.value.map((r) => ({ label: r.alias, value: r.id })),
+)
+
+async function loadRepoCatalog() {
+  repoCatalogLoading.value = true
+  try {
+    repoCatalog.value = await useApi<RepoCatalogEntry[]>('/api/repo-catalog')
+  } catch {
+    repoCatalog.value = []
+  } finally {
+    repoCatalogLoading.value = false
+  }
+}
+
+// 별칭 선택 → ownerRepo로 브랜치 로드 + 기본 브랜치 프리필
+function onRepoSelected(catalogId: number | null) {
+  draft.githubBranch = ''
+  resetBranchState()
+  const entry = repoCatalog.value.find((r) => r.id === catalogId)
+  if (!entry || !entry.ownerRepo) return
+  loadBranches(entry.ownerRepo).then(() => {
+    if (entry.defaultBranch) draft.githubBranch = entry.defaultBranch
+  })
+}
 
 function statusDotColor(s: string | null): string {
   if (!s) return 'grey-5'
@@ -126,8 +162,6 @@ const repoStatusIcon: Record<RepoStatus, string> = {
   error: 'warning',
 }
 
-const REPO_RE = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/
-let debounceTimer: ReturnType<typeof setTimeout> | null = null
 let inflightRepo = ''  // 응답 도착 시 최신 입력과 일치하는지 가드
 
 function resetBranchState() {
@@ -138,35 +172,6 @@ function resetBranchState() {
   filteredBranchOptions.value = []
   draft.githubBranch = ''
 }
-
-function normalizeRepo(input: string): string {
-  // "https://github.com/owner/repo(.git)?" 또는 "owner/repo" 모두 허용
-  const trimmed = input.trim()
-  const m = trimmed.match(/(?:github\.com[\/:])?([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+?)(?:\.git)?\/?$/)
-  return m ? m[1] : trimmed
-}
-
-watch(
-  () => draft.githubRepo,
-  (val) => {
-    if (debounceTimer) clearTimeout(debounceTimer)
-    const raw = (val ?? '').trim()
-    if (!raw) {
-      resetBranchState()
-      return
-    }
-    const normalized = normalizeRepo(raw)
-    if (!REPO_RE.test(normalized)) {
-      branches.value = []
-      defaultBranch.value = null
-      draft.githubBranch = ''
-      repoStatus.value = 'invalid'
-      repoStatusMsg.value = "'owner/repo' 형식이어야 합니다"
-      return
-    }
-    debounceTimer = setTimeout(() => loadBranches(normalized), 600)
-  },
-)
 
 async function loadBranches(repo: string) {
   inflightRepo = repo
@@ -243,7 +248,7 @@ async function loadCatalog() {
 }
 
 function openCreate() {
-  draft.githubRepo = ''
+  draft.repoCatalogId = null
   draft.githubBranch = ''
   draft.title = ''
   draft.description = ''
@@ -256,6 +261,7 @@ function openCreate() {
   showCreate.value = true
   loadAvailableMcps()
   loadCatalog()
+  loadRepoCatalog()
 }
 
 function toggleCatalog(id: number) {
@@ -267,7 +273,7 @@ function toggleCatalog(id: number) {
 const canSubmit = computed(
   () =>
     !submitting.value &&
-    repoStatus.value === 'ok' &&
+    draft.repoCatalogId !== null &&
     !!draft.githubBranch &&
     !!draft.title.trim() &&
     !!draft.description.trim(),
@@ -279,7 +285,7 @@ async function submit() {
     await useApi('/api/tasks', {
       method: 'POST',
       body: {
-        githubRepo: normalizeRepo(draft.githubRepo),
+        repoCatalogId: draft.repoCatalogId,
         githubBranch: draft.githubBranch,
         title: draft.title,
         description: draft.description,
@@ -307,7 +313,7 @@ async function startInterview() {
     const res = await useApi<{ sessionId: number }>('/api/interviews', {
       method: 'POST',
       body: {
-        githubRepo: normalizeRepo(draft.githubRepo),
+        repoCatalogId: draft.repoCatalogId,
         githubBranch: draft.githubBranch,
         title: draft.title,
         description: draft.description,
@@ -446,7 +452,7 @@ function statusClass(status: string) {
       :columns="[
         { name: 'id', label: '#', field: 'id', align: 'left' },
         { name: 'title', label: '제목', field: 'title', align: 'left' },
-        { name: 'repo', label: '레포', field: 'githubRepo', align: 'left' },
+        { name: 'repo', label: '레포', field: (r) => r.repoAlias ?? r.githubRepo, align: 'left' },
         { name: 'status', label: '상태', field: 'statusLabel', align: 'left' },
         { name: 'pr', label: 'PR', field: (r) => r.implementation?.prNumber ?? '', align: 'center' },
         { name: 'retry', label: '재시도', field: (r) => `${r.retryCount}/${r.maxRetry}`, align: 'center' },
@@ -560,29 +566,26 @@ function statusClass(status: string) {
             </template>
           </q-banner>
 
-          <div>
-            <q-input
-              v-model="draft.githubRepo"
-              label="GitHub 레포"
-              placeholder="owner/repo 또는 https://github.com/owner/repo"
-              outlined
-              dense
-              autofocus
-              :loading="repoStatus === 'loading'"
-            />
-            <div
-              v-if="repoStatusMsg"
-              class="text-caption q-mt-xs row items-center q-gutter-xs"
-              :class="`text-${repoStatusColor[repoStatus]}`"
-            >
-              <q-icon
-                v-if="repoStatusIcon[repoStatus]"
-                :name="repoStatusIcon[repoStatus]"
-                size="14px"
-              />
-              <span>{{ repoStatusMsg }}</span>
-            </div>
-          </div>
+          <q-select
+            v-model="draft.repoCatalogId"
+            :options="repoOptions"
+            :loading="repoCatalogLoading"
+            label="레포 (별칭 선택)"
+            outlined
+            dense
+            emit-value
+            map-options
+            autofocus
+            data-test="repo-select"
+            :hint="repoCatalog.length === 0 ? '등록된 레포 없음 — 관리자에게 문의' : '관리자가 등록한 레포 중 선택'"
+            @update:model-value="onRepoSelected"
+          >
+            <template #no-option>
+              <q-item>
+                <q-item-section class="text-grey">등록된 레포가 없습니다</q-item-section>
+              </q-item>
+            </template>
+          </q-select>
 
           <q-select
             v-model="draft.githubBranch"
@@ -598,7 +601,7 @@ function statusClass(status: string) {
             :hint="
               repoStatus === 'ok'
                 ? '입력해서 검색할 수 있습니다'
-                : '레포 입력 후 브랜치 선택 가능'
+                : '레포 선택 후 브랜치 선택 가능'
             "
             @filter="onBranchFilter"
           >

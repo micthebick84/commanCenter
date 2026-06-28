@@ -8,7 +8,8 @@ set -euo pipefail
 
 NETWORK="${NETWORK:-netis-deploy}"
 ENTRYPOINT_PORT="${ENTRYPOINT_PORT:-18080}"
-IMAGE="${TRAEFIK_IMAGE:-traefik:v3.1}"
+# v3.7: docker provider가 Docker Engine 29.x와 호환 (v3.1은 신형 데몬 API와 비호환 — provider가 컨테이너 디스커버리 실패).
+IMAGE="${TRAEFIK_IMAGE:-traefik:v3.7}"
 
 # 공유 네트워크 보장 (멱등)
 docker network inspect "$NETWORK" >/dev/null 2>&1 || docker network create "$NETWORK"

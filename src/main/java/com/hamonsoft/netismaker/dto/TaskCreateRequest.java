@@ -1,17 +1,14 @@
 package com.hamonsoft.netismaker.dto;
 
 import jakarta.validation.constraints.NotBlank;
-import jakarta.validation.constraints.Pattern;
+import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Size;
 
 import java.util.List;
 
 public record TaskCreateRequest(
-        @NotBlank
-        @Pattern(regexp = "^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$",
-                 message = "github_repo는 'owner/repo' 형식이어야 합니다")
-        @Size(max = 255)
-        String githubRepo,
+        @NotNull(message = "repoCatalogId는 필수입니다 (레포 카탈로그에서 선택)")
+        Long repoCatalogId,
 
         @Size(max = 255)
         String githubBranch,

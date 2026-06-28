@@ -24,6 +24,7 @@ class InterviewServiceTest {
     InterviewTurnRepository turnRepo;
     InterviewPlanRepository planRepo;
     McpCatalogService mcpCatalogService;
+    RepoCatalogService repoCatalogService;
     TaskRepository taskRepo;
     TaskAnalysisRepository analysisRepo;
     TaskStatusHistoryRepository historyRepo;
@@ -35,11 +36,16 @@ class InterviewServiceTest {
         turnRepo = mock(InterviewTurnRepository.class);
         planRepo = mock(InterviewPlanRepository.class);
         mcpCatalogService = mock(McpCatalogService.class);
+        repoCatalogService = mock(RepoCatalogService.class);
         taskRepo = mock(TaskRepository.class);
         analysisRepo = mock(TaskAnalysisRepository.class);
         historyRepo = mock(TaskStatusHistoryRepository.class);
         service = new InterviewService(sessionRepo, turnRepo, planRepo,
-                mcpCatalogService, taskRepo, analysisRepo, historyRepo);
+                mcpCatalogService, repoCatalogService, taskRepo, analysisRepo, historyRepo);
+        // default: resolve returns a stub repo for any id
+        when(repoCatalogService.resolveForRegistration(any())).thenReturn(
+                new RepoCatalogService.ResolvedRepo(1L, "owner/repo-alias",
+                        "https://github.com/owner/repo.git", "github", "owner/repo", null));
         ReflectionTestUtils.setField(service, "userConcurrentLimit", 3);
         ReflectionTestUtils.setField(service, "maxRetry", 3);
         when(sessionRepo.save(any())).thenAnswer(i -> i.getArgument(0));
@@ -55,7 +61,7 @@ class InterviewServiceTest {
     }
 
     private CreateInterviewRequest req() {
-        return new CreateInterviewRequest("owner/repo", "main", "제목", "기능 요구", List.of(), null, null);
+        return new CreateInterviewRequest(1L, "main", "제목", "기능 요구", List.of(), null, null);
     }
 
     @Test
@@ -353,7 +359,7 @@ class InterviewServiceTest {
     void create_rejects_incompatible_model_effort() {
         when(sessionRepo.countActiveByRequester("u1")).thenReturn(0L);
         var bad = new com.hamonsoft.netismaker.dto.CreateInterviewRequest(
-                "owner/repo", "main", "제목", "내용", List.of(), "claude-haiku-4-5", "max");
+                1L, "main", "제목", "내용", List.of(), "claude-haiku-4-5", "max");
         assertThatThrownBy(() -> service.create(bad, "u1"))
                 .isInstanceOf(TaskException.class)
                 .hasMessageContaining("effort");

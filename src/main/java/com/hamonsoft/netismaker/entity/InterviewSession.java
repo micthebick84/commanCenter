@@ -101,6 +101,18 @@ public class InterviewSession {
     @Setter
     private String effort = "high";
 
+    @Column(name = "git_url", columnDefinition = "TEXT")
+    @Setter
+    private String gitUrl;
+
+    @Column(name = "repo_alias", length = 100)
+    @Setter
+    private String repoAlias;
+
+    @Column(name = "repo_catalog_id")
+    @Setter
+    private Long repoCatalogId;
+
     /** 등록 시 생성된 Task id. PLAN_READY → REGISTERED 전이에서 set. */
     @Column(name = "task_id")
     @Setter

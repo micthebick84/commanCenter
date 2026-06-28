@@ -12,6 +12,7 @@ import java.util.List;
 public record TaskResponse(
         Long id,
         String githubRepo,
+        String repoAlias,
         String githubBranch,
         String title,
         String description,
@@ -93,6 +94,7 @@ public record TaskResponse(
         return new TaskResponse(
                 t.getId(),
                 t.getGithubRepo(),
+                t.getRepoAlias(),
                 t.getGithubBranch(),
                 t.getTitle(),
                 t.getDescription(),

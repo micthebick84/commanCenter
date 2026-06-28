@@ -115,6 +115,21 @@ public class Task {
     @Setter
     private String implementationLog;
 
+    /** 작업 등록 시 선택된 레포 카탈로그의 전체 Git URL 스냅샷. */
+    @Column(name = "git_url", columnDefinition = "TEXT")
+    @Setter
+    private String gitUrl;
+
+    /** 작업 등록 시 선택된 레포 카탈로그의 한글 별칭 스냅샷 (목록/상세 표시용). */
+    @Column(name = "repo_alias", length = 100)
+    @Setter
+    private String repoAlias;
+
+    /** 선택된 레포 카탈로그 id (편의 FK — 소스 오브 트루스는 스냅샷). */
+    @Column(name = "repo_catalog_id")
+    @Setter
+    private Long repoCatalogId;
+
     /** 배포 접속 URL. DEPLOYED 시 set. 예: http://localhost:19000 */
     @Column(name = "deploy_url", length = 500)
     @Setter

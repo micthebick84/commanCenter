@@ -33,7 +33,8 @@ class InterviewActiveQueryTest {
     void clean() { sessionRepo.deleteAll(); }
 
     private InterviewSession create(String requester, String repo) {
-        return service.create(new CreateInterviewRequest(repo, "main", "T", "d", List.of(), null, null), requester);
+        // repoCatalogId=1 → V14 seed (Netis7.0). repo arg unused after Task 5 migration.
+        return service.create(new CreateInterviewRequest(1L, "main", "T", "d", List.of(), null, null), requester);
     }
 
     @Test

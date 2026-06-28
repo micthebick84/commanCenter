@@ -45,6 +45,7 @@ public class InterviewService {
     private final InterviewTurnRepository turnRepo;
     private final InterviewPlanRepository planRepo;
     private final McpCatalogService mcpCatalogService;
+    private final RepoCatalogService repoCatalogService;
     private final TaskRepository taskRepo;
     private final TaskAnalysisRepository analysisRepo;
     private final TaskStatusHistoryRepository historyRepo;
@@ -59,6 +60,7 @@ public class InterviewService {
                             InterviewTurnRepository turnRepo,
                             InterviewPlanRepository planRepo,
                             McpCatalogService mcpCatalogService,
+                            RepoCatalogService repoCatalogService,
                             TaskRepository taskRepo,
                             TaskAnalysisRepository analysisRepo,
                             TaskStatusHistoryRepository historyRepo) {
@@ -66,6 +68,7 @@ public class InterviewService {
         this.turnRepo = turnRepo;
         this.planRepo = planRepo;
         this.mcpCatalogService = mcpCatalogService;
+        this.repoCatalogService = repoCatalogService;
         this.taskRepo = taskRepo;
         this.analysisRepo = analysisRepo;
         this.historyRepo = historyRepo;
@@ -82,8 +85,12 @@ public class InterviewService {
         String model = ModelEffortPolicy.resolveModel(req.model());
         String effort = ModelEffortPolicy.resolveEffort(req.effort());
         ModelEffortPolicy.validate(model, effort);
-        InterviewSession s = InterviewSession.create(req.githubRepo(), req.githubBranch(),
+        RepoCatalogService.ResolvedRepo repo = repoCatalogService.resolveForRegistration(req.repoCatalogId());
+        InterviewSession s = InterviewSession.create(repo.ownerRepo(), req.githubBranch(),
                 req.title(), req.description(), requesterId, extras, model, effort);
+        s.setGitUrl(repo.gitUrl());
+        s.setRepoAlias(repo.alias());
+        s.setRepoCatalogId(repo.catalogId());
         return sessionRepo.save(s);
     }
 
@@ -328,6 +335,9 @@ public class InterviewService {
                 new ArrayList<>(s.getMcpsExtra() == null ? List.of() : s.getMcpsExtra()),
                 s.getModel(), s.getEffort());
         t.setStatus(TaskStatus.COMPLETED);
+        t.setGitUrl(s.getGitUrl());
+        t.setRepoAlias(s.getRepoAlias());
+        t.setRepoCatalogId(s.getRepoCatalogId());
         Task saved = taskRepo.save(t);
 
         // TaskAnalysis 프리필 (계약 고정):

@@ -41,6 +41,7 @@ public class TaskService {
     private final TaskAnalysisRepository analysisRepo;
     private final TaskStatusHistoryRepository historyRepo;
     private final McpCatalogService mcpCatalogService;
+    private final RepoCatalogService repoCatalogService;
 
     @Value("${app.task.user-concurrent-limit:5}")
     private int userConcurrentLimit;
@@ -51,11 +52,13 @@ public class TaskService {
     public TaskService(TaskRepository taskRepo,
                        TaskAnalysisRepository analysisRepo,
                        TaskStatusHistoryRepository historyRepo,
-                       McpCatalogService mcpCatalogService) {
+                       McpCatalogService mcpCatalogService,
+                       RepoCatalogService repoCatalogService) {
         this.taskRepo = taskRepo;
         this.analysisRepo = analysisRepo;
         this.historyRepo = historyRepo;
         this.mcpCatalogService = mcpCatalogService;
+        this.repoCatalogService = repoCatalogService;
     }
 
     @Transactional
@@ -69,8 +72,12 @@ public class TaskService {
         String model = ModelEffortPolicy.resolveModel(req.model());
         String effort = ModelEffortPolicy.resolveEffort(req.effort());
         ModelEffortPolicy.validate(model, effort);
-        Task t = Task.create(req.githubRepo(), req.githubBranch(), req.title(),
+        RepoCatalogService.ResolvedRepo repo = repoCatalogService.resolveForRegistration(req.repoCatalogId());
+        Task t = Task.create(repo.ownerRepo(), req.githubBranch(), req.title(),
                              req.description(), requesterId, maxRetry, extras, model, effort);
+        t.setGitUrl(repo.gitUrl());
+        t.setRepoAlias(repo.alias());
+        t.setRepoCatalogId(repo.catalogId());
         Task saved = taskRepo.save(t);
         historyRepo.save(TaskStatusHistory.log(saved.getId(), null, TaskStatus.PENDING,
                 "user", requesterId, "작업 등록"));

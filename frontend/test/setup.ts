@@ -11,6 +11,23 @@ import {
   resetNuxtMocks,
 } from './mocks/nuxt'
 
+// Minimal stub for useTaskPolling (composable, not a Nuxt auto-import).
+// Returns a data ref that stays null and a no-op refresh — tests that need real
+// polling call the underlying useApi mock directly.
+function useTaskPollingStub<T>(fetcher: () => Promise<T>) {
+  const data = vue.ref<T | null>(null)
+  const loading = vue.ref(false)
+  const error = vue.ref<unknown>(null)
+  vue.onMounted(async () => {
+    try {
+      data.value = await fetcher()
+    } catch (e) {
+      error.value = e
+    }
+  })
+  return { data, loading, error, refresh: () => fetcher().then((v) => { data.value = v }).catch(() => {}) }
+}
+
 // Install fake EventSource globally so the composable's `new EventSource(...)` resolves to it.
 ;(globalThis as any).EventSource = FakeEventSource
 
@@ -26,6 +43,11 @@ Object.assign(globalThis as any, {
   useApi: useApiMock,
   useAuthStore: useAuthStoreMock,
   useRuntimeConfig: useRuntimeConfigMock,
+  // Nuxt page-only macro — no-op in Vitest (pages are tested without the router layer)
+  definePageMeta: vi.fn(),
+  // useTaskPolling is a local composable (not a Nuxt auto-import) but pages/tasks/index.vue
+  // calls it at setup-time. Provide a test-safe stub that still calls the fetcher on mount.
+  useTaskPolling: useTaskPollingStub,
 })
 
 // Register every Quasar component (QInput, QBtn, ...) globally so they resolve to real

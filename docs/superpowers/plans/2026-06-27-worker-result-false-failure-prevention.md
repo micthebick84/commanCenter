@@ -588,10 +588,10 @@ In `src/main/resources/application-worker.yml`, under `netis-maker.worker:`, aft
     result-report-backoff-ms: 2000
 ```
 
-- [ ] **Step 8: Run full test suite + compile**
+- [ ] **Step 8: Compile + run our unit tests (Testcontainers 통합테스트는 로컬 Docker 비호환이라 CI 전용 — 제외)**
 
-Run: `./gradlew test`
-Expected: BUILD SUCCESSFUL — all tests pass (new ResultReporterTest, WorkerServiceReconcileTest, StaleTaskRecoveryJobTest, plus existing). WorkerMainLoop compiles with the new ResultReporter dependency.
+Run: `./gradlew compileJava compileTestJava && ./gradlew test --tests 'com.hamonsoft.netismaker.workerdaemon.ResultReporterTest' --tests 'com.hamonsoft.netismaker.service.WorkerServiceReconcileTest' --tests 'com.hamonsoft.netismaker.service.StaleTaskRecoveryJobTest' --tests 'com.hamonsoft.netismaker.service.WorkerServiceDeployTest'`
+Expected: BUILD SUCCESSFUL — 전체 컴파일 성공(WorkerMainLoop이 새 ResultReporter 의존성으로 빌드됨) + 대상 단위테스트 전부 PASS.
 
 - [ ] **Step 9: Commit**
 

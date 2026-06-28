@@ -44,6 +44,7 @@ interface EnvVar {
 interface TaskResponse {
   id: number
   githubRepo: string
+  repoAlias: string | null
   githubBranch: string
   title: string
   description: string
@@ -277,7 +278,7 @@ function statusClass(status: string) {
         <q-card-section>
           <div class="text-caption">레포</div>
           <div>
-            {{ task.githubRepo }}
+            {{ task.repoAlias ?? task.githubRepo }}
             <q-chip dense size="sm" :label="task.githubBranch" />
           </div>
         </q-card-section>

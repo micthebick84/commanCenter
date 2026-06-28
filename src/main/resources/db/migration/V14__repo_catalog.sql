@@ -20,12 +20,12 @@ CREATE INDEX IF NOT EXISTS idx_repo_catalog_enabled ON com.repo_catalog(enabled)
 ALTER TABLE com.task
     ADD COLUMN IF NOT EXISTS git_url         TEXT,
     ADD COLUMN IF NOT EXISTS repo_alias      VARCHAR(100),
-    ADD COLUMN IF NOT EXISTS repo_catalog_id BIGINT REFERENCES com.repo_catalog(id);
+    ADD COLUMN IF NOT EXISTS repo_catalog_id BIGINT REFERENCES com.repo_catalog(id) ON DELETE SET NULL;
 
 ALTER TABLE com.interview_session
     ADD COLUMN IF NOT EXISTS git_url         TEXT,
     ADD COLUMN IF NOT EXISTS repo_alias      VARCHAR(100),
-    ADD COLUMN IF NOT EXISTS repo_catalog_id BIGINT REFERENCES com.repo_catalog(id);
+    ADD COLUMN IF NOT EXISTS repo_catalog_id BIGINT REFERENCES com.repo_catalog(id) ON DELETE SET NULL;
 
 -- (선택) 첫 실행 시 폼이 비지 않도록 시드 1건. 불필요하면 이 블록 삭제 가능.
 INSERT INTO com.repo_catalog (alias, git_url, host, owner_repo, description, enabled)

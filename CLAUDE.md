@@ -24,6 +24,12 @@
 cd frontend && npm run dev                                  # 프론트 :3001
 ```
 
+## 프론트엔드 코드 스타일 (`frontend/`)
+
+- **작은따옴표(single quote) + 세미콜론 없음.** 코드베이스 전체가 이 스타일로 손수 작성됨 (워크스페이스 `nuxt_practice`와 동일 컨벤션). `<script setup lang="ts">`, 2-space, trailing comma.
+- ⚠️ **`npm run lint-prettier` 실행 금지 (현재 상태)**: `frontend/`에 prettier 설정 파일이 없어 `prettier --write`가 **기본값(큰따옴표 + 세미콜론)으로 전체 파일을 잘못 재포맷**한다. 코드베이스는 작은따옴표이므로 이걸 돌리면 모든 `.ts/.vue/.json`이 큰따옴표로 뒤집힌다. 고치려면 먼저 `frontend/.prettierrc`에 `{"singleQuote": true, "semi": false}`를 추가할 것.
+- `npm run lint`(eslint)은 ESLint v9 flat config 부재로 현재 동작하지 않음(별도 정비 필요). 포맷은 에디터/수동으로 작은따옴표 스타일 유지.
+
 워커 실행 환경변수:
 ```bash
 API_BASE_URL=http://localhost:8090 \

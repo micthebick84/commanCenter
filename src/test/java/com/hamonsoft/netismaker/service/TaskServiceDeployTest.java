@@ -28,6 +28,7 @@ class TaskServiceDeployTest {
     private TaskAnalysisRepository analysisRepo;
     private TaskStatusHistoryRepository historyRepo;
     private McpCatalogService mcpCatalogService;
+    private RepoCatalogService repoCatalogService;
     private TaskService service;
 
     private Task taskWithStatus(TaskStatus status) {
@@ -43,7 +44,8 @@ class TaskServiceDeployTest {
         analysisRepo = mock(TaskAnalysisRepository.class);
         historyRepo = mock(TaskStatusHistoryRepository.class);
         mcpCatalogService = mock(McpCatalogService.class);
-        service = new TaskService(taskRepo, analysisRepo, historyRepo, mcpCatalogService);
+        repoCatalogService = mock(RepoCatalogService.class);
+        service = new TaskService(taskRepo, analysisRepo, historyRepo, mcpCatalogService, repoCatalogService);
         when(historyRepo.save(any())).thenAnswer(i -> i.getArgument(0));
     }
 

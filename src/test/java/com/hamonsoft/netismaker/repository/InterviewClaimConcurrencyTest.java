@@ -42,8 +42,9 @@ class InterviewClaimConcurrencyTest {
         int n = 8;
         // init-test-schema.sql seeds com."user"(user_id='user1'); reuse it as requester.
         for (int i = 0; i < n; i++) {
+            // repoCatalogId=1 → V14 seed (Netis7.0).
             service.create(new CreateInterviewRequest(
-                    "owner/repo" + i, "main", "T" + i, "desc", List.of(), null, null), "user1");
+                    1L, "main", "T" + i, "desc", List.of(), null, null), "user1");
         }
 
         ExecutorService pool = Executors.newFixedThreadPool(n);

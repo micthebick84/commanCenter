@@ -20,6 +20,10 @@ public final class RepoUrlParser {
     // github.com/<owner>/<repo> 를 https/http/ssh/scp 어떤 형태에서든 추출
     private static final Pattern GITHUB =
             Pattern.compile("github\\.com[/:]([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+?)(?:\\.git)?/?$");
+    // 비-GitHub URL 모양: https?/git/ssh://<anything>
+    private static final Pattern URL_SHAPE = Pattern.compile("^(https?|git|ssh)://.+");
+    // SCP 스타일: <anything>@<anything>:<anything>
+    private static final Pattern SCP_SHAPE = Pattern.compile("^[^\\s]+@[^\\s]+:.+");
 
     public static Parsed parse(String input) {
         if (input == null || input.isBlank()) {
@@ -40,7 +44,7 @@ public final class RepoUrlParser {
         }
 
         // 3) 비-GitHub but URL 모양이면 other 로 보존
-        if (s.matches("^(https?|git|ssh)://.+") || s.matches("^[^\\s]+@[^\\s]+:.+")) {
+        if (URL_SHAPE.matcher(s).matches() || SCP_SHAPE.matcher(s).matches()) {
             String canonical = s.replaceAll("/+$", "");
             return new Parsed(canonical, "other", null);
         }

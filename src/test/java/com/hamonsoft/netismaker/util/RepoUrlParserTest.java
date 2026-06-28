@@ -43,6 +43,8 @@ class RepoUrlParserTest {
     void trims_whitespace_and_trailing_slash() {
         RepoUrlParser.Parsed p = RepoUrlParser.parse("  https://github.com/owner/repo/  ");
         assertThat(p.ownerRepo()).isEqualTo("owner/repo");
+        assertThat(p.host()).isEqualTo("github");
+        assertThat(p.canonicalUrl()).isEqualTo("https://github.com/owner/repo.git");
     }
 
     @Test

@@ -26,6 +26,8 @@ Object.assign(globalThis as any, {
   useApi: useApiMock,
   useAuthStore: useAuthStoreMock,
   useRuntimeConfig: useRuntimeConfigMock,
+  // Nuxt page-only macro — no-op in Vitest (pages are tested without the router layer)
+  definePageMeta: vi.fn(),
 })
 
 // Register every Quasar component (QInput, QBtn, ...) globally so they resolve to real

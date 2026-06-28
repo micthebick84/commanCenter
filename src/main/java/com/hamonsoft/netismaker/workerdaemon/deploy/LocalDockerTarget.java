@@ -37,6 +37,28 @@ public class LocalDockerTarget implements DeployTarget {
         this.buildTimeoutSec = cfg.buildTimeout().toSeconds();
     }
 
+    /**
+     * docker run 인자 빌드 (docker 미실행 환경에서도 검증 가능하도록 분리).
+     * 공개 모드면 공유 네트워크 합류 + Traefik 라우팅 라벨 부착. host-port 발행은 모드 무관 유지.
+     */
+    static List<String> buildRunArgs(DeployTarget.DeploySpec spec, int hostPort,
+                                     boolean publicMode, String network, String baseDomain) {
+        List<String> run = new ArrayList<>(List.of(
+                DOCKER, "run", "-d",
+                "--name", spec.containerName(),
+                "-p", hostPort + ":" + spec.containerPort()));
+        spec.labels().forEach((k, v) -> { run.add("--label"); run.add(k + "=" + v); });
+        spec.env().forEach((k, v) -> { run.add("-e"); run.add(k + "=" + v); });
+        if (publicMode) {
+            run.add("--network"); run.add(network);
+            for (String label : PublicRoute.dockerLabels(spec.taskId(), spec.containerPort(), baseDomain)) {
+                run.add("--label"); run.add(label);
+            }
+        }
+        run.add(spec.imageName());
+        return run;
+    }
+
     @Override
     public DeployResult deploy(DeploySpec spec, java.util.function.Consumer<String> logSink) throws Exception {
         StringBuilder logBuf = new StringBuilder();
@@ -64,14 +86,11 @@ public class LocalDockerTarget implements DeployTarget {
         // 3. 포트 할당
         int hostPort = PortAllocator.allocate(cfg.portFrom(), cfg.portTo(), dockerPublishedPorts());
 
-        // 4. run
-        List<String> run = new ArrayList<>(List.of(
-                DOCKER, "run", "-d",
-                "--name", spec.containerName(),
-                "-p", hostPort + ":" + spec.containerPort()));
-        spec.labels().forEach((k, v) -> { run.add("--label"); run.add(k + "=" + v); });
-        spec.env().forEach((k, v) -> { run.add("-e"); run.add(k + "=" + v); });
-        run.add(spec.imageName());
+        // 4. run (공개 모드면 Traefik 네트워크/라벨 포함 — buildRunArgs 참조)
+        boolean publicMode = cfg.publicAccess().enabled();
+        String pubNetwork = cfg.publicAccess().network();
+        String pubBaseDomain = cfg.publicAccess().baseDomain();
+        List<String> run = buildRunArgs(spec, hostPort, publicMode, pubNetwork, pubBaseDomain);
 
         // run 명령 echo는 env 시크릿 값이 로그/SSE 스트림에 노출되지 않도록 -e 값을 마스킹한다.
         // (정책: 주입 env 값은 출력하지 않고 키만 노출 — UI 마스킹과 일관). 실행 커맨드 run은 실제 값 유지.
@@ -79,6 +98,11 @@ public class LocalDockerTarget implements DeployTarget {
                 + " -p " + hostPort + ":" + spec.containerPort());
         spec.labels().forEach((k, v) -> runEcho.append(" --label ").append(k).append('=').append(v));
         spec.env().forEach((k, v) -> runEcho.append(" -e ").append(k).append("=•••"));
+        if (publicMode) {
+            runEcho.append(" --network ").append(pubNetwork);
+            for (String label : PublicRoute.dockerLabels(spec.taskId(), spec.containerPort(), pubBaseDomain))
+                runEcho.append(" --label ").append(label);
+        }
         runEcho.append(' ').append(spec.imageName());
         logBuf.append("\n$ ").append(runEcho).append('\n');
         sink.accept("\n$ " + runEcho);
@@ -140,7 +164,9 @@ public class LocalDockerTarget implements DeployTarget {
         String startupLog = dockerLogsTail(spec.containerName(), 4000);
         sink.accept("--- container logs ---\n" + startupLog);
 
-        String url = "http://" + cfg.publicHost() + ":" + hostPort;
+        String url = publicMode
+                ? PublicRoute.publicUrl(spec.taskId(), pubBaseDomain)
+                : "http://" + cfg.publicHost() + ":" + hostPort;
         log.info("배포 완료: container={} url={}", spec.containerName(), url);
         return new DeployResult(url, containerId, hostPort, spec.imageName(),
                 tail(logBuf.toString(), 8000));

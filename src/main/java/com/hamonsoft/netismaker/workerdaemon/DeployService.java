@@ -86,6 +86,7 @@ public class DeployService {
             log.append("[env 주입: ").append(env.size()).append("개 키]\n");
 
             DeployTarget.DeploySpec spec = new DeployTarget.DeploySpec(
+                    task.id(),
                     wt.toPath(),
                     "netis-task-" + task.id() + ":" + shortSha,
                     "netis-task-" + task.id(),

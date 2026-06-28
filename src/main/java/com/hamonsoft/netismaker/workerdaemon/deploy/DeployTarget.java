@@ -28,6 +28,7 @@ public interface DeployTarget {
     default void gc(int orphanGraceMinutes, int keepImagesPerTask) { }
 
     /**
+     * @param taskId        작업 ID (공개 배포 라우팅 슬러그 등에 사용)
      * @param contextDir    빌드 컨텍스트(Dockerfile 포함 worktree)
      * @param imageName     예: netis-task-7:abcdef1
      * @param containerName 예: netis-task-7
@@ -36,6 +37,7 @@ public interface DeployTarget {
      * @param labels        docker 라벨 (예: netis-maker.task=7)
      */
     record DeploySpec(
+            long taskId,
             Path contextDir,
             String imageName,
             String containerName,

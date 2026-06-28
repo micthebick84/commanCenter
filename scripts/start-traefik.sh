@@ -13,7 +13,7 @@ IMAGE="${TRAEFIK_IMAGE:-traefik:v3.1}"
 # 공유 네트워크 보장 (멱등)
 docker network inspect "$NETWORK" >/dev/null 2>&1 || docker network create "$NETWORK"
 
-if docker ps --format '{{.Names}}' | grep -qx traefik; then
+if docker ps --format '{{.Names}}' 2>/dev/null | grep -qx traefik; then
   echo "● Traefik 이미 실행 중 — skip"
   exit 0
 fi

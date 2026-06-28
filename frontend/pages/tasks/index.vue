@@ -601,7 +601,9 @@ function statusClass(status: string) {
             :hint="
               repoStatus === 'ok'
                 ? '입력해서 검색할 수 있습니다'
-                : '레포 선택 후 브랜치 선택 가능'
+                : repoStatus === 'notfound' || repoStatus === 'error'
+                  ? repoStatusMsg
+                  : '레포 선택 후 브랜치 선택 가능'
             "
             @filter="onBranchFilter"
           >

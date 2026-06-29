@@ -48,7 +48,8 @@ public record WorkerProperties(
             Boolean gcEnabled,
             int gcIntervalMinutes,
             int gcOrphanGraceMinutes,
-            int gcKeepImagesPerTask
+            int gcKeepImagesPerTask,
+            PublicAccess publicAccess
     ) {
         public Deploy {
             if (target == null || target.isBlank()) target = "local";
@@ -63,9 +64,19 @@ public record WorkerProperties(
             if (gcIntervalMinutes <= 0) gcIntervalMinutes = 60;
             if (gcOrphanGraceMinutes <= 0) gcOrphanGraceMinutes = 60;
             if (gcKeepImagesPerTask <= 0) gcKeepImagesPerTask = 1;
+            if (publicAccess == null) publicAccess = new PublicAccess(null, null, null);
         }
         public int portFrom() { return Integer.parseInt(portRange.split("-")[0].trim()); }
         public int portTo()   { return Integer.parseInt(portRange.split("-")[1].trim()); }
+
+        /** 공개 배포 주소(Traefik 라우팅) 설정. */
+        public record PublicAccess(Boolean enabled, String baseDomain, String network) {
+            public PublicAccess {
+                if (enabled == null) enabled = false;
+                if (baseDomain == null || baseDomain.isBlank()) baseDomain = "micthebick.dev";
+                if (network == null || network.isBlank()) network = "netis-deploy";
+            }
+        }
     }
 
     public WorkerProperties {
@@ -89,6 +100,6 @@ public record WorkerProperties(
         if (gitUserName == null || gitUserName.isBlank()) gitUserName = "netisMaker";
         if (gitUserEmail == null || gitUserEmail.isBlank()) gitUserEmail = "netismaker@hamonsoft.local";
         if (implementationTimeout == null) implementationTimeout = Duration.ofMinutes(45);
-        if (deploy == null) deploy = new Deploy(null, null, 0, null, null, null, 0, 0, null, null, 0, 0, 0);
+        if (deploy == null) deploy = new Deploy(null, null, 0, null, null, null, 0, 0, null, null, 0, 0, 0, null);
     }
 }

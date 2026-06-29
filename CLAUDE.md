@@ -133,6 +133,16 @@ PR 본문/브랜치 prefix/timeout은 `application-worker.yml`의 `netis-maker.w
 - **MCP 합본**: `~/netis-maker/worker-mcp.json` (워커 부팅 시 자동 생성/갱신)
 - **레포 캐시**: `~/netis-maker/repos/{owner}/{repo}` (depth=1 clone, 이후 fetch+reset)
 
+## 공개 배포 주소 (`task-N.micthebick.dev`)
+
+배포된 앱을 외부에서 `https://task-{id}.micthebick.dev`로 접속. 로컬 **Traefik**(Docker provider) 리버스 프록시 + Cloudflare Tunnel 와일드카드 ingress.
+
+- **인프라(1회 셋업)**: `./scripts/setup-public-deploy.sh` — `netis-deploy` 도커 네트워크 + Traefik(`traefik:v3.7`, 호스트 `:18080`) 기동. cloudflared `~/.cloudflared/config.yml`에 `*.micthebick.dev → http://localhost:18080` ingress + 와일드카드 DNS CNAME(`*.micthebick.dev` → 터널). **이미 라이브**(2026-06-29 외부 스모크 통과).
+- **켜기**: `deploy.public-access.enabled=true`(또는 env `NETIS_MAKER_WORKER_DEPLOY_PUBLIC_ACCESS_ENABLED=true`) + 워커 재기동. OFF면 기존 `http://localhost:{hostPort}` 동작 그대로(회귀 없음). 켜면 워커가 배포 컨테이너에 `--network netis-deploy` + Traefik Host 라벨 부착, `deploy_url`=공개 URL.
+- **Traefik 라이프사이클**: `./scripts/start-traefik.sh`(기동), `docker rm -f traefik`(정지). `stop-all.sh`는 Traefik **안 멈춤**(`--restart unless-stopped` 장수 프록시 — 의도적). `status.sh`가 실행 여부 표시.
+- **⚠️ Traefik 버전**: docker provider가 데몬 API와 버전 호환돼야 함. `v3.1`은 Docker Engine 29와 비호환(provider가 컨테이너 디스커버리 실패→Host 라우팅 404). 현재 `v3.7` 핀. Engine 업글 시 Traefik도 맞춰 올릴 것.
+- **undeploy**: `docker rm -f` 시 Traefik 라우트 자동 소멸(별도 정리 불필요).
+
 ## 진행상황 노트
 
 옵시디언: `Andy/netisMaker-진행상황-YYYY-MM-DD.md` (운영자 vault).

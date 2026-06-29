@@ -27,13 +27,21 @@ fi
 
 echo ""
 echo "── 포트 LISTEN ──"
-for p in "$API_PORT" 3001 9000; do
+for p in "$API_PORT" 3001 9000 18080; do
   if lsof -nP -iTCP:"$p" -sTCP:LISTEN >/dev/null 2>&1; then
     echo "  ✓ :$p"
   else
     echo "  ✗ :$p"
   fi
 done
+
+echo ""
+echo "── Traefik (공개 배포 프록시) ──"
+if docker ps --format '{{.Names}}' 2>/dev/null | grep -qx traefik; then
+  echo "  ✓ traefik 컨테이너 실행 중"
+else
+  echo "  ✗ traefik 미실행 (공개 URL 비활성 — ./scripts/start-traefik.sh)"
+fi
 
 echo ""
 echo "── API health ──"

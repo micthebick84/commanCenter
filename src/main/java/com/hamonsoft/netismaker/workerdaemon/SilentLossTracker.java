@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.hamonsoft.netismaker.dto.WorkerResultRequest;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.annotation.Profile;
 import org.springframework.stereotype.Component;
 
@@ -29,6 +30,8 @@ public class SilentLossTracker implements ResultReporter.LostReportListener {
     private final AtomicInteger lostCount = new AtomicInteger();
     private final Path deadLetterFile;
 
+    // 생성자 여러 개(테스트용 포함) → Spring 주입 생성자 명시(없으면 no-arg 폴백→기동 실패).
+    @Autowired
     public SilentLossTracker(WorkerProperties props) {
         this(props.deadLetterDir(), props.id());
     }

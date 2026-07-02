@@ -2,6 +2,7 @@ package com.hamonsoft.netismaker.workerdaemon;
 
 import com.hamonsoft.netismaker.dto.WorkerResultRequest;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.annotation.Profile;
 import org.springframework.stereotype.Component;
 import org.springframework.web.client.HttpClientErrorException;
@@ -43,6 +44,8 @@ public class ResultReporter {
     private final Sleeper sleeper;
     private final LostReportListener lossListener;
 
+    // 생성자가 여러 개(테스트용 포함)이므로 Spring이 주입에 쓸 생성자를 명시. 없으면 no-arg 폴백→기동 실패.
+    @Autowired
     public ResultReporter(WorkerHttpClient http, WorkerProperties props, SilentLossTracker tracker) {
         this(http::postResult, props.resultReportMaxRetries(), props.resultReportBackoffMs(), Thread::sleep, tracker);
     }

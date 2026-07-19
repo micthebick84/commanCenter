@@ -50,7 +50,7 @@ const tasks = computed<TaskResponse[]>(() => page.value?.content ?? [])
 
 // 등록 다이얼로그 상태
 const showCreate = ref(false)
-const draft = reactive({ repoCatalogId: null as number | null, githubBranch: '', title: '', description: '', model: DEFAULT_MODEL, effort: DEFAULT_EFFORT, designRequested: false })
+const draft = reactive({ repoCatalogId: null as number | null, githubBranch: '', title: '', description: '', model: DEFAULT_MODEL, effort: DEFAULT_EFFORT })
 const effortOptions = computed(() => effortsForModel(draft.model))
 watch(() => draft.model, (m) => { draft.effort = coerceEffort(m, draft.effort) })
 const submitting = ref(false)
@@ -254,7 +254,6 @@ function openCreate() {
   draft.description = ''
   draft.model = DEFAULT_MODEL
   draft.effort = DEFAULT_EFFORT
-  draft.designRequested = false
   selectedCatalogIds.value = []
   resetBranchState()
   dialogPhase.value = 'form'
@@ -293,7 +292,6 @@ async function submit() {
         mcpCatalogIds: selectedCatalogIds.value,
         model: draft.model,
         effort: draft.effort,
-        designRequested: draft.designRequested,
       },
     })
     $q.notify({ type: 'positive', message: '작업 등록 완료' })
@@ -671,14 +669,6 @@ const DEPLOY_ACTIVE_STATUSES = [
               />
             </div>
           </div>
-
-          <q-toggle
-            v-model="draft.designRequested"
-            dense
-            label="디자인 단계 포함"
-          >
-            <q-tooltip>분석 승인 후 워커가 화면 목업을 생성하고, 승인해야 구현이 시작됩니다</q-tooltip>
-          </q-toggle>
 
           <q-expansion-item
             icon="extension"

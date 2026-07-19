@@ -3,6 +3,8 @@ package com.hamonsoft.netismaker.controller;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.hamonsoft.netismaker.TestcontainersConfig;
 import com.hamonsoft.netismaker.dto.TaskCreateRequest;
+import com.hamonsoft.netismaker.repository.InterviewSessionRepository;
+import com.hamonsoft.netismaker.repository.TaskDesignRepository;
 import com.hamonsoft.netismaker.repository.TaskRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -43,9 +45,15 @@ class TaskApiIntegrationTest {
     @Autowired private MockMvc mvc;
     @Autowired private ObjectMapper json;
     @Autowired private TaskRepository taskRepo;
+    @Autowired private TaskDesignRepository designRepo;
+    @Autowired private InterviewSessionRepository sessionRepo;
 
     @BeforeEach
     void cleanTasks() {
+        // 공유 컨테이너 — 다른 클래스가 남긴 자식 row(task_design/interview_session)가
+        // task 삭제를 FK로 막지 않도록 자식 먼저 삭제
+        designRepo.deleteAll();
+        sessionRepo.deleteAll();
         taskRepo.deleteAll();
     }
 

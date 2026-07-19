@@ -29,11 +29,13 @@ class WorkerServiceDesignResultTest {
     @Autowired private TaskRepository taskRepo;
     @Autowired private TaskDesignRepository designRepo;
     @Autowired private RepoCatalogRepository repoCatalogRepo;
+    @Autowired private InterviewSessionRepository sessionRepo;
 
     @BeforeEach
     void cleanUp() {
-        // FK 위반 방지: task_design(자식) 먼저 삭제, 그 다음 task(부모) 삭제
+        // FK 위반 방지: task_design/interview_session(자식) 먼저 삭제, 그 다음 task(부모) 삭제
         designRepo.deleteAll();
+        sessionRepo.deleteAll();
         taskRepo.deleteAll();
     }
 

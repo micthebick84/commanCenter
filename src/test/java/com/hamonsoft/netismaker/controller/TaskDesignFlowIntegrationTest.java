@@ -3,6 +3,7 @@ package com.hamonsoft.netismaker.controller;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.hamonsoft.netismaker.TestcontainersConfig;
 import com.hamonsoft.netismaker.dto.TaskCreateRequest;
+import com.hamonsoft.netismaker.repository.InterviewSessionRepository;
 import com.hamonsoft.netismaker.repository.TaskAnalysisRepository;
 import com.hamonsoft.netismaker.repository.TaskDesignRepository;
 import com.hamonsoft.netismaker.repository.TaskRepository;
@@ -44,12 +45,15 @@ class TaskDesignFlowIntegrationTest {
     @Autowired private TaskRepository taskRepo;
     @Autowired private TaskAnalysisRepository analysisRepo;
     @Autowired private TaskDesignRepository designRepo;
+    @Autowired private InterviewSessionRepository sessionRepo;
     @Value("${app.worker.api-key}") private String apiKey;
 
     @BeforeEach
     void cleanTasks() {
+        // 자식(task_design/task_analysis/interview_session) 먼저 삭제 — task 삭제 FK 방지
         designRepo.deleteAll();
         analysisRepo.deleteAll();
+        sessionRepo.deleteAll();
         taskRepo.deleteAll();
     }
 

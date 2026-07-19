@@ -25,10 +25,13 @@ class InterviewRegisterContractTest {
     @Autowired private InterviewSessionRepository sessionRepo;
     @Autowired private TaskRepository taskRepo;
     @Autowired private TaskAnalysisRepository analysisRepo;
+    @Autowired private TaskDesignRepository designRepo;
 
     private Long sid;
 
     @BeforeEach void seed() {
+        // 공유 컨테이너 — task_design(자식, CASCADE 없음)이 남아 있으면 task 삭제가 FK에 막힌다
+        designRepo.deleteAll();
         sessionRepo.deleteAll();
         taskRepo.deleteAll();
         InterviewSession s = InterviewSession.create("hamonsoft/netis-backend", "feat/rbac",

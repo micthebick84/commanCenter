@@ -168,7 +168,8 @@ public class WorkerMainLoop {
                 exec.durationMs(),
                 null,
                 null, null, null, null, null,
-                null, null, null, null, null
+                null, null, null, null, null,
+                null, null, null, null
         ));
         log.info("분석 완료: id={} duration={}ms warnings={}",
                 task.id(), exec.durationMs(), parsed.warnings());
@@ -253,7 +254,8 @@ public class WorkerMainLoop {
                 TaskStatus.PR_CREATED,
                 null, null, null, exec.durationMs(), null,
                 pr.url(), pr.number(), wt.branchName(), headSha, exec.stdout(),
-                null, null, null, null, null
+                null, null, null, null, null,
+                null, null, null, null
         ));
         log.info("구현 완료 + PR 생성: task={} pr=#{} {}", task.id(), pr.number(), pr.url());
     }
@@ -353,7 +355,8 @@ public class WorkerMainLoop {
                 props.id(), TaskStatus.FAILED,
                 null, null, null, null, reason,
                 null, null, null, null, null,
-                null, null, null, null, null));
+                null, null, null, null, null,
+                null, null, null, null));
     }
 
     private void safePostImplementationFailure(Long taskId, String reason,
@@ -362,7 +365,8 @@ public class WorkerMainLoop {
                 props.id(), TaskStatus.IMPLEMENTATION_FAILED,
                 null, null, null, null, reason,
                 null, null, headBranch, headSha, log_,
-                null, null, null, null, null));
+                null, null, null, null, null,
+                null, null, null, null));
     }
 
     private static String tail(String s, int max) {

@@ -48,7 +48,8 @@ class WorkerServiceReconcileTest {
         return new WorkerResultRequest("mac-worker-1", TaskStatus.PR_CREATED,
                 null, null, null, 123L, null,
                 prUrl, 10, headBranch, "abcdef1", "impl log",
-                null, null, null, null, null);
+                null, null, null, null, null,
+                null, null, null, null);
     }
 
     @Test

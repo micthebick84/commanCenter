@@ -16,7 +16,8 @@ class ResultReporterTest {
     private static final WorkerResultRequest REQ = new WorkerResultRequest(
             "w1", TaskStatus.PR_CREATED, null, null, null, 1L, null,
             "https://x/pull/1", 1, "netismaker/task-1", "sha", "log",
-            null, null, null, null, null);
+            null, null, null, null, null,
+            null, null, null, null);
 
     /** maxRetries=2, backoff=1ms, no-op sleeper. */
     private ResultReporter reporter(ResultReporter.Poster poster) {

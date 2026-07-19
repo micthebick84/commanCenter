@@ -109,7 +109,7 @@ public class WorkerService {
 
         if (t.getStatus() == TaskStatus.IMPLEMENTING) {
             TaskAnalysis a = analysisRepo.findById(t.getId()).orElse(null);
-            return Optional.of(WorkerTaskResponse.forImplementation(t, a));
+            return Optional.of(WorkerTaskResponse.forImplementation(t, a, null));
         }
         if (from == TaskStatus.DEPLOY_PENDING) {
             return Optional.of(WorkerTaskResponse.forDeploy(t));

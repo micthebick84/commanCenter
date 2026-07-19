@@ -27,5 +27,14 @@ public record TaskCreateRequest(
         String model,
 
         /** 추론 effort. blank면 서버 기본값(high). */
-        String effort
-) {}
+        String effort,
+
+        /** 디자인 단계 포함 여부. null이면 false. */
+        Boolean designRequested
+) {
+    /** 기존 7-arg 호출처(테스트 등) 호환용 — designRequested=null(=false)로 위임. */
+    public TaskCreateRequest(Long repoCatalogId, String githubBranch, String title, String description,
+                             List<Long> mcpCatalogIds, String model, String effort) {
+        this(repoCatalogId, githubBranch, title, description, mcpCatalogIds, model, effort, null);
+    }
+}

@@ -319,7 +319,7 @@ public class InterviewService {
      * 반환: 생성된 taskId.
      */
     @Transactional
-    public Long register(Long sessionId, String actorId, boolean isAdmin) {
+    public Long register(Long sessionId, String actorId, boolean isAdmin, boolean designRequested) {
         InterviewSession s = requireSession(sessionId);
         requireOwner(s, actorId, isAdmin);
         if (s.getStatus() != InterviewStatus.PLAN_READY) {
@@ -335,6 +335,7 @@ public class InterviewService {
                 new ArrayList<>(s.getMcpsExtra() == null ? List.of() : s.getMcpsExtra()),
                 s.getModel(), s.getEffort());
         t.setStatus(TaskStatus.COMPLETED);
+        t.setDesignRequested(designRequested);
         t.setGitUrl(s.getGitUrl());
         t.setRepoAlias(s.getRepoAlias());
         t.setRepoCatalogId(s.getRepoCatalogId());

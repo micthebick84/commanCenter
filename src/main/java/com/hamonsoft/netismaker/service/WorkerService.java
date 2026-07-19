@@ -6,7 +6,9 @@ import com.hamonsoft.netismaker.dto.WorkerResultRequest;
 import com.hamonsoft.netismaker.dto.WorkerRuntimeStatusRequest;
 import com.hamonsoft.netismaker.dto.WorkerTaskResponse;
 import com.hamonsoft.netismaker.entity.*;
+import com.hamonsoft.netismaker.repository.RepoCatalogRepository;
 import com.hamonsoft.netismaker.repository.TaskAnalysisRepository;
+import com.hamonsoft.netismaker.repository.TaskDesignRepository;
 import com.hamonsoft.netismaker.repository.TaskRepository;
 import com.hamonsoft.netismaker.repository.TaskStatusHistoryRepository;
 import com.hamonsoft.netismaker.repository.WorkerHeartbeatRepository;
@@ -27,13 +29,16 @@ import java.util.Optional;
  *   claimNextTask   ─► PENDING/APPROVED 작업 1건 atomic claim (SKIP LOCKED)
  *                       PENDING         → IN_PROGRESS  (kind=ANALYSIS)
  *                       APPROVED        → IMPLEMENTING  (kind=IMPLEMENTATION, analysis 동봉)
+ *                       DESIGN_PENDING  → DESIGNING     (kind=DESIGN, 이전 디자인/피드백 동봉)
  *                       DEPLOY_PENDING  → DEPLOYING     (kind=DEPLOY)
  *                       UNDEPLOY_PENDING → UNDEPLOYING  (kind=UNDEPLOY)
- *   recordResult    ─► 워커가 분석/구현/배포 완료/실패 보고. worker_id 일치 필수.
+ *   recordResult    ─► 워커가 분석/구현/배포/디자인 완료/실패 보고. worker_id 일치 필수.
  *                       COMPLETED           : task_analysis upsert + status=COMPLETED
  *                       FAILED              : failure_reason + status=FAILED
  *                       PR_CREATED          : pr_url/pr_number/head_* + status=PR_CREATED
  *                       IMPLEMENTATION_FAILED: failure_reason + (있으면)log + status=IMPLEMENTATION_FAILED
+ *                       DESIGN_REVIEW       : task_design upsert(반려 이력 보존) + status=DESIGN_REVIEW
+ *                       DESIGN_FAILED       : failure_reason + status=DESIGN_FAILED
  */
 @Service
 @Profile("api")
@@ -41,17 +46,23 @@ public class WorkerService {
 
     private final TaskRepository taskRepo;
     private final TaskAnalysisRepository analysisRepo;
+    private final TaskDesignRepository designRepo;
+    private final RepoCatalogRepository repoCatalogRepo;
     private final TaskStatusHistoryRepository historyRepo;
     private final WorkerHeartbeatRepository heartbeatRepo;
     private final DeployLogStreamService deployLogStream;
 
     public WorkerService(TaskRepository taskRepo,
                          TaskAnalysisRepository analysisRepo,
+                         TaskDesignRepository designRepo,
+                         RepoCatalogRepository repoCatalogRepo,
                          TaskStatusHistoryRepository historyRepo,
                          WorkerHeartbeatRepository heartbeatRepo,
                          DeployLogStreamService deployLogStream) {
         this.taskRepo = taskRepo;
         this.analysisRepo = analysisRepo;
+        this.designRepo = designRepo;
+        this.repoCatalogRepo = repoCatalogRepo;
         this.historyRepo = historyRepo;
         this.heartbeatRepo = heartbeatRepo;
         this.deployLogStream = deployLogStream;
@@ -93,6 +104,8 @@ public class WorkerService {
             t.setStatus(TaskStatus.IN_PROGRESS);
         } else if (from == TaskStatus.APPROVED) {
             t.setStatus(TaskStatus.IMPLEMENTING);
+        } else if (from == TaskStatus.DESIGN_PENDING) {
+            t.setStatus(TaskStatus.DESIGNING);
         } else if (from == TaskStatus.DEPLOY_PENDING) {
             t.setStatus(TaskStatus.DEPLOYING);
         } else if (from == TaskStatus.UNDEPLOY_PENDING) {
@@ -107,9 +120,25 @@ public class WorkerService {
         historyRepo.save(TaskStatusHistory.log(t.getId(), from, t.getStatus(),
                 "worker", workerId, "워커 claim"));
 
+        if (t.getStatus() == TaskStatus.DESIGNING) {
+            TaskAnalysis a = analysisRepo.findById(t.getId()).orElse(null);
+            TaskDesign prev = designRepo.findById(t.getId()).orElse(null);
+            String dsProjectId = null;
+            String outProjectId = null;
+            if (t.getRepoCatalogId() != null) {
+                var cat = repoCatalogRepo.findById(t.getRepoCatalogId()).orElse(null);
+                if (cat != null) {
+                    dsProjectId = cat.getDesignSystemProjectId();
+                    outProjectId = cat.getDesignOutputProjectId();
+                }
+            }
+            return Optional.of(WorkerTaskResponse.forDesign(t, a, prev, dsProjectId, outProjectId));
+        }
         if (t.getStatus() == TaskStatus.IMPLEMENTING) {
             TaskAnalysis a = analysisRepo.findById(t.getId()).orElse(null);
-            return Optional.of(WorkerTaskResponse.forImplementation(t, a));
+            TaskDesign d = designRepo.findById(t.getId()).orElse(null);
+            return Optional.of(WorkerTaskResponse.forImplementation(t, a,
+                    (d != null && d.isApproved()) ? d : null));
         }
         if (from == TaskStatus.DEPLOY_PENDING) {
             return Optional.of(WorkerTaskResponse.forDeploy(t));
@@ -150,6 +179,7 @@ public class WorkerService {
 
         if (current != TaskStatus.IN_PROGRESS
                 && current != TaskStatus.IMPLEMENTING
+                && current != TaskStatus.DESIGNING
                 && current != TaskStatus.DEPLOYING
                 && current != TaskStatus.UNDEPLOYING) {
             throw new TaskException(HttpStatus.CONFLICT,
@@ -163,6 +193,12 @@ public class WorkerService {
         // 배포/중지 단계는 별도 처리 (분석/구현 검증 로직과 분리).
         if (current == TaskStatus.DEPLOYING || current == TaskStatus.UNDEPLOYING) {
             recordDeployResult(t, req);
+            return;
+        }
+
+        // 디자인 단계도 별도 처리 (분석/구현 검증 로직과 분리).
+        if (current == TaskStatus.DESIGNING) {
+            recordDesignResult(t, req);
             return;
         }
 
@@ -278,6 +314,57 @@ public class WorkerService {
                 "worker", req.workerId(), reason));
         // 배포/중지 종료 → 스트림 구독자에 done 통지 + 청크 정리
         deployLogStream.finish(t.getId());
+    }
+
+    private void recordDesignResult(Task t, WorkerResultRequest req) {
+        TaskStatus from = t.getStatus();
+        String reason;
+        switch (req.status()) {
+            case DESIGN_REVIEW -> {
+                if (req.designMarkdown() == null || req.designMarkdown().isBlank()) {
+                    throw new TaskException(HttpStatus.BAD_REQUEST, "디자인 완료 시 designMarkdown 필수");
+                }
+                if (req.mockupFilesJson() == null || req.mockupFilesJson().isBlank()) {
+                    throw new TaskException(HttpStatus.BAD_REQUEST, "디자인 완료 시 mockupFilesJson 필수");
+                }
+                TaskDesign d = designRepo.findById(t.getId()).orElse(null);
+                if (d == null) {
+                    d = TaskDesign.create(t.getId(), req.designMarkdown(), req.mockupFilesJson(),
+                            req.designProjectId(), req.designUrl(), req.claudeLog(), req.durationMs());
+                } else {
+                    // 반려 재실행: feedback_history/reject_count 보존, 산출물만 갱신
+                    d.setDesignMarkdown(req.designMarkdown());
+                    d.setMockupFilesJson(req.mockupFilesJson());
+                    if (req.designProjectId() != null) d.setDesignProjectId(req.designProjectId());
+                    d.setDesignUrl(req.designUrl());
+                    d.setClaudeLog(req.claudeLog());
+                    d.setDurationMs(req.durationMs());
+                    d.setCompletedAt(OffsetDateTime.now());
+                }
+                designRepo.save(d);
+                // 출력 프로젝트 최초 생성 시 카탈로그에 박제 (이후 작업이 재사용)
+                if (req.designProjectId() != null && t.getRepoCatalogId() != null) {
+                    repoCatalogRepo.findById(t.getRepoCatalogId())
+                            .filter(c -> c.getDesignOutputProjectId() == null)
+                            .ifPresent(c -> {
+                                c.setDesignOutputProjectId(req.designProjectId());
+                                c.setUpdatedAt(OffsetDateTime.now());
+                            });
+                }
+                t.setStatus(TaskStatus.DESIGN_REVIEW);
+                reason = "디자인 생성 완료 → 승인 대기";
+            }
+            case DESIGN_FAILED -> {
+                t.setStatus(TaskStatus.DESIGN_FAILED);
+                t.setFailureReason(req.failureReason() == null ? "원인 미상" : req.failureReason());
+                reason = t.getFailureReason();
+            }
+            default -> throw new TaskException(HttpStatus.BAD_REQUEST,
+                    "디자인 단계에서 허용되지 않는 status: " + req.status());
+        }
+        t.setUpdatedAt(OffsetDateTime.now());
+        historyRepo.save(TaskStatusHistory.log(t.getId(), from, t.getStatus(),
+                "worker", req.workerId(), reason));
     }
 
     /** 워커가 배포 중 올리는 증분 로그 청크. 상태 검증 없이 best-effort 영속/중계. */

@@ -48,6 +48,7 @@ public class WorkerMainLoop {
     private final DeployService deployService;
     private final ResultReporter reporter;
     private final SilentLossTracker silentLossTracker;
+    private final DesignResultHarvester designHarvester;
 
     public WorkerMainLoop(WorkerProperties props,
                           WorkerHttpClient http,
@@ -59,7 +60,8 @@ public class WorkerMainLoop {
                           GitOpsService gitOps,
                           DeployService deployService,
                           ResultReporter reporter,
-                          SilentLossTracker silentLossTracker) {
+                          SilentLossTracker silentLossTracker,
+                          DesignResultHarvester designHarvester) {
         this.props = props;
         this.http = http;
         this.repos = repos;
@@ -71,6 +73,7 @@ public class WorkerMainLoop {
         this.deployService = deployService;
         this.reporter = reporter;
         this.silentLossTracker = silentLossTracker;
+        this.designHarvester = designHarvester;
     }
 
     @Scheduled(fixedRateString = "#{${netis-maker.worker.heartbeat-interval-seconds:10} * 1000}")
@@ -103,6 +106,7 @@ public class WorkerMainLoop {
                 case IMPLEMENTATION -> processImplementation(task);
                 case DEPLOY -> processDeploy(task);
                 case UNDEPLOY -> processUndeploy(task);
+                case DESIGN -> processDesign(task);
                 default -> processAnalysis(task);
             }
         } catch (Throwable t) {
@@ -112,6 +116,8 @@ public class WorkerMainLoop {
                         "처리 중 예외: " + t.getClass().getSimpleName() + ": " + t.getMessage(),
                         null, null, null);
                 case DEPLOY, UNDEPLOY -> safePostDeployFailure(task.id(),
+                        "처리 중 예외: " + t.getClass().getSimpleName() + ": " + t.getMessage(), null);
+                case DESIGN -> safePostDesignFailure(task.id(),
                         "처리 중 예외: " + t.getClass().getSimpleName() + ": " + t.getMessage(), null);
                 default -> safePostAnalysisFailure(task.id(),
                         "처리 중 예외: " + t.getClass().getSimpleName() + ": " + t.getMessage());
@@ -168,7 +174,8 @@ public class WorkerMainLoop {
                 exec.durationMs(),
                 null,
                 null, null, null, null, null,
-                null, null, null, null, null
+                null, null, null, null, null,
+                null, null, null, null
         ));
         log.info("분석 완료: id={} duration={}ms warnings={}",
                 task.id(), exec.durationMs(), parsed.warnings());
@@ -196,6 +203,20 @@ public class WorkerMainLoop {
             return;
         }
 
+        // 승인된 디자인이 있으면 목업을 워크트리에 배치 (참조용 — 커밋 전 삭제)
+        File designDir = null;
+        if (task.mockupFilesJson() != null && !task.mockupFilesJson().isBlank()) {
+            try {
+                designDir = new File(wt.dir(), ".design");
+                writeMockupFiles(designDir, task.mockupFilesJson());
+                java.nio.file.Files.writeString(new File(designDir, "DESIGN.md").toPath(),
+                        nvl(task.designMarkdown(), ""));
+            } catch (Exception e) {
+                log.warn("목업 배치 실패 (디자인 없이 진행): {}", e.getMessage());
+                designDir = null;
+            }
+        }
+
         // 3. 구현 prompt + claude exec (worktree 디렉토리에서)
         //    비대화식 모드에서 Write/Edit/Bash 차단 회피 위해 권한 우회 활성.
         //    worktree는 격리 환경이라 워커 머신 다른 곳에 영향 없음.
@@ -218,6 +239,9 @@ public class WorkerMainLoop {
                     wt.branchName(), null, exec.stdout());
             return;
         }
+
+        // 목업 참조 파일은 커밋 대상에서 제외
+        if (designDir != null) deleteRecursively(designDir);
 
         // 4. 변경 commit + push
         String headSha;
@@ -253,9 +277,85 @@ public class WorkerMainLoop {
                 TaskStatus.PR_CREATED,
                 null, null, null, exec.durationMs(), null,
                 pr.url(), pr.number(), wt.branchName(), headSha, exec.stdout(),
-                null, null, null, null, null
+                null, null, null, null, null,
+                null, null, null, null
         ));
         log.info("구현 완료 + PR 생성: task={} pr=#{} {}", task.id(), pr.number(), pr.url());
+    }
+
+    private void processDesign(WorkerTaskResponse task) throws Exception {
+        GitRepoCache.CheckedOutRepo repo;
+        try {
+            repo = repos.ensureFresh(task.githubRepo(), task.githubBranch());
+        } catch (Exception e) {
+            safePostDesignFailure(task.id(), "레포 fetch 실패: " + e.getMessage(), null);
+            return;
+        }
+
+        File wt;
+        try {
+            wt = worktrees.createForDesign(repo.dir(), task.githubRepo(),
+                    task.githubBranch(), task.id());
+        } catch (Exception e) {
+            safePostDesignFailure(task.id(), "design worktree 생성 실패: " + e.getMessage(), null);
+            return;
+        }
+
+        String prompt = renderDesignPrompt(task);
+        ClaudeExecAdapter.ExecResult exec;
+        try {
+            exec = claude.exec(prompt, wt, props.designTimeout(),
+                    task.mcpsExtra() == null ? java.util.List.of() : task.mcpsExtra(),
+                    true, task.model(), task.effort());
+        } catch (Exception e) {
+            safePostDesignFailure(task.id(), "claude exec 실패: " + e.getMessage(), null);
+            return;
+        }
+        if (exec.exitCode() != 0) {
+            safePostDesignFailure(task.id(),
+                    "claude exit=" + exec.exitCode() + "\n" + tail(exec.stdout(), 4000),
+                    exec.stdout());
+            return;
+        }
+
+        DesignResultHarvester.HarvestResult harvest;
+        try {
+            harvest = designHarvester.harvest(wt);
+        } catch (DesignResultHarvester.HarvestException e) {
+            safePostDesignFailure(task.id(), e.getMessage(), exec.stdout());
+            return;
+        }
+
+        reporter.reportTerminal(task.id(), WorkerResultRequest.designReview(
+                props.id(), harvest.designMarkdown(), harvest.mockupFilesJson(),
+                harvest.designProjectId(), harvest.designUrl(),
+                exec.stdout(), exec.durationMs()));
+        // 수확 완료 후 design worktree는 best-effort 정리 (산출물은 DB로 감 — 보존 불필요)
+        worktrees.remove(repo.dir(), wt);
+        log.info("디자인 생성 완료: task={} screens 포함, url={}", task.id(), harvest.designUrl());
+    }
+
+    private String renderDesignPrompt(WorkerTaskResponse task) {
+        String tpl = props.designPromptTemplate();
+        return tpl
+                .replace("{github_repo}", task.githubRepo())
+                .replace("{task_id}", String.valueOf(task.id()))
+                .replace("{title}", task.title())
+                .replace("{description}", task.description())
+                .replace("{analysis_markdown}", nvl(task.analysisMarkdown(), ""))
+                .replace("{subtasks_json}", nvl(task.subtasksJson(), "[]"))
+                .replace("{previous_design_markdown}", nvl(task.designMarkdown(), "(없음 — 첫 생성)"))
+                .replace("{feedback_history}", nvl(task.feedbackHistoryJson(), "[]"))
+                .replace("{design_system_project_id}", nvl(task.designSystemProjectId(), "없음"))
+                .replace("{design_output_project_id}", nvl(task.designOutputProjectId(), "없음"));
+    }
+
+    private static String nvl(String s, String def) {
+        return s == null || s.isBlank() ? def : s;
+    }
+
+    private void safePostDesignFailure(Long taskId, String reason, String log_) {
+        reporter.reportTerminal(taskId, WorkerResultRequest.designFailed(props.id(), reason, log_));
     }
 
     private void processDeploy(WorkerTaskResponse task) {
@@ -306,7 +406,21 @@ public class WorkerMainLoop {
                 .replace("{title}", task.title())
                 .replace("{description}", task.description())
                 .replace("{analysis_markdown}", task.analysisMarkdown() == null ? "" : task.analysisMarkdown())
-                .replace("{subtasks_json}", task.subtasksJson() == null ? "[]" : task.subtasksJson());
+                .replace("{subtasks_json}", task.subtasksJson() == null ? "[]" : task.subtasksJson())
+                .replace("{design_section}", renderDesignSection(task));
+    }
+
+    /** 승인된 디자인이 있으면 구현 프롬프트에 삽입할 블록, 없으면 빈 문자열 (기존 작업 불변). */
+    private static String renderDesignSection(WorkerTaskResponse task) {
+        if (task.designMarkdown() == null || task.designMarkdown().isBlank()) return "";
+        return """
+
+                ## 확정된 디자인 (반드시 이 디자인 기준으로 구현)
+                아래 디자인 문서와 `.design/` 디렉토리의 화면 목업 HTML이 승인된 확정 디자인입니다.
+                화면 구현 시 목업의 레이아웃·색·타이포·컴포넌트 구조를 그대로 따르세요.
+                `.design/`은 참조용이며 커밋하지 마세요.
+
+                """ + task.designMarkdown();
     }
 
     private static String defaultImplementationPrompt() {
@@ -319,7 +433,7 @@ public class WorkerMainLoop {
 
                 ## 요구사항
                 {description}
-
+                {design_section}
                 ## 사전 분석 결과
                 {analysis_markdown}
 
@@ -340,6 +454,7 @@ public class WorkerMainLoop {
                 + "- **Task**: #" + task.id() + " " + task.title() + "\n"
                 + "- **베이스**: `" + task.githubBranch() + "`\n"
                 + "- **구현 SHA**: `" + headSha.substring(0, Math.min(7, headSha.length())) + "`\n"
+                + (task.designMarkdown() == null ? "" : "- **디자인**: 확정 디자인 기반 구현 (작업 상세의 디자인 카드 참고)\n")
                 + "- **소요시간**: " + (durationMs / 1000) + "초\n\n"
                 + "## 사전 분석\n"
                 + (task.analysisMarkdown() == null ? "" : task.analysisMarkdown())
@@ -353,7 +468,8 @@ public class WorkerMainLoop {
                 props.id(), TaskStatus.FAILED,
                 null, null, null, null, reason,
                 null, null, null, null, null,
-                null, null, null, null, null));
+                null, null, null, null, null,
+                null, null, null, null));
     }
 
     private void safePostImplementationFailure(Long taskId, String reason,
@@ -362,12 +478,41 @@ public class WorkerMainLoop {
                 props.id(), TaskStatus.IMPLEMENTATION_FAILED,
                 null, null, null, null, reason,
                 null, null, headBranch, headSha, log_,
-                null, null, null, null, null));
+                null, null, null, null, null,
+                null, null, null, null));
     }
 
     private static String tail(String s, int max) {
         if (s == null) return "";
         return s.length() <= max ? s : "…" + s.substring(s.length() - max);
+    }
+
+    /** mockup_files JSON([{path,title,html}])을 dir 아래 파일로 풀어놓는다. path는 dir 내부로 강제. */
+    private void writeMockupFiles(File dir, String mockupFilesJson) throws java.io.IOException {
+        var mapper = new com.fasterxml.jackson.databind.ObjectMapper();
+        var root = mapper.readTree(mockupFilesJson);
+        java.nio.file.Path base = dir.toPath().toAbsolutePath().normalize();
+        for (var node : root) {
+            String rel = node.path("path").asText("");
+            String html = node.path("html").asText("");
+            if (rel.isBlank()) continue;
+            java.nio.file.Path target = base.resolve(rel).normalize();
+            if (!target.startsWith(base)) continue; // path traversal 방어
+            java.nio.file.Files.createDirectories(target.getParent());
+            java.nio.file.Files.writeString(target, html);
+        }
+    }
+
+    private static void deleteRecursively(File f) {
+        if (f == null) return;
+        // 심볼릭 링크는 타깃을 따라가지 않고 링크 자체만 제거 (워크트리 밖 삭제 방지)
+        boolean symlink = java.nio.file.Files.isSymbolicLink(f.toPath());
+        if (!symlink && !f.exists()) return;
+        if (!symlink && f.isDirectory()) {
+            File[] children = f.listFiles();
+            if (children != null) for (File c : children) deleteRecursively(c);
+        }
+        if (!f.delete()) log.warn("파일 삭제 실패: {}", f);
     }
 
     private String hostname() {

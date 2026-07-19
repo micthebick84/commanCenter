@@ -28,6 +28,9 @@ public record WorkerProperties(
         String gitUserEmail,
         String implementationPromptTemplate,
         Duration implementationTimeout,
+        // 디자인 단계
+        String designPromptTemplate,
+        Duration designTimeout,
         // 배포 단계
         Deploy deploy
 ) {
@@ -105,6 +108,7 @@ public record WorkerProperties(
         if (gitUserName == null || gitUserName.isBlank()) gitUserName = "netisMaker";
         if (gitUserEmail == null || gitUserEmail.isBlank()) gitUserEmail = "netismaker@hamonsoft.local";
         if (implementationTimeout == null) implementationTimeout = Duration.ofMinutes(45);
+        if (designTimeout == null) designTimeout = Duration.ofMinutes(30);
         if (deploy == null) deploy = new Deploy(null, null, 0, null, null, null, 0, 0, null, null, 0, 0, 0, null, 0, null);
     }
 }

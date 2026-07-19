@@ -1,14 +1,17 @@
 package com.hamonsoft.netismaker.service;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.hamonsoft.netismaker.dto.TaskCreateRequest;
 import com.hamonsoft.netismaker.entity.EnvVar;
 import com.hamonsoft.netismaker.entity.McpCatalogEntry;
 import com.hamonsoft.netismaker.entity.Task;
 import com.hamonsoft.netismaker.entity.TaskAnalysis;
+import com.hamonsoft.netismaker.entity.TaskDesign;
 import com.hamonsoft.netismaker.entity.TaskMcpSpec;
 import com.hamonsoft.netismaker.entity.TaskStatus;
 import com.hamonsoft.netismaker.entity.TaskStatusHistory;
 import com.hamonsoft.netismaker.repository.TaskAnalysisRepository;
+import com.hamonsoft.netismaker.repository.TaskDesignRepository;
 import com.hamonsoft.netismaker.repository.TaskRepository;
 import com.hamonsoft.netismaker.repository.TaskStatusHistoryRepository;
 import org.springframework.context.annotation.Profile;
@@ -37,11 +40,15 @@ import java.util.Optional;
 @Profile("api")
 public class TaskService {
 
+    static final int MAX_DESIGN_REJECTS = 3;
+
     private final TaskRepository taskRepo;
     private final TaskAnalysisRepository analysisRepo;
+    private final TaskDesignRepository designRepo;
     private final TaskStatusHistoryRepository historyRepo;
     private final McpCatalogService mcpCatalogService;
     private final RepoCatalogService repoCatalogService;
+    private final ObjectMapper objectMapper;
 
     @Value("${app.task.user-concurrent-limit:5}")
     private int userConcurrentLimit;
@@ -51,14 +58,18 @@ public class TaskService {
 
     public TaskService(TaskRepository taskRepo,
                        TaskAnalysisRepository analysisRepo,
+                       TaskDesignRepository designRepo,
                        TaskStatusHistoryRepository historyRepo,
                        McpCatalogService mcpCatalogService,
-                       RepoCatalogService repoCatalogService) {
+                       RepoCatalogService repoCatalogService,
+                       ObjectMapper objectMapper) {
         this.taskRepo = taskRepo;
         this.analysisRepo = analysisRepo;
+        this.designRepo = designRepo;
         this.historyRepo = historyRepo;
         this.mcpCatalogService = mcpCatalogService;
         this.repoCatalogService = repoCatalogService;
+        this.objectMapper = objectMapper;
     }
 
     @Transactional
@@ -78,6 +89,7 @@ public class TaskService {
         t.setGitUrl(repo.gitUrl());
         t.setRepoAlias(repo.alias());
         t.setRepoCatalogId(repo.catalogId());
+        t.setDesignRequested(Boolean.TRUE.equals(req.designRequested()));
         Task saved = taskRepo.save(t);
         historyRepo.save(TaskStatusHistory.log(saved.getId(), null, TaskStatus.PENDING,
                 "user", requesterId, "작업 등록"));
@@ -118,6 +130,11 @@ public class TaskService {
     @Transactional(readOnly = true)
     public Optional<TaskAnalysis> getAnalysis(Long taskId) {
         return analysisRepo.findById(taskId);
+    }
+
+    @Transactional(readOnly = true)
+    public Optional<TaskDesign> getDesign(Long taskId) {
+        return designRepo.findById(taskId);
     }
 
     @Transactional(readOnly = true)
@@ -187,23 +204,88 @@ public class TaskService {
         TaskAnalysis a = analysisRepo.findById(taskId)
                 .orElseThrow(() -> TaskException.conflict("분석 결과가 없습니다"));
 
+        boolean toDesign = t.isDesignRequested();
         String reason;
         if (!a.isApproved()) {
             a.setApproved(true);
             a.setApprovedBy(adminId);
             a.setApprovedAt(OffsetDateTime.now());
-            reason = "관리자 승인 → 구현 큐 진입";
+            reason = toDesign ? "관리자 승인 → 디자인 큐 진입" : "관리자 승인 → 구현 큐 진입";
         } else {
             // 이미 approved이지만 status가 COMPLETED인 경우: 구버전 데이터 또는 admin 명시적 재큐잉
-            reason = "이미 승인된 작업 → 구현 큐 재진입";
+            reason = toDesign ? "이미 승인된 작업 → 디자인 큐 재진입" : "이미 승인된 작업 → 구현 큐 재진입";
         }
 
+        TaskStatus from = t.getStatus();
+        TaskStatus to = toDesign ? TaskStatus.DESIGN_PENDING : TaskStatus.APPROVED;
+        t.setStatus(to);
+        t.setUpdatedAt(OffsetDateTime.now());
+        historyRepo.save(TaskStatusHistory.log(t.getId(), from, to, "user", adminId,
+                reason + (to == TaskStatus.DESIGN_PENDING ? " (디자인 구간)" : "")));
+        return a;
+    }
+
+    /** 디자인승인대기 → 구현대기. admin 한정. */
+    @Transactional
+    public TaskDesign approveDesign(Long taskId, String adminId) {
+        Task t = taskRepo.findActiveById(taskId).orElseThrow(TaskException::notFound);
+        if (t.getStatus() != TaskStatus.DESIGN_REVIEW) {
+            throw TaskException.conflict("디자인승인대기 상태에서만 승인할 수 있습니다 (현재: "
+                    + t.getStatus().dbValue() + ")");
+        }
+        TaskDesign d = designRepo.findById(taskId)
+                .orElseThrow(() -> TaskException.conflict("디자인 결과가 없습니다"));
+        d.setApproved(true);
+        d.setApprovedBy(adminId);
+        d.setApprovedAt(OffsetDateTime.now());
         TaskStatus from = t.getStatus();
         t.setStatus(TaskStatus.APPROVED);
         t.setUpdatedAt(OffsetDateTime.now());
         historyRepo.save(TaskStatusHistory.log(t.getId(), from, TaskStatus.APPROVED,
-                "user", adminId, reason));
-        return a;
+                "user", adminId, "디자인 승인 → 구현 큐 진입"));
+        return d;
+    }
+
+    /** 디자인승인대기 → 디자인대기 (피드백 반려, 최대 MAX_DESIGN_REJECTS회). admin 한정. */
+    @Transactional
+    public Task rejectDesign(Long taskId, String adminId, String feedback) {
+        Task t = taskRepo.findActiveById(taskId).orElseThrow(TaskException::notFound);
+        if (t.getStatus() != TaskStatus.DESIGN_REVIEW) {
+            throw TaskException.conflict("디자인승인대기 상태에서만 반려할 수 있습니다 (현재: "
+                    + t.getStatus().dbValue() + ")");
+        }
+        TaskDesign d = designRepo.findById(taskId)
+                .orElseThrow(() -> TaskException.conflict("디자인 결과가 없습니다"));
+        if (d.getRejectCount() >= MAX_DESIGN_REJECTS) {
+            throw TaskException.conflict("반려 한도(" + MAX_DESIGN_REJECTS
+                    + ")에 도달했습니다 — 승인 또는 삭제만 가능합니다");
+        }
+        d.setFeedbackHistoryJson(appendFeedback(d.getFeedbackHistoryJson(), feedback, adminId));
+        d.setRejectCount(d.getRejectCount() + 1);
+        TaskStatus from = t.getStatus();
+        t.setStatus(TaskStatus.DESIGN_PENDING);
+        t.setWorkerId(null);
+        t.setClaimedAt(null);
+        t.setUpdatedAt(OffsetDateTime.now());
+        historyRepo.save(TaskStatusHistory.log(t.getId(), from, TaskStatus.DESIGN_PENDING,
+                "user", adminId, "디자인 반려 (" + d.getRejectCount() + "/" + MAX_DESIGN_REJECTS + ")"));
+        return t;
+    }
+
+    /** feedback_history jsonb 배열에 항목 append. 파싱 실패 시 새 배열로 시작 (방어). */
+    private String appendFeedback(String historyJson, String feedback, String adminId) {
+        try {
+            var list = objectMapper.readValue(
+                    historyJson == null || historyJson.isBlank() ? "[]" : historyJson,
+                    new com.fasterxml.jackson.core.type.TypeReference<java.util.List<java.util.Map<String, Object>>>() {});
+            list.add(java.util.Map.of(
+                    "feedback", feedback,
+                    "rejectedBy", adminId,
+                    "rejectedAt", OffsetDateTime.now().toString()));
+            return objectMapper.writeValueAsString(list);
+        } catch (com.fasterxml.jackson.core.JsonProcessingException e) {
+            throw new TaskException(HttpStatus.INTERNAL_SERVER_ERROR, "피드백 이력 직렬화 실패");
+        }
     }
 
     @Transactional
@@ -212,8 +294,20 @@ public class TaskService {
         if (!t.isOwnedBy(actorId) && !isAdmin) {
             throw TaskException.forbidden();
         }
+        if (t.getStatus() == TaskStatus.DESIGN_FAILED) {
+            // 디자인 재시도: admin 수동 조작이므로 retryCount 소비 없음
+            TaskStatus from = t.getStatus();
+            t.setStatus(TaskStatus.DESIGN_PENDING);
+            t.setFailureReason(null);
+            t.setClaimedAt(null);
+            t.setWorkerId(null);
+            t.setUpdatedAt(OffsetDateTime.now());
+            historyRepo.save(TaskStatusHistory.log(t.getId(), from, TaskStatus.DESIGN_PENDING,
+                    isAdmin ? "system" : "user", actorId, "디자인 재시도"));
+            return t;
+        }
         if (t.getStatus() != TaskStatus.FAILED) {
-            throw TaskException.conflict("분석실패 상태에서만 재시도할 수 있습니다 (현재: "
+            throw TaskException.conflict("분석실패/디자인실패 상태에서만 재시도할 수 있습니다 (현재: "
                     + t.getStatus().dbValue() + ")");
         }
         if (t.getRetryCount() >= t.getMaxRetry()) {

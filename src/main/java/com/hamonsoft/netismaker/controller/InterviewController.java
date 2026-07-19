@@ -80,13 +80,19 @@ public class InterviewController {
     }
 
     @PostMapping("/{id}/register")
-    public RegisterResponse register(@PathVariable Long id, JwtAuthenticationToken auth) {
+    public RegisterResponse register(@PathVariable Long id,
+                                     @RequestBody(required = false) InterviewRegisterRequest body,
+                                     JwtAuthenticationToken auth) {
         String userId = AuthContext.requireUserId(auth);
-        Long taskId = interviewService.register(id, userId, AuthContext.isAdmin(auth));
+        Long taskId = interviewService.register(id, userId, AuthContext.isAdmin(auth),
+                body != null && Boolean.TRUE.equals(body.designRequested()));
         interviewStream.pushStatus(id, InterviewStatus.REGISTERED);
         interviewStream.finish(id); // terminal → done 이벤트
         return new RegisterResponse(taskId);
     }
+
+    /** register 요청 바디 — designRequested 미지정 시 false 취급. */
+    public record InterviewRegisterRequest(Boolean designRequested) {}
 
     @PostMapping("/{id}/cancel")
     public InterviewResponse cancel(@PathVariable Long id, JwtAuthenticationToken auth) {

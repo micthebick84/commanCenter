@@ -88,8 +88,31 @@ describe('InterviewPanel — register flow', () => {
     await reg.trigger('click')
     await flushPromises()
 
-    expect(useApiMock).toHaveBeenCalledWith('/api/interviews/9/register', { method: 'POST' })
+    expect(useApiMock).toHaveBeenCalledWith('/api/interviews/9/register', {
+      method: 'POST',
+      body: { designRequested: false },
+    })
     expect(w.emitted('registered')?.[0]).toEqual([123])
+    w.unmount()
+  })
+
+  it('sends designRequested: true when the 디자인 단계 포함 toggle is on', async () => {
+    const w = await mountPanel(9)
+    const es = FakeEventSource.last()
+    es.emit('plan_ready', { designMarkdown: 'd', planMarkdown: 'p', planJson: JSON.stringify([]) })
+    await flushPromises()
+
+    await w.find('.q-toggle').trigger('click')
+    await flushPromises()
+
+    useApiMock.mockResolvedValueOnce({ taskId: 124 })
+    await w.find('[data-test="register"]').trigger('click')
+    await flushPromises()
+
+    expect(useApiMock).toHaveBeenCalledWith('/api/interviews/9/register', {
+      method: 'POST',
+      body: { designRequested: true },
+    })
     w.unmount()
   })
 })

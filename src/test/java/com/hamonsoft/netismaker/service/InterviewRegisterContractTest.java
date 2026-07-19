@@ -47,7 +47,7 @@ class InterviewRegisterContractTest {
     @Test
     void register_creates_completed_task_with_design_only_analysis() {
         toPlanReady();
-        Long taskId = interviewService.register(sid, "user1", false);
+        Long taskId = interviewService.register(sid, "user1", false, false);
 
         Task t = taskRepo.findById(taskId).orElseThrow();
         assertThat(t.getStatus()).isEqualTo(TaskStatus.COMPLETED);
@@ -70,7 +70,7 @@ class InterviewRegisterContractTest {
 
     @Test
     void register_before_plan_ready_is_rejected() {
-        assertThatThrownBy(() -> interviewService.register(sid, "user1", false))
+        assertThatThrownBy(() -> interviewService.register(sid, "user1", false, false))
                 .isInstanceOf(TaskException.class)
                 .hasMessageContaining("플랜완료");
     }
@@ -78,8 +78,8 @@ class InterviewRegisterContractTest {
     @Test
     void register_is_idempotent_after_first_call() {
         toPlanReady();
-        Long first = interviewService.register(sid, "user1", false);
-        assertThatThrownBy(() -> interviewService.register(sid, "user1", false))
+        Long first = interviewService.register(sid, "user1", false, false);
+        assertThatThrownBy(() -> interviewService.register(sid, "user1", false, false))
                 .isInstanceOf(TaskException.class);
         assertThat(taskRepo.count()).isEqualTo(1);
         assertThat(taskRepo.findById(first)).isPresent();
@@ -88,7 +88,7 @@ class InterviewRegisterContractTest {
     @Test
     void register_non_owner_is_forbidden() {
         toPlanReady();
-        assertThatThrownBy(() -> interviewService.register(sid, "user2", false))
+        assertThatThrownBy(() -> interviewService.register(sid, "user2", false, false))
                 .isInstanceOf(TaskException.class);
     }
 }

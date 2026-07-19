@@ -31,7 +31,7 @@ class DeployReconcileJobTest {
         var deploy = new WorkerProperties.Deploy(null, null, 0, null, null, null, 0, 0, null,
                 null, 0, 0, 0, reconcileEnabled, 0, null);
         return new WorkerProperties("mac-worker-1", null, null, null, 0, 0, 0, 0, null, null,
-                null, null, null, null, null, null, null, null, null, null, deploy);
+                null, null, null, null, null, null, null, null, null, null, null, null, deploy);
     }
 
     private DeployTarget fakeTarget() {

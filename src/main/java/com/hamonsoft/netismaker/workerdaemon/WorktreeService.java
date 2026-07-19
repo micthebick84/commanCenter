@@ -144,6 +144,40 @@ public class WorktreeService {
     }
 
     /**
+     * 디자인용 worktree. 새 브랜치 없이 origin/{baseBranch} detached 체크아웃 (목업 생성만, push 없음).
+     * 경로 design-{id} — 구현 worktree(task-{id})와 분리되어 재실행/후속 구현과 충돌 없음.
+     */
+    public File createForDesign(File repoCacheDir, String githubRepo,
+                                String baseBranch, long taskId)
+            throws IOException, InterruptedException {
+        return repos.withRepoLock(githubRepo,
+                () -> doCreateForDesign(repoCacheDir, githubRepo, baseBranch, taskId));
+    }
+
+    private File doCreateForDesign(File repoCacheDir, String githubRepo,
+                                   String baseBranch, long taskId)
+            throws IOException, InterruptedException {
+        Path worktreeDir = Paths.get(props.worktreeRoot(), githubRepo, "design-" + taskId);
+        Files.createDirectories(worktreeDir.getParent());
+        if (Files.exists(worktreeDir)) {
+            log.warn("기존 design worktree 발견, 강제 제거: {}", worktreeDir);
+            try {
+                ProcessRunner.run(repoCacheDir, List.of("git", "worktree", "remove", "--force",
+                        worktreeDir.toString()), GIT_TIMEOUT_SECONDS);
+            } catch (Exception e) {
+                log.warn("worktree remove 실패 (계속): {}", e.getMessage());
+            }
+            deleteRecursively(worktreeDir.toFile());
+        }
+        ProcessRunner.requireSuccess(repoCacheDir,
+                List.of("git", "worktree", "add", "--force", "--detach",
+                        worktreeDir.toString(), "origin/" + baseBranch),
+                GIT_TIMEOUT_SECONDS);
+        log.info("design worktree 생성: task={} dir={}", taskId, worktreeDir);
+        return worktreeDir.toFile();
+    }
+
+    /**
      * worktree 제거. 실패해도 예외 던지지 않음 (보존 우선, 호출자가 best-effort 정리 시 사용).
      */
     public void remove(File repoCacheDir, File worktreeDir) {

@@ -3,7 +3,9 @@ package com.hamonsoft.netismaker.service;
 import com.hamonsoft.netismaker.dto.WorkerResultRequest;
 import com.hamonsoft.netismaker.entity.Task;
 import com.hamonsoft.netismaker.entity.TaskStatus;
+import com.hamonsoft.netismaker.repository.RepoCatalogRepository;
 import com.hamonsoft.netismaker.repository.TaskAnalysisRepository;
+import com.hamonsoft.netismaker.repository.TaskDesignRepository;
 import com.hamonsoft.netismaker.repository.TaskRepository;
 import com.hamonsoft.netismaker.repository.TaskStatusHistoryRepository;
 import com.hamonsoft.netismaker.repository.WorkerHeartbeatRepository;
@@ -29,10 +31,12 @@ class WorkerServiceReconcileTest {
     void setUp() {
         taskRepo = mock(TaskRepository.class);
         TaskAnalysisRepository analysisRepo = mock(TaskAnalysisRepository.class);
+        TaskDesignRepository designRepo = mock(TaskDesignRepository.class);
+        RepoCatalogRepository repoCatalogRepo = mock(RepoCatalogRepository.class);
         historyRepo = mock(TaskStatusHistoryRepository.class);
         WorkerHeartbeatRepository heartbeatRepo = mock(WorkerHeartbeatRepository.class);
         DeployLogStreamService deployLogStream = mock(DeployLogStreamService.class);
-        service = new WorkerService(taskRepo, analysisRepo, historyRepo, heartbeatRepo, deployLogStream);
+        service = new WorkerService(taskRepo, analysisRepo, designRepo, repoCatalogRepo, historyRepo, heartbeatRepo, deployLogStream);
         when(historyRepo.save(any())).thenAnswer(i -> i.getArgument(0));
     }
 
@@ -48,7 +52,8 @@ class WorkerServiceReconcileTest {
         return new WorkerResultRequest("mac-worker-1", TaskStatus.PR_CREATED,
                 null, null, null, 123L, null,
                 prUrl, 10, headBranch, "abcdef1", "impl log",
-                null, null, null, null, null);
+                null, null, null, null, null,
+                null, null, null, null);
     }
 
     @Test

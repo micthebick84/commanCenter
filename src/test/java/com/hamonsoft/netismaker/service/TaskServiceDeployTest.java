@@ -1,8 +1,10 @@
 package com.hamonsoft.netismaker.service;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.hamonsoft.netismaker.entity.Task;
 import com.hamonsoft.netismaker.entity.TaskStatus;
 import com.hamonsoft.netismaker.repository.TaskAnalysisRepository;
+import com.hamonsoft.netismaker.repository.TaskDesignRepository;
 import com.hamonsoft.netismaker.repository.TaskRepository;
 import com.hamonsoft.netismaker.repository.TaskStatusHistoryRepository;
 import org.junit.jupiter.api.BeforeEach;
@@ -26,6 +28,7 @@ class TaskServiceDeployTest {
 
     private TaskRepository taskRepo;
     private TaskAnalysisRepository analysisRepo;
+    private TaskDesignRepository designRepo;
     private TaskStatusHistoryRepository historyRepo;
     private McpCatalogService mcpCatalogService;
     private RepoCatalogService repoCatalogService;
@@ -42,10 +45,12 @@ class TaskServiceDeployTest {
     void setUp() {
         taskRepo = mock(TaskRepository.class);
         analysisRepo = mock(TaskAnalysisRepository.class);
+        designRepo = mock(TaskDesignRepository.class);
         historyRepo = mock(TaskStatusHistoryRepository.class);
         mcpCatalogService = mock(McpCatalogService.class);
         repoCatalogService = mock(RepoCatalogService.class);
-        service = new TaskService(taskRepo, analysisRepo, historyRepo, mcpCatalogService, repoCatalogService);
+        service = new TaskService(taskRepo, analysisRepo, designRepo, historyRepo, mcpCatalogService,
+                repoCatalogService, new ObjectMapper());
         when(historyRepo.save(any())).thenAnswer(i -> i.getArgument(0));
     }
 

@@ -47,6 +47,14 @@ public class RepoCatalogEntry {
     @Column(nullable = false)
     private boolean enabled;
 
+    /** Claude Design 디자인 시스템 프로젝트 ID (입력). null이면 디자인 시 pull skip. */
+    @Column(name = "design_system_project_id", length = 100)
+    private String designSystemProjectId;
+
+    /** Claude Design 목업 출력 프로젝트 ID. 워커가 최초 업로드 시 create_project 후 박제. */
+    @Column(name = "design_output_project_id", length = 100)
+    private String designOutputProjectId;
+
     @Column(name = "created_by", length = 20)
     private String createdBy;
 

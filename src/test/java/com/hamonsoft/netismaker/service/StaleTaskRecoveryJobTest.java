@@ -42,6 +42,8 @@ class StaleTaskRecoveryJobTest {
         ReflectionTestUtils.setField(job, "workerDeadThresholdSeconds", 60);
         ReflectionTestUtils.setField(job, "implementationWorkerDeadThresholdSeconds", 300);
         ReflectionTestUtils.setField(job, "deployWorkerDeadThresholdSeconds", 180);
+        ReflectionTestUtils.setField(job, "designStaleThresholdMinutes", 30);
+        ReflectionTestUtils.setField(job, "designWorkerDeadThresholdSeconds", 300);
         when(historyRepo.save(any())).thenAnswer(i -> i.getArgument(0));
     }
 
@@ -192,5 +194,18 @@ class StaleTaskRecoveryJobTest {
         job.recoverStale();
         assertThat(t.getStatus()).isEqualTo(TaskStatus.DEPLOYING);
         verifyNoInteractions(historyRepo);
+    }
+
+    @Test
+    void 디자인중_작업은_stale시_디자인대기로_재큐잉된다() {
+        // given: DESIGNING task, workerId="dead-worker", claimedAt=now-2h, heartbeat 없음
+        Task t = task(13L, TaskStatus.DESIGNING, "dead-worker", 120, 0);
+        when(taskRepo.findInFlightClaimed()).thenReturn(List.of(t));
+        when(heartbeatRepo.findAllById(any())).thenReturn(List.of()); // heartbeat 없음 = 사망
+        // when
+        job.recoverStale();
+        // then
+        assertThat(t.getStatus()).isEqualTo(TaskStatus.DESIGN_PENDING);
+        assertThat(t.getWorkerId()).isNull();
     }
 }

@@ -82,6 +82,10 @@ class WorkerServiceDesignResultTest {
         assertThat(reloaded.getRejectCount()).isEqualTo(1);
         assertThat(reloaded.getFeedbackHistoryJson()).isEqualTo("[{\"feedback\":\"f1\"}]");
         assertThat(reloaded.getDesignMarkdown()).isEqualTo("# 새 디자인");
+        // designUrl은 무조건 덮어쓴다 (업로드 실패 시 null → 이전 URL이 남아 구버전 목업으로 오도하지 않도록)
+        assertThat(reloaded.getDesignUrl()).isNull();
+        // designProjectId는 null이면 이전 값 보존 (프로젝트 재사용 목적)
+        assertThat(reloaded.getDesignProjectId()).isEqualTo("p-old");
 
         Task reloadedTask = taskRepo.findById(t.getId()).orElseThrow();
         assertThat(reloadedTask.getStatus()).isEqualTo(TaskStatus.DESIGN_REVIEW);

@@ -8,6 +8,10 @@ interface QueueStats {
   prCreated: number
   implementationFailed: number
   failed: number
+  designPending: number
+  designing: number
+  designReview: number
+  designFailed: number
   deployPending: number
   deploying: number
   deployed: number
@@ -69,6 +73,26 @@ const avgDurationLabel = computed(() => {
       <div class="stat">
         <div class="stat-label">분석실패</div>
         <div class="stat-value text-red-9">{{ data.failed }}</div>
+      </div>
+      <q-separator vertical />
+      <div class="stat">
+        <div class="stat-label">디자인대기</div>
+        <div class="stat-value text-deep-purple-9">{{ data.designPending }}</div>
+      </div>
+      <q-separator vertical />
+      <div class="stat">
+        <div class="stat-label">디자인중</div>
+        <div class="stat-value text-orange-9">{{ data.designing }}</div>
+      </div>
+      <q-separator vertical />
+      <div class="stat">
+        <div class="stat-label">디자인승인대기</div>
+        <div class="stat-value text-green-9">{{ data.designReview }}</div>
+      </div>
+      <q-separator vertical />
+      <div class="stat">
+        <div class="stat-label">디자인실패</div>
+        <div class="stat-value text-pink-9">{{ data.designFailed }}</div>
       </div>
       <q-separator vertical />
       <div class="stat">

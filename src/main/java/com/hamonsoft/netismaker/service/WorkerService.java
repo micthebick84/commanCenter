@@ -336,7 +336,7 @@ public class WorkerService {
                     d.setDesignMarkdown(req.designMarkdown());
                     d.setMockupFilesJson(req.mockupFilesJson());
                     if (req.designProjectId() != null) d.setDesignProjectId(req.designProjectId());
-                    if (req.designUrl() != null) d.setDesignUrl(req.designUrl());
+                    d.setDesignUrl(req.designUrl());
                     d.setClaudeLog(req.claudeLog());
                     d.setDurationMs(req.durationMs());
                     d.setCompletedAt(OffsetDateTime.now());

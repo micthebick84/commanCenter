@@ -89,6 +89,7 @@ public class TaskService {
         t.setGitUrl(repo.gitUrl());
         t.setRepoAlias(repo.alias());
         t.setRepoCatalogId(repo.catalogId());
+        t.setDesignRequested(Boolean.TRUE.equals(req.designRequested()));
         Task saved = taskRepo.save(t);
         historyRepo.save(TaskStatusHistory.log(saved.getId(), null, TaskStatus.PENDING,
                 "user", requesterId, "작업 등록"));
@@ -129,6 +130,11 @@ public class TaskService {
     @Transactional(readOnly = true)
     public Optional<TaskAnalysis> getAnalysis(Long taskId) {
         return analysisRepo.findById(taskId);
+    }
+
+    @Transactional(readOnly = true)
+    public Optional<TaskDesign> getDesign(Long taskId) {
+        return designRepo.findById(taskId);
     }
 
     @Transactional(readOnly = true)

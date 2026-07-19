@@ -3,6 +3,7 @@ package com.hamonsoft.netismaker.dto;
 import com.hamonsoft.netismaker.entity.EnvVar;
 import com.hamonsoft.netismaker.entity.Task;
 import com.hamonsoft.netismaker.entity.TaskAnalysis;
+import com.hamonsoft.netismaker.entity.TaskDesign;
 import com.hamonsoft.netismaker.entity.TaskMcpSpec;
 import com.hamonsoft.netismaker.entity.TaskStatus;
 
@@ -28,7 +29,9 @@ public record TaskResponse(
         OffsetDateTime updatedAt,
         String model,
         String effort,
+        boolean designRequested,
         AnalysisView analysis,
+        DesignView design,
         ImplementationView implementation,
         DeploymentView deployment
 ) {
@@ -36,6 +39,20 @@ public record TaskResponse(
             String markdownResult,
             String subtasksJson,
             Long durationMs,
+            boolean approved,
+            String approvedBy,
+            OffsetDateTime approvedAt,
+            OffsetDateTime completedAt
+    ) {}
+
+    /** 디자인 산출물. 상세 조회에서만 non-null (목록에서는 항상 null). */
+    public record DesignView(
+            String designMarkdown,
+            String mockupFilesJson,
+            String designProjectId,
+            String designUrl,
+            int rejectCount,
+            String feedbackHistoryJson,
             boolean approved,
             String approvedBy,
             OffsetDateTime approvedAt,
@@ -61,6 +78,10 @@ public record TaskResponse(
     ) {}
 
     public static TaskResponse of(Task t, TaskAnalysis a) {
+        return of(t, a, null);
+    }
+
+    public static TaskResponse of(Task t, TaskAnalysis a, TaskDesign d) {
         AnalysisView av = (a == null) ? null : new AnalysisView(
                 a.getMarkdownResult(),
                 a.getSubtasksJson(),
@@ -91,6 +112,10 @@ public record TaskResponse(
                 t.getDeployedAt(),
                 t.getDeployLog()
         );
+        DesignView designV = (d == null) ? null : new DesignView(
+                d.getDesignMarkdown(), d.getMockupFilesJson(), d.getDesignProjectId(),
+                d.getDesignUrl(), d.getRejectCount(), d.getFeedbackHistoryJson(),
+                d.isApproved(), d.getApprovedBy(), d.getApprovedAt(), d.getCompletedAt());
         return new TaskResponse(
                 t.getId(),
                 t.getGithubRepo(),
@@ -110,7 +135,9 @@ public record TaskResponse(
                 t.getUpdatedAt(),
                 t.getModel(),
                 t.getEffort(),
+                t.isDesignRequested(),
                 av,
+                designV,
                 iv,
                 dv
         );

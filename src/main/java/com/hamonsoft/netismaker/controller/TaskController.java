@@ -1,6 +1,7 @@
 package com.hamonsoft.netismaker.controller;
 
 import com.hamonsoft.netismaker.dto.DeployRequest;
+import com.hamonsoft.netismaker.dto.RejectDesignRequest;
 import com.hamonsoft.netismaker.dto.TaskCreateRequest;
 import com.hamonsoft.netismaker.dto.TaskResponse;
 import com.hamonsoft.netismaker.entity.Task;
@@ -67,7 +68,8 @@ public class TaskController {
         String userId = AuthContext.requireUserId(auth);
         boolean isAdmin = AuthContext.isAdmin(auth);
         Task t = taskService.getForView(id, userId, isAdmin);
-        return TaskResponse.of(t, taskService.getAnalysis(id).orElse(null));
+        return TaskResponse.of(t, taskService.getAnalysis(id).orElse(null),
+                taskService.getDesign(id).orElse(null));
     }
 
     @PostMapping("/{id}/cancel")
@@ -93,6 +95,28 @@ public class TaskController {
         taskService.approve(id, adminId);
         Task t = taskService.getForView(id, adminId, true);
         return TaskResponse.of(t, taskService.getAnalysis(id).orElse(null));
+    }
+
+    @PostMapping("/{id}/design/approve")
+    @PreAuthorize("hasAuthority('ROLE_ADMIN')")
+    public TaskResponse approveDesign(@PathVariable Long id, JwtAuthenticationToken auth) {
+        String adminId = AuthContext.requireUserId(auth);
+        taskService.approveDesign(id, adminId);
+        Task t = taskService.getForView(id, adminId, true);
+        return TaskResponse.of(t, taskService.getAnalysis(id).orElse(null),
+                taskService.getDesign(id).orElse(null));
+    }
+
+    @PostMapping("/{id}/design/reject")
+    @PreAuthorize("hasAuthority('ROLE_ADMIN')")
+    public TaskResponse rejectDesign(@PathVariable Long id,
+                                     @RequestBody @Valid RejectDesignRequest body,
+                                     JwtAuthenticationToken auth) {
+        String adminId = AuthContext.requireUserId(auth);
+        taskService.rejectDesign(id, adminId, body.feedback());
+        Task t = taskService.getForView(id, adminId, true);
+        return TaskResponse.of(t, taskService.getAnalysis(id).orElse(null),
+                taskService.getDesign(id).orElse(null));
     }
 
     @PostMapping("/{id}/retry")

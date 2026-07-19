@@ -92,6 +92,7 @@ class WorkerServiceDesignClaimTest {
         assertThat(claimed).isPresent();
         WorkerTaskResponse r = claimed.get();
         assertThat(r.designMarkdown()).isEqualTo("# 이전 디자인 마크다운");
+        assertThat(r.designUrl()).isEqualTo("https://claude.ai/design/design-out-1");
         // jsonb 컬럼은 Postgres가 재직렬화(공백 삽입)하므로 문자열이 아닌 JSON 의미로 비교
         ObjectMapper om = new ObjectMapper();
         assertThat(om.readTree(r.feedbackHistoryJson()))

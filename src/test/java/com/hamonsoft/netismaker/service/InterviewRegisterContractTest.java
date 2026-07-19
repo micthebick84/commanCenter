@@ -31,7 +31,8 @@ class InterviewRegisterContractTest {
     private Long sid;
 
     @BeforeEach void seed() {
-        // 공유 컨테이너 — task_design(자식, CASCADE 없음)이 남아 있으면 task 삭제가 FK에 막힌다
+        // 공유 컨테이너 — interview_session.task_id FK는 non-cascade라 세션을 task보다 먼저 삭제.
+        // task_design은 V17부터 CASCADE지만 명시 삭제를 유지한다 (정리 규약 통일)
         designRepo.deleteAll();
         sessionRepo.deleteAll();
         taskRepo.deleteAll();

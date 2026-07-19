@@ -284,6 +284,15 @@ public class WorkerMainLoop {
     }
 
     private void processDesign(WorkerTaskResponse task) throws Exception {
+        // 순수 설정 전제조건 — fetch/worktree 생성 전에 검사해 낭비·워크트리 잔존 없이
+        // NPE 대신 명확한 사유로 디자인실패 보고 (설정 실수 진단성)
+        if (props.designPromptTemplate() == null || props.designPromptTemplate().isBlank()) {
+            safePostDesignFailure(task.id(),
+                    "design-prompt-template 미설정 — application-worker.yml의 "
+                            + "netis-maker.worker.design-prompt-template을 확인하세요", null);
+            return;
+        }
+
         GitRepoCache.CheckedOutRepo repo;
         try {
             repo = repos.ensureFresh(task.githubRepo(), task.githubBranch());
@@ -450,11 +459,19 @@ public class WorkerMainLoop {
     }
 
     private String renderPrBody(WorkerTaskResponse task, long durationMs, String headSha) {
+        boolean hasDesign = task.designMarkdown() != null && !task.designMarkdown().isBlank();
+        // 마크다운 링크를 깨는 값(공백, ')', 개행 등) 방어 — 형태가 이상하면 링크만 생략
+        boolean hasDesignUrl = task.designUrl() != null
+                && task.designUrl().matches("https?://[^\\s)]+");
+        String designLine = !hasDesign ? ""
+                : "- **디자인**: 확정 디자인 기반 구현"
+                + (hasDesignUrl ? " — [Claude Design 목업](" + task.designUrl() + ")" : "")
+                + " (작업 상세의 디자인 카드 참고)\n";
         return "## netisMaker 자동 생성 PR\n\n"
                 + "- **Task**: #" + task.id() + " " + task.title() + "\n"
                 + "- **베이스**: `" + task.githubBranch() + "`\n"
                 + "- **구현 SHA**: `" + headSha.substring(0, Math.min(7, headSha.length())) + "`\n"
-                + (task.designMarkdown() == null ? "" : "- **디자인**: 확정 디자인 기반 구현 (작업 상세의 디자인 카드 참고)\n")
+                + designLine
                 + "- **소요시간**: " + (durationMs / 1000) + "초\n\n"
                 + "## 사전 분석\n"
                 + (task.analysisMarkdown() == null ? "" : task.analysisMarkdown())

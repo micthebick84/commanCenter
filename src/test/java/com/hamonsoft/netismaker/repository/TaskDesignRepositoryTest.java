@@ -34,7 +34,8 @@ class TaskDesignRepositoryTest {
 
     @BeforeEach
     void cleanUp() {
-        // 공유 컨테이너 — 자식(task_design/interview_session) 먼저 삭제해야 task 삭제가 FK에 안 막힌다.
+        // 공유 컨테이너 — interview_session.task_id FK는 non-cascade라 세션을 task보다 먼저 삭제.
+        // task_design은 V17부터 CASCADE지만 명시 삭제를 유지한다 (정리 규약 통일).
         // 이 클래스가 남기는 task/task_design도 다음 클래스의 동일한 정리 규약이 치운다.
         designRepo.deleteAll();
         sessionRepo.deleteAll();

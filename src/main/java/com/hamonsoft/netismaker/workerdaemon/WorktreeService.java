@@ -221,8 +221,11 @@ public class WorktreeService {
     }
 
     private static void deleteRecursively(File f) {
-        if (f == null || !f.exists()) return;
-        if (f.isDirectory()) {
+        if (f == null) return;
+        // 심볼릭 링크는 타깃을 따라가지 않고 링크 자체만 제거 (워크트리 밖 삭제 방지 — WorkerMainLoop과 동일)
+        boolean symlink = java.nio.file.Files.isSymbolicLink(f.toPath());
+        if (!symlink && !f.exists()) return;
+        if (!symlink && f.isDirectory()) {
             File[] children = f.listFiles();
             if (children != null) for (File c : children) deleteRecursively(c);
         }

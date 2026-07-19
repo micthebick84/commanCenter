@@ -73,6 +73,7 @@ public interface TaskRepository extends JpaRepository<Task, Long> {
         SELECT t FROM Task t
         WHERE t.status IN (com.hamonsoft.netismaker.entity.TaskStatus.PENDING,
                            com.hamonsoft.netismaker.entity.TaskStatus.APPROVED,
+                           com.hamonsoft.netismaker.entity.TaskStatus.DESIGN_PENDING,
                            com.hamonsoft.netismaker.entity.TaskStatus.DEPLOY_PENDING,
                            com.hamonsoft.netismaker.entity.TaskStatus.UNDEPLOY_PENDING)
           AND t.deletedAt IS NULL
@@ -93,6 +94,7 @@ public interface TaskRepository extends JpaRepository<Task, Long> {
         SELECT t FROM Task t
         WHERE t.status IN (com.hamonsoft.netismaker.entity.TaskStatus.IN_PROGRESS,
                            com.hamonsoft.netismaker.entity.TaskStatus.IMPLEMENTING,
+                           com.hamonsoft.netismaker.entity.TaskStatus.DESIGNING,
                            com.hamonsoft.netismaker.entity.TaskStatus.DEPLOYING,
                            com.hamonsoft.netismaker.entity.TaskStatus.UNDEPLOYING)
           AND t.workerId IS NOT NULL

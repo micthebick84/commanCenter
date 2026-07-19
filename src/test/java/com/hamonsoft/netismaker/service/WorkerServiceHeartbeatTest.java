@@ -2,7 +2,9 @@ package com.hamonsoft.netismaker.service;
 
 import com.hamonsoft.netismaker.dto.WorkerHeartbeatRequest;
 import com.hamonsoft.netismaker.entity.WorkerHeartbeat;
+import com.hamonsoft.netismaker.repository.RepoCatalogRepository;
 import com.hamonsoft.netismaker.repository.TaskAnalysisRepository;
+import com.hamonsoft.netismaker.repository.TaskDesignRepository;
 import com.hamonsoft.netismaker.repository.TaskRepository;
 import com.hamonsoft.netismaker.repository.TaskStatusHistoryRepository;
 import com.hamonsoft.netismaker.repository.WorkerHeartbeatRepository;
@@ -26,10 +28,12 @@ class WorkerServiceHeartbeatTest {
     void setUp() {
         TaskRepository taskRepo = mock(TaskRepository.class);
         TaskAnalysisRepository analysisRepo = mock(TaskAnalysisRepository.class);
+        TaskDesignRepository designRepo = mock(TaskDesignRepository.class);
+        RepoCatalogRepository repoCatalogRepo = mock(RepoCatalogRepository.class);
         TaskStatusHistoryRepository historyRepo = mock(TaskStatusHistoryRepository.class);
         heartbeatRepo = mock(WorkerHeartbeatRepository.class);
         DeployLogStreamService deployLogStream = mock(DeployLogStreamService.class);
-        service = new WorkerService(taskRepo, analysisRepo, historyRepo, heartbeatRepo, deployLogStream);
+        service = new WorkerService(taskRepo, analysisRepo, designRepo, repoCatalogRepo, historyRepo, heartbeatRepo, deployLogStream);
         when(heartbeatRepo.findById(any())).thenReturn(Optional.empty());
         when(heartbeatRepo.save(any())).thenAnswer(i -> i.getArgument(0));
     }

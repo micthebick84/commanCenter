@@ -6,7 +6,9 @@ import com.hamonsoft.netismaker.dto.WorkerResultRequest;
 import com.hamonsoft.netismaker.dto.WorkerRuntimeStatusRequest;
 import com.hamonsoft.netismaker.dto.WorkerTaskResponse;
 import com.hamonsoft.netismaker.entity.*;
+import com.hamonsoft.netismaker.repository.RepoCatalogRepository;
 import com.hamonsoft.netismaker.repository.TaskAnalysisRepository;
+import com.hamonsoft.netismaker.repository.TaskDesignRepository;
 import com.hamonsoft.netismaker.repository.TaskRepository;
 import com.hamonsoft.netismaker.repository.TaskStatusHistoryRepository;
 import com.hamonsoft.netismaker.repository.WorkerHeartbeatRepository;
@@ -27,6 +29,7 @@ import java.util.Optional;
  *   claimNextTask   ─► PENDING/APPROVED 작업 1건 atomic claim (SKIP LOCKED)
  *                       PENDING         → IN_PROGRESS  (kind=ANALYSIS)
  *                       APPROVED        → IMPLEMENTING  (kind=IMPLEMENTATION, analysis 동봉)
+ *                       DESIGN_PENDING  → DESIGNING     (kind=DESIGN, 이전 디자인/피드백 동봉)
  *                       DEPLOY_PENDING  → DEPLOYING     (kind=DEPLOY)
  *                       UNDEPLOY_PENDING → UNDEPLOYING  (kind=UNDEPLOY)
  *   recordResult    ─► 워커가 분석/구현/배포 완료/실패 보고. worker_id 일치 필수.
@@ -41,17 +44,23 @@ public class WorkerService {
 
     private final TaskRepository taskRepo;
     private final TaskAnalysisRepository analysisRepo;
+    private final TaskDesignRepository designRepo;
+    private final RepoCatalogRepository repoCatalogRepo;
     private final TaskStatusHistoryRepository historyRepo;
     private final WorkerHeartbeatRepository heartbeatRepo;
     private final DeployLogStreamService deployLogStream;
 
     public WorkerService(TaskRepository taskRepo,
                          TaskAnalysisRepository analysisRepo,
+                         TaskDesignRepository designRepo,
+                         RepoCatalogRepository repoCatalogRepo,
                          TaskStatusHistoryRepository historyRepo,
                          WorkerHeartbeatRepository heartbeatRepo,
                          DeployLogStreamService deployLogStream) {
         this.taskRepo = taskRepo;
         this.analysisRepo = analysisRepo;
+        this.designRepo = designRepo;
+        this.repoCatalogRepo = repoCatalogRepo;
         this.historyRepo = historyRepo;
         this.heartbeatRepo = heartbeatRepo;
         this.deployLogStream = deployLogStream;
@@ -93,6 +102,8 @@ public class WorkerService {
             t.setStatus(TaskStatus.IN_PROGRESS);
         } else if (from == TaskStatus.APPROVED) {
             t.setStatus(TaskStatus.IMPLEMENTING);
+        } else if (from == TaskStatus.DESIGN_PENDING) {
+            t.setStatus(TaskStatus.DESIGNING);
         } else if (from == TaskStatus.DEPLOY_PENDING) {
             t.setStatus(TaskStatus.DEPLOYING);
         } else if (from == TaskStatus.UNDEPLOY_PENDING) {
@@ -107,9 +118,25 @@ public class WorkerService {
         historyRepo.save(TaskStatusHistory.log(t.getId(), from, t.getStatus(),
                 "worker", workerId, "워커 claim"));
 
+        if (t.getStatus() == TaskStatus.DESIGNING) {
+            TaskAnalysis a = analysisRepo.findById(t.getId()).orElse(null);
+            TaskDesign prev = designRepo.findById(t.getId()).orElse(null);
+            String dsProjectId = null;
+            String outProjectId = null;
+            if (t.getRepoCatalogId() != null) {
+                var cat = repoCatalogRepo.findById(t.getRepoCatalogId()).orElse(null);
+                if (cat != null) {
+                    dsProjectId = cat.getDesignSystemProjectId();
+                    outProjectId = cat.getDesignOutputProjectId();
+                }
+            }
+            return Optional.of(WorkerTaskResponse.forDesign(t, a, prev, dsProjectId, outProjectId));
+        }
         if (t.getStatus() == TaskStatus.IMPLEMENTING) {
             TaskAnalysis a = analysisRepo.findById(t.getId()).orElse(null);
-            return Optional.of(WorkerTaskResponse.forImplementation(t, a, null));
+            TaskDesign d = designRepo.findById(t.getId()).orElse(null);
+            return Optional.of(WorkerTaskResponse.forImplementation(t, a,
+                    (d != null && d.isApproved()) ? d : null));
         }
         if (from == TaskStatus.DEPLOY_PENDING) {
             return Optional.of(WorkerTaskResponse.forDeploy(t));

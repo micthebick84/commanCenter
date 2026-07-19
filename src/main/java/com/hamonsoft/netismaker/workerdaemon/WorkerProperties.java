@@ -49,6 +49,9 @@ public record WorkerProperties(
             int gcIntervalMinutes,
             int gcOrphanGraceMinutes,
             int gcKeepImagesPerTask,
+            // 배포 런타임 정합 (DeployReconcileJob): DB 배포완료 ↔ 실제 컨테이너 생존 대사
+            Boolean reconcileEnabled,
+            int reconcileIntervalSeconds,
             PublicAccess publicAccess
     ) {
         public Deploy {
@@ -64,6 +67,8 @@ public record WorkerProperties(
             if (gcIntervalMinutes <= 0) gcIntervalMinutes = 60;
             if (gcOrphanGraceMinutes <= 0) gcOrphanGraceMinutes = 60;
             if (gcKeepImagesPerTask <= 0) gcKeepImagesPerTask = 1;
+            if (reconcileEnabled == null) reconcileEnabled = true;
+            if (reconcileIntervalSeconds <= 0) reconcileIntervalSeconds = 300;
             if (publicAccess == null) publicAccess = new PublicAccess(null, null, null);
         }
         public int portFrom() { return Integer.parseInt(portRange.split("-")[0].trim()); }
@@ -100,6 +105,6 @@ public record WorkerProperties(
         if (gitUserName == null || gitUserName.isBlank()) gitUserName = "netisMaker";
         if (gitUserEmail == null || gitUserEmail.isBlank()) gitUserEmail = "netismaker@hamonsoft.local";
         if (implementationTimeout == null) implementationTimeout = Duration.ofMinutes(45);
-        if (deploy == null) deploy = new Deploy(null, null, 0, null, null, null, 0, 0, null, null, 0, 0, 0, null);
+        if (deploy == null) deploy = new Deploy(null, null, 0, null, null, null, 0, 0, null, null, 0, 0, 0, null, 0, null);
     }
 }

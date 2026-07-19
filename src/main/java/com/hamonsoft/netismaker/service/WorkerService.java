@@ -1,7 +1,9 @@
 package com.hamonsoft.netismaker.service;
 
+import com.hamonsoft.netismaker.dto.DeployedTaskSummary;
 import com.hamonsoft.netismaker.dto.WorkerHeartbeatRequest;
 import com.hamonsoft.netismaker.dto.WorkerResultRequest;
+import com.hamonsoft.netismaker.dto.WorkerRuntimeStatusRequest;
 import com.hamonsoft.netismaker.dto.WorkerTaskResponse;
 import com.hamonsoft.netismaker.entity.*;
 import com.hamonsoft.netismaker.repository.TaskAnalysisRepository;
@@ -282,5 +284,45 @@ public class WorkerService {
     @Transactional
     public void appendDeployLog(Long taskId, com.hamonsoft.netismaker.dto.DeployLogChunkRequest req) {
         deployLogStream.ingestChunk(taskId, req.seq() == null ? 0 : req.seq(), req.content());
+    }
+
+    /** 배포 런타임 정합 대상(배포완료 + 배포중단됨) 목록. 워커 DeployReconcileJob이 주기 조회. */
+    @Transactional(readOnly = true)
+    public List<DeployedTaskSummary> listDeployReconcilable() {
+        return taskRepo.findDeployReconcilable().stream()
+                .map(t -> new DeployedTaskSummary(t.getId(), t.getStatus()))
+                .toList();
+    }
+
+    /**
+     * 워커의 컨테이너 런타임 관측 반영.
+     *
+     *  배포완료   + running=false → 배포중단됨 (컨테이너 소실 감지)
+     *  배포중단됨 + running=true  → 배포완료 (컨테이너 복구 감지)
+     *
+     * 그 외 조합은 no-op — 관측·보고 사이에 재배포/중지가 시작됐을 수 있으므로
+     * (관측 시점의 스냅샷이 최신 상태를 덮어쓰지 않게) 조용히 무시한다.
+     */
+    @Transactional
+    public void recordRuntimeStatus(Long taskId, WorkerRuntimeStatusRequest req) {
+        // findActiveById: 관측 목록 수신 후 삭제된 task의 지각 보고가 삭제 row를 변이시키지 않게
+        Task t = taskRepo.findActiveById(taskId).orElseThrow(TaskException::notFound);
+        TaskStatus from = t.getStatus();
+        boolean running = Boolean.TRUE.equals(req.running());
+
+        if (from == TaskStatus.DEPLOYED && !running) {
+            t.setStatus(TaskStatus.DEPLOY_LOST);
+            historyRepo.save(TaskStatusHistory.log(t.getId(), from, TaskStatus.DEPLOY_LOST,
+                    "system", req.workerId(),
+                    "컨테이너 소실 감지" + (req.detail() == null ? "" : ": " + req.detail())));
+        } else if (from == TaskStatus.DEPLOY_LOST && running) {
+            t.setStatus(TaskStatus.DEPLOYED);
+            historyRepo.save(TaskStatusHistory.log(t.getId(), from, TaskStatus.DEPLOYED,
+                    "system", req.workerId(),
+                    "컨테이너 복구 감지" + (req.detail() == null ? "" : ": " + req.detail())));
+        } else {
+            return; // 상태가 이미 진행됨(재배포/중지 등) — 관측 스냅샷 무시
+        }
+        t.setUpdatedAt(OffsetDateTime.now());
     }
 }

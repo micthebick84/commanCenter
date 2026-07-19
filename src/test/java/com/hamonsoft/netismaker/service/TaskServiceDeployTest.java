@@ -85,6 +85,22 @@ class TaskServiceDeployTest {
     }
 
     @Test
+    void redeploy_from_deploy_lost_is_allowed() {
+        Task t = taskWithStatus(TaskStatus.DEPLOY_LOST);
+        when(taskRepo.findActiveById(42L)).thenReturn(Optional.of(t));
+        assertThat(service.redeploy(42L, "admin", null).getStatus())
+                .isEqualTo(TaskStatus.DEPLOY_PENDING);
+    }
+
+    @Test
+    void undeploy_from_deploy_lost_is_allowed() {
+        Task t = taskWithStatus(TaskStatus.DEPLOY_LOST);
+        when(taskRepo.findActiveById(42L)).thenReturn(Optional.of(t));
+        assertThat(service.undeploy(42L, "admin").getStatus())
+                .isEqualTo(TaskStatus.UNDEPLOY_PENDING);
+    }
+
+    @Test
     void undeploy_from_deployed_moves_to_undeploy_pending() {
         Task t = taskWithStatus(TaskStatus.DEPLOYED);
         when(taskRepo.findActiveById(42L)).thenReturn(Optional.of(t));
@@ -98,6 +114,34 @@ class TaskServiceDeployTest {
         when(taskRepo.findActiveById(42L)).thenReturn(Optional.of(t));
         assertThatThrownBy(() -> service.undeploy(42L, "admin"))
                 .isInstanceOf(TaskException.class);
+    }
+
+    @Test
+    void soft_delete_of_deployed_task_is_rejected() {
+        // 삭제하면 reconcile/GC 보호에서 빠져 컨테이너·공개 URL이 고아가 됨 — 중지 먼저
+        Task t = taskWithStatus(TaskStatus.DEPLOYED);
+        when(taskRepo.findActiveById(42L)).thenReturn(Optional.of(t));
+        assertThatThrownBy(() -> service.softDelete(42L, "admin", true))
+                .isInstanceOf(TaskException.class)
+                .hasMessageContaining("중지");
+        assertThat(t.getDeletedAt()).isNull();
+    }
+
+    @Test
+    void soft_delete_of_deploy_lost_task_is_rejected() {
+        Task t = taskWithStatus(TaskStatus.DEPLOY_LOST);
+        when(taskRepo.findActiveById(42L)).thenReturn(Optional.of(t));
+        assertThatThrownBy(() -> service.softDelete(42L, "admin", true))
+                .isInstanceOf(TaskException.class);
+        assertThat(t.getDeletedAt()).isNull();
+    }
+
+    @Test
+    void soft_delete_of_pr_created_task_is_allowed() {
+        Task t = taskWithStatus(TaskStatus.PR_CREATED);
+        when(taskRepo.findActiveById(42L)).thenReturn(Optional.of(t));
+        service.softDelete(42L, "admin", true);
+        assertThat(t.getDeletedAt()).isNotNull();
     }
 
     @Test

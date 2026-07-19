@@ -18,14 +18,16 @@ public interface DeployTarget {
     /** 컨테이너 중지 + 제거 (멱등 — 없으면 무시). */
     void stop(String containerName) throws Exception;
 
-    /** 컨테이너 상태 조회 (보고용). */
+    /** 컨테이너 상태 조회 (reconcile/보고용). 재시작 대기(restarting)는 RUNNING으로 본다. */
     DeployStatus status(String containerName);
 
     /**
      * 자가정리: grace 지난 비실행 owned 컨테이너 + 보존 외 owned 이미지 제거.
+     * protectedContainers(배포완료/배포중단됨 task의 컨테이너)는 제거 대상에서 제외.
      * 원격 타깃 등 미지원 구현은 no-op (default).
      */
-    default void gc(int orphanGraceMinutes, int keepImagesPerTask) { }
+    default void gc(int orphanGraceMinutes, int keepImagesPerTask,
+                    java.util.Set<String> protectedContainers) { }
 
     /**
      * @param taskId        작업 ID (공개 배포 라우팅 슬러그 등에 사용)

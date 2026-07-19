@@ -23,6 +23,8 @@ class LocalDockerTargetRunArgsTest {
     @Test
     void local_mode_publishes_port_no_network_no_traefik() {
         List<String> args = LocalDockerTarget.buildRunArgs(spec(), 19000, false, "netis-deploy", "micthebick.dev");
+        // --restart는 run 시점에 붙이지 않는다(기동 크래시 감지 무력화) — 헬스체크 통과 후 docker update로 부여
+        assertThat(args).doesNotContain("--restart");
         assertThat(args).containsSequence("--name", "netis-task-7");
         assertThat(args).containsSequence("-p", "19000:8080");
         assertThat(args).containsSequence("--label", "netis-maker.task=7");
@@ -35,6 +37,7 @@ class LocalDockerTargetRunArgsTest {
     @Test
     void public_mode_adds_network_and_traefik_labels_and_keeps_port() {
         List<String> args = LocalDockerTarget.buildRunArgs(spec(), 19042, true, "netis-deploy", "micthebick.dev");
+        assertThat(args).doesNotContain("--restart");                          // 정책은 헬스체크 후 update로
         assertThat(args).containsSequence("-p", "19042:8080");                 // host-port 유지
         assertThat(args).containsSequence("--network", "netis-deploy");
         assertThat(args).contains("traefik.enable=true");

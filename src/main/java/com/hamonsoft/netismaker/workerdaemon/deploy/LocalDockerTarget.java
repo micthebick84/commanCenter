@@ -40,6 +40,9 @@ public class LocalDockerTarget implements DeployTarget {
     /**
      * docker run 인자 빌드 (docker 미실행 환경에서도 검증 가능하도록 분리).
      * 공개 모드면 공유 네트워크 합류 + Traefik 라우팅 라벨 부착. host-port 발행은 모드 무관 유지.
+     * NOTE: --restart는 여기서 붙이지 않는다 — run 시점에 붙이면 기동 크래시가
+     * restarting(State.Running=true) 루프로 위장되어 헬스체크의 !running 감지가 무력화된다.
+     * 재시작 정책은 헬스체크 통과 후 deploy()가 docker update로 부여한다.
      */
     static List<String> buildRunArgs(DeployTarget.DeploySpec spec, int hostPort,
                                      boolean publicMode, String network, String baseDomain) {
@@ -160,6 +163,21 @@ public class LocalDockerTarget implements DeployTarget {
             }
         }
 
+        // 헬스체크 통과 후에만 재시작 정책 부여 — 도커 데몬 재시작/앱 크래시에도 자동 복구
+        // (traefik과 동일 정책). run 시점이 아니라 여기서 붙이는 이유는 buildRunArgs NOTE 참조.
+        // 부여 실패는 배포 실패로 보지 않는다(컨테이너는 정상 — 데몬 재시작 생존만 포기, reconcile이 감지).
+        try {
+            ProcessRunner.Result upd = ProcessRunner.run(spec.contextDir().toFile(),
+                    List.of(DOCKER, "update", "--restart", "unless-stopped", spec.containerName()), 30);
+            String updMsg = upd.exitCode() == 0
+                    ? "[재시작 정책 부여: --restart unless-stopped]\n"
+                    : "[경고: 재시작 정책 부여 실패 (exit=" + upd.exitCode() + ") — 데몬 재시작 시 자동 복구 안 됨]\n";
+            logBuf.append(updMsg);
+            sink.accept(updMsg);
+        } catch (Exception e) {
+            log.warn("docker update --restart 실패 (배포는 계속): {}", e.getMessage());
+        }
+
         // 헬스 성공 종료 직후 앱 기동 로그 1회 push
         String startupLog = dockerLogsTail(spec.containerName(), 4000);
         sink.accept("--- container logs ---\n" + startupLog);
@@ -180,13 +198,21 @@ public class LocalDockerTarget implements DeployTarget {
     }
 
     @Override
-    public void gc(int orphanGraceMinutes, int keepImagesPerTask) {
+    public void gc(int orphanGraceMinutes, int keepImagesPerTask,
+                   java.util.Set<String> protectedContainers) {
         try {
             List<DockerGcPlanner.ContainerInfo> containers = listOwnedContainers();
             List<DockerGcPlanner.ImageInfo> images = listOwnedImages();
             DockerGcPlanner.GcPlan plan = DockerGcPlanner.plan(
-                    containers, images, OffsetDateTime.now(), orphanGraceMinutes, keepImagesPerTask);
+                    containers, images, OffsetDateTime.now(), orphanGraceMinutes, keepImagesPerTask,
+                    protectedContainers);
             for (String name : plan.containersToRemove()) {
+                // TOCTOU 재확인: 계획 수립 후 재배포 등으로 같은 이름의 컨테이너가 살아났으면 스킵
+                // (STOPPED 확인 시에만 제거 — UNKNOWN도 fail-closed로 보존)
+                if (status(name) != DeployStatus.STOPPED) {
+                    log.info("GC 스킵: {} 가 계획 수립 후 다시 활성화됨", name);
+                    continue;
+                }
                 safeRun(List.of(DOCKER, "rm", "-f", name), "컨테이너 제거 " + name);
             }
             for (String img : plan.imagesToRemove()) {
@@ -200,7 +226,7 @@ public class LocalDockerTarget implements DeployTarget {
         }
     }
 
-    /** label=netis-maker.task 컨테이너 목록 (비실행은 inspect로 생성 시각 보강). */
+    /** label=netis-maker.task 컨테이너 목록 (비실행은 inspect로 grace 기준 시각 보강). */
     private List<DockerGcPlanner.ContainerInfo> listOwnedContainers() {
         List<DockerGcPlanner.ContainerInfo> out = new ArrayList<>();
         try {
@@ -213,8 +239,8 @@ public class LocalDockerTarget implements DeployTarget {
                 String[] p = line.split("\\|", -1);
                 if (p.length < 3) continue;
                 String name = p[0].trim(), state = p[1].trim(), image = p[2].trim();
-                OffsetDateTime created = "running".equalsIgnoreCase(state) ? null : inspectCreated(name);
-                out.add(new DockerGcPlanner.ContainerInfo(name, state, created, image));
+                OffsetDateTime graceRef = "running".equalsIgnoreCase(state) ? null : inspectGraceRef(name);
+                out.add(new DockerGcPlanner.ContainerInfo(name, state, graceRef, image));
             }
         } catch (Exception e) {
             log.warn("docker ps 조회 실패: {}", e.getMessage());
@@ -243,15 +269,28 @@ public class LocalDockerTarget implements DeployTarget {
         return out;
     }
 
-    private OffsetDateTime inspectCreated(String name) {
+    /**
+     * 비실행 컨테이너의 grace 판정 기준 시각: 종료 시각(FinishedAt) 우선, 한 번도 안 돌았으면
+     * (FinishedAt이 zero value "0001-01-01…") 생성 시각으로 폴백.
+     * 생성 시각 기준이면 오래 돌다 방금 죽은 컨테이너가 grace 없이 즉시 제거되는 버그가 있었다.
+     */
+    private OffsetDateTime inspectGraceRef(String name) {
         try {
             ProcessRunner.Result r = ProcessRunner.run(new File("."),
-                    List.of(DOCKER, "inspect", "-f", "{{.Created}}", name), 30);
+                    List.of(DOCKER, "inspect", "-f", "{{.State.FinishedAt}}|{{.Created}}", name), 30);
             if (r.exitCode() != 0) return null;
-            return OffsetDateTime.parse(r.stdout().trim()); // RFC3339
+            String[] p = r.stdout().trim().split("\\|", -1);
+            OffsetDateTime finished = parseTimeSafe(p.length > 0 ? p[0] : null);
+            if (finished != null && finished.getYear() > 2000) return finished;
+            return parseTimeSafe(p.length > 1 ? p[1] : null); // RFC3339
         } catch (Exception e) {
             return null;
         }
+    }
+
+    private static OffsetDateTime parseTimeSafe(String s) {
+        if (s == null || s.isBlank()) return null;
+        try { return OffsetDateTime.parse(s.trim()); } catch (Exception e) { return null; }
     }
 
     private void safeRun(List<String> cmd, String what) {
@@ -266,9 +305,20 @@ public class LocalDockerTarget implements DeployTarget {
     public DeployStatus status(String containerName) {
         try {
             ProcessRunner.Result r = ProcessRunner.run(new File("."),
-                    List.of(DOCKER, "inspect", "-f", "{{.State.Running}}", containerName), 30);
-            if (r.exitCode() != 0) return DeployStatus.STOPPED;
-            return r.stdout().trim().equals("true") ? DeployStatus.RUNNING : DeployStatus.STOPPED;
+                    List.of(DOCKER, "inspect", "-f",
+                            "{{.State.Running}}|{{.State.Restarting}}", containerName), 30);
+            if (r.exitCode() != 0) {
+                // 컨테이너 부재('No such object')만 STOPPED. 데몬 접근 불가('Cannot connect' 등)
+                // 는 UNKNOWN — 데몬 재시작 중 reconcile 틱이 전 배포를 배포중단됨으로 오탐하지 않게.
+                // (stderr는 redirectErrorStream으로 stdout에 합본됨)
+                String out = r.stdout() == null ? "" : r.stdout().toLowerCase();
+                return out.contains("no such") ? DeployStatus.STOPPED : DeployStatus.UNKNOWN;
+            }
+            // restarting(재시작 백오프 중)은 docker가 살리는 중 — RUNNING 취급해 상태 플래핑 방지
+            String[] p = r.stdout().trim().split("\\|", -1);
+            boolean running = p.length > 0 && p[0].equals("true");
+            boolean restarting = p.length > 1 && p[1].equals("true");
+            return (running || restarting) ? DeployStatus.RUNNING : DeployStatus.STOPPED;
         } catch (Exception e) {
             return DeployStatus.UNKNOWN;
         }

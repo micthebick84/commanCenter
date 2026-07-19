@@ -247,6 +247,7 @@ function statusClass(status: string) {
       DEPLOYING: 'status-chip status-deploying',
       DEPLOYED: 'status-chip status-deployed',
       DEPLOY_FAILED: 'status-chip status-deploy-failed',
+      DEPLOY_LOST: 'status-chip status-deploy-lost',
       UNDEPLOY_PENDING: 'status-chip status-deploying',
       UNDEPLOYING: 'status-chip status-deploying',
       CANCELLED: 'status-chip status-cancelled',
@@ -432,7 +433,9 @@ function statusClass(status: string) {
           <template
             v-if="
               auth.isAdmin &&
-              (task.status === 'DEPLOYED' || task.status === 'DEPLOY_FAILED')
+              (task.status === 'DEPLOYED' ||
+                task.status === 'DEPLOY_FAILED' ||
+                task.status === 'DEPLOY_LOST')
             "
           >
             <q-btn
@@ -443,7 +446,7 @@ function statusClass(status: string) {
               @click="openDeployDialog('redeploy')"
             />
             <q-btn
-              v-if="task.status === 'DEPLOYED'"
+              v-if="task.status === 'DEPLOYED' || task.status === 'DEPLOY_LOST'"
               color="negative"
               icon="stop"
               label="중지"
@@ -452,6 +455,19 @@ function statusClass(status: string) {
             />
           </template>
         </q-card-section>
+
+        <q-banner
+          v-if="task.status === 'DEPLOY_LOST'"
+          dense
+          class="bg-orange-1 text-orange-9"
+        >
+          <template #avatar>
+            <q-icon name="warning" color="orange" />
+          </template>
+          배포 컨테이너가 실행 중이 아닙니다 (도커 데몬 재시작 등). 접속 URL이
+          응답하지 않으면 재배포하세요. 컨테이너가 다시 살아나면 자동으로
+          배포완료로 복귀합니다.
+        </q-banner>
 
         <q-separator v-if="task.deployment && task.deployment.deployUrl" />
         <q-card-section v-if="task.deployment && task.deployment.deployUrl">

@@ -24,6 +24,12 @@ package com.hamonsoft.netismaker.entity;
  *   [배포완료] ──(컨테이너 소실 감지)──→ [배포중단됨]
  *   [배포중단됨] ──(컨테이너 복구 감지)──→ [배포완료]
  *
+ *  디자인 단계 (design_requested=true인 작업이 분석 승인 시 진입):
+ *   [분석완료] ──(승인)──→ [디자인대기] ──(워커 claim)──→ [디자인중] ──┬→ [디자인승인대기]
+ *                                                                      └→ [디자인실패] ──(retry)──→ [디자인대기]
+ *   [디자인승인대기] ──(승인)──→ [구현대기]
+ *   [디자인승인대기] ──(반려, 최대 3회)──→ [디자인대기]
+ *
  *  취소:
  *   [작업대기] ──→ [취소됨] (본인, PENDING 한정)
  *
@@ -46,6 +52,10 @@ public enum TaskStatus {
     DEPLOY_LOST("배포중단됨"),
     UNDEPLOY_PENDING("배포중지대기"),
     UNDEPLOYING("배포중지중"),
+    DESIGN_PENDING("디자인대기"),
+    DESIGNING("디자인중"),
+    DESIGN_REVIEW("디자인승인대기"),
+    DESIGN_FAILED("디자인실패"),
     CANCELLED("취소됨");
 
     private final String dbValue;

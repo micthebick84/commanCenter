@@ -34,6 +34,8 @@ class WorkerServiceDesignClaimTest {
     void cleanUp() {
         // repoCatalogRepo는 삭제하지 않음 — V14 시드(alias 'Netis7.0')를 다른 테스트 클래스가
         // 같은 컨테이너에서 공유하므로 여기서 deleteAll하면 그쪽이 깨진다.
+        // FK 위반 방지: task_design(자식) 먼저 삭제, 그 다음 task(부모) 삭제
+        designRepo.deleteAll();
         taskRepo.deleteAll();
     }
 

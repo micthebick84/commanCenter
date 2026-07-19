@@ -293,7 +293,7 @@ class InterviewServiceTest {
                 "[{\"title\":\"sub1\"}]", 1000L, new BigDecimal("0.5"));
         when(planRepo.findById(20L)).thenReturn(Optional.of(plan));
 
-        Long taskId = service.register(20L, "u1", false);
+        Long taskId = service.register(20L, "u1", false, false);
 
         assertThat(taskId).isEqualTo(999L);
         assertThat(s.getStatus()).isEqualTo(InterviewStatus.REGISTERED);
@@ -317,7 +317,7 @@ class InterviewServiceTest {
     void register_not_plan_ready_throws() {
         InterviewSession s = session(20L, InterviewStatus.AWAITING_INPUT);
         when(sessionRepo.findActiveById(20L)).thenReturn(Optional.of(s));
-        assertThatThrownBy(() -> service.register(20L, "u1", false))
+        assertThatThrownBy(() -> service.register(20L, "u1", false, false))
                 .isInstanceOf(TaskException.class)
                 .hasMessageContaining("플랜완료");
     }
@@ -326,7 +326,7 @@ class InterviewServiceTest {
     void register_by_non_owner_throws_forbidden() {
         InterviewSession s = session(20L, InterviewStatus.PLAN_READY);
         when(sessionRepo.findActiveById(20L)).thenReturn(Optional.of(s));
-        assertThatThrownBy(() -> service.register(20L, "intruder", false))
+        assertThatThrownBy(() -> service.register(20L, "intruder", false, false))
                 .isInstanceOf(TaskException.class)
                 .hasMessageContaining("권한");
     }
@@ -374,7 +374,7 @@ class InterviewServiceTest {
         InterviewPlan plan = InterviewPlan.create(20L, "# 설계", "# 플랜", "[]", 1000L, new java.math.BigDecimal("0.1"));
         when(planRepo.findById(20L)).thenReturn(java.util.Optional.of(plan));
 
-        service.register(20L, "u1", false);
+        service.register(20L, "u1", false, false);
 
         org.mockito.ArgumentCaptor<Task> cap = org.mockito.ArgumentCaptor.forClass(Task.class);
         verify(taskRepo).save(cap.capture());

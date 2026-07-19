@@ -3,10 +3,13 @@ package com.hamonsoft.netismaker.controller;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.hamonsoft.netismaker.TestcontainersConfig;
 import com.hamonsoft.netismaker.dto.CreateInterviewRequest;
+import com.hamonsoft.netismaker.entity.Task;
 import com.hamonsoft.netismaker.repository.InterviewSessionRepository;
+import com.hamonsoft.netismaker.repository.TaskRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.http.HttpHeaders;
@@ -16,6 +19,8 @@ import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.request.RequestPostProcessor;
 
 import java.util.List;
+
+import static org.assertj.core.api.Assertions.assertThat;
 
 import static org.hamcrest.Matchers.containsString;
 import static org.springframework.http.MediaType.APPLICATION_JSON;
@@ -32,6 +37,8 @@ class InterviewApiIntegrationTest {
     @Autowired private MockMvc mvc;
     @Autowired private ObjectMapper json;
     @Autowired private InterviewSessionRepository sessionRepo;
+    @Autowired private TaskRepository taskRepo;
+    @Value("${app.worker.api-key}") private String apiKey;
 
     @BeforeEach void clean() { sessionRepo.deleteAll(); }
 
@@ -106,6 +113,32 @@ class InterviewApiIntegrationTest {
                         .contentType(APPLICATION_JSON).content(body(1L, "제목", "내용")))
                 .andReturn().getResponse().getHeader("Location");
         mvc.perform(post(loc + "/register").with(userJwt("user1"))).andExpect(status().isConflict());
+    }
+
+    @Test
+    void 등록시_designRequested를_넘기면_task에_반영된다() throws Exception {
+        String loc = mvc.perform(post("/api/interviews").with(userJwt("user1"))
+                        .contentType(APPLICATION_JSON).content(body(1L, "제목", "내용")))
+                .andReturn().getResponse().getHeader("Location");
+        Long sid = Long.valueOf(loc.substring(loc.lastIndexOf('/') + 1));
+
+        // PLAN_READY 도달: worker claim → plan (InterviewWorkerApiIntegrationTest와 동일 패턴).
+        mvc.perform(post("/worker/interviews/claim").header("X-Worker-API-Key", apiKey)
+                        .param("workerId", "iw-1"));
+        mvc.perform(post("/worker/interviews/" + sid + "/plan").header("X-Worker-API-Key", apiKey)
+                        .param("workerId", "iw-1")
+                        .contentType(APPLICATION_JSON)
+                        .content("{\"designMarkdown\":\"# 설계\",\"planMarkdown\":\"# 플랜\",\"planJson\":\"[]\",\"costUsd\":0.1,\"durationMs\":1000}"))
+                .andExpect(status().isNoContent());
+
+        String resp = mvc.perform(post(loc + "/register").with(userJwt("user1"))
+                        .contentType(APPLICATION_JSON).content("{\"designRequested\":true}"))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+        Long taskId = json.readTree(resp).get("taskId").asLong();
+
+        Task t = taskRepo.findById(taskId).orElseThrow();
+        assertThat(t.isDesignRequested()).isTrue();
     }
 
     @Test

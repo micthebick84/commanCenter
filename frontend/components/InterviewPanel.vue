@@ -49,6 +49,7 @@ const statusLabel = computed(() =>
 )
 
 const registering = ref(false)
+const designRequested = ref(false)
 
 const isTerminal = computed(() =>
   ['REGISTERED', 'CANCELLED', 'EXPIRED', 'FAILED'].includes(status.value as string),
@@ -127,6 +128,7 @@ async function register() {
   try {
     const res = await useApi<{ taskId: number }>(`/api/interviews/${props.sessionId}/register`, {
       method: 'POST',
+      body: { designRequested: designRequested.value },
     })
     $q.notify({ type: 'positive', message: '작업 등록 완료' })
     emit('registered', res.taskId)
@@ -337,7 +339,14 @@ onUnmounted(() => stream.close())
             <pre class="plan-md">{{ plan.planMarkdown }}</pre>
           </div>
 
-          <div class="row justify-end q-mt-md">
+          <div class="row items-center justify-end q-mt-md q-gutter-sm">
+            <q-toggle
+              v-model="designRequested"
+              dense
+              label="디자인 단계 포함"
+            >
+              <q-tooltip>분석 승인 후 화면 목업을 생성해 승인받습니다</q-tooltip>
+            </q-toggle>
             <q-btn
               data-test="register"
               unelevated

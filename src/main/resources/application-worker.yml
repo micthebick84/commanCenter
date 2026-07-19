@@ -89,7 +89,7 @@ netis-maker:
 
       ## 요구사항
       {description}
-
+      {design_section}
       ## 사전 분석 결과 (참고용 — 우선 따르세요)
       {analysis_markdown}
 

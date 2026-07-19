@@ -1,8 +1,10 @@
 package com.hamonsoft.netismaker.service;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.hamonsoft.netismaker.dto.TaskCreateRequest;
 import com.hamonsoft.netismaker.entity.Task;
 import com.hamonsoft.netismaker.repository.TaskAnalysisRepository;
+import com.hamonsoft.netismaker.repository.TaskDesignRepository;
 import com.hamonsoft.netismaker.repository.TaskRepository;
 import com.hamonsoft.netismaker.repository.TaskStatusHistoryRepository;
 import org.junit.jupiter.api.BeforeEach;
@@ -19,6 +21,7 @@ class TaskServiceRepoCatalogTest {
 
     private TaskRepository taskRepo;
     private TaskAnalysisRepository analysisRepo;
+    private TaskDesignRepository designRepo;
     private TaskStatusHistoryRepository historyRepo;
     private McpCatalogService mcpCatalogService;
     private RepoCatalogService repoCatalogService;
@@ -28,10 +31,12 @@ class TaskServiceRepoCatalogTest {
     void setUp() {
         taskRepo = mock(TaskRepository.class);
         analysisRepo = mock(TaskAnalysisRepository.class);
+        designRepo = mock(TaskDesignRepository.class);
         historyRepo = mock(TaskStatusHistoryRepository.class);
         mcpCatalogService = mock(McpCatalogService.class);
         repoCatalogService = mock(RepoCatalogService.class);
-        service = new TaskService(taskRepo, analysisRepo, historyRepo, mcpCatalogService, repoCatalogService);
+        service = new TaskService(taskRepo, analysisRepo, designRepo, historyRepo, mcpCatalogService,
+                repoCatalogService, new ObjectMapper());
         ReflectionTestUtils.setField(service, "userConcurrentLimit", 5);
         ReflectionTestUtils.setField(service, "maxRetry", 3);
         when(taskRepo.save(any())).thenAnswer(i -> {

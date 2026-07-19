@@ -87,7 +87,8 @@ public class DesignResultHarvester {
             return new HarvestResult(Files.readString(designMd),
                     mapper.writeValueAsString(mockups), designProjectId, designUrl);
         } catch (IOException e) {
-            throw new HarvestException(".design-out 수확 실패: " + e.getMessage());
+            // cause 체이닝 — IOException의 원 스택을 보존해 진단성 확보
+            throw new HarvestException(".design-out 수확 실패: " + e.getMessage(), e);
         }
     }
 
@@ -97,6 +98,10 @@ public class DesignResultHarvester {
     public static class HarvestException extends Exception {
         public HarvestException(String message) {
             super(message);
+        }
+
+        public HarvestException(String message, Throwable cause) {
+            super(message, cause);
         }
     }
 }

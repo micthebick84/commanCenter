@@ -35,6 +35,7 @@ public record WorkerTaskResponse(
         String designMarkdown,
         String mockupFilesJson,
         String feedbackHistoryJson,
+        String designUrl,
         String designSystemProjectId,
         String designOutputProjectId
 ) {
@@ -45,7 +46,7 @@ public record WorkerTaskResponse(
                 t.getTitle(), t.getDescription(), Kind.ANALYSIS,
                 t.getMcpsExtra() == null ? List.of() : List.copyOf(t.getMcpsExtra()),
                 null, null, null, null, List.of(), t.getModel(), t.getEffort(),
-                null, null, null, null, null);
+                null, null, null, null, null, null);
     }
 
     public static WorkerTaskResponse forImplementation(Task t, TaskAnalysis a, TaskDesign d) {
@@ -56,7 +57,9 @@ public record WorkerTaskResponse(
                 null, null, List.of(), t.getModel(), t.getEffort(),
                 d == null ? null : d.getDesignMarkdown(),
                 d == null ? null : d.getMockupFilesJson(),
-                null, null, null);
+                null,
+                d == null ? null : d.getDesignUrl(),
+                null, null);
     }
 
     public static WorkerTaskResponse forDeploy(Task t) {
@@ -64,14 +67,14 @@ public record WorkerTaskResponse(
                 t.getTitle(), t.getDescription(), Kind.DEPLOY, List.of(), null, null,
                 t.getHeadBranch(), t.getHeadSha(),
                 t.getEnvVars() == null ? List.of() : List.copyOf(t.getEnvVars()), null, null,
-                null, null, null, null, null);
+                null, null, null, null, null, null);
     }
 
     public static WorkerTaskResponse forUndeploy(Task t) {
         return new WorkerTaskResponse(t.getId(), t.getGithubRepo(), t.getGithubBranch(),
                 t.getTitle(), t.getDescription(), Kind.UNDEPLOY, List.of(), null, null,
                 t.getHeadBranch(), t.getHeadSha(), List.of(), null, null,
-                null, null, null, null, null);
+                null, null, null, null, null, null);
     }
 
     /** 디자인 구간 claim 페이로드. prev가 있으면(반려 재실행) 이전 디자인 + 피드백 이력 동봉. */
@@ -86,6 +89,7 @@ public record WorkerTaskResponse(
                 prev == null ? null : prev.getDesignMarkdown(),
                 prev == null ? null : prev.getMockupFilesJson(),
                 prev == null ? "[]" : prev.getFeedbackHistoryJson(),
+                prev == null ? null : prev.getDesignUrl(),
                 designSystemProjectId, designOutputProjectId);
     }
 }

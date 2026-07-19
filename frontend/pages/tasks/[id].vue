@@ -332,12 +332,21 @@ function statusClass(status: string) {
           <pre style="white-space: pre-wrap; color: #c62828">{{
             task.failureReason
           }}</pre>
+          <!-- 재시도는 백엔드가 분석실패(FAILED)/디자인실패(DESIGN_FAILED)만 허용 — 그 외 실패 상태는 버튼 비노출.
+               디자인 재시도는 retryCount를 소비하지 않으므로(admin 수동 조작) 한도 비활성/카운트 표시 제외 -->
           <q-btn
+            v-if="task.status === 'FAILED' || task.status === 'DESIGN_FAILED'"
             unelevated
             color="warning"
             icon="refresh"
-            :label="`재시도 (${task.retryCount}/${task.maxRetry})`"
-            :disable="task.retryCount >= task.maxRetry"
+            :label="
+              task.status === 'DESIGN_FAILED'
+                ? '재시도'
+                : `재시도 (${task.retryCount}/${task.maxRetry})`
+            "
+            :disable="
+              task.status !== 'DESIGN_FAILED' && task.retryCount >= task.maxRetry
+            "
             @click="retry"
           />
         </q-card-section>

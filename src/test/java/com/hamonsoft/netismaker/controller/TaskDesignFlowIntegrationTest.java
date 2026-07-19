@@ -50,7 +50,8 @@ class TaskDesignFlowIntegrationTest {
 
     @BeforeEach
     void cleanTasks() {
-        // 자식(task_design/task_analysis/interview_session) 먼저 삭제 — task 삭제 FK 방지
+        // interview_session.task_id FK는 non-cascade라 세션을 task보다 먼저 삭제.
+        // task_design(V17부터 CASCADE)/task_analysis(V1부터 CASCADE)는 명시 삭제 유지 (정리 규약 통일)
         designRepo.deleteAll();
         analysisRepo.deleteAll();
         sessionRepo.deleteAll();

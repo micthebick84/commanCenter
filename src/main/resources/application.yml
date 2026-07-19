@@ -75,9 +75,11 @@ app:
     stale-threshold-minutes: 5
     implementation-stale-threshold-minutes: 60
     deploy-stale-threshold-minutes: 15
+    design-stale-threshold-minutes: 30         # 디자인 생성(목업+DesignSync 업로드) 처리 시간 초과
     worker-dead-threshold-seconds: 60          # 분석 단계 heartbeat 사망 판정
     implementation-worker-dead-threshold-seconds: 300   # 구현: 긴 작업 중 블립 허용
     deploy-worker-dead-threshold-seconds: 180           # 배포/중지
+    design-worker-dead-threshold-seconds: 300           # 디자인: 긴 생성 중 블립 허용
     stale-check-interval-ms: 60000
     user-concurrent-limit: 5
   interview:

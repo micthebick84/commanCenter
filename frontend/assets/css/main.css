@@ -66,3 +66,7 @@ body {
   background: #fce4ec;
   color: #ad1457;
 }
+.status-deploy-lost {
+  background: #fbe9e7;
+  color: #bf360c;
+}

@@ -99,4 +99,22 @@ public interface TaskRepository extends JpaRepository<Task, Long> {
           AND t.deletedAt IS NULL
     """)
     List<Task> findInFlightClaimed();
+
+    /**
+     * 배포 계열 활성 task: reconcile 관측 + GC 보호 겸용.
+     * DeployReconcileJob은 이 중 DEPLOYED/DEPLOY_LOST만 대사하고 나머지는 무시한다.
+     * in-flight 상태(배포대기~중지중)를 포함하는 이유: GC 보호 목록이 DEPLOYED만 담으면
+     * 재배포 클릭 직후(DEPLOY_PENDING) 보호가 풀려 GC가 새 컨테이너를 죽이는 race가 생긴다.
+     */
+    @Query("""
+        SELECT t FROM Task t
+        WHERE t.status IN (com.hamonsoft.netismaker.entity.TaskStatus.DEPLOYED,
+                           com.hamonsoft.netismaker.entity.TaskStatus.DEPLOY_LOST,
+                           com.hamonsoft.netismaker.entity.TaskStatus.DEPLOY_PENDING,
+                           com.hamonsoft.netismaker.entity.TaskStatus.DEPLOYING,
+                           com.hamonsoft.netismaker.entity.TaskStatus.UNDEPLOY_PENDING,
+                           com.hamonsoft.netismaker.entity.TaskStatus.UNDEPLOYING)
+          AND t.deletedAt IS NULL
+    """)
+    List<Task> findDeployReconcilable();
 }

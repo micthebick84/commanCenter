@@ -153,6 +153,14 @@ public class TaskService {
         if (!t.isOwnedBy(actorId) && !isAdmin) {
             throw TaskException.forbidden();
         }
+        // 배포 계열 상태 가드: 삭제하면 reconcile 관측·GC 보호에서 빠져 컨테이너(재시작 정책
+        // 부여 시 불멸)와 공개 URL이 추적 불가 고아로 남는다 — 먼저 중지(undeploy)를 요구.
+        switch (t.getStatus()) {
+            case DEPLOYED, DEPLOY_LOST, DEPLOY_PENDING, DEPLOYING, UNDEPLOY_PENDING, UNDEPLOYING ->
+                    throw TaskException.conflict("배포 이력이 활성인 작업은 먼저 중지 후 삭제할 수 있습니다 (현재: "
+                            + t.getStatus().dbValue() + ")");
+            default -> { }
+        }
         t.setDeletedAt(OffsetDateTime.now());
         t.setUpdatedAt(OffsetDateTime.now());
         historyRepo.save(TaskStatusHistory.log(t.getId(), t.getStatus(), t.getStatus(),
@@ -236,24 +244,26 @@ public class TaskService {
         return toDeployPending(t, adminId, "관리자 배포 요청 → 배포 큐 진입");
     }
 
-    /** 배포완료/배포실패 → 배포대기 (기존 컨테이너는 배포 시 stop 후 교체). */
+    /** 배포완료/배포실패/배포중단됨 → 배포대기 (기존 컨테이너는 배포 시 stop 후 교체). */
     @Transactional
     public Task redeploy(Long taskId, String adminId, List<EnvVar> envVars) {
         Task t = taskRepo.findActiveById(taskId).orElseThrow(TaskException::notFound);
-        if (t.getStatus() != TaskStatus.DEPLOYED && t.getStatus() != TaskStatus.DEPLOY_FAILED) {
-            throw TaskException.conflict("배포완료/배포실패 상태에서만 재배포할 수 있습니다 (현재: "
+        if (t.getStatus() != TaskStatus.DEPLOYED && t.getStatus() != TaskStatus.DEPLOY_FAILED
+                && t.getStatus() != TaskStatus.DEPLOY_LOST) {
+            throw TaskException.conflict("배포완료/배포실패/배포중단됨 상태에서만 재배포할 수 있습니다 (현재: "
                     + t.getStatus().dbValue() + ")");
         }
         if (envVars != null) t.setEnvVars(new ArrayList<>(envVars));
         return toDeployPending(t, adminId, "관리자 재배포 요청 → 배포 큐 진입");
     }
 
-    /** 배포완료/배포실패 → 배포중지대기. 워커가 claim해 컨테이너 stop 후 PR생성 복귀. */
+    /** 배포완료/배포실패/배포중단됨 → 배포중지대기. 워커가 claim해 컨테이너 stop 후 PR생성 복귀. */
     @Transactional
     public Task undeploy(Long taskId, String adminId) {
         Task t = taskRepo.findActiveById(taskId).orElseThrow(TaskException::notFound);
-        if (t.getStatus() != TaskStatus.DEPLOYED && t.getStatus() != TaskStatus.DEPLOY_FAILED) {
-            throw TaskException.conflict("배포완료/배포실패 상태에서만 중지할 수 있습니다 (현재: "
+        if (t.getStatus() != TaskStatus.DEPLOYED && t.getStatus() != TaskStatus.DEPLOY_FAILED
+                && t.getStatus() != TaskStatus.DEPLOY_LOST) {
+            throw TaskException.conflict("배포완료/배포실패/배포중단됨 상태에서만 중지할 수 있습니다 (현재: "
                     + t.getStatus().dbValue() + ")");
         }
         TaskStatus from = t.getStatus();

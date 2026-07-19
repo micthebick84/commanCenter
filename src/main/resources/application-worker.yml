@@ -119,6 +119,10 @@ netis-maker:
       gc-interval-minutes: ${DEPLOY_GC_INTERVAL_MIN:60}
       gc-orphan-grace-minutes: ${DEPLOY_GC_ORPHAN_GRACE_MIN:60}
       gc-keep-images-per-task: ${DEPLOY_GC_KEEP_IMAGES:1}
+      # 배포 런타임 정합(reconcile): DB 배포완료 ↔ 실제 컨테이너 생존을 주기 대사.
+      # 소실 → 배포중단됨, 복구 → 배포완료. 재배포/중지 진행 중이면 서버가 no-op.
+      reconcile-enabled: ${DEPLOY_RECONCILE_ENABLED:true}
+      reconcile-interval-seconds: ${DEPLOY_RECONCILE_INTERVAL_SEC:300}
       public-access:
         enabled: false           # true 로 켜면 공개 서브도메인 라우팅 활성
         base-domain: micthebick.dev

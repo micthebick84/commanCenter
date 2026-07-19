@@ -11,8 +11,11 @@ import java.util.Set;
 /**
  * GC 결정 로직 (순수 함수, docker I/O 없음 → 단위 테스트 용이).
  *
- *  보존: 실행 중 컨테이너 + 그 이미지, task repo당 최신 keepImagesPerTask개 태그.
- *  제거: grace 지난 비실행 owned 컨테이너, 보존 외 owned 이미지 태그.
+ *  보존: 실행/재시작 중 컨테이너 + 그 이미지, 보호 컨테이너(배포완료/배포중단됨 task) + 그 이미지,
+ *        task repo당 최신 keepImagesPerTask개 태그.
+ *  제거: grace 지난 비실행 owned 컨테이너(보호 제외), 보존 외 owned 이미지 태그.
+ *  grace 기준: 컨테이너 종료 시각(FinishedAt). 오래 돌다 방금 죽은 컨테이너가
+ *  생성 시각 기준으로 즉시 제거되는 문제를 막는다 (한 번도 안 돈 컨테이너는 생성 시각).
  *  소유 식별: 컨테이너 이름/이미지 repo 접두사 "netis-task-".
  */
 public final class DockerGcPlanner {
@@ -21,8 +24,8 @@ public final class DockerGcPlanner {
 
     private DockerGcPlanner() {}
 
-    /** @param createdAt 비실행 컨테이너의 생성 시각(grace 판정용). 실행 중이면 무시. */
-    public record ContainerInfo(String name, String state, OffsetDateTime createdAt, String imageRef) {}
+    /** @param graceRefAt 비실행 컨테이너의 grace 판정 기준 시각(FinishedAt, 미기동이면 생성 시각). 실행 중이면 무시. */
+    public record ContainerInfo(String name, String state, OffsetDateTime graceRefAt, String imageRef) {}
 
     /** images는 docker 기본 정렬(최신순)으로 전달한다. */
     public record ImageInfo(String repoTag, String id) {}
@@ -30,17 +33,22 @@ public final class DockerGcPlanner {
     public record GcPlan(List<String> containersToRemove, List<String> imagesToRemove) {}
 
     public static GcPlan plan(List<ContainerInfo> containers, List<ImageInfo> images,
-                              OffsetDateTime now, int orphanGraceMinutes, int keepImagesPerTask) {
+                              OffsetDateTime now, int orphanGraceMinutes, int keepImagesPerTask,
+                              Set<String> protectedContainers) {
+        Set<String> guarded = protectedContainers == null ? Set.of() : protectedContainers;
         OffsetDateTime graceBefore = now.minusMinutes(orphanGraceMinutes);
         Set<String> inUseImages = new HashSet<>();
         List<String> containersToRemove = new ArrayList<>();
 
         for (ContainerInfo c : containers) {
             if (c.name() == null || !c.name().startsWith(OWN_PREFIX)) continue; // 소유 아님
-            boolean running = "running".equalsIgnoreCase(c.state());
-            if (running) {
+            boolean active = "running".equalsIgnoreCase(c.state())
+                    || "restarting".equalsIgnoreCase(c.state());
+            boolean isProtected = guarded.contains(c.name());
+            if (active || isProtected) {
+                // 보호 컨테이너는 정지 상태여도 이미지를 보존해 docker start 복구가 가능하게 한다
                 if (c.imageRef() != null) inUseImages.add(c.imageRef());
-            } else if (c.createdAt() != null && c.createdAt().isBefore(graceBefore)) {
+            } else if (c.graceRefAt() != null && c.graceRefAt().isBefore(graceBefore)) {
                 containersToRemove.add(c.name());
             }
         }
@@ -53,7 +61,7 @@ public final class DockerGcPlanner {
             if (repoTag == null || !repoTag.startsWith(OWN_PREFIX)) continue; // 소유 아님
             String repo = repoTag.contains(":") ? repoTag.substring(0, repoTag.lastIndexOf(':')) : repoTag;
             if (inUseImages.contains(repoTag)) {
-                // 실행 중 컨테이너 이미지 → 보존하되 keep 카운트에 포함
+                // 실행 중/보호 컨테이너 이미지 → 보존하되 keep 카운트에 포함
                 keptPerRepo.merge(repo, 1, Integer::sum);
                 continue;
             }

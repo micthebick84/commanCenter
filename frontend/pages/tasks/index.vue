@@ -410,6 +410,16 @@ function statusClass(status: string) {
     }[status] || 'status-chip'
   )
 }
+
+// 서버 softDelete 가드와 동일 집합 — 배포 이력이 활성이면 먼저 중지 후 삭제
+const DEPLOY_ACTIVE_STATUSES = [
+  'DEPLOYED',
+  'DEPLOY_LOST',
+  'DEPLOY_PENDING',
+  'DEPLOYING',
+  'UNDEPLOY_PENDING',
+  'UNDEPLOYING',
+]
 </script>
 
 <template>
@@ -496,7 +506,19 @@ function statusClass(status: string) {
             icon="block"
             @click="cancel(props.row)"
           />
-          <q-btn flat dense color="negative" icon="delete" @click="remove(props.row)" />
+          <q-btn
+            flat
+            dense
+            color="negative"
+            icon="delete"
+            :disable="DEPLOY_ACTIVE_STATUSES.includes(props.row.status)"
+            :title="
+              DEPLOY_ACTIVE_STATUSES.includes(props.row.status)
+                ? '배포 이력이 활성인 작업은 먼저 중지 후 삭제할 수 있습니다'
+                : undefined
+            "
+            @click="remove(props.row)"
+          />
         </q-td>
       </template>
     </q-table>

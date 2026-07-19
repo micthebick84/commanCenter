@@ -44,5 +44,21 @@ else
 fi
 
 echo ""
+echo "── 배포 컨테이너 (netis-task-*) ──"
+deploys="$(docker ps -a --filter label=netis-maker.task --format '{{.Names}}|{{.State}}' 2>/dev/null || true)"
+if [ -n "$deploys" ]; then
+  while IFS='|' read -r name state; do
+    [ -z "$name" ] && continue
+    if [ "$state" = "running" ]; then
+      echo "  ✓ $name ($state)"
+    else
+      echo "  ✗ $name ($state — docker start $name 또는 재배포)"
+    fi
+  done <<< "$deploys"
+else
+  echo "  (배포된 컨테이너 없음)"
+fi
+
+echo ""
 echo "── API health ──"
 curl -fs "http://localhost:${API_PORT}/actuator/health" 2>/dev/null && echo "" || echo "  ✗ /actuator/health 응답 없음"

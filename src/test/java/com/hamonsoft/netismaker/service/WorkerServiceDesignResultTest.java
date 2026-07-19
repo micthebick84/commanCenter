@@ -1,5 +1,6 @@
 package com.hamonsoft.netismaker.service;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.hamonsoft.netismaker.TestcontainersConfig;
 import com.hamonsoft.netismaker.dto.WorkerResultRequest;
 import com.hamonsoft.netismaker.entity.*;
@@ -67,7 +68,7 @@ class WorkerServiceDesignResultTest {
     }
 
     @Test
-    void 반려_재실행_보고는_reject_count와_피드백_이력을_보존한다() {
+    void 반려_재실행_보고는_reject_count와_피드백_이력을_보존한다() throws Exception {
         Task t = designingTask(null);
 
         TaskDesign prev = TaskDesign.create(t.getId(), "# 이전 디자인", "[{\"path\":\"a.html\",\"title\":\"A\",\"html\":\"<div/>\"}]",
@@ -82,7 +83,10 @@ class WorkerServiceDesignResultTest {
 
         TaskDesign reloaded = designRepo.findById(t.getId()).orElseThrow();
         assertThat(reloaded.getRejectCount()).isEqualTo(1);
-        assertThat(reloaded.getFeedbackHistoryJson()).isEqualTo("[{\"feedback\":\"f1\"}]");
+        // jsonb 컬럼은 Postgres가 재직렬화(공백 삽입)하므로 문자열이 아닌 JSON 의미로 비교
+        ObjectMapper om = new ObjectMapper();
+        assertThat(om.readTree(reloaded.getFeedbackHistoryJson()))
+                .isEqualTo(om.readTree("[{\"feedback\":\"f1\"}]"));
         assertThat(reloaded.getDesignMarkdown()).isEqualTo("# 새 디자인");
         // designUrl은 무조건 덮어쓴다 (업로드 실패 시 null → 이전 URL이 남아 구버전 목업으로 오도하지 않도록)
         assertThat(reloaded.getDesignUrl()).isNull();

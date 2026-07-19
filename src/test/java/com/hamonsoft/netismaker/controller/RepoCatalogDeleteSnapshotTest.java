@@ -58,7 +58,7 @@ class RepoCatalogDeleteSnapshotTest {
 
     private static org.springframework.test.web.servlet.request.RequestPostProcessor adminJwt(String userId) {
         return jwt()
-                .jwt(b -> b.claim("user_id", userId).claim("authorities", List.of("ROLE_ADMIN")))
+                .jwt(b -> b.claim("username", userId).claim("authorities", List.of("ROLE_ADMIN")))
                 .authorities(new SimpleGrantedAuthority("ROLE_ADMIN"));
     }
 

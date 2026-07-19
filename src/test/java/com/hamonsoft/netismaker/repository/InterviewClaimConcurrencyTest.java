@@ -1,7 +1,6 @@
 package com.hamonsoft.netismaker.repository;
 
 import com.hamonsoft.netismaker.TestcontainersConfig;
-import com.hamonsoft.netismaker.dto.CreateInterviewRequest;
 import com.hamonsoft.netismaker.dto.InterviewClaimResponse;
 import com.hamonsoft.netismaker.entity.InterviewSession;
 import com.hamonsoft.netismaker.entity.InterviewStatus;
@@ -41,10 +40,11 @@ class InterviewClaimConcurrencyTest {
     void concurrent_claims_never_double_assign_a_session() throws Exception {
         int n = 8;
         // init-test-schema.sql seeds com."user"(user_id='user1'); reuse it as requester.
+        // service.create()는 사용자당 동시 인터뷰 한도(3)에 걸리므로, claim 동시성이 관심사인
+        // 이 테스트는 QUEUED 세션을 엔티티로 직접 저장한다 (InterviewRegisterContractTest 관용구).
         for (int i = 0; i < n; i++) {
-            // repoCatalogId=1 → V14 seed (Netis7.0).
-            service.create(new CreateInterviewRequest(
-                    1L, "main", "T" + i, "desc", List.of(), null, null), "user1");
+            sessionRepo.save(InterviewSession.create("owner/repo", "main", "T" + i, "desc",
+                    "user1", List.of(), null, null));
         }
 
         ExecutorService pool = Executors.newFixedThreadPool(n);

@@ -1,5 +1,6 @@
 package com.hamonsoft.netismaker.service;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.hamonsoft.netismaker.TestcontainersConfig;
 import com.hamonsoft.netismaker.dto.WorkerTaskResponse;
 import com.hamonsoft.netismaker.entity.*;
@@ -75,7 +76,7 @@ class WorkerServiceDesignClaimTest {
     }
 
     @Test
-    void 반려_이력이_있으면_이전_디자인과_피드백이_동봉된다() {
+    void 반려_이력이_있으면_이전_디자인과_피드백이_동봉된다() throws Exception {
         Task t = designPendingTask();
 
         TaskDesign prev = TaskDesign.create(t.getId(), "# 이전 디자인 마크다운",
@@ -91,6 +92,9 @@ class WorkerServiceDesignClaimTest {
         assertThat(claimed).isPresent();
         WorkerTaskResponse r = claimed.get();
         assertThat(r.designMarkdown()).isEqualTo("# 이전 디자인 마크다운");
-        assertThat(r.feedbackHistoryJson()).isEqualTo("[{\"round\":1,\"feedback\":\"버튼 색이 이상함\"}]");
+        // jsonb 컬럼은 Postgres가 재직렬화(공백 삽입)하므로 문자열이 아닌 JSON 의미로 비교
+        ObjectMapper om = new ObjectMapper();
+        assertThat(om.readTree(r.feedbackHistoryJson()))
+                .isEqualTo(om.readTree("[{\"round\":1,\"feedback\":\"버튼 색이 이상함\"}]"));
     }
 }

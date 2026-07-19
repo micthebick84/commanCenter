@@ -75,9 +75,13 @@ tasks.named('test') {
     maxHeapSize = "1024m"
     jvmArgs = ['-XX:+UseSerialGC', '-XX:MaxMetaspaceSize=256m']
 
-    // macOS Docker Desktop socket 경로 (Testcontainers가 자동 감지 실패하는 경우)
-    environment 'DOCKER_HOST', System.getenv('DOCKER_HOST') ?:
-            "unix://${System.getProperty('user.home')}/.docker/run/docker.sock"
+    // macOS Docker Desktop socket 경로 (Testcontainers가 자동 감지 실패하는 경우).
+    // 소켓이 실제로 있을 때만 지정 — Linux/CI에서 무조건 넣으면 존재하지 않는 경로가
+    // /var/run/docker.sock 자동 감지를 가로채 컨테이너 기동이 전부 실패한다.
+    def macDockerSock = "${System.getProperty('user.home')}/.docker/run/docker.sock"
+    if (System.getenv('DOCKER_HOST') == null && file(macDockerSock).exists()) {
+        environment 'DOCKER_HOST', "unix://${macDockerSock}"
+    }
     environment 'TESTCONTAINERS_RYUK_DISABLED', 'false'
 
     testLogging {

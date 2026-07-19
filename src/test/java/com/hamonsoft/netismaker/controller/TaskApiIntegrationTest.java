@@ -3,13 +3,14 @@ package com.hamonsoft.netismaker.controller;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.hamonsoft.netismaker.TestcontainersConfig;
 import com.hamonsoft.netismaker.dto.TaskCreateRequest;
+import com.hamonsoft.netismaker.repository.InterviewSessionRepository;
+import com.hamonsoft.netismaker.repository.TaskDesignRepository;
 import com.hamonsoft.netismaker.repository.TaskRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
-import org.springframework.http.HttpHeaders;
 import org.springframework.security.core.authority.SimpleGrantedAuthority;
 import org.springframework.test.context.ContextConfiguration;
 import org.springframework.test.web.servlet.MockMvc;
@@ -17,7 +18,6 @@ import org.springframework.test.web.servlet.MockMvc;
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.hamcrest.Matchers.containsString;
 import static org.springframework.http.MediaType.APPLICATION_JSON;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.jwt;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.*;
@@ -43,21 +43,27 @@ class TaskApiIntegrationTest {
     @Autowired private MockMvc mvc;
     @Autowired private ObjectMapper json;
     @Autowired private TaskRepository taskRepo;
+    @Autowired private TaskDesignRepository designRepo;
+    @Autowired private InterviewSessionRepository sessionRepo;
 
     @BeforeEach
     void cleanTasks() {
+        // 공유 컨테이너 — 다른 클래스가 남긴 자식 row(task_design/interview_session)가
+        // task 삭제를 FK로 막지 않도록 자식 먼저 삭제
+        designRepo.deleteAll();
+        sessionRepo.deleteAll();
         taskRepo.deleteAll();
     }
 
     private static org.springframework.test.web.servlet.request.RequestPostProcessor userJwt(String userId) {
         return jwt()
-                .jwt(b -> b.claim("user_id", userId).claim("authorities", List.of("ROLE_USER")))
+                .jwt(b -> b.claim("username", userId).claim("authorities", List.of("ROLE_USER")))
                 .authorities(new SimpleGrantedAuthority("ROLE_USER"));
     }
 
     private static org.springframework.test.web.servlet.request.RequestPostProcessor adminJwt(String userId) {
         return jwt()
-                .jwt(b -> b.claim("user_id", userId).claim("authorities", List.of("ROLE_ADMIN")))
+                .jwt(b -> b.claim("username", userId).claim("authorities", List.of("ROLE_ADMIN")))
                 .authorities(new SimpleGrantedAuthority("ROLE_ADMIN"));
     }
 
@@ -177,11 +183,11 @@ class TaskApiIntegrationTest {
                 .andReturn().getResponse().getHeader("Location");
         assertThat(location).isNotNull();
 
+        // SseEmitter는 첫 이벤트 전송 전까지 헤더가 커밋되지 않아 MockMvc에선 Content-Type이 null.
+        // 구독 성공(=접근 허용)은 비동기 시작 여부로 검증한다.
         mvc.perform(get(location + "/logs/stream").with(userJwt("user1")))
                 .andExpect(status().isOk())
-                .andExpect(header().string(
-                        HttpHeaders.CONTENT_TYPE,
-                        containsString("text/event-stream")));
+                .andExpect(request().asyncStarted());
     }
 
     @Test
@@ -195,8 +201,6 @@ class TaskApiIntegrationTest {
 
         mvc.perform(get(location + "/logs/stream").with(adminJwt("admin1")))
                 .andExpect(status().isOk())
-                .andExpect(header().string(
-                        HttpHeaders.CONTENT_TYPE,
-                        containsString("text/event-stream")));
+                .andExpect(request().asyncStarted());
     }
 }

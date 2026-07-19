@@ -3,7 +3,10 @@ package com.hamonsoft.netismaker.controller;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.hamonsoft.netismaker.TestcontainersConfig;
 import com.hamonsoft.netismaker.dto.TaskCreateRequest;
+import com.hamonsoft.netismaker.entity.RepoCatalogEntry;
+import com.hamonsoft.netismaker.repository.InterviewSessionRepository;
 import com.hamonsoft.netismaker.repository.RepoCatalogRepository;
+import com.hamonsoft.netismaker.repository.TaskDesignRepository;
 import com.hamonsoft.netismaker.repository.TaskRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -40,25 +43,33 @@ class RepoCatalogDeleteSnapshotTest {
     @Autowired private MockMvc mvc;
     @Autowired private ObjectMapper json;
     @Autowired private TaskRepository taskRepo;
+    @Autowired private TaskDesignRepository designRepo;
+    @Autowired private InterviewSessionRepository sessionRepo;
     @Autowired private RepoCatalogRepository repoCatalogRepo;
 
     @BeforeEach
     void cleanTasks() {
+        // 공유 컨테이너 — 다른 클래스가 남긴 자식 row(task_design/interview_session)가
+        // task 삭제를 FK로 막지 않도록 자식 먼저 삭제
+        designRepo.deleteAll();
+        sessionRepo.deleteAll();
         taskRepo.deleteAll();
     }
 
     private static org.springframework.test.web.servlet.request.RequestPostProcessor adminJwt(String userId) {
         return jwt()
-                .jwt(b -> b.claim("user_id", userId).claim("authorities", List.of("ROLE_ADMIN")))
+                .jwt(b -> b.claim("username", userId).claim("authorities", List.of("ROLE_ADMIN")))
                 .authorities(new SimpleGrantedAuthority("ROLE_ADMIN"));
     }
 
     @Test
     void DELETE_repo_catalog_sets_task_snapshot_catalog_id_to_null_and_preserves_alias_and_git_url() throws Exception {
-        // V14 시드 항목 'Netis7.0'의 id를 alias 조회로 얻는다 (하드코딩 금지).
-        Long catalogId = repoCatalogRepo.findByAlias("Netis7.0")
-                .orElseThrow(() -> new IllegalStateException("V14 시드 'Netis7.0'이 없습니다 — 마이그레이션 확인 필요"))
-                .getId();
+        // V14 시드('Netis7.0')는 다른 게이트 클래스들이 카탈로그 id=1로 공유하므로 삭제 대상으로 쓰지 않는다.
+        // 전용 카탈로그 항목을 만들어 그것을 삭제한다.
+        String alias = "del-snap-" + System.nanoTime();
+        RepoCatalogEntry cat = RepoCatalogEntry.create(alias, "https://github.com/hamonsoft/" + alias,
+                "github", "hamonsoft/" + alias, "main", "삭제 스냅샷 테스트", "admin1");
+        Long catalogId = repoCatalogRepo.save(cat).getId();
 
         // 해당 카탈로그 항목으로 작업 등록
         var req = new TaskCreateRequest(catalogId, "main", "스냅샷 보존 테스트", "카탈로그 삭제 후 스냅샷 확인", List.of(), null, null);
@@ -72,7 +83,7 @@ class RepoCatalogDeleteSnapshotTest {
 
         // 작업 등록 후 스냅샷 컬럼 확인
         var taskBefore = taskRepo.findById(taskId).orElseThrow();
-        assertThat(taskBefore.getRepoAlias()).isEqualTo("Netis7.0");
+        assertThat(taskBefore.getRepoAlias()).isEqualTo(alias);
         assertThat(taskBefore.getGitUrl()).isNotNull();
         assertThat(taskBefore.getRepoCatalogId()).isEqualTo(catalogId);
 
@@ -87,7 +98,7 @@ class RepoCatalogDeleteSnapshotTest {
                 .isNull();
         assertThat(taskAfter.getRepoAlias())
                 .as("repo_alias 스냅샷은 카탈로그 삭제 후에도 보존되어야 함")
-                .isEqualTo("Netis7.0");
+                .isEqualTo(alias);
         assertThat(taskAfter.getGitUrl())
                 .as("git_url 스냅샷은 카탈로그 삭제 후에도 보존되어야 함")
                 .isNotNull();

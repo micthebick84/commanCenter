@@ -3,6 +3,7 @@ package com.hamonsoft.netismaker.repository;
 import com.hamonsoft.netismaker.TestcontainersConfig;
 import com.hamonsoft.netismaker.entity.Task;
 import com.hamonsoft.netismaker.entity.TaskDesign;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -29,6 +30,16 @@ class TaskDesignRepositoryTest {
 
     @Autowired TaskRepository taskRepo;
     @Autowired TaskDesignRepository designRepo;
+    @Autowired InterviewSessionRepository sessionRepo;
+
+    @BeforeEach
+    void cleanUp() {
+        // 공유 컨테이너 — 자식(task_design/interview_session) 먼저 삭제해야 task 삭제가 FK에 안 막힌다.
+        // 이 클래스가 남기는 task/task_design도 다음 클래스의 동일한 정리 규약이 치운다.
+        designRepo.deleteAll();
+        sessionRepo.deleteAll();
+        taskRepo.deleteAll();
+    }
 
     @Test
     void 저장_후_기본값과_필드가_유지된다() {

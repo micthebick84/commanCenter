@@ -1,5 +1,6 @@
 package com.hamonsoft.netismaker.service;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.hamonsoft.netismaker.TestcontainersConfig;
 import com.hamonsoft.netismaker.dto.WorkerPlanRequest;
 import com.hamonsoft.netismaker.entity.*;
@@ -25,10 +26,13 @@ class InterviewRegisterContractTest {
     @Autowired private InterviewSessionRepository sessionRepo;
     @Autowired private TaskRepository taskRepo;
     @Autowired private TaskAnalysisRepository analysisRepo;
+    @Autowired private TaskDesignRepository designRepo;
 
     private Long sid;
 
     @BeforeEach void seed() {
+        // 공유 컨테이너 — task_design(자식, CASCADE 없음)이 남아 있으면 task 삭제가 FK에 막힌다
+        designRepo.deleteAll();
         sessionRepo.deleteAll();
         taskRepo.deleteAll();
         InterviewSession s = InterviewSession.create("hamonsoft/netis-backend", "feat/rbac",
@@ -45,7 +49,7 @@ class InterviewRegisterContractTest {
     }
 
     @Test
-    void register_creates_completed_task_with_design_only_analysis() {
+    void register_creates_completed_task_with_design_only_analysis() throws Exception {
         toPlanReady();
         Long taskId = interviewService.register(sid, "user1", false, false);
 
@@ -59,7 +63,10 @@ class InterviewRegisterContractTest {
         TaskAnalysis a = analysisRepo.findById(taskId).orElseThrow();
         // LOCKED CONTRACT v2: markdownResult = design_markdown ONLY (합본 아님)
         assertThat(a.getMarkdownResult()).isEqualTo("# 설계 문서");
-        assertThat(a.getSubtasksJson()).isEqualTo("[{\"title\":\"A\"},{\"title\":\"B\"}]");
+        // jsonb 컬럼은 Postgres가 재직렬화(공백 삽입)하므로 문자열이 아닌 JSON 의미로 비교
+        ObjectMapper om = new ObjectMapper();
+        assertThat(om.readTree(a.getSubtasksJson()))
+                .isEqualTo(om.readTree("[{\"title\":\"A\"},{\"title\":\"B\"}]"));
         assertThat(a.getClaudeLog()).isNull();      // claudeLog = null
         assertThat(a.isApproved()).isFalse();       // 관리자 승인 게이트 유지
 

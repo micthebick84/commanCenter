@@ -5,6 +5,7 @@ import com.hamonsoft.netismaker.entity.Task;
 import com.hamonsoft.netismaker.entity.TaskAnalysis;
 import com.hamonsoft.netismaker.entity.TaskDesign;
 import com.hamonsoft.netismaker.entity.TaskStatus;
+import com.hamonsoft.netismaker.repository.InterviewSessionRepository;
 import com.hamonsoft.netismaker.repository.TaskAnalysisRepository;
 import com.hamonsoft.netismaker.repository.TaskDesignRepository;
 import com.hamonsoft.netismaker.repository.TaskRepository;
@@ -33,12 +34,14 @@ class TaskServiceDesignTest {
     @Autowired private TaskRepository taskRepo;
     @Autowired private TaskAnalysisRepository analysisRepo;
     @Autowired private TaskDesignRepository designRepo;
+    @Autowired private InterviewSessionRepository sessionRepo;
 
     @BeforeEach
     void cleanUp() {
-        // FK 위반 방지: task_design/task_analysis(자식) 먼저 삭제, 그 다음 task(부모) 삭제
+        // FK 위반 방지: task_design/task_analysis/interview_session(자식) 먼저 삭제, 그 다음 task(부모) 삭제
         designRepo.deleteAll();
         analysisRepo.deleteAll();
+        sessionRepo.deleteAll();
         taskRepo.deleteAll();
     }
 
@@ -56,7 +59,7 @@ class TaskServiceDesignTest {
         Task t = taskWithStatus(TaskStatus.COMPLETED, true);
         analysisRepo.save(TaskAnalysis.create(t.getId(), "# 분석", "[]", "log", 100L));
 
-        taskService.approve(t.getId(), "admin");
+        taskService.approve(t.getId(), "admin1");
 
         Task reloaded = taskRepo.findById(t.getId()).orElseThrow();
         assertThat(reloaded.getStatus()).isEqualTo(TaskStatus.DESIGN_PENDING);
@@ -70,7 +73,7 @@ class TaskServiceDesignTest {
         Task t = taskWithStatus(TaskStatus.COMPLETED, false);
         analysisRepo.save(TaskAnalysis.create(t.getId(), "# 분석", "[]", "log", 100L));
 
-        taskService.approve(t.getId(), "admin");
+        taskService.approve(t.getId(), "admin1");
 
         Task reloaded = taskRepo.findById(t.getId()).orElseThrow();
         assertThat(reloaded.getStatus()).isEqualTo(TaskStatus.APPROVED);
@@ -81,14 +84,14 @@ class TaskServiceDesignTest {
         Task t = taskWithStatus(TaskStatus.DESIGN_REVIEW, true);
         designRepo.save(TaskDesign.create(t.getId(), "# 디자인", "[]", null, null, "log", 100L));
 
-        taskService.approveDesign(t.getId(), "admin");
+        taskService.approveDesign(t.getId(), "admin1");
 
         Task reloaded = taskRepo.findById(t.getId()).orElseThrow();
         assertThat(reloaded.getStatus()).isEqualTo(TaskStatus.APPROVED);
 
         TaskDesign d = designRepo.findById(t.getId()).orElseThrow();
         assertThat(d.isApproved()).isTrue();
-        assertThat(d.getApprovedBy()).isEqualTo("admin");
+        assertThat(d.getApprovedBy()).isEqualTo("admin1");
     }
 
     @Test
@@ -98,7 +101,7 @@ class TaskServiceDesignTest {
         taskRepo.save(t);
         designRepo.save(TaskDesign.create(t.getId(), "# 디자인", "[]", null, null, "log", 100L));
 
-        taskService.rejectDesign(t.getId(), "admin", "색상이 어둡습니다");
+        taskService.rejectDesign(t.getId(), "admin1", "색상이 어둡습니다");
 
         Task reloaded = taskRepo.findById(t.getId()).orElseThrow();
         assertThat(reloaded.getStatus()).isEqualTo(TaskStatus.DESIGN_PENDING);
@@ -116,7 +119,7 @@ class TaskServiceDesignTest {
         d.setRejectCount(3);
         designRepo.save(d);
 
-        assertThatThrownBy(() -> taskService.rejectDesign(t.getId(), "admin", "또 반려"))
+        assertThatThrownBy(() -> taskService.rejectDesign(t.getId(), "admin1", "또 반려"))
                 .isInstanceOf(TaskException.class)
                 .satisfies(ex -> assertThat(((TaskException) ex).getStatus())
                         .isEqualTo(org.springframework.http.HttpStatus.CONFLICT));
@@ -127,12 +130,12 @@ class TaskServiceDesignTest {
         Task t = taskWithStatus(TaskStatus.COMPLETED, true);
         designRepo.save(TaskDesign.create(t.getId(), "# 디자인", "[]", null, null, "log", 100L));
 
-        assertThatThrownBy(() -> taskService.approveDesign(t.getId(), "admin"))
+        assertThatThrownBy(() -> taskService.approveDesign(t.getId(), "admin1"))
                 .isInstanceOf(TaskException.class)
                 .satisfies(ex -> assertThat(((TaskException) ex).getStatus())
                         .isEqualTo(org.springframework.http.HttpStatus.CONFLICT));
 
-        assertThatThrownBy(() -> taskService.rejectDesign(t.getId(), "admin", "피드백"))
+        assertThatThrownBy(() -> taskService.rejectDesign(t.getId(), "admin1", "피드백"))
                 .isInstanceOf(TaskException.class)
                 .satisfies(ex -> assertThat(((TaskException) ex).getStatus())
                         .isEqualTo(org.springframework.http.HttpStatus.CONFLICT));

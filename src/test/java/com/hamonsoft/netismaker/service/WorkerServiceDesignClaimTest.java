@@ -1,5 +1,6 @@
 package com.hamonsoft.netismaker.service;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.hamonsoft.netismaker.TestcontainersConfig;
 import com.hamonsoft.netismaker.dto.WorkerTaskResponse;
 import com.hamonsoft.netismaker.entity.*;
@@ -29,13 +30,15 @@ class WorkerServiceDesignClaimTest {
     @Autowired private TaskRepository taskRepo;
     @Autowired private TaskDesignRepository designRepo;
     @Autowired private RepoCatalogRepository repoCatalogRepo;
+    @Autowired private InterviewSessionRepository sessionRepo;
 
     @BeforeEach
     void cleanUp() {
         // repoCatalogRepo는 삭제하지 않음 — V14 시드(alias 'Netis7.0')를 다른 테스트 클래스가
         // 같은 컨테이너에서 공유하므로 여기서 deleteAll하면 그쪽이 깨진다.
-        // FK 위반 방지: task_design(자식) 먼저 삭제, 그 다음 task(부모) 삭제
+        // FK 위반 방지: task_design/interview_session(자식) 먼저 삭제, 그 다음 task(부모) 삭제
         designRepo.deleteAll();
+        sessionRepo.deleteAll();
         taskRepo.deleteAll();
     }
 
@@ -73,7 +76,7 @@ class WorkerServiceDesignClaimTest {
     }
 
     @Test
-    void 반려_이력이_있으면_이전_디자인과_피드백이_동봉된다() {
+    void 반려_이력이_있으면_이전_디자인과_피드백이_동봉된다() throws Exception {
         Task t = designPendingTask();
 
         TaskDesign prev = TaskDesign.create(t.getId(), "# 이전 디자인 마크다운",
@@ -89,6 +92,9 @@ class WorkerServiceDesignClaimTest {
         assertThat(claimed).isPresent();
         WorkerTaskResponse r = claimed.get();
         assertThat(r.designMarkdown()).isEqualTo("# 이전 디자인 마크다운");
-        assertThat(r.feedbackHistoryJson()).isEqualTo("[{\"round\":1,\"feedback\":\"버튼 색이 이상함\"}]");
+        // jsonb 컬럼은 Postgres가 재직렬화(공백 삽입)하므로 문자열이 아닌 JSON 의미로 비교
+        ObjectMapper om = new ObjectMapper();
+        assertThat(om.readTree(r.feedbackHistoryJson()))
+                .isEqualTo(om.readTree("[{\"round\":1,\"feedback\":\"버튼 색이 이상함\"}]"));
     }
 }

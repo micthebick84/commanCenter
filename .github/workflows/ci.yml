@@ -1,0 +1,77 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  backend:
+    name: Backend (Gradle + Testcontainers)
+    # ubuntu-latest는 26.04로 순차 이관 예정인데, 26.04는 Docker Engine 29를 탑재하고
+    # Testcontainers 1.21.3의 docker-java 3.4.2가 Engine 29와 비호환(HTTP 400 on /info).
+    # Engine 28을 쓰는 24.04에 고정. Testcontainers를 Engine 29 지원 버전으로 올린 뒤 -latest 복귀.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    env:
+      # @EnabledIfEnvironmentVariable 게이트 해제 — 통합테스트 전체 실행
+      RUN_TESTCONTAINERS: 'true'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - uses: gradle/actions/setup-gradle@v4
+      - name: Build & test
+        run: ./gradlew build
+      - name: Upload test reports
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: backend-test-reports
+          path: build/reports/tests/test/
+          retention-days: 7
+
+  frontend:
+    name: Frontend (vitest + nuxt build)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci
+      - run: npm test
+      - name: Production build
+        run: npm run build
+
+  interview-service:
+    name: Interview service (vitest + tsc)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: netismaker-interview-service
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: netismaker-interview-service/package-lock.json
+      - run: npm ci
+      - run: npm test
+      - name: Type-check build
+        run: npm run build

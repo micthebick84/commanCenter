@@ -27,6 +27,19 @@ interface ImplementationView {
   implementationLog: string | null
 }
 
+interface DesignView {
+  designMarkdown: string
+  mockupFilesJson: string
+  designProjectId: string | null
+  designUrl: string | null
+  rejectCount: number
+  feedbackHistoryJson: string
+  approved: boolean
+  approvedBy: string | null
+  approvedAt: string | null
+  completedAt: string
+}
+
 interface DeploymentView {
   deployUrl: string | null
   deployHostPort: number | null
@@ -60,7 +73,9 @@ interface TaskResponse {
   updatedAt: string
   model: string
   effort: string
+  designRequested: boolean
   analysis: AnalysisView | null
+  design: DesignView | null
   implementation: ImplementationView | null
   deployment: DeploymentView | null
 }
@@ -250,6 +265,10 @@ function statusClass(status: string) {
       DEPLOY_LOST: 'status-chip status-deploy-lost',
       UNDEPLOY_PENDING: 'status-chip status-deploying',
       UNDEPLOYING: 'status-chip status-deploying',
+      DESIGN_PENDING: 'status-chip status-approved',
+      DESIGNING: 'status-chip status-implementing',
+      DESIGN_REVIEW: 'status-chip status-completed',
+      DESIGN_FAILED: 'status-chip status-failed',
       CANCELLED: 'status-chip status-cancelled',
     }[status] || 'status-chip'
   )
@@ -308,7 +327,7 @@ function statusClass(status: string) {
           </q-chip>
         </q-card-section>
         <q-separator />
-        <q-card-section v-if="task.failureReason">
+        <q-card-section v-if="task.failureReason || task.status === 'DESIGN_FAILED'">
           <div class="text-caption text-negative">실패 사유</div>
           <pre style="white-space: pre-wrap; color: #c62828">{{
             task.failureReason
@@ -582,6 +601,15 @@ function statusClass(status: string) {
           </q-card-actions>
         </q-card>
       </q-dialog>
+
+      <DesignReviewCard
+        v-if="task.design"
+        :task-id="task.id"
+        :status="task.status"
+        :design="task.design"
+        :is-admin="auth.isAdmin"
+        @refresh="refresh"
+      />
 
       <q-card v-if="task.analysis" flat bordered>
         <q-card-section class="row items-center q-gutter-sm">

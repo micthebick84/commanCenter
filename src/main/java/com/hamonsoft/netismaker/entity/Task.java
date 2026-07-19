@@ -92,6 +92,11 @@ public class Task {
     @Setter
     private List<EnvVar> envVars = new ArrayList<>();
 
+    /** 디자인 단계 포함 여부 (등록 시 토글). true면 분석 승인 시 구현대기 대신 디자인대기로. */
+    @Column(name = "design_requested", nullable = false)
+    @Setter
+    private boolean designRequested;
+
     /** 구현 결과 PR URL. PR_CREATED 시 set. */
     @Column(name = "pr_url", length = 500)
     @Setter

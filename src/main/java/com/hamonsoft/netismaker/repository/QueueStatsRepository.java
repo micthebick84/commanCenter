@@ -24,6 +24,7 @@ public class QueueStatsRepository {
         Object[] row = (Object[]) em.createNativeQuery("""
                 SELECT pending, in_progress, awaiting_approval,
                        approved, implementing, pr_created, implementation_failed, failed,
+                       design_pending, designing, design_review, design_failed,
                        deploy_pending, deploying, deployed, deploy_failed, deploy_lost,
                        undeploy_pending, undeploying,
                        avg_duration_ms
@@ -45,7 +46,11 @@ public class QueueStatsRepository {
                 ((Number) row[12]).longValue(),
                 ((Number) row[13]).longValue(),
                 ((Number) row[14]).longValue(),
-                row[15] == null ? null : ((Number) row[15]).doubleValue()
+                ((Number) row[15]).longValue(),
+                ((Number) row[16]).longValue(),
+                ((Number) row[17]).longValue(),
+                ((Number) row[18]).longValue(),
+                row[19] == null ? null : ((Number) row[19]).doubleValue()
         );
     }
 }

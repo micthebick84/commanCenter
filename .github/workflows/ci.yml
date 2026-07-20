@@ -13,10 +13,9 @@ concurrency:
 jobs:
   backend:
     name: Backend (Gradle + Testcontainers)
-    # ubuntu-latest는 26.04로 순차 이관 예정인데, 26.04는 Docker Engine 29를 탑재하고
-    # Testcontainers 1.21.3의 docker-java 3.4.2가 Engine 29와 비호환(HTTP 400 on /info).
-    # Engine 28을 쓰는 24.04에 고정. Testcontainers를 Engine 29 지원 버전으로 올린 뒤 -latest 복귀.
-    runs-on: ubuntu-24.04
+    # Testcontainers 2.x(docker-java 3.7.x, API 1.44 명시)로 Engine 28/29 모두 호환 —
+    # 과거 24.04 핀(Engine 29 비호환)은 해제됨. 상세는 build.gradle test 블록 주석 참고.
+    runs-on: ubuntu-latest
     timeout-minutes: 40
     env:
       # @EnabledIfEnvironmentVariable 게이트 해제 — 통합테스트 전체 실행

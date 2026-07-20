@@ -3,7 +3,7 @@ package com.hamonsoft.netismaker;
 import org.springframework.boot.test.util.TestPropertyValues;
 import org.springframework.context.ApplicationContextInitializer;
 import org.springframework.context.ConfigurableApplicationContext;
-import org.testcontainers.containers.PostgreSQLContainer;
+import org.testcontainers.postgresql.PostgreSQLContainer;
 import org.testcontainers.utility.DockerImageName;
 
 /**
@@ -15,7 +15,7 @@ import org.testcontainers.utility.DockerImageName;
 public class TestcontainersConfig implements ApplicationContextInitializer<ConfigurableApplicationContext> {
 
     @SuppressWarnings("resource")
-    private static final PostgreSQLContainer<?> POSTGRES = new PostgreSQLContainer<>(
+    private static final PostgreSQLContainer POSTGRES = new PostgreSQLContainer(
             DockerImageName.parse("postgres:16-alpine"))
             .withDatabaseName("netismaker_test")
             .withUsername("test")

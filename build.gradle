@@ -7,8 +7,9 @@ plugins {
 group = 'com.hamonsoft'
 version = '0.1.0-SNAPSHOT'
 
-// Spring Boot dependency management의 testcontainers BOM(1.20.4) override
-ext['testcontainers.version'] = '1.21.3'
+// Testcontainers 2.x는 아티팩트명이 testcontainers-*로 바뀌어 Spring Boot BOM(1.x 관리) 영향 밖 —
+// 버전을 의존성에 직접 명시한다. docker-java 3.7.x 동봉으로 Docker Engine 29 호환
+// (3.4.2는 Engine 29에서 HTTP 400 on /info — 로컬/최신 CI 러너 전멸 이슈).
 
 java {
     toolchain {
@@ -29,7 +30,6 @@ configurations {
 
 repositories {
     mavenCentral()
-    maven { url 'https://projectlombok.org/edge-releases' }
 }
 
 dependencies {
@@ -48,15 +48,18 @@ dependencies {
     implementation 'org.flywaydb:flyway-core'
     implementation 'org.flywaydb:flyway-database-postgresql'
 
-    // Lombok (edge for Java 24, same as netis-backend)
-    compileOnly 'org.projectlombok:lombok:edge-SNAPSHOT'
-    annotationProcessor 'org.projectlombok:lombok:edge-SNAPSHOT'
+    // Lombok 안정판 — 컴파일은 JDK 21 툴체인에서 돌므로 edge 불필요.
+    // (edge-SNAPSHOT은 이동 타깃이라 CI 재현성 저하 — 2026-07-20 안정판 전환)
+    compileOnly 'org.projectlombok:lombok:1.18.46'
+    annotationProcessor 'org.projectlombok:lombok:1.18.46'
 
     // Test
     testImplementation 'org.springframework.boot:spring-boot-starter-test'
     testImplementation 'org.springframework.security:spring-security-test'
-    testImplementation 'org.testcontainers:postgresql:1.21.3'
-    testImplementation 'org.testcontainers:junit-jupiter:1.21.3'
+    testImplementation 'org.testcontainers:testcontainers-postgresql:2.0.5'
+    // TC 2.x는 commons-io/commons-lang3를 전이로 안 가져오는데 withInitScript(ScriptUtils)가 요구
+    testImplementation 'commons-io:commons-io:2.22.0'
+    testImplementation 'org.apache.commons:commons-lang3'   // 버전은 Spring Boot BOM 관리
     testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
 }
 
@@ -78,10 +81,26 @@ tasks.named('test') {
     // macOS Docker Desktop socket 경로 (Testcontainers가 자동 감지 실패하는 경우).
     // 소켓이 실제로 있을 때만 지정 — Linux/CI에서 무조건 넣으면 존재하지 않는 경로가
     // /var/run/docker.sock 자동 감지를 가로채 컨테이너 기동이 전부 실패한다.
-    def macDockerSock = "${System.getProperty('user.home')}/.docker/run/docker.sock"
-    if (System.getenv('DOCKER_HOST') == null && file(macDockerSock).exists()) {
-        environment 'DOCKER_HOST', "unix://${macDockerSock}"
+    // ⚠️ Desktop 프록시 소켓(~/.docker/run/docker.sock)은 docker-java의 /info 요청을
+    // 빈 body + 400으로 가로챈다(curl은 정상 — 요청 형태로 차별) → 실데몬 raw 소켓 우선.
+    def home = System.getProperty('user.home')
+    def rawSock = "${home}/Library/Containers/com.docker.docker/Data/docker.raw.sock"
+    def desktopSock = "${home}/.docker/run/docker.sock"
+    if (System.getenv('DOCKER_HOST') == null) {
+        if (file(rawSock).exists()) {
+            environment 'DOCKER_HOST', "unix://${rawSock}"
+        } else if (file(desktopSock).exists()) {
+            environment 'DOCKER_HOST', "unix://${desktopSock}"
+        }
     }
+    // docker-java는 버전 미협상 시 API 1.32로 폴백하는데 Engine 29+는 최소 1.40을 요구
+    // ("client version 1.32 is too old"). 1.44는 Engine 28(CI)/29(로컬) 모두 지원 범위.
+    // ⚠️ docker-java가 읽는 키는 DOCKER_API_VERSION(env)이 아니라 'api.version'(시스템 프로퍼티).
+    systemProperty 'api.version', System.getenv('DOCKER_API_VERSION') ?: '1.44'
+    // ryuk 컨테이너에 마운트할 도커 소켓의 컨테이너-내부 경로. raw.sock의 호스트 경로는
+    // Desktop VM 안에 존재하지 않아 마운트가 500으로 실패한다. Linux CI에서도 동일 경로라 무해.
+    environment 'TESTCONTAINERS_DOCKER_SOCKET_OVERRIDE',
+            System.getenv('TESTCONTAINERS_DOCKER_SOCKET_OVERRIDE') ?: '/var/run/docker.sock'
     environment 'TESTCONTAINERS_RYUK_DISABLED', 'false'
 
     testLogging {

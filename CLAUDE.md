@@ -22,6 +22,8 @@
 ./gradlew bootRun --args='--spring.profiles.active=worker'  # 워커 데몬
 ./gradlew test
 cd frontend && npm run dev                                  # 프론트 :3001
+cd netismaker-interview-service && npm run dev              # 인터뷰 워커 (대화형 분석, .env 필요 — dotenv 자동로딩 없음)
+./scripts/start-all.sh                                      # API+워커 N+인터뷰 서비스 일괄 기동 (공개 노출 스택은 ./scripts/start-public.sh 먼저)
 ```
 
 ## 프론트엔드 코드 스타일 (`frontend/`)

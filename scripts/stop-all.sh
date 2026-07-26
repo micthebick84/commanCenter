@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# netisMaker 전체 스택 중지: .run/*.pid 기준으로 API + 워커 전부 종료.
+# netisMaker 전체 스택 중지: .run/*.pid 기준으로 API + 워커 + 인터뷰 서비스 전부 종료.
 #
 # 사용: ./scripts/stop-all.sh
 #

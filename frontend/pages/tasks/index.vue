@@ -1,6 +1,5 @@
 <script setup lang="ts">
 import { useQuasar } from 'quasar'
-import { decideResume, type InterviewSummary } from '~/composables/interviewResume'
 import { MODEL_OPTIONS, DEFAULT_MODEL, DEFAULT_EFFORT, effortsForModel, coerceEffort } from '~/composables/modelEffort'
 
 definePageMeta({ layout: 'default' })
@@ -59,10 +58,6 @@ const submitting = ref(false)
 const dialogPhase = ref<'form' | 'interview'>('form')
 const interviewSessionId = ref<number | null>(null)
 const starting = ref(false)
-
-// 새로고침 후 '이어할 인터뷰' 선택(활성 2개 이상일 때)
-const resumeCandidates = ref<InterviewSummary[]>([])
-const showResumePicker = ref(false)
 
 // 살아있는 워커들이 보고한 MCP 합집합 (다이얼로그 열 때 1회 조회)
 const availableMcps = ref<string[]>([])
@@ -336,31 +331,6 @@ function openInterview(id: number) {
   dialogPhase.value = 'interview'
   showCreate.value = true
 }
-
-// 새로고침 후 진행 중 인터뷰 발견 → 하이브리드 재오픈.
-async function discoverActiveInterviews() {
-  let list: InterviewSummary[] = []
-  try {
-    list = await useApi<InterviewSummary[]>('/api/interviews/active')
-  } catch {
-    return // 조용히 무시 — 작업 목록 로드는 방해하지 않음
-  }
-  const decision = decideResume(list)
-  if (decision.mode === 'auto') {
-    openInterview(decision.id)
-  } else if (decision.mode === 'pick') {
-    resumeCandidates.value = decision.candidates
-    showResumePicker.value = true
-  }
-}
-
-// 선택 다이얼로그에서 하나를 골라 이어하기.
-function resumeFromPicker(id: number) {
-  showResumePicker.value = false
-  openInterview(id)
-}
-
-onMounted(discoverActiveInterviews)
 
 // Phase 2에서 '작업 등록' 성공 시: 다이얼로그 닫고 목록 갱신.
 function onRegistered(_taskId: number) {
@@ -751,37 +721,6 @@ const DEPLOY_ACTIVE_STATUSES = [
             @close="closeDialog"
           />
         </q-card-section>
-      </q-card>
-    </q-dialog>
-
-    <!-- 진행 중 인터뷰 선택(활성 2개 이상) -->
-    <q-dialog v-model="showResumePicker">
-      <q-card style="min-width: 420px">
-        <q-card-section class="text-h6">진행 중인 대화형 분석</q-card-section>
-        <q-card-section class="q-pt-none text-grey-8">
-          이어서 진행할 인터뷰를 선택하세요.
-        </q-card-section>
-        <q-list bordered separator>
-          <q-item
-            v-for="c in resumeCandidates"
-            :key="c.id"
-            clickable
-            @click="resumeFromPicker(c.id)"
-          >
-            <q-item-section>
-              <q-item-label>{{ c.title }}</q-item-label>
-              <q-item-label caption>
-                {{ c.githubRepo }} · {{ c.githubBranch }} · {{ c.status }}
-              </q-item-label>
-            </q-item-section>
-            <q-item-section side>
-              <q-btn flat dense color="primary" icon="forum" label="이어하기" no-caps />
-            </q-item-section>
-          </q-item>
-        </q-list>
-        <q-card-actions align="right">
-          <q-btn flat label="닫기" @click="showResumePicker = false" />
-        </q-card-actions>
       </q-card>
     </q-dialog>
   </q-page>

@@ -120,7 +120,7 @@ describe('tasks form — 등록 payload', () => {
     await flushPromises()
 
     const dialog = document.querySelector('.q-dialog')!
-    expect(dialog.textContent).not.toContain('Claude 모델')
+    expect(dialog.textContent).not.toContain('모델')
     expect(dialog.textContent).not.toContain('MCP')
 
     w.unmount()

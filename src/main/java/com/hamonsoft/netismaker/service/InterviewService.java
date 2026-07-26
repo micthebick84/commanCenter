@@ -347,6 +347,28 @@ public class InterviewService {
                 planRepo.findById(id).orElse(null));
     }
 
+    /** task 상세가 열 세션 — 최신 1건. */
+    @Transactional(readOnly = true)
+    public Optional<Long> latestSessionIdForTask(Long taskId) {
+        return sessionRepo.findTopByTaskIdOrderByCreatedAtDesc(taskId).map(InterviewSession::getId);
+    }
+
+    /**
+     * task 삭제 시 열린 세션을 닫는다. 워커가 이미 잡고 있어도 다음 보고에서 상태 가드에 걸려
+     * 조용히 실패하므로(고아 컨테이너 같은 부작용 없음) 차단 대신 정리로 처리한다.
+     * task 상태는 이미 삭제 대상이므로 미러링하지 않는다.
+     */
+    @Transactional
+    public void closeOpenSessionsForTask(Long taskId, String actorId) {
+        for (InterviewSession s : sessionRepo.findOpenByTaskId(taskId)) {
+            appendTurn(s.getId(), "system", "note", "작업 삭제로 인터뷰 취소 (" + actorId + ")");
+            s.setStatus(InterviewStatus.CANCELLED);
+            s.setWorkerId(null);
+            s.setClaimedAt(null);
+            touch(s);
+        }
+    }
+
     private void requireOwner(InterviewSession s, String actorId, boolean isAdmin) {
         if (!s.isOwnedBy(actorId) && !isAdmin) {
             throw TaskException.forbidden();

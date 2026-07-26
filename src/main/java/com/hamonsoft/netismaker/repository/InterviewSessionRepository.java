@@ -74,4 +74,18 @@ public interface InterviewSessionRepository extends JpaRepository<InterviewSessi
           AND s.lastActivityAt < :cutoff
     """)
     List<InterviewSession> findIdleAwaitingInput(@Param("cutoff") OffsetDateTime cutoff);
+
+    /** task의 최신 세션 1건 (재승인으로 세션이 여러 개일 수 있다). */
+    Optional<InterviewSession> findTopByTaskIdOrderByCreatedAtDesc(Long taskId);
+
+    /** task에 붙은 비종료 세션들 — 삭제 시 정리 대상. */
+    @Query("""
+        SELECT s FROM InterviewSession s
+        WHERE s.taskId = :taskId
+          AND s.status IN (com.hamonsoft.netismaker.entity.InterviewStatus.QUEUED,
+                           com.hamonsoft.netismaker.entity.InterviewStatus.RUNNING,
+                           com.hamonsoft.netismaker.entity.InterviewStatus.AWAITING_INPUT,
+                           com.hamonsoft.netismaker.entity.InterviewStatus.PLAN_READY)
+    """)
+    List<InterviewSession> findOpenByTaskId(@Param("taskId") Long taskId);
 }

@@ -8,6 +8,7 @@ import com.hamonsoft.netismaker.dto.TaskResponse;
 import com.hamonsoft.netismaker.entity.Task;
 import com.hamonsoft.netismaker.entity.TaskStatus;
 import com.hamonsoft.netismaker.service.DeployLogStreamService;
+import com.hamonsoft.netismaker.service.InterviewService;
 import com.hamonsoft.netismaker.service.TaskService;
 import jakarta.validation.Valid;
 import org.springframework.context.annotation.Profile;
@@ -38,10 +39,13 @@ public class TaskController {
 
     private final TaskService taskService;
     private final DeployLogStreamService deployLogStream;
+    private final InterviewService interviewService;
 
-    public TaskController(TaskService taskService, DeployLogStreamService deployLogStream) {
+    public TaskController(TaskService taskService, DeployLogStreamService deployLogStream,
+                          InterviewService interviewService) {
         this.taskService = taskService;
         this.deployLogStream = deployLogStream;
+        this.interviewService = interviewService;
     }
 
     @PostMapping
@@ -70,7 +74,8 @@ public class TaskController {
         boolean isAdmin = AuthContext.isAdmin(auth);
         Task t = taskService.getForView(id, userId, isAdmin);
         return TaskResponse.of(t, taskService.getAnalysis(id).orElse(null),
-                taskService.getDesign(id).orElse(null));
+                taskService.getDesign(id).orElse(null),
+                interviewService.latestSessionIdForTask(id).orElse(null));
     }
 
     @PostMapping("/{id}/cancel")

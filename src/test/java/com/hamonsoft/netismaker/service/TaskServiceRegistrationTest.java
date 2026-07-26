@@ -25,6 +25,7 @@ class TaskServiceRegistrationTest {
     @Autowired private TaskRepository taskRepo;
     @Autowired private InterviewSessionRepository sessionRepo;
     @Autowired private TaskStatusHistoryRepository historyRepo;
+    @Autowired private InterviewService interviewService;
 
     @BeforeEach void clean() {
         sessionRepo.deleteAll();
@@ -65,5 +66,31 @@ class TaskServiceRegistrationTest {
         Task cancelled = taskService.cancel(t.getId(), "user1", false);
 
         assertThat(cancelled.getStatus()).isEqualTo(TaskStatus.CANCELLED);
+    }
+
+    @Test
+    void deleting_an_interviewing_task_closes_its_open_session() {
+        Task t = taskService.create(req("작업 A"), "user1");
+        taskService.approve(t.getId(), "admin", null);
+        Long sid = sessionRepo.findAll().get(0).getId();
+
+        taskService.softDelete(t.getId(), "admin", true);
+
+        assertThat(sessionRepo.findById(sid).orElseThrow().getStatus())
+                .isEqualTo(com.hamonsoft.netismaker.entity.InterviewStatus.CANCELLED);
+        assertThat(taskRepo.findActiveById(t.getId())).isEmpty();
+    }
+
+    @Test
+    void latest_session_id_is_the_most_recent_one() {
+        Task t = taskService.create(req("작업 A"), "user1");
+        taskService.approve(t.getId(), "admin", null);
+        Long first = sessionRepo.findAll().get(0).getId();
+        interviewService.cancel(first, "admin", true);          // → 승인대기 복귀
+        taskService.approve(t.getId(), "admin", null);           // 재승인 → 두 번째 세션
+
+        Long latest = interviewService.latestSessionIdForTask(t.getId()).orElseThrow();
+
+        assertThat(latest).isGreaterThan(first);
     }
 }

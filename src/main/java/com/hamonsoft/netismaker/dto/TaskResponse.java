@@ -33,7 +33,8 @@ public record TaskResponse(
         AnalysisView analysis,
         DesignView design,
         ImplementationView implementation,
-        DeploymentView deployment
+        DeploymentView deployment,
+        Long interviewSessionId
 ) {
     public record AnalysisView(
             String markdownResult,
@@ -82,6 +83,10 @@ public record TaskResponse(
     }
 
     public static TaskResponse of(Task t, TaskAnalysis a, TaskDesign d) {
+        return of(t, a, d, null);
+    }
+
+    public static TaskResponse of(Task t, TaskAnalysis a, TaskDesign d, Long interviewSessionId) {
         AnalysisView av = (a == null) ? null : new AnalysisView(
                 a.getMarkdownResult(),
                 a.getSubtasksJson(),
@@ -139,7 +144,8 @@ public record TaskResponse(
                 av,
                 designV,
                 iv,
-                dv
+                dv,
+                interviewSessionId
         );
     }
 }

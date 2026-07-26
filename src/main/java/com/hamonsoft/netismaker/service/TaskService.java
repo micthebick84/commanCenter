@@ -180,6 +180,7 @@ public class TaskService {
                             + t.getStatus().dbValue() + ")");
             default -> { }
         }
+        interviewService.closeOpenSessionsForTask(t.getId(), actorId);
         t.setDeletedAt(OffsetDateTime.now());
         t.setUpdatedAt(OffsetDateTime.now());
         historyRepo.save(TaskStatusHistory.log(t.getId(), t.getStatus(), t.getStatus(),

@@ -94,6 +94,24 @@ public class InterviewService {
         return sessionRepo.save(s);
     }
 
+    /**
+     * 관리자 승인 → 해당 task의 인터뷰 세션 생성(QUEUED).
+     * task 필드를 스냅샷으로 복사한다 — 워커는 세션만 보고 일하므로 계약이 바뀌지 않는다.
+     * task 상태 전이는 호출자(TaskService)가 담당한다.
+     */
+    @Transactional
+    public InterviewSession createForTask(Task t, String model, String effort,
+                                          List<TaskMcpSpec> extras) {
+        InterviewSession s = InterviewSession.create(t.getGithubRepo(), t.getGithubBranch(),
+                t.getTitle(), t.getDescription(), t.getRequesterId(),
+                new ArrayList<>(extras == null ? List.of() : extras), model, effort);
+        s.setGitUrl(t.getGitUrl());
+        s.setRepoAlias(t.getRepoAlias());
+        s.setRepoCatalogId(t.getRepoCatalogId());
+        s.setTaskId(t.getId());
+        return sessionRepo.save(s);
+    }
+
     /** 카탈로그 id 리스트 → snapshot 스펙. 비활성/누락 id는 거절. TaskService와 동일 규칙. */
     private List<TaskMcpSpec> resolveMcpExtras(List<Long> catalogIds) {
         if (catalogIds == null || catalogIds.isEmpty()) return new ArrayList<>();

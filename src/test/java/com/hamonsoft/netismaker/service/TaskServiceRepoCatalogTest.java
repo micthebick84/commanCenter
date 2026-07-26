@@ -23,6 +23,7 @@ class TaskServiceRepoCatalogTest {
     private TaskStatusHistoryRepository historyRepo;
     private McpCatalogService mcpCatalogService;
     private RepoCatalogService repoCatalogService;
+    private InterviewService interviewService;
     private TaskService service;
 
     @BeforeEach
@@ -33,8 +34,9 @@ class TaskServiceRepoCatalogTest {
         historyRepo = mock(TaskStatusHistoryRepository.class);
         mcpCatalogService = mock(McpCatalogService.class);
         repoCatalogService = mock(RepoCatalogService.class);
+        interviewService = mock(InterviewService.class);
         service = new TaskService(taskRepo, analysisRepo, designRepo, historyRepo, mcpCatalogService,
-                repoCatalogService, new ObjectMapper());
+                repoCatalogService, new ObjectMapper(), interviewService);
         ReflectionTestUtils.setField(service, "userConcurrentLimit", 5);
         ReflectionTestUtils.setField(service, "maxRetry", 3);
         when(taskRepo.save(any())).thenAnswer(i -> {

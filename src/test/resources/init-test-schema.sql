@@ -13,5 +13,6 @@ CREATE TABLE IF NOT EXISTS com."user" (
 INSERT INTO com."user" (user_id, user_name, password, email) VALUES
     ('user1',  'User 1', 'x', 'user1@hamonsoft.co.kr'),
     ('user2',  'User 2', 'x', 'user2@hamonsoft.co.kr'),
-    ('admin1', 'Admin',  'x', 'admin1@hamonsoft.co.kr')
+    ('admin1', 'Admin',  'x', 'admin1@hamonsoft.co.kr'),
+    ('admin',  'Admin',  'x', 'admin@hamonsoft.co.kr')
 ON CONFLICT (user_id) DO NOTHING;

@@ -8,10 +8,12 @@ import com.hamonsoft.netismaker.entity.InterviewStatus;
 import com.hamonsoft.netismaker.entity.Task;
 import com.hamonsoft.netismaker.entity.TaskAnalysis;
 import com.hamonsoft.netismaker.entity.TaskStatus;
+import com.hamonsoft.netismaker.entity.TaskStatusHistory;
 import com.hamonsoft.netismaker.repository.InterviewSessionRepository;
 import com.hamonsoft.netismaker.repository.TaskAnalysisRepository;
 import com.hamonsoft.netismaker.repository.TaskDesignRepository;
 import com.hamonsoft.netismaker.repository.TaskRepository;
+import com.hamonsoft.netismaker.repository.TaskStatusHistoryRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -34,6 +36,7 @@ class InterviewConfirmContractTest {
     @Autowired private TaskAnalysisRepository analysisRepo;
     @Autowired private TaskDesignRepository designRepo;
     @Autowired private InterviewSessionRepository sessionRepo;
+    @Autowired private TaskStatusHistoryRepository historyRepo;
 
     private Long taskId;
     private Long sid;
@@ -42,6 +45,7 @@ class InterviewConfirmContractTest {
         designRepo.deleteAll();
         sessionRepo.deleteAll();
         analysisRepo.deleteAll();
+        historyRepo.deleteAll();
         taskRepo.deleteAll();
         Task t = taskService.create(new TaskCreateRequest(1L, "feat/rbac", "RBAC 추가", "역할 기반 권한"), "user1");
         taskId = t.getId();
@@ -81,6 +85,11 @@ class InterviewConfirmContractTest {
 
         assertThat(sessionRepo.findById(sid).orElseThrow().getStatus())
                 .isEqualTo(InterviewStatus.REGISTERED);
+
+        // TaskStatusHistory.log(...)가 확정 전이를 남긴다 (플랜승인대기 → 구현대기)
+        TaskStatusHistory latest = historyRepo.findByTaskIdOrderByAtDesc(taskId).get(0);
+        assertThat(latest.getFromStatus()).isEqualTo(TaskStatus.INTERVIEW_REVIEW.dbValue());
+        assertThat(latest.getToStatus()).isEqualTo(TaskStatus.APPROVED.dbValue());
     }
 
     @Test
@@ -92,6 +101,11 @@ class InterviewConfirmContractTest {
         Task t = taskRepo.findById(taskId).orElseThrow();
         assertThat(t.getStatus()).isEqualTo(TaskStatus.DESIGN_PENDING);
         assertThat(t.isDesignRequested()).isTrue();
+
+        // 디자인대기로 가는 경우도 history에 남는다 (플랜승인대기 → 디자인대기)
+        TaskStatusHistory latest = historyRepo.findByTaskIdOrderByAtDesc(taskId).get(0);
+        assertThat(latest.getFromStatus()).isEqualTo(TaskStatus.INTERVIEW_REVIEW.dbValue());
+        assertThat(latest.getToStatus()).isEqualTo(TaskStatus.DESIGN_PENDING.dbValue());
     }
 
     @Test

@@ -64,7 +64,7 @@ const avgDurationLabel = computed(() => {
       </div>
       <q-separator vertical />
       <div class="stat">
-        <div class="stat-label">승인 대기</div>
+        <div class="stat-label">분석승인대기</div>
         <div class="stat-value text-green-9">{{ data.awaitingApproval }}</div>
       </div>
       <q-separator vertical />

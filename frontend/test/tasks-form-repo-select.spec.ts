@@ -17,7 +17,7 @@ const PageWrapper = defineComponent({
 
 describe('tasks form — repo alias select', () => {
   it('loads repo catalog when the form dialog is opened', async () => {
-    // onMounted fires useTaskPolling (GET /api/tasks) and discoverActiveInterviews (GET /api/interviews/active)
+    // onMounted fires useTaskPolling (GET /api/tasks)
     // Use mockResolvedValue([]) as the blanket fallback for all API calls
     useApiMock.mockResolvedValue([])
 

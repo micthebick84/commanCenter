@@ -359,7 +359,7 @@ const DEPLOY_ACTIVE_STATUSES = [
       <template #body-cell-actions="props">
         <q-td :props="props">
           <q-btn
-            v-if="props.row.status === 'PENDING'"
+            v-if="['PENDING', 'AWAITING_APPROVAL'].includes(props.row.status)"
             flat
             dense
             color="warning"

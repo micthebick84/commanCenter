@@ -128,6 +128,19 @@ function openApprove() {
   showApprove.value = true
 }
 
+// 승인대기 취소: 요청자 본인 또는 admin — getForView가 이미 조회 시점에 두 경우만
+// 통과시키므로(그 외 403) 별도 소유권 가드 없이 재시도 버튼과 동일한 패턴을 따른다.
+async function cancelTask() {
+  if (!confirm('이 작업을 취소하시겠습니까?')) return
+  try {
+    await useApi(`/api/tasks/${taskId.value}/cancel`, { method: 'POST' })
+    $q.notify({ type: 'positive', message: '작업이 취소되었습니다' })
+    refresh()
+  } catch (e: any) {
+    $q.notify({ type: 'negative', message: e?.data?.message ?? '취소 실패' })
+  }
+}
+
 function onApproved() {
   refresh()
 }
@@ -382,6 +395,16 @@ function statusClass(status: string) {
           <div class="text-h6">승인 대기</div>
           <q-space />
           <q-btn
+            data-test="cancel-task"
+            flat
+            dense
+            color="warning"
+            icon="block"
+            label="취소"
+            class="q-mr-sm"
+            @click="cancelTask"
+          />
+          <q-btn
             v-if="auth.isAdmin"
             data-test="approve"
             unelevated
@@ -405,6 +428,7 @@ function statusClass(status: string) {
             :session-id="task.interviewSessionId"
             :readonly="!auth.isAdmin"
             @confirmed="onInterviewConfirmed"
+            @close="refresh"
           />
         </q-card-section>
       </q-card>

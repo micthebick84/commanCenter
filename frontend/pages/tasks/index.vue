@@ -1,6 +1,5 @@
 <script setup lang="ts">
 import { useQuasar } from 'quasar'
-import { MODEL_OPTIONS, DEFAULT_MODEL, DEFAULT_EFFORT, effortsForModel, coerceEffort } from '~/composables/modelEffort'
 
 definePageMeta({ layout: 'default' })
 
@@ -49,35 +48,13 @@ const tasks = computed<TaskResponse[]>(() => page.value?.content ?? [])
 
 // 등록 다이얼로그 상태
 const showCreate = ref(false)
-const draft = reactive({ repoCatalogId: null as number | null, githubBranch: '', title: '', description: '', model: DEFAULT_MODEL, effort: DEFAULT_EFFORT })
-const effortOptions = computed(() => effortsForModel(draft.model))
-watch(() => draft.model, (m) => { draft.effort = coerceEffort(m, draft.effort) })
+const draft = reactive({
+  repoCatalogId: null as number | null,
+  githubBranch: '',
+  title: '',
+  description: '',
+})
 const submitting = ref(false)
-
-// 다이얼로그 단계: 'form' = 입력(Phase 1), 'interview' = 분할 뷰(Phase 2)
-const dialogPhase = ref<'form' | 'interview'>('form')
-const interviewSessionId = ref<number | null>(null)
-const starting = ref(false)
-
-// 살아있는 워커들이 보고한 MCP 합집합 (다이얼로그 열 때 1회 조회)
-const availableMcps = ref<string[]>([])
-const aliveWorkerCount = ref(0)
-const mcpsLoading = ref(false)
-
-// 관리자 카탈로그 (작업별 추가 MCP)
-interface CatalogEntry {
-  id: number
-  name: string
-  displayName: string
-  url: string
-  transport: string
-  description: string | null
-  lastCheckStatus: string | null
-  lastCheckAt: string | null
-}
-const catalog = ref<CatalogEntry[]>([])
-const selectedCatalogIds = ref<number[]>([])
-const catalogLoading = ref(false)
 
 // 레포 카탈로그 (작업 등록 대상 레포)
 interface RepoCatalogEntry {
@@ -113,17 +90,6 @@ function onRepoSelected(catalogId: number | null) {
     if (entry.defaultBranch) draft.githubBranch = entry.defaultBranch
   })
 }
-
-function statusDotColor(s: string | null): string {
-  if (!s) return 'grey-5'
-  return { HEALTHY: 'positive', DEGRADED: 'warning', DOWN: 'negative' }[s] ?? 'grey-5'
-}
-
-const selectedHasDown = computed(() =>
-  catalog.value.some(
-    (c) => selectedCatalogIds.value.includes(c.id) && c.lastCheckStatus === 'DOWN',
-  ),
-)
 
 // 브랜치 동기화 상태 (Phase 1: repo 입력 → /api/repos/branches 자동 호출)
 type RepoStatus = 'empty' | 'invalid' | 'loading' | 'ok' | 'notfound' | 'error'
@@ -215,54 +181,14 @@ function onBranchFilter(val: string, update: (cb: () => void) => void) {
   })
 }
 
-async function loadAvailableMcps() {
-  mcpsLoading.value = true
-  try {
-    const res = await useApi<{ mcps: string[]; aliveWorkerCount: number }>(
-      '/api/workers/mcps/available',
-    )
-    availableMcps.value = res.mcps ?? []
-    aliveWorkerCount.value = res.aliveWorkerCount ?? 0
-  } catch {
-    availableMcps.value = []
-    aliveWorkerCount.value = 0
-  } finally {
-    mcpsLoading.value = false
-  }
-}
-
-async function loadCatalog() {
-  catalogLoading.value = true
-  try {
-    catalog.value = await useApi<CatalogEntry[]>('/api/mcp-catalog')
-  } catch {
-    catalog.value = []
-  } finally {
-    catalogLoading.value = false
-  }
-}
-
 function openCreate() {
   draft.repoCatalogId = null
   draft.githubBranch = ''
   draft.title = ''
   draft.description = ''
-  draft.model = DEFAULT_MODEL
-  draft.effort = DEFAULT_EFFORT
-  selectedCatalogIds.value = []
   resetBranchState()
-  dialogPhase.value = 'form'
-  interviewSessionId.value = null
   showCreate.value = true
-  loadAvailableMcps()
-  loadCatalog()
   loadRepoCatalog()
-}
-
-function toggleCatalog(id: number) {
-  const idx = selectedCatalogIds.value.indexOf(id)
-  if (idx >= 0) selectedCatalogIds.value.splice(idx, 1)
-  else selectedCatalogIds.value.push(id)
 }
 
 const canSubmit = computed(
@@ -284,9 +210,6 @@ async function submit() {
         githubBranch: draft.githubBranch,
         title: draft.title,
         description: draft.description,
-        mcpCatalogIds: selectedCatalogIds.value,
-        model: draft.model,
-        effort: draft.effort,
       },
     })
     $q.notify({ type: 'positive', message: '작업 등록 완료' })
@@ -300,49 +223,8 @@ async function submit() {
   }
 }
 
-// Phase 1 제출: 작업이 아니라 인터뷰 세션을 생성하고 Phase 2(분할 뷰)로 전환한다.
-// task는 인터뷰 완료(PLAN_READY) 후 '작업 등록'에서만 생성된다.
-async function startInterview() {
-  starting.value = true
-  try {
-    const res = await useApi<{ sessionId: number }>('/api/interviews', {
-      method: 'POST',
-      body: {
-        repoCatalogId: draft.repoCatalogId,
-        githubBranch: draft.githubBranch,
-        title: draft.title,
-        description: draft.description,
-        mcpCatalogIds: selectedCatalogIds.value,
-        model: draft.model,
-        effort: draft.effort,
-      },
-    })
-    openInterview(res.sessionId)
-  } catch (e: any) {
-    $q.notify({ type: 'negative', message: e?.data?.message ?? '인터뷰 시작 실패' })
-  } finally {
-    starting.value = false
-  }
-}
-
-// 인터뷰 패널을 특정 세션으로 연다(신규 시작/재오픈 공통).
-function openInterview(id: number) {
-  interviewSessionId.value = id
-  dialogPhase.value = 'interview'
-  showCreate.value = true
-}
-
-// Phase 2에서 '작업 등록' 성공 시: 다이얼로그 닫고 목록 갱신.
-function onRegistered(_taskId: number) {
-  $q.notify({ type: 'positive', message: '작업이 등록되었습니다' })
-  closeDialog()
-  refresh()
-}
-
 function closeDialog() {
   showCreate.value = false
-  dialogPhase.value = 'form'
-  interviewSessionId.value = null
 }
 
 async function cancel(t: TaskResponse) {
@@ -495,69 +377,11 @@ const DEPLOY_ACTIVE_STATUSES = [
 
     <!-- 등록 다이얼로그 -->
     <q-dialog v-model="showCreate" persistent>
-      <q-card
-        :style="
-          dialogPhase === 'interview'
-            ? 'min-width: 90vw; max-width: 1200px'
-            : 'min-width: 520px'
-        "
-      >
+      <q-card style="min-width: 520px">
         <q-card-section>
-          <div class="text-h6">
-            {{ dialogPhase === 'form' ? '대화형 분석 시작' : '대화형 분석' }}
-          </div>
+          <div class="text-h6">작업 등록</div>
         </q-card-section>
-        <q-card-section v-if="dialogPhase === 'form'" class="q-gutter-md">
-          <q-banner
-            v-if="!mcpsLoading"
-            :class="
-              aliveWorkerCount === 0
-                ? 'bg-orange-1 text-orange-10'
-                : availableMcps.length === 0
-                  ? 'bg-grey-2 text-grey-9'
-                  : 'bg-indigo-1 text-indigo-10'
-            "
-            dense
-            rounded
-          >
-            <template #avatar>
-              <q-icon
-                :name="
-                  aliveWorkerCount === 0
-                    ? 'warning'
-                    : availableMcps.length === 0
-                      ? 'info'
-                      : 'bolt'
-                "
-              />
-            </template>
-            <template v-if="aliveWorkerCount === 0">
-              살아있는 워커가 없습니다. 작업 등록은 가능하지만 워커가 시작될 때까지 대기 상태로 남습니다.
-            </template>
-            <template v-else-if="availableMcps.length === 0">
-              워커 {{ aliveWorkerCount }}개 활성 · 등록된 MCP 없음 (기본 Claude 도구만 사용)
-            </template>
-            <template v-else>
-              <div class="q-mb-xs">
-                이 분석에서 사용 가능한 MCP 도구
-                <span class="text-caption">(워커 {{ aliveWorkerCount }}개 활성)</span>
-              </div>
-              <div>
-                <q-chip
-                  v-for="m in availableMcps"
-                  :key="m"
-                  color="white"
-                  text-color="indigo-10"
-                  icon="bolt"
-                  size="sm"
-                  dense
-                  :label="m"
-                  class="q-mr-xs q-mb-xs"
-                />
-              </div>
-            </template>
-          </q-banner>
-
+        <q-card-section class="q-gutter-md">
           <q-select
             v-model="draft.repoCatalogId"
             :options="repoOptions"
@@ -615,112 +439,19 @@ const DEPLOY_ACTIVE_STATUSES = [
             autogrow
             rows="4"
           />
-
-          <div class="row q-col-gutter-md">
-            <div class="col">
-              <q-select
-                v-model="draft.model"
-                :options="MODEL_OPTIONS"
-                label="모델"
-                emit-value
-                map-options
-                dense
-                outlined
-              />
-            </div>
-            <div class="col">
-              <q-select
-                v-model="draft.effort"
-                :options="effortOptions"
-                label="effort"
-                dense
-                outlined
-                :hint="draft.model === 'claude-haiku-4-5' ? 'Haiku는 low/medium/high만 지원' : ''"
-              />
-            </div>
-          </div>
-
-          <q-expansion-item
-            icon="extension"
-            label="이 분석에만 추가할 MCP 도구"
-            :caption="
-              catalog.length === 0
-                ? '관리자 카탈로그 비어있음'
-                : `${selectedCatalogIds.length}개 선택 · 활성 ${catalog.length}개 중`
-            "
-            header-class="text-grey-9 bg-grey-2"
-            dense
-          >
-            <q-banner
-              v-if="catalog.length === 0"
-              class="bg-grey-1 text-grey-8 q-mt-sm"
-              dense
-            >
-              <template #avatar><q-icon name="info" /></template>
-              관리자가 등록한 SSE MCP 카탈로그가 없습니다. 관리자에게 등록 요청하세요.
-            </q-banner>
-            <div v-else class="q-pa-sm">
-              <q-chip
-                v-for="entry in catalog"
-                :key="entry.id"
-                clickable
-                :color="selectedCatalogIds.includes(entry.id) ? 'indigo-6' : 'grey-3'"
-                :text-color="selectedCatalogIds.includes(entry.id) ? 'white' : 'grey-9'"
-                :icon="selectedCatalogIds.includes(entry.id) ? 'check' : 'add'"
-                @click="toggleCatalog(entry.id)"
-              >
-                <q-badge
-                  rounded
-                  :color="statusDotColor(entry.lastCheckStatus)"
-                  class="q-mr-xs"
-                  style="min-height: 8px; min-width: 8px; padding: 0"
-                />
-                {{ entry.displayName }}
-                <q-tooltip>
-                  <div><strong>{{ entry.name }}</strong> ({{ entry.transport }})</div>
-                  <div style="max-width: 360px; word-break: break-all">{{ entry.url }}</div>
-                  <div v-if="entry.description" class="q-mt-xs">{{ entry.description }}</div>
-                  <div class="q-mt-xs">
-                    헬스: <strong>{{ entry.lastCheckStatus ?? 'UNKNOWN' }}</strong>
-                  </div>
-                </q-tooltip>
-              </q-chip>
-              <div
-                v-if="selectedHasDown"
-                class="text-caption text-negative q-mt-sm row items-center q-gutter-xs"
-              >
-                <q-icon name="warning" size="14px" />
-                <span>
-                  DOWN 상태 MCP가 포함됨 — claude가 연결 실패해도 분석은 진행되지만 해당 도구는 사용
-                  안 됨. 관리자에게 확인 요청 권장.
-                </span>
-              </div>
-            </div>
-          </q-expansion-item>
         </q-card-section>
-        <q-card-actions v-if="dialogPhase === 'form'" align="right">
+        <q-card-actions align="right">
           <q-btn flat label="취소" @click="closeDialog" />
           <q-btn
             unelevated
             color="primary"
-            icon="forum"
-            label="인터뷰 시작"
-            :loading="starting"
+            icon="add_task"
+            label="작업 등록"
+            :loading="submitting"
             :disable="!canSubmit"
-            @click="startInterview"
+            @click="submit"
           />
         </q-card-actions>
-
-        <q-card-section v-else class="q-pa-none">
-          <InterviewPanel
-            v-if="interviewSessionId"
-            :session-id="interviewSessionId"
-            :model="draft.model"
-            :effort="draft.effort"
-            @registered="onRegistered"
-            @close="closeDialog"
-          />
-        </q-card-section>
       </q-card>
     </q-dialog>
   </q-page>

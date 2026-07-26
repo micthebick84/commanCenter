@@ -79,3 +79,51 @@ describe('tasks form — repo alias select', () => {
     w.unmount()
   })
 })
+
+describe('tasks form — 등록 payload', () => {
+  it('모델/effort/MCP 없이 4필드만 보낸다', async () => {
+    useApiMock.mockResolvedValue([])
+    const w = mount(PageWrapper, { attachTo: document.body })
+    await flushPromises()
+
+    const vm = w.findComponent(TasksIndex).vm as any
+    vm.draft.repoCatalogId = 1
+    vm.draft.githubBranch = 'main'
+    vm.draft.title = 'RBAC 추가'
+    vm.draft.description = '역할 기반 권한'
+
+    useApiMock.mockClear()
+    useApiMock.mockResolvedValue({})
+    await vm.submit()
+    await flushPromises()
+
+    expect(useApiMock).toHaveBeenCalledWith('/api/tasks', {
+      method: 'POST',
+      body: {
+        repoCatalogId: 1,
+        githubBranch: 'main',
+        title: 'RBAC 추가',
+        description: '역할 기반 권한',
+      },
+    })
+
+    w.unmount()
+  })
+
+  it('등록 다이얼로그에 모델·MCP 선택 UI가 없다', async () => {
+    useApiMock.mockResolvedValue([])
+    const w = mount(PageWrapper, { attachTo: document.body })
+    await flushPromises()
+
+    const addBtn = w.findAll('button').find((b) => b.text().includes('작업 등록'))
+    await addBtn!.trigger('click')
+    await flushPromises()
+
+    const dialog = document.querySelector('.q-dialog')!
+    expect(dialog.textContent).not.toContain('Claude 모델')
+    expect(dialog.textContent).not.toContain('MCP')
+
+    w.unmount()
+    document.querySelectorAll('.q-dialog').forEach((n) => n.remove())
+  })
+})

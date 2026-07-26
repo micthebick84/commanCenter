@@ -70,18 +70,22 @@ WORKER_ID=mac-worker-2 ./gradlew bootRun --args='--spring.profiles.active=worker
 
 **진짜 천장은 Anthropic quota**. 워커가 N대지만 같은 user 구독을 공유 → 시간당 메시지 cap에 빨리 도달하면 모든 워커가 retry/backoff로 자연 직렬화. Max 5x 이상 권장.
 
-## 작업 상태머신 (V1.1 — 구현 파이프라인)
+## 작업 상태머신
 
 ```
-[작업대기] → [분석중] → [분석완료] ──(admin 승인)──→ [구현대기] → [구현중] ──┬─→ [PR생성]
-                          ↓                                                  └─→ [구현실패]
-                       (실패)
-                          ↓
-                       [분석실패] ──(retry)──→ [작업대기]
+[승인대기] ──(관리자 승인 = 인터뷰 시작)──→ [인터뷰중] ⇄ [입력대기] ──→ [플랜승인대기]
+                                                                          │ (구현 진행)
+                                                                          ↓
+                                                        [구현대기] 또는 [디자인대기]
+[승인대기] ← (인터뷰 실패/만료/취소)
+
+레거시 자동분석: [작업대기] → [분석중] → [분석완료] ──(승인)──→ [구현대기]/[디자인대기]  (API 전용)
 ```
 
-- **분석**: PENDING → IN_PROGRESS → COMPLETED/FAILED. 결과는 `task_analysis.markdown_result`.
-- **승인**: admin이 `/tasks/{id}/approve` → `analysis.approved=true` + `task.status=APPROVED`. 즉시 큐 진입.
+- **등록**: 사용자는 레포/브랜치/제목/설명만 입력. 모델·effort·MCP는 관리자가 승인 시 결정.
+- **분석**(레거시 자동분석, API 전용): PENDING → IN_PROGRESS → COMPLETED/FAILED. 결과는 `task_analysis.markdown_result`.
+- **승인**: `/tasks/{id}/approve`가 상태에 따라 분기 — `승인대기`면 인터뷰 세션 생성, `분석완료`면 기존 구현 큐 진입(`analysis.approved=true` + `task.status=APPROVED`).
+- **확정**: `/interviews/{sid}/confirm`이 `TaskAnalysis`를 프리필하고(approved=true) 구현/디자인 큐로 보냄.
 - **구현**: 같은 워커가 APPROVED를 claim → `WorktreeService.create` → `claude -p` (worktree에서) → `git commit/push` → `gh pr create --draft` → `task.status=PR_CREATED` (+ pr_url/pr_number/head_branch/head_sha 저장).
 - **실패 시**: `IMPLEMENTATION_FAILED` + 사유. 부분 진행분(브랜치까지 push 등)은 보존, worktree도 디버그용 보존.
 
@@ -115,6 +119,7 @@ PR 본문/브랜치 prefix/timeout은 `application-worker.yml`의 `netis-maker.w
 | git commit/push + `gh pr create` | `workerdaemon/GitOpsService.java` |
 | 작업 등록 다이얼로그 (브랜치 자동 동기화 + MCP 안내) | `frontend/pages/tasks/index.vue` |
 | 작업 상세 + 구현 승인 + PR 링크 | `frontend/pages/tasks/[id].vue` |
+| 승인 다이얼로그 | `frontend/components/ApproveDialog.vue` |
 | 워커 헬스 (관리자) | `frontend/pages/admin/workers.vue`, `controller/WorkerHealthController.java` |
 
 ## 운영자 환경 권장 셋업

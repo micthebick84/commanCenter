@@ -271,6 +271,10 @@ onUnmounted(() => closeLog())
 function statusClass(status: string) {
   return (
     {
+      AWAITING_APPROVAL: 'status-chip status-pending',
+      INTERVIEWING: 'status-chip status-in-progress',
+      INTERVIEW_INPUT: 'status-chip status-pending',
+      INTERVIEW_REVIEW: 'status-chip status-completed',
       PENDING: 'status-chip status-pending',
       IN_PROGRESS: 'status-chip status-in-progress',
       COMPLETED: 'status-chip status-completed',

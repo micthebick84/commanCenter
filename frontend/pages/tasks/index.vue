@@ -250,6 +250,10 @@ async function remove(t: TaskResponse) {
 function statusClass(status: string) {
   return (
     {
+      AWAITING_APPROVAL: 'status-chip status-pending',
+      INTERVIEWING: 'status-chip status-in-progress',
+      INTERVIEW_INPUT: 'status-chip status-pending',
+      INTERVIEW_REVIEW: 'status-chip status-completed',
       PENDING: 'status-chip status-pending',
       IN_PROGRESS: 'status-chip status-in-progress',
       COMPLETED: 'status-chip status-completed',
@@ -285,6 +289,10 @@ const DEPLOY_ACTIVE_STATUSES = [
         v-model="statusFilter"
         :options="[
           { label: '전체', value: null },
+          { label: '승인대기', value: 'AWAITING_APPROVAL' },
+          { label: '인터뷰중', value: 'INTERVIEWING' },
+          { label: '입력대기', value: 'INTERVIEW_INPUT' },
+          { label: '플랜승인대기', value: 'INTERVIEW_REVIEW' },
           { label: '작업대기', value: 'PENDING' },
           { label: '분석중', value: 'IN_PROGRESS' },
           { label: '분석완료', value: 'COMPLETED' },

@@ -160,6 +160,7 @@ body: { designRequested }
 ```
 프리필 계약은 그대로 유지한다: `markdown_result = design_markdown`(합본 아님),
 `subtasks_json = plan_json`, `claude_log = null`, `duration_ms = plan.durationMs`.
++ TaskAnalysis.approved=true / approvedBy=관리자 (확정이 곧 승인 — 뒤에 별도 게이트 없음)
 **Task를 생성하지 않고 기존 task를 갱신**하는 것이 유일한 실질 변경이다.
 
 **`POST /api/interviews/{sid}/answer`** — 경로 유지, `ROLE_ADMIN` 추가.

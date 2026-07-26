@@ -1,5 +1,7 @@
 <script setup lang="ts">
 import { useQuasar } from 'quasar'
+import ApproveDialog from '~/components/ApproveDialog.vue'
+import InterviewPanel from '~/components/InterviewPanel.vue'
 
 definePageMeta({ layout: 'default' })
 
@@ -69,6 +71,7 @@ interface TaskResponse {
   failureReason: string | null
   mcpsExtra: TaskMcpSpec[]
   envVars: EnvVar[]
+  interviewSessionId: number | null
   createdAt: string
   updatedAt: string
   model: string
@@ -118,6 +121,24 @@ async function approve() {
     $q.notify({ type: 'negative', message: e?.data?.message ?? '승인 실패' })
   }
 }
+
+const showApprove = ref(false)
+
+function openApprove() {
+  showApprove.value = true
+}
+
+function onApproved() {
+  refresh()
+}
+
+function onInterviewConfirmed() {
+  refresh()
+}
+
+const isInterviewPhase = computed(() =>
+  ['INTERVIEWING', 'INTERVIEW_INPUT', 'INTERVIEW_REVIEW'].includes(task.value?.status ?? ''),
+)
 
 // 편집용 행: 와이어 포맷(EnvVar)에 UI 전용 상태(reveal) + 안정적 key(id)를 더한다.
 // id는 v-for의 stable key로 써서 행 삭제 시 입력/마스킹 상태가 어긋나지 않게 한다.
@@ -351,6 +372,40 @@ function statusClass(status: string) {
           />
         </q-card-section>
       </q-card>
+
+      <q-card v-if="task.status === 'AWAITING_APPROVAL'" flat bordered class="q-mb-md">
+        <q-card-section class="row items-center">
+          <div class="text-h6">승인 대기</div>
+          <q-space />
+          <q-btn
+            v-if="auth.isAdmin"
+            data-test="approve"
+            unelevated
+            color="primary"
+            icon="forum"
+            label="승인 — 인터뷰 시작"
+            @click="openApprove"
+          />
+        </q-card-section>
+        <q-separator />
+        <q-card-section class="text-grey-8">
+          관리자가 승인하면 대화형 분석(인터뷰)이 시작됩니다. 승인 전에는 워커 자원을 쓰지 않습니다.
+        </q-card-section>
+      </q-card>
+
+      <q-card v-if="isInterviewPhase && task.interviewSessionId" flat bordered class="q-mb-md">
+        <q-card-section class="text-h6">대화형 분석</q-card-section>
+        <q-separator />
+        <q-card-section class="q-pa-none">
+          <InterviewPanel
+            :session-id="task.interviewSessionId"
+            :readonly="!auth.isAdmin"
+            @confirmed="onInterviewConfirmed"
+          />
+        </q-card-section>
+      </q-card>
+
+      <ApproveDialog v-model="showApprove" :task-id="task.id" @approved="onApproved" />
 
       <!-- 구현 결과 카드 (PR 생성 또는 구현 실패 시 노출) -->
       <q-card

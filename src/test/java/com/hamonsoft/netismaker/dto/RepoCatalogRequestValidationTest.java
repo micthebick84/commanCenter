@@ -7,8 +7,6 @@ import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 
-import java.util.List;
-
 import static org.assertj.core.api.Assertions.assertThat;
 
 class RepoCatalogRequestValidationTest {
@@ -31,9 +29,4 @@ class RepoCatalogRequestValidationTest {
         assertThat(validator.validate(req)).isEmpty();
     }
 
-    @Test
-    void interview_create_requires_repo_catalog_id() {
-        CreateInterviewRequest req = new CreateInterviewRequest(null, "main", "t", "d", List.of(), null, null);
-        assertThat(validator.validate(req)).isNotEmpty();
-    }
 }

@@ -1,15 +1,12 @@
 package com.hamonsoft.netismaker.service;
 
 import com.hamonsoft.netismaker.dto.AnswerRequest;
-import com.hamonsoft.netismaker.dto.CreateInterviewRequest;
 import com.hamonsoft.netismaker.dto.InterviewClaimResponse;
 import com.hamonsoft.netismaker.dto.InterviewResponse;
-import com.hamonsoft.netismaker.dto.InterviewSummary;
 import com.hamonsoft.netismaker.dto.WorkerPlanRequest;
 import com.hamonsoft.netismaker.dto.WorkerQuestionRequest;
 import com.hamonsoft.netismaker.entity.*;
 import com.hamonsoft.netismaker.repository.*;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Profile;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.http.HttpStatus;
@@ -25,7 +22,7 @@ import java.util.Optional;
 /**
  * 인터뷰 세션 상태 전이의 단일 진입점. 모든 상태 변경은 여기서 (TaskService 패턴).
  *
- *   create        ─► QUEUED
+ *   createForTask ─► QUEUED (관리자 승인, TaskService.approve의 유일한 출구)
  *   claim         ─► QUEUED → RUNNING (워커, SKIP LOCKED)
  *   recordQuestion─► RUNNING → AWAITING_INPUT (워커가 질문 emit, 반납)
  *   submitAnswer  ─► AWAITING_INPUT → QUEUED (사용자 답변, 재큐; idempotent)
@@ -46,51 +43,22 @@ public class InterviewService {
     private final InterviewSessionRepository sessionRepo;
     private final InterviewTurnRepository turnRepo;
     private final InterviewPlanRepository planRepo;
-    private final McpCatalogService mcpCatalogService;
-    private final RepoCatalogService repoCatalogService;
     private final TaskRepository taskRepo;
     private final TaskAnalysisRepository analysisRepo;
     private final TaskStatusHistoryRepository historyRepo;
 
-    @Value("${app.interview.user-concurrent-limit:3}")
-    private int userConcurrentLimit;
-
     public InterviewService(InterviewSessionRepository sessionRepo,
                             InterviewTurnRepository turnRepo,
                             InterviewPlanRepository planRepo,
-                            McpCatalogService mcpCatalogService,
-                            RepoCatalogService repoCatalogService,
                             TaskRepository taskRepo,
                             TaskAnalysisRepository analysisRepo,
                             TaskStatusHistoryRepository historyRepo) {
         this.sessionRepo = sessionRepo;
         this.turnRepo = turnRepo;
         this.planRepo = planRepo;
-        this.mcpCatalogService = mcpCatalogService;
-        this.repoCatalogService = repoCatalogService;
         this.taskRepo = taskRepo;
         this.analysisRepo = analysisRepo;
         this.historyRepo = historyRepo;
-    }
-
-    @Transactional
-    public InterviewSession create(CreateInterviewRequest req, String requesterId) {
-        long active = sessionRepo.countActiveByRequester(requesterId);
-        if (active >= userConcurrentLimit) {
-            throw TaskException.tooManyRequests(
-                    "동시에 진행할 수 있는 인터뷰 한도(" + userConcurrentLimit + ")를 초과했습니다");
-        }
-        List<TaskMcpSpec> extras = resolveMcpExtras(req.mcpCatalogIds());
-        String model = ModelEffortPolicy.resolveModel(req.model());
-        String effort = ModelEffortPolicy.resolveEffort(req.effort());
-        ModelEffortPolicy.validate(model, effort);
-        RepoCatalogService.ResolvedRepo repo = repoCatalogService.resolveForRegistration(req.repoCatalogId());
-        InterviewSession s = InterviewSession.create(repo.ownerRepo(), req.githubBranch(),
-                req.title(), req.description(), requesterId, extras, model, effort);
-        s.setGitUrl(repo.gitUrl());
-        s.setRepoAlias(repo.alias());
-        s.setRepoCatalogId(repo.catalogId());
-        return sessionRepo.save(s);
     }
 
     /**
@@ -109,28 +77,6 @@ public class InterviewService {
         s.setRepoCatalogId(t.getRepoCatalogId());
         s.setTaskId(t.getId());
         return sessionRepo.save(s);
-    }
-
-    /** 카탈로그 id 리스트 → snapshot 스펙. 비활성/누락 id는 거절. TaskService와 동일 규칙. */
-    private List<TaskMcpSpec> resolveMcpExtras(List<Long> catalogIds) {
-        if (catalogIds == null || catalogIds.isEmpty()) return new ArrayList<>();
-        List<McpCatalogEntry> entries = mcpCatalogService.resolveByIds(catalogIds);
-        if (entries.size() != catalogIds.size()) {
-            throw new TaskException(HttpStatus.BAD_REQUEST,
-                    "존재하지 않는 MCP 카탈로그 id 포함. 요청=" + catalogIds.size()
-                            + " 매칭=" + entries.size());
-        }
-        for (McpCatalogEntry e : entries) {
-            if (!e.isEnabled()) {
-                throw new TaskException(HttpStatus.BAD_REQUEST,
-                        "비활성화된 MCP 카탈로그 항목: " + e.getName());
-            }
-        }
-        List<TaskMcpSpec> out = new ArrayList<>(entries.size());
-        for (McpCatalogEntry e : entries) {
-            out.add(new TaskMcpSpec(e.getName(), e.getUrl(), e.getTransport()));
-        }
-        return out;
     }
 
     /** session_id의 다음 seq. 턴이 없으면 0. */
@@ -399,14 +345,6 @@ public class InterviewService {
         return InterviewResponse.of(s,
                 turnRepo.findBySessionIdOrderBySeqAsc(id),
                 planRepo.findById(id).orElse(null));
-    }
-
-    /** 요청자 본인의 비종료 인터뷰 목록(경량). 새로고침 후 디스커버리/재오픈용. */
-    @Transactional(readOnly = true)
-    public List<InterviewSummary> listActiveForRequester(String requesterId) {
-        return sessionRepo.findActiveByRequester(requesterId).stream()
-                .map(InterviewSummary::of)
-                .toList();
     }
 
     private void requireOwner(InterviewSession s, String actorId, boolean isAdmin) {

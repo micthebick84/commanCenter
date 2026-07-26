@@ -1,7 +1,5 @@
 package com.hamonsoft.netismaker.service;
 
-import com.hamonsoft.netismaker.dto.CreateInterviewRequest;
-import com.hamonsoft.netismaker.dto.InterviewSummary;
 import com.hamonsoft.netismaker.dto.WorkerPlanRequest;
 import com.hamonsoft.netismaker.entity.*;
 import com.hamonsoft.netismaker.repository.*;
@@ -23,8 +21,6 @@ class InterviewServiceTest {
     InterviewSessionRepository sessionRepo;
     InterviewTurnRepository turnRepo;
     InterviewPlanRepository planRepo;
-    McpCatalogService mcpCatalogService;
-    RepoCatalogService repoCatalogService;
     TaskRepository taskRepo;
     TaskAnalysisRepository analysisRepo;
     TaskStatusHistoryRepository historyRepo;
@@ -35,18 +31,11 @@ class InterviewServiceTest {
         sessionRepo = mock(InterviewSessionRepository.class);
         turnRepo = mock(InterviewTurnRepository.class);
         planRepo = mock(InterviewPlanRepository.class);
-        mcpCatalogService = mock(McpCatalogService.class);
-        repoCatalogService = mock(RepoCatalogService.class);
         taskRepo = mock(TaskRepository.class);
         analysisRepo = mock(TaskAnalysisRepository.class);
         historyRepo = mock(TaskStatusHistoryRepository.class);
         service = new InterviewService(sessionRepo, turnRepo, planRepo,
-                mcpCatalogService, repoCatalogService, taskRepo, analysisRepo, historyRepo);
-        // default: resolve returns a stub repo for any id
-        when(repoCatalogService.resolveForRegistration(any())).thenReturn(
-                new RepoCatalogService.ResolvedRepo(1L, "owner/repo-alias",
-                        "https://github.com/owner/repo.git", "github", "owner/repo", null));
-        ReflectionTestUtils.setField(service, "userConcurrentLimit", 3);
+                taskRepo, analysisRepo, historyRepo);
         when(sessionRepo.save(any())).thenAnswer(i -> i.getArgument(0));
         when(turnRepo.save(any())).thenAnswer(i -> i.getArgument(0));
         when(planRepo.save(any())).thenAnswer(i -> i.getArgument(0));
@@ -57,28 +46,6 @@ class InterviewServiceTest {
             return t;
         });
         when(analysisRepo.save(any())).thenAnswer(i -> i.getArgument(0));
-    }
-
-    private CreateInterviewRequest req() {
-        return new CreateInterviewRequest(1L, "main", "제목", "기능 요구", List.of(), null, null);
-    }
-
-    @Test
-    void create_persists_queued_session() {
-        when(sessionRepo.countActiveByRequester("u1")).thenReturn(0L);
-        when(mcpCatalogService.resolveByIds(any())).thenReturn(List.of());
-        InterviewSession s = service.create(req(), "u1");
-        assertThat(s.getStatus()).isEqualTo(InterviewStatus.QUEUED);
-        assertThat(s.getRequesterId()).isEqualTo("u1");
-        verify(sessionRepo).save(any());
-    }
-
-    @Test
-    void create_over_limit_throws_too_many() {
-        when(sessionRepo.countActiveByRequester("u1")).thenReturn(3L);
-        assertThatThrownBy(() -> service.create(req(), "u1"))
-                .isInstanceOf(TaskException.class)
-                .hasMessageContaining("한도");
     }
 
     private InterviewSession session(long id, InterviewStatus status) {
@@ -282,40 +249,6 @@ class InterviewServiceTest {
         assertThatThrownBy(() -> service.expire(12L, "x"))
                 .isInstanceOf(TaskException.class)
                 .hasMessageContaining("입력대기");
-    }
-
-    @Test
-    void listActiveForRequester_maps_sessions_to_summaries() {
-        InterviewSession s = session(30L, InterviewStatus.AWAITING_INPUT);
-        when(sessionRepo.findActiveByRequester("u1")).thenReturn(List.of(s));
-
-        List<InterviewSummary> out = service.listActiveForRequester("u1");
-
-        assertThat(out).hasSize(1);
-        assertThat(out.get(0).id()).isEqualTo(30L);
-        assertThat(out.get(0).status()).isEqualTo("입력대기");        // 한글 dbValue (표시)
-        assertThat(out.get(0).statusName()).isEqualTo("AWAITING_INPUT"); // 영문 enum (로직)
-        assertThat(out.get(0).title()).isEqualTo("T");
-        verify(sessionRepo).findActiveByRequester("u1");
-    }
-
-    @Test
-    void create_applies_default_model_and_effort_when_blank() {
-        when(sessionRepo.countActiveByRequester("u1")).thenReturn(0L);
-        when(mcpCatalogService.resolveByIds(any())).thenReturn(List.of());
-        InterviewSession s = service.create(req(), "u1");   // req() sends model=null, effort=null
-        assertThat(s.getModel()).isEqualTo("claude-opus-4-8");
-        assertThat(s.getEffort()).isEqualTo("high");
-    }
-
-    @Test
-    void create_rejects_incompatible_model_effort() {
-        when(sessionRepo.countActiveByRequester("u1")).thenReturn(0L);
-        var bad = new com.hamonsoft.netismaker.dto.CreateInterviewRequest(
-                1L, "main", "제목", "내용", List.of(), "claude-haiku-4-5", "max");
-        assertThatThrownBy(() -> service.create(bad, "u1"))
-                .isInstanceOf(TaskException.class)
-                .hasMessageContaining("effort");
     }
 
 }

@@ -47,7 +47,6 @@ class InterviewServiceTest {
                 new RepoCatalogService.ResolvedRepo(1L, "owner/repo-alias",
                         "https://github.com/owner/repo.git", "github", "owner/repo", null));
         ReflectionTestUtils.setField(service, "userConcurrentLimit", 3);
-        ReflectionTestUtils.setField(service, "maxRetry", 3);
         when(sessionRepo.save(any())).thenAnswer(i -> i.getArgument(0));
         when(turnRepo.save(any())).thenAnswer(i -> i.getArgument(0));
         when(planRepo.save(any())).thenAnswer(i -> i.getArgument(0));
@@ -286,52 +285,6 @@ class InterviewServiceTest {
     }
 
     @Test
-    void register_creates_completed_task_and_analysis_then_marks_registered() {
-        InterviewSession s = session(20L, InterviewStatus.PLAN_READY);
-        when(sessionRepo.findActiveById(20L)).thenReturn(Optional.of(s));
-        InterviewPlan plan = InterviewPlan.create(20L, "# 설계", "# 플랜",
-                "[{\"title\":\"sub1\"}]", 1000L, new BigDecimal("0.5"));
-        when(planRepo.findById(20L)).thenReturn(Optional.of(plan));
-
-        Long taskId = service.register(20L, "u1", false, false);
-
-        assertThat(taskId).isEqualTo(999L);
-        assertThat(s.getStatus()).isEqualTo(InterviewStatus.REGISTERED);
-        assertThat(s.getTaskId()).isEqualTo(999L);
-        // task saved as COMPLETED
-        org.mockito.ArgumentCaptor<Task> taskCap = org.mockito.ArgumentCaptor.forClass(Task.class);
-        verify(taskRepo).save(taskCap.capture());
-        assertThat(taskCap.getValue().getStatus()).isEqualTo(TaskStatus.COMPLETED);
-        // analysis prefilled: markdown_result = design_markdown ONLY (합본 X), subtasks_json = plan_json, claude_log = null
-        org.mockito.ArgumentCaptor<TaskAnalysis> aCap = org.mockito.ArgumentCaptor.forClass(TaskAnalysis.class);
-        verify(analysisRepo).save(aCap.capture());
-        assertThat(aCap.getValue().getMarkdownResult()).isEqualTo("# 설계");
-        assertThat(aCap.getValue().getMarkdownResult()).doesNotContain("# 플랜");
-        assertThat(aCap.getValue().getSubtasksJson()).isEqualTo("[{\"title\":\"sub1\"}]");
-        assertThat(aCap.getValue().getClaudeLog()).isNull();
-        // history logged: null → COMPLETED
-        verify(historyRepo).save(any());
-    }
-
-    @Test
-    void register_not_plan_ready_throws() {
-        InterviewSession s = session(20L, InterviewStatus.AWAITING_INPUT);
-        when(sessionRepo.findActiveById(20L)).thenReturn(Optional.of(s));
-        assertThatThrownBy(() -> service.register(20L, "u1", false, false))
-                .isInstanceOf(TaskException.class)
-                .hasMessageContaining("플랜완료");
-    }
-
-    @Test
-    void register_by_non_owner_throws_forbidden() {
-        InterviewSession s = session(20L, InterviewStatus.PLAN_READY);
-        when(sessionRepo.findActiveById(20L)).thenReturn(Optional.of(s));
-        assertThatThrownBy(() -> service.register(20L, "intruder", false, false))
-                .isInstanceOf(TaskException.class)
-                .hasMessageContaining("권한");
-    }
-
-    @Test
     void listActiveForRequester_maps_sessions_to_summaries() {
         InterviewSession s = session(30L, InterviewStatus.AWAITING_INPUT);
         when(sessionRepo.findActiveByRequester("u1")).thenReturn(List.of(s));
@@ -365,20 +318,4 @@ class InterviewServiceTest {
                 .hasMessageContaining("effort");
     }
 
-    @Test
-    void register_forwards_model_and_effort_to_created_task() {
-        InterviewSession s = session(20L, InterviewStatus.PLAN_READY);
-        s.setModel("claude-sonnet-4-6");
-        s.setEffort("medium");
-        when(sessionRepo.findActiveById(20L)).thenReturn(java.util.Optional.of(s));
-        InterviewPlan plan = InterviewPlan.create(20L, "# 설계", "# 플랜", "[]", 1000L, new java.math.BigDecimal("0.1"));
-        when(planRepo.findById(20L)).thenReturn(java.util.Optional.of(plan));
-
-        service.register(20L, "u1", false, false);
-
-        org.mockito.ArgumentCaptor<Task> cap = org.mockito.ArgumentCaptor.forClass(Task.class);
-        verify(taskRepo).save(cap.capture());
-        assertThat(cap.getValue().getModel()).isEqualTo("claude-sonnet-4-6");
-        assertThat(cap.getValue().getEffort()).isEqualTo("medium");
-    }
 }

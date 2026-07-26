@@ -14,6 +14,7 @@ import jakarta.validation.Valid;
 import org.springframework.context.annotation.Profile;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
+import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.security.oauth2.server.resource.authentication.JwtAuthenticationToken;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
@@ -70,37 +71,38 @@ public class InterviewController {
     }
 
     @PostMapping("/{id}/answer")
+    @PreAuthorize("hasAuthority('ROLE_ADMIN')")
     public InterviewResponse answer(@PathVariable Long id, @RequestBody @Valid AnswerRequest req,
                                     JwtAuthenticationToken auth) {
-        String userId = AuthContext.requireUserId(auth);
-        boolean isAdmin = AuthContext.isAdmin(auth);
-        interviewService.submitAnswer(id, userId, isAdmin, req);
-        interviewStream.pushStatus(id, InterviewStatus.QUEUED); // 영문 enum name
-        return interviewService.getResponse(id, userId, isAdmin);
+        String adminId = AuthContext.requireUserId(auth);
+        interviewService.submitAnswer(id, adminId, true, req);
+        interviewStream.pushStatus(id, InterviewStatus.QUEUED);
+        return interviewService.getResponse(id, adminId, true);
     }
 
-    @PostMapping("/{id}/register")
-    public RegisterResponse register(@PathVariable Long id,
-                                     @RequestBody(required = false) InterviewRegisterRequest body,
-                                     JwtAuthenticationToken auth) {
-        String userId = AuthContext.requireUserId(auth);
-        Long taskId = interviewService.register(id, userId, AuthContext.isAdmin(auth),
+    @PostMapping("/{id}/confirm")
+    @PreAuthorize("hasAuthority('ROLE_ADMIN')")
+    public RegisterResponse confirm(@PathVariable Long id,
+                                    @RequestBody(required = false) InterviewConfirmRequest body,
+                                    JwtAuthenticationToken auth) {
+        String adminId = AuthContext.requireUserId(auth);
+        Long taskId = interviewService.confirm(id, adminId,
                 body != null && Boolean.TRUE.equals(body.designRequested()));
         interviewStream.pushStatus(id, InterviewStatus.REGISTERED);
         interviewStream.finish(id); // terminal → done 이벤트
         return new RegisterResponse(taskId);
     }
 
-    /** register 요청 바디 — designRequested 미지정 시 false 취급. */
-    public record InterviewRegisterRequest(Boolean designRequested) {}
+    /** confirm 요청 바디 — designRequested 미지정 시 false 취급. */
+    public record InterviewConfirmRequest(Boolean designRequested) {}
 
     @PostMapping("/{id}/cancel")
+    @PreAuthorize("hasAuthority('ROLE_ADMIN')")
     public InterviewResponse cancel(@PathVariable Long id, JwtAuthenticationToken auth) {
-        String userId = AuthContext.requireUserId(auth);
-        boolean isAdmin = AuthContext.isAdmin(auth);
-        interviewService.cancel(id, userId, isAdmin);
+        String adminId = AuthContext.requireUserId(auth);
+        interviewService.cancel(id, adminId, true);
         interviewStream.pushStatus(id, InterviewStatus.CANCELLED);
         interviewStream.finish(id); // terminal → done 이벤트
-        return interviewService.getResponse(id, userId, isAdmin);
+        return interviewService.getResponse(id, adminId, true);
     }
 }

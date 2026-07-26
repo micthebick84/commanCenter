@@ -112,7 +112,7 @@ class InterviewApiIntegrationTest {
         String loc = mvc.perform(post("/api/interviews").with(userJwt("user1"))
                         .contentType(APPLICATION_JSON).content(body(1L, "제목", "내용")))
                 .andReturn().getResponse().getHeader("Location");
-        mvc.perform(post(loc + "/register").with(userJwt("user1"))).andExpect(status().isConflict());
+        mvc.perform(post(loc + "/confirm").with(adminJwt("admin"))).andExpect(status().isConflict());
     }
 
     @Test
@@ -131,7 +131,7 @@ class InterviewApiIntegrationTest {
                         .content("{\"designMarkdown\":\"# 설계\",\"planMarkdown\":\"# 플랜\",\"planJson\":\"[]\",\"costUsd\":0.1,\"durationMs\":1000}"))
                 .andExpect(status().isNoContent());
 
-        String resp = mvc.perform(post(loc + "/register").with(userJwt("user1"))
+        String resp = mvc.perform(post(loc + "/confirm").with(adminJwt("admin"))
                         .contentType(APPLICATION_JSON).content("{\"designRequested\":true}"))
                 .andExpect(status().isOk())
                 .andReturn().getResponse().getContentAsString();
@@ -150,7 +150,7 @@ class InterviewApiIntegrationTest {
         String loc2 = mvc.perform(post("/api/interviews").with(userJwt("user1"))
                         .contentType(APPLICATION_JSON).content(body(1L, "취소할 인터뷰", "내용")))
                 .andReturn().getResponse().getHeader("Location");
-        mvc.perform(post(loc2 + "/cancel").with(userJwt("user1"))).andExpect(status().isOk());
+        mvc.perform(post(loc2 + "/cancel").with(adminJwt("admin"))).andExpect(status().isOk());
         // user2의 세션은 user1 목록에 안 나와야 (생성 성공을 확인해 무음 실패 방지)
         mvc.perform(post("/api/interviews").with(userJwt("user2"))
                         .contentType(APPLICATION_JSON).content(body(1L, "남의 인터뷰", "내용")))

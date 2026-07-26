@@ -44,6 +44,11 @@ class InterviewAnswerIdempotencyTest {
                 .authorities(new SimpleGrantedAuthority("ROLE_USER"));
     }
 
+    private static RequestPostProcessor adminJwt(String u) {
+        return jwt().jwt(b -> b.claim("username", u).claim("authorities", List.of("ROLE_ADMIN")))
+                .authorities(new SimpleGrantedAuthority("ROLE_ADMIN"));
+    }
+
     @BeforeEach void seed() {
         sessionRepo.deleteAll();
         sid = sessionRepo.save(InterviewSession.create("a/b", "main", "T", "D", "user1", List.of(), "claude-opus-4-8", "high")).getId();
@@ -61,14 +66,14 @@ class InterviewAnswerIdempotencyTest {
         String answer = json.writeValueAsString(new com.hamonsoft.netismaker.dto.AnswerRequest("내 답변", 1));
 
         // 1st answer → 200, re-queues to QUEUED, adds user turn
-        mvc.perform(post("/api/interviews/" + sid + "/answer").with(userJwt("user1"))
+        mvc.perform(post("/api/interviews/" + sid + "/answer").with(adminJwt("admin"))
                 .contentType(APPLICATION_JSON).content(answer)).andExpect(status().isOk());
 
         long afterFirst = turnRepo.findBySessionIdOrderBySeqAsc(sid).stream()
                 .filter(t -> "user".equals(t.getRole())).count();
 
         // 2nd identical answer (same replyToSeq=1) → no new user turn
-        mvc.perform(post("/api/interviews/" + sid + "/answer").with(userJwt("user1"))
+        mvc.perform(post("/api/interviews/" + sid + "/answer").with(adminJwt("admin"))
                 .contentType(APPLICATION_JSON).content(answer)).andExpect(status().isOk());
 
         long afterSecond = turnRepo.findBySessionIdOrderBySeqAsc(sid).stream()

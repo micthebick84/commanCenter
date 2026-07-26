@@ -30,7 +30,7 @@ import java.util.Optional;
  *   recordQuestion─► RUNNING → AWAITING_INPUT (워커가 질문 emit, 반납)
  *   submitAnswer  ─► AWAITING_INPUT → QUEUED (사용자 답변, 재큐; idempotent)
  *   recordPlan    ─► RUNNING → PLAN_READY (writing-plans 완료)
- *   register      ─► PLAN_READY → REGISTERED (+ Task(COMPLETED)+TaskAnalysis 프리필)
+ *   confirm       ─► PLAN_READY → REGISTERED (기존 task 갱신: analysis 프리필 + 구현/디자인 큐)
  *   cancel        ─► QUEUED/RUNNING/AWAITING_INPUT/PLAN_READY → CANCELLED
  *   expire        ─► AWAITING_INPUT → EXPIRED (idle TTL)
  *   fail          ─► QUEUED/RUNNING/AWAITING_INPUT → FAILED
@@ -54,9 +54,6 @@ public class InterviewService {
 
     @Value("${app.interview.user-concurrent-limit:3}")
     private int userConcurrentLimit;
-
-    @Value("${app.task.max-retry:3}")
-    private int maxRetry;
 
     public InterviewService(InterviewSessionRepository sessionRepo,
                             InterviewTurnRepository turnRepo,
@@ -340,50 +337,51 @@ public class InterviewService {
     }
 
     /**
-     * "작업 등록" — PLAN_READY → REGISTERED. Task(COMPLETED) + TaskAnalysis 프리필 생성.
-     * 기존 승인 게이트(COMPLETED→APPROVED)는 유지(거버넌스). task는 인터뷰 완료 후에만 생성.
-     * 반환: 생성된 taskId.
+     * 플랜 확정 — 세션 PLAN_READY + task 플랜승인대기 → task 구현대기|디자인대기, 세션 REGISTERED.
+     *
+     * TaskAnalysis 프리필 계약(고정):
+     *   markdown_result = design_markdown ONLY (합본 X)
+     *   subtasks_json   = plan_json
+     *   claude_log      = null
+     *   duration_ms     = plan.durationMs
+     * 확정이 곧 승인이므로 approved=true로 저장한다 (별도 승인 게이트 없음).
      */
     @Transactional
-    public Long register(Long sessionId, String actorId, boolean isAdmin, boolean designRequested) {
+    public Long confirm(Long sessionId, String adminId, boolean designRequested) {
         InterviewSession s = requireSession(sessionId);
-        requireOwner(s, actorId, isAdmin);
         if (s.getStatus() != InterviewStatus.PLAN_READY) {
-            throw TaskException.conflict("플랜완료 상태에서만 작업 등록할 수 있습니다 (현재: "
+            throw TaskException.conflict("플랜완료 상태에서만 확정할 수 있습니다 (현재: "
                     + s.getStatus().dbValue() + ")");
+        }
+        if (s.getTaskId() == null) {
+            throw TaskException.conflict("작업에 연결되지 않은 세션입니다");
+        }
+        Task t = taskRepo.findActiveById(s.getTaskId()).orElseThrow(TaskException::notFound);
+        if (t.getStatus() != TaskStatus.INTERVIEW_REVIEW) {
+            throw TaskException.conflict("플랜승인대기 상태에서만 확정할 수 있습니다 (현재: "
+                    + t.getStatus().dbValue() + ")");
         }
         InterviewPlan plan = planRepo.findById(sessionId)
                 .orElseThrow(() -> TaskException.conflict("인터뷰 플랜이 없습니다"));
 
-        // Task(COMPLETED) 생성 — 인터뷰가 분석을 대체. mcps_extra 스냅샷 승계.
-        Task t = Task.create(s.getGithubRepo(), s.getGithubBranch(), s.getTitle(),
-                s.getDescription(), s.getRequesterId(), maxRetry,
-                new ArrayList<>(s.getMcpsExtra() == null ? List.of() : s.getMcpsExtra()),
-                s.getModel(), s.getEffort());
-        t.setStatus(TaskStatus.COMPLETED);
-        t.setDesignRequested(designRequested);
-        t.setGitUrl(s.getGitUrl());
-        t.setRepoAlias(s.getRepoAlias());
-        t.setRepoCatalogId(s.getRepoCatalogId());
-        Task saved = taskRepo.save(t);
-
-        // TaskAnalysis 프리필 (계약 고정):
-        //   markdown_result = design_markdown ONLY (합본 X),
-        //   subtasks_json   = plan_json,
-        //   claude_log      = null,
-        //   duration_ms     = plan.durationMs.
-        TaskAnalysis a = TaskAnalysis.create(saved.getId(), plan.getDesignMarkdown(),
+        TaskAnalysis a = TaskAnalysis.create(t.getId(), plan.getDesignMarkdown(),
                 plan.getPlanJson(), null, plan.getDurationMs());
+        a.setApproved(true);
+        a.setApprovedBy(adminId);
+        a.setApprovedAt(OffsetDateTime.now());
         analysisRepo.save(a);
 
-        historyRepo.save(TaskStatusHistory.log(saved.getId(), null, TaskStatus.COMPLETED,
-                "system", actorId, "대화형 분석 등록 (interview_session " + sessionId + ")"));
+        t.setDesignRequested(designRequested);
+        TaskStatus from = t.getStatus();
+        TaskStatus to = designRequested ? TaskStatus.DESIGN_PENDING : TaskStatus.APPROVED;
+        t.setStatus(to);
+        t.setUpdatedAt(OffsetDateTime.now());
+        historyRepo.save(TaskStatusHistory.log(t.getId(), from, to, "user", adminId,
+                "플랜 확정 → " + to.dbValue() + " (interview_session " + sessionId + ")"));
 
-        // 세션 마감.
-        s.setTaskId(saved.getId());
         s.setStatus(InterviewStatus.REGISTERED);
         touch(s);
-        return saved.getId();
+        return t.getId();
     }
 
     /** ACL 검증 후 세션 반환 (소유자/관리자만). 스트림 구독 전 권한 체크에도 사용. */

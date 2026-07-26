@@ -35,7 +35,9 @@ import java.util.Optional;
  *   expire        ─► AWAITING_INPUT → EXPIRED (idle TTL)
  *   fail          ─► QUEUED/RUNNING/AWAITING_INPUT → FAILED
  *
- * Task 상태머신(TaskStatus)은 변경하지 않는다.
+ * task_id가 있는 세션은 각 전이마다 소유 task 상태도 함께 미러링한다:
+ *   recordQuestion → INTERVIEW_INPUT, submitAnswer → INTERVIEWING, recordPlan → INTERVIEW_REVIEW,
+ *   fail/expire/cancel → AWAITING_APPROVAL.
  */
 @Service
 @Profile("api")
@@ -217,6 +219,7 @@ public class InterviewService {
         s.setClaimedAt(null);
         s.setCurrentPhase("brainstorming");
         touch(s);
+        mirrorTask(s, TaskStatus.INTERVIEW_INPUT, workerId, "인터뷰 질문 도착 → 관리자 답변 대기");
         return turn;
     }
 
@@ -242,6 +245,7 @@ public class InterviewService {
         s.setClaimedAt(null);
         s.setCurrentPhase("writing-plans");
         touch(s);
+        mirrorTask(s, TaskStatus.INTERVIEW_REVIEW, workerId, "플랜 생성 완료 → 확정 대기");
         return plan;
     }
 
@@ -269,6 +273,7 @@ public class InterviewService {
         s.setWorkerId(null);
         s.setClaimedAt(null);
         touch(s);
+        mirrorTask(s, TaskStatus.AWAITING_APPROVAL, actor, "인터뷰 실패 → 승인대기 복귀");
         return s;
     }
 
@@ -296,6 +301,7 @@ public class InterviewService {
         appendTurn(sessionId, "user", "answer", req.answer(), req.replyToSeq());
         s.setStatus(InterviewStatus.QUEUED);
         touch(s);
+        mirrorTask(s, TaskStatus.INTERVIEWING, actorId, "관리자 답변 → 인터뷰 재개");
         return s;
     }
 
@@ -314,6 +320,7 @@ public class InterviewService {
         s.setWorkerId(null);
         s.setClaimedAt(null);
         touch(s);
+        mirrorTask(s, TaskStatus.AWAITING_APPROVAL, actorId, "인터뷰 취소 → 승인대기 복귀");
         return s;
     }
 
@@ -328,6 +335,7 @@ public class InterviewService {
         appendTurn(sessionId, "system", "note", "만료: " + (reason == null ? "idle TTL 초과" : reason));
         s.setStatus(InterviewStatus.EXPIRED);
         touch(s);
+        mirrorTask(s, TaskStatus.AWAITING_APPROVAL, "system", "인터뷰 만료 → 승인대기 복귀");
         return s;
     }
 
@@ -430,5 +438,19 @@ public class InterviewService {
         OffsetDateTime now = OffsetDateTime.now();
         s.setUpdatedAt(now);
         s.setLastActivityAt(now);
+    }
+
+    /**
+     * 세션 전이를 소유 task 상태로 미러링한다. 관리자가 행동해야 하는 구간(입력대기/플랜승인대기)을
+     * 작업 목록에서 바로 식별하기 위한 것. task_id가 없는 레거시 세션은 조용히 무시한다.
+     */
+    private void mirrorTask(InterviewSession s, TaskStatus to, String actorId, String reason) {
+        if (s.getTaskId() == null) return;
+        Task t = taskRepo.findActiveById(s.getTaskId()).orElse(null);
+        if (t == null || t.getStatus() == to) return;
+        TaskStatus from = t.getStatus();
+        t.setStatus(to);
+        t.setUpdatedAt(OffsetDateTime.now());
+        historyRepo.save(TaskStatusHistory.log(t.getId(), from, to, "system", actorId, reason));
     }
 }

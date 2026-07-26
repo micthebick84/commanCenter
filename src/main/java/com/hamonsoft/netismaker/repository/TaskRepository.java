@@ -23,7 +23,11 @@ public interface TaskRepository extends JpaRepository<Task, Long> {
         SELECT COUNT(t) FROM Task t
         WHERE t.requesterId = :requesterId
           AND t.deletedAt IS NULL
-          AND t.status IN (com.hamonsoft.netismaker.entity.TaskStatus.PENDING,
+          AND t.status IN (com.hamonsoft.netismaker.entity.TaskStatus.AWAITING_APPROVAL,
+                           com.hamonsoft.netismaker.entity.TaskStatus.INTERVIEWING,
+                           com.hamonsoft.netismaker.entity.TaskStatus.INTERVIEW_INPUT,
+                           com.hamonsoft.netismaker.entity.TaskStatus.INTERVIEW_REVIEW,
+                           com.hamonsoft.netismaker.entity.TaskStatus.PENDING,
                            com.hamonsoft.netismaker.entity.TaskStatus.IN_PROGRESS,
                            com.hamonsoft.netismaker.entity.TaskStatus.COMPLETED,
                            com.hamonsoft.netismaker.entity.TaskStatus.FAILED)

@@ -72,7 +72,7 @@ class RepoCatalogDeleteSnapshotTest {
         Long catalogId = repoCatalogRepo.save(cat).getId();
 
         // 해당 카탈로그 항목으로 작업 등록
-        var req = new TaskCreateRequest(catalogId, "main", "스냅샷 보존 테스트", "카탈로그 삭제 후 스냅샷 확인", List.of(), null, null);
+        var req = new TaskCreateRequest(catalogId, "main", "스냅샷 보존 테스트", "카탈로그 삭제 후 스냅샷 확인");
         String location = mvc.perform(post("/api/tasks").with(adminJwt("admin1"))
                         .contentType(APPLICATION_JSON)
                         .content(json.writeValueAsString(req)))

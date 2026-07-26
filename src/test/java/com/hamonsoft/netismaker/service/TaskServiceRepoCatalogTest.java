@@ -11,8 +11,6 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.test.util.ReflectionTestUtils;
 
-import java.util.List;
-
 import static org.assertj.core.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.*;
@@ -54,7 +52,7 @@ class TaskServiceRepoCatalogTest {
                 new RepoCatalogService.ResolvedRepo(7L, "Netis7.0",
                         "https://github.com/micthebick84/netis7.0.git", "github",
                         "micthebick84/netis7.0", null));
-        TaskCreateRequest req = new TaskCreateRequest(7L, "main", "제목", "설명", List.of(), null, null);
+        TaskCreateRequest req = new TaskCreateRequest(7L, "main", "제목", "설명");
 
         Task t = service.create(req, "user1");
 
@@ -68,7 +66,7 @@ class TaskServiceRepoCatalogTest {
     void create_propagates_resolve_rejection() {
         when(repoCatalogService.resolveForRegistration(8L))
                 .thenThrow(new TaskException(org.springframework.http.HttpStatus.BAD_REQUEST, "비활성화된 레포 카탈로그 항목: X"));
-        TaskCreateRequest req = new TaskCreateRequest(8L, "main", "제목", "설명", List.of(), null, null);
+        TaskCreateRequest req = new TaskCreateRequest(8L, "main", "제목", "설명");
 
         assertThatThrownBy(() -> service.create(req, "user1"))
                 .isInstanceOf(TaskException.class)

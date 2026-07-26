@@ -30,8 +30,8 @@ import java.util.Optional;
 /**
  * 작업 상태 전이의 단일 진입점. 모든 상태 변경은 여기서 + 히스토리 로깅.
  *
- *   create   ─► PENDING
- *   cancel   ─► PENDING → CANCELLED  (본인, PENDING 한정)
+ *   create   ─► AWAITING_APPROVAL  (모델/effort/MCP는 승인 시점에 결정, Task 4)
+ *   cancel   ─► AWAITING_APPROVAL/PENDING → CANCELLED  (본인, 두 상태 한정)
  *   delete   ─► soft delete (deleted_at = now)
  *   approve  ─► COMPLETED + approved=true  (ADMIN, COMPLETED 한정)
  *   retry    ─► FAILED → PENDING + retry_count++  (retry_count < max_retry)
@@ -79,19 +79,17 @@ public class TaskService {
             throw TaskException.tooManyRequests(
                     "동시에 보유할 수 있는 미완료 작업 한도(" + userConcurrentLimit + ")를 초과했습니다");
         }
-        List<TaskMcpSpec> extras = resolveMcpExtras(req.mcpCatalogIds());
-        String model = ModelEffortPolicy.resolveModel(req.model());
-        String effort = ModelEffortPolicy.resolveEffort(req.effort());
-        ModelEffortPolicy.validate(model, effort);
         RepoCatalogService.ResolvedRepo repo = repoCatalogService.resolveForRegistration(req.repoCatalogId());
+        // 모델/effort/MCP는 승인 시점에 관리자가 결정 — 등록은 서버 기본값으로 시작한다.
         Task t = Task.create(repo.ownerRepo(), req.githubBranch(), req.title(),
-                             req.description(), requesterId, maxRetry, extras, model, effort);
+                             req.description(), requesterId, maxRetry,
+                             new ArrayList<>(), null, null);
+        t.setStatus(TaskStatus.AWAITING_APPROVAL);
         t.setGitUrl(repo.gitUrl());
         t.setRepoAlias(repo.alias());
         t.setRepoCatalogId(repo.catalogId());
-        t.setDesignRequested(Boolean.TRUE.equals(req.designRequested()));
         Task saved = taskRepo.save(t);
-        historyRepo.save(TaskStatusHistory.log(saved.getId(), null, TaskStatus.PENDING,
+        historyRepo.save(TaskStatusHistory.log(saved.getId(), null, TaskStatus.AWAITING_APPROVAL,
                 "user", requesterId, "작업 등록"));
         return saved;
     }
@@ -152,8 +150,8 @@ public class TaskService {
         if (!t.isOwnedBy(actorId) && !isAdmin) {
             throw TaskException.forbidden();
         }
-        if (t.getStatus() != TaskStatus.PENDING) {
-            throw TaskException.conflict("작업대기 상태에서만 취소할 수 있습니다 (현재: "
+        if (t.getStatus() != TaskStatus.PENDING && t.getStatus() != TaskStatus.AWAITING_APPROVAL) {
+            throw TaskException.conflict("승인대기/작업대기 상태에서만 취소할 수 있습니다 (현재: "
                     + t.getStatus().dbValue() + ")");
         }
         TaskStatus from = t.getStatus();

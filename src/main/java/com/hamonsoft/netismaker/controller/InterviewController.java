@@ -23,8 +23,9 @@ import java.net.URI;
 import java.util.List;
 
 /**
- * 대화형 분석 사용자 API (JWT, ROLE_USER/ADMIN). DESIGN §8 표면 그대로.
- * ACL: 소유자 또는 관리자만 조회/스트림/답변/등록/취소.
+ * 대화형 분석 API (JWT). DESIGN §8 표면 그대로.
+ * ACL: 조회/스트림(get, stream)은 소유자 또는 관리자. 답변/확정/취소(answer, confirm, cancel)는
+ * 관리자가 승인 시점에 인터뷰를 진행시키는 구조이므로 ROLE_ADMIN 전용(@PreAuthorize).
  * 동시성 게이트(요청자별 active 한도)는 Phase 1 InterviewService.create에서 검증.
  * 모든 상태 전이는 Phase 1 InterviewService 메서드 위임 — 컨트롤러는 SSE push만 추가.
  */

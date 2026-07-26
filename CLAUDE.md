@@ -79,11 +79,11 @@ WORKER_ID=mac-worker-2 ./gradlew bootRun --args='--spring.profiles.active=worker
                                                         [구현대기] 또는 [디자인대기]
 [승인대기] ← (인터뷰 실패/만료/취소)
 
-레거시 자동분석: [작업대기] → [분석중] → [분석완료] ──(승인)──→ [구현대기]/[디자인대기]  (API 전용)
+레거시 자동분석: [작업대기] → [분석중] → [분석완료] ──(승인)──→ [구현대기]/[디자인대기]  (현재 진입점 없음)
 ```
 
 - **등록**: 사용자는 레포/브랜치/제목/설명만 입력. 모델·effort·MCP는 관리자가 승인 시 결정.
-- **분석**(레거시 자동분석, API 전용): PENDING → IN_PROGRESS → COMPLETED/FAILED. 결과는 `task_analysis.markdown_result`.
+- **분석**(레거시 자동분석, 현재 진입점 없음): PENDING → IN_PROGRESS → COMPLETED/FAILED. 결과는 `task_analysis.markdown_result`. `TaskService.create`는 항상 `AWAITING_APPROVAL`을 쓰고, `PENDING`은 `retry`(FAILED에서만)로만 도달 가능 — 즉 이 경로와 워커의 `kind=ANALYSIS` 분기는 현재 프로덕션에서 도달 불가능하다. "인터뷰 없이 바로 구현" 라우트(스펙 §7 엣지 케이스, 범위 밖)를 위해 코드만 보존.
 - **승인**: `/tasks/{id}/approve`가 상태에 따라 분기 — `승인대기`면 인터뷰 세션 생성, `분석완료`면 기존 구현 큐 진입(`analysis.approved=true` + `task.status=APPROVED`).
 - **확정**: `/interviews/{sid}/confirm`이 `TaskAnalysis`를 프리필하고(approved=true) 구현/디자인 큐로 보냄.
 - **구현**: 같은 워커가 APPROVED를 claim → `WorktreeService.create` → `claude -p` (worktree에서) → `git commit/push` → `gh pr create --draft` → `task.status=PR_CREATED` (+ pr_url/pr_number/head_branch/head_sha 저장).
@@ -139,6 +139,7 @@ PR 본문/브랜치 prefix/timeout은 `application-worker.yml`의 `netis-maker.w
   ```
 - **MCP 합본**: `~/netis-maker/worker-mcp.json` (워커 부팅 시 자동 생성/갱신)
 - **레포 캐시**: `~/netis-maker/repos/{owner}/{repo}` (depth=1 clone, 이후 fetch+reset)
+- **`confirm`(구현 진행) 전제조건**: `task_analysis.approved_by`가 `com."user"(user_id)`에 FK로 걸려 있어(`V1__schema.sql:40`) JWT `username`이 `com."user"`에 없는 admin 계정으로 확정을 시도하면 500이 난다(작업은 `플랜승인대기`에 그대로 남고 재시도 가능). 인터뷰 승인/확정을 수행할 admin 계정은 반드시 `com."user"`에 시드돼 있어야 함.
 
 ## 공개 배포 주소 (`task-N.micthebick.dev`)
 

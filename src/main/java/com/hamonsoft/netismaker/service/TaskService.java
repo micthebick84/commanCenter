@@ -34,7 +34,9 @@ import java.util.Optional;
  *   create   ─► AWAITING_APPROVAL  (모델/effort/MCP는 승인 시점에 결정, Task 4)
  *   cancel   ─► AWAITING_APPROVAL/PENDING → CANCELLED  (본인, 두 상태 한정)
  *   delete   ─► soft delete (deleted_at = now)
- *   approve  ─► COMPLETED + approved=true  (ADMIN, COMPLETED 한정)
+ *   approve  ─► 상태에 따라 두 갈래 (ADMIN 한정, 그 외 상태는 409)
+ *                 AWAITING_APPROVAL → INTERVIEWING (인터뷰 세션 생성, 현행 경로)
+ *                 COMPLETED         → APPROVED/DESIGN_PENDING + approved=true (레거시 자동분석 경로)
  *   retry    ─► FAILED → PENDING + retry_count++  (retry_count < max_retry)
  */
 @Service
@@ -195,7 +197,9 @@ public class TaskService {
      */
     @Transactional
     public void approve(Long taskId, String adminId, ApproveRequest req) {
-        Task t = taskRepo.findActiveById(taskId).orElseThrow(TaskException::notFound);
+        // 비관적 락(FOR UPDATE, SKIP LOCKED 없음) — 동시 승인 더블클릭 시 두 번째 호출이
+        // 첫 번째 커밋을 기다렸다가 갱신된 상태를 재판정하도록 한다 (세션 중복 생성 방지).
+        Task t = taskRepo.findActiveByIdForUpdate(taskId).orElseThrow(TaskException::notFound);
         switch (t.getStatus()) {
             case AWAITING_APPROVAL -> startInterview(t, adminId, req);
             case COMPLETED -> approveAnalysis(t, adminId);

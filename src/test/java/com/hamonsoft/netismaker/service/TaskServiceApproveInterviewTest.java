@@ -18,7 +18,13 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.test.context.ContextConfiguration;
 
+import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -103,6 +109,45 @@ class TaskServiceApproveInterviewTest {
 
         assertThat(taskRepo.findById(t.getId()).orElseThrow().getStatus()).isEqualTo(TaskStatus.APPROVED);
         assertThat(sessionRepo.findAll()).isEmpty();
+    }
+
+    /**
+     * 동시 승인(더블클릭) 재현. findActiveByIdForUpdate의 FOR UPDATE(SKIP LOCKED 없음)
+     * 없이 이 테스트를 돌리면 두 스레드가 모두 AWAITING_APPROVAL을 읽어 세션을 2개
+     * 만들어낸다 — 실제 Postgres 트랜잭션으로 재현되는 결정적 테스트(락이 있으면
+     * 두 번째 호출은 첫 번째 커밋을 기다렸다가 갱신된 상태를 보고 409로 실패한다).
+     */
+    @Test
+    void concurrent_double_approve_creates_only_one_session() throws Exception {
+        Task t = register();
+
+        int n = 2;
+        ExecutorService pool = Executors.newFixedThreadPool(n);
+        CountDownLatch start = new CountDownLatch(1);
+        List<Future<Boolean>> futures = new ArrayList<>();
+        for (int i = 0; i < n; i++) {
+            futures.add(pool.submit(() -> {
+                start.await();
+                try {
+                    taskService.approve(t.getId(), "admin", null);
+                    return true;
+                } catch (TaskException e) {
+                    return false;
+                }
+            }));
+        }
+        start.countDown();
+
+        int successes = 0;
+        for (Future<Boolean> f : futures) {
+            if (f.get(15, TimeUnit.SECONDS)) successes++;
+        }
+        pool.shutdown();
+
+        assertThat(successes).as("정확히 한 번만 승인이 성공해야 함").isEqualTo(1);
+        assertThat(sessionRepo.findAll()).as("세션은 정확히 1개만 생성돼야 함").hasSize(1);
+        assertThat(taskRepo.findById(t.getId()).orElseThrow().getStatus())
+                .isEqualTo(TaskStatus.INTERVIEWING);
     }
 
     @Test

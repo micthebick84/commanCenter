@@ -64,6 +64,21 @@ public interface TaskRepository extends JpaRepository<Task, Long> {
     Optional<Task> findActiveById(@Param("id") Long id);
 
     /**
+     * 단건 조회 + SELECT ... FOR UPDATE (SKIP LOCKED 없음).
+     *
+     * 관리자 승인(approve)처럼 "읽은 상태를 근거로 상태 전이 + 부수 리소스(인터뷰 세션)를
+     * 생성"하는 흐름에서 쓴다. 동시에 두 번의 승인 호출이 들어오면(더블클릭 등) 두 번째
+     * 호출은 첫 번째 트랜잭션이 커밋할 때까지 이 SELECT에서 블록되고, 그 다음 갱신된
+     * 상태(예: INTERVIEWING)를 읽게 되어 상태 가드에서 자연히 409로 거절된다 — 세션 중복
+     * 생성 방지. SKIP LOCKED를 쓰는 워커 claim 큐(findClaimableForUpdateSkipLocked)와 달리
+     * 여기서는 두 번째 호출을 건너뛰지 않고 "기다렸다가 최신 상태로 재판정"해야 하므로
+     * SKIP LOCKED를 넣지 않는다.
+     */
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("SELECT t FROM Task t WHERE t.id = :id AND t.deletedAt IS NULL")
+    Optional<Task> findActiveByIdForUpdate(@Param("id") Long id);
+
+    /**
      * 워커가 다음에 처리할 작업 1건을 atomic claim.
      * SELECT FOR UPDATE SKIP LOCKED. 동시 워커가 있어도 1개만 잡음.
      *

@@ -39,7 +39,7 @@ package com.hamonsoft.netismaker.entity;
  *   [디자인승인대기] ──(반려, 최대 3회)──→ [디자인대기]
  *
  *  취소:
- *   [작업대기] ──→ [취소됨] (본인, PENDING 한정)
+ *   [작업대기|승인대기] ──→ [취소됨] (본인 또는 admin, 두 상태 한정)
  *
  * DB 값은 한글 그대로 저장 (VARCHAR(30)). Enum 이름과 분리되어 있으니
  * Java enum 이름 변경이 DB 호환을 깨지 않음.

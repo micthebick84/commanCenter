@@ -153,5 +153,5 @@ PR 본문/브랜치 prefix/timeout은 `application-worker.yml`의 `netis-maker.w
 
 ## 진행상황 노트
 
-옵시디언: `Andy/netisMaker-진행상황-YYYY-MM-DD.md` (운영자 vault).
+옵시디언: `HamonSoft/netisMaker/netisMaker-진행상황-YYYY-MM-DD.md` (운영자 vault).
 hooks 셋업 후엔 commit/push마다 자동 한 줄 + 세션 종료 시 자동 요약 섹션.

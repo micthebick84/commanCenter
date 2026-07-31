@@ -19,7 +19,7 @@ describe('ApproveDialog', () => {
 
     expect(useApiMock).toHaveBeenCalledWith('/api/tasks/7/approve', {
       method: 'POST',
-      body: { model: 'claude-opus-4-8', effort: 'high', mcpCatalogIds: [] },
+      body: { model: 'claude-opus-5', effort: 'high', mcpCatalogIds: [] },
     })
     expect(w.emitted('approved')).toBeTruthy()
 
@@ -55,7 +55,7 @@ describe('ApproveDialog', () => {
 
     expect(useApiMock).toHaveBeenCalledWith('/api/tasks/7/approve', {
       method: 'POST',
-      body: { model: 'claude-opus-4-8', effort: 'high', mcpCatalogIds: [3] },
+      body: { model: 'claude-opus-5', effort: 'high', mcpCatalogIds: [3] },
     })
 
     w.unmount()

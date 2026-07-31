@@ -91,10 +91,11 @@ public class InterviewSession {
     @Setter
     private List<TaskMcpSpec> mcpsExtra = new ArrayList<>();
 
-    /** 작업 등록 시 선택된 Claude 모델. 워커가 claude --model에 사용. */
+    /** 작업 등록 시 선택된 Claude 모델. 워커가 claude --model에 사용.
+     *  기본값은 ModelEffortPolicy.DEFAULT_MODEL과 반드시 일치해야 한다(둘 다 바꿀 것). */
     @Column(name = "model", nullable = false, length = 64)
     @Setter
-    private String model = "claude-opus-4-8";
+    private String model = "claude-opus-5";
 
     /** 추론 effort (low/medium/high/xhigh/max). 워커가 claude --effort에 사용. */
     @Column(name = "effort", nullable = false, length = 16)

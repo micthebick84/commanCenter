@@ -53,11 +53,11 @@ class TaskServiceApproveInterviewTest {
     void approving_a_pending_task_starts_an_interview_session() {
         Task t = register();
 
-        taskService.approve(t.getId(), "admin", new ApproveRequest(List.of(), "claude-opus-4-8", "max"));
+        taskService.approve(t.getId(), "admin", new ApproveRequest(List.of(), "claude-opus-5", "max"));
 
         Task after = taskRepo.findById(t.getId()).orElseThrow();
         assertThat(after.getStatus()).isEqualTo(TaskStatus.INTERVIEWING);
-        assertThat(after.getModel()).isEqualTo("claude-opus-4-8");
+        assertThat(after.getModel()).isEqualTo("claude-opus-5");
         assertThat(after.getEffort()).isEqualTo("max");
         // 인터뷰 워커 소유권은 세션 컬럼이 갖는다 — task 쪽은 비워 둬야 StaleTaskRecoveryJob과 섞이지 않는다
         assertThat(after.getWorkerId()).isNull();
@@ -71,7 +71,7 @@ class TaskServiceApproveInterviewTest {
         assertThat(s.getRequesterId()).isEqualTo("user1");        // 원 요청자 보존
         assertThat(s.getGithubRepo()).isEqualTo(after.getGithubRepo());
         assertThat(s.getGithubBranch()).isEqualTo("main");
-        assertThat(s.getModel()).isEqualTo("claude-opus-4-8");
+        assertThat(s.getModel()).isEqualTo("claude-opus-5");
         assertThat(s.getEffort()).isEqualTo("max");
     }
 

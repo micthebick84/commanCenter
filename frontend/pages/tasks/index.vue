@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { useQuasar } from 'quasar'
+import { buildStages, stageAccepts, type MoveDef, type StageCard } from '~/composables/taskStages'
 
 definePageMeta({ layout: 'default' })
 
@@ -19,10 +20,11 @@ interface TaskResponse {
   description: string
   status: string
   statusLabel: string
-  requesterId: number
+  requesterId: string
   retryCount: number
   maxRetry: number
   failureReason: string | null
+  designRequested: boolean
   createdAt: string
   updatedAt: string
   implementation: ImplementationView | null
@@ -35,6 +37,7 @@ interface PageResponse<T> {
 }
 
 const $q = useQuasar()
+const auth = useAuthStore()
 const mine = ref(true)
 const statusFilter = ref<string | null>(null)
 
@@ -46,7 +49,129 @@ const { data: page, refresh } = useTaskPolling<PageResponse<TaskResponse>>(() =>
 
 const tasks = computed<TaskResponse[]>(() => page.value?.content ?? [])
 
-// 등록 다이얼로그 상태
+// ── 카드뷰(1b 여유형) ────────────────────────────────────────────
+// 단계/상태/전이 정의는 composables/taskStages.ts. 상태 필터가 걸리면 그 상태만 남으므로
+// 빈 단계는 감춘다(필터 결과가 한 줄로 보이는 편이 낫다).
+const stages = computed(() =>
+  buildStages(tasks.value, {
+    isAdmin: auth.isAdmin,
+    showEmptyStages: !statusFilter.value,
+  }),
+)
+
+const dragId = ref<number | null>(null)
+const overStage = ref<string | null>(null)
+const moving = ref(false)
+
+const draggingMove = computed<MoveDef | null>(() => {
+  if (dragId.value == null) return null
+  for (const s of stages.value) {
+    for (const g of s.groups) {
+      const hit = g.cards.find((c) => c.task.id === dragId.value)
+      if (hit) return hit.move
+    }
+  }
+  return null
+})
+
+function dropState(stageKey: string): 'none' | 'ready' | 'over' {
+  if (!stageAccepts(stageKey, draggingMove.value)) return 'none'
+  return overStage.value === stageKey ? 'over' : 'ready'
+}
+
+function onDragStart(card: StageCard<TaskResponse>) {
+  if (!card.move) return
+  dragId.value = card.task.id
+}
+
+function onDragEnd() {
+  dragId.value = null
+  overStage.value = null
+}
+
+function onDragOver(stageKey: string, e: DragEvent) {
+  if (!stageAccepts(stageKey, draggingMove.value)) return
+  e.preventDefault()
+  if (overStage.value !== stageKey) overStage.value = stageKey
+}
+
+async function onDrop(stageKey: string, e: DragEvent) {
+  e.preventDefault()
+  const id = dragId.value
+  const move = draggingMove.value
+  onDragEnd()
+  if (id == null || !stageAccepts(stageKey, move)) return
+  await applyMove(id, move!)
+}
+
+/**
+ * 드래그 전이 실행. 배포 계열은 되돌리기가 비싸서(컨테이너 빌드/기동, 공개 URL 회수)
+ * 목업과 달리 확인을 한 번 받는다 — 승인 계열은 목업대로 바로 실행.
+ */
+async function applyMove(id: number, move: MoveDef) {
+  if (move.confirm && !confirm(`작업 #${id} — ${move.label}을(를) 실행할까요?`)) return
+  moving.value = true
+  try {
+    await useApi(`/api/tasks/${id}/${move.path}`, { method: 'POST' })
+    $q.notify({ type: 'positive', message: `작업 #${id} — ${move.label} 완료` })
+    refresh()
+  } catch (e: any) {
+    $q.notify({ type: 'negative', message: e?.data?.message ?? `${move.label} 실패` })
+  } finally {
+    moving.value = false
+  }
+}
+
+function repoLabel(t: TaskResponse) {
+  return t.repoAlias ?? t.githubRepo
+}
+
+function initialOf(t: TaskResponse) {
+  return String(t.requesterId ?? '?').trim().charAt(0).toUpperCase() || '?'
+}
+
+// 서버 softDelete 가드와 동일 집합 — 배포 이력이 활성이면 먼저 중지 후 삭제
+const DEPLOY_ACTIVE_STATUSES = [
+  'DEPLOYED',
+  'DEPLOY_LOST',
+  'DEPLOY_PENDING',
+  'DEPLOYING',
+  'UNDEPLOY_PENDING',
+  'UNDEPLOYING',
+]
+
+function cancelable(t: TaskResponse) {
+  return ['PENDING', 'AWAITING_APPROVAL'].includes(t.status)
+}
+
+async function cancel(t: TaskResponse) {
+  if (!confirm(`작업 #${t.id} '${t.title}'을 취소하시겠습니까?`)) return
+  try {
+    await useApi(`/api/tasks/${t.id}/cancel`, { method: 'POST' })
+    refresh()
+  } catch (e: any) {
+    $q.notify({ type: 'negative', message: e?.data?.message ?? '취소 실패' })
+  }
+}
+
+async function remove(t: TaskResponse) {
+  if (DEPLOY_ACTIVE_STATUSES.includes(t.status)) {
+    $q.notify({
+      type: 'warning',
+      message: '배포 이력이 활성인 작업은 먼저 중지 후 삭제할 수 있습니다',
+    })
+    return
+  }
+  if (!confirm(`작업 #${t.id}을 삭제하시겠습니까? (복구 불가)`)) return
+  try {
+    await useApi(`/api/tasks/${t.id}`, { method: 'DELETE' })
+    refresh()
+  } catch (e: any) {
+    $q.notify({ type: 'negative', message: e?.data?.message ?? '삭제 실패' })
+  }
+}
+
+// ── 등록 다이얼로그 ──────────────────────────────────────────────
 const showCreate = ref(false)
 const draft = reactive({
   repoCatalogId: null as number | null,
@@ -56,7 +181,6 @@ const draft = reactive({
 })
 const submitting = ref(false)
 
-// 레포 카탈로그 (작업 등록 대상 레포)
 interface RepoCatalogEntry {
   id: number
   alias: string
@@ -91,7 +215,6 @@ function onRepoSelected(catalogId: number | null) {
   })
 }
 
-// 브랜치 동기화 상태 (Phase 1: repo 입력 → /api/repos/branches 자동 호출)
 type RepoStatus = 'empty' | 'invalid' | 'loading' | 'ok' | 'notfound' | 'error'
 const repoStatus = ref<RepoStatus>('empty')
 const repoStatusMsg = ref('')
@@ -105,23 +228,6 @@ const branchOptions = computed(() =>
   })),
 )
 const filteredBranchOptions = ref<{ label: string; value: string }[]>([])
-
-const repoStatusColor: Record<RepoStatus, string> = {
-  empty: 'grey-7',
-  invalid: 'orange-9',
-  loading: 'grey-7',
-  ok: 'positive',
-  notfound: 'negative',
-  error: 'warning',
-}
-const repoStatusIcon: Record<RepoStatus, string> = {
-  empty: '',
-  invalid: 'info',
-  loading: 'sync',
-  ok: 'check_circle',
-  notfound: 'cancel',
-  error: 'warning',
-}
 
 let inflightRepo = ''  // 응답 도착 시 최신 입력과 일치하는지 가드
 
@@ -226,61 +332,12 @@ async function submit() {
 function closeDialog() {
   showCreate.value = false
 }
-
-async function cancel(t: TaskResponse) {
-  if (!confirm(`작업 #${t.id} '${t.title}'을 취소하시겠습니까?`)) return
-  try {
-    await useApi(`/api/tasks/${t.id}/cancel`, { method: 'POST' })
-    refresh()
-  } catch (e: any) {
-    $q.notify({ type: 'negative', message: e?.data?.message ?? '취소 실패' })
-  }
-}
-
-async function remove(t: TaskResponse) {
-  if (!confirm(`작업 #${t.id}을 삭제하시겠습니까? (복구 불가)`)) return
-  try {
-    await useApi(`/api/tasks/${t.id}`, { method: 'DELETE' })
-    refresh()
-  } catch (e: any) {
-    $q.notify({ type: 'negative', message: e?.data?.message ?? '삭제 실패' })
-  }
-}
-
-function statusClass(status: string) {
-  return (
-    {
-      AWAITING_APPROVAL: 'status-chip status-pending',
-      INTERVIEWING: 'status-chip status-in-progress',
-      INTERVIEW_INPUT: 'status-chip status-pending',
-      INTERVIEW_REVIEW: 'status-chip status-completed',
-      PENDING: 'status-chip status-pending',
-      IN_PROGRESS: 'status-chip status-in-progress',
-      COMPLETED: 'status-chip status-completed',
-      FAILED: 'status-chip status-failed',
-      APPROVED: 'status-chip status-approved',
-      IMPLEMENTING: 'status-chip status-implementing',
-      PR_CREATED: 'status-chip status-pr-created',
-      IMPLEMENTATION_FAILED: 'status-chip status-impl-failed',
-      CANCELLED: 'status-chip status-cancelled',
-    }[status] || 'status-chip'
-  )
-}
-
-// 서버 softDelete 가드와 동일 집합 — 배포 이력이 활성이면 먼저 중지 후 삭제
-const DEPLOY_ACTIVE_STATUSES = [
-  'DEPLOYED',
-  'DEPLOY_LOST',
-  'DEPLOY_PENDING',
-  'DEPLOYING',
-  'UNDEPLOY_PENDING',
-  'UNDEPLOYING',
-]
 </script>
 
 <template>
   <q-page padding>
     <QueueStatsBar />
+
     <div class="row items-center q-mb-md">
       <div class="text-h5">작업 목록</div>
       <q-space />
@@ -314,74 +371,177 @@ const DEPLOY_ACTIVE_STATUSES = [
       <q-btn class="q-ml-md" color="primary" icon="add" label="작업 등록" @click="openCreate" />
     </div>
 
-    <q-table
-      :rows="tasks"
-      row-key="id"
-      flat
-      bordered
-      :columns="[
-        { name: 'id', label: '#', field: 'id', align: 'left' },
-        { name: 'title', label: '제목', field: 'title', align: 'left' },
-        { name: 'repo', label: '레포', field: (r) => r.repoAlias ?? r.githubRepo, align: 'left' },
-        { name: 'status', label: '상태', field: 'statusLabel', align: 'left' },
-        { name: 'pr', label: 'PR', field: (r) => r.implementation?.prNumber ?? '', align: 'center' },
-        { name: 'retry', label: '재시도', field: (r) => `${r.retryCount}/${r.maxRetry}`, align: 'center' },
-        { name: 'createdAt', label: '등록', field: 'createdAt', align: 'left' },
-        { name: 'actions', label: '', field: () => '', align: 'right' },
-      ]"
-      :pagination="{ rowsPerPage: 20 }"
-    >
-      <template #body-cell-title="props">
-        <q-td :props="props">
-          <NuxtLink :to="`/tasks/${props.row.id}`">{{ props.row.title }}</NuxtLink>
-        </q-td>
-      </template>
-      <template #body-cell-status="props">
-        <q-td :props="props">
-          <span :class="statusClass(props.row.status)">{{ props.row.statusLabel }}</span>
-        </q-td>
-      </template>
-      <template #body-cell-pr="props">
-        <q-td :props="props">
-          <a
-            v-if="props.row.implementation?.prUrl"
-            :href="props.row.implementation.prUrl"
-            target="_blank"
-            class="text-primary"
-            @click.stop
+    <div class="stage-rows">
+      <div
+        v-for="s in stages"
+        :key="s.key"
+        class="stage-row"
+        :data-test="`stage-${s.key}`"
+        @dragover="onDragOver(s.key, $event)"
+        @drop="onDrop(s.key, $event)"
+      >
+        <!-- 단계 요약 -->
+        <div class="stage-side">
+          <div class="row items-baseline q-gutter-x-sm">
+            <span class="stage-name">{{ s.name }}</span>
+            <q-space />
+            <span class="stage-count" :style="{ color: s.color }">{{ s.count }}</span>
+          </div>
+          <div v-if="!s.terminal" class="row q-gutter-x-xs">
+            <div
+              v-for="(p, i) in s.pipeline"
+              :key="i"
+              class="pipeline-seg"
+              :style="{ background: p.bg }"
+            />
+          </div>
+          <div class="stage-summary">{{ s.summary }}</div>
+          <div class="stage-oldest">
+            <q-icon name="schedule" size="14px" color="grey-6" />
+            최장 {{ s.oldest }}
+          </div>
+          <div v-if="s.bottleneck" class="stage-bottleneck">
+            <q-icon name="priority_high" size="14px" />
+            병목 단계
+          </div>
+        </div>
+
+        <!-- 카드 트랙 -->
+        <div class="stage-track-wrap">
+          <div class="stage-track">
+            <div v-for="g in s.groups" :key="g.status" class="stage-group">
+              <div class="row items-center q-gutter-x-sm">
+                <span class="group-chip" :style="{ background: g.bg, color: g.fg }">
+                  {{ g.label }}
+                </span>
+                <span class="group-count">{{ g.count }}</span>
+              </div>
+              <div class="row no-wrap q-gutter-x-md">
+                <div
+                  v-for="c in g.cards"
+                  :key="c.task.id"
+                  class="task-card"
+                  :class="{ draggable: !!c.move }"
+                  :draggable="!!c.move"
+                  :title="c.move ? `드래그: ${c.move.label}` : undefined"
+                  @dragstart="onDragStart(c)"
+                  @dragend="onDragEnd"
+                >
+                  <div class="row items-center q-gutter-x-sm">
+                    <span class="card-id">#{{ c.task.id }}</span>
+                    <span class="card-status" :style="{ background: c.bg, color: c.fg }">
+                      {{ c.task.statusLabel }}
+                    </span>
+                    <q-space />
+                    <q-icon
+                      v-if="cancelable(c.task)"
+                      name="block"
+                      size="18px"
+                      color="warning"
+                      class="cursor-pointer"
+                      @click="cancel(c.task)"
+                    >
+                      <q-tooltip>취소</q-tooltip>
+                    </q-icon>
+                    <q-icon
+                      name="delete"
+                      size="18px"
+                      class="cursor-pointer"
+                      :color="DEPLOY_ACTIVE_STATUSES.includes(c.task.status) ? 'grey-4' : 'negative'"
+                      @click="remove(c.task)"
+                    >
+                      <q-tooltip>
+                        {{
+                          DEPLOY_ACTIVE_STATUSES.includes(c.task.status)
+                            ? '배포 이력이 활성인 작업은 먼저 중지 후 삭제'
+                            : '삭제'
+                        }}
+                      </q-tooltip>
+                    </q-icon>
+                  </div>
+
+                  <NuxtLink :to="`/tasks/${c.task.id}`" class="card-title">
+                    {{ c.task.title }}
+                  </NuxtLink>
+
+                  <div class="card-repo">
+                    <q-icon name="folder" size="13px" color="grey-6" />
+                    <span class="ellipsis">{{ repoLabel(c.task) }}</span>
+                    <span class="text-grey-5">·</span>
+                    <q-icon name="call_split" size="13px" color="grey-6" />
+                    <span class="ellipsis">{{ c.task.githubBranch }}</span>
+                  </div>
+
+                  <div class="row no-wrap q-gutter-x-xs">
+                    <div v-for="(st, i) in c.steps" :key="i" class="card-step">
+                      <div class="card-step-bar" :style="{ background: st.bg }" />
+                      <span
+                        class="card-step-label"
+                        :style="{ color: st.fg, fontWeight: st.weight }"
+                      >{{ st.label }}</span>
+                    </div>
+                  </div>
+
+                  <div class="card-age">
+                    <span class="text-grey-7">등록 후 {{ c.age }}</span>
+                    <div class="card-age-track">
+                      <div
+                        class="card-age-fill"
+                        :style="{ background: c.ageColor, width: `${c.agePct}%` }"
+                      />
+                    </div>
+                  </div>
+
+                  <div class="card-foot">
+                    <span class="card-avatar">{{ initialOf(c.task) }}</span>
+                    <span>{{ c.task.requesterId }}</span>
+                    <span class="text-grey-5">·</span>
+                    <span>재시도 {{ c.task.retryCount }}/{{ c.task.maxRetry }}</span>
+                    <a
+                      v-if="c.task.implementation?.prUrl"
+                      :href="c.task.implementation.prUrl"
+                      target="_blank"
+                      class="card-pr"
+                      @click.stop
+                    >
+                      PR #{{ c.task.implementation.prNumber }}
+                      <q-icon name="open_in_new" size="13px" />
+                    </a>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div v-if="s.isEmpty" class="stage-empty">
+              <q-icon name="inbox" size="22px" />
+              이 단계에 작업이 없습니다
+              <span v-if="s.emptyHint" class="stage-empty-hint">{{ s.emptyHint }}</span>
+            </div>
+          </div>
+
+          <div
+            v-if="dropState(s.key) !== 'none'"
+            class="drop-overlay"
+            :class="{ over: dropState(s.key) === 'over' }"
+            :style="{ borderColor: s.color, color: s.color }"
           >
-            #{{ props.row.implementation.prNumber }}
-            <q-icon name="open_in_new" size="14px" />
-          </a>
-          <span v-else class="text-grey-5">—</span>
-        </q-td>
-      </template>
-      <template #body-cell-actions="props">
-        <q-td :props="props">
-          <q-btn
-            v-if="['PENDING', 'AWAITING_APPROVAL'].includes(props.row.status)"
-            flat
-            dense
-            color="warning"
-            icon="block"
-            @click="cancel(props.row)"
-          />
-          <q-btn
-            flat
-            dense
-            color="negative"
-            icon="delete"
-            :disable="DEPLOY_ACTIVE_STATUSES.includes(props.row.status)"
-            :title="
-              DEPLOY_ACTIVE_STATUSES.includes(props.row.status)
-                ? '배포 이력이 활성인 작업은 먼저 중지 후 삭제할 수 있습니다'
-                : undefined
-            "
-            @click="remove(props.row)"
-          />
-        </q-td>
-      </template>
-    </q-table>
+            {{ draggingMove?.label }}
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="board-foot">
+      <span v-if="auth.isAdmin">
+        드래그로 이동 가능한 전이만 허용: 분석완료 → 구현대기 · 디자인승인대기 → 구현대기 ·
+        PR생성 → 배포대기 · 배포완료 → 배포중지대기
+      </span>
+      <span v-else>상태 전이는 관리자만 수행할 수 있습니다</span>
+      <q-space />
+      <span>총 {{ tasks.length }}건</span>
+    </div>
+
+    <q-inner-loading :showing="moving" />
 
     <!-- 등록 다이얼로그 -->
     <q-dialog v-model="showCreate" persistent>
@@ -464,3 +624,198 @@ const DEPLOY_ACTIVE_STATUSES = [
     </q-dialog>
   </q-page>
 </template>
+
+<style scoped>
+/* 값은 디자인 문서 `작업 목록 카드뷰.dc.html` 1b(여유형) 그대로 */
+.stage-rows { display: flex; flex-direction: column; gap: 14px; }
+
+.stage-row {
+  display: flex;
+  border: 1px solid rgba(0, 0, 0, 0.12);
+  border-radius: 4px;
+  background: #fff;
+  overflow: hidden;
+}
+
+.stage-side {
+  flex: 0 0 208px;
+  padding: 14px 16px;
+  background: #fafafa;
+  border-right: 1px solid rgba(0, 0, 0, 0.12);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.stage-name { font-size: 17px; font-weight: 700; color: #212121; }
+.stage-count { font-size: 26px; font-weight: 600; line-height: 1; }
+.pipeline-seg { flex: 1; height: 5px; border-radius: 3px; }
+.stage-summary { font-size: 11.5px; color: #757575; line-height: 1.5; }
+.stage-oldest {
+  margin-top: auto;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11.5px;
+  color: #616161;
+}
+.stage-bottleneck {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  align-self: flex-start;
+  font-size: 11.5px;
+  font-weight: 600;
+  color: #ef6c00;
+  background: #fff8e1;
+  border: 1px solid #ffe082;
+  border-radius: 3px;
+  padding: 3px 7px;
+}
+
+.stage-track-wrap { flex: 1; min-width: 0; position: relative; }
+.stage-track { display: flex; overflow-x: auto; padding: 14px 0; }
+.stage-track::-webkit-scrollbar { height: 8px; }
+.stage-track::-webkit-scrollbar-thumb { background: rgba(0, 0, 0, 0.18); border-radius: 4px; }
+.stage-track::-webkit-scrollbar-track { background: transparent; }
+
+.stage-group {
+  flex: 0 0 auto;
+  padding: 0 14px;
+  border-right: 1px dashed rgba(0, 0, 0, 0.12);
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+}
+.group-chip { font-size: 11.5px; font-weight: 600; padding: 2px 7px; border-radius: 4px; }
+.group-count { font-size: 12px; font-weight: 600; color: #616161; }
+
+.task-card {
+  flex: 0 0 auto;
+  width: 272px;
+  border: 1px solid rgba(0, 0, 0, 0.14);
+  border-radius: 6px;
+  background: #fff;
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.07);
+  transition: box-shadow 0.15s, border-color 0.15s;
+}
+.task-card:hover {
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+  border-color: rgba(25, 118, 210, 0.45);
+}
+.task-card.draggable { cursor: grab; }
+.task-card.draggable:active { cursor: grabbing; }
+
+.card-id { font-size: 12px; font-weight: 700; color: #9e9e9e; }
+.card-status { font-size: 11px; font-weight: 500; padding: 2px 7px; border-radius: 4px; }
+.card-title {
+  font-size: 14.5px;
+  font-weight: 600;
+  line-height: 1.4;
+  text-decoration: none;
+  color: #1976d2;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  min-height: 41px;
+}
+.card-title:hover { color: #0d47a1; text-decoration: underline; }
+.card-repo {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11.5px;
+  color: #757575;
+  white-space: nowrap;
+  overflow: hidden;
+}
+.card-repo .ellipsis { overflow: hidden; text-overflow: ellipsis; }
+
+.card-step { flex: 1; display: flex; flex-direction: column; gap: 3px; }
+.card-step-bar { height: 4px; border-radius: 2px; }
+.card-step-label { font-size: 11px; }
+
+.card-age { display: flex; align-items: center; gap: 6px; font-size: 11px; color: #616161; }
+.card-age-track {
+  flex: 1;
+  height: 3px;
+  background: #eeeeee;
+  border-radius: 2px;
+  overflow: hidden;
+}
+.card-age-fill { height: 3px; border-radius: 2px; }
+
+.card-foot {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  border-top: 1px solid rgba(0, 0, 0, 0.07);
+  padding-top: 8px;
+  font-size: 11.5px;
+  color: #616161;
+}
+.card-avatar {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: #e3f2fd;
+  color: #1565c0;
+  font-size: 10px;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.card-pr {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  font-size: 11.5px;
+  text-decoration: none;
+  color: #1976d2;
+}
+
+.stage-empty {
+  flex: 1;
+  margin: 0 14px;
+  min-height: 150px;
+  border: 1px dashed rgba(0, 0, 0, 0.18);
+  border-radius: 6px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  color: #9e9e9e;
+  font-size: 13px;
+}
+.stage-empty-hint { font-size: 11.5px; color: #bdbdbd; }
+
+.drop-overlay {
+  position: absolute;
+  inset: 0;
+  border: 2px dashed;
+  border-radius: 4px;
+  background: rgba(25, 118, 210, 0.04);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 13px;
+  font-weight: 600;
+  pointer-events: none;
+}
+.drop-overlay.over { background: rgba(25, 118, 210, 0.1); }
+
+.board-foot {
+  display: flex;
+  align-items: center;
+  padding: 14px 4px 0;
+  font-size: 12px;
+  color: #757575;
+}
+</style>

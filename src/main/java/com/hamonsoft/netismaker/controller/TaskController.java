@@ -21,9 +21,11 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.security.oauth2.server.resource.authentication.JwtAuthenticationToken;
 import org.springframework.web.bind.annotation.*;
+import org.springframework.web.multipart.MultipartFile;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
 import java.net.URI;
+import java.util.List;
 
 /**
  *  사용자/관리자 작업 API. DESIGN §12 표면 그대로.
@@ -53,6 +55,21 @@ public class TaskController {
                                                JwtAuthenticationToken auth) {
         String userId = AuthContext.requireUserId(auth);
         Task t = taskService.create(req, userId);
+        TaskResponse body = TaskResponse.of(t, null);
+        return ResponseEntity.created(URI.create("/api/tasks/" + t.getId())).body(body);
+    }
+
+    /**
+     * 파일 첨부 등록 (스펙 2026-08-16 §5.1). 기존 JSON 매핑은 consumes 미지정 그대로 —
+     * multipart 요청만 이 더 구체적인 매핑으로 라우팅된다. 기존 매핑에 consumes를 달지 말 것.
+     */
+    @PostMapping(consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+    public ResponseEntity<TaskResponse> createMultipart(
+            @RequestPart("meta") @Valid TaskCreateRequest req,
+            @RequestPart(value = "files", required = false) List<MultipartFile> files,
+            JwtAuthenticationToken auth) {
+        String userId = AuthContext.requireUserId(auth);
+        Task t = taskService.create(req, files, userId);
         TaskResponse body = TaskResponse.of(t, null);
         return ResponseEntity.created(URI.create("/api/tasks/" + t.getId())).body(body);
     }

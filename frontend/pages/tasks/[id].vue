@@ -73,7 +73,7 @@ interface TaskResponse {
   description: string
   status: string
   statusLabel: string
-  requesterId: number
+  requesterId: string
   retryCount: number
   maxRetry: number
   failureReason: string | null
@@ -338,10 +338,27 @@ async function downloadAttachment(att: AttachmentMeta) {
     const a = document.createElement('a')
     a.href = url
     a.download = att.fileName
+    document.body.appendChild(a)
     a.click()
-    URL.revokeObjectURL(url)
+    // blob URL을 click과 같은 tick에 해제하면 일부 브라우저에서 다운로드가 시작 전에 중단된다(Chromium 41380177, Firefox 1282407).
+    setTimeout(() => {
+      URL.revokeObjectURL(url)
+      a.remove()
+    }, 0)
   } catch (e: any) {
-    $q.notify({ type: 'negative', message: e?.data?.message ?? '다운로드 실패' })
+    // responseType:'blob'이면 ofetch가 에러 본문도 Blob으로 파싱하므로 e.data는 {message}가 아니라 Blob이다.
+    let message = '다운로드 실패'
+    try {
+      if (e?.data instanceof Blob) {
+        const parsed = JSON.parse(await e.data.text())
+        if (parsed?.message) message = parsed.message
+      } else if (e?.data?.message) {
+        message = e.data.message
+      }
+    } catch {
+      // 본문이 JSON이 아니면 fallback 유지
+    }
+    $q.notify({ type: 'negative', message })
   }
 }
 </script>

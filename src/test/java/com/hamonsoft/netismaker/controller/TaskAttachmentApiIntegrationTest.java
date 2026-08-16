@@ -12,11 +12,13 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.http.ContentDisposition;
 import org.springframework.mock.web.MockMultipartFile;
 import org.springframework.security.core.authority.SimpleGrantedAuthority;
 import org.springframework.test.context.ContextConfiguration;
 import org.springframework.test.context.TestPropertySource;
 import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.test.web.servlet.MvcResult;
 import org.springframework.test.web.servlet.request.RequestPostProcessor;
 import org.springframework.util.FileSystemUtils;
 
@@ -148,27 +150,43 @@ class TaskAttachmentApiIntegrationTest {
                 .authorities(new SimpleGrantedAuthority("ROLE_ADMIN"));
     }
 
-    /** multipart 등록 후 (taskId, attachmentId) 반환. */
+    /**
+     * multipart 등록 후 (taskId, attachmentId) 반환. taskId는 생성 응답 JSON의 id를
+     * 직접 읽는다(taskRepo.findAll().get(0)은 여러 task가 공존할 때 순서를 보장하지
+     * 않는 함정 — 자기 리뷰 발견, task-6 리뷰에서 제거 확정).
+     */
     private long[] registerWithFile() throws Exception {
-        mvc.perform(multipart("/api/tasks")
+        String responseJson = mvc.perform(multipart("/api/tasks")
                         .file(metaPart())
                         .file(filePart("요구사항.txt", "내용"))
                         .with(userJwt("user1")))
-                .andExpect(status().isCreated());
-        Long taskId = taskRepo.findAll().get(0).getId();
+                .andExpect(status().isCreated())
+                .andReturn().getResponse().getContentAsString(StandardCharsets.UTF_8);
+        long taskId = json.readTree(responseJson).get("id").asLong();
         Long attId = attachmentRepo.findByTaskIdOrderByIdAsc(taskId).get(0).getId();
         return new long[]{taskId, attId};
     }
 
+    /**
+     * Content-Disposition이 RFC 5987 filename*=UTF-8''로 실제 인코딩되는지 핀 고정
+     * (리뷰 요청, task-6). "attachment"만 확인하는 약한 단언은 filename(name, UTF_8) →
+     * filename(name)(charset 없는 오버로드)로의 회귀를 잡지 못하고 조용히 통과한다 —
+     * 그러면 한글 파일명이 깨진다. 실제 헤더 값을 Spring의 ContentDisposition.parse로
+     * 되읽어 원본 파일명과 라운드트립이 성립하는지까지 확인한다.
+     */
     @Test
     void 요청자_본인은_다운로드할_수_있다() throws Exception {
         long[] ids = registerWithFile();
-        mvc.perform(get("/api/tasks/" + ids[0] + "/attachments/" + ids[1])
+        MvcResult result = mvc.perform(get("/api/tasks/" + ids[0] + "/attachments/" + ids[1])
                         .with(userJwt("user1")))
                 .andExpect(status().isOk())
-                .andExpect(header().string("Content-Disposition",
-                        org.hamcrest.Matchers.containsString("attachment")))
-                .andExpect(content().bytes("내용".getBytes(StandardCharsets.UTF_8)));
+                .andExpect(content().bytes("내용".getBytes(StandardCharsets.UTF_8)))
+                .andReturn();
+
+        String contentDisposition = result.getResponse().getHeader("Content-Disposition");
+        assertThat(contentDisposition).contains("filename*=UTF-8''");
+        assertThat(ContentDisposition.parse(contentDisposition).getFilename())
+                .isEqualTo("요구사항.txt");
     }
 
     @Test

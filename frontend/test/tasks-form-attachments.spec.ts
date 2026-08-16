@@ -155,6 +155,16 @@ describe('tasks form — attachments', () => {
       message: '첨부는 최대 10개까지 가능합니다',
     })
   })
+
+  // 라벨이 서버가 실제로 강제하는 한도와 다르면(합계 50MB 누락) 사용자는 통과할 줄 알고
+  // 파일을 고른 뒤 거절당한다. 세 한도가 모두 라벨에 있어야 한다.
+  it('첨부 라벨은 개수·파일당·합계 한도를 모두 알린다', async () => {
+    const w = await openDialog()
+    const label = String(w.findComponent(QFile).props('label'))
+    expect(label).toContain('10개')
+    expect(label).toContain('20MB')
+    expect(label).toContain('합계 50MB')
+  })
 })
 
 // Fix round 1 (finding 4): validateFiles has 4 rules; only the >10-files rule had any

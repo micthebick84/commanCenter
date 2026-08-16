@@ -8,6 +8,7 @@ import org.springframework.stereotype.Component;
 import org.springframework.web.multipart.MultipartFile;
 
 import java.io.IOException;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
@@ -63,7 +64,10 @@ public class AttachmentStorage {
                 throw new TaskException(HttpStatus.BAD_REQUEST,
                         "파일당 " + maxFileSizeMb + "MB 이하만 첨부할 수 있습니다: " + name);
             }
-            String ext = extensionOf(name);
+            // 검증은 반드시 "디스크에 실제로 남을 이름"에서 확장자를 뽑는다. 원본 이름으로
+            // 뽑으면 "evil.sh " / "evil.exe<제어문자>" / "evil.sh." 처럼 sanitize가 되살리는
+            // 차단 확장자가 검증을 통과해 버린다(우회).
+            String ext = extensionOf(sanitize(name));
             if (BLOCKED_EXTENSIONS.contains(ext)) {
                 throw new TaskException(HttpStatus.BAD_REQUEST,
                         "허용되지 않는 파일 형식입니다: ." + ext);
@@ -83,8 +87,8 @@ public class AttachmentStorage {
     }
 
     /**
-     * 파일명 정리: 경로 구분자 뒤만 취하고, '..'/제어문자 제거, 200자 제한(확장자가 뒤에
-     * 있으므로 뒤쪽 보존), 빈 결과는 "file".
+     * 파일명 정리: 경로 구분자 뒤만 취하고, '..'/제어문자 제거, 뒤쪽 공백·마침표 제거,
+     * UTF-8 240바이트 제한(확장자가 뒤에 있으므로 뒤쪽 보존), 빈 결과는 "file".
      */
     static String sanitize(String name) {
         String base = name == null ? "" : name;
@@ -94,9 +98,42 @@ public class AttachmentStorage {
         base = base.replace("..", "");
         base = base.replaceAll("\\p{Cntrl}", "");
         base = base.trim();
-        if (base.length() > 200) base = base.substring(base.length() - 200);
+        // 끝의 마침표는 제거 — "evil.sh." 처럼 확장자를 감추는 형태를 없애고, Windows에서
+        // 실제 파일명이 되지 못하는 표기도 정리한다.
+        while (base.endsWith(".")) base = base.substring(0, base.length() - 1);
+        base = truncateTailToBytes(base, MAX_FILENAME_BYTES);
         if (base.isBlank()) base = "file";
         return base;
+    }
+
+    /** 파일명 상한(바이트). ext4/xfs는 255바이트 — "{ordinal}-" 접두사 여유를 두고 240. */
+    static final int MAX_FILENAME_BYTES = 240;
+
+    /**
+     * UTF-8 바이트 기준으로 뒤쪽(확장자 포함)을 보존하며 자른다. 글자수가 아니라 바이트여야
+     * 하는 이유: 한글은 UTF-8 3바이트라 200"자"는 최대 600바이트 — Linux(ext4) 255바이트
+     * 한도를 넘어 macOS 개발기에서만 통과하고 서버에서 500이 난다.
+     * 코드포인트 경계에서만 잘라 서로게이트 페어(이모지 등)가 쪼개지지 않는다.
+     */
+    private static String truncateTailToBytes(String s, int maxBytes) {
+        if (s.getBytes(StandardCharsets.UTF_8).length <= maxBytes) return s;
+        int bytes = 0;
+        int idx = s.length();
+        while (idx > 0) {
+            int cp = s.codePointBefore(idx);
+            int cpBytes = utf8Length(cp);
+            if (bytes + cpBytes > maxBytes) break;
+            bytes += cpBytes;
+            idx -= Character.charCount(cp);
+        }
+        return s.substring(idx);
+    }
+
+    private static int utf8Length(int codePoint) {
+        if (codePoint < 0x80) return 1;
+        if (codePoint < 0x800) return 2;
+        if (codePoint < 0x10000) return 3;
+        return 4;
     }
 
     public String relativePath(long taskId, int ordinal, String originalFilename) {

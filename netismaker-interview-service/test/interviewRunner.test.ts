@@ -160,9 +160,22 @@ describe('InterviewRunner', () => {
     const legacy = { ...freshClaim } as Record<string, unknown>;
     delete legacy.attachments;
     const client = makeClient();
-    const fakeQuery = vi.fn(() => questionStream());
+    let seenPrompt = '';
+    // MUST drain the prompt like the sibling tests: vi.fn(() => questionStream()) never
+    // consumes it, so attachmentSection() is never invoked and this test cannot fail.
+    // The drain promise is captured and awaited so a throw inside the generator surfaces
+    // as a test failure instead of an (ignorable) unhandled rejection.
+    let drained: Promise<void> = Promise.resolve();
+    const fakeQuery = vi.fn((args: { prompt: AsyncIterable<{ message?: { content?: string } }> }) => {
+      drained = (async () => { for await (const p of args.prompt) seenPrompt += p.message?.content ?? ''; })();
+      return questionStream();
+    });
     const runner = new InterviewRunner(client as never, fakeQuery as never, deps as never);
     await runner.run(legacy as never);
+    await drained;
+    // kickoff 프롬프트가 실제로 만들어졌고(=가드를 통과했고) 첨부 섹션만 비어 있어야 한다.
+    expect(seenPrompt).toContain('Title:');
+    expect(seenPrompt).not.toContain('첨부 자료');
     expect(client.fail).not.toHaveBeenCalled();
     expect(client.postQuestion).toHaveBeenCalled();
   });

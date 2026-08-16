@@ -186,6 +186,8 @@ const MAX_FILES = 10
 const MAX_FILE_MB = 20
 const MAX_TOTAL_MB = 50
 const draftFiles = ref<File[]>([])
+// 라벨은 상수에서 파생 — 한도를 문자열에 다시 하드코딩하면 서버/검증과 갈라진다
+const attachmentLabel = `첨부파일 (선택 · 최대 ${MAX_FILES}개, 파일당 ${MAX_FILE_MB}MB, 합계 ${MAX_TOTAL_MB}MB)`
 
 function validateFiles(files: File[]): string | null {
   if (files.length > MAX_FILES) return `첨부는 최대 ${MAX_FILES}개까지 가능합니다`
@@ -639,7 +641,7 @@ function closeDialog() {
           />
           <q-file
             v-model="draftFiles"
-            label="첨부파일 (선택 · 최대 10개, 파일당 20MB)"
+            :label="attachmentLabel"
             outlined
             dense
             multiple

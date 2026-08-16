@@ -84,11 +84,23 @@ const taskFixture = {
 let currentWrapper: ReturnType<typeof mount> | null = null
 let clickSpy: ReturnType<typeof vi.spyOn> | null = null
 
+// URL.createObjectURL/revokeObjectURL은 Object.assign으로 갈아끼우므로(스파이가 아니라
+// 대입) 반드시 원본으로 되돌려야 한다. 안 되돌리면 Blob 케이스가 앞 테스트의
+// createObjectURL 스파이를 그대로 물려받아, 다운로드 경로를 지키는 이 스펙 자체가
+// 다른 테스트의 전역 오염에 의존하게 된다. (jsdom에선 원본이 undefined일 수 있고,
+// undefined로 되돌리는 것이 바로 "원래 상태"다.)
+const origCreateObjectURL = URL.createObjectURL
+const origRevokeObjectURL = URL.revokeObjectURL
+
 afterEach(() => {
   currentWrapper?.unmount()
   currentWrapper = null
   clickSpy?.mockRestore()
   clickSpy = null
+  Object.assign(URL, {
+    createObjectURL: origCreateObjectURL,
+    revokeObjectURL: origRevokeObjectURL,
+  })
 })
 
 async function mountPage(task: unknown = taskFixture) {

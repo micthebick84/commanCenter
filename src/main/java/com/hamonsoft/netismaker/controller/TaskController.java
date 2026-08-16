@@ -92,7 +92,8 @@ public class TaskController {
         Task t = taskService.getForView(id, userId, isAdmin);
         return TaskResponse.of(t, taskService.getAnalysis(id).orElse(null),
                 taskService.getDesign(id).orElse(null),
-                interviewService.latestSessionIdForTask(id).orElse(null));
+                interviewService.latestSessionIdForTask(id).orElse(null),
+                taskService.getAttachments(id));
     }
 
     @PostMapping("/{id}/cancel")

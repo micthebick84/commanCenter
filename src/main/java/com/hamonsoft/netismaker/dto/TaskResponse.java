@@ -3,6 +3,7 @@ package com.hamonsoft.netismaker.dto;
 import com.hamonsoft.netismaker.entity.EnvVar;
 import com.hamonsoft.netismaker.entity.Task;
 import com.hamonsoft.netismaker.entity.TaskAnalysis;
+import com.hamonsoft.netismaker.entity.TaskAttachment;
 import com.hamonsoft.netismaker.entity.TaskDesign;
 import com.hamonsoft.netismaker.entity.TaskMcpSpec;
 import com.hamonsoft.netismaker.entity.TaskStatus;
@@ -34,7 +35,9 @@ public record TaskResponse(
         DesignView design,
         ImplementationView implementation,
         DeploymentView deployment,
-        Long interviewSessionId
+        Long interviewSessionId,
+        /** 항상 non-null. 목록 엔드포인트는 항상 [] — 실데이터는 상세 응답만 (스펙 §5.2). */
+        List<AttachmentView> attachments
 ) {
     public record AnalysisView(
             String markdownResult,
@@ -78,6 +81,19 @@ public record TaskResponse(
             String deployLog
     ) {}
 
+    public record AttachmentView(
+            Long id,
+            String fileName,
+            String contentType,
+            long sizeBytes,
+            OffsetDateTime createdAt
+    ) {
+        static AttachmentView from(TaskAttachment a) {
+            return new AttachmentView(a.getId(), a.getOriginalFilename(),
+                    a.getContentType(), a.getSizeBytes(), a.getCreatedAt());
+        }
+    }
+
     public static TaskResponse of(Task t, TaskAnalysis a) {
         return of(t, a, null);
     }
@@ -87,6 +103,11 @@ public record TaskResponse(
     }
 
     public static TaskResponse of(Task t, TaskAnalysis a, TaskDesign d, Long interviewSessionId) {
+        return of(t, a, d, interviewSessionId, List.of());
+    }
+
+    public static TaskResponse of(Task t, TaskAnalysis a, TaskDesign d, Long interviewSessionId,
+                                  List<TaskAttachment> attachments) {
         AnalysisView av = (a == null) ? null : new AnalysisView(
                 a.getMarkdownResult(),
                 a.getSubtasksJson(),
@@ -145,7 +166,9 @@ public record TaskResponse(
                 designV,
                 iv,
                 dv,
-                interviewSessionId
+                interviewSessionId,
+                attachments == null ? List.of()
+                        : attachments.stream().map(AttachmentView::from).toList()
         );
     }
 }

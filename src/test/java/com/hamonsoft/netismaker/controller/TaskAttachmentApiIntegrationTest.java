@@ -125,4 +125,21 @@ class TaskAttachmentApiIntegrationTest {
                 .andExpect(status().isBadRequest());
         assertThat(taskRepo.count()).isZero();
     }
+
+    @Test
+    void 상세_조회에는_attachments_메타가_실린다() throws Exception {
+        mvc.perform(multipart("/api/tasks")
+                        .file(metaPart())
+                        .file(filePart("요구사항.txt", "내용"))
+                        .with(userJwt("user1")))
+                .andExpect(status().isCreated());
+        Long taskId = taskRepo.findAll().get(0).getId();
+
+        mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders
+                        .get("/api/tasks/" + taskId).with(userJwt("user1")))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.attachments[0].fileName").value("요구사항.txt"))
+                .andExpect(jsonPath("$.attachments[0].sizeBytes").value(6));
+        // "내용" = UTF-8 6바이트
+    }
 }

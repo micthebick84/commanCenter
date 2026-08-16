@@ -103,20 +103,36 @@ async function mountPage(task: unknown = taskFixture) {
 // (앵커는 실제로 DOM에 존재하지만 즉시 다시 제거되므로 - B2 수정 이후 - click 호출 시점의
 // this를 통해 관찰한다.)
 // B2 가드: appendChild/remove가 통째로 삭제돼도 createObjectURL/revokeObjectURL 호출
-// 여부만으로는 안 걸린다 — click 시점에 DOM에 연결돼 있었는지(isConnected)를 기록해 둔다.
-function spyAnchorClick(): {
+// 여부만으로는 안 걸린다 — click 시점에 DOM에 연결돼 있었는지(isConnected/parentNode)와
+// revoke 호출 횟수를 그 순간에 동기적으로 기록해 둔다. click 콜백 내부는 setTimeout(0)
+// 매크로태스크와 절대 교차할 수 없으므로 이 값들은 나중에(flushPromises 이후) 읽어도
+// CPU 경합 등으로 revoke/remove가 먼저 실행돼 버리는 레이스가 없다 — 반면 anchor()의
+// parentNode/isConnected를 나중에 직접 읽으면 그 사이 setTimeout이 already 실행됐을 수
+// 있어 레이스가 생긴다(실제로 Task 11 게이트에서 관찰됨).
+function spyAnchorClick(revokeObjectURL: ReturnType<typeof vi.fn>): {
   anchor: () => HTMLAnchorElement | null
   wasConnectedAtClick: () => boolean
+  parentAtClick: () => string | null
+  revokeCallsAtClick: () => number
 } {
   let lastAnchor: HTMLAnchorElement | null = null
   let connectedAtClick = false
+  let parentAtClick: string | null = null
+  let revokeCallsAtClick = 0
   clickSpy = vi
     .spyOn(HTMLAnchorElement.prototype, 'click')
     .mockImplementation(function (this: HTMLAnchorElement) {
       lastAnchor = this
       connectedAtClick = this.isConnected
+      parentAtClick = this.parentNode?.nodeName ?? null
+      revokeCallsAtClick = revokeObjectURL.mock.calls.length
     })
-  return { anchor: () => lastAnchor, wasConnectedAtClick: () => connectedAtClick }
+  return {
+    anchor: () => lastAnchor,
+    wasConnectedAtClick: () => connectedAtClick,
+    parentAtClick: () => parentAtClick,
+    revokeCallsAtClick: () => revokeCallsAtClick,
+  }
 }
 
 function findAttachmentChip(w: ReturnType<typeof mount>, fileName = '요구사항.pdf') {
@@ -143,7 +159,8 @@ describe('task detail — attachments', () => {
     const createObjectURL = vi.fn(() => 'blob:mock')
     const revokeObjectURL = vi.fn()
     Object.assign(URL, { createObjectURL, revokeObjectURL })
-    const { anchor, wasConnectedAtClick } = spyAnchorClick()
+    const { anchor, wasConnectedAtClick, parentAtClick, revokeCallsAtClick } =
+      spyAnchorClick(revokeObjectURL)
 
     useApiMock.mockClear()
     const blob = new Blob(['pdf'])
@@ -166,12 +183,16 @@ describe('task detail — attachments', () => {
 
     // B2 가드(appendChild): click 시점에 앵커가 실제로 document.body에 붙어 있어야 한다 —
     // appendChild가 삭제돼도 createObjectURL/download 관련 assertion은 안 걸린다.
+    // click 콜백 안에서 동기적으로 캡처된 값이므로 setTimeout(0)과 경합하지 않는다.
     expect(wasConnectedAtClick()).toBe(true)
-    expect(anchor()?.parentNode?.nodeName).toBe('BODY')
+    expect(parentAtClick()).toBe('BODY')
 
     // B2: object URL을 click과 같은 tick에 revoke하면 일부 브라우저에서 다운로드가 시작되기
-    // 전에 끊긴다(Chromium 41380177, Firefox 1282407) — click 직후엔 아직 revoke 전이어야 한다.
-    expect(revokeObjectURL).not.toHaveBeenCalled()
+    // 전에 끊긴다(Chromium 41380177, Firefox 1282407) — click 시점엔 아직 revoke가 호출된
+    // 적이 없어야 한다. (click 콜백 안에서 캡처한 호출 횟수를 확인 — flushPromises 이후에
+    // revokeObjectURL 자체를 검사하면 CPU 경합으로 setTimeout(0)이 먼저 실행돼 버릴 때
+    // 정상 코드에서도 스퓨리어스하게 실패할 수 있다.)
+    expect(revokeCallsAtClick()).toBe(0)
     await new Promise((r) => setTimeout(r, 0))
     expect(revokeObjectURL).toHaveBeenCalledWith('blob:mock')
     // B2 가드(remove): revoke 이후 앵커가 DOM에서 실제로 제거돼야 한다 — a.remove()가

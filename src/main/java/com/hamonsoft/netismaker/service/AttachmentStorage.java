@@ -1,5 +1,6 @@
 package com.hamonsoft.netismaker.service;
 
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Profile;
 import org.springframework.http.HttpStatus;
@@ -19,6 +20,7 @@ import java.util.Set;
  * 저장 상대경로 = task-{taskId}/{ordinal}-{sanitized}. ordinal은 업로드 순번(1..N) —
  * 첨부는 등록 트랜잭션에서만 생성되고 추가/삭제가 없어(스펙 §2) 순번이 영구히 유일하다.
  */
+@Slf4j
 @Component
 @Profile("api")
 public class AttachmentStorage {
@@ -123,12 +125,14 @@ public class AttachmentStorage {
         return resolve(relativePath).toString();
     }
 
-    /** 롤백 시 best-effort 정리 — 실패는 무시한다 (tx는 이미 롤백 경로). */
+    /** 롤백 시 best-effort 정리 — 실패는 무시하되 원인은 남긴다 (tx는 이미 롤백 경로). */
     public void deleteQuietly(String relativePath) {
         try {
             Files.deleteIfExists(resolve(relativePath));
-        } catch (IOException | RuntimeException ignored) {
-            // best-effort: 잔존 파일은 무해 (메타가 롤백되어 참조 불가)
+        } catch (IOException | RuntimeException e) {
+            // best-effort: 잔존 파일은 무해(메타가 롤백되어 참조 불가)하지만, 운영자가
+            // 고아 파일을 추적할 수 있도록 원인은 로그로 남긴다.
+            log.warn("첨부 파일 삭제 실패(무시): relativePath={}", relativePath, e);
         }
     }
 }

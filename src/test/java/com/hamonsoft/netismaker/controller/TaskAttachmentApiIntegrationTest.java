@@ -195,4 +195,34 @@ class TaskAttachmentApiIntegrationTest {
                         .with(adminJwt("admin")))
                 .andExpect(status().isNotFound());
     }
+
+    /**
+     * 존재하지 않는 task id가 아니라, 실존하는 다른 task의 첨부 id를 섞는 경우 —
+     * TaskService.getAttachment의 taskId 불일치 검사(getForView 이전 단계가 아니라
+     * getAttachment 자신의 분기)가 실제로 404를 내는지 확인 (자기 리뷰, task-6).
+     * registerWithFile()은 taskRepo.findAll().get(0)에 의존해 단일 task 전제이므로,
+     * task 2개가 공존하는 이 테스트에서는 각자의 생성 응답에서 id를 직접 뽑아 쓴다.
+     */
+    @Test
+    void 실존하는_다른_task의_attId를_섞으면_404다() throws Exception {
+        long task1Id = createTaskWithFile("첨부 등록 1");
+        long task2Id = createTaskWithFile("첨부 등록 2");
+        long task2AttId = attachmentRepo.findByTaskIdOrderByIdAsc(task2Id).get(0).getId();
+
+        mvc.perform(get("/api/tasks/" + task1Id + "/attachments/" + task2AttId)
+                        .with(adminJwt("admin")))
+                .andExpect(status().isNotFound());
+    }
+
+    private long createTaskWithFile(String title) throws Exception {
+        MockMultipartFile meta = new MockMultipartFile("meta", "meta", "application/json",
+                json.writeValueAsBytes(new TaskCreateRequest(1L, "main", title, "설명")));
+        String responseJson = mvc.perform(multipart("/api/tasks")
+                        .file(meta)
+                        .file(filePart("요구사항.txt", "내용"))
+                        .with(userJwt("user1")))
+                .andExpect(status().isCreated())
+                .andReturn().getResponse().getContentAsString(StandardCharsets.UTF_8);
+        return json.readTree(responseJson).get("id").asLong();
+    }
 }

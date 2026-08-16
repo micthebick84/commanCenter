@@ -108,4 +108,21 @@ class TaskAttachmentApiIntegrationTest {
         assertThat(taskRepo.count()).isZero();
         assertThat(Files.exists(Path.of(attachmentDir))).isFalse();
     }
+
+    /**
+     * meta 파트도 @RequestBody와 동일하게 @Valid가 걸리는지 확인 (리뷰 요청, task-4).
+     * title은 TaskCreateRequest의 @NotBlank — 공백이면 검증에서 걸려야 하고, 걸리지 않으면
+     * MethodArgumentNotValidException이 안 던져져 task 행이 그대로 생겨버리는 조용한 구멍이다.
+     */
+    @Test
+    void meta의_title이_공백이면_400이고_task가_생기지_않는다() throws Exception {
+        MockMultipartFile blankTitleMeta = new MockMultipartFile("meta", "meta", "application/json",
+                json.writeValueAsBytes(new TaskCreateRequest(1L, "main", "   ", "설명")));
+
+        mvc.perform(multipart("/api/tasks")
+                        .file(blankTitleMeta)
+                        .with(userJwt("user1")))
+                .andExpect(status().isBadRequest());
+        assertThat(taskRepo.count()).isZero();
+    }
 }

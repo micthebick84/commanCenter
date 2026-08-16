@@ -6,7 +6,7 @@ CREATE TABLE IF NOT EXISTS com.task_attachment (
     stored_path       VARCHAR(500) NOT NULL,
     content_type      VARCHAR(100),
     size_bytes        BIGINT NOT NULL,
-    uploaded_by       VARCHAR(20) NOT NULL,
-    created_at        TIMESTAMP NOT NULL DEFAULT now()
+    uploaded_by       VARCHAR(20) NOT NULL REFERENCES com."user"(user_id),
+    created_at        TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS idx_task_attachment_task ON com.task_attachment(task_id);

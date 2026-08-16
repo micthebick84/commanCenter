@@ -277,4 +277,43 @@ class TaskAttachmentApiIntegrationTest {
         assertThat(Files.exists(path)).isTrue();
         assertThat(Files.readString(path, StandardCharsets.UTF_8)).isEqualTo("내용");
     }
+
+    /**
+     * task-7 리뷰 Important 픽스: 첨부 0건인 "진짜 task"가 claim 경로에서 attachments=[]를
+     * 돌려주는지 확인한다. 유일했던 zero-attachment 커버리지(InterviewWorkerApiIntegrationTest)는
+     * InterviewSession.create(...)로 직접 만든, task에 물리지 않은(taskId==null) 세션이라
+     * InterviewService.attachmentRefsFor의 null 단락에서 끝나버려 attachmentRepo가 호출조차
+     * 안 된다 — 즉 Task 8이 실제로 가장 자주 마주칠 "task는 있는데 첨부가 없는" 경로는 검증된 적이
+     * 없었다(자기 리뷰 지적). 여기서는 등록 → 승인 → claim을 그대로 태워 taskId가 non-null인
+     * 세션을 만들고, attachmentRepo.findByTaskIdOrderByIdAsc가 실제로 실행되어 빈 리스트를
+     * 돌려주는지, 그리고 그 세션이 정말 이 task에 물려 있는지(단락을 타지 않았다는 증거)까지
+     * DB 왕복으로 못 박는다.
+     */
+    @Test
+    void 첨부_없는_실제_task도_claim에서_attachments가_빈_배열이다() throws Exception {
+        String responseJson = mvc.perform(post("/api/tasks").with(userJwt("user1"))
+                        .contentType("application/json")
+                        .content(json.writeValueAsString(
+                                new TaskCreateRequest(1L, "main", "첨부 없는 등록", "설명"))))
+                .andExpect(status().isCreated())
+                .andReturn().getResponse().getContentAsString(StandardCharsets.UTF_8);
+        long taskId = json.readTree(responseJson).get("id").asLong();
+        assertThat(attachmentRepo.findByTaskIdOrderByIdAsc(taskId)).isEmpty(); // 전제 확인
+
+        taskService.approve(taskId, "admin", null);   // AWAITING_APPROVAL → 인터뷰 세션 생성
+
+        MvcResult result = mvc.perform(post("/worker/interviews/claim")
+                        .header("X-Worker-API-Key", apiKey)
+                        .param("workerId", "iw-2"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.attachments").isArray())
+                .andExpect(jsonPath("$.attachments").isEmpty())
+                .andReturn();
+
+        long sessionId = json.readTree(result.getResponse().getContentAsString(StandardCharsets.UTF_8))
+                .get("sessionId").asLong();
+        // taskId==null 단락(InterviewService.attachmentRefsFor)을 타지 않았다는 증거 —
+        // claim된 세션이 실제로 이 task에 물려 있어야 findByTaskIdOrderByIdAsc가 진짜 실행된 것이다.
+        assertThat(sessionRepo.findById(sessionId).orElseThrow().getTaskId()).isEqualTo(taskId);
+    }
 }

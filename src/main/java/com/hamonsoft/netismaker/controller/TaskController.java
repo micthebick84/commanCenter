@@ -6,15 +6,21 @@ import com.hamonsoft.netismaker.dto.RejectDesignRequest;
 import com.hamonsoft.netismaker.dto.TaskCreateRequest;
 import com.hamonsoft.netismaker.dto.TaskResponse;
 import com.hamonsoft.netismaker.entity.Task;
+import com.hamonsoft.netismaker.entity.TaskAttachment;
 import com.hamonsoft.netismaker.entity.TaskStatus;
 import com.hamonsoft.netismaker.service.DeployLogStreamService;
 import com.hamonsoft.netismaker.service.InterviewService;
+import com.hamonsoft.netismaker.service.TaskException;
 import com.hamonsoft.netismaker.service.TaskService;
 import jakarta.validation.Valid;
 import org.springframework.context.annotation.Profile;
+import org.springframework.core.io.FileSystemResource;
+import org.springframework.core.io.Resource;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.web.PageableDefault;
+import org.springframework.http.ContentDisposition;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
@@ -25,6 +31,9 @@ import org.springframework.web.multipart.MultipartFile;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
 import java.net.URI;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.List;
 
 /**
@@ -190,5 +199,31 @@ public class TaskController {
         boolean isAdmin = AuthContext.isAdmin(auth);
         taskService.getForView(id, userId, isAdmin); // 접근 권한 검증 (없으면 예외)
         return deployLogStream.subscribe(id);
+    }
+
+    /**
+     * 첨부 다운로드 (스펙 2026-08-16 §5.3). ACL = getForView(요청자 본인 or ADMIN) —
+     * logsStream과 동일 패턴. 한글 파일명은 RFC 5987 filename*으로.
+     */
+    @GetMapping("/{id}/attachments/{attId}")
+    public ResponseEntity<Resource> downloadAttachment(@PathVariable Long id,
+                                                       @PathVariable Long attId,
+                                                       JwtAuthenticationToken auth) {
+        String userId = AuthContext.requireUserId(auth);
+        boolean isAdmin = AuthContext.isAdmin(auth);
+        taskService.getForView(id, userId, isAdmin); // 접근 권한 검증 (없으면 403/404 예외)
+        TaskAttachment att = taskService.getAttachment(id, attId);
+        Path file = taskService.resolveAttachmentPath(att);
+        if (!Files.exists(file)) {
+            throw new TaskException(HttpStatus.NOT_FOUND, "첨부 파일이 서버에 존재하지 않습니다");
+        }
+        ContentDisposition cd = ContentDisposition.attachment()
+                .filename(att.getOriginalFilename(), StandardCharsets.UTF_8)
+                .build();
+        return ResponseEntity.ok()
+                .header(HttpHeaders.CONTENT_DISPOSITION, cd.toString())
+                .contentType(MediaType.APPLICATION_OCTET_STREAM)
+                .contentLength(att.getSizeBytes())
+                .body(new FileSystemResource(file));
     }
 }

@@ -27,6 +27,7 @@ import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.jwt;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.multipart;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
@@ -135,11 +136,63 @@ class TaskAttachmentApiIntegrationTest {
                 .andExpect(status().isCreated());
         Long taskId = taskRepo.findAll().get(0).getId();
 
-        mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders
-                        .get("/api/tasks/" + taskId).with(userJwt("user1")))
+        mvc.perform(get("/api/tasks/" + taskId).with(userJwt("user1")))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.attachments[0].fileName").value("요구사항.txt"))
                 .andExpect(jsonPath("$.attachments[0].sizeBytes").value(6));
         // "내용" = UTF-8 6바이트
+    }
+
+    private static RequestPostProcessor adminJwt(String userId) {
+        return jwt().jwt(b -> b.claim("username", userId).claim("authorities", List.of("ROLE_ADMIN")))
+                .authorities(new SimpleGrantedAuthority("ROLE_ADMIN"));
+    }
+
+    /** multipart 등록 후 (taskId, attachmentId) 반환. */
+    private long[] registerWithFile() throws Exception {
+        mvc.perform(multipart("/api/tasks")
+                        .file(metaPart())
+                        .file(filePart("요구사항.txt", "내용"))
+                        .with(userJwt("user1")))
+                .andExpect(status().isCreated());
+        Long taskId = taskRepo.findAll().get(0).getId();
+        Long attId = attachmentRepo.findByTaskIdOrderByIdAsc(taskId).get(0).getId();
+        return new long[]{taskId, attId};
+    }
+
+    @Test
+    void 요청자_본인은_다운로드할_수_있다() throws Exception {
+        long[] ids = registerWithFile();
+        mvc.perform(get("/api/tasks/" + ids[0] + "/attachments/" + ids[1])
+                        .with(userJwt("user1")))
+                .andExpect(status().isOk())
+                .andExpect(header().string("Content-Disposition",
+                        org.hamcrest.Matchers.containsString("attachment")))
+                .andExpect(content().bytes("내용".getBytes(StandardCharsets.UTF_8)));
+    }
+
+    @Test
+    void 타인은_403_관리자는_200이다() throws Exception {
+        long[] ids = registerWithFile();
+        String url = "/api/tasks/" + ids[0] + "/attachments/" + ids[1];
+        mvc.perform(get(url).with(userJwt("other"))).andExpect(status().isForbidden());
+        mvc.perform(get(url).with(adminJwt("admin"))).andExpect(status().isOk());
+    }
+
+    @Test
+    void 디스크_파일이_유실되면_404다() throws Exception {
+        long[] ids = registerWithFile();
+        Files.delete(Path.of(attachmentDir, "task-" + ids[0] + "/1-요구사항.txt"));
+        mvc.perform(get("/api/tasks/" + ids[0] + "/attachments/" + ids[1])
+                        .with(userJwt("user1")))
+                .andExpect(status().isNotFound());
+    }
+
+    @Test
+    void 다른_task의_attId를_섞으면_404다() throws Exception {
+        long[] ids = registerWithFile();
+        mvc.perform(get("/api/tasks/" + (ids[0] + 999) + "/attachments/" + ids[1])
+                        .with(adminJwt("admin")))
+                .andExpect(status().isNotFound());
     }
 }

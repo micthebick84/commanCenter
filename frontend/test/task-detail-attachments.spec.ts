@@ -102,14 +102,21 @@ async function mountPage(task: unknown = taskFixture) {
 // a.click()을 가로채 실제 네비게이션 없이 생성된 앵커(download/href)를 검사할 수 있게 한다.
 // (앵커는 실제로 DOM에 존재하지만 즉시 다시 제거되므로 - B2 수정 이후 - click 호출 시점의
 // this를 통해 관찰한다.)
-function spyAnchorClick(): { anchor: () => HTMLAnchorElement | null } {
+// B2 가드: appendChild/remove가 통째로 삭제돼도 createObjectURL/revokeObjectURL 호출
+// 여부만으로는 안 걸린다 — click 시점에 DOM에 연결돼 있었는지(isConnected)를 기록해 둔다.
+function spyAnchorClick(): {
+  anchor: () => HTMLAnchorElement | null
+  wasConnectedAtClick: () => boolean
+} {
   let lastAnchor: HTMLAnchorElement | null = null
+  let connectedAtClick = false
   clickSpy = vi
     .spyOn(HTMLAnchorElement.prototype, 'click')
     .mockImplementation(function (this: HTMLAnchorElement) {
       lastAnchor = this
+      connectedAtClick = this.isConnected
     })
-  return { anchor: () => lastAnchor }
+  return { anchor: () => lastAnchor, wasConnectedAtClick: () => connectedAtClick }
 }
 
 function findAttachmentChip(w: ReturnType<typeof mount>, fileName = '요구사항.pdf') {
@@ -136,7 +143,7 @@ describe('task detail — attachments', () => {
     const createObjectURL = vi.fn(() => 'blob:mock')
     const revokeObjectURL = vi.fn()
     Object.assign(URL, { createObjectURL, revokeObjectURL })
-    const { anchor } = spyAnchorClick()
+    const { anchor, wasConnectedAtClick } = spyAnchorClick()
 
     useApiMock.mockClear()
     const blob = new Blob(['pdf'])
@@ -157,11 +164,19 @@ describe('task detail — attachments', () => {
     expect(anchor()?.download).toBe('요구사항.pdf')
     expect(anchor()?.href).toContain('blob:mock')
 
+    // B2 가드(appendChild): click 시점에 앵커가 실제로 document.body에 붙어 있어야 한다 —
+    // appendChild가 삭제돼도 createObjectURL/download 관련 assertion은 안 걸린다.
+    expect(wasConnectedAtClick()).toBe(true)
+    expect(anchor()?.parentNode?.nodeName).toBe('BODY')
+
     // B2: object URL을 click과 같은 tick에 revoke하면 일부 브라우저에서 다운로드가 시작되기
     // 전에 끊긴다(Chromium 41380177, Firefox 1282407) — click 직후엔 아직 revoke 전이어야 한다.
     expect(revokeObjectURL).not.toHaveBeenCalled()
     await new Promise((r) => setTimeout(r, 0))
     expect(revokeObjectURL).toHaveBeenCalledWith('blob:mock')
+    // B2 가드(remove): revoke 이후 앵커가 DOM에서 실제로 제거돼야 한다 — a.remove()가
+    // 삭제돼도 revoke 호출 여부 assertion만으론 안 걸린다.
+    expect(anchor()?.isConnected).toBe(false)
   })
 
   it('다운로드 실패 시(JSON 본문) 서버 메시지로 알림을 띄우고 객체 URL을 생성하지 않는다', async () => {

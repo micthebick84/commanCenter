@@ -29,11 +29,23 @@ public record InterviewClaimResponse(
         String model,
         String effort,
         /** 세션 누적 SHADOW 비용. 워커가 CostGuard를 이 값으로 시드해 세션 전체 누적 가드로 쓴다(단일 턴 아님). */
-        double totalCostUsd
+        double totalCostUsd,
+        /** 등록 시 업로드된 첨부(절대경로 — work_dir과 동일한 단일 호스트 전제). 항상 non-null. */
+        List<AttachmentRef> attachments
 ) {
+    /** 어느 경로로 생성돼도 non-null 계약 유지 (스펙 §5.4). */
+    public InterviewClaimResponse {
+        attachments = attachments == null ? List.of() : List.copyOf(attachments);
+    }
+
     public record Turn(int seq, String role, String kind, String content, Integer replyToSeq) {}
 
-    public static InterviewClaimResponse of(InterviewSession s, List<InterviewTurn> turns) {
+    /** contentType만 null 가능 — TS 타입도 string | null (스펙 §5.4). */
+    public record AttachmentRef(long id, String fileName, String absolutePath,
+                                String contentType, long sizeBytes) {}
+
+    public static InterviewClaimResponse of(InterviewSession s, List<InterviewTurn> turns,
+                                            List<AttachmentRef> attachments) {
         String lastAnswer = null;
         Integer replyToSeq = null;
         for (int i = turns.size() - 1; i >= 0; i--) {
@@ -53,6 +65,6 @@ public record InterviewClaimResponse(
                 s.getClaudeSessionId(), s.getCurrentPhase(), s.getWorkDir(),
                 lastAnswer, replyToSeq,
                 s.getMcpsExtra() == null ? List.of() : List.copyOf(s.getMcpsExtra()),
-                mapped, s.getModel(), s.getEffort(), totalCostUsd);
+                mapped, s.getModel(), s.getEffort(), totalCostUsd, attachments);
     }
 }

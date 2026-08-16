@@ -45,11 +45,16 @@ class TaskAttachmentApiIntegrationTest {
     @Autowired private ObjectMapper json;
     @Autowired private TaskRepository taskRepo;
     @Autowired private TaskAttachmentRepository attachmentRepo;
+    @Autowired private com.hamonsoft.netismaker.service.TaskService taskService;
+    @Autowired private com.hamonsoft.netismaker.repository.InterviewSessionRepository sessionRepo;
     @Value("${app.attachment.dir}") private String attachmentDir;
     @Value("${app.worker.api-key}") private String apiKey;
 
     @BeforeEach void clean() throws Exception {
         attachmentRepo.deleteAll();
+        // interview_session이 task_id FK를 참조하므로 taskRepo.deleteAll()보다 먼저 지워야
+        // 한다 — 안 그러면 claim 테스트(task-7)가 만든 세션이 남아 다음 테스트에서 FK 위반이 난다.
+        sessionRepo.deleteAll();
         taskRepo.deleteAll();
         FileSystemUtils.deleteRecursively(Path.of(attachmentDir));
     }
@@ -242,5 +247,34 @@ class TaskAttachmentApiIntegrationTest {
                 .andExpect(status().isCreated())
                 .andReturn().getResponse().getContentAsString(StandardCharsets.UTF_8);
         return json.readTree(responseJson).get("id").asLong();
+    }
+
+    /**
+     * 워커 claim 페이로드가 실제로 절대경로를 나르는지 확인 (task-7). registerWithFile()로
+     * 등록 → approve로 인터뷰 세션을 QUEUED로 만든 뒤 /worker/interviews/claim이 그 세션을
+     * 잡으면서 attachments[0].absolutePath가 디스크상의 실제 파일을 가리켜야 한다.
+     */
+    @Test
+    void 승인_후_워커_claim에_첨부_절대경로가_실린다() throws Exception {
+        long[] ids = registerWithFile();
+        taskService.approve(ids[0], "admin", null);   // AWAITING_APPROVAL → 인터뷰 세션 생성
+
+        MvcResult result = mvc.perform(post("/worker/interviews/claim")
+                        .header("X-Worker-API-Key", apiKey)
+                        .param("workerId", "iw-1"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.attachments[0].fileName").value("요구사항.txt"))
+                .andExpect(jsonPath("$.attachments[0].absolutePath").value(
+                        org.hamcrest.Matchers.endsWith("task-" + ids[0] + "/1-요구사항.txt")))
+                .andReturn();
+
+        // 문자열 단언만으론 워커가 실제로 열 수 있는 경로인지 증명하지 못한다 — 진짜
+        // 절대경로(파일시스템 루트에서 시작)이고 디스크상에 실존하는지까지 확인 (task-7 self-review).
+        String absolutePath = json.readTree(result.getResponse().getContentAsString(StandardCharsets.UTF_8))
+                .at("/attachments/0/absolutePath").asText();
+        Path path = Path.of(absolutePath);
+        assertThat(path.isAbsolute()).isTrue();
+        assertThat(Files.exists(path)).isTrue();
+        assertThat(Files.readString(path, StandardCharsets.UTF_8)).isEqualTo("내용");
     }
 }

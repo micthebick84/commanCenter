@@ -19,6 +19,7 @@ export const freshClaim: InterviewClaimResponse = {
   effort: 'high',
   // 신규 claim은 누적 비용 0. 누적 가드 시드 검증은 테스트에서 override.
   totalCostUsd: 0,
+  attachments: [],
 };
 
 export const resumeClaim: InterviewClaimResponse = {
@@ -31,5 +32,25 @@ export const resumeClaim: InterviewClaimResponse = {
   turns: [
     { seq: 1, role: 'assistant', kind: 'question', content: 'Which columns?', replyToSeq: null },
     { seq: 2, role: 'user', kind: 'answer', content: 'Yes, scope it to the visible columns only.', replyToSeq: 1 },
+  ],
+};
+
+export const freshClaimWithAttachments: InterviewClaimResponse = {
+  ...freshClaim,
+  attachments: [
+    {
+      id: 1,
+      fileName: '요구사항.pdf',
+      absolutePath: '/Users/micthebick/netis-maker/attachments/task-7/1-요구사항.pdf',
+      contentType: 'application/pdf',
+      sizeBytes: 1234567,
+    },
+    {
+      id: 2,
+      fileName: '화면시안.png',
+      absolutePath: '/Users/micthebick/netis-maker/attachments/task-7/2-화면시안.png',
+      contentType: null,
+      sizeBytes: 2048,
+    },
   ],
 };

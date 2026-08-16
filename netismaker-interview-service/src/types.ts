@@ -14,6 +14,16 @@ export interface McpSpec {
   transport: string;
 }
 
+/** Java InterviewClaimResponse.AttachmentRef — 등록 시 업로드된 첨부 1건. */
+export interface AttachmentRef {
+  id: number;
+  fileName: string;
+  /** 공유 FS 절대경로 (workDir과 동일한 단일 호스트 전제) — 에이전트가 Read로 직접 읽는다. */
+  absolutePath: string;
+  contentType: string | null;
+  sizeBytes: number;
+}
+
 /**
  * Returned by POST /worker/interviews/claim?workerId=... — the Java `InterviewClaimResponse`
  * record. All pending state lives here — never in memory.
@@ -46,6 +56,11 @@ export interface InterviewClaimResponse {
   /** 세션 누적 SHADOW 비용(이전 턴들까지). CostGuard를 이 값으로 시드해 가드가 세션 전체에 걸쳐
    *  누적되도록 한다(단일 턴이 아니라). Java는 NOT NULL — 신규 claim은 0. */
   totalCostUsd: number;
+  /**
+   * 등록 시 업로드된 첨부. 신버전 Java는 항상 []-이상을 보내지만 구버전 백엔드는 필드
+   * 자체가 없다 — 읽는 쪽은 무조건 Array.isArray 가드 (스펙 §7/§11, mcpsExtra 선례).
+   */
+  attachments?: AttachmentRef[];
 }
 
 /** Body for POST /worker/interviews/{id}/question */

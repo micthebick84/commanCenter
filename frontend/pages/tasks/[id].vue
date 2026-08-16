@@ -56,6 +56,14 @@ interface EnvVar {
   secret: boolean
 }
 
+interface AttachmentMeta {
+  id: number
+  fileName: string
+  contentType: string | null
+  sizeBytes: number
+  createdAt: string
+}
+
 interface TaskResponse {
   id: number
   githubRepo: string
@@ -81,6 +89,7 @@ interface TaskResponse {
   design: DesignView | null
   implementation: ImplementationView | null
   deployment: DeploymentView | null
+  attachments: AttachmentMeta[]
 }
 
 const route = useRoute()
@@ -311,6 +320,30 @@ function statusClass(status: string) {
     }[status] || 'status-chip'
   )
 }
+
+function formatSize(bytes: number): string {
+  if (bytes >= 1024 * 1024) return `${(bytes / 1024 / 1024).toFixed(1)}MB`
+  if (bytes >= 1024) return `${Math.round(bytes / 1024)}KB`
+  return `${bytes}B`
+}
+
+// 반드시 useApi 경유 — 전역 $fetch는 Authorization 미첨부로 401 (스펙 §8.2).
+// 파일명은 응답 헤더가 아니라 메타 fileName 사용 ($fetch는 헤더를 안 돌려준다).
+async function downloadAttachment(att: AttachmentMeta) {
+  try {
+    const blob = await useApi<Blob>(`/api/tasks/${taskId.value}/attachments/${att.id}`, {
+      responseType: 'blob',
+    })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = att.fileName
+    a.click()
+    URL.revokeObjectURL(url)
+  } catch (e: any) {
+    $q.notify({ type: 'negative', message: e?.data?.message ?? '다운로드 실패' })
+  }
+}
 </script>
 
 <template>
@@ -362,6 +395,25 @@ function statusClass(status: string) {
             class="q-mr-xs q-mb-xs"
           >
             <q-tooltip>{{ m.url }}</q-tooltip>
+          </q-chip>
+        </q-card-section>
+        <q-separator v-if="task.attachments && task.attachments.length" />
+        <q-card-section v-if="task.attachments && task.attachments.length">
+          <div class="text-caption q-mb-xs">첨부파일</div>
+          <q-chip
+            v-for="a in task.attachments"
+            :key="a.id"
+            clickable
+            color="blue-grey-1"
+            text-color="blue-grey-9"
+            icon="attach_file"
+            size="sm"
+            dense
+            :label="`${a.fileName} (${formatSize(a.sizeBytes)})`"
+            class="q-mr-xs q-mb-xs"
+            @click="downloadAttachment(a)"
+          >
+            <q-tooltip>클릭하여 다운로드</q-tooltip>
           </q-chip>
         </q-card-section>
         <q-separator />

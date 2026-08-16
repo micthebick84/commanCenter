@@ -1,0 +1,167 @@
+import { mount, flushPromises } from '@vue/test-utils'
+import { describe, it, expect, vi, afterEach } from 'vitest'
+import { defineComponent, h } from 'vue'
+import { QLayout, QPageContainer } from 'quasar'
+import TaskDetail from '../pages/tasks/[id].vue'
+import { useApiMock } from './mocks/nuxt'
+
+// useRoute는 Nuxt 자동 임포트 — test/setup.ts의 다른 auto-import처럼 전역 스텁으로 제공
+// (vi.mock('vue-router')는 SFC가 명시 임포트할 때만 듣는다)
+;(globalThis as any).useRoute = () => ({ params: { id: '42' } })
+
+const PageWrapper = defineComponent({
+  setup() {
+    return () =>
+      h(QLayout, { view: 'hHh lpR fFf' }, {
+        default: () => h(QPageContainer, {}, { default: () => h(TaskDetail) }),
+      })
+  },
+})
+
+// q-breadcrumbs-el의 :to가 router-link를 요구 — 라우터 없이 마운트하므로 스텁
+const mountOpts = {
+  attachTo: document.body,
+  global: { stubs: { 'router-link': { template: '<a><slot /></a>' } } },
+}
+
+const taskFixture = {
+  id: 42,
+  githubRepo: 'acme/widgets',
+  repoAlias: null,
+  githubBranch: 'main',
+  title: '제목',
+  description: '설명',
+  status: 'AWAITING_APPROVAL',
+  statusLabel: '승인대기',
+  requesterId: 1,
+  retryCount: 0,
+  maxRetry: 3,
+  failureReason: null,
+  mcpsExtra: [],
+  envVars: [],
+  interviewSessionId: null,
+  createdAt: '2026-08-16T00:00:00Z',
+  updatedAt: '2026-08-16T00:00:00Z',
+  model: 'claude-opus-5',
+  effort: 'high',
+  designRequested: false,
+  analysis: null,
+  design: null,
+  implementation: null,
+  deployment: null,
+  attachments: [
+    {
+      id: 7,
+      fileName: '요구사항.pdf',
+      contentType: 'application/pdf',
+      sizeBytes: 1536,
+      createdAt: '2026-08-16T00:00:00Z',
+    },
+  ],
+}
+
+// Task 9(tasks-form-attachments.spec.ts)의 구조 선례를 따른다: 각 테스트 바디가 아니라
+// 모듈 레벨 afterEach에 정리 로직을 모아, 실패한 테스트가 다음 테스트에 마운트/스파이를
+// 흘리지 않게 한다.
+let currentWrapper: ReturnType<typeof mount> | null = null
+let clickSpy: ReturnType<typeof vi.spyOn> | null = null
+
+afterEach(() => {
+  currentWrapper?.unmount()
+  currentWrapper = null
+  clickSpy?.mockRestore()
+  clickSpy = null
+})
+
+async function mountPage(task: unknown = taskFixture) {
+  useApiMock.mockResolvedValue(task)
+  const w = mount(PageWrapper, mountOpts)
+  currentWrapper = w
+  await flushPromises()
+  return w
+}
+
+// a.click()을 가로채 실제 네비게이션 없이 생성된 앵커(download/href)를 검사할 수 있게 한다.
+// (앵커는 document에 append되지 않으므로 DOM 쿼리로는 못 잡는다 — 유일한 관찰 지점은 click 호출 시점의 this)
+function spyAnchorClick(): { anchor: () => HTMLAnchorElement | null } {
+  let lastAnchor: HTMLAnchorElement | null = null
+  clickSpy = vi
+    .spyOn(HTMLAnchorElement.prototype, 'click')
+    .mockImplementation(function (this: HTMLAnchorElement) {
+      lastAnchor = this
+    })
+  return { anchor: () => lastAnchor }
+}
+
+function findAttachmentChip(w: ReturnType<typeof mount>) {
+  return w.findAll('.q-chip').find((c) => c.text().includes('요구사항.pdf'))
+}
+
+describe('task detail — attachments', () => {
+  it('첨부 파일명과 크기를 렌더링한다', async () => {
+    const w = await mountPage()
+
+    expect(w.text()).toContain('첨부파일')
+    expect(w.text()).toContain('요구사항.pdf')
+    expect(w.text()).toContain('2KB')
+  })
+
+  it('클릭하면 useApi로 blob 다운로드를 호출하고 메타 fileName으로 저장한다', async () => {
+    const w = await mountPage()
+
+    const createObjectURL = vi.fn(() => 'blob:mock')
+    const revokeObjectURL = vi.fn()
+    Object.assign(URL, { createObjectURL, revokeObjectURL })
+    const { anchor } = spyAnchorClick()
+
+    useApiMock.mockClear()
+    useApiMock.mockResolvedValue(new Blob(['pdf']))
+    const chip = findAttachmentChip(w)
+    expect(chip).toBeTruthy()
+    await chip!.trigger('click')
+    await flushPromises()
+
+    expect(useApiMock).toHaveBeenCalledWith('/api/tasks/42/attachments/7', {
+      responseType: 'blob',
+    })
+    expect(createObjectURL).toHaveBeenCalledTimes(1)
+    // 뮤테이션 가드: a.download = att.fileName이 지워지면(파일명 유실) createObjectURL
+    // 호출 여부만으로는 걸리지 않는다 — 실제로 지정된 다운로드 파일명을 확인한다.
+    expect(anchor()?.download).toBe('요구사항.pdf')
+    expect(anchor()?.href).toContain('blob:mock')
+    // object URL 누수 가드
+    expect(revokeObjectURL).toHaveBeenCalledWith('blob:mock')
+  })
+
+  it('다운로드 실패 시 실패 알림을 띄우고 객체 URL을 생성하지 않는다', async () => {
+    const w = await mountPage()
+
+    const createObjectURL = vi.fn(() => 'blob:mock')
+    Object.assign(URL, { createObjectURL })
+
+    useApiMock.mockClear()
+    useApiMock.mockRejectedValue({ data: { message: '첨부파일을 찾을 수 없습니다' } })
+
+    const vm = w.findComponent(TaskDetail).vm as unknown as {
+      $q: { notify: (opts: unknown) => void }
+    }
+    const notifySpy = vi.spyOn(vm.$q, 'notify')
+
+    const chip = findAttachmentChip(w)
+    expect(chip).toBeTruthy()
+    await chip!.trigger('click')
+    await flushPromises()
+
+    expect(notifySpy).toHaveBeenCalledWith({
+      type: 'negative',
+      message: '첨부파일을 찾을 수 없습니다',
+    })
+    expect(createObjectURL).not.toHaveBeenCalled()
+  })
+
+  it('첨부가_없으면_섹션을_렌더링하지_않는다', async () => {
+    const w = await mountPage({ ...taskFixture, attachments: [] })
+
+    expect(w.text()).not.toContain('첨부파일')
+  })
+})

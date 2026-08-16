@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.hamonsoft.netismaker.dto.TaskCreateRequest;
 import com.hamonsoft.netismaker.entity.Task;
 import com.hamonsoft.netismaker.repository.TaskAnalysisRepository;
+import com.hamonsoft.netismaker.repository.TaskAttachmentRepository;
 import com.hamonsoft.netismaker.repository.TaskDesignRepository;
 import com.hamonsoft.netismaker.repository.TaskRepository;
 import com.hamonsoft.netismaker.repository.TaskStatusHistoryRepository;
@@ -24,6 +25,8 @@ class TaskServiceRepoCatalogTest {
     private McpCatalogService mcpCatalogService;
     private RepoCatalogService repoCatalogService;
     private InterviewService interviewService;
+    private TaskAttachmentRepository attachmentRepo;
+    private AttachmentStorage attachmentStorage;
     private TaskService service;
 
     @BeforeEach
@@ -35,8 +38,10 @@ class TaskServiceRepoCatalogTest {
         mcpCatalogService = mock(McpCatalogService.class);
         repoCatalogService = mock(RepoCatalogService.class);
         interviewService = mock(InterviewService.class);
+        attachmentRepo = mock(TaskAttachmentRepository.class);
+        attachmentStorage = mock(AttachmentStorage.class);
         service = new TaskService(taskRepo, analysisRepo, designRepo, historyRepo, mcpCatalogService,
-                repoCatalogService, new ObjectMapper(), interviewService);
+                repoCatalogService, new ObjectMapper(), interviewService, attachmentRepo, attachmentStorage);
         ReflectionTestUtils.setField(service, "userConcurrentLimit", 5);
         ReflectionTestUtils.setField(service, "maxRetry", 3);
         when(taskRepo.save(any())).thenAnswer(i -> {

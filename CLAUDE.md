@@ -138,7 +138,8 @@ PR 본문/브랜치 prefix/timeout은 `application-worker.yml`의 `netis-maker.w
 배포된 앱을 외부에서 `https://task-{id}.micthebick.dev`로 접속. 로컬 **Traefik**(Docker provider) 리버스 프록시 + Cloudflare Tunnel 와일드카드 ingress.
 
 - **인프라(1회 셋업)**: `./scripts/setup-public-deploy.sh` — `netis-deploy` 도커 네트워크 + Traefik(`traefik:v3.7`, 호스트 `:18080`) 기동. cloudflared `~/.cloudflared/config.yml`에 `*.micthebick.dev → http://localhost:18080` ingress + 와일드카드 DNS CNAME(`*.micthebick.dev` → 터널). **이미 라이브**(2026-06-29 외부 스모크 통과).
-- **켜기**: `deploy.public-access.enabled=true`(또는 env `NETIS_MAKER_WORKER_DEPLOY_PUBLIC_ACCESS_ENABLED=true`) + 워커 재기동. OFF면 기존 `http://localhost:{hostPort}` 동작 그대로(회귀 없음). 켜면 워커가 배포 컨테이너에 `--network netis-deploy` + Traefik Host 라벨 부착, `deploy_url`=공개 URL.
+- **켜기**: `./scripts/start-all.sh`가 인프라(`netis-deploy` 네트워크 + `traefik` 컨테이너)를 감지해 **자동으로 `DEPLOY_PUBLIC_ACCESS_ENABLED=true`를 워커에 주입**한다(기동 배너에 `공개 배포 주소=ON/OFF` 표시). 명시 override는 `DEPLOY_PUBLIC_ACCESS_ENABLED=true|false ./scripts/start-all.sh`. 수동으로 `./gradlew bootRun --args='--spring.profiles.active=worker'`를 띄우면 yml 기본값 `false`이므로 env를 직접 줘야 한다. OFF면 기존 `http://localhost:{hostPort}` 동작 그대로(회귀 없음). 켜면 워커가 배포 컨테이너에 `--network netis-deploy` + Traefik Host 라벨 부착, `deploy_url`=공개 URL.
+- **⚠️ 이 값은 배포 시점의 워커 프로세스 env로 결정된다.** OFF 상태 워커가 배포하면 `deploy_url`에 `http://localhost:{port}`가 **DB에 박히고**, 컨테이너에 Traefik 라벨/네트워크가 안 붙어 공개 URL이 404가 된다. 고치려면 워커를 ON으로 재기동한 뒤 **재배포**해야 한다(URL 문자열만 수정으론 라우팅이 안 생김).
 - **Traefik 라이프사이클**: `./scripts/start-traefik.sh`(기동), `docker rm -f traefik`(정지). `stop-all.sh`는 Traefik **안 멈춤**(`--restart unless-stopped` 장수 프록시 — 의도적). `status.sh`가 실행 여부 표시.
 - **⚠️ Traefik 버전**: docker provider가 데몬 API와 버전 호환돼야 함. `v3.1`은 Docker Engine 29와 비호환(provider가 컨테이너 디스커버리 실패→Host 라우팅 404). 현재 `v3.7` 핀. Engine 업글 시 Traefik도 맞춰 올릴 것.
 - **undeploy**: `docker rm -f` 시 Traefik 라우트 자동 소멸(별도 정리 불필요).

@@ -29,6 +29,20 @@ REPOS_DIR="${REPOS_DIR:-$HOME/netis-maker/repos}"
 CORS_ALLOWED_ORIGINS="${CORS_ALLOWED_ORIGINS:-http://localhost:3001}"
 CLAUDE_CLI="${CLAUDE_CLI:-$(command -v claude || true)}"
 
+# 공개 배포 주소(task-N.micthebick.dev) 활성 여부.
+# 기본 auto = 인프라(netis-deploy 네트워크 + traefik 컨테이너)가 둘 다 있으면 켬.
+# 인프라 없이 켜면 docker run 이 --network 없음으로 실패하므로 자동으로 끈다.
+# true/false 로 명시 override 가능.
+DEPLOY_PUBLIC_ACCESS_ENABLED="${DEPLOY_PUBLIC_ACCESS_ENABLED:-auto}"
+if [ "$DEPLOY_PUBLIC_ACCESS_ENABLED" = "auto" ]; then
+  if docker network inspect netis-deploy >/dev/null 2>&1 \
+     && docker ps --format '{{.Names}}' 2>/dev/null | grep -qx traefik; then
+    DEPLOY_PUBLIC_ACCESS_ENABLED=true
+  else
+    DEPLOY_PUBLIC_ACCESS_ENABLED=false
+  fi
+fi
+
 GRADLE="./gradlew"
 
 # 이미 떠 있는지 검사 후 기동하는 헬퍼
@@ -53,6 +67,11 @@ echo "netisMaker 스택 기동 (워커 ${WORKERS}개)"
 echo "  ROOT=$ROOT"
 echo "  API_BASE_URL=$API_BASE_URL  REPOS_DIR=$REPOS_DIR"
 echo "  CLAUDE_CLI=${CLAUDE_CLI:-(auto-detect)}"
+if [ "$DEPLOY_PUBLIC_ACCESS_ENABLED" = "true" ]; then
+  echo "  공개 배포 주소=ON (deploy_url=https://task-N.micthebick.dev)"
+else
+  echo "  공개 배포 주소=OFF (deploy_url=http://localhost:{port} — traefik/netis-deploy 미탐지)"
+fi
 echo ""
 
 # ── 1) 백엔드 API ──────────────────────────────────────────────
@@ -90,6 +109,7 @@ for n in $(seq 1 "$WORKERS"); do
     API_BASE_URL="$API_BASE_URL" \
     WORKER_API_KEY="$WORKER_API_KEY" \
     REPOS_DIR="$REPOS_DIR" \
+    DEPLOY_PUBLIC_ACCESS_ENABLED="$DEPLOY_PUBLIC_ACCESS_ENABLED" \
     ${CLAUDE_CLI:+CLAUDE_CLI="$CLAUDE_CLI"} \
     "$GRADLE" bootRun --args='--spring.profiles.active=worker' -q > "$logf" 2>&1 &
   echo $! > "$pidf"

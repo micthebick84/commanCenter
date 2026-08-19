@@ -166,7 +166,10 @@ netis-maker:
       reconcile-enabled: ${DEPLOY_RECONCILE_ENABLED:true}
       reconcile-interval-seconds: ${DEPLOY_RECONCILE_INTERVAL_SEC:300}
       public-access:
-        enabled: false           # true 로 켜면 공개 서브도메인 라우팅 활성
+        # true 로 켜면 공개 서브도메인 라우팅 활성 (deploy_url=https://task-N.{base-domain}).
+        # 기본 false = 인프라(Traefik + netis-deploy 네트워크) 없는 환경에서도 안전.
+        # start-all.sh 는 인프라 존재를 감지해 자동으로 true 를 주입한다.
+        enabled: ${DEPLOY_PUBLIC_ACCESS_ENABLED:false}
         base-domain: micthebick.dev
         network: netis-deploy
       dockerfile-prompt-template: |

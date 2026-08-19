@@ -38,7 +38,7 @@ jobs:
           retention-days: 7
 
   frontend:
-    name: Frontend (vitest + nuxt build)
+    name: Frontend (vitest + vue-tsc + nuxt build)
     runs-on: ubuntu-latest
     timeout-minutes: 20
     defaults:
@@ -53,6 +53,10 @@ jobs:
           cache-dependency-path: frontend/package-lock.json
       - run: npm ci
       - run: npm test
+      # nuxi build 는 타입체크를 하지 않는다 — 타입 오류만으로는 빌드가 통과하므로 별도 게이트.
+      # .nuxt(생성물)에 의존하는데 npm ci 의 postinstall(nuxi prepare)이 만들어 준다.
+      - name: Type check
+        run: npm run typecheck
       - name: Production build
         run: npm run build
 

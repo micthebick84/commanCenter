@@ -12,6 +12,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
+import java.util.Locale;
 import java.util.Set;
 
 /**
@@ -83,7 +84,9 @@ public class AttachmentStorage {
     private static String extensionOf(String name) {
         if (name == null) return "";
         int dot = name.lastIndexOf('.');
-        return dot < 0 ? "" : name.substring(dot + 1).toLowerCase();
+        // Locale.ROOT 고정 — 기본 로케일이 터키어면 'I'가 점 없는 'ı'로 내려가
+        // "MSI"/"PIF"/"DYLIB"가 블록리스트와 어긋나 통과한다.
+        return dot < 0 ? "" : name.substring(dot + 1).toLowerCase(Locale.ROOT);
     }
 
     /**
@@ -98,9 +101,11 @@ public class AttachmentStorage {
         base = base.replace("..", "");
         base = base.replaceAll("\\p{Cntrl}", "");
         base = base.trim();
-        // 끝의 마침표는 제거 — "evil.sh." 처럼 확장자를 감추는 형태를 없애고, Windows에서
-        // 실제 파일명이 되지 못하는 표기도 정리한다.
-        while (base.endsWith(".")) base = base.substring(0, base.length() - 1);
+        // 끝의 공백·마침표는 함께 제거 — "evil.sh." 처럼 확장자를 감추는 형태를 없애고,
+        // Windows에서 실제 파일명이 되지 못하는 표기도 정리한다. 마침표만 떼면 그 밑에 깔린
+        // 공백이 다시 꼬리로 드러나("evil.exe ." → "evil.exe ") 확장자가 "exe "가 되어
+        // 블록리스트를 빠져나가므로, 둘을 한 번에 제거해야 한다.
+        base = base.replaceAll("[\\s.]+$", "");
         base = truncateTailToBytes(base, MAX_FILENAME_BYTES);
         if (base.isBlank()) base = "file";
         return base;

@@ -9,6 +9,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
+import java.util.Locale;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
@@ -103,6 +104,40 @@ class AttachmentStorageTest {
         차단됨("evil.sh.");
     }
 
+    /*
+     * 공백과 마침표는 서로를 되살린다. trim() 을 한 번 돌리고 나서 마침표를 떼면 그 밑에 있던
+     * 공백이 다시 꼬리로 드러나는데, 다시 trim 하지 않으면 그대로 저장된다("evil.exe ").
+     * 확장자가 "exe "(공백 포함)라 블록리스트를 빠져나가고, 저장명 끝 공백·마침표를 떼는
+     * Windows에서 내려받으면 evil.exe 가 된다.
+     */
+    @Test
+    void 마침표와_공백을_섞어_확장자를_감춰도_400() {
+        차단됨("evil.exe .");
+    }
+
+    @Test
+    void 마침표와_공백이_여러_번_섞여도_400() {
+        차단됨("evil.sh . .");
+    }
+
+    /*
+     * 확장자 소문자화가 기본 로케일을 따르면 안 된다. 터키어 로케일에서 'I'.toLowerCase() 는
+     * 점 없는 'ı' 라, 대문자로 올린 "MSI"/"PIF"/"DYLIB" 가 블록리스트("msi"/"pif"/"dylib")와
+     * 어긋나 그대로 통과한다. 운영자 JVM 로케일이 무엇이든 판정이 같아야 한다.
+     */
+    @Test
+    void 터키어_로케일에서도_차단_확장자를_막는다() {
+        Locale prev = Locale.getDefault();
+        try {
+            Locale.setDefault(Locale.forLanguageTag("tr-TR"));
+            차단됨("evil.MSI");
+            차단됨("evil.PIF");
+            차단됨("lib.DYLIB");
+        } finally {
+            Locale.setDefault(prev);
+        }
+    }
+
     @Test
     void 정상_파일들은_통과한다() {
         storage().validate(List.of(file("요구사항.pdf", 100), file("화면.png", 100)));
@@ -122,6 +157,16 @@ class AttachmentStorageTest {
         String longName = "a".repeat(300) + ".pdf";
         String out = AttachmentStorage.sanitize(longName);
         assertThat(out).hasSize(240).endsWith(".pdf");
+    }
+
+    /** 꼬리의 공백·마침표는 한 번씩 번갈아 떼면 잔여물이 남는다 — 고정점까지 함께 제거해야 한다. */
+    @Test
+    void sanitize는_꼬리의_공백과_마침표를_섞여_있어도_모두_제거한다() {
+        assertThat(AttachmentStorage.sanitize("evil.exe .")).isEqualTo("evil.exe");
+        assertThat(AttachmentStorage.sanitize("evil.sh . .")).isEqualTo("evil.sh");
+        assertThat(AttachmentStorage.sanitize("보고서.pdf . ")).isEqualTo("보고서.pdf");
+        // 앞쪽 공백 제거(기존 trim 동작)는 그대로 유지돼야 한다.
+        assertThat(AttachmentStorage.sanitize("  요구사항.pdf")).isEqualTo("요구사항.pdf");
     }
 
     @Test

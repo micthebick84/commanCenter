@@ -6,6 +6,7 @@ import org.springframework.http.HttpStatus;
 import org.springframework.mock.web.MockMultipartFile;
 
 import java.nio.charset.StandardCharsets;
+import java.time.Duration;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
@@ -14,6 +15,7 @@ import java.util.Locale;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.junit.jupiter.api.Assertions.assertTimeoutPreemptively;
 
 class AttachmentStorageTest {
 
@@ -167,6 +169,23 @@ class AttachmentStorageTest {
         assertThat(AttachmentStorage.sanitize("보고서.pdf . ")).isEqualTo("보고서.pdf");
         // 앞쪽 공백 제거(기존 trim 동작)는 그대로 유지돼야 한다.
         assertThat(AttachmentStorage.sanitize("  요구사항.pdf")).isEqualTo("요구사항.pdf");
+    }
+
+    /*
+     * 꼬리 제거는 입력 길이에 선형이어야 한다. 정규식 "[\s.]+$" 는 매치에 실패하면 시작 위치마다
+     * 런 전체를 다시 훑어 2차식으로 튄다 — 공백이 긴 파일명 하나가 요청 스레드를 수 초 점유한다.
+     * multipart part 헤더 상한(10,240바이트) 안에서 만들 수 있는 길이라 실제로 도달 가능하고,
+     * 첨부 1건당 sanitize 가 3회(TaskService:121,127,129) × 최대 10개 = 30회 호출돼 증폭된다.
+     * 아래 길이에서 2차식 구현은 수십 초가 걸려 타임아웃에 걸리고, 선형 구현은 밀리초 단위다.
+     */
+    @Test
+    void sanitize는_긴_공백_런에도_선형_시간이다() {
+        String hostile = "a" + " ".repeat(100_000) + "x.pdf";
+        assertTimeoutPreemptively(Duration.ofSeconds(5), () -> {
+            for (int i = 0; i < 30; i++) AttachmentStorage.sanitize(hostile);
+        });
+        // 꼬리가 아닌 중간 공백은 그대로 보존된다(자르기 전 결과 확인).
+        assertThat(AttachmentStorage.sanitize("a" + " ".repeat(50) + "x.pdf")).endsWith("x.pdf");
     }
 
     @Test

@@ -105,10 +105,35 @@ public class AttachmentStorage {
         // Windows에서 실제 파일명이 되지 못하는 표기도 정리한다. 마침표만 떼면 그 밑에 깔린
         // 공백이 다시 꼬리로 드러나("evil.exe ." → "evil.exe ") 확장자가 "exe "가 되어
         // 블록리스트를 빠져나가므로, 둘을 한 번에 제거해야 한다.
-        base = base.replaceAll("[\\s.]+$", "");
+        base = stripTrailingBlanksAndDots(base);
         base = truncateTailToBytes(base, MAX_FILENAME_BYTES);
         if (base.isBlank()) base = "file";
         return base;
+    }
+
+    /**
+     * 꼬리의 공백·마침표를 제거한다. 정규식 "[\s.]+$" 와 결과는 같지만 시간이 선형이다.
+     *
+     * 정규식을 쓰면 안 되는 이유: 매치에 실패할 때마다 시작 위치를 한 칸 옮겨 런 전체를 다시
+     * 훑어 2차식이 된다. 파일명 길이는 multipart part 헤더 상한(10,240바이트)까지 열려 있고
+     * 첨부 1건당 sanitize 가 3회 호출되므로(TaskService: validate/relativePath/저장명), 최대
+     * 10개 첨부면 30회 — 공백을 길게 채운 요청 하나로 워커 스레드를 수 초 점유할 수 있다.
+     *
+     * 문자 집합은 Java 정규식 \s 와 동일하게 유지한다([ \t\n\x0B\f\r]).
+     * NBSP(U+00A0) 같은 비ASCII 공백은 여기서도, \p{Cntrl} 치환에서도 걸리지 않는다 —
+     * 수정 전부터 같았고 이 메서드로 좁히거나 넓히지 않는다(후속 하드닝 대상).
+     */
+    private static String stripTrailingBlanksAndDots(String s) {
+        int end = s.length();
+        while (end > 0) {
+            char c = s.charAt(end - 1);
+            if (c == '.' || c == ' ' || c == '\t' || c == '\n' || c == 0x0B || c == '\f' || c == '\r') {
+                end--;
+            } else {
+                break;
+            }
+        }
+        return end == s.length() ? s : s.substring(0, end);
     }
 
     /** 파일명 상한(바이트). ext4/xfs는 255바이트 — "{ordinal}-" 접두사 여유를 두고 240. */

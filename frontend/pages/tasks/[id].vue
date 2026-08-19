@@ -56,6 +56,14 @@ interface EnvVar {
   secret: boolean
 }
 
+interface AttachmentMeta {
+  id: number
+  fileName: string
+  contentType: string | null
+  sizeBytes: number
+  createdAt: string
+}
+
 interface TaskResponse {
   id: number
   githubRepo: string
@@ -65,7 +73,7 @@ interface TaskResponse {
   description: string
   status: string
   statusLabel: string
-  requesterId: number
+  requesterId: string
   retryCount: number
   maxRetry: number
   failureReason: string | null
@@ -81,6 +89,7 @@ interface TaskResponse {
   design: DesignView | null
   implementation: ImplementationView | null
   deployment: DeploymentView | null
+  attachments: AttachmentMeta[]
 }
 
 const route = useRoute()
@@ -311,6 +320,47 @@ function statusClass(status: string) {
     }[status] || 'status-chip'
   )
 }
+
+function formatSize(bytes: number): string {
+  if (bytes >= 1024 * 1024) return `${(bytes / 1024 / 1024).toFixed(1)}MB`
+  if (bytes >= 1024) return `${Math.round(bytes / 1024)}KB`
+  return `${bytes}B`
+}
+
+// 반드시 useApi 경유 — 전역 $fetch는 Authorization 미첨부로 401 (스펙 §8.2).
+// 파일명은 응답 헤더가 아니라 메타 fileName 사용 ($fetch는 헤더를 안 돌려준다).
+async function downloadAttachment(att: AttachmentMeta) {
+  try {
+    const blob = await useApi<Blob>(`/api/tasks/${taskId.value}/attachments/${att.id}`, {
+      responseType: 'blob',
+    })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = att.fileName
+    document.body.appendChild(a)
+    a.click()
+    // blob URL을 click과 같은 tick에 해제하면 일부 브라우저에서 다운로드가 시작 전에 중단된다(Chromium 41380177, Firefox 1282407).
+    setTimeout(() => {
+      URL.revokeObjectURL(url)
+      a.remove()
+    }, 0)
+  } catch (e: any) {
+    // responseType:'blob'이면 ofetch가 에러 본문도 Blob으로 파싱하므로 e.data는 {message}가 아니라 Blob이다.
+    let message = '다운로드 실패'
+    try {
+      if (e?.data instanceof Blob) {
+        const parsed = JSON.parse(await e.data.text())
+        if (parsed?.message) message = parsed.message
+      } else if (e?.data?.message) {
+        message = e.data.message
+      }
+    } catch {
+      // 본문이 JSON이 아니면 fallback 유지
+    }
+    $q.notify({ type: 'negative', message })
+  }
+}
 </script>
 
 <template>
@@ -362,6 +412,25 @@ function statusClass(status: string) {
             class="q-mr-xs q-mb-xs"
           >
             <q-tooltip>{{ m.url }}</q-tooltip>
+          </q-chip>
+        </q-card-section>
+        <q-separator v-if="task.attachments && task.attachments.length" />
+        <q-card-section v-if="task.attachments && task.attachments.length">
+          <div class="text-caption q-mb-xs">첨부파일</div>
+          <q-chip
+            v-for="a in task.attachments"
+            :key="a.id"
+            clickable
+            color="blue-grey-1"
+            text-color="blue-grey-9"
+            icon="attach_file"
+            size="sm"
+            dense
+            :label="`${a.fileName} (${formatSize(a.sizeBytes)})`"
+            class="q-mr-xs q-mb-xs"
+            @click="downloadAttachment(a)"
+          >
+            <q-tooltip>클릭하여 다운로드</q-tooltip>
           </q-chip>
         </q-card-section>
         <q-separator />

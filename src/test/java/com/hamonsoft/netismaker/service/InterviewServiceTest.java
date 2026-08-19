@@ -24,6 +24,8 @@ class InterviewServiceTest {
     TaskRepository taskRepo;
     TaskAnalysisRepository analysisRepo;
     TaskStatusHistoryRepository historyRepo;
+    TaskAttachmentRepository attachmentRepo;
+    AttachmentStorage attachmentStorage;
     InterviewService service;
 
     @BeforeEach
@@ -34,8 +36,10 @@ class InterviewServiceTest {
         taskRepo = mock(TaskRepository.class);
         analysisRepo = mock(TaskAnalysisRepository.class);
         historyRepo = mock(TaskStatusHistoryRepository.class);
+        attachmentRepo = mock(TaskAttachmentRepository.class);
+        attachmentStorage = mock(AttachmentStorage.class);
         service = new InterviewService(sessionRepo, turnRepo, planRepo,
-                taskRepo, analysisRepo, historyRepo);
+                taskRepo, analysisRepo, historyRepo, attachmentRepo, attachmentStorage);
         when(sessionRepo.save(any())).thenAnswer(i -> i.getArgument(0));
         when(turnRepo.save(any())).thenAnswer(i -> i.getArgument(0));
         when(planRepo.save(any())).thenAnswer(i -> i.getArgument(0));

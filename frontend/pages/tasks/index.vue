@@ -181,6 +181,24 @@ const draft = reactive({
 })
 const submitting = ref(false)
 
+// 첨부 (스펙 2026-08-16 §8.1) — 서버 한도와 동일 값의 사전 검증
+const MAX_FILES = 10
+const MAX_FILE_MB = 20
+const MAX_TOTAL_MB = 50
+const draftFiles = ref<File[]>([])
+// 라벨은 상수에서 파생 — 한도를 문자열에 다시 하드코딩하면 서버/검증과 갈라진다
+const attachmentLabel = `첨부파일 (선택 · 최대 ${MAX_FILES}개, 파일당 ${MAX_FILE_MB}MB, 합계 ${MAX_TOTAL_MB}MB)`
+
+function validateFiles(files: File[]): string | null {
+  if (files.length > MAX_FILES) return `첨부는 최대 ${MAX_FILES}개까지 가능합니다`
+  const over = files.find((f) => f.size > MAX_FILE_MB * 1024 * 1024)
+  if (over) return `파일당 ${MAX_FILE_MB}MB 이하만 첨부할 수 있습니다: ${over.name}`
+  if (files.some((f) => f.size === 0)) return '빈 파일(0바이트)은 첨부할 수 없습니다'
+  const total = files.reduce((s, f) => s + f.size, 0)
+  if (total > MAX_TOTAL_MB * 1024 * 1024) return `첨부 합계는 ${MAX_TOTAL_MB}MB 이하여야 합니다`
+  return null
+}
+
 interface RepoCatalogEntry {
   id: number
   alias: string
@@ -292,6 +310,7 @@ function openCreate() {
   draft.githubBranch = ''
   draft.title = ''
   draft.description = ''
+  draftFiles.value = []
   resetBranchState()
   showCreate.value = true
   loadRepoCatalog()
@@ -307,17 +326,30 @@ const canSubmit = computed(
 )
 
 async function submit() {
+  const meta = {
+    repoCatalogId: draft.repoCatalogId,
+    githubBranch: draft.githubBranch,
+    title: draft.title,
+    description: draft.description,
+  }
+  if (draftFiles.value.length > 0) {
+    const err = validateFiles(draftFiles.value)
+    if (err) {
+      $q.notify({ type: 'warning', message: err })
+      return
+    }
+  }
   submitting.value = true
   try {
-    await useApi('/api/tasks', {
-      method: 'POST',
-      body: {
-        repoCatalogId: draft.repoCatalogId,
-        githubBranch: draft.githubBranch,
-        title: draft.title,
-        description: draft.description,
-      },
-    })
+    if (draftFiles.value.length > 0) {
+      // Content-Type을 명시하지 않는다 — $fetch가 FormData boundary를 스스로 설정 (스펙 §8.1)
+      const form = new FormData()
+      form.append('meta', new Blob([JSON.stringify(meta)], { type: 'application/json' }))
+      for (const f of draftFiles.value) form.append('files', f, f.name)
+      await useApi('/api/tasks', { method: 'POST', body: form })
+    } else {
+      await useApi('/api/tasks', { method: 'POST', body: meta })
+    }
     $q.notify({ type: 'positive', message: '작업 등록 완료' })
     showCreate.value = false
     refresh()
@@ -607,6 +639,21 @@ function closeDialog() {
             autogrow
             rows="4"
           />
+          <q-file
+            v-model="draftFiles"
+            :label="attachmentLabel"
+            outlined
+            dense
+            multiple
+            use-chips
+            counter
+            append
+            data-test="attachment-input"
+          >
+            <template #prepend>
+              <q-icon name="attach_file" />
+            </template>
+          </q-file>
         </q-card-section>
         <q-card-actions align="right">
           <q-btn flat label="취소" @click="closeDialog" />

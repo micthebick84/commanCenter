@@ -46,19 +46,25 @@ public class InterviewService {
     private final TaskRepository taskRepo;
     private final TaskAnalysisRepository analysisRepo;
     private final TaskStatusHistoryRepository historyRepo;
+    private final TaskAttachmentRepository attachmentRepo;
+    private final AttachmentStorage attachmentStorage;
 
     public InterviewService(InterviewSessionRepository sessionRepo,
                             InterviewTurnRepository turnRepo,
                             InterviewPlanRepository planRepo,
                             TaskRepository taskRepo,
                             TaskAnalysisRepository analysisRepo,
-                            TaskStatusHistoryRepository historyRepo) {
+                            TaskStatusHistoryRepository historyRepo,
+                            TaskAttachmentRepository attachmentRepo,
+                            AttachmentStorage attachmentStorage) {
         this.sessionRepo = sessionRepo;
         this.turnRepo = turnRepo;
         this.planRepo = planRepo;
         this.taskRepo = taskRepo;
         this.analysisRepo = analysisRepo;
         this.historyRepo = historyRepo;
+        this.attachmentRepo = attachmentRepo;
+        this.attachmentStorage = attachmentStorage;
     }
 
     /**
@@ -123,7 +129,18 @@ public class InterviewService {
         }
         touch(s);
         List<InterviewTurn> turns = turnRepo.findBySessionIdOrderBySeqAsc(s.getId());
-        return Optional.of(InterviewClaimResponse.of(s, turns));
+        return Optional.of(InterviewClaimResponse.of(s, turns, attachmentRefsFor(s)));
+    }
+
+    /** 세션 소유 task의 첨부 → 절대경로 ref (스펙 §5.4). task 없는 레거시 세션은 []. */
+    private List<InterviewClaimResponse.AttachmentRef> attachmentRefsFor(InterviewSession s) {
+        if (s.getTaskId() == null) return List.of();
+        return attachmentRepo.findByTaskIdOrderByIdAsc(s.getTaskId()).stream()
+                .map(a -> new InterviewClaimResponse.AttachmentRef(
+                        a.getId(), a.getOriginalFilename(),
+                        attachmentStorage.absolutePathOf(a.getStoredPath()),
+                        a.getContentType(), a.getSizeBytes()))
+                .toList();
     }
 
     /**

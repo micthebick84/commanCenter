@@ -1,6 +1,6 @@
 import type { JavaApiClient } from '../api/javaClient.js';
 import type { SdkMessage, SdkQuery } from '../sdk/sdkAdapter.js';
-import type { InterviewClaimResponse } from '../types.js';
+import type { AttachmentRef, InterviewClaimResponse } from '../types.js';
 import { buildOptions } from '../sdk/sessionOptions.js';
 import { QuotaGuardExceeded, CostGuard } from './costGuard.js';
 import { tryHarvest } from './planHarvest.js';
@@ -36,12 +36,42 @@ function userTurn(content: string): UserTurn {
   return { type: 'user', message: { role: 'user', content } };
 }
 
+function formatSize(bytes: number): string {
+  if (!Number.isFinite(bytes) || bytes < 0) return '';
+  if (bytes >= 1024 * 1024) return `${(bytes / 1024 / 1024).toFixed(1)}MB`;
+  if (bytes >= 1024) return `${Math.round(bytes / 1024)}KB`;
+  return `${bytes}B`;
+}
+
+/**
+ * kickoff 첨부 섹션 (스펙 2026-08-16 §7). 구버전 백엔드 claim에는 attachments 필드가
+ * 없으므로 무조건 Array.isArray 가드 (sessionOptions.toMcpServers 선례). 0건이면 빈 문자열.
+ * contentType null은 표기 생략 — 리터럴 'null'을 렌더링하지 않는다.
+ */
+function attachmentSection(claim: InterviewClaimResponse): string {
+  const atts: AttachmentRef[] = Array.isArray(claim.attachments) ? claim.attachments : [];
+  if (atts.length === 0) return '';
+  const lines = atts.map((a) => {
+    const meta = [a.contentType, formatSize(a.sizeBytes)].filter(Boolean).join(', ');
+    return `- ${a.absolutePath}${meta ? ` (${meta})` : ''}`;
+  });
+  return (
+    '첨부 자료 (요청자가 등록 시 업로드한 파일):\n' +
+    lines.join('\n') +
+    '\n\n' +
+    'brainstorming 시작 전에 이 파일들을 Read 도구로 읽고 요구사항 파악에 활용하세요. ' +
+    '읽을 수 없는 포맷(docx/xlsx 등 오피스 문서)이거나 파일이 없으면 건너뛰고, ' +
+    '필요한 내용은 사용자에게 질문으로 확인하세요.\n\n'
+  );
+}
+
 /** One async-iterable user prompt for the turn. Fresh => kickoff text; resume => the injected answer. */
 async function* promptFor(claim: InterviewClaimResponse): AsyncIterable<UserTurn> {
   if (!claim.claudeSessionId) {
     yield userTurn(
       `I want to add a feature to the repo at ${claim.githubRepo} (branch ${claim.githubBranch}).\n` +
         `Title: ${claim.title}\nRequest: ${claim.description}\n\n` +
+        attachmentSection(claim) +
         'IMPORTANT — this is a PLANNING-ONLY interview. Your only deliverable is a written ' +
         'implementation PLAN (via brainstorming → writing-plans), NOT code. Do NOT implement the ' +
         'feature: do not create or modify source files, do not run builds/installs/tests, do not ' +

@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.hamonsoft.netismaker.entity.Task;
 import com.hamonsoft.netismaker.entity.TaskStatus;
 import com.hamonsoft.netismaker.repository.TaskAnalysisRepository;
+import com.hamonsoft.netismaker.repository.TaskAttachmentRepository;
 import com.hamonsoft.netismaker.repository.TaskDesignRepository;
 import com.hamonsoft.netismaker.repository.TaskRepository;
 import com.hamonsoft.netismaker.repository.TaskStatusHistoryRepository;
@@ -33,6 +34,8 @@ class TaskServiceDeployTest {
     private McpCatalogService mcpCatalogService;
     private RepoCatalogService repoCatalogService;
     private InterviewService interviewService;
+    private TaskAttachmentRepository attachmentRepo;
+    private AttachmentStorage attachmentStorage;
     private TaskService service;
 
     private Task taskWithStatus(TaskStatus status) {
@@ -51,8 +54,10 @@ class TaskServiceDeployTest {
         mcpCatalogService = mock(McpCatalogService.class);
         repoCatalogService = mock(RepoCatalogService.class);
         interviewService = mock(InterviewService.class);
+        attachmentRepo = mock(TaskAttachmentRepository.class);
+        attachmentStorage = mock(AttachmentStorage.class);
         service = new TaskService(taskRepo, analysisRepo, designRepo, historyRepo, mcpCatalogService,
-                repoCatalogService, new ObjectMapper(), interviewService);
+                repoCatalogService, new ObjectMapper(), interviewService, attachmentRepo, attachmentStorage);
         when(historyRepo.save(any())).thenAnswer(i -> i.getArgument(0));
     }
 

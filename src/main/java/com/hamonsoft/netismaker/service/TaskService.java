@@ -7,11 +7,13 @@ import com.hamonsoft.netismaker.entity.EnvVar;
 import com.hamonsoft.netismaker.entity.McpCatalogEntry;
 import com.hamonsoft.netismaker.entity.Task;
 import com.hamonsoft.netismaker.entity.TaskAnalysis;
+import com.hamonsoft.netismaker.entity.TaskAttachment;
 import com.hamonsoft.netismaker.entity.TaskDesign;
 import com.hamonsoft.netismaker.entity.TaskMcpSpec;
 import com.hamonsoft.netismaker.entity.TaskStatus;
 import com.hamonsoft.netismaker.entity.TaskStatusHistory;
 import com.hamonsoft.netismaker.repository.TaskAnalysisRepository;
+import com.hamonsoft.netismaker.repository.TaskAttachmentRepository;
 import com.hamonsoft.netismaker.repository.TaskDesignRepository;
 import com.hamonsoft.netismaker.repository.TaskRepository;
 import com.hamonsoft.netismaker.repository.TaskStatusHistoryRepository;
@@ -22,7 +24,9 @@ import org.springframework.data.domain.Pageable;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.web.multipart.MultipartFile;
 
+import java.nio.file.Path;
 import java.time.OffsetDateTime;
 import java.util.ArrayList;
 import java.util.List;
@@ -53,6 +57,8 @@ public class TaskService {
     private final RepoCatalogService repoCatalogService;
     private final ObjectMapper objectMapper;
     private final InterviewService interviewService;
+    private final TaskAttachmentRepository attachmentRepo;
+    private final AttachmentStorage attachmentStorage;
 
     @Value("${app.task.user-concurrent-limit:5}")
     private int userConcurrentLimit;
@@ -67,7 +73,9 @@ public class TaskService {
                        McpCatalogService mcpCatalogService,
                        RepoCatalogService repoCatalogService,
                        ObjectMapper objectMapper,
-                       InterviewService interviewService) {
+                       InterviewService interviewService,
+                       TaskAttachmentRepository attachmentRepo,
+                       AttachmentStorage attachmentStorage) {
         this.taskRepo = taskRepo;
         this.analysisRepo = analysisRepo;
         this.designRepo = designRepo;
@@ -76,6 +84,8 @@ public class TaskService {
         this.repoCatalogService = repoCatalogService;
         this.objectMapper = objectMapper;
         this.interviewService = interviewService;
+        this.attachmentRepo = attachmentRepo;
+        this.attachmentStorage = attachmentStorage;
     }
 
     @Transactional
@@ -98,6 +108,53 @@ public class TaskService {
         historyRepo.save(TaskStatusHistory.log(saved.getId(), null, TaskStatus.AWAITING_APPROVAL,
                 "user", requesterId, "작업 등록"));
         return saved;
+    }
+
+    /**
+     * 파일 첨부 등록 (스펙 2026-08-16 §6.2). 검증 → 기존 create 재사용(같은 tx) →
+     * 메타 행 + 디스크 쓰기. 실패 시 tx 롤백 + 이미 쓴 파일 best-effort 삭제 — 부분 상태 없음.
+     * 경로의 ordinal은 업로드 순번(1..N) — IDENTITY라 INSERT 전 id를 못 쓴다.
+     */
+    @Transactional
+    public Task create(TaskCreateRequest req, List<MultipartFile> files, String requesterId) {
+        List<MultipartFile> attached = files == null ? List.of() : files;
+        attachmentStorage.validate(attached);
+        Task saved = create(req, requesterId);   // 내부 호출 — 이미 @Transactional 안이라 같은 tx
+        List<String> written = new ArrayList<>();
+        try {
+            int ordinal = 1;
+            for (MultipartFile f : attached) {
+                String rel = attachmentStorage.relativePath(saved.getId(), ordinal, f.getOriginalFilename());
+                attachmentRepo.save(TaskAttachment.create(saved.getId(),
+                        AttachmentStorage.sanitize(f.getOriginalFilename()), rel,
+                        f.getContentType(), f.getSize(), requesterId));
+                written.add(rel);
+                attachmentStorage.write(rel, f);
+                ordinal++;
+            }
+        } catch (RuntimeException e) {
+            written.forEach(attachmentStorage::deleteQuietly);
+            throw e;   // tx 롤백 → task/메타 행 전부 취소
+        }
+        return saved;
+    }
+
+    @Transactional(readOnly = true)
+    public List<TaskAttachment> getAttachments(Long taskId) {
+        return attachmentRepo.findByTaskIdOrderByIdAsc(taskId);
+    }
+
+    /** 첨부 단건 — task 소속이 아니면 존재를 숨긴다(404). ACL은 컨트롤러의 getForView가 담당. */
+    @Transactional(readOnly = true)
+    public TaskAttachment getAttachment(Long taskId, Long attachmentId) {
+        TaskAttachment a = attachmentRepo.findById(attachmentId)
+                .orElseThrow(TaskException::notFound);
+        if (!a.getTaskId().equals(taskId)) throw TaskException.notFound();
+        return a;
+    }
+
+    public Path resolveAttachmentPath(TaskAttachment att) {
+        return attachmentStorage.resolve(att.getStoredPath());
     }
 
     /** 카탈로그 id 리스트 → snapshot 스펙. 비활성/누락 id는 거절. */

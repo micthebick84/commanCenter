@@ -6,13 +6,16 @@ import org.springframework.http.HttpStatus;
 import org.springframework.mock.web.MockMultipartFile;
 
 import java.nio.charset.StandardCharsets;
+import java.time.Duration;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
+import java.util.Locale;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.junit.jupiter.api.Assertions.assertTimeoutPreemptively;
 
 class AttachmentStorageTest {
 
@@ -103,6 +106,40 @@ class AttachmentStorageTest {
         차단됨("evil.sh.");
     }
 
+    /*
+     * 공백과 마침표는 서로를 되살린다. trim() 을 한 번 돌리고 나서 마침표를 떼면 그 밑에 있던
+     * 공백이 다시 꼬리로 드러나는데, 다시 trim 하지 않으면 그대로 저장된다("evil.exe ").
+     * 확장자가 "exe "(공백 포함)라 블록리스트를 빠져나가고, 저장명 끝 공백·마침표를 떼는
+     * Windows에서 내려받으면 evil.exe 가 된다.
+     */
+    @Test
+    void 마침표와_공백을_섞어_확장자를_감춰도_400() {
+        차단됨("evil.exe .");
+    }
+
+    @Test
+    void 마침표와_공백이_여러_번_섞여도_400() {
+        차단됨("evil.sh . .");
+    }
+
+    /*
+     * 확장자 소문자화가 기본 로케일을 따르면 안 된다. 터키어 로케일에서 'I'.toLowerCase() 는
+     * 점 없는 'ı' 라, 대문자로 올린 "MSI"/"PIF"/"DYLIB" 가 블록리스트("msi"/"pif"/"dylib")와
+     * 어긋나 그대로 통과한다. 운영자 JVM 로케일이 무엇이든 판정이 같아야 한다.
+     */
+    @Test
+    void 터키어_로케일에서도_차단_확장자를_막는다() {
+        Locale prev = Locale.getDefault();
+        try {
+            Locale.setDefault(Locale.forLanguageTag("tr-TR"));
+            차단됨("evil.MSI");
+            차단됨("evil.PIF");
+            차단됨("lib.DYLIB");
+        } finally {
+            Locale.setDefault(prev);
+        }
+    }
+
     @Test
     void 정상_파일들은_통과한다() {
         storage().validate(List.of(file("요구사항.pdf", 100), file("화면.png", 100)));
@@ -122,6 +159,33 @@ class AttachmentStorageTest {
         String longName = "a".repeat(300) + ".pdf";
         String out = AttachmentStorage.sanitize(longName);
         assertThat(out).hasSize(240).endsWith(".pdf");
+    }
+
+    /** 꼬리의 공백·마침표는 한 번씩 번갈아 떼면 잔여물이 남는다 — 고정점까지 함께 제거해야 한다. */
+    @Test
+    void sanitize는_꼬리의_공백과_마침표를_섞여_있어도_모두_제거한다() {
+        assertThat(AttachmentStorage.sanitize("evil.exe .")).isEqualTo("evil.exe");
+        assertThat(AttachmentStorage.sanitize("evil.sh . .")).isEqualTo("evil.sh");
+        assertThat(AttachmentStorage.sanitize("보고서.pdf . ")).isEqualTo("보고서.pdf");
+        // 앞쪽 공백 제거(기존 trim 동작)는 그대로 유지돼야 한다.
+        assertThat(AttachmentStorage.sanitize("  요구사항.pdf")).isEqualTo("요구사항.pdf");
+    }
+
+    /*
+     * 꼬리 제거는 입력 길이에 선형이어야 한다. 정규식 "[\s.]+$" 는 매치에 실패하면 시작 위치마다
+     * 런 전체를 다시 훑어 2차식으로 튄다 — 공백이 긴 파일명 하나가 요청 스레드를 수 초 점유한다.
+     * multipart part 헤더 상한(10,240바이트) 안에서 만들 수 있는 길이라 실제로 도달 가능하고,
+     * 첨부 1건당 sanitize 가 3회(TaskService:121,127,129) × 최대 10개 = 30회 호출돼 증폭된다.
+     * 아래 길이에서 2차식 구현은 수십 초가 걸려 타임아웃에 걸리고, 선형 구현은 밀리초 단위다.
+     */
+    @Test
+    void sanitize는_긴_공백_런에도_선형_시간이다() {
+        String hostile = "a" + " ".repeat(100_000) + "x.pdf";
+        assertTimeoutPreemptively(Duration.ofSeconds(5), () -> {
+            for (int i = 0; i < 30; i++) AttachmentStorage.sanitize(hostile);
+        });
+        // 꼬리가 아닌 중간 공백은 그대로 보존된다(자르기 전 결과 확인).
+        assertThat(AttachmentStorage.sanitize("a" + " ".repeat(50) + "x.pdf")).endsWith("x.pdf");
     }
 
     @Test

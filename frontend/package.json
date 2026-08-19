@@ -11,10 +11,12 @@
     "lint": "eslint \"**/*.{ts,vue}\" --fix",
     "lint-prettier": "prettier --write \"**/*.{ts,vue,json}\"",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "typecheck": "nuxi typecheck"
   },
   "devDependencies": {
     "@nuxt/test-utils": "^3.15.1",
+    "@types/node": "^24.13.3",
     "@vitejs/plugin-vue": "^6.0.0",
     "@vue/test-utils": "^2.4.6",
     "eslint": "^9.0.0",

@@ -6,8 +6,13 @@ import { useAutoScroll } from '~/composables/useAutoScroll'
 import ChatBubble from '~/components/chat/ChatBubble.vue'
 import TypingIndicator from '~/components/chat/TypingIndicator.vue'
 
-const props = defineProps<{ sessionId: number; model?: string; effort?: string }>()
-const emit = defineEmits<{ (e: 'registered', taskId: number): void; (e: 'close'): void }>()
+const props = defineProps<{
+  sessionId: number
+  model?: string
+  effort?: string
+  readonly?: boolean
+}>()
+const emit = defineEmits<{ (e: 'confirmed', taskId: number): void; (e: 'close'): void }>()
 
 const stream = useInterviewStream()
 const { connState, status, turns, designSections, plan, error } = stream
@@ -48,7 +53,7 @@ const statusLabel = computed(() =>
   status.value ? (STATUS_LABELS[status.value] ?? status.value) : '연결 중',
 )
 
-const registering = ref(false)
+const confirming = ref(false)
 const designRequested = ref(false)
 
 const isTerminal = computed(() =>
@@ -122,20 +127,20 @@ async function sendAnswer() {
   }
 }
 
-async function register() {
-  if (status.value !== 'PLAN_READY' || registering.value) return
-  registering.value = true
+async function confirm() {
+  if (status.value !== 'PLAN_READY' || confirming.value) return
+  confirming.value = true
   try {
-    const res = await useApi<{ taskId: number }>(`/api/interviews/${props.sessionId}/register`, {
+    const res = await useApi<{ taskId: number }>(`/api/interviews/${props.sessionId}/confirm`, {
       method: 'POST',
       body: { designRequested: designRequested.value },
     })
-    $q.notify({ type: 'positive', message: '작업 등록 완료' })
-    emit('registered', res.taskId)
+    $q.notify({ type: 'positive', message: '확정 완료 — 구현 큐에 진입했습니다' })
+    emit('confirmed', res.taskId)
   } catch (e: any) {
-    $q.notify({ type: 'negative', message: e?.data?.message ?? '작업 등록 실패' })
+    $q.notify({ type: 'negative', message: e?.data?.message ?? '확정 실패' })
   } finally {
-    registering.value = false
+    confirming.value = false
   }
 }
 
@@ -213,7 +218,7 @@ onUnmounted(() => stream.close())
         @click="closePanel"
       />
       <q-btn
-        v-if="!isTerminal"
+        v-if="!isTerminal && !readonly"
         data-test="cancel-interview"
         outline
         dense
@@ -276,7 +281,7 @@ onUnmounted(() => stream.close())
             ↓ 새 메시지 {{ unread }}
           </div>
         </div>
-        <div class="answer-bar q-pa-sm">
+        <div v-if="!readonly" class="answer-bar q-pa-sm">
           <q-input
             v-model="answer"
             type="textarea"
@@ -339,7 +344,7 @@ onUnmounted(() => stream.close())
             <pre class="plan-md">{{ plan.planMarkdown }}</pre>
           </div>
 
-          <div class="row items-center justify-end q-mt-md q-gutter-sm">
+          <div v-if="!readonly" class="row items-center justify-end q-mt-md q-gutter-sm">
             <q-toggle
               v-model="designRequested"
               dense
@@ -348,14 +353,14 @@ onUnmounted(() => stream.close())
               <q-tooltip>분석 승인 후 화면 목업을 생성해 승인받습니다</q-tooltip>
             </q-toggle>
             <q-btn
-              data-test="register"
+              data-test="confirm"
               unelevated
               color="positive"
               icon="task_alt"
-              label="작업 등록"
-              :loading="registering"
-              :disable="status !== 'PLAN_READY' || registering"
-              @click="register"
+              label="구현 진행"
+              :loading="confirming"
+              :disable="status !== 'PLAN_READY' || confirming"
+              @click="confirm"
             />
           </div>
         </div>

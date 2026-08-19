@@ -6,6 +6,7 @@ import com.hamonsoft.netismaker.config.WorkerApiKeyFilter;
 import com.hamonsoft.netismaker.entity.Task;
 import com.hamonsoft.netismaker.entity.TaskStatus;
 import com.hamonsoft.netismaker.service.DeployLogStreamService;
+import com.hamonsoft.netismaker.service.InterviewService;
 import com.hamonsoft.netismaker.service.TaskService;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -56,6 +57,9 @@ class TaskControllerSseResolverTest {
 
     @MockBean
     private DeployLogStreamService deployLogStreamService;
+
+    @MockBean
+    private InterviewService interviewService;
 
     /**
      * ?access_token= 쿼리 파라미터에 토큰을 전달하면 Authorization 헤더 없이도

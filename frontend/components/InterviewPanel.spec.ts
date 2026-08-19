@@ -68,31 +68,31 @@ describe('InterviewPanel — answer flow', () => {
   })
 })
 
-describe('InterviewPanel — register flow', () => {
-  it('enables 작업 등록 only at PLAN_READY and emits registered with taskId', async () => {
+describe('InterviewPanel — confirm flow', () => {
+  it('enables 구현 진행 only at PLAN_READY and emits confirmed with taskId', async () => {
     const w = await mountPanel(9)
     const es = FakeEventSource.last()
 
     // Before plan_ready: button is disabled.
     es.emit('design', { key: 'a', title: 'A', body: 'b', approved: true })
     await flushPromises()
-    let reg = w.find('[data-test="register"]')
+    let reg = w.find('[data-test="confirm"]')
     expect(reg.attributes('disabled')).toBeDefined()
 
     es.emit('plan_ready', { designMarkdown: 'd', planMarkdown: 'p', planJson: JSON.stringify([]) })
     await flushPromises()
-    reg = w.find('[data-test="register"]')
+    reg = w.find('[data-test="confirm"]')
     expect(reg.attributes('disabled')).toBeUndefined()
 
-    useApiMock.mockResolvedValueOnce({ taskId: 123 }) // 이제 다음 useApi 호출(register POST)이 소비
+    useApiMock.mockResolvedValueOnce({ taskId: 123 }) // 이제 다음 useApi 호출(confirm POST)이 소비
     await reg.trigger('click')
     await flushPromises()
 
-    expect(useApiMock).toHaveBeenCalledWith('/api/interviews/9/register', {
+    expect(useApiMock).toHaveBeenCalledWith('/api/interviews/9/confirm', {
       method: 'POST',
       body: { designRequested: false },
     })
-    expect(w.emitted('registered')?.[0]).toEqual([123])
+    expect(w.emitted('confirmed')?.[0]).toEqual([123])
     w.unmount()
   })
 
@@ -106,10 +106,10 @@ describe('InterviewPanel — register flow', () => {
     await flushPromises()
 
     useApiMock.mockResolvedValueOnce({ taskId: 124 })
-    await w.find('[data-test="register"]').trigger('click')
+    await w.find('[data-test="confirm"]').trigger('click')
     await flushPromises()
 
-    expect(useApiMock).toHaveBeenCalledWith('/api/interviews/9/register', {
+    expect(useApiMock).toHaveBeenCalledWith('/api/interviews/9/confirm', {
       method: 'POST',
       body: { designRequested: true },
     })
@@ -284,6 +284,44 @@ describe('InterviewPanel — refresh resume (snapshot hydration)', () => {
     FakeEventSource.last().emit('question', { seq: 1, content: '폴백 질문' })
     await flushPromises()
     expect(w.text()).toContain('폴백 질문')
+    w.unmount()
+  })
+})
+
+describe('InterviewPanel — 확정 / 읽기 전용', () => {
+  it('플랜 완료 후 확정하면 /confirm을 호출한다', async () => {
+    const w = await mountPanel(9, {
+      statusName: 'PLAN_READY',
+      turns: [],
+      plan: { designMarkdown: '# 설계', planMarkdown: '# 플랜', planJson: '[]' },
+    })
+
+    useApiMock.mockResolvedValueOnce({ taskId: 42 })
+    await w.find('[data-test="confirm"]').trigger('click')
+    await flushPromises()
+
+    expect(useApiMock).toHaveBeenCalledWith('/api/interviews/9/confirm', {
+      method: 'POST',
+      body: { designRequested: false },
+    })
+    expect(w.emitted('confirmed')).toBeTruthy()
+    w.unmount()
+  })
+
+  it('readonly면 답변 입력·확정 버튼을 렌더하지 않는다', async () => {
+    authStub.accessToken = 'jwt'
+    useApiMock.mockResolvedValueOnce({
+      statusName: 'AWAITING_INPUT',
+      turns: [{ seq: 1, role: 'assistant', kind: 'question', content: '범위는?' }],
+      plan: null,
+    })
+    const w = mount(InterviewPanel, { props: { sessionId: 9, readonly: true } })
+    await flushPromises()
+
+    expect(w.text()).toContain('범위는?')          // 대화는 보인다
+    expect(w.find('textarea').exists()).toBe(false) // 입력창은 없다
+    expect(w.find('[data-test="send-answer"]').exists()).toBe(false)
+    expect(w.find('[data-test="confirm"]').exists()).toBe(false)
     w.unmount()
   })
 })

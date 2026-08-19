@@ -3,6 +3,9 @@ package com.hamonsoft.netismaker.controller;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.hamonsoft.netismaker.TestcontainersConfig;
 import com.hamonsoft.netismaker.dto.TaskCreateRequest;
+import com.hamonsoft.netismaker.entity.Task;
+import com.hamonsoft.netismaker.entity.TaskAnalysis;
+import com.hamonsoft.netismaker.entity.TaskStatus;
 import com.hamonsoft.netismaker.repository.InterviewSessionRepository;
 import com.hamonsoft.netismaker.repository.TaskAnalysisRepository;
 import com.hamonsoft.netismaker.repository.TaskDesignRepository;
@@ -71,15 +74,15 @@ class TaskDesignFlowIntegrationTest {
     }
 
     // catalog id=1 corresponds to the V14 seed entry (alias 'Netis7.0').
-    private String createBody(boolean designRequested) throws Exception {
+    private String createBody() throws Exception {
         return json.writeValueAsString(new TaskCreateRequest(1L, "main", "디자인 플로우 테스트",
-                "디자인 구간 검증용 작업", List.of(), null, null, designRequested));
+                "디자인 구간 검증용 작업"));
     }
 
-    private Long createTask(boolean designRequested) throws Exception {
+    private Long createTask() throws Exception {
         String location = mvc.perform(post("/api/tasks").with(userJwt("user1"))
                         .contentType(APPLICATION_JSON)
-                        .content(createBody(designRequested)))
+                        .content(createBody()))
                 .andExpect(status().isCreated())
                 .andReturn().getResponse().getHeader("Location");
         assertThat(location).isNotNull();
@@ -88,27 +91,16 @@ class TaskDesignFlowIntegrationTest {
 
     @Test
     void 디자인_전체_플로우() throws Exception {
-        // 1) designRequested=true로 작업 생성 → 201, body.designRequested==true
-        String location = mvc.perform(post("/api/tasks").with(userJwt("user1"))
-                        .contentType(APPLICATION_JSON)
-                        .content(createBody(true)))
-                .andExpect(status().isCreated())
-                .andExpect(jsonPath("$.designRequested").value(true))
-                .andReturn().getResponse().getHeader("Location");
-        Long id = Long.parseLong(location.substring(location.lastIndexOf('/') + 1));
-
-        // 2) 워커 분석 claim + COMPLETED 보고
-        mvc.perform(get("/worker/next-task").header("X-Worker-API-Key", apiKey)
-                        .param("workerId", "w1"))
-                .andExpect(status().isOk())
-                .andExpect(jsonPath("$.id").value(id))
-                .andExpect(jsonPath("$.kind").value("ANALYSIS"));
-
-        mvc.perform(post("/worker/tasks/" + id + "/result").header("X-Worker-API-Key", apiKey)
-                        .contentType(APPLICATION_JSON)
-                        .content("{\"workerId\":\"w1\",\"status\":\"COMPLETED\","
-                                + "\"markdownResult\":\"# 분석 결과\",\"subtasksJson\":\"[]\"}"))
-                .andExpect(status().isNoContent());
+        // 1) 등록은 이제 승인대기로 시작하고 모델/MCP/디자인 여부를 받지 않는다 (Task 3).
+        //    이 테스트의 관심사는 등록 폼이 아니라 레거시 승인 경로(분석완료 → 디자인 큐)이므로,
+        //    등록 후 리포지토리로 직접 "분석완료 + designRequested=true" 상태를 만들어
+        //    그 경로부터 검증을 이어간다.
+        Long id = createTask();
+        Task t = taskRepo.findById(id).orElseThrow();
+        t.setDesignRequested(true);
+        t.setStatus(TaskStatus.COMPLETED);
+        taskRepo.save(t);
+        analysisRepo.save(TaskAnalysis.create(id, "# 분석 결과", "[]", null, null));
 
         // 3) admin 승인 → 200, statusLabel=="디자인대기" (designRequested=true → DESIGN_PENDING 라우팅)
         mvc.perform(post("/api/tasks/" + id + "/approve").with(adminJwt("admin1")))
@@ -183,7 +175,7 @@ class TaskDesignFlowIntegrationTest {
 
     @Test
     void 디자인_반려는_admin_전용이다() throws Exception {
-        Long id = createTask(false);
+        Long id = createTask();
         mvc.perform(post("/api/tasks/" + id + "/design/reject").with(userJwt("user1"))
                         .contentType(APPLICATION_JSON)
                         .content("{\"feedback\":\"피드백\"}"))
@@ -192,7 +184,7 @@ class TaskDesignFlowIntegrationTest {
 
     @Test
     void 피드백_없는_반려는_400() throws Exception {
-        Long id = createTask(false);
+        Long id = createTask();
         mvc.perform(post("/api/tasks/" + id + "/design/reject").with(adminJwt("admin1"))
                         .contentType(APPLICATION_JSON)
                         .content("{\"feedback\":\"  \"}"))

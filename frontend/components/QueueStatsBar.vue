@@ -19,6 +19,9 @@ interface QueueStats {
   deployLost: number
   undeployPending: number
   undeploying: number
+  pendingApproval: number
+  interviewing: number
+  planReview: number
   avgDurationMs: number | null
 }
 
@@ -36,6 +39,21 @@ const avgDurationLabel = computed(() => {
   <q-card v-if="data" flat bordered class="q-mb-md">
     <q-card-section class="row q-gutter-md items-center">
       <div class="stat">
+        <div class="stat-label">승인대기</div>
+        <div class="stat-value text-grey-8">{{ data.pendingApproval }}</div>
+      </div>
+      <q-separator vertical />
+      <div class="stat">
+        <div class="stat-label">인터뷰중</div>
+        <div class="stat-value text-teal-9">{{ data.interviewing }}</div>
+      </div>
+      <q-separator vertical />
+      <div class="stat">
+        <div class="stat-label">플랜승인대기</div>
+        <div class="stat-value text-indigo-9">{{ data.planReview }}</div>
+      </div>
+      <q-separator vertical />
+      <div class="stat">
         <div class="stat-label">작업대기</div>
         <div class="stat-value text-blue-9">{{ data.pending }}</div>
       </div>
@@ -46,7 +64,7 @@ const avgDurationLabel = computed(() => {
       </div>
       <q-separator vertical />
       <div class="stat">
-        <div class="stat-label">승인 대기</div>
+        <div class="stat-label">분석승인대기</div>
         <div class="stat-value text-green-9">{{ data.awaitingApproval }}</div>
       </div>
       <q-separator vertical />

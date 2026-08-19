@@ -1,15 +1,12 @@
 package com.hamonsoft.netismaker.service;
 
 import com.hamonsoft.netismaker.dto.AnswerRequest;
-import com.hamonsoft.netismaker.dto.CreateInterviewRequest;
 import com.hamonsoft.netismaker.dto.InterviewClaimResponse;
 import com.hamonsoft.netismaker.dto.InterviewResponse;
-import com.hamonsoft.netismaker.dto.InterviewSummary;
 import com.hamonsoft.netismaker.dto.WorkerPlanRequest;
 import com.hamonsoft.netismaker.dto.WorkerQuestionRequest;
 import com.hamonsoft.netismaker.entity.*;
 import com.hamonsoft.netismaker.repository.*;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Profile;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.http.HttpStatus;
@@ -25,17 +22,19 @@ import java.util.Optional;
 /**
  * 인터뷰 세션 상태 전이의 단일 진입점. 모든 상태 변경은 여기서 (TaskService 패턴).
  *
- *   create        ─► QUEUED
+ *   createForTask ─► QUEUED (관리자 승인, TaskService.approve의 유일한 출구)
  *   claim         ─► QUEUED → RUNNING (워커, SKIP LOCKED)
  *   recordQuestion─► RUNNING → AWAITING_INPUT (워커가 질문 emit, 반납)
  *   submitAnswer  ─► AWAITING_INPUT → QUEUED (사용자 답변, 재큐; idempotent)
  *   recordPlan    ─► RUNNING → PLAN_READY (writing-plans 완료)
- *   register      ─► PLAN_READY → REGISTERED (+ Task(COMPLETED)+TaskAnalysis 프리필)
+ *   confirm       ─► PLAN_READY → REGISTERED (기존 task 갱신: analysis 프리필 + 구현/디자인 큐)
  *   cancel        ─► QUEUED/RUNNING/AWAITING_INPUT/PLAN_READY → CANCELLED
  *   expire        ─► AWAITING_INPUT → EXPIRED (idle TTL)
  *   fail          ─► QUEUED/RUNNING/AWAITING_INPUT → FAILED
  *
- * Task 상태머신(TaskStatus)은 변경하지 않는다.
+ * task_id가 있는 세션은 각 전이마다 소유 task 상태도 함께 미러링한다:
+ *   recordQuestion → INTERVIEW_INPUT, submitAnswer → INTERVIEWING, recordPlan → INTERVIEW_REVIEW,
+ *   fail/expire/cancel → AWAITING_APPROVAL.
  */
 @Service
 @Profile("api")
@@ -44,76 +43,40 @@ public class InterviewService {
     private final InterviewSessionRepository sessionRepo;
     private final InterviewTurnRepository turnRepo;
     private final InterviewPlanRepository planRepo;
-    private final McpCatalogService mcpCatalogService;
-    private final RepoCatalogService repoCatalogService;
     private final TaskRepository taskRepo;
     private final TaskAnalysisRepository analysisRepo;
     private final TaskStatusHistoryRepository historyRepo;
 
-    @Value("${app.interview.user-concurrent-limit:3}")
-    private int userConcurrentLimit;
-
-    @Value("${app.task.max-retry:3}")
-    private int maxRetry;
-
     public InterviewService(InterviewSessionRepository sessionRepo,
                             InterviewTurnRepository turnRepo,
                             InterviewPlanRepository planRepo,
-                            McpCatalogService mcpCatalogService,
-                            RepoCatalogService repoCatalogService,
                             TaskRepository taskRepo,
                             TaskAnalysisRepository analysisRepo,
                             TaskStatusHistoryRepository historyRepo) {
         this.sessionRepo = sessionRepo;
         this.turnRepo = turnRepo;
         this.planRepo = planRepo;
-        this.mcpCatalogService = mcpCatalogService;
-        this.repoCatalogService = repoCatalogService;
         this.taskRepo = taskRepo;
         this.analysisRepo = analysisRepo;
         this.historyRepo = historyRepo;
     }
 
+    /**
+     * 관리자 승인 → 해당 task의 인터뷰 세션 생성(QUEUED).
+     * task 필드를 스냅샷으로 복사한다 — 워커는 세션만 보고 일하므로 계약이 바뀌지 않는다.
+     * task 상태 전이는 호출자(TaskService)가 담당한다.
+     */
     @Transactional
-    public InterviewSession create(CreateInterviewRequest req, String requesterId) {
-        long active = sessionRepo.countActiveByRequester(requesterId);
-        if (active >= userConcurrentLimit) {
-            throw TaskException.tooManyRequests(
-                    "동시에 진행할 수 있는 인터뷰 한도(" + userConcurrentLimit + ")를 초과했습니다");
-        }
-        List<TaskMcpSpec> extras = resolveMcpExtras(req.mcpCatalogIds());
-        String model = ModelEffortPolicy.resolveModel(req.model());
-        String effort = ModelEffortPolicy.resolveEffort(req.effort());
-        ModelEffortPolicy.validate(model, effort);
-        RepoCatalogService.ResolvedRepo repo = repoCatalogService.resolveForRegistration(req.repoCatalogId());
-        InterviewSession s = InterviewSession.create(repo.ownerRepo(), req.githubBranch(),
-                req.title(), req.description(), requesterId, extras, model, effort);
-        s.setGitUrl(repo.gitUrl());
-        s.setRepoAlias(repo.alias());
-        s.setRepoCatalogId(repo.catalogId());
+    public InterviewSession createForTask(Task t, String model, String effort,
+                                          List<TaskMcpSpec> extras) {
+        InterviewSession s = InterviewSession.create(t.getGithubRepo(), t.getGithubBranch(),
+                t.getTitle(), t.getDescription(), t.getRequesterId(),
+                new ArrayList<>(extras == null ? List.of() : extras), model, effort);
+        s.setGitUrl(t.getGitUrl());
+        s.setRepoAlias(t.getRepoAlias());
+        s.setRepoCatalogId(t.getRepoCatalogId());
+        s.setTaskId(t.getId());
         return sessionRepo.save(s);
-    }
-
-    /** 카탈로그 id 리스트 → snapshot 스펙. 비활성/누락 id는 거절. TaskService와 동일 규칙. */
-    private List<TaskMcpSpec> resolveMcpExtras(List<Long> catalogIds) {
-        if (catalogIds == null || catalogIds.isEmpty()) return new ArrayList<>();
-        List<McpCatalogEntry> entries = mcpCatalogService.resolveByIds(catalogIds);
-        if (entries.size() != catalogIds.size()) {
-            throw new TaskException(HttpStatus.BAD_REQUEST,
-                    "존재하지 않는 MCP 카탈로그 id 포함. 요청=" + catalogIds.size()
-                            + " 매칭=" + entries.size());
-        }
-        for (McpCatalogEntry e : entries) {
-            if (!e.isEnabled()) {
-                throw new TaskException(HttpStatus.BAD_REQUEST,
-                        "비활성화된 MCP 카탈로그 항목: " + e.getName());
-            }
-        }
-        List<TaskMcpSpec> out = new ArrayList<>(entries.size());
-        for (McpCatalogEntry e : entries) {
-            out.add(new TaskMcpSpec(e.getName(), e.getUrl(), e.getTransport()));
-        }
-        return out;
     }
 
     /** session_id의 다음 seq. 턴이 없으면 0. */
@@ -199,6 +162,7 @@ public class InterviewService {
         s.setClaimedAt(null);
         s.setCurrentPhase("brainstorming");
         touch(s);
+        mirrorTask(s, TaskStatus.INTERVIEW_INPUT, workerId, "인터뷰 질문 도착 → 관리자 답변 대기");
         return turn;
     }
 
@@ -224,6 +188,7 @@ public class InterviewService {
         s.setClaimedAt(null);
         s.setCurrentPhase("writing-plans");
         touch(s);
+        mirrorTask(s, TaskStatus.INTERVIEW_REVIEW, workerId, "플랜 생성 완료 → 확정 대기");
         return plan;
     }
 
@@ -251,6 +216,7 @@ public class InterviewService {
         s.setWorkerId(null);
         s.setClaimedAt(null);
         touch(s);
+        mirrorTask(s, TaskStatus.AWAITING_APPROVAL, actor, "인터뷰 실패 → 승인대기 복귀");
         return s;
     }
 
@@ -278,6 +244,7 @@ public class InterviewService {
         appendTurn(sessionId, "user", "answer", req.answer(), req.replyToSeq());
         s.setStatus(InterviewStatus.QUEUED);
         touch(s);
+        mirrorTask(s, TaskStatus.INTERVIEWING, actorId, "관리자 답변 → 인터뷰 재개");
         return s;
     }
 
@@ -296,6 +263,7 @@ public class InterviewService {
         s.setWorkerId(null);
         s.setClaimedAt(null);
         touch(s);
+        mirrorTask(s, TaskStatus.AWAITING_APPROVAL, actorId, "인터뷰 취소 → 승인대기 복귀");
         return s;
     }
 
@@ -310,54 +278,56 @@ public class InterviewService {
         appendTurn(sessionId, "system", "note", "만료: " + (reason == null ? "idle TTL 초과" : reason));
         s.setStatus(InterviewStatus.EXPIRED);
         touch(s);
+        mirrorTask(s, TaskStatus.AWAITING_APPROVAL, "system", "인터뷰 만료 → 승인대기 복귀");
         return s;
     }
 
     /**
-     * "작업 등록" — PLAN_READY → REGISTERED. Task(COMPLETED) + TaskAnalysis 프리필 생성.
-     * 기존 승인 게이트(COMPLETED→APPROVED)는 유지(거버넌스). task는 인터뷰 완료 후에만 생성.
-     * 반환: 생성된 taskId.
+     * 플랜 확정 — 세션 PLAN_READY + task 플랜승인대기 → task 구현대기|디자인대기, 세션 REGISTERED.
+     *
+     * TaskAnalysis 프리필 계약(고정):
+     *   markdown_result = design_markdown ONLY (합본 X)
+     *   subtasks_json   = plan_json
+     *   claude_log      = null
+     *   duration_ms     = plan.durationMs
+     * 확정이 곧 승인이므로 approved=true로 저장한다 (별도 승인 게이트 없음).
      */
     @Transactional
-    public Long register(Long sessionId, String actorId, boolean isAdmin, boolean designRequested) {
+    public Long confirm(Long sessionId, String adminId, boolean designRequested) {
         InterviewSession s = requireSession(sessionId);
-        requireOwner(s, actorId, isAdmin);
         if (s.getStatus() != InterviewStatus.PLAN_READY) {
-            throw TaskException.conflict("플랜완료 상태에서만 작업 등록할 수 있습니다 (현재: "
+            throw TaskException.conflict("플랜완료 상태에서만 확정할 수 있습니다 (현재: "
                     + s.getStatus().dbValue() + ")");
+        }
+        if (s.getTaskId() == null) {
+            throw TaskException.conflict("작업에 연결되지 않은 세션입니다");
+        }
+        Task t = taskRepo.findActiveById(s.getTaskId()).orElseThrow(TaskException::notFound);
+        if (t.getStatus() != TaskStatus.INTERVIEW_REVIEW) {
+            throw TaskException.conflict("플랜승인대기 상태에서만 확정할 수 있습니다 (현재: "
+                    + t.getStatus().dbValue() + ")");
         }
         InterviewPlan plan = planRepo.findById(sessionId)
                 .orElseThrow(() -> TaskException.conflict("인터뷰 플랜이 없습니다"));
 
-        // Task(COMPLETED) 생성 — 인터뷰가 분석을 대체. mcps_extra 스냅샷 승계.
-        Task t = Task.create(s.getGithubRepo(), s.getGithubBranch(), s.getTitle(),
-                s.getDescription(), s.getRequesterId(), maxRetry,
-                new ArrayList<>(s.getMcpsExtra() == null ? List.of() : s.getMcpsExtra()),
-                s.getModel(), s.getEffort());
-        t.setStatus(TaskStatus.COMPLETED);
-        t.setDesignRequested(designRequested);
-        t.setGitUrl(s.getGitUrl());
-        t.setRepoAlias(s.getRepoAlias());
-        t.setRepoCatalogId(s.getRepoCatalogId());
-        Task saved = taskRepo.save(t);
-
-        // TaskAnalysis 프리필 (계약 고정):
-        //   markdown_result = design_markdown ONLY (합본 X),
-        //   subtasks_json   = plan_json,
-        //   claude_log      = null,
-        //   duration_ms     = plan.durationMs.
-        TaskAnalysis a = TaskAnalysis.create(saved.getId(), plan.getDesignMarkdown(),
+        TaskAnalysis a = TaskAnalysis.create(t.getId(), plan.getDesignMarkdown(),
                 plan.getPlanJson(), null, plan.getDurationMs());
+        a.setApproved(true);
+        a.setApprovedBy(adminId);
+        a.setApprovedAt(OffsetDateTime.now());
         analysisRepo.save(a);
 
-        historyRepo.save(TaskStatusHistory.log(saved.getId(), null, TaskStatus.COMPLETED,
-                "system", actorId, "대화형 분석 등록 (interview_session " + sessionId + ")"));
+        t.setDesignRequested(designRequested);
+        TaskStatus from = t.getStatus();
+        TaskStatus to = designRequested ? TaskStatus.DESIGN_PENDING : TaskStatus.APPROVED;
+        t.setStatus(to);
+        t.setUpdatedAt(OffsetDateTime.now());
+        historyRepo.save(TaskStatusHistory.log(t.getId(), from, to, "user", adminId,
+                "플랜 확정 → " + to.dbValue() + " (interview_session " + sessionId + ")"));
 
-        // 세션 마감.
-        s.setTaskId(saved.getId());
         s.setStatus(InterviewStatus.REGISTERED);
         touch(s);
-        return saved.getId();
+        return t.getId();
     }
 
     /** ACL 검증 후 세션 반환 (소유자/관리자만). 스트림 구독 전 권한 체크에도 사용. */
@@ -377,12 +347,26 @@ public class InterviewService {
                 planRepo.findById(id).orElse(null));
     }
 
-    /** 요청자 본인의 비종료 인터뷰 목록(경량). 새로고침 후 디스커버리/재오픈용. */
+    /** task 상세가 열 세션 — 최신 1건. */
     @Transactional(readOnly = true)
-    public List<InterviewSummary> listActiveForRequester(String requesterId) {
-        return sessionRepo.findActiveByRequester(requesterId).stream()
-                .map(InterviewSummary::of)
-                .toList();
+    public Optional<Long> latestSessionIdForTask(Long taskId) {
+        return sessionRepo.findTopByTaskIdOrderByCreatedAtDesc(taskId).map(InterviewSession::getId);
+    }
+
+    /**
+     * task 삭제 시 열린 세션을 닫는다. 워커가 이미 잡고 있어도 다음 보고에서 상태 가드에 걸려
+     * 조용히 실패하므로(고아 컨테이너 같은 부작용 없음) 차단 대신 정리로 처리한다.
+     * task 상태는 이미 삭제 대상이므로 미러링하지 않는다.
+     */
+    @Transactional
+    public void closeOpenSessionsForTask(Long taskId, String actorId) {
+        for (InterviewSession s : sessionRepo.findOpenByTaskId(taskId)) {
+            appendTurn(s.getId(), "system", "note", "작업 삭제로 인터뷰 취소 (" + actorId + ")");
+            s.setStatus(InterviewStatus.CANCELLED);
+            s.setWorkerId(null);
+            s.setClaimedAt(null);
+            touch(s);
+        }
     }
 
     private void requireOwner(InterviewSession s, String actorId, boolean isAdmin) {
@@ -412,5 +396,19 @@ public class InterviewService {
         OffsetDateTime now = OffsetDateTime.now();
         s.setUpdatedAt(now);
         s.setLastActivityAt(now);
+    }
+
+    /**
+     * 세션 전이를 소유 task 상태로 미러링한다. 관리자가 행동해야 하는 구간(입력대기/플랜승인대기)을
+     * 작업 목록에서 바로 식별하기 위한 것. task_id가 없는 레거시 세션은 조용히 무시한다.
+     */
+    private void mirrorTask(InterviewSession s, TaskStatus to, String actorId, String reason) {
+        if (s.getTaskId() == null) return;
+        Task t = taskRepo.findActiveById(s.getTaskId()).orElse(null);
+        if (t == null || t.getStatus() == to) return;
+        TaskStatus from = t.getStatus();
+        t.setStatus(to);
+        t.setUpdatedAt(OffsetDateTime.now());
+        historyRepo.save(TaskStatusHistory.log(t.getId(), from, to, "system", actorId, reason));
     }
 }

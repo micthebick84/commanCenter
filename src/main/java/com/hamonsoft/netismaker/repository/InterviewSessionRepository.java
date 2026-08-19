@@ -16,20 +16,6 @@ import java.util.Optional;
 
 public interface InterviewSessionRepository extends JpaRepository<InterviewSession, Long> {
 
-    /**
-     * 요청자별 미완료(=terminal 아님) 인터뷰 카운트. 동시 인터뷰 한도 검증용.
-     * terminal = REGISTERED/CANCELLED/EXPIRED/FAILED.
-     */
-    @Query("""
-        SELECT COUNT(s) FROM InterviewSession s
-        WHERE s.requesterId = :requesterId
-          AND s.status IN (com.hamonsoft.netismaker.entity.InterviewStatus.QUEUED,
-                           com.hamonsoft.netismaker.entity.InterviewStatus.RUNNING,
-                           com.hamonsoft.netismaker.entity.InterviewStatus.AWAITING_INPUT,
-                           com.hamonsoft.netismaker.entity.InterviewStatus.PLAN_READY)
-    """)
-    long countActiveByRequester(@Param("requesterId") String requesterId);
-
     /** 단건 조회 (인터뷰는 soft-delete 없음 — id로 직접). */
     @Query("SELECT s FROM InterviewSession s WHERE s.id = :id")
     Optional<InterviewSession> findActiveById(@Param("id") Long id);
@@ -73,21 +59,6 @@ public interface InterviewSessionRepository extends JpaRepository<InterviewSessi
     List<InterviewSession> findByRequester(@Param("requesterId") String requesterId,
                                            @Param("status") InterviewStatus status);
 
-    /**
-     * 요청자별 비종료(=active) 세션, 최근 활동 우선. 새로고침 후 '이어할 인터뷰' 디스커버리용.
-     * active = QUEUED/RUNNING/AWAITING_INPUT/PLAN_READY (countActiveByRequester와 동일 집합).
-     */
-    @Query("""
-        SELECT s FROM InterviewSession s
-        WHERE s.requesterId = :requesterId
-          AND s.status IN (com.hamonsoft.netismaker.entity.InterviewStatus.QUEUED,
-                           com.hamonsoft.netismaker.entity.InterviewStatus.RUNNING,
-                           com.hamonsoft.netismaker.entity.InterviewStatus.AWAITING_INPUT,
-                           com.hamonsoft.netismaker.entity.InterviewStatus.PLAN_READY)
-        ORDER BY s.lastActivityAt DESC
-    """)
-    List<InterviewSession> findActiveByRequester(@Param("requesterId") String requesterId);
-
     /** RUNNING이면서 claimed_at이 cutoff 이전(=stale) — 회수 후보. */
     @Query("""
         SELECT s FROM InterviewSession s
@@ -103,4 +74,18 @@ public interface InterviewSessionRepository extends JpaRepository<InterviewSessi
           AND s.lastActivityAt < :cutoff
     """)
     List<InterviewSession> findIdleAwaitingInput(@Param("cutoff") OffsetDateTime cutoff);
+
+    /** task의 최신 세션 1건 (재승인으로 세션이 여러 개일 수 있다). */
+    Optional<InterviewSession> findTopByTaskIdOrderByCreatedAtDesc(Long taskId);
+
+    /** task에 붙은 비종료 세션들 — 삭제 시 정리 대상. */
+    @Query("""
+        SELECT s FROM InterviewSession s
+        WHERE s.taskId = :taskId
+          AND s.status IN (com.hamonsoft.netismaker.entity.InterviewStatus.QUEUED,
+                           com.hamonsoft.netismaker.entity.InterviewStatus.RUNNING,
+                           com.hamonsoft.netismaker.entity.InterviewStatus.AWAITING_INPUT,
+                           com.hamonsoft.netismaker.entity.InterviewStatus.PLAN_READY)
+    """)
+    List<InterviewSession> findOpenByTaskId(@Param("taskId") Long taskId);
 }

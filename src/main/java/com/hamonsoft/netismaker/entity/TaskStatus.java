@@ -3,6 +3,14 @@ package com.hamonsoft.netismaker.entity;
 /**
  * 작업 상태 머신.
  *
+ *  인터뷰 단계 (등록 → 관리자 승인 → 플랜 확정):
+ *   [승인대기] ──(관리자 승인)──→ [인터뷰중] ⇄ [입력대기]
+ *                                     │
+ *                               (플랜 생성)
+ *                                     ↓
+ *                             [플랜승인대기] ──(구현 진행)──→ [구현대기] | [디자인대기]
+ *   [인터뷰중|입력대기|플랜승인대기] ──(실패/만료/취소)──→ [승인대기]
+ *
  *  분석 단계:
  *   [작업대기] ──→ [분석중] ──→ [분석완료]
  *                      │
@@ -31,12 +39,13 @@ package com.hamonsoft.netismaker.entity;
  *   [디자인승인대기] ──(반려, 최대 3회)──→ [디자인대기]
  *
  *  취소:
- *   [작업대기] ──→ [취소됨] (본인, PENDING 한정)
+ *   [작업대기|승인대기] ──→ [취소됨] (본인 또는 admin, 두 상태 한정)
  *
  * DB 값은 한글 그대로 저장 (VARCHAR(30)). Enum 이름과 분리되어 있으니
  * Java enum 이름 변경이 DB 호환을 깨지 않음.
  */
 public enum TaskStatus {
+    AWAITING_APPROVAL("승인대기"),
     PENDING("작업대기"),
     IN_PROGRESS("분석중"),
     COMPLETED("분석완료"),
@@ -56,6 +65,9 @@ public enum TaskStatus {
     DESIGNING("디자인중"),
     DESIGN_REVIEW("디자인승인대기"),
     DESIGN_FAILED("디자인실패"),
+    INTERVIEWING("인터뷰중"),
+    INTERVIEW_INPUT("입력대기"),
+    INTERVIEW_REVIEW("플랜승인대기"),
     CANCELLED("취소됨");
 
     private final String dbValue;

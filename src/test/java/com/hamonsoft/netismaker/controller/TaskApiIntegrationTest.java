@@ -69,18 +69,18 @@ class TaskApiIntegrationTest {
 
     // catalog id=1 corresponds to the V14 seed entry (alias 'Netis7.0').
     private String body(Long repoCatalogId, String title, String desc) throws Exception {
-        return json.writeValueAsString(new TaskCreateRequest(repoCatalogId, "main", title, desc, java.util.List.of(), null, null));
+        return json.writeValueAsString(new TaskCreateRequest(repoCatalogId, "main", title, desc));
     }
 
     @Test
-    void POST_tasks_happy_path_returns_201_and_pending_status() throws Exception {
+    void POST_tasks_happy_path_returns_201_and_awaiting_approval_status() throws Exception {
         mvc.perform(post("/api/tasks").with(userJwt("user1"))
                         .contentType(APPLICATION_JSON)
                         .content(body(1L, "버그 수정", "로그인이 안 됨")))
                 .andExpect(status().isCreated())
                 .andExpect(header().exists("Location"))
-                .andExpect(jsonPath("$.status").value("PENDING"))
-                .andExpect(jsonPath("$.statusLabel").value("작업대기"))
+                .andExpect(jsonPath("$.status").value("AWAITING_APPROVAL"))
+                .andExpect(jsonPath("$.statusLabel").value("승인대기"))
                 .andExpect(jsonPath("$.requesterId").value("user1"));
         assertThat(taskRepo.count()).isEqualTo(1);
     }

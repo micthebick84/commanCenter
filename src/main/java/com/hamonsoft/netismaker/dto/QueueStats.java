@@ -20,5 +20,8 @@ public record QueueStats(
         long deployLost,
         long undeployPending,
         long undeploying,
+        long pendingApproval,
+        long interviewing,
+        long planReview,
         Double avgDurationMs
 ) {}

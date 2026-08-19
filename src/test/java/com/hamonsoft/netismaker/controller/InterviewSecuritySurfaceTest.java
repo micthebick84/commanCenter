@@ -23,8 +23,7 @@ class InterviewSecuritySurfaceTest {
 
     @Test
     void api_interviews_without_jwt_is_401() throws Exception {
-        mvc.perform(post("/api/interviews").contentType(APPLICATION_JSON)
-                        .content("{\"githubRepo\":\"a/b\",\"title\":\"t\",\"description\":\"d\"}"))
+        mvc.perform(post("/api/interviews/1/confirm").contentType(APPLICATION_JSON))
                 .andExpect(status().isUnauthorized());
     }
 

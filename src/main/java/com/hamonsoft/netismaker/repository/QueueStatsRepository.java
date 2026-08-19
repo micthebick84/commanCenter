@@ -27,6 +27,7 @@ public class QueueStatsRepository {
                        design_pending, designing, design_review, design_failed,
                        deploy_pending, deploying, deployed, deploy_failed, deploy_lost,
                        undeploy_pending, undeploying,
+                       pending_approval, interviewing, plan_review,
                        avg_duration_ms
                 FROM com.task_queue_stats
                 """).getSingleResult();
@@ -50,7 +51,10 @@ public class QueueStatsRepository {
                 ((Number) row[16]).longValue(),
                 ((Number) row[17]).longValue(),
                 ((Number) row[18]).longValue(),
-                row[19] == null ? null : ((Number) row[19]).doubleValue()
+                ((Number) row[19]).longValue(),
+                ((Number) row[20]).longValue(),
+                ((Number) row[21]).longValue(),
+                row[22] == null ? null : ((Number) row[22]).doubleValue()
         );
     }
 }

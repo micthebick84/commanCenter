@@ -1,6 +1,7 @@
 package com.hamonsoft.netismaker.service;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.hamonsoft.netismaker.dto.ApproveRequest;
 import com.hamonsoft.netismaker.dto.TaskCreateRequest;
 import com.hamonsoft.netismaker.entity.EnvVar;
 import com.hamonsoft.netismaker.entity.McpCatalogEntry;
@@ -30,10 +31,12 @@ import java.util.Optional;
 /**
  * 작업 상태 전이의 단일 진입점. 모든 상태 변경은 여기서 + 히스토리 로깅.
  *
- *   create   ─► PENDING
- *   cancel   ─► PENDING → CANCELLED  (본인, PENDING 한정)
+ *   create   ─► AWAITING_APPROVAL  (모델/effort/MCP는 승인 시점에 결정, Task 4)
+ *   cancel   ─► AWAITING_APPROVAL/PENDING → CANCELLED  (본인, 두 상태 한정)
  *   delete   ─► soft delete (deleted_at = now)
- *   approve  ─► COMPLETED + approved=true  (ADMIN, COMPLETED 한정)
+ *   approve  ─► 상태에 따라 두 갈래 (ADMIN 한정, 그 외 상태는 409)
+ *                 AWAITING_APPROVAL → INTERVIEWING (인터뷰 세션 생성, 현행 경로)
+ *                 COMPLETED         → APPROVED/DESIGN_PENDING + approved=true (레거시 자동분석 경로)
  *   retry    ─► FAILED → PENDING + retry_count++  (retry_count < max_retry)
  */
 @Service
@@ -49,6 +52,7 @@ public class TaskService {
     private final McpCatalogService mcpCatalogService;
     private final RepoCatalogService repoCatalogService;
     private final ObjectMapper objectMapper;
+    private final InterviewService interviewService;
 
     @Value("${app.task.user-concurrent-limit:5}")
     private int userConcurrentLimit;
@@ -62,7 +66,8 @@ public class TaskService {
                        TaskStatusHistoryRepository historyRepo,
                        McpCatalogService mcpCatalogService,
                        RepoCatalogService repoCatalogService,
-                       ObjectMapper objectMapper) {
+                       ObjectMapper objectMapper,
+                       InterviewService interviewService) {
         this.taskRepo = taskRepo;
         this.analysisRepo = analysisRepo;
         this.designRepo = designRepo;
@@ -70,6 +75,7 @@ public class TaskService {
         this.mcpCatalogService = mcpCatalogService;
         this.repoCatalogService = repoCatalogService;
         this.objectMapper = objectMapper;
+        this.interviewService = interviewService;
     }
 
     @Transactional
@@ -79,19 +85,17 @@ public class TaskService {
             throw TaskException.tooManyRequests(
                     "동시에 보유할 수 있는 미완료 작업 한도(" + userConcurrentLimit + ")를 초과했습니다");
         }
-        List<TaskMcpSpec> extras = resolveMcpExtras(req.mcpCatalogIds());
-        String model = ModelEffortPolicy.resolveModel(req.model());
-        String effort = ModelEffortPolicy.resolveEffort(req.effort());
-        ModelEffortPolicy.validate(model, effort);
         RepoCatalogService.ResolvedRepo repo = repoCatalogService.resolveForRegistration(req.repoCatalogId());
+        // 모델/effort/MCP는 승인 시점에 관리자가 결정 — 등록은 서버 기본값으로 시작한다.
         Task t = Task.create(repo.ownerRepo(), req.githubBranch(), req.title(),
-                             req.description(), requesterId, maxRetry, extras, model, effort);
+                             req.description(), requesterId, maxRetry,
+                             new ArrayList<>(), null, null);
+        t.setStatus(TaskStatus.AWAITING_APPROVAL);
         t.setGitUrl(repo.gitUrl());
         t.setRepoAlias(repo.alias());
         t.setRepoCatalogId(repo.catalogId());
-        t.setDesignRequested(Boolean.TRUE.equals(req.designRequested()));
         Task saved = taskRepo.save(t);
-        historyRepo.save(TaskStatusHistory.log(saved.getId(), null, TaskStatus.PENDING,
+        historyRepo.save(TaskStatusHistory.log(saved.getId(), null, TaskStatus.AWAITING_APPROVAL,
                 "user", requesterId, "작업 등록"));
         return saved;
     }
@@ -152,8 +156,8 @@ public class TaskService {
         if (!t.isOwnedBy(actorId) && !isAdmin) {
             throw TaskException.forbidden();
         }
-        if (t.getStatus() != TaskStatus.PENDING) {
-            throw TaskException.conflict("작업대기 상태에서만 취소할 수 있습니다 (현재: "
+        if (t.getStatus() != TaskStatus.PENDING && t.getStatus() != TaskStatus.AWAITING_APPROVAL) {
+            throw TaskException.conflict("승인대기/작업대기 상태에서만 취소할 수 있습니다 (현재: "
                     + t.getStatus().dbValue() + ")");
         }
         TaskStatus from = t.getStatus();
@@ -178,6 +182,7 @@ public class TaskService {
                             + t.getStatus().dbValue() + ")");
             default -> { }
         }
+        interviewService.closeOpenSessionsForTask(t.getId(), actorId);
         t.setDeletedAt(OffsetDateTime.now());
         t.setUpdatedAt(OffsetDateTime.now());
         historyRepo.save(TaskStatusHistory.log(t.getId(), t.getStatus(), t.getStatus(),
@@ -185,25 +190,55 @@ public class TaskService {
     }
 
     /**
-     * 관리자 승인 (idempotent).
+     * 관리자 승인. 상태에 따라 두 의미로 갈린다.
      *
-     *  COMPLETED + !approved          ─► analysis.approved=true + task.status=APPROVED (1차 승인)
-     *  COMPLETED + approved           ─► task.status=APPROVED만 전이 (구 데이터 마이그레이션 / 큐 재진입)
-     *  APPROVED/IMPLEMENTING/PR_CREATED 등 ─► conflict (이미 큐/진행중)
-     *
-     * task.status 전이가 핵심 — 워커 큐가 PENDING/APPROVED 둘 다 보고 있어
-     * 승인 즉시 다음 폴링에 picked up되어 worktree 구현 → PR 생성으로 이어짐.
+     *  승인대기 → 인터뷰 세션 생성 + task=인터뷰중  (현행 경로)
+     *  분석완료 → analysis.approved + task=구현대기|디자인대기 (레거시 자동분석 경로)
      */
     @Transactional
-    public TaskAnalysis approve(Long taskId, String adminId) {
-        Task t = taskRepo.findActiveById(taskId).orElseThrow(TaskException::notFound);
-        if (t.getStatus() != TaskStatus.COMPLETED) {
-            throw TaskException.conflict("분석완료 상태에서만 승인할 수 있습니다 (현재: "
-                    + t.getStatus().dbValue() + ")");
+    public void approve(Long taskId, String adminId, ApproveRequest req) {
+        // 비관적 락(FOR UPDATE, SKIP LOCKED 없음) — 동시 승인 더블클릭 시 두 번째 호출이
+        // 첫 번째 커밋을 기다렸다가 갱신된 상태를 재판정하도록 한다 (세션 중복 생성 방지).
+        Task t = taskRepo.findActiveByIdForUpdate(taskId).orElseThrow(TaskException::notFound);
+        switch (t.getStatus()) {
+            case AWAITING_APPROVAL -> startInterview(t, adminId, req);
+            case COMPLETED -> approveAnalysis(t, adminId);
+            default -> throw TaskException.conflict(
+                    "승인대기 또는 분석완료 상태에서만 승인할 수 있습니다 (현재: "
+                            + t.getStatus().dbValue() + ")");
         }
-        TaskAnalysis a = analysisRepo.findById(taskId)
-                .orElseThrow(() -> TaskException.conflict("분석 결과가 없습니다"));
+    }
 
+    /** 레거시 2-arg 호출부(테스트 등) 호환 — 바디 없는 승인. */
+    @Transactional
+    public void approve(Long taskId, String adminId) {
+        approve(taskId, adminId, null);
+    }
+
+    /** 승인대기 → 인터뷰중. 세션을 만들고 모델/effort/MCP 선택을 task에도 박제한다. */
+    private void startInterview(Task t, String adminId, ApproveRequest req) {
+        List<TaskMcpSpec> extras = resolveMcpExtras(req == null ? null : req.mcpCatalogIds());
+        String model = ModelEffortPolicy.resolveModel(req == null ? null : req.model());
+        String effort = ModelEffortPolicy.resolveEffort(req == null ? null : req.effort());
+        ModelEffortPolicy.validate(model, effort);   // 검증이 먼저 — 실패 시 세션이 생기면 안 된다
+
+        t.setModel(model);
+        t.setEffort(effort);
+        t.setMcpsExtra(new ArrayList<>(extras));
+        t.setFailureReason(null);
+        interviewService.createForTask(t, model, effort, extras);
+
+        TaskStatus from = t.getStatus();
+        t.setStatus(TaskStatus.INTERVIEWING);
+        t.setUpdatedAt(OffsetDateTime.now());
+        historyRepo.save(TaskStatusHistory.log(t.getId(), from, TaskStatus.INTERVIEWING,
+                "user", adminId, "관리자 승인 → 인터뷰 시작"));
+    }
+
+    /** 레거시: 분석완료 + admin 승인 → 구현/디자인 큐. 기존 동작 그대로. */
+    private void approveAnalysis(Task t, String adminId) {
+        TaskAnalysis a = analysisRepo.findById(t.getId())
+                .orElseThrow(() -> TaskException.conflict("분석 결과가 없습니다"));
         boolean toDesign = t.isDesignRequested();
         String reason;
         if (!a.isApproved()) {
@@ -212,17 +247,14 @@ public class TaskService {
             a.setApprovedAt(OffsetDateTime.now());
             reason = toDesign ? "관리자 승인 → 디자인 큐 진입" : "관리자 승인 → 구현 큐 진입";
         } else {
-            // 이미 approved이지만 status가 COMPLETED인 경우: 구버전 데이터 또는 admin 명시적 재큐잉
             reason = toDesign ? "이미 승인된 작업 → 디자인 큐 재진입" : "이미 승인된 작업 → 구현 큐 재진입";
         }
-
         TaskStatus from = t.getStatus();
         TaskStatus to = toDesign ? TaskStatus.DESIGN_PENDING : TaskStatus.APPROVED;
         t.setStatus(to);
         t.setUpdatedAt(OffsetDateTime.now());
         historyRepo.save(TaskStatusHistory.log(t.getId(), from, to, "user", adminId,
                 reason + (to == TaskStatus.DESIGN_PENDING ? " (디자인 구간)" : "")));
-        return a;
     }
 
     /** 디자인승인대기 → 구현대기. admin 한정. */

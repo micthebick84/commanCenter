@@ -132,7 +132,7 @@ class TaskServiceDeployTest {
     void soft_delete_of_deployed_task_is_rejected() {
         // 삭제하면 reconcile/GC 보호에서 빠져 컨테이너·공개 URL이 고아가 됨 — 중지 먼저
         Task t = taskWithStatus(TaskStatus.DEPLOYED);
-        when(taskRepo.findActiveById(42L)).thenReturn(Optional.of(t));
+        when(taskRepo.findActiveByIdForUpdate(42L)).thenReturn(Optional.of(t));
         assertThatThrownBy(() -> service.softDelete(42L, "admin", true))
                 .isInstanceOf(TaskException.class)
                 .hasMessageContaining("중지");
@@ -142,7 +142,7 @@ class TaskServiceDeployTest {
     @Test
     void soft_delete_of_deploy_lost_task_is_rejected() {
         Task t = taskWithStatus(TaskStatus.DEPLOY_LOST);
-        when(taskRepo.findActiveById(42L)).thenReturn(Optional.of(t));
+        when(taskRepo.findActiveByIdForUpdate(42L)).thenReturn(Optional.of(t));
         assertThatThrownBy(() -> service.softDelete(42L, "admin", true))
                 .isInstanceOf(TaskException.class);
         assertThat(t.getDeletedAt()).isNull();
@@ -151,7 +151,7 @@ class TaskServiceDeployTest {
     @Test
     void soft_delete_of_pr_created_task_is_allowed() {
         Task t = taskWithStatus(TaskStatus.PR_CREATED);
-        when(taskRepo.findActiveById(42L)).thenReturn(Optional.of(t));
+        when(taskRepo.findActiveByIdForUpdate(42L)).thenReturn(Optional.of(t));
         service.softDelete(42L, "admin", true);
         assertThat(t.getDeletedAt()).isNotNull();
     }

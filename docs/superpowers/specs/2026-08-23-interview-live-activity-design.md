@@ -138,7 +138,7 @@ public void activity(@PathVariable Long id, @RequestParam String workerId,
 - **Props:** `{ pending: PendingActivity }`
 - **렌더** (assistant 말풍선 스타일, `ChatBubble` 룩앤필 재사용):
   - 상단: `TypingIndicator` 점 + **최신 도구 활동 라인** (`activities`의 마지막 항목: 아이콘 + `label · detail`). 이전 활동은 흐릿한 소형 리스트로 최근 3건.
-  - 중단: `thinking`이 비어있지 않으면 **QExpansionItem "추론 중…"**(기본 접힘, `dense`) — 펼치면 흐릿한 소형 폰트(`pre-wrap`)로 thinking 텍스트.
+  - 중단: `thinking`이 비어있지 않으면 **자체 접힘 토글 "추론 중…"**(기본 접힘 — chat/* 컴포넌트는 Quasar 미의존 순수 프레젠테이션 관례) — 펼치면 흐릿한 소형 폰트(`pre-wrap`)로 thinking 텍스트.
   - 하단: `narration`이 비어있지 않으면 본문 텍스트(`pre-wrap`) — 최종 질문의 라이브 미리보기.
 - 내부 상태는 접힘 토글뿐. `aria-live="off"`(고빈도 갱신이라 스크린리더 소음 방지 — 확정 질문 도착 시 기존 transcript의 `aria-live="polite"`가 알림).
 

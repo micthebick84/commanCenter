@@ -128,8 +128,8 @@ describe('ActivityPoster', () => {
     await vi.advanceTimersByTimeAsync(300);
     const batch = client.postActivity.mock.calls[0]![1] as { events: Array<{ content?: string }> };
     expect(batch.events).toHaveLength(2);
-    expect(batch.events[0].content).toHaveLength(3999);
-    expect(batch.events[1].content).toBe('yy');
+    expect(batch.events[0]!.content).toHaveLength(3999);
+    expect(batch.events[1]!.content).toBe('yy');
     await p.stop();
   });
 
@@ -143,8 +143,8 @@ describe('ActivityPoster', () => {
     const batch = client.postActivity.mock.calls[0]![1] as {
       events: Array<{ content?: string; label?: string }>;
     };
-    expect(batch.events[0].content).toHaveLength(4096);
-    expect(batch.events[1].label).toHaveLength(100);
+    expect(batch.events[0]!.content).toHaveLength(4096);
+    expect(batch.events[1]!.label).toHaveLength(100);
     await p.stop();
   });
 
@@ -155,7 +155,7 @@ describe('ActivityPoster', () => {
     p.push({ type: 'tool', label: '환경 준비', detail: 'D'.repeat(300) });
     await vi.advanceTimersByTimeAsync(300);
     const batch = client.postActivity.mock.calls[0]![1] as { events: Array<{ detail?: string }> };
-    expect(batch.events[0].detail).toHaveLength(200);
+    expect(batch.events[0]!.detail).toHaveLength(200);
     await p.stop();
   });
 

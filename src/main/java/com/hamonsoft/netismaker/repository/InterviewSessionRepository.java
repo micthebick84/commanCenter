@@ -78,6 +78,9 @@ public interface InterviewSessionRepository extends JpaRepository<InterviewSessi
     /** task의 최신 세션 1건 (재승인으로 세션이 여러 개일 수 있다). */
     Optional<InterviewSession> findTopByTaskIdOrderByCreatedAtDesc(Long taskId);
 
+    /** task의 전체 세션 이력 (최신순). V18 idx_interview_session_task(task_id, created_at DESC)가 커버. */
+    List<InterviewSession> findByTaskIdOrderByCreatedAtDesc(Long taskId);
+
     /** task에 붙은 비종료 세션들 — 삭제 시 정리 대상. */
     @Query("""
         SELECT s FROM InterviewSession s

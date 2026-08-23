@@ -3,6 +3,7 @@ package com.hamonsoft.netismaker.service;
 import com.hamonsoft.netismaker.dto.AnswerRequest;
 import com.hamonsoft.netismaker.dto.InterviewClaimResponse;
 import com.hamonsoft.netismaker.dto.InterviewResponse;
+import com.hamonsoft.netismaker.dto.InterviewSummaryResponse;
 import com.hamonsoft.netismaker.dto.WorkerPlanRequest;
 import com.hamonsoft.netismaker.dto.WorkerQuestionRequest;
 import com.hamonsoft.netismaker.entity.*;
@@ -368,6 +369,22 @@ public class InterviewService {
     @Transactional(readOnly = true)
     public Optional<Long> latestSessionIdForTask(Long taskId) {
         return sessionRepo.findTopByTaskIdOrderByCreatedAtDesc(taskId).map(InterviewSession::getId);
+    }
+
+    /**
+     * task의 전체 세션 이력 (최신순, 경량 — turns/plan 미포함).
+     * ACL은 세션이 아니라 task 소유자 기준으로 통일: TaskController.get과 동일 의미론
+     * (소프트삭제된 task는 404, 비소유자·비관리자는 403).
+     */
+    @Transactional(readOnly = true)
+    public List<InterviewSummaryResponse> listForTask(Long taskId, String viewerId, boolean isAdmin) {
+        Task t = taskRepo.findActiveById(taskId).orElseThrow(TaskException::notFound);
+        if (!isAdmin && !t.isOwnedBy(viewerId)) {
+            throw TaskException.forbidden();
+        }
+        return sessionRepo.findByTaskIdOrderByCreatedAtDesc(taskId).stream()
+                .map(InterviewSummaryResponse::of)
+                .toList();
     }
 
     /**

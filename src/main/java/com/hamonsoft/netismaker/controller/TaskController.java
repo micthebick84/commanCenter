@@ -2,6 +2,7 @@ package com.hamonsoft.netismaker.controller;
 
 import com.hamonsoft.netismaker.dto.ApproveRequest;
 import com.hamonsoft.netismaker.dto.DeployRequest;
+import com.hamonsoft.netismaker.dto.InterviewSummaryResponse;
 import com.hamonsoft.netismaker.dto.RejectDesignRequest;
 import com.hamonsoft.netismaker.dto.TaskCreateRequest;
 import com.hamonsoft.netismaker.dto.TaskResponse;
@@ -103,6 +104,16 @@ public class TaskController {
                 taskService.getDesign(id).orElse(null),
                 interviewService.latestSessionIdForTask(id).orElse(null),
                 taskService.getAttachments(id));
+    }
+
+    /**
+     * task의 인터뷰 세션 이력 (최신순, 경량). 재승인으로 세션이 여러 개 쌓인 task의
+     * 과거 transcript 발견용. ACL(task 소유자 또는 관리자)은 서비스에서 검증.
+     */
+    @GetMapping("/{id}/interviews")
+    public List<InterviewSummaryResponse> interviews(@PathVariable Long id, JwtAuthenticationToken auth) {
+        String userId = AuthContext.requireUserId(auth);
+        return interviewService.listForTask(id, userId, AuthContext.isAdmin(auth));
     }
 
     @PostMapping("/{id}/cancel")

@@ -177,6 +177,52 @@ public class WorkerService {
             return;
         }
 
+        // 지각 보고 정합화(분석): stale 회수로 FAILED가 됐지만 워커가 실제로는 분석에 성공한 경우.
+        // PENDING은 받지 않는다 — stale 회수가 재큐한 PENDING은 재클레임(SKIP LOCKED)과 경합하고,
+        // 어차피 재분석이 같은 결과로 수렴하므로 지각 보고로 덮지 않는다.
+        // markdownResult가 빈 지각 보고는 분기 불충족 → 아래 in-flight 가드에서 409 (PR_CREATED 관행과 동일).
+        if (current == TaskStatus.FAILED
+                && req.status() == TaskStatus.COMPLETED
+                && req.markdownResult() != null && !req.markdownResult().isBlank()) {
+            TaskAnalysis a = TaskAnalysis.create(t.getId(),
+                    req.markdownResult(), req.subtasksJson(),
+                    req.claudeLog(), req.durationMs());
+            analysisRepo.save(a);
+            t.setStatus(TaskStatus.COMPLETED);
+            t.setFailureReason(null);
+            t.setUpdatedAt(OffsetDateTime.now());
+            historyRepo.save(TaskStatusHistory.log(t.getId(),
+                    TaskStatus.FAILED, TaskStatus.COMPLETED,
+                    "worker", req.workerId(), "지각 보고 정합화: stale 회수 → 분석완료"));
+            return;
+        }
+
+        // 지각 보고 정합화(배포): stale 회수로 DEPLOY_FAILED가 됐지만 워커가 실제로는 배포에 성공한 경우.
+        // DEPLOYING/DEPLOY_PENDING은 받지 않는다(재배포가 진행 중이면 그쪽이 이겨야 함).
+        // DEPLOY_LOST도 대상 아님(DEPLOYED에서만 진입하는 관측 상태).
+        // 잘못된 정합화(컨테이너가 실제로 죽은 경우)는 DeployReconcileJob(300초 주기)이
+        // DEPLOYED↔DEPLOY_LOST 관측 보고로 자가치유한다.
+        if (current == TaskStatus.DEPLOY_FAILED
+                && req.status() == TaskStatus.DEPLOYED
+                && req.deployUrl() != null && !req.deployUrl().isBlank()) {
+            t.setStatus(TaskStatus.DEPLOYED);
+            t.setDeployUrl(req.deployUrl());
+            t.setDeployContainerId(req.deployContainerId());
+            t.setDeployHostPort(req.deployHostPort());
+            t.setDeployImage(req.deployImage());
+            t.setDeployedAt(OffsetDateTime.now());
+            t.setDeployLog(req.deployLog());
+            t.setFailureReason(null);
+            t.setUpdatedAt(OffsetDateTime.now());
+            historyRepo.save(TaskStatusHistory.log(t.getId(),
+                    TaskStatus.DEPLOY_FAILED, TaskStatus.DEPLOYED,
+                    "worker", req.workerId(), "지각 보고 정합화: stale 회수 → 배포완료"));
+            // stale 회수가 이미 finish했을 수 있으나 finish는 멱등
+            // (emitters.remove → null no-op, deleteByTaskId → 0건 no-op).
+            deployLogStream.finish(t.getId());
+            return;
+        }
+
         if (current != TaskStatus.IN_PROGRESS
                 && current != TaskStatus.IMPLEMENTING
                 && current != TaskStatus.DESIGNING

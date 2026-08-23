@@ -32,6 +32,10 @@ netis-maker:
     # 결과 보고 재시도 — 일시적 백엔드 장애(풀 고갈 등)에도 성공/실패 보고가 닿도록.
     result-report-max-retries: 5
     result-report-backoff-ms: 2000
+    # dead-letter 재전송(DeadLetterReplayJob) — 유실 보고(pending)를 주기 재전송해 silent-loss 복구.
+    # 4xx 거부가 max-attempts 소진되면 <workerId>.dead.jsonl로 이동(포렌식 보존, 재전송 종료).
+    replay-interval-seconds: 60
+    replay-max-attempts: 3
     repos-dir: ${REPOS_DIR:${user.home}/netis-maker/repos}
     dead-letter-dir: ${DEAD_LETTER_DIR:${user.home}/netis-maker/dead-letter}
     claude-cli-path: ${CLAUDE_CLI:/opt/homebrew/bin/claude}

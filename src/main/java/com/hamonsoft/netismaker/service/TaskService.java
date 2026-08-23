@@ -42,6 +42,9 @@ import java.util.Optional;
  *                 AWAITING_APPROVAL → INTERVIEWING (인터뷰 세션 생성, 현행 경로)
  *                 COMPLETED         → APPROVED/DESIGN_PENDING + approved=true (레거시 자동분석 경로)
  *   retry    ─► FAILED → PENDING + retry_count++  (retry_count < max_retry)
+ *
+ * 락 정책: approve/cancel/softDelete/retry는 findActiveByIdForUpdate(FOR UPDATE, SKIP LOCKED 없음)로
+ * task 행을 잠근 뒤 상태를 재판정한다 — 동시 호출은 앞선 커밋을 기다렸다가 가드에서 409/404로 거절.
  */
 @Service
 @Profile("api")
@@ -209,7 +212,8 @@ public class TaskService {
 
     @Transactional
     public Task cancel(Long taskId, String actorId, boolean isAdmin) {
-        Task t = taskRepo.findActiveById(taskId).orElseThrow(TaskException::notFound);
+        // 비관적 락(FOR UPDATE) — 동시 취소/워커 claim과 경합 시 갱신된 상태를 재판정해 중복 전이 방지.
+        Task t = taskRepo.findActiveByIdForUpdate(taskId).orElseThrow(TaskException::notFound);
         if (!t.isOwnedBy(actorId) && !isAdmin) {
             throw TaskException.forbidden();
         }
@@ -227,7 +231,9 @@ public class TaskService {
 
     @Transactional
     public void softDelete(Long taskId, String actorId, boolean isAdmin) {
-        Task t = taskRepo.findActiveById(taskId).orElseThrow(TaskException::notFound);
+        // 비관적 락(FOR UPDATE) — approve(세션 생성)와 직렬화해 '삭제된 task + 살아있는 세션' 고아 방지.
+        // 락 획득이 첫 문장, 세션 정리는 그 뒤 — task-먼저 락 순서로 approve와 데드락 없음.
+        Task t = taskRepo.findActiveByIdForUpdate(taskId).orElseThrow(TaskException::notFound);
         if (!t.isOwnedBy(actorId) && !isAdmin) {
             throw TaskException.forbidden();
         }
@@ -379,7 +385,8 @@ public class TaskService {
 
     @Transactional
     public Task retry(Long taskId, String actorId, boolean isAdmin) {
-        Task t = taskRepo.findActiveById(taskId).orElseThrow(TaskException::notFound);
+        // 비관적 락(FOR UPDATE) — 더블클릭 재시도 시 retry_count 증분 유실/중복과 이중 재큐 방지.
+        Task t = taskRepo.findActiveByIdForUpdate(taskId).orElseThrow(TaskException::notFound);
         if (!t.isOwnedBy(actorId) && !isAdmin) {
             throw TaskException.forbidden();
         }

@@ -29,12 +29,15 @@ import java.util.Optional;
  *   recordPlan    ─► RUNNING → PLAN_READY (writing-plans 완료)
  *   confirm       ─► PLAN_READY → REGISTERED (기존 task 갱신: analysis 프리필 + 구현/디자인 큐)
  *   cancel        ─► QUEUED/RUNNING/AWAITING_INPUT/PLAN_READY → CANCELLED
- *   expire        ─► AWAITING_INPUT → EXPIRED (idle TTL)
+ *   expire        ─► AWAITING_INPUT → EXPIRED (idle TTL) | QUEUED → EXPIRED (인터뷰 서비스 미처리 TTL)
  *   fail          ─► QUEUED/RUNNING/AWAITING_INPUT → FAILED
  *
  * task_id가 있는 세션은 각 전이마다 소유 task 상태도 함께 미러링한다:
  *   recordQuestion → INTERVIEW_INPUT, submitAnswer → INTERVIEWING, recordPlan → INTERVIEW_REVIEW,
  *   fail/expire/cancel → AWAITING_APPROVAL.
+ *
+ * 세션 상태 전이는 행 잠금(FOR UPDATE) 하에서만 — claim(SKIP LOCKED)과 스윕(expire/fail)이
+ * 같은 행을 두고 경합하기 때문. 읽기 경로(getForView/getResponse 등)는 잠그지 않는다.
  */
 @Service
 @Profile("api")
@@ -161,7 +164,7 @@ public class InterviewService {
      */
     @Transactional
     public InterviewTurn recordQuestion(Long sessionId, String workerId, WorkerQuestionRequest req) {
-        InterviewSession s = requireSession(sessionId);
+        InterviewSession s = requireSessionForUpdate(sessionId);
         if (s.getStatus() != InterviewStatus.RUNNING) {
             throw TaskException.conflict("인터뷰중 상태에서만 질문을 보고할 수 있습니다 (현재: "
                     + s.getStatus().dbValue() + ")");
@@ -188,7 +191,7 @@ public class InterviewService {
      */
     @Transactional
     public InterviewPlan recordPlan(Long sessionId, String workerId, WorkerPlanRequest req) {
-        InterviewSession s = requireSession(sessionId);
+        InterviewSession s = requireSessionForUpdate(sessionId);
         if (s.getStatus() != InterviewStatus.RUNNING) {
             throw TaskException.conflict("인터뷰중 상태에서만 플랜을 보고할 수 있습니다 (현재: "
                     + s.getStatus().dbValue() + ")");
@@ -212,7 +215,7 @@ public class InterviewService {
     /** 워커가 idle heartbeat 시 last_activity 갱신 (회수 오탐 방지용 best-effort). */
     @Transactional
     public void heartbeat(Long sessionId, String workerId) {
-        InterviewSession s = requireSession(sessionId);
+        InterviewSession s = requireSessionForUpdate(sessionId);
         requireWorker(s, workerId);
         s.setClaimedAt(OffsetDateTime.now());
         touch(s);
@@ -221,7 +224,7 @@ public class InterviewService {
     /** clone/SDK/parse/비용상한 등 오류 → FAILED. terminal 상태에선 거부. */
     @Transactional
     public InterviewSession fail(Long sessionId, String actor, String reason) {
-        InterviewSession s = requireSession(sessionId);
+        InterviewSession s = requireSessionForUpdate(sessionId);
         InterviewStatus st = s.getStatus();
         if (st != InterviewStatus.QUEUED && st != InterviewStatus.RUNNING
                 && st != InterviewStatus.AWAITING_INPUT) {
@@ -243,7 +246,7 @@ public class InterviewService {
      */
     @Transactional
     public InterviewSession submitAnswer(Long sessionId, String actorId, boolean isAdmin, AnswerRequest req) {
-        InterviewSession s = requireSession(sessionId);
+        InterviewSession s = requireSessionForUpdate(sessionId);
         requireOwner(s, actorId, isAdmin);
         // idempotency: 같은 replyToSeq에 대한 user answer 턴이 이미 있으면 중복 → 무시 (상태 무관).
         // status 가드보다 먼저 검사해야 한다 — 1차 답변이 이미 AWAITING_INPUT→QUEUED로 전이시킨 뒤
@@ -268,7 +271,7 @@ public class InterviewService {
     /** 사용자 취소 — QUEUED/RUNNING/AWAITING_INPUT/PLAN_READY에서만. */
     @Transactional
     public InterviewSession cancel(Long sessionId, String actorId, boolean isAdmin) {
-        InterviewSession s = requireSession(sessionId);
+        InterviewSession s = requireSessionForUpdate(sessionId);
         requireOwner(s, actorId, isAdmin);
         InterviewStatus st = s.getStatus();
         if (st != InterviewStatus.QUEUED && st != InterviewStatus.RUNNING
@@ -284,12 +287,16 @@ public class InterviewService {
         return s;
     }
 
-    /** idle TTL 초과 → EXPIRED. AWAITING_INPUT(사람 미복귀) 한정. */
+    /**
+     * TTL 초과 → EXPIRED. AWAITING_INPUT(사람 미복귀) 또는 QUEUED(인터뷰 서비스 미처리) 한정.
+     * QUEUED 만료도 task 미러는 AWAITING_APPROVAL 복귀가 맞다 — 승인 시 task가 INTERVIEWING이 됐으므로.
+     */
     @Transactional
     public InterviewSession expire(Long sessionId, String reason) {
-        InterviewSession s = requireSession(sessionId);
-        if (s.getStatus() != InterviewStatus.AWAITING_INPUT) {
-            throw TaskException.conflict("입력대기 상태에서만 만료할 수 있습니다 (현재: "
+        InterviewSession s = requireSessionForUpdate(sessionId);
+        if (s.getStatus() != InterviewStatus.AWAITING_INPUT
+                && s.getStatus() != InterviewStatus.QUEUED) {
+            throw TaskException.conflict("인터뷰대기/입력대기 상태에서만 만료할 수 있습니다 (현재: "
                     + s.getStatus().dbValue() + ")");
         }
         appendTurn(sessionId, "system", "note", "만료: " + (reason == null ? "idle TTL 초과" : reason));
@@ -311,7 +318,7 @@ public class InterviewService {
      */
     @Transactional
     public Long confirm(Long sessionId, String adminId, boolean designRequested) {
-        InterviewSession s = requireSession(sessionId);
+        InterviewSession s = requireSessionForUpdate(sessionId);
         if (s.getStatus() != InterviewStatus.PLAN_READY) {
             throw TaskException.conflict("플랜완료 상태에서만 확정할 수 있습니다 (현재: "
                     + s.getStatus().dbValue() + ")");
@@ -394,6 +401,14 @@ public class InterviewService {
 
     private InterviewSession requireSession(Long sessionId) {
         return sessionRepo.findActiveById(sessionId).orElseThrow(TaskException::notFound);
+    }
+
+    /**
+     * 상태 전이용 잠금 로드(FOR UPDATE). claim(SKIP LOCKED)/스윕과 경합하는 전이는
+     * 앞선 트랜잭션 커밋을 기다렸다가 갱신된 상태를 재판정해야 하므로 이쪽을 쓴다.
+     */
+    private InterviewSession requireSessionForUpdate(Long sessionId) {
+        return sessionRepo.findByIdForUpdate(sessionId).orElseThrow(TaskException::notFound);
     }
 
     private void requireWorker(InterviewSession s, String workerId) {

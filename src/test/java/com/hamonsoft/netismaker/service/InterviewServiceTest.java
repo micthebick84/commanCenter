@@ -97,7 +97,7 @@ class InterviewServiceTest {
     void recordQuestion_moves_running_to_awaiting_input_and_releases_worker() {
         InterviewSession s = session(2L, InterviewStatus.RUNNING);
         s.setWorkerId("w1");
-        when(sessionRepo.findActiveById(2L)).thenReturn(Optional.of(s));
+        when(sessionRepo.findByIdForUpdate(2L)).thenReturn(Optional.of(s));
         when(turnRepo.findMaxSeq(2L)).thenReturn(null);
         service.recordQuestion(2L, "w1", new com.hamonsoft.netismaker.dto.WorkerQuestionRequest(
                 "어떤 화면에 추가하나요?", "sess-abc", "question", new BigDecimal("0.01")));
@@ -111,7 +111,7 @@ class InterviewServiceTest {
     @Test
     void recordQuestion_from_wrong_status_throws() {
         InterviewSession s = session(2L, InterviewStatus.QUEUED);
-        when(sessionRepo.findActiveById(2L)).thenReturn(Optional.of(s));
+        when(sessionRepo.findByIdForUpdate(2L)).thenReturn(Optional.of(s));
         assertThatThrownBy(() -> service.recordQuestion(2L, "w1",
                 new com.hamonsoft.netismaker.dto.WorkerQuestionRequest("q", "s", "question", null)))
                 .isInstanceOf(TaskException.class)
@@ -122,7 +122,7 @@ class InterviewServiceTest {
     void recordQuestion_wrong_worker_throws() {
         InterviewSession s = session(2L, InterviewStatus.RUNNING);
         s.setWorkerId("w1");
-        when(sessionRepo.findActiveById(2L)).thenReturn(Optional.of(s));
+        when(sessionRepo.findByIdForUpdate(2L)).thenReturn(Optional.of(s));
         assertThatThrownBy(() -> service.recordQuestion(2L, "w2",
                 new com.hamonsoft.netismaker.dto.WorkerQuestionRequest("q", "s", "question", null)))
                 .isInstanceOf(TaskException.class)
@@ -133,7 +133,7 @@ class InterviewServiceTest {
     void recordPlan_moves_running_to_plan_ready_and_persists_plan() {
         InterviewSession s = session(3L, InterviewStatus.RUNNING);
         s.setWorkerId("w1");
-        when(sessionRepo.findActiveById(3L)).thenReturn(Optional.of(s));
+        when(sessionRepo.findByIdForUpdate(3L)).thenReturn(Optional.of(s));
         service.recordPlan(3L, "w1", new WorkerPlanRequest("# 설계", "# 플랜", "[]",
                 new BigDecimal("0.05"), 4321L));
         assertThat(s.getStatus()).isEqualTo(InterviewStatus.PLAN_READY);
@@ -146,7 +146,7 @@ class InterviewServiceTest {
     void fail_from_running_moves_to_failed() {
         InterviewSession s = session(4L, InterviewStatus.RUNNING);
         s.setWorkerId("w1");
-        when(sessionRepo.findActiveById(4L)).thenReturn(Optional.of(s));
+        when(sessionRepo.findByIdForUpdate(4L)).thenReturn(Optional.of(s));
         service.fail(4L, "w1", "clone 실패");
         assertThat(s.getStatus()).isEqualTo(InterviewStatus.FAILED);
         assertThat(s.getWorkerId()).isNull();
@@ -155,7 +155,7 @@ class InterviewServiceTest {
     @Test
     void fail_from_terminal_throws() {
         InterviewSession s = session(4L, InterviewStatus.REGISTERED);
-        when(sessionRepo.findActiveById(4L)).thenReturn(Optional.of(s));
+        when(sessionRepo.findByIdForUpdate(4L)).thenReturn(Optional.of(s));
         assertThatThrownBy(() -> service.fail(4L, "w1", "x"))
                 .isInstanceOf(TaskException.class);
     }
@@ -163,7 +163,7 @@ class InterviewServiceTest {
     @Test
     void submitAnswer_moves_awaiting_to_queued_and_logs_user_turn() {
         InterviewSession s = session(10L, InterviewStatus.AWAITING_INPUT);
-        when(sessionRepo.findActiveById(10L)).thenReturn(Optional.of(s));
+        when(sessionRepo.findByIdForUpdate(10L)).thenReturn(Optional.of(s));
         when(turnRepo.findMaxSeq(10L)).thenReturn(2);  // last question at seq 2
         service.submitAnswer(10L, "u1", false,
                 new com.hamonsoft.netismaker.dto.AnswerRequest("좌측 패널에 추가", 2));
@@ -174,7 +174,7 @@ class InterviewServiceTest {
     @Test
     void submitAnswer_duplicate_replyToSeq_is_ignored() {
         InterviewSession s = session(10L, InterviewStatus.AWAITING_INPUT);
-        when(sessionRepo.findActiveById(10L)).thenReturn(Optional.of(s));
+        when(sessionRepo.findByIdForUpdate(10L)).thenReturn(Optional.of(s));
         // an answer turn already exists at seq 3 replying to question seq 2 (reply_to_seq=2)
         com.hamonsoft.netismaker.entity.InterviewTurn existing =
                 com.hamonsoft.netismaker.entity.InterviewTurn.of(10L, 3, "user", "answer", "이전 답변", 2);
@@ -192,7 +192,7 @@ class InterviewServiceTest {
         // 재제출하면 conflict가 아니라 no-op이어야 한다 — idempotency 검사가 status 가드보다 우선.
         // (e2e InterviewAnswerIdempotencyTest와 동일 시나리오를 Docker 없이 잠금.)
         InterviewSession s = session(10L, InterviewStatus.QUEUED);
-        when(sessionRepo.findActiveById(10L)).thenReturn(Optional.of(s));
+        when(sessionRepo.findByIdForUpdate(10L)).thenReturn(Optional.of(s));
         com.hamonsoft.netismaker.entity.InterviewTurn existing =
                 com.hamonsoft.netismaker.entity.InterviewTurn.of(10L, 3, "user", "answer", "이전 답변", 2);
         when(turnRepo.findBySessionIdOrderBySeqAsc(10L)).thenReturn(List.of(existing));
@@ -205,7 +205,7 @@ class InterviewServiceTest {
     @Test
     void submitAnswer_to_expired_session_throws_conflict() {
         InterviewSession s = session(10L, InterviewStatus.EXPIRED);
-        when(sessionRepo.findActiveById(10L)).thenReturn(Optional.of(s));
+        when(sessionRepo.findByIdForUpdate(10L)).thenReturn(Optional.of(s));
         assertThatThrownBy(() -> service.submitAnswer(10L, "u1", false,
                 new com.hamonsoft.netismaker.dto.AnswerRequest("늦은 답변", 1)))
                 .isInstanceOf(TaskException.class)
@@ -215,7 +215,7 @@ class InterviewServiceTest {
     @Test
     void submitAnswer_by_non_owner_throws_forbidden() {
         InterviewSession s = session(10L, InterviewStatus.AWAITING_INPUT);
-        when(sessionRepo.findActiveById(10L)).thenReturn(Optional.of(s));
+        when(sessionRepo.findByIdForUpdate(10L)).thenReturn(Optional.of(s));
         assertThatThrownBy(() -> service.submitAnswer(10L, "intruder", false,
                 new com.hamonsoft.netismaker.dto.AnswerRequest("x", 1)))
                 .isInstanceOf(TaskException.class)
@@ -225,7 +225,7 @@ class InterviewServiceTest {
     @Test
     void cancel_from_awaiting_input_moves_to_cancelled() {
         InterviewSession s = session(11L, InterviewStatus.AWAITING_INPUT);
-        when(sessionRepo.findActiveById(11L)).thenReturn(Optional.of(s));
+        when(sessionRepo.findByIdForUpdate(11L)).thenReturn(Optional.of(s));
         service.cancel(11L, "u1", false);
         assertThat(s.getStatus()).isEqualTo(InterviewStatus.CANCELLED);
     }
@@ -233,7 +233,7 @@ class InterviewServiceTest {
     @Test
     void cancel_from_registered_throws() {
         InterviewSession s = session(11L, InterviewStatus.REGISTERED);
-        when(sessionRepo.findActiveById(11L)).thenReturn(Optional.of(s));
+        when(sessionRepo.findByIdForUpdate(11L)).thenReturn(Optional.of(s));
         assertThatThrownBy(() -> service.cancel(11L, "u1", false))
                 .isInstanceOf(TaskException.class);
     }
@@ -241,18 +241,45 @@ class InterviewServiceTest {
     @Test
     void expire_from_awaiting_input_moves_to_expired() {
         InterviewSession s = session(12L, InterviewStatus.AWAITING_INPUT);
-        when(sessionRepo.findActiveById(12L)).thenReturn(Optional.of(s));
+        when(sessionRepo.findByIdForUpdate(12L)).thenReturn(Optional.of(s));
         service.expire(12L, "idle TTL 초과");
         assertThat(s.getStatus()).isEqualTo(InterviewStatus.EXPIRED);
     }
 
     @Test
+    void expire_from_queued_moves_to_expired_and_returns_task_to_awaiting_approval() {
+        // 인터뷰 서비스 미가동으로 QUEUED에 체류한 세션도 만료 가능해야 한다 (QUEUED TTL).
+        InterviewSession s = session(13L, InterviewStatus.QUEUED);
+        s.setTaskId(77L);
+        Task t = Task.create("owner/repo", "main", "T", "d", "u1", 3, List.of(), "claude-opus-4-8", "high");
+        ReflectionTestUtils.setField(t, "id", 77L);
+        t.setStatus(TaskStatus.INTERVIEWING);
+        when(sessionRepo.findByIdForUpdate(13L)).thenReturn(Optional.of(s));
+        when(taskRepo.findActiveById(77L)).thenReturn(Optional.of(t));
+
+        service.expire(13L, "인터뷰대기 60분 초과(인터뷰 서비스 미처리)");
+
+        assertThat(s.getStatus()).isEqualTo(InterviewStatus.EXPIRED);
+        assertThat(t.getStatus()).isEqualTo(TaskStatus.AWAITING_APPROVAL); // task 미러 복귀
+        verify(turnRepo).save(any());     // system note 턴
+        verify(historyRepo).save(any());  // task 히스토리
+    }
+
+    @Test
     void expire_from_running_throws() {
         InterviewSession s = session(12L, InterviewStatus.RUNNING);
-        when(sessionRepo.findActiveById(12L)).thenReturn(Optional.of(s));
+        when(sessionRepo.findByIdForUpdate(12L)).thenReturn(Optional.of(s));
         assertThatThrownBy(() -> service.expire(12L, "x"))
                 .isInstanceOf(TaskException.class)
-                .hasMessageContaining("입력대기");
+                .hasMessageContaining("만료");
+    }
+
+    @Test
+    void expire_from_terminal_throws() {
+        InterviewSession s = session(12L, InterviewStatus.REGISTERED);
+        when(sessionRepo.findByIdForUpdate(12L)).thenReturn(Optional.of(s));
+        assertThatThrownBy(() -> service.expire(12L, "x"))
+                .isInstanceOf(TaskException.class);
     }
 
 }

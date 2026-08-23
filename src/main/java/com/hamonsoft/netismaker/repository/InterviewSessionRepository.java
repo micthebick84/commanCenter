@@ -21,6 +21,20 @@ public interface InterviewSessionRepository extends JpaRepository<InterviewSessi
     Optional<InterviewSession> findActiveById(@Param("id") Long id);
 
     /**
+     * 단건 조회 + SELECT ... FOR UPDATE (SKIP LOCKED 없음).
+     *
+     * 세션 상태 전이(recordQuestion/fail/expire 등)처럼 "읽은 상태를 근거로 전이"하는
+     * 흐름에서 쓴다. claim(SKIP LOCKED)과 스윕(expire/fail)이 같은 행을 두고 경합하므로,
+     * 나중에 온 트랜잭션은 앞선 커밋을 기다렸다가 갱신된 상태를 재판정해 상태 가드에서
+     * 자연히 409로 거절된다. SKIP LOCKED를 넣으면 두 번째 호출이 조용히 건너뛰어
+     * "기다렸다가 최신 상태로 재판정"이 불가능해지므로 넣지 않는다
+     * (TaskRepository.findActiveByIdForUpdate와 동일한 wait-then-re-judge 의미론).
+     */
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("SELECT s FROM InterviewSession s WHERE s.id = :id")
+    Optional<InterviewSession> findByIdForUpdate(@Param("id") Long id);
+
+    /**
      * 워커가 다음에 처리할 인터뷰 1건을 atomic claim.
      * SELECT FOR UPDATE SKIP LOCKED. 동시 워커가 있어도 1개만 잡음.
      *
@@ -74,6 +88,18 @@ public interface InterviewSessionRepository extends JpaRepository<InterviewSessi
           AND s.lastActivityAt < :cutoff
     """)
     List<InterviewSession> findIdleAwaitingInput(@Param("cutoff") OffsetDateTime cutoff);
+
+    /**
+     * QUEUED 상태로 cutoff 이전부터 대기 중인 세션 — 인터뷰 서비스 미가동 감지용.
+     * lastActivityAt은 큐 진입 시점(createForTask/submitAnswer의 touch())이므로
+     * '대기 시작' 시계로 정확하다. V11의 부분 인덱스 idx_interview_queued가 커버.
+     */
+    @Query("""
+        SELECT s FROM InterviewSession s
+        WHERE s.status = com.hamonsoft.netismaker.entity.InterviewStatus.QUEUED
+          AND s.lastActivityAt < :cutoff
+    """)
+    List<InterviewSession> findStaleQueued(@Param("cutoff") OffsetDateTime cutoff);
 
     /** task의 최신 세션 1건 (재승인으로 세션이 여러 개일 수 있다). */
     Optional<InterviewSession> findTopByTaskIdOrderByCreatedAtDesc(Long taskId);

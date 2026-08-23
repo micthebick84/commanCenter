@@ -1,6 +1,7 @@
 package com.hamonsoft.netismaker.controller;
 
 import com.hamonsoft.netismaker.dto.InterviewClaimResponse;
+import com.hamonsoft.netismaker.dto.WorkerActivityRequest;
 import com.hamonsoft.netismaker.dto.WorkerPlanRequest;
 import com.hamonsoft.netismaker.dto.WorkerQuestionRequest;
 import com.hamonsoft.netismaker.entity.InterviewPlan;
@@ -24,6 +25,7 @@ import java.util.Optional;
  *                                                  (claim이 work_dir 할당/반환 — Phase 1)
  *   POST /worker/interviews/{id}/question       ─► assistant turn 저장 + SSE question|design/status + AWAITING_INPUT
  *   POST /worker/interviews/{id}/plan           ─► interview_plan 저장 + SSE plan_ready(객체)/status + PLAN_READY
+ *   POST /worker/interviews/{id}/activity?workerId=… ─► SSE activity fan-out (transient, DB 미접근)
  *   POST /worker/interviews/{id}/heartbeat?workerId=… ─► last_activity_at 갱신
  *   POST /worker/interviews/{id}/fail?workerId=…&reason=… ─► FAILED + SSE status/done
  */
@@ -66,6 +68,18 @@ public class InterviewWorkerController {
         interviewStream.pushPlanReady(id,
                 plan.getDesignMarkdown(), plan.getPlanMarkdown(), plan.getPlanJson());
         interviewStream.pushStatus(id, InterviewStatus.PLAN_READY);
+    }
+
+    /**
+     * 활동 스트림 중계 (transient) — DB 미접근이 계약: 300ms 배치 고빈도 호출이라
+     * 커넥션 풀을 만지지 않는다(과거 SSE+OSIV 풀 고갈 사고 재발 방지). 세션 소유 검증도
+     * 생략 — 신뢰 경계는 X-Worker-API-Key(다른 워커 엔드포인트와 동일).
+     */
+    @PostMapping("/{id}/activity")
+    @ResponseStatus(HttpStatus.NO_CONTENT)
+    public void activity(@PathVariable Long id, @RequestParam String workerId,
+                         @RequestBody @Valid WorkerActivityRequest req) {
+        interviewStream.pushActivity(id, req);
     }
 
     @PostMapping("/{id}/heartbeat")

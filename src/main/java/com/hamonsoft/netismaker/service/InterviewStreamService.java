@@ -5,6 +5,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.hamonsoft.netismaker.dto.DesignEvent;
 import com.hamonsoft.netismaker.dto.PlanReadyEvent;
 import com.hamonsoft.netismaker.dto.QuestionEvent;
+import com.hamonsoft.netismaker.dto.WorkerActivityRequest;
 import com.hamonsoft.netismaker.entity.InterviewStatus;
 import com.hamonsoft.netismaker.entity.InterviewTurn;
 import com.hamonsoft.netismaker.repository.InterviewTurnRepository;
@@ -24,7 +25,7 @@ import java.util.concurrent.CopyOnWriteArrayList;
 /**
  * 인터뷰 SSE 스트리밍 (api 프로파일).
  *
- *  이벤트: question | design | plan_ready | status | done
+ *  이벤트: question | design | plan_ready | status | done | activity
  *  - subscribe: 접속 시 keepalive ping + 기존 turn replay 후 live 구독.
  *  - pushQuestion/pushDesign/pushPlanReady/pushStatus: 라이브 fan-out.
  *  - finish: done 이벤트 + emitter complete (세션 terminal 시).
@@ -32,6 +33,7 @@ import java.util.concurrent.CopyOnWriteArrayList;
  *  LOCKED CONTRACT v2:
  *    status 페이로드 = InterviewStatus.name() (영문 enum, 예 "AWAITING_INPUT") — 한글 dbValue 아님.
  *    plan_ready 페이로드 = {designMarkdown, planMarkdown, planJson} JSON 객체 — bare string 아님.
+ *    activity 페이로드 = {events:[{seq,type,label,detail,content}]} JSON — transient(미저장)·no-replay.
  *
  *  api 단일 인스턴스 전제 — emitter 레지스트리 in-memory.
  */
@@ -106,6 +108,14 @@ public class InterviewStreamService {
         } catch (JsonProcessingException e) {
             log.error("plan_ready 직렬화 실패 session={}", sessionId, e);
         }
+    }
+
+    /**
+     * activity 페이로드 = {events:[{seq,type,label,detail,content}]} JSON — 워커 배치 그대로 fan-out.
+     * transient: DB 미저장, subscribe()의 replay 대상 아님 (확정 내용은 question 턴이 대체).
+     */
+    public void pushActivity(Long sessionId, WorkerActivityRequest batch) {
+        sendJson(sessionId, "activity", batch);
     }
 
     /** 객체를 JSON으로 직렬화해 라이브 fan-out. 직렬화 실패는 로깅만(이벤트 누락). */

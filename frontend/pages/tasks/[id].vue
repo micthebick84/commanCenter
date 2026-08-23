@@ -2,6 +2,7 @@
 import { useQuasar } from 'quasar'
 import ApproveDialog from '~/components/ApproveDialog.vue'
 import InterviewPanel from '~/components/InterviewPanel.vue'
+import InterviewHistoryCard from '~/components/InterviewHistoryCard.vue'
 
 definePageMeta({ layout: 'default' })
 
@@ -501,6 +502,9 @@ async function downloadAttachment(att: AttachmentMeta) {
           />
         </q-card-section>
       </q-card>
+
+      <!-- 지난 인터뷰 이력 — 인터뷰 phase 여부와 무관하게 항상 마운트 (카드 스스로 숨김 판단) -->
+      <InterviewHistoryCard :task-id="task.id" :task-status="task.status" />
 
       <ApproveDialog v-model="showApprove" :task-id="task.id" @approved="onApproved" />
 

@@ -3,6 +3,7 @@ import { useQuasar } from 'quasar'
 import { useInterviewStream } from '~/composables/useInterviewStream'
 import type { InterviewStatus, InterviewSnapshot } from '~/composables/useInterviewStream'
 import { useAutoScroll } from '~/composables/useAutoScroll'
+import { INTERVIEW_STATUS_LABELS } from '~/composables/interviewLabels'
 import ChatBubble from '~/components/chat/ChatBubble.vue'
 import TypingIndicator from '~/components/chat/TypingIndicator.vue'
 
@@ -38,19 +39,10 @@ const canAnswer = computed(
   () => status.value === 'AWAITING_INPUT' && !sending.value && !!answer.value.trim(),
 )
 
-// 화면 표시 전용 한글 라벨. 상태 비교/터미널 판정은 영문 enum 이름으로만 한다.
-const STATUS_LABELS: Record<InterviewStatus, string> = {
-  QUEUED: '대기 중',
-  RUNNING: '분석 중',
-  AWAITING_INPUT: '입력 대기',
-  PLAN_READY: '플랜 완료',
-  REGISTERED: '등록됨',
-  CANCELLED: '취소됨',
-  EXPIRED: '만료됨',
-  FAILED: '실패',
-}
+// 화면 표시 전용 한글 라벨 (공유 상수 — interviewLabels.ts).
+// 상태 비교/터미널 판정은 영문 enum 이름으로만 한다.
 const statusLabel = computed(() =>
-  status.value ? (STATUS_LABELS[status.value] ?? status.value) : '연결 중',
+  status.value ? (INTERVIEW_STATUS_LABELS[status.value] ?? status.value) : '연결 중',
 )
 
 const confirming = ref(false)

@@ -148,6 +148,17 @@ describe('ActivityPoster', () => {
     await p.stop();
   });
 
+  it('detail은 200자로 절단한다 (Java @Size(200) 동기 — 합성 이벤트의 긴 repo URL 방어)', async () => {
+    const client = makeClient();
+    const p = new ActivityPoster(client, 42, { flushIntervalMs: 300 });
+    p.start();
+    p.push({ type: 'tool', label: '환경 준비', detail: 'D'.repeat(300) });
+    await vi.advanceTimersByTimeAsync(300);
+    const batch = client.postActivity.mock.calls[0]![1] as { events: Array<{ detail?: string }> };
+    expect(batch.events[0].detail).toHaveLength(200);
+    await p.stop();
+  });
+
   it('404로 비활성화되면 이미 체인에 대기 중이던 배치도 전송하지 않는다', async () => {
     const client = makeClient();
     let rejectFirst!: (e: unknown) => void;

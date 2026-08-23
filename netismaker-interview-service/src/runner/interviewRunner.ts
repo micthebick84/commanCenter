@@ -223,6 +223,9 @@ export class InterviewRunner {
         durationMs = retry.durationMs;
         harvested = tryHarvest(assistantText);
       }
+      // trailing 배치가 question/plan보다 늦게 도착하지 않도록, 확정 POST 전에 활동 큐를 비운다.
+      // (stop은 멱등 — finally의 stop은 에러 경로 안전망으로 유지)
+      await poster.stop();
       if (harvested.ok) {
         // planJson is sent as a JSON STRING — Java stores it as text/JSONB; frontend parses on use.
         await this.client.postPlan(claim.sessionId, {

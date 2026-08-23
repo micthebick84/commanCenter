@@ -81,7 +81,7 @@ ActivityEvent = {
 ### 5.3 `ActivityPoster` (신규 모듈 `runner/activityPoster.ts`)
 
 - `push(e: ActivityInput)`: 내부 큐 적재 + seq 부여.
-- **배치 flush**: 300ms 간격 또는 큐 20건 도달 시. 배치 내 **동일 type 연속 델타는 content 병합**(text/thinking) — 페이로드 수 최소화. 단 **병합 4000자·개별 content 4096자·label 100자 상한**(Java `@Size`와 동기): SDK 자식프로세스 stdout이 델타 다수를 한 chunk로 실어오면 이벤트 루프 기아로 병합이 무제한 커져 Java 400으로 배치 전체가 폐기될 수 있어 생산 측에서 절단한다.
+- **배치 flush**: 300ms 간격 또는 큐 20건 도달 시. 배치 내 **동일 type 연속 델타는 content 병합**(text/thinking) — 페이로드 수 최소화. 단 **병합 4000자·개별 content 4096자·label 100자·detail 200자 상한**(Java `@Size`와 동기): SDK 자식프로세스 stdout이 델타 다수를 한 chunk로 실어오면 이벤트 루프 기아로 병합이 무제한 커져 Java 400으로 배치 전체가 폐기될 수 있어 생산 측에서 절단한다.
 - **직렬 전송**: in-flight POST 1개(순서 보장). 실패 시 해당 배치 폐기 + 경고 로그(세션당 1회), **404면 남은 세션 동안 전송 비활성화**. 어떤 실패도 throw하지 않는다.
 - `stop()`: 타이머 정리 + 마지막 flush 시도. `interviewRunner`의 `finally`에서 호출.
 

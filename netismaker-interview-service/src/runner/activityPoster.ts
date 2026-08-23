@@ -14,6 +14,9 @@ export interface ActivityPosterOpts {
 const MAX_CONTENT = 4096;
 const MAX_MERGED = 4000;
 const MAX_LABEL = 100;
+// Java @Size(max=200) 동기 — 합성 이벤트(예: '환경 준비' 활동의 claim.githubRepo, VARCHAR(255)로 스키마상 합법)가
+// 상한을 넘으면 400으로 배치 전체가 폐기되므로 생산 측에서 절단한다.
+const MAX_DETAIL = 200;
 
 /**
  * 활동 이벤트 배치 전송기 (스펙 §5.3).
@@ -46,6 +49,7 @@ export class ActivityPoster {
     if (this.disabled) return;
     const content = typeof e.content === 'string' ? e.content.slice(0, MAX_CONTENT) : e.content;
     const label = typeof e.label === 'string' ? e.label.slice(0, MAX_LABEL) : e.label;
+    const detail = typeof e.detail === 'string' ? e.detail.slice(0, MAX_DETAIL) : e.detail;
     const last = this.queue[this.queue.length - 1];
     if (
       last &&
@@ -58,7 +62,7 @@ export class ActivityPoster {
       last.content += content;
       return;
     }
-    this.queue.push({ ...e, label, content, seq: ++this.seq });
+    this.queue.push({ ...e, label, detail, content, seq: ++this.seq });
     if (this.queue.length >= (this.opts.maxQueue ?? 20)) this.flush();
   }
 

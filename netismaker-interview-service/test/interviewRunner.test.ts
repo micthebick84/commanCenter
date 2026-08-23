@@ -374,4 +374,15 @@ describe('InterviewRunner activity wiring', () => {
     expect(client.fail).not.toHaveBeenCalled();
     warnSpy.mockRestore();
   });
+
+  it('활동 배치는 전부 question POST보다 먼저 전송된다 (trailing 배치 유령 렌더 방지)', async () => {
+    const client = makeClient();
+    const fakeQuery = vi.fn(() => streamingQuestionStream());
+    const runner = new InterviewRunner(client as never, fakeQuery as never, deps as never);
+    await runner.run(freshClaim);
+    expect(client.postActivity).toHaveBeenCalled();
+    const lastActivityOrder = Math.max(...client.postActivity.mock.invocationCallOrder);
+    const questionOrder = client.postQuestion.mock.invocationCallOrder[0]!;
+    expect(lastActivityOrder).toBeLessThan(questionOrder);
+  });
 });

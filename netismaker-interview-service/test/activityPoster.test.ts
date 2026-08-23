@@ -147,4 +147,22 @@ describe('ActivityPoster', () => {
     expect(batch.events[1].label).toHaveLength(100);
     await p.stop();
   });
+
+  it('404로 비활성화되면 이미 체인에 대기 중이던 배치도 전송하지 않는다', async () => {
+    const client = makeClient();
+    let rejectFirst!: (e: unknown) => void;
+    client.postActivity
+      .mockImplementationOnce(() => new Promise<void>((_, rej) => (rejectFirst = rej)))
+      .mockResolvedValue(undefined);
+    const p = new ActivityPoster(client, 42, { flushIntervalMs: 300 });
+    p.start();
+    p.push({ type: 'text', content: '1' });
+    await vi.advanceTimersByTimeAsync(300); // 배치1 in-flight (미해결)
+    p.push({ type: 'text', content: '2' });
+    await vi.advanceTimersByTimeAsync(300); // 배치2가 체인에 커밋됨 (아직 disabled 아님)
+    rejectFirst(new HttpStatusError(404, 'activity failed: 404')); // 배치1이 404로 종결 → disabled
+    await vi.advanceTimersByTimeAsync(0);
+    expect(client.postActivity).toHaveBeenCalledTimes(1); // 배치2는 체인 내부 가드로 스킵
+    await p.stop();
+  });
 });

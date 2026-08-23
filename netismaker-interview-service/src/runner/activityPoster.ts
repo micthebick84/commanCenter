@@ -68,6 +68,7 @@ export class ActivityPoster {
     this.queue = [];
     // 직렬 체이닝: 이전 POST 완료 후 다음 배치 — 순서 보장, 동시 요청 없음.
     this.inFlight = this.inFlight.then(async () => {
+      if (this.disabled) return; // 체인 대기 중 앞 배치가 404로 비활성화됐으면 전송하지 않는다
       try {
         await this.client.postActivity(this.sessionId, { events });
       } catch (err) {

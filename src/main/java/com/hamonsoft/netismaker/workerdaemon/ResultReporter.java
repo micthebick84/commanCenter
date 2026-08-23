@@ -15,7 +15,8 @@ import org.springframework.web.client.RestClientException;
  *  - 4xx(HttpClientErrorException): 영구 오류 → 재시도 무의미, 즉시 포기.
  *  - 최종 실패해도 예외를 던지지 않는다(false 반환). 성공 보고의 일시적 백엔드 장애가
  *    상위 catch에서 실패 보고로 뒤집히는 것을 방지(task16 false-failure 재발방지).
- *  - 최종 실패 시 lossListener.onLost(...) 1회 호출(유실 카운트/dead-letter용). 리스너 예외도 삼킴.
+ *  - 최종 실패 시 lossListener.onLost(...) 1회 호출(유실 카운트/dead-letter 적재 —
+ *    DeadLetterReplayJob이 주기 재전송). 리스너 예외도 삼킴.
  */
 @Component
 @Profile("worker")

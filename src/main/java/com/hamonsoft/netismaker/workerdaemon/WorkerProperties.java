@@ -14,6 +14,9 @@ public record WorkerProperties(
         long heartbeatIntervalSeconds,
         int resultReportMaxRetries,
         long resultReportBackoffMs,
+        // dead-letter 재전송(DeadLetterReplayJob): 엔트리별 최대 재전송 시도 횟수 (소진 시 .dead.jsonl 보존)
+        // 재전송 주기는 netis-maker.worker.replay-interval-seconds (스케줄 SpEL 기본 60초, 필드 아님)
+        int replayMaxAttempts,
         String reposDir,
         String deadLetterDir,
         String claudeCliPath,
@@ -94,6 +97,7 @@ public record WorkerProperties(
         if (heartbeatIntervalSeconds <= 0) heartbeatIntervalSeconds = 10;
         if (resultReportMaxRetries <= 0) resultReportMaxRetries = 5;
         if (resultReportBackoffMs <= 0) resultReportBackoffMs = 2000;
+        if (replayMaxAttempts <= 0) replayMaxAttempts = 3;
         if (deadLetterDir == null || deadLetterDir.isBlank()) {
             deadLetterDir = System.getProperty("user.home") + "/netis-maker/dead-letter";
         }

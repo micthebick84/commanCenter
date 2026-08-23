@@ -28,6 +28,18 @@ export interface DesignSection {
   approved: boolean
 }
 
+export interface ActivityLine {
+  label: string
+  detail?: string
+}
+
+/** SSE activity 누적 상태 — 확정 question 도착 전의 transient 진행 미리보기. */
+export interface PendingActivity {
+  activities: ActivityLine[]
+  narration: string
+  thinking: string
+}
+
 export interface InterviewSnapshot {
   statusName?: string | null
   turns?: Array<{ seq: number; role: string; kind: string; content: string }>
@@ -64,6 +76,7 @@ export function useInterviewStream() {
   const turns = ref<Turn[]>([])
   const designSections = ref<DesignSection[]>([])
   const plan = ref<InterviewPlan | null>(null)
+  const pending = ref<PendingActivity | null>(null)
   const error = ref<string | null>(null)
 
   let es: EventSource | null = null
@@ -103,6 +116,7 @@ export function useInterviewStream() {
     es.addEventListener('status', (e) => onStatus(e as MessageEvent))
     es.addEventListener('question', (e) => onQuestion(e as MessageEvent))
     es.addEventListener('design', (e) => onDesign(e as MessageEvent))
+    es.addEventListener('activity', (e) => onActivity(e as MessageEvent))
     es.addEventListener('plan_ready', (e) => onPlanReady(e as MessageEvent))
     es.addEventListener('done', () => close())
     es.onerror = () => onError()
@@ -127,9 +141,12 @@ export function useInterviewStream() {
       kind: 'question',
       content: data.content,
     })
-    // 새로 도착한 질문일 때만 입력 대기로 전환. replay된(이미 있는 seq) 질문은
-    // hydrate가 복원한 status(PLAN_READY/QUEUED/RUNNING)를 덮어쓰지 않는다.
-    if (added) status.value = 'AWAITING_INPUT'
+    // 새로 도착한 질문일 때만 입력 대기로 전환 + 진행 미리보기 소거(확정 턴이 대체).
+    // replay된(이미 있는 seq) 질문은 status도 pending도 건드리지 않는다.
+    if (added) {
+      status.value = 'AWAITING_INPUT'
+      pending.value = null
+    }
   }
 
   function onDesign(e: MessageEvent) {
@@ -153,6 +170,30 @@ export function useInterviewStream() {
     } else {
       designSections.value = [...designSections.value, section]
     }
+  }
+
+  const MAX_ACTIVITY_LINES = 30
+
+  // activity 페이로드 = {events:[{seq,type,label,detail,content}]} — transient 진행 미리보기.
+  // 확정 question/plan_ready/터미널이 도착하면 pending은 소거되고 확정 턴이 대체한다.
+  function onActivity(e: MessageEvent) {
+    const data = parse(e)
+    if (!data || !Array.isArray(data.events)) return
+    const p: PendingActivity = pending.value ?? { activities: [], narration: '', thinking: '' }
+    for (const ev of data.events) {
+      if (ev?.type === 'tool' && typeof ev.label === 'string') {
+        p.activities.push({
+          label: ev.label,
+          detail: typeof ev.detail === 'string' ? ev.detail : undefined,
+        })
+        if (p.activities.length > MAX_ACTIVITY_LINES) p.activities.shift()
+      } else if (ev?.type === 'text' && typeof ev.content === 'string') {
+        p.narration += ev.content
+      } else if (ev?.type === 'thinking' && typeof ev.content === 'string') {
+        p.thinking += ev.content
+      }
+    }
+    pending.value = { ...p } // 새 객체 할당으로 watch 트리거 보장
   }
 
   // plan_ready 이벤트와 REST 스냅샷의 plan은 동일 형태({designMarkdown,planMarkdown,planJson})다.
@@ -179,6 +220,7 @@ export function useInterviewStream() {
     if (!obj) return
     plan.value = toPlan(obj)
     status.value = 'PLAN_READY'
+    pending.value = null
   }
 
   // REST 스냅샷(GET /api/interviews/{id})으로 상태 시드 — 새로고침 후 대화 복원.
@@ -246,6 +288,7 @@ export function useInterviewStream() {
     }
     teardown()
     sessionId = null
+    pending.value = null
     connState.value = 'closed'
   }
 
@@ -257,6 +300,7 @@ export function useInterviewStream() {
     turns,
     designSections,
     plan,
+    pending,
     error,
     open,
     close,

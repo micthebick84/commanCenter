@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { InterviewRunner } from '../src/runner/interviewRunner.js';
 import { freshClaim, resumeClaim, freshClaimWithAttachments } from './fixtures/claims.js';
-import { planCompleteStream, questionStream } from './fixtures/sdkMessages.js';
+import { planCompleteStream, questionStream, streamingQuestionStream } from './fixtures/sdkMessages.js';
 import { detectHandoff } from '../src/runner/skillDispatch.js';
 
 function makeClient() {
@@ -9,6 +9,7 @@ function makeClient() {
     postQuestion: vi.fn().mockResolvedValue(undefined),
     postPlan: vi.fn().mockResolvedValue(undefined),
     fail: vi.fn().mockResolvedValue(undefined),
+    postActivity: vi.fn().mockResolvedValue(undefined),
   };
 }
 // ensureRepo is injected so unit tests never touch git.
@@ -340,5 +341,37 @@ describe('InterviewRunner handoff shim', () => {
     // second query reuses the SAME session via resume and carries the spliced SKILL.md
     expect(fakeQuery.mock.calls[1]![0].options.resume).toBe('sess-h');
     expect(client.postPlan).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('InterviewRunner activity wiring', () => {
+  it('활동 배선: 합성 "환경 준비" 활동이 최초로, relay 활동이 이어서 poster로 전송된다', async () => {
+    const client = makeClient();
+    const fakeQuery = vi.fn(() => streamingQuestionStream());
+    const runner = new InterviewRunner(client as never, fakeQuery as never, deps as never);
+    await runner.run(freshClaim);
+    // run()의 finally에서 poster.stop()이 잔여 큐를 flush하므로 최소 1회 전송된다.
+    expect(client.postActivity).toHaveBeenCalled();
+    const events = client.postActivity.mock.calls.flatMap(
+      (c: unknown[]) => (c[1] as { events: Array<Record<string, unknown>> }).events,
+    );
+    expect(events[0]).toMatchObject({ type: 'tool', label: '환경 준비' });
+    // relay 활동(델타/tool_use)도 흘러들어옴
+    expect(events.some((e) => e.type === 'thinking')).toBe(true);
+    expect(events.some((e) => e.type === 'tool' && e.label === 'Read')).toBe(true);
+    // 활동과 무관하게 최종 question 전송은 기존 그대로
+    expect(client.postQuestion).toHaveBeenCalled();
+  });
+
+  it('활동 전송이 전부 실패해도 인터뷰(question 전송)는 성공한다', async () => {
+    const client = makeClient();
+    client.postActivity.mockRejectedValue(new Error('boom'));
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const fakeQuery = vi.fn(() => streamingQuestionStream());
+    const runner = new InterviewRunner(client as never, fakeQuery as never, deps as never);
+    await runner.run(freshClaim);
+    expect(client.postQuestion).toHaveBeenCalled();
+    expect(client.fail).not.toHaveBeenCalled();
+    warnSpy.mockRestore();
   });
 });

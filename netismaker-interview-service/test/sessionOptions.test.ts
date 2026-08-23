@@ -73,4 +73,14 @@ describe('buildOptions', () => {
     expect('model' in o).toBe(false);
     expect('effort' in o).toBe(false);
   });
+
+  it('enables includePartialMessages so relay can stream activity deltas (스펙 §5.1)', () => {
+    const opts = buildOptions({
+      superpowersPluginPath: '/sp',
+      workDir: '/w',
+      claudeCliPath: '/bin/claude',
+      claudeSessionId: null,
+    });
+    expect(opts.includePartialMessages).toBe(true);
+  });
 });

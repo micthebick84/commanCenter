@@ -1,6 +1,7 @@
 import type { JavaApiClient } from '../api/javaClient.js';
 import type { SdkMessage, SdkQuery } from '../sdk/sdkAdapter.js';
-import type { AttachmentRef, InterviewClaimResponse } from '../types.js';
+import type { ActivityInput, AttachmentRef, InterviewClaimResponse } from '../types.js';
+import { ActivityPoster } from './activityPoster.js';
 import { buildOptions } from '../sdk/sessionOptions.js';
 import { QuotaGuardExceeded, CostGuard } from './costGuard.js';
 import { tryHarvest } from './planHarvest.js';
@@ -107,6 +108,10 @@ export class InterviewRunner {
   async run(claim: InterviewClaimResponse): Promise<void> {
     const ticker = new HeartbeatTicker(this.client, claim.sessionId, this.deps.heartbeatIntervalMs ?? 15000);
     ticker.start();
+    // 활동 스트림: 진행(도구/델타)을 300ms 배치로 중계. 실패는 poster가 격리 — 인터뷰에 무영향.
+    const poster = new ActivityPoster(this.client, claim.sessionId);
+    poster.start();
+    const onActivity = (e: ActivityInput) => poster.push(e);
     // Seed the guard from the claim's accumulated session total so it is CUMULATIVE across all turns
     // (not just one runaway turn): the server accumulates total_cost_usd on every /question + /plan
     // and the claim carries it back, so a looping interview that never completes eventually trips the
@@ -125,6 +130,7 @@ export class InterviewRunner {
       const forceFinish = assistantTurns >= this.deps.forceFinishTurns;
 
       // CLONE: ensure the checkout exists at workDir before the (fresh OR resume) turn.
+      poster.push({ type: 'tool', label: '환경 준비', detail: claim.githubRepo });
       await this.ensureRepo({
         githubRepo: claim.githubRepo,
         githubBranch: claim.githubBranch,
@@ -151,7 +157,7 @@ export class InterviewRunner {
             : promptFor(claim),
         options,
       });
-      const result = await relay(stream);
+      const result = await relay(stream, { onActivity, workDir: claim.workDir });
       guard.add(result.costUsd);
 
       let assistantText = result.assistantText;
@@ -181,6 +187,7 @@ export class InterviewRunner {
               effort: claim.effort,
             }),
           }),
+          { onActivity, workDir: claim.workDir },
         );
         guard.add(second.costUsd);
         assistantText = second.assistantText;
@@ -207,6 +214,7 @@ export class InterviewRunner {
               effort: claim.effort,
             }),
           }),
+          { onActivity, workDir: claim.workDir },
         );
         guard.add(retry.costUsd);
         assistantText = retry.assistantText;
@@ -241,6 +249,7 @@ export class InterviewRunner {
       await this.client.fail(claim.sessionId, `interview turn failed: ${(err as Error).message}`);
     } finally {
       ticker.stop();
+      await poster.stop();
     }
   }
 }

@@ -246,3 +246,84 @@ describe('useInterviewStream — hydrate (refresh resume)', () => {
     s.close()
   })
 })
+
+describe('useInterviewStream — activity events (진행 미리보기)', () => {
+  it('tool 라인·narration·thinking 델타를 pending에 누적한다', () => {
+    authStub.accessToken = 'jwt'
+    const s = useInterviewStream()
+    s.open(1)
+    const es = FakeEventSource.last()
+    es.emit('activity', {
+      events: [
+        { seq: 1, type: 'tool', label: 'Read', detail: 'src/pages/login.vue' },
+        { seq: 2, type: 'text', content: '이제 ' },
+      ],
+    })
+    es.emit('activity', {
+      events: [
+        { seq: 3, type: 'text', content: '인증 흐름을 확인합니다' },
+        { seq: 4, type: 'thinking', content: 'auth flow…' },
+      ],
+    })
+    expect(s.pending.value).not.toBeNull()
+    expect(s.pending.value!.activities).toEqual([{ label: 'Read', detail: 'src/pages/login.vue' }])
+    expect(s.pending.value!.narration).toBe('이제 인증 흐름을 확인합니다')
+    expect(s.pending.value!.thinking).toBe('auth flow…')
+    s.close()
+  })
+
+  it('tool 라인은 최근 30건만 유지한다(오래된 것 제거)', () => {
+    authStub.accessToken = 'jwt'
+    const s = useInterviewStream()
+    s.open(1)
+    const es = FakeEventSource.last()
+    const events = Array.from({ length: 31 }, (_, i) => ({
+      seq: i + 1,
+      type: 'tool',
+      label: `T${i + 1}`,
+    }))
+    es.emit('activity', { events })
+    expect(s.pending.value!.activities).toHaveLength(30)
+    expect(s.pending.value!.activities[0].label).toBe('T2') // T1 탈락
+    s.close()
+  })
+
+  it('신규 question 도착 시 pending 소거 — replay 중복 question은 소거하지 않는다', () => {
+    authStub.accessToken = 'jwt'
+    const s = useInterviewStream()
+    s.open(1)
+    const es = FakeEventSource.last()
+    es.emit('question', { seq: 1, content: 'Q1' })
+    es.emit('activity', { events: [{ seq: 1, type: 'text', content: '다음 질문 준비…' }] })
+    expect(s.pending.value).not.toBeNull()
+    es.emit('question', { seq: 1, content: 'Q1' }) // replay dup — pending 유지
+    expect(s.pending.value).not.toBeNull()
+    es.emit('question', { seq: 2, content: 'Q2' }) // 신규 — 소거
+    expect(s.pending.value).toBeNull()
+    s.close()
+  })
+
+  it('plan_ready·터미널 status·done에서 pending 소거', () => {
+    authStub.accessToken = 'jwt'
+    const s = useInterviewStream()
+    s.open(1)
+    const es = FakeEventSource.last()
+    es.emit('activity', { events: [{ seq: 1, type: 'text', content: 'x' }] })
+    es.emit('plan_ready', { designMarkdown: '#d', planMarkdown: '#p', planJson: '[]' })
+    expect(s.pending.value).toBeNull()
+    es.emit('activity', { events: [{ seq: 2, type: 'text', content: 'y' }] })
+    es.emit('status', 'FAILED') // 터미널 → close() 경유 소거
+    expect(s.pending.value).toBeNull()
+  })
+
+  it('깨진 activity 페이로드는 무시한다', () => {
+    authStub.accessToken = 'jwt'
+    const s = useInterviewStream()
+    s.open(1)
+    const es = FakeEventSource.last()
+    es.emit('activity', 'not-json{')
+    es.emit('activity', { nothing: true })
+    expect(s.pending.value).toBeNull()
+    s.close()
+  })
+})

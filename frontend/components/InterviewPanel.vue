@@ -6,6 +6,7 @@ import { useAutoScroll } from '~/composables/useAutoScroll'
 import { INTERVIEW_STATUS_LABELS } from '~/composables/interviewLabels'
 import ChatBubble from '~/components/chat/ChatBubble.vue'
 import TypingIndicator from '~/components/chat/TypingIndicator.vue'
+import PendingBubble from '~/components/chat/PendingBubble.vue'
 
 const props = defineProps<{
   sessionId: number
@@ -16,7 +17,7 @@ const props = defineProps<{
 const emit = defineEmits<{ (e: 'confirmed', taskId: number): void; (e: 'close'): void }>()
 
 const stream = useInterviewStream()
-const { connState, status, turns, designSections, plan, error } = stream
+const { connState, status, turns, designSections, plan, error, pending } = stream
 
 // Narrow-screen tab fallback ('chat' | 'design').
 const activeTab = ref<'chat' | 'design'>('chat')
@@ -82,6 +83,21 @@ watch(waitingForAi, async (v) => {
   await nextTick()
   if (nearBottom.value) scrollToBottom()
 })
+
+// 진행(활동/델타) 갱신도 '새 메시지'가 아니다 — 하단 근처일 때만 따라 내려가고 unread는 올리지 않는다.
+watch(
+  () =>
+    pending.value
+      ? pending.value.narration.length +
+        pending.value.thinking.length +
+        pending.value.activities.length
+      : 0,
+  async (len) => {
+    if (len === 0) return
+    await nextTick()
+    if (nearBottom.value) scrollToBottom()
+  },
+)
 
 async function sendAnswer() {
   const text = answer.value.trim()
@@ -250,7 +266,12 @@ onUnmounted(() => stream.close())
           @scroll="onScroll"
         >
           <ChatBubble v-for="t in turns" :key="t.seq" :role="t.role" :content="t.content" />
-          <TypingIndicator v-if="waitingForAi" data-test="typing-indicator" />
+          <PendingBubble
+            v-if="waitingForAi && pending"
+            data-test="pending-bubble"
+            :pending="pending"
+          />
+          <TypingIndicator v-else-if="waitingForAi" data-test="typing-indicator" />
           <div
             v-if="turns.length === 0 && waitingForAi"
             class="text-grey-6 q-mt-xs text-center"

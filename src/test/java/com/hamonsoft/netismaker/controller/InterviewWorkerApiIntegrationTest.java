@@ -104,4 +104,38 @@ class InterviewWorkerApiIntegrationTest {
         mvc.perform(post("/worker/interviews/claim").param("workerId", "iw-1"))
                 .andExpect(status().is4xxClientError());
     }
+
+    @Test
+    void activity_returns_204_and_does_not_touch_session_state() throws Exception {
+        mvc.perform(post("/worker/interviews/" + sid + "/activity").header("X-Worker-API-Key", apiKey)
+                        .param("workerId", "iw-1")
+                        .contentType(APPLICATION_JSON)
+                        .content("{\"events\":[{\"seq\":1,\"type\":\"tool\",\"label\":\"Read\",\"detail\":\"a.ts\"},"
+                                + "{\"seq\":2,\"type\":\"text\",\"content\":\"이제…\"}]}"))
+                .andExpect(status().isNoContent());
+        // transient 계약: 세션 상태/턴 무변화 (QUEUED 그대로, 턴 0건)
+        assertThat(sessionRepo.findById(sid).orElseThrow().getStatus()).isEqualTo(InterviewStatus.QUEUED);
+        assertThat(turnRepo.findBySessionIdOrderBySeqAsc(sid)).isEmpty();
+    }
+
+    @Test
+    void activity_rejects_oversized_batch_with_400() throws Exception {
+        String events = java.util.stream.IntStream.rangeClosed(1, 101)
+                .mapToObj(i -> "{\"seq\":" + i + ",\"type\":\"text\",\"content\":\"x\"}")
+                .collect(java.util.stream.Collectors.joining(","));
+        mvc.perform(post("/worker/interviews/" + sid + "/activity").header("X-Worker-API-Key", apiKey)
+                        .param("workerId", "iw-1")
+                        .contentType(APPLICATION_JSON)
+                        .content("{\"events\":[" + events + "]}"))
+                .andExpect(status().isBadRequest());
+    }
+
+    @Test
+    void activity_without_worker_key_is_rejected() throws Exception {
+        mvc.perform(post("/worker/interviews/" + sid + "/activity")
+                        .param("workerId", "iw-1")
+                        .contentType(APPLICATION_JSON)
+                        .content("{\"events\":[{\"seq\":1,\"type\":\"text\",\"content\":\"x\"}]}"))
+                .andExpect(status().is4xxClientError()); // InterviewSecuritySurfaceTest의 claim 테스트와 동일 기대
+    }
 }

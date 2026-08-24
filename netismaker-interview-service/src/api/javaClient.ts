@@ -1,10 +1,25 @@
-import type { InterviewClaimResponse, WorkerPlanRequest, WorkerQuestionRequest } from '../types.js';
+import type {
+  InterviewClaimResponse,
+  WorkerActivityRequest,
+  WorkerPlanRequest,
+  WorkerQuestionRequest,
+} from '../types.js';
 
 type FetchLike = typeof fetch;
 interface ClientConfig {
   apiBaseUrl: string;
   workerApiKey: string;
   workerId: string;
+}
+
+/** HTTP 상태를 보존하는 에러 — ActivityPoster가 404(구 Java)를 식별해 비활성화한다. */
+export class HttpStatusError extends Error {
+  constructor(
+    public readonly status: number,
+    message: string,
+  ) {
+    super(message);
+  }
 }
 
 export class JavaApiClient {
@@ -59,6 +74,16 @@ export class JavaApiClient {
       body: JSON.stringify(body),
     });
     if (!res.ok) throw new Error(`plan failed: ${res.status}`);
+  }
+
+  /** 활동 배치 전송 — 실패 처리(폐기/비활성화)는 호출자(ActivityPoster) 책임. */
+  async postActivity(id: number, body: WorkerActivityRequest): Promise<void> {
+    const res = await this.fetchFn(this.url(`/worker/interviews/${id}/activity?${this.wq()}`), {
+      method: 'POST',
+      headers: this.headers(),
+      body: JSON.stringify(body),
+    });
+    if (!res.ok) throw new HttpStatusError(res.status, `activity failed: ${res.status}`);
   }
 
   async heartbeat(id: number): Promise<void> {

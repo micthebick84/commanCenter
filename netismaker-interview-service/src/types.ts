@@ -63,6 +63,30 @@ export interface InterviewClaimResponse {
   attachments?: AttachmentRef[];
 }
 
+/** SSE activity 와이어 계약의 활동 type (스펙 §4.1). */
+export type ActivityEventType = 'tool' | 'text' | 'thinking';
+
+/** relay → ActivityPoster 콜백 입력 (seq는 poster가 부여). */
+export interface ActivityInput {
+  type: ActivityEventType;
+  /** tool 전용: 'Read'|'Grep'|'Glob'|'Skill'|'환경 준비'… */
+  label?: string;
+  /** tool 전용: 파일경로/패턴 (workDir prefix 제거, 120자 절단) */
+  detail?: string;
+  /** text/thinking 전용: 델타 텍스트 청크 */
+  content?: string;
+}
+
+/** 와이어 ActivityEvent = ActivityInput + 워커 run() 내 단조증가 seq. */
+export interface ActivityEvent extends ActivityInput {
+  seq: number;
+}
+
+/** Body for POST /worker/interviews/{id}/activity — 배치 최대 100건 (Java @Size와 동기). */
+export interface WorkerActivityRequest {
+  events: ActivityEvent[];
+}
+
 /** Body for POST /worker/interviews/{id}/question */
 export interface WorkerQuestionRequest {
   content: string;

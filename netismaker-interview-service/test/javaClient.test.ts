@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { JavaApiClient } from '../src/api/javaClient.js';
+import { JavaApiClient, HttpStatusError } from '../src/api/javaClient.js';
 import { freshClaim } from './fixtures/claims.js';
 
 const cfg = { apiBaseUrl: 'http://api:8090', workerApiKey: 'KEY', workerId: 'iw-1' };
@@ -80,5 +80,29 @@ describe('JavaApiClient', () => {
     expect(fetchMock.mock.calls[0]![0]).toBe(
       'http://api:8090/worker/interviews/42/fail?workerId=iw-1&reason=cost%20cap%20exceeded',
     );
+  });
+
+  it('postActivity POSTs the batch to /worker/interviews/{id}/activity?workerId=...', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(null, { status: 204 }));
+    const client = new JavaApiClient(cfg, fetchMock);
+    await client.postActivity(42, {
+      events: [
+        { seq: 1, type: 'tool', label: 'Read', detail: 'src/app.ts' },
+        { seq: 2, type: 'text', content: '이제 ' },
+      ],
+    });
+    const [url, init] = fetchMock.mock.calls[0]!;
+    expect(url).toBe('http://api:8090/worker/interviews/42/activity?workerId=iw-1');
+    expect(init.method).toBe('POST');
+    expect(init.headers['X-Worker-API-Key']).toBe('KEY');
+    expect(JSON.parse(init.body).events).toHaveLength(2);
+  });
+
+  it('postActivity throws HttpStatusError with the status (404 → poster가 비활성화 판단)', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(null, { status: 404 }));
+    const client = new JavaApiClient(cfg, fetchMock);
+    await expect(
+      client.postActivity(42, { events: [{ seq: 1, type: 'text', content: 'x' }] }),
+    ).rejects.toSatisfy((e: unknown) => e instanceof HttpStatusError && (e as HttpStatusError).status === 404);
   });
 });

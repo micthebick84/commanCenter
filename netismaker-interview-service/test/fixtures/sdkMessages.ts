@@ -34,3 +34,55 @@ export const planCompleteStream = (): AsyncIterable<SdkMessage> =>
     },
     { type: 'result', subtype: 'success', usage: { total_cost_usd: 0.31 }, duration_ms: 5400 },
   );
+
+/**
+ * includePartialMessages 턴: thinking·text 델타 + tool_use + 서브에이전트 노이즈 + 최종 질문.
+ * shape 근거: @anthropic-ai/claude-agent-sdk@0.2.117 sdk.d.ts의 SDKPartialAssistantMessage
+ * ({type:'stream_event', event, parent_tool_use_id}) + BetaTextDelta{text}/BetaThinkingDelta{thinking}.
+ * 실물 재검증: scripts/spikeStream.ts → test/fixtures/STREAM_SHAPE_FINDINGS.md.
+ */
+export const streamingQuestionStream = (): AsyncIterable<SdkMessage> =>
+  gen(
+    { type: 'system', subtype: 'init', session_id: 'sess-stream-1' },
+    {
+      type: 'stream_event',
+      parent_tool_use_id: null,
+      event: { type: 'content_block_delta', index: 0, delta: { type: 'thinking_delta', thinking: 'repo부터 봐야' } },
+    },
+    {
+      type: 'stream_event',
+      parent_tool_use_id: null,
+      event: { type: 'content_block_delta', index: 0, delta: { type: 'signature_delta', signature: 'sig==' } },
+    },
+    {
+      type: 'stream_event',
+      parent_tool_use_id: null,
+      event: { type: 'content_block_delta', index: 1, delta: { type: 'text_delta', text: '레포를 먼저 ' } },
+    },
+    {
+      type: 'stream_event',
+      parent_tool_use_id: null,
+      event: { type: 'content_block_delta', index: 1, delta: { type: 'text_delta', text: '읽겠습니다' } },
+    },
+    {
+      type: 'assistant',
+      message: {
+        content: [
+          { type: 'text', text: '레포를 먼저 읽겠습니다' },
+          { type: 'tool_use', id: 'tu-1', name: 'Read', input: { file_path: '/work/repo/src/app.ts' } },
+        ],
+      },
+    },
+    {
+      type: 'stream_event',
+      parent_tool_use_id: 'tu-x', // 서브에이전트 스트림 — 활동으로 방출하면 안 됨
+      event: { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: 'SUBAGENT NOISE' } },
+    },
+    {
+      type: 'stream_event',
+      parent_tool_use_id: null,
+      event: { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: 'Which columns?' } },
+    },
+    { type: 'assistant', message: { content: [{ type: 'text', text: 'Which columns?' }] } },
+    { type: 'result', subtype: 'success', usage: { total_cost_usd: 0.2 }, duration_ms: 900 },
+  );

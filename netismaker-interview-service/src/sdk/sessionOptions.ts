@@ -56,6 +56,8 @@ export function buildOptions(input: SessionOptionsInput): Record<string, unknown
     allowedTools: ['Skill', 'Read', 'Grep', 'Glob'],
     cwd: input.workDir,
     permissionMode: 'default',
+    // 활동 스트림: stream_event(텍스트/thinking 델타)를 relay가 실시간 방출할 수 있게 켠다 (스펙 §5.1).
+    includePartialMessages: true,
     ...(input.claudeSessionId ? { resume: input.claudeSessionId } : {}),
     ...(mcpServers ? { mcpServers } : {}),
     ...(input.model ? { model: input.model } : {}),

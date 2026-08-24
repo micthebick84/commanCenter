@@ -325,3 +325,39 @@ describe('InterviewPanel — 확정 / 읽기 전용', () => {
     w.unmount()
   })
 })
+
+describe('InterviewPanel — 진행 활동(pending) 버블', () => {
+  it('activity 수신 시 PendingBubble을 표시하고 TypingIndicator는 숨긴다', async () => {
+    const w = await mountPanel()
+    FakeEventSource.last().emit('status', 'RUNNING')
+    await flushPromises()
+    expect(w.find('[data-test="typing-indicator"]').exists()).toBe(true) // 활동 전엔 기존 점 표시
+    FakeEventSource.last().emit('activity', {
+      events: [
+        { seq: 1, type: 'tool', label: 'Read', detail: 'src/pages/login.vue' },
+        { seq: 2, type: 'text', content: '레포를 먼저 읽겠습니다' },
+      ],
+    })
+    await flushPromises()
+    expect(w.find('[data-test="pending-bubble"]').exists()).toBe(true)
+    expect(w.find('[data-test="typing-indicator"]').exists()).toBe(false)
+    expect(w.text()).toContain('src/pages/login.vue')
+    expect(w.text()).toContain('레포를 먼저 읽겠습니다')
+    w.unmount()
+  })
+
+  it('확정 question 도착 시 PendingBubble이 사라지고 확정 말풍선으로 대체된다', async () => {
+    const w = await mountPanel()
+    FakeEventSource.last().emit('status', 'RUNNING')
+    FakeEventSource.last().emit('activity', {
+      events: [{ seq: 1, type: 'text', content: '어떤 인증을' }],
+    })
+    await flushPromises()
+    expect(w.find('[data-test="pending-bubble"]').exists()).toBe(true)
+    FakeEventSource.last().emit('question', { seq: 1, content: '어떤 인증을 쓰나요?' })
+    await flushPromises()
+    expect(w.find('[data-test="pending-bubble"]').exists()).toBe(false)
+    expect(w.text()).toContain('어떤 인증을 쓰나요?') // ChatBubble 확정 턴
+    w.unmount()
+  })
+})

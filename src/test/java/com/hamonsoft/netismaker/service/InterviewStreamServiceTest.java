@@ -2,8 +2,10 @@ package com.hamonsoft.netismaker.service;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.hamonsoft.netismaker.dto.ActivityEvent;
 import com.hamonsoft.netismaker.dto.DesignEvent;
 import com.hamonsoft.netismaker.dto.QuestionEvent;
+import com.hamonsoft.netismaker.dto.WorkerActivityRequest;
 import com.hamonsoft.netismaker.entity.InterviewStatus;
 import com.hamonsoft.netismaker.entity.InterviewTurn;
 import com.hamonsoft.netismaker.repository.InterviewTurnRepository;
@@ -64,6 +66,35 @@ class InterviewStreamServiceTest {
         // finish 후 두 번째 push는 구독자 없음 — 예외 없이 no-op
         svc.pushStatus(99L, InterviewStatus.REGISTERED);
         assertThat(svc.subscriberCount(99L)).isZero();
+    }
+
+    /**
+     * 와이어 계약 잠금: activity 페이로드 = {events:[{seq,type,label,detail,content}]} JSON.
+     * 프론트(useInterviewStream.onActivity)가 data.events 배열을 순회한다.
+     */
+    @Test
+    void activity_batch_serializes_to_frontend_json_contract() throws Exception {
+        var batch = new WorkerActivityRequest(List.of(
+                new ActivityEvent(1, "tool", "Read", "src/pages/login.vue", null),
+                new ActivityEvent(2, "text", null, null, "이제 인증 흐름을")));
+        JsonNode n = json.readTree(json.writeValueAsString(batch));
+        assertThat(n.get("events")).hasSize(2);
+        assertThat(n.get("events").get(0).get("seq").asLong()).isEqualTo(1);
+        assertThat(n.get("events").get(0).get("type").asText()).isEqualTo("tool");
+        assertThat(n.get("events").get(0).get("label").asText()).isEqualTo("Read");
+        assertThat(n.get("events").get(0).get("detail").asText()).isEqualTo("src/pages/login.vue");
+        assertThat(n.get("events").get(1).get("content").asText()).isEqualTo("이제 인증 흐름을");
+    }
+
+    /** transient 계약: 구독자 유무와 무관하게 예외 없이 동작, DB 접근 없음(turnRepo 미호출). */
+    @Test
+    void pushActivity_is_safe_with_and_without_subscribers() {
+        when(turnRepo.findBySessionIdOrderBySeqAsc(77L)).thenReturn(List.of());
+        var svc = new InterviewStreamService(turnRepo, json);
+        var batch = new WorkerActivityRequest(List.of(new ActivityEvent(1, "thinking", null, null, "음…")));
+        svc.pushActivity(77L, batch);   // 구독자 없음 — no-op
+        svc.subscribe(77L);
+        svc.pushActivity(77L, batch);   // 구독자 1 — 예외 없이 전달
     }
 
     private static InterviewTurn turn(int seq, String role, String kind, String content) {

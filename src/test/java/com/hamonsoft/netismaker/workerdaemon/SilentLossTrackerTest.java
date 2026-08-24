@@ -55,6 +55,33 @@ class SilentLossTrackerTest {
     }
 
     @Test
+    void dead_file_rotates_to_generation_1_when_over_the_cap(@TempDir Path dir) throws Exception {
+        // append-only 포렌식 파일(.dead.jsonl)이 무한 성장하지 않아야 한다 — 상한 초과 시 .1로 밀림.
+        SilentLossTracker t = new SilentLossTracker(dir.toString(), "mac-worker-1", 1L);
+        Path main = dir.resolve("mac-worker-1.jsonl");
+        Path dead = dir.resolve("mac-worker-1.dead.jsonl");
+        Path rolled = dir.resolve("mac-worker-1.dead.jsonl.1");
+
+        // 파싱 불가 라인 → snapshotPending이 dead 파일로 이동시킨다 (appendDead 경로)
+        Files.writeString(main, "not-json-1\n");
+        t.snapshotPending();
+        assertThat(Files.readAllLines(dead)).containsExactly("not-json-1");
+        assertThat(Files.exists(rolled)).isFalse();
+
+        // 두 번째 이동 시 dead가 상한(1B)을 넘었으므로 .1로 로테이션 후 새로 쓴다
+        Files.writeString(main, "not-json-2\n");
+        t.snapshotPending();
+        assertThat(Files.readAllLines(rolled)).containsExactly("not-json-1");
+        assertThat(Files.readAllLines(dead)).containsExactly("not-json-2");
+
+        // 세 번째: 기존 .1은 대체된다 (최대 2세대 보존)
+        Files.writeString(main, "not-json-3\n");
+        t.snapshotPending();
+        assertThat(Files.readAllLines(rolled)).containsExactly("not-json-2");
+        assertThat(Files.readAllLines(dead)).containsExactly("not-json-3");
+    }
+
+    @Test
     void creates_dead_letter_dir_if_absent(@TempDir Path dir) {
         Path nested = dir.resolve("sub/dead-letter");
         SilentLossTracker t = new SilentLossTracker(nested.toString(), "mac-worker-1");

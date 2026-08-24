@@ -82,7 +82,7 @@ class WorkerServiceDeployTest {
         t.setWorkerId("mac-worker-1");
         t.setDeployUrl("http://localhost:19000");
         t.setDeployHostPort(19000);
-        when(taskRepo.findById(7L)).thenReturn(Optional.of(t));
+        when(taskRepo.findActiveByIdForUpdate(7L)).thenReturn(Optional.of(t));
         service.recordResult(7L, WorkerResultRequest.undeployed("mac-worker-1", "중지/제거"));
         assertThat(t.getStatus()).isEqualTo(TaskStatus.PR_CREATED);
         assertThat(t.getDeployUrl()).isNull();
@@ -92,7 +92,7 @@ class WorkerServiceDeployTest {
     void record_deployed_sets_url_and_status() {
         Task t = taskWithStatus(TaskStatus.DEPLOYING);
         t.setWorkerId("mac-worker-1");
-        when(taskRepo.findById(7L)).thenReturn(Optional.of(t));
+        when(taskRepo.findActiveByIdForUpdate(7L)).thenReturn(Optional.of(t));
         service.recordResult(7L, WorkerResultRequest.deployed(
                 "mac-worker-1", "http://localhost:19000", "cid123", 19000,
                 "netis-task-7:abcdef1", 5000L, "build ok"));
@@ -110,7 +110,7 @@ class WorkerServiceDeployTest {
         t.setWorkerId("mac-worker-1");
         t.setDeployUrl("http://localhost:19000");
         t.setDeployHostPort(19000);
-        when(taskRepo.findById(7L)).thenReturn(Optional.of(t));
+        when(taskRepo.findActiveByIdForUpdate(7L)).thenReturn(Optional.of(t));
         service.recordResult(7L, WorkerResultRequest.undeployed("mac-worker-1", "stopped"));
         assertThat(t.getStatus()).isEqualTo(TaskStatus.PR_CREATED);
         assertThat(t.getDeployUrl()).isNull();
@@ -123,7 +123,7 @@ class WorkerServiceDeployTest {
     void record_undeploy_result_calls_finish_on_stream() {
         Task t = taskWithStatus(TaskStatus.UNDEPLOYING);
         t.setWorkerId("mac-worker-1");
-        when(taskRepo.findById(7L)).thenReturn(Optional.of(t));
+        when(taskRepo.findActiveByIdForUpdate(7L)).thenReturn(Optional.of(t));
         service.recordResult(7L, WorkerResultRequest.undeployed("mac-worker-1", "중지/제거"));
         // finish must be called for UNDEPLOYING result as well
         verify(deployLogStream).finish(7L);

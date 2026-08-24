@@ -38,10 +38,14 @@ import java.util.concurrent.atomic.AtomicInteger;
 @Slf4j
 public class SilentLossTracker implements ResultReporter.LostReportListener {
 
+    /** .dead.jsonl(포렌식 보존) 상한 — 초과 시 .dead.jsonl.1로 밀어 무한 성장을 막는다 (최대 2세대). */
+    static final long MAX_DEAD_BYTES = 5L * 1024 * 1024;
+
     private final ObjectMapper mapper = new ObjectMapper();
     private final AtomicInteger pendingCount = new AtomicInteger();
     private final Path deadLetterFile;
     private final Path deadFile;
+    private final long maxDeadBytes;
 
     /** 재전송 대기 엔트리. raw는 파일 내 원본 라인 그대로 — resolve/reject의 매칭 키. */
     public record PendingEntry(Long taskId, WorkerResultRequest result, int attempts, String raw) { }
@@ -49,12 +53,17 @@ public class SilentLossTracker implements ResultReporter.LostReportListener {
     // 생성자 여러 개(테스트용 포함) → Spring 주입 생성자 명시(없으면 no-arg 폴백→기동 실패).
     @Autowired
     public SilentLossTracker(WorkerProperties props) {
-        this(props.deadLetterDir(), props.id());
+        this(props.deadLetterDir(), props.id(), MAX_DEAD_BYTES);
     }
 
     SilentLossTracker(String deadLetterDir, String workerId) {
+        this(deadLetterDir, workerId, MAX_DEAD_BYTES);
+    }
+
+    SilentLossTracker(String deadLetterDir, String workerId, long maxDeadBytes) {
         this.deadLetterFile = Path.of(deadLetterDir, workerId + ".jsonl");
         this.deadFile = Path.of(deadLetterDir, workerId + ".dead.jsonl");
+        this.maxDeadBytes = maxDeadBytes;
         // 시작 시 파일 스캔으로 pending 수 초기화 (재시작해도 배지 유지)
         this.pendingCount.set(loadPendingSafe().size());
     }
@@ -195,7 +204,20 @@ public class SilentLossTracker implements ResultReporter.LostReportListener {
 
     private void appendDead(List<String> lines) throws IOException {
         Files.createDirectories(deadFile.getParent());
+        rotateDeadIfNeeded();
         Files.writeString(deadFile, String.join(System.lineSeparator(), lines) + System.lineSeparator(),
                 StandardOpenOption.CREATE, StandardOpenOption.APPEND);
+    }
+
+    /**
+     * dead 파일이 상한을 넘으면 <이름>.1로 밀어낸다(기존 .1은 대체). append-only 포렌식
+     * 파일이 무한 성장하지 않게 하는 로테이션 — 최대 2세대(약 2×상한)만 보존한다.
+     */
+    private void rotateDeadIfNeeded() throws IOException {
+        if (!Files.exists(deadFile) || Files.size(deadFile) < maxDeadBytes) return;
+        Path rolled = deadFile.resolveSibling(deadFile.getFileName() + ".1");
+        Files.move(deadFile, rolled, StandardCopyOption.REPLACE_EXISTING);
+        log.warn("dead 파일 로테이션: {} ({}B 초과) → {} (이전 세대 대체)",
+                deadFile.getFileName(), maxDeadBytes, rolled.getFileName());
     }
 }

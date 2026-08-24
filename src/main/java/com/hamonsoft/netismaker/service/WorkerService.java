@@ -151,7 +151,11 @@ public class WorkerService {
 
     @Transactional
     public void recordResult(Long taskId, WorkerResultRequest req) {
-        Task t = taskRepo.findById(taskId)
+        // 비관적 락(FOR UPDATE) + findActive — ① 결과 보고를 admin 진입점(deploy/undeploy/
+        // rejectDesign 등)·claim과 직렬화해 stale 스냅샷 기반 이중 전이/lost update를 막고
+        // ② 소프트삭제된 task의 지각 보고(dead-letter replay 포함)가 삭제 row를 변이시키지
+        // 않게 한다 — 404는 워커 쪽에서 4xx 영구 거부로 dead-letter에 보존된다.
+        Task t = taskRepo.findActiveByIdForUpdate(taskId)
                 .orElseThrow(TaskException::notFound);
 
         TaskStatus current = t.getStatus();
@@ -220,6 +224,21 @@ public class WorkerService {
             // stale 회수가 이미 finish했을 수 있으나 finish는 멱등
             // (emitters.remove → null no-op, deleteByTaskId → 0건 no-op).
             deployLogStream.finish(t.getId());
+            return;
+        }
+
+        // 지각 보고 정합화(디자인): stale 회수로 DESIGN_PENDING 재큐됐지만 워커가 실제로는
+        // 디자인을 완성한 경우 — 늦은 DESIGN_REVIEW 보고를 받아 재생성 사이클(수 분 + claude
+        // 비용)을 생략한다. 재큐분을 다른 워커가 이미 claim했으면(DESIGNING) 이 분기 불충족 →
+        // 아래 in-flight 가드의 소유 워커 검사로 귀결. 산출물이 유효할 때만 수용한다.
+        // (배포중지 지각 PR_CREATED는 정합화하지 않는다 — UNDEPLOY_PENDING 재큐는 docker rm -f가
+        //  이미 없는 컨테이너를 무해 통과해 스스로 수렴하고, 여러 사이클 뒤의 초지각 replay를
+        //  수용하면 살아있는 컨테이너를 고아로 만들 수 있다.)
+        if (current == TaskStatus.DESIGN_PENDING
+                && req.status() == TaskStatus.DESIGN_REVIEW
+                && req.designMarkdown() != null && !req.designMarkdown().isBlank()
+                && req.mockupFilesJson() != null && !req.mockupFilesJson().isBlank()) {
+            recordDesignResult(t, req, "지각 보고 정합화: stale 재큐 → 디자인승인대기");
             return;
         }
 
@@ -363,6 +382,11 @@ public class WorkerService {
     }
 
     private void recordDesignResult(Task t, WorkerResultRequest req) {
+        recordDesignResult(t, req, null);
+    }
+
+    /** reasonOverride: 지각 보고 정합화처럼 이력 사유를 구분해야 할 때만 지정 (null=기본 사유). */
+    private void recordDesignResult(Task t, WorkerResultRequest req, String reasonOverride) {
         TaskStatus from = t.getStatus();
         String reason;
         switch (req.status()) {
@@ -398,7 +422,7 @@ public class WorkerService {
                             });
                 }
                 t.setStatus(TaskStatus.DESIGN_REVIEW);
-                reason = "디자인 생성 완료 → 승인 대기";
+                reason = reasonOverride != null ? reasonOverride : "디자인 생성 완료 → 승인 대기";
             }
             case DESIGN_FAILED -> {
                 t.setStatus(TaskStatus.DESIGN_FAILED);

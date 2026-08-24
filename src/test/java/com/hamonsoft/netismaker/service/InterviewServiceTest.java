@@ -143,6 +143,24 @@ class InterviewServiceTest {
     }
 
     @Test
+    void heartbeat_refreshes_last_activity_but_not_claimed_at() {
+        // 회귀 가드: heartbeat가 claimedAt(턴 시작 시각)을 갱신하면 SDK 행업 시
+        // wall-clock 스윕이 영영 발동하지 않는다 — 생존 신호는 lastActivityAt에만.
+        InterviewSession s = session(5L, InterviewStatus.RUNNING);
+        s.setWorkerId("w1");
+        java.time.OffsetDateTime turnStart = java.time.OffsetDateTime.now().minusMinutes(10);
+        java.time.OffsetDateTime staleActivity = java.time.OffsetDateTime.now().minusMinutes(10);
+        s.setClaimedAt(turnStart);
+        s.setLastActivityAt(staleActivity);
+        when(sessionRepo.findByIdForUpdate(5L)).thenReturn(Optional.of(s));
+
+        service.heartbeat(5L, "w1");
+
+        assertThat(s.getClaimedAt()).isEqualTo(turnStart);           // 불변 — wall-clock 앵커
+        assertThat(s.getLastActivityAt()).isAfter(staleActivity);    // 생존 신호 갱신
+    }
+
+    @Test
     void fail_from_running_moves_to_failed() {
         InterviewSession s = session(4L, InterviewStatus.RUNNING);
         s.setWorkerId("w1");
@@ -150,6 +168,40 @@ class InterviewServiceTest {
         service.fail(4L, "w1", "clone 실패");
         assertThat(s.getStatus()).isEqualTo(InterviewStatus.FAILED);
         assertThat(s.getWorkerId()).isNull();
+    }
+
+    @Test
+    void failFromWorker_on_running_owned_session_moves_to_failed() {
+        InterviewSession s = session(6L, InterviewStatus.RUNNING);
+        s.setWorkerId("w1");
+        when(sessionRepo.findByIdForUpdate(6L)).thenReturn(Optional.of(s));
+        service.failFromWorker(6L, "w1", "SDK 턴 wall-clock 타임아웃(30분) 초과 — 행업 회수");
+        assertThat(s.getStatus()).isEqualTo(InterviewStatus.FAILED);
+        assertThat(s.getWorkerId()).isNull();
+    }
+
+    @Test
+    void failFromWorker_on_awaiting_input_throws_conflict_and_preserves_the_question() {
+        // 경계 레이스 가드: postQuestion이 먼저 도착해 AWAITING_INPUT이 된 세션에
+        // 지각한 턴 타임아웃 fail이 오면 방금 전달된 질문을 파괴하지 말고 409로 거절해야 한다.
+        InterviewSession s = session(6L, InterviewStatus.AWAITING_INPUT);
+        when(sessionRepo.findByIdForUpdate(6L)).thenReturn(Optional.of(s));
+        assertThatThrownBy(() -> service.failFromWorker(6L, "w1", "타임아웃"))
+                .isInstanceOf(TaskException.class)
+                .hasMessageContaining("워커");
+        assertThat(s.getStatus()).isEqualTo(InterviewStatus.AWAITING_INPUT);
+    }
+
+    @Test
+    void failFromWorker_by_non_owner_throws_conflict() {
+        // 다른 워커가 재클레임한 세션을 이전 워커의 지각 fail이 죽이면 안 된다.
+        InterviewSession s = session(6L, InterviewStatus.RUNNING);
+        s.setWorkerId("w2");
+        when(sessionRepo.findByIdForUpdate(6L)).thenReturn(Optional.of(s));
+        assertThatThrownBy(() -> service.failFromWorker(6L, "w1", "타임아웃"))
+                .isInstanceOf(TaskException.class)
+                .hasMessageContaining("다른 워커");
+        assertThat(s.getStatus()).isEqualTo(InterviewStatus.RUNNING);
     }
 
     @Test
@@ -255,7 +307,7 @@ class InterviewServiceTest {
         ReflectionTestUtils.setField(t, "id", 77L);
         t.setStatus(TaskStatus.INTERVIEWING);
         when(sessionRepo.findByIdForUpdate(13L)).thenReturn(Optional.of(s));
-        when(taskRepo.findActiveById(77L)).thenReturn(Optional.of(t));
+        when(taskRepo.findActiveByIdForUpdate(77L)).thenReturn(Optional.of(t));
 
         service.expire(13L, "인터뷰대기 60분 초과(인터뷰 서비스 미처리)");
 

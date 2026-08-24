@@ -17,6 +17,7 @@ async function main(): Promise<void> {
     maxTurns: cfg.maxTurns,
     forceFinishTurns: cfg.forceFinishTurns,
     heartbeatIntervalMs: cfg.heartbeatIntervalMs,
+    turnTimeoutMs: cfg.turnTimeoutMs,
   });
   const loop = new ClaimLoop(client, runner, { pollIntervalMs: cfg.claimPollIntervalMs });
 

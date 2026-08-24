@@ -213,16 +213,20 @@ public class InterviewService {
         return plan;
     }
 
-    /** 워커가 idle heartbeat 시 last_activity 갱신 (회수 오탐 방지용 best-effort). */
+    /**
+     * 워커 heartbeat — 생존 신호는 last_activity_at에만 기록한다 (touch).
+     * claimed_at은 갱신하지 않는다: claimed_at은 "이 턴이 시작된 시각"(claim이 기록)이고
+     * 스윕의 wall-clock 백스톱 기준이다. heartbeat가 이를 갱신하면 SDK가 행업해도
+     * (워커 프로세스는 살아서 계속 heartbeat) stale-RUNNING 회수가 영영 발동하지 않는다.
+     */
     @Transactional
     public void heartbeat(Long sessionId, String workerId) {
         InterviewSession s = requireSessionForUpdate(sessionId);
         requireWorker(s, workerId);
-        s.setClaimedAt(OffsetDateTime.now());
         touch(s);
     }
 
-    /** clone/SDK/parse/비용상한 등 오류 → FAILED. terminal 상태에선 거부. */
+    /** 시스템/스윕용 실패 처리 → FAILED. terminal 상태에선 거부. */
     @Transactional
     public InterviewSession fail(Long sessionId, String actor, String reason) {
         InterviewSession s = requireSessionForUpdate(sessionId);
@@ -232,7 +236,29 @@ public class InterviewService {
             throw TaskException.conflict("진행중 인터뷰만 실패 처리할 수 있습니다 (현재: "
                     + st.dbValue() + ")");
         }
-        appendTurn(sessionId, "system", "note", "인터뷰 실패: " + (reason == null ? "원인 미상" : reason));
+        return doFail(s, actor, reason);
+    }
+
+    /**
+     * 워커발 실패 보고 — 소유권 강제 버전. RUNNING + 소유 워커일 때만 FAILED로 전이한다.
+     * 워커는 RUNNING 세션만 소유하므로, 지각 도착한 실패 보고(턴 타임아웃 fail이
+     * in-flight postQuestion과 경합하는 경계 등)가 이미 질문을 전달해 AWAITING_INPUT이
+     * 된 세션이나 다른 워커가 재클레임한 세션을 파괴하지 못하게 409로 거절한다.
+     * 스윕/시스템 경로는 기존 fail()을 그대로 쓴다.
+     */
+    @Transactional
+    public InterviewSession failFromWorker(Long sessionId, String workerId, String reason) {
+        InterviewSession s = requireSessionForUpdate(sessionId);
+        if (s.getStatus() != InterviewStatus.RUNNING) {
+            throw TaskException.conflict("인터뷰중(워커 소유) 상태에서만 워커 실패 보고를 받을 수 있습니다 (현재: "
+                    + s.getStatus().dbValue() + ")");
+        }
+        requireWorker(s, workerId);
+        return doFail(s, workerId, reason);
+    }
+
+    private InterviewSession doFail(InterviewSession s, String actor, String reason) {
+        appendTurn(s.getId(), "system", "note", "인터뷰 실패: " + (reason == null ? "원인 미상" : reason));
         s.setStatus(InterviewStatus.FAILED);
         s.setWorkerId(null);
         s.setClaimedAt(null);
@@ -327,7 +353,10 @@ public class InterviewService {
         if (s.getTaskId() == null) {
             throw TaskException.conflict("작업에 연결되지 않은 세션입니다");
         }
-        Task t = taskRepo.findActiveById(s.getTaskId()).orElseThrow(TaskException::notFound);
+        // task도 비관적 락(FOR UPDATE) — softDelete/approve 등 task 진입점과 경합 시 갱신된
+        // 상태를 재판정한다(무락이면 상태 가드가 낡은 스냅샷을 보고 이중 전이·lost update 가능).
+        // 락 순서는 세션 → task (cancel 등 동일 순서의 세션 진입점과는 대기-재판정으로 수렴).
+        Task t = taskRepo.findActiveByIdForUpdate(s.getTaskId()).orElseThrow(TaskException::notFound);
         if (t.getStatus() != TaskStatus.INTERVIEW_REVIEW) {
             throw TaskException.conflict("플랜승인대기 상태에서만 확정할 수 있습니다 (현재: "
                     + t.getStatus().dbValue() + ")");
@@ -453,7 +482,10 @@ public class InterviewService {
      */
     private void mirrorTask(InterviewSession s, TaskStatus to, String actorId, String reason) {
         if (s.getTaskId() == null) return;
-        Task t = taskRepo.findActiveById(s.getTaskId()).orElse(null);
+        // 비관적 락(FOR UPDATE) — softDelete 등 task 진입점과 경합 시 커밋을 기다렸다가
+        // 재판정한다(무락이면 JPA 전체-컬럼 UPDATE가 상대 변경을 되돌리는 lost update 가능).
+        // 삭제가 먼저 커밋됐으면 findActive가 비어 조용히 스킵된다.
+        Task t = taskRepo.findActiveByIdForUpdate(s.getTaskId()).orElse(null);
         if (t == null || t.getStatus() == to) return;
         TaskStatus from = t.getStatus();
         t.setStatus(to);

@@ -43,8 +43,10 @@ import java.util.Optional;
  *                 COMPLETED         → APPROVED/DESIGN_PENDING + approved=true (레거시 자동분석 경로)
  *   retry    ─► FAILED → PENDING + retry_count++  (retry_count < max_retry)
  *
- * 락 정책: approve/cancel/softDelete/retry는 findActiveByIdForUpdate(FOR UPDATE, SKIP LOCKED 없음)로
- * task 행을 잠근 뒤 상태를 재판정한다 — 동시 호출은 앞선 커밋을 기다렸다가 가드에서 409/404로 거절.
+ * 락 정책: 상태를 전이시키는 모든 admin/user 진입점(approve/cancel/softDelete/retry/
+ * approveDesign/rejectDesign/deploy/redeploy/undeploy)은 findActiveByIdForUpdate
+ * (FOR UPDATE, SKIP LOCKED 없음)로 task 행을 잠근 뒤 상태를 재판정한다 — 동시 호출(더블클릭,
+ * 워커 보고와의 경합)은 앞선 커밋을 기다렸다가 가드에서 409/404로 거절. 읽기 경로는 잠그지 않는다.
  */
 @Service
 @Profile("api")
@@ -323,7 +325,9 @@ public class TaskService {
     /** 디자인승인대기 → 구현대기. admin 한정. */
     @Transactional
     public TaskDesign approveDesign(Long taskId, String adminId) {
-        Task t = taskRepo.findActiveById(taskId).orElseThrow(TaskException::notFound);
+        // 비관적 락(FOR UPDATE) — 동시 승인/반려 더블클릭과 스윕(DESIGNING stale 재큐잉)이
+        // 같은 행을 두고 경합 시 갱신된 상태를 재판정해 이중 전이를 막는다.
+        Task t = taskRepo.findActiveByIdForUpdate(taskId).orElseThrow(TaskException::notFound);
         if (t.getStatus() != TaskStatus.DESIGN_REVIEW) {
             throw TaskException.conflict("디자인승인대기 상태에서만 승인할 수 있습니다 (현재: "
                     + t.getStatus().dbValue() + ")");
@@ -344,7 +348,8 @@ public class TaskService {
     /** 디자인승인대기 → 디자인대기 (피드백 반려, 최대 MAX_DESIGN_REJECTS회). admin 한정. */
     @Transactional
     public Task rejectDesign(Long taskId, String adminId, String feedback) {
-        Task t = taskRepo.findActiveById(taskId).orElseThrow(TaskException::notFound);
+        // 비관적 락(FOR UPDATE) — 동시 승인/반려 경합 시 재판정 (approveDesign과 동일 정책).
+        Task t = taskRepo.findActiveByIdForUpdate(taskId).orElseThrow(TaskException::notFound);
         if (t.getStatus() != TaskStatus.DESIGN_REVIEW) {
             throw TaskException.conflict("디자인승인대기 상태에서만 반려할 수 있습니다 (현재: "
                     + t.getStatus().dbValue() + ")");
@@ -425,7 +430,8 @@ public class TaskService {
     /** PR생성 → 배포대기. admin 한정. 워커가 다음 폴링에 claim해 배포 수행. */
     @Transactional
     public Task deploy(Long taskId, String adminId, List<EnvVar> envVars) {
-        Task t = taskRepo.findActiveById(taskId).orElseThrow(TaskException::notFound);
+        // 비관적 락(FOR UPDATE) — 더블클릭 이중 배포 큐 진입 방지 + env_vars 덮어쓰기 직렬화.
+        Task t = taskRepo.findActiveByIdForUpdate(taskId).orElseThrow(TaskException::notFound);
         if (t.getStatus() != TaskStatus.PR_CREATED) {
             throw TaskException.conflict("PR생성 상태에서만 배포할 수 있습니다 (현재: "
                     + t.getStatus().dbValue() + ")");
@@ -437,7 +443,8 @@ public class TaskService {
     /** 배포완료/배포실패/배포중단됨 → 배포대기 (기존 컨테이너는 배포 시 stop 후 교체). */
     @Transactional
     public Task redeploy(Long taskId, String adminId, List<EnvVar> envVars) {
-        Task t = taskRepo.findActiveById(taskId).orElseThrow(TaskException::notFound);
+        // 비관적 락(FOR UPDATE) — 재배포 vs 중지/reconcile 경합 시 갱신된 상태를 재판정.
+        Task t = taskRepo.findActiveByIdForUpdate(taskId).orElseThrow(TaskException::notFound);
         if (t.getStatus() != TaskStatus.DEPLOYED && t.getStatus() != TaskStatus.DEPLOY_FAILED
                 && t.getStatus() != TaskStatus.DEPLOY_LOST) {
             throw TaskException.conflict("배포완료/배포실패/배포중단됨 상태에서만 재배포할 수 있습니다 (현재: "
@@ -450,7 +457,8 @@ public class TaskService {
     /** 배포완료/배포실패/배포중단됨 → 배포중지대기. 워커가 claim해 컨테이너 stop 후 PR생성 복귀. */
     @Transactional
     public Task undeploy(Long taskId, String adminId) {
-        Task t = taskRepo.findActiveById(taskId).orElseThrow(TaskException::notFound);
+        // 비관적 락(FOR UPDATE) — 중지 vs 재배포/reconcile 경합 시 갱신된 상태를 재판정.
+        Task t = taskRepo.findActiveByIdForUpdate(taskId).orElseThrow(TaskException::notFound);
         if (t.getStatus() != TaskStatus.DEPLOYED && t.getStatus() != TaskStatus.DEPLOY_FAILED
                 && t.getStatus() != TaskStatus.DEPLOY_LOST) {
             throw TaskException.conflict("배포완료/배포실패/배포중단됨 상태에서만 중지할 수 있습니다 (현재: "

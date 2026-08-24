@@ -13,6 +13,8 @@ export interface SessionOptionsInput {
   model?: string;
   /** 추론 effort (blank/미지정이면 CLI 기본값). */
   effort?: string;
+  /** 턴 wall-clock 타임아웃용 — abort 시 SDK가 claude CLI 자식 프로세스를 종료한다. */
+  abortController?: AbortController;
 }
 
 /**
@@ -62,6 +64,7 @@ export function buildOptions(input: SessionOptionsInput): Record<string, unknown
     ...(mcpServers ? { mcpServers } : {}),
     ...(input.model ? { model: input.model } : {}),
     ...(input.effort ? { effort: input.effort } : {}),
+    ...(input.abortController ? { abortController: input.abortController } : {}),
     canUseTool: buildCanUseTool(input.workDir),
   };
 }

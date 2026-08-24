@@ -73,13 +73,29 @@ public interface InterviewSessionRepository extends JpaRepository<InterviewSessi
     List<InterviewSession> findByRequester(@Param("requesterId") String requesterId,
                                            @Param("status") InterviewStatus status);
 
-    /** RUNNING이면서 claimed_at이 cutoff 이전(=stale) — 회수 후보. */
+    /**
+     * RUNNING이면서 claimed_at(턴 시작 시각)이 cutoff 이전 — SDK 턴 wall-clock 초과 회수 후보.
+     * claimed_at은 claim에서만 기록되고 heartbeat는 건드리지 않는다(절대 백스톱,
+     * StaleTaskRecoveryJob의 hungBackstop 미러). 생존 신호는 lastActivityAt(findDeadRunning).
+     */
     @Query("""
         SELECT s FROM InterviewSession s
         WHERE s.status = com.hamonsoft.netismaker.entity.InterviewStatus.RUNNING
           AND s.claimedAt IS NOT NULL AND s.claimedAt < :cutoff
     """)
     List<InterviewSession> findStaleRunning(@Param("cutoff") OffsetDateTime cutoff);
+
+    /**
+     * RUNNING이면서 last_activity_at(heartbeat가 갱신)이 cutoff 이전 — 워커 사망 회수 후보.
+     * heartbeat 주기(기본 15s) 대비 충분히 큰 임계로 블립 오탐을 피한다
+     * (StaleTaskRecoveryJob의 worker-dead 판정 미러).
+     */
+    @Query("""
+        SELECT s FROM InterviewSession s
+        WHERE s.status = com.hamonsoft.netismaker.entity.InterviewStatus.RUNNING
+          AND s.lastActivityAt < :cutoff
+    """)
+    List<InterviewSession> findDeadRunning(@Param("cutoff") OffsetDateTime cutoff);
 
     /** AWAITING_INPUT이면서 last_activity_at이 cutoff 이전(=idle TTL 초과) — 만료 후보. */
     @Query("""

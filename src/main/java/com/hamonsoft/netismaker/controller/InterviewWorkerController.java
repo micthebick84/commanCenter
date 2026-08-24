@@ -92,7 +92,7 @@ public class InterviewWorkerController {
     @ResponseStatus(HttpStatus.NO_CONTENT)
     public void fail(@PathVariable Long id, @RequestParam String workerId,
                      @RequestParam(required = false) String reason) {
-        interviewService.fail(id, workerId, reason);
+        interviewService.failFromWorker(id, workerId, reason);
         interviewStream.pushStatus(id, InterviewStatus.FAILED);
         interviewStream.finish(id);
     }

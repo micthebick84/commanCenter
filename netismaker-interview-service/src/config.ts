@@ -13,6 +13,8 @@ export interface Config {
   maxTurns: number;
   /** 이 턴 수 이상이면 force-finish(정규 형식 plan 강제 요청) 프롬프트 사용. 기본 maxTurns-1. */
   forceFinishTurns: number;
+  /** 한 claim(턴 전체)의 wall-clock 상한(ms). 초과 시 SDK abort + FAILED 보고. 기본 30분. */
+  turnTimeoutMs: number;
 }
 
 function req(env: Record<string, string | undefined>, key: string): string {
@@ -39,5 +41,6 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
     claudeCliPath: env.CLAUDE_CLI,
     maxTurns: num(env, 'INTERVIEW_MAX_TURNS', 20),
     forceFinishTurns: num(env, 'INTERVIEW_FORCE_FINISH_TURNS', 19),
+    turnTimeoutMs: num(env, 'INTERVIEW_TURN_TIMEOUT_MS', 1_800_000),
   };
 }

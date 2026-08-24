@@ -213,12 +213,16 @@ public class InterviewService {
         return plan;
     }
 
-    /** 워커가 idle heartbeat 시 last_activity 갱신 (회수 오탐 방지용 best-effort). */
+    /**
+     * 워커 heartbeat — 생존 신호는 last_activity_at에만 기록한다 (touch).
+     * claimed_at은 갱신하지 않는다: claimed_at은 "이 턴이 시작된 시각"(claim이 기록)이고
+     * 스윕의 wall-clock 백스톱 기준이다. heartbeat가 이를 갱신하면 SDK가 행업해도
+     * (워커 프로세스는 살아서 계속 heartbeat) stale-RUNNING 회수가 영영 발동하지 않는다.
+     */
     @Transactional
     public void heartbeat(Long sessionId, String workerId) {
         InterviewSession s = requireSessionForUpdate(sessionId);
         requireWorker(s, workerId);
-        s.setClaimedAt(OffsetDateTime.now());
         touch(s);
     }
 
@@ -327,7 +331,10 @@ public class InterviewService {
         if (s.getTaskId() == null) {
             throw TaskException.conflict("작업에 연결되지 않은 세션입니다");
         }
-        Task t = taskRepo.findActiveById(s.getTaskId()).orElseThrow(TaskException::notFound);
+        // task도 비관적 락(FOR UPDATE) — softDelete/approve 등 task 진입점과 경합 시 갱신된
+        // 상태를 재판정한다(무락이면 상태 가드가 낡은 스냅샷을 보고 이중 전이·lost update 가능).
+        // 락 순서는 세션 → task (cancel 등 동일 순서의 세션 진입점과는 대기-재판정으로 수렴).
+        Task t = taskRepo.findActiveByIdForUpdate(s.getTaskId()).orElseThrow(TaskException::notFound);
         if (t.getStatus() != TaskStatus.INTERVIEW_REVIEW) {
             throw TaskException.conflict("플랜승인대기 상태에서만 확정할 수 있습니다 (현재: "
                     + t.getStatus().dbValue() + ")");
@@ -453,7 +460,10 @@ public class InterviewService {
      */
     private void mirrorTask(InterviewSession s, TaskStatus to, String actorId, String reason) {
         if (s.getTaskId() == null) return;
-        Task t = taskRepo.findActiveById(s.getTaskId()).orElse(null);
+        // 비관적 락(FOR UPDATE) — softDelete 등 task 진입점과 경합 시 커밋을 기다렸다가
+        // 재판정한다(무락이면 JPA 전체-컬럼 UPDATE가 상대 변경을 되돌리는 lost update 가능).
+        // 삭제가 먼저 커밋됐으면 findActive가 비어 조용히 스킵된다.
+        Task t = taskRepo.findActiveByIdForUpdate(s.getTaskId()).orElse(null);
         if (t == null || t.getStatus() == to) return;
         TaskStatus from = t.getStatus();
         t.setStatus(to);

@@ -386,3 +386,107 @@ describe('InterviewRunner activity wiring', () => {
     expect(lastActivityOrder).toBeLessThan(questionOrder);
   });
 });
+
+describe('InterviewRunner wall-clock timeout', () => {
+  // HeartbeatTicker가 fake timer 진행 중 발화하므로 heartbeat mock이 필요하다.
+  function makeClientWithHeartbeat() {
+    return {
+      postQuestion: vi.fn().mockResolvedValue(undefined),
+      postPlan: vi.fn().mockResolvedValue(undefined),
+      fail: vi.fn().mockResolvedValue(undefined),
+      postActivity: vi.fn().mockResolvedValue(undefined),
+      heartbeat: vi.fn().mockResolvedValue(undefined),
+    };
+  }
+  /** 영원히 yield하지 않는 스트림 = SDK 행업 재현. */
+  function hungStream(): AsyncIterable<never> {
+    return (async function* () {
+      await new Promise<never>(() => {});
+    })() as AsyncIterable<never>;
+  }
+
+  it('행업한 SDK 스트림은 타임아웃 시 abort되고 세션이 FAILED로 보고된다', async () => {
+    vi.useFakeTimers();
+    try {
+      const client = makeClientWithHeartbeat();
+      let abortSignal: AbortSignal | undefined;
+      const fakeQuery = vi.fn((args: { options: { abortController?: AbortController } }) => {
+        abortSignal = args.options.abortController?.signal;
+        return hungStream();
+      });
+      const runner = new InterviewRunner(client as never, fakeQuery as never, {
+        ...deps,
+        turnTimeoutMs: 60_000,
+      } as never);
+
+      const done = runner.run(freshClaim);
+      await vi.advanceTimersByTimeAsync(60_000);
+      await done;
+
+      expect(abortSignal?.aborted).toBe(true);
+      expect(client.fail).toHaveBeenCalledWith(42, expect.stringContaining('wall-clock 타임아웃'));
+      expect(client.postQuestion).not.toHaveBeenCalled();
+      expect(client.postPlan).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('git clone(ensureRepo) 행업도 같은 데드라인으로 회수된다', async () => {
+    vi.useFakeTimers();
+    try {
+      const client = makeClientWithHeartbeat();
+      const hungEnsureRepo = vi.fn(() => new Promise<void>(() => {}));
+      const fakeQuery = vi.fn(() => questionStream());
+      const runner = new InterviewRunner(client as never, fakeQuery as never, {
+        ...deps,
+        ensureRepo: hungEnsureRepo,
+        turnTimeoutMs: 60_000,
+      } as never);
+
+      const done = runner.run(freshClaim);
+      await vi.advanceTimersByTimeAsync(60_000);
+      await done;
+
+      expect(client.fail).toHaveBeenCalledWith(42, expect.stringContaining('wall-clock 타임아웃'));
+      expect(fakeQuery).not.toHaveBeenCalled(); // SDK 진입 전에 걸린 행업
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('정상 완료 턴은 타임아웃과 무관하게 기존 계약 그대로 동작한다', async () => {
+    const client = makeClientWithHeartbeat();
+    const fakeQuery = vi.fn(() => questionStream());
+    const runner = new InterviewRunner(client as never, fakeQuery as never, {
+      ...deps,
+      turnTimeoutMs: 60_000,
+    } as never);
+
+    await runner.run(freshClaim);
+
+    expect(client.postQuestion).toHaveBeenCalled();
+    expect(client.fail).not.toHaveBeenCalled();
+  });
+
+  it('타임아웃 fail 보고 자체가 실패해도 run()은 throw 없이 종료한다 (ClaimLoop 보호)', async () => {
+    vi.useFakeTimers();
+    try {
+      const client = makeClientWithHeartbeat();
+      client.fail.mockRejectedValue(new Error('api down'));
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      const fakeQuery = vi.fn(() => hungStream());
+      const runner = new InterviewRunner(client as never, fakeQuery as never, {
+        ...deps,
+        turnTimeoutMs: 60_000,
+      } as never);
+
+      const done = runner.run(freshClaim);
+      await vi.advanceTimersByTimeAsync(60_000);
+      await expect(done).resolves.toBeUndefined();
+      warnSpy.mockRestore();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});

@@ -83,4 +83,13 @@ describe('buildOptions', () => {
     });
     expect(opts.includePartialMessages).toBe(true);
   });
+
+  it('passes abortController through when provided and omits the key otherwise', () => {
+    const controller = new AbortController();
+    const withAbort = buildOptions({ ...base, claudeSessionId: null, abortController: controller });
+    expect(withAbort.abortController).toBe(controller);
+
+    const without = buildOptions({ ...base, claudeSessionId: null });
+    expect('abortController' in without).toBe(false);
+  });
 });

@@ -25,6 +25,12 @@ export interface RunnerDeps {
   /** Injectable SKILL.md reader for the writing-plans splice fallback (defaults to real fs read). */
   spliceRead?: (path: string, enc: 'utf8') => string;
   heartbeatIntervalMs?: number;
+  /**
+   * 한 claim(턴 전체: clone + SDK 최대 3회)의 wall-clock 상한(ms). 초과 시 SDK abort +
+   * 세션 FAILED 보고로 워커 슬롯을 회수한다 — heartbeat가 살아있는 행업의 유일한 로컬 백스톱.
+   * 기본 30분.
+   */
+  turnTimeoutMs?: number;
 }
 
 /**
@@ -111,17 +117,73 @@ export class InterviewRunner {
     // 활동 스트림: 진행(도구/델타)을 300ms 배치로 중계. 실패는 poster가 격리 — 인터뷰에 무영향.
     const poster = new ActivityPoster(this.client, claim.sessionId);
     poster.start();
-    const onActivity = (e: ActivityInput) => poster.push(e);
     // Seed the guard from the claim's accumulated session total so it is CUMULATIVE across all turns
     // (not just one runaway turn): the server accumulates total_cost_usd on every /question + /plan
     // and the claim carries it back, so a looping interview that never completes eventually trips the
     // guard → fail (safety net for the "completion never detected" loop). Fresh claims carry 0.
     const guard = new CostGuard(this.deps.quotaGuard, claim.totalCostUsd ?? 0);
+    // Wall-clock 절대 백스톱 (task쪽 StaleTaskRecoveryJob hungBackstop 미러): SDK/git이 행업해도
+    // HeartbeatTicker는 계속 돌므로 서버 스윕만으로는 이 워커 슬롯이 풀리지 않는다(ClaimLoop 직렬).
+    // 턴 전체를 하나의 데드라인으로 묶고, 초과 시 SDK abort + FAILED 보고로 슬롯을 회수한다.
+    const timeoutMs = this.deps.turnTimeoutMs ?? 1_800_000;
+    const controller = new AbortController();
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const turn = this.runTurn(claim, controller, guard, poster);
     try {
+      const outcome = await Promise.race([
+        turn.then(() => 'done' as const),
+        new Promise<'timeout'>((resolve) => {
+          timer = setTimeout(() => {
+            controller.abort();
+            resolve('timeout');
+          }, timeoutMs);
+        }),
+      ]);
+      if (outcome === 'timeout') {
+        // 낙오한 턴 promise의 지연 거부(AbortError 등)가 unhandled rejection이 되지 않게 흡수.
+        void turn.catch(() => {});
+        await this.safeFail(
+          claim.sessionId,
+          `SDK 턴 wall-clock 타임아웃(${Math.round(timeoutMs / 60_000)}분) 초과 — 행업 회수`,
+        );
+        return;
+      }
+    } catch (err) {
+      if (err instanceof QuotaGuardExceeded) {
+        await this.safeFail(claim.sessionId, err.message);
+        return;
+      }
+      await this.safeFail(claim.sessionId, `interview turn failed: ${(err as Error).message}`);
+    } finally {
+      if (timer) clearTimeout(timer);
+      ticker.stop();
+      await poster.stop();
+    }
+  }
+
+  /** fail 보고 자체의 실패(네트워크/409)가 런너 밖으로 새어 ClaimLoop까지 죽이지 않게 격리한다. */
+  private async safeFail(sessionId: number, reason: string): Promise<void> {
+    try {
+      await this.client.fail(sessionId, reason);
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.warn(`[runner] fail 보고 실패: session=${sessionId} — ${(err as Error).message}`);
+    }
+  }
+
+  /** 한 claim의 실제 턴 본문. 타임아웃 취소는 controller.abort()가 SDK로 전파한다. */
+  private async runTurn(
+    claim: InterviewClaimResponse,
+    controller: AbortController,
+    guard: CostGuard,
+    poster: ActivityPoster,
+  ): Promise<void> {
+    const onActivity = (e: ActivityInput) => poster.push(e);
+    {
       // 턴 상한: claim.turns의 assistant 턴 수로 진행도 판정(백엔드 변경 불필요).
       const assistantTurns = claim.turns.filter((t) => t.role === 'assistant').length;
       if (assistantTurns >= this.deps.maxTurns) {
-        await this.client.fail(
+        await this.safeFail(
           claim.sessionId,
           `최대 질문 턴(${this.deps.maxTurns}) 초과 — plan 미완성`,
         );
@@ -145,6 +207,7 @@ export class InterviewRunner {
         mcpsExtra: claim.mcpsExtra,
         model: claim.model,
         effort: claim.effort,
+        abortController: controller,
       });
       const stream: AsyncIterable<SdkMessage> = this.query({
         prompt:
@@ -185,6 +248,7 @@ export class InterviewRunner {
               mcpsExtra: claim.mcpsExtra,
               model: claim.model,
               effort: claim.effort,
+              abortController: controller,
             }),
           }),
           { onActivity, workDir: claim.workDir },
@@ -212,6 +276,7 @@ export class InterviewRunner {
               mcpsExtra: claim.mcpsExtra,
               model: claim.model,
               effort: claim.effort,
+              abortController: controller,
             }),
           }),
           { onActivity, workDir: claim.workDir },
@@ -244,15 +309,6 @@ export class InterviewRunner {
         kind: 'question',
         costUsd,
       });
-    } catch (err) {
-      if (err instanceof QuotaGuardExceeded) {
-        await this.client.fail(claim.sessionId, err.message);
-        return;
-      }
-      await this.client.fail(claim.sessionId, `interview turn failed: ${(err as Error).message}`);
-    } finally {
-      ticker.stop();
-      await poster.stop();
     }
   }
 }

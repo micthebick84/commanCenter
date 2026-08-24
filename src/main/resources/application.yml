@@ -92,7 +92,8 @@ app:
   interview:
     sse-ping-interval-ms: 30000
     idle-ttl-minutes: 1440          # AWAITING_INPUT 무응답 → EXPIRED (24h)
-    stale-running-minutes: 60       # RUNNING claimed_at 초과 → FAILED 회수
+    stale-running-minutes: 60       # RUNNING claimed_at(턴 시작) 초과 → FAILED (SDK 턴 wall-clock 백스톱)
+    running-dead-seconds: 180       # RUNNING last_activity_at(heartbeat) 두절 → FAILED (워커 사망)
     queued-ttl-minutes: 60          # QUEUED 체류 초과 → EXPIRED (인터뷰 서비스 미가동 감지)
     stale-check-interval-ms: 60000  # InterviewStaleRecoveryJob 주기
   attachment:

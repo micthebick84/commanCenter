@@ -41,4 +41,13 @@ describe('loadConfig', () => {
     expect(o.maxTurns).toBe(30);
     expect(o.forceFinishTurns).toBe(28);
   });
+
+  it('defaults turnTimeoutMs=30min and honors INTERVIEW_TURN_TIMEOUT_MS override', () => {
+    const base = {
+      API_BASE_URL: 'http://x', WORKER_API_KEY: 'k', WORKER_ID: 'w',
+      SUPERPOWERS_PLUGIN_PATH: '/sp',
+    };
+    expect(loadConfig({ ...base }).turnTimeoutMs).toBe(1_800_000);
+    expect(loadConfig({ ...base, INTERVIEW_TURN_TIMEOUT_MS: '600000' }).turnTimeoutMs).toBe(600_000);
+  });
 });

@@ -37,7 +37,15 @@ export class ClaimLoop {
         try {
           await this.runner.run(claim);
         } catch (err) {
-          await this.client.fail(claim.sessionId, `runner crashed: ${(err as Error).message}`);
+          // fail 보고 자체가 실패(네트워크/409)해도 루프는 계속 돌아야 한다 — 여기서 격리.
+          try {
+            await this.client.fail(claim.sessionId, `runner crashed: ${(err as Error).message}`);
+          } catch (failErr) {
+            // eslint-disable-next-line no-console
+            console.warn(
+              `[claim-loop] fail 보고 실패: session=${claim.sessionId} — ${(failErr as Error).message}`,
+            );
+          }
         }
       }
       await sleep(this.cfg.pollIntervalMs);

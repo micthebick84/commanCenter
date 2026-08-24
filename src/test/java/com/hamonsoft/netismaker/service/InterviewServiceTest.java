@@ -143,6 +143,24 @@ class InterviewServiceTest {
     }
 
     @Test
+    void heartbeat_refreshes_last_activity_but_not_claimed_at() {
+        // 회귀 가드: heartbeat가 claimedAt(턴 시작 시각)을 갱신하면 SDK 행업 시
+        // wall-clock 스윕이 영영 발동하지 않는다 — 생존 신호는 lastActivityAt에만.
+        InterviewSession s = session(5L, InterviewStatus.RUNNING);
+        s.setWorkerId("w1");
+        java.time.OffsetDateTime turnStart = java.time.OffsetDateTime.now().minusMinutes(10);
+        java.time.OffsetDateTime staleActivity = java.time.OffsetDateTime.now().minusMinutes(10);
+        s.setClaimedAt(turnStart);
+        s.setLastActivityAt(staleActivity);
+        when(sessionRepo.findByIdForUpdate(5L)).thenReturn(Optional.of(s));
+
+        service.heartbeat(5L, "w1");
+
+        assertThat(s.getClaimedAt()).isEqualTo(turnStart);           // 불변 — wall-clock 앵커
+        assertThat(s.getLastActivityAt()).isAfter(staleActivity);    // 생존 신호 갱신
+    }
+
+    @Test
     void fail_from_running_moves_to_failed() {
         InterviewSession s = session(4L, InterviewStatus.RUNNING);
         s.setWorkerId("w1");
@@ -255,7 +273,7 @@ class InterviewServiceTest {
         ReflectionTestUtils.setField(t, "id", 77L);
         t.setStatus(TaskStatus.INTERVIEWING);
         when(sessionRepo.findByIdForUpdate(13L)).thenReturn(Optional.of(s));
-        when(taskRepo.findActiveById(77L)).thenReturn(Optional.of(t));
+        when(taskRepo.findActiveByIdForUpdate(77L)).thenReturn(Optional.of(t));
 
         service.expire(13L, "인터뷰대기 60분 초과(인터뷰 서비스 미처리)");
 

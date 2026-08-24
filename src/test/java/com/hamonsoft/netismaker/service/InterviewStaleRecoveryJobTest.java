@@ -23,7 +23,7 @@ class InterviewStaleRecoveryJobTest {
         InterviewStaleRecoveryJob j = new InterviewStaleRecoveryJob(sessionRepo, interviewService, stream);
         ReflectionTestUtils.setField(j, "idleTtlMinutes", 1440);
         ReflectionTestUtils.setField(j, "staleRunningMinutes", 60);
-        ReflectionTestUtils.setField(j, "workerDeadThresholdSeconds", 60);
+        ReflectionTestUtils.setField(j, "runningDeadSeconds", 180);
         ReflectionTestUtils.setField(j, "queuedTtlMinutes", 60L);
         return j;
     }
@@ -50,6 +50,55 @@ class InterviewStaleRecoveryJobTest {
         verify(interviewService).fail(eq(1L), eq("stale-recovery"), contains("초과"));
         verify(stream).pushStatus(1L, InterviewStatus.FAILED);
         verify(stream).finish(1L);
+    }
+
+    @Test
+    void running_with_dead_heartbeat_is_failed() {
+        // heartbeat(lastActivityAt) 두절 = 워커 사망 — claimed_at이 신선해도(방금 claim) 회수돼야 한다.
+        OffsetDateTime freshClaim = OffsetDateTime.now().minusMinutes(5);
+        OffsetDateTime deadActivity = OffsetDateTime.now().minusMinutes(10);
+        InterviewSession s = session(8L, InterviewStatus.RUNNING, freshClaim, deadActivity);
+        when(sessionRepo.findStaleRunning(any())).thenReturn(List.of());
+        when(sessionRepo.findDeadRunning(any())).thenReturn(List.of(s));
+        when(sessionRepo.findIdleAwaitingInput(any())).thenReturn(List.of());
+
+        job().recover();
+
+        verify(interviewService).fail(eq(8L), eq("stale-recovery"), contains("heartbeat 두절"));
+        verify(stream).pushStatus(8L, InterviewStatus.FAILED);
+        verify(stream).finish(8L);
+    }
+
+    @Test
+    void session_matching_both_running_sweeps_is_failed_only_once() {
+        // wall-clock과 heartbeat 두절 후보가 겹치면 1a에서 처리하고 1b는 스킵해야 한다.
+        OffsetDateTime old = OffsetDateTime.now().minusMinutes(120);
+        InterviewSession s = session(9L, InterviewStatus.RUNNING, old, old);
+        when(sessionRepo.findStaleRunning(any())).thenReturn(List.of(s));
+        when(sessionRepo.findDeadRunning(any())).thenReturn(List.of(s));
+        when(sessionRepo.findIdleAwaitingInput(any())).thenReturn(List.of());
+
+        job().recover();
+
+        verify(interviewService, times(1)).fail(eq(9L), any(), any());
+    }
+
+    @Test
+    void dead_running_cutoff_honors_running_dead_seconds() {
+        when(sessionRepo.findStaleRunning(any())).thenReturn(List.of());
+        when(sessionRepo.findDeadRunning(any())).thenReturn(List.of());
+        when(sessionRepo.findIdleAwaitingInput(any())).thenReturn(List.of());
+
+        OffsetDateTime before = OffsetDateTime.now();
+        job().recover();
+        OffsetDateTime after = OffsetDateTime.now();
+
+        org.mockito.ArgumentCaptor<OffsetDateTime> cutoff =
+                org.mockito.ArgumentCaptor.forClass(OffsetDateTime.class);
+        verify(sessionRepo).findDeadRunning(cutoff.capture());
+        org.assertj.core.api.Assertions.assertThat(cutoff.getValue())
+                .isAfterOrEqualTo(before.minusSeconds(180))
+                .isBeforeOrEqualTo(after.minusSeconds(180));
     }
 
     @Test

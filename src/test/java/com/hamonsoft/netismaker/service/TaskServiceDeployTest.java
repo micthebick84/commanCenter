@@ -64,7 +64,7 @@ class TaskServiceDeployTest {
     @Test
     void deploy_from_pr_created_moves_to_deploy_pending() {
         Task t = taskWithStatus(TaskStatus.PR_CREATED);
-        when(taskRepo.findActiveById(42L)).thenReturn(Optional.of(t));
+        when(taskRepo.findActiveByIdForUpdate(42L)).thenReturn(Optional.of(t));
         Task result = service.deploy(42L, "admin", null);
         assertThat(result.getStatus()).isEqualTo(TaskStatus.DEPLOY_PENDING);
         assertThat(result.getWorkerId()).isNull();
@@ -74,7 +74,7 @@ class TaskServiceDeployTest {
     @Test
     void deploy_from_wrong_status_throws() {
         Task t = taskWithStatus(TaskStatus.COMPLETED);
-        when(taskRepo.findActiveById(42L)).thenReturn(Optional.of(t));
+        when(taskRepo.findActiveByIdForUpdate(42L)).thenReturn(Optional.of(t));
         assertThatThrownBy(() -> service.deploy(42L, "admin", null))
                 .isInstanceOf(TaskException.class)
                 .hasMessageContaining("PR생성");
@@ -83,7 +83,7 @@ class TaskServiceDeployTest {
     @Test
     void redeploy_from_deployed_moves_to_deploy_pending() {
         Task t = taskWithStatus(TaskStatus.DEPLOYED);
-        when(taskRepo.findActiveById(42L)).thenReturn(Optional.of(t));
+        when(taskRepo.findActiveByIdForUpdate(42L)).thenReturn(Optional.of(t));
         assertThat(service.redeploy(42L, "admin", null).getStatus())
                 .isEqualTo(TaskStatus.DEPLOY_PENDING);
     }
@@ -91,7 +91,7 @@ class TaskServiceDeployTest {
     @Test
     void redeploy_from_deploy_failed_is_allowed() {
         Task t = taskWithStatus(TaskStatus.DEPLOY_FAILED);
-        when(taskRepo.findActiveById(42L)).thenReturn(Optional.of(t));
+        when(taskRepo.findActiveByIdForUpdate(42L)).thenReturn(Optional.of(t));
         assertThat(service.redeploy(42L, "admin", null).getStatus())
                 .isEqualTo(TaskStatus.DEPLOY_PENDING);
     }
@@ -99,7 +99,7 @@ class TaskServiceDeployTest {
     @Test
     void redeploy_from_deploy_lost_is_allowed() {
         Task t = taskWithStatus(TaskStatus.DEPLOY_LOST);
-        when(taskRepo.findActiveById(42L)).thenReturn(Optional.of(t));
+        when(taskRepo.findActiveByIdForUpdate(42L)).thenReturn(Optional.of(t));
         assertThat(service.redeploy(42L, "admin", null).getStatus())
                 .isEqualTo(TaskStatus.DEPLOY_PENDING);
     }
@@ -107,7 +107,7 @@ class TaskServiceDeployTest {
     @Test
     void undeploy_from_deploy_lost_is_allowed() {
         Task t = taskWithStatus(TaskStatus.DEPLOY_LOST);
-        when(taskRepo.findActiveById(42L)).thenReturn(Optional.of(t));
+        when(taskRepo.findActiveByIdForUpdate(42L)).thenReturn(Optional.of(t));
         assertThat(service.undeploy(42L, "admin").getStatus())
                 .isEqualTo(TaskStatus.UNDEPLOY_PENDING);
     }
@@ -115,7 +115,7 @@ class TaskServiceDeployTest {
     @Test
     void undeploy_from_deployed_moves_to_undeploy_pending() {
         Task t = taskWithStatus(TaskStatus.DEPLOYED);
-        when(taskRepo.findActiveById(42L)).thenReturn(Optional.of(t));
+        when(taskRepo.findActiveByIdForUpdate(42L)).thenReturn(Optional.of(t));
         assertThat(service.undeploy(42L, "admin").getStatus())
                 .isEqualTo(TaskStatus.UNDEPLOY_PENDING);
     }
@@ -123,7 +123,7 @@ class TaskServiceDeployTest {
     @Test
     void undeploy_from_pr_created_throws() {
         Task t = taskWithStatus(TaskStatus.PR_CREATED);
-        when(taskRepo.findActiveById(42L)).thenReturn(Optional.of(t));
+        when(taskRepo.findActiveByIdForUpdate(42L)).thenReturn(Optional.of(t));
         assertThatThrownBy(() -> service.undeploy(42L, "admin"))
                 .isInstanceOf(TaskException.class);
     }
@@ -159,7 +159,7 @@ class TaskServiceDeployTest {
     @Test
     void deploy_persists_env_vars() {
         Task t = taskWithStatus(TaskStatus.PR_CREATED);
-        when(taskRepo.findActiveById(42L)).thenReturn(Optional.of(t));
+        when(taskRepo.findActiveByIdForUpdate(42L)).thenReturn(Optional.of(t));
         List<EnvVar> env = List.of(new EnvVar("JWT_SECRET", "s3cr3t", true));
         Task result = service.deploy(42L, "admin", env);
         assertThat(result.getStatus()).isEqualTo(TaskStatus.DEPLOY_PENDING);
@@ -171,7 +171,7 @@ class TaskServiceDeployTest {
     void deploy_with_null_env_keeps_existing() {
         Task t = taskWithStatus(TaskStatus.PR_CREATED);
         t.setEnvVars(new ArrayList<>(List.of(new EnvVar("A", "1", false))));
-        when(taskRepo.findActiveById(42L)).thenReturn(Optional.of(t));
+        when(taskRepo.findActiveByIdForUpdate(42L)).thenReturn(Optional.of(t));
         Task result = service.deploy(42L, "admin", null);
         assertThat(result.getEnvVars()).hasSize(1);
         assertThat(result.getEnvVars().get(0).key()).isEqualTo("A");

@@ -69,7 +69,7 @@ class WorkerServiceReconcileTest {
     @Test
     void late_pr_created_on_stale_failed_task_reconciles_to_pr_created() {
         Task t = failedTask();
-        when(taskRepo.findById(16L)).thenReturn(Optional.of(t));
+        when(taskRepo.findActiveByIdForUpdate(16L)).thenReturn(Optional.of(t));
 
         service.recordResult(16L, prCreated("https://github.com/o/r/pull/10", "netismaker/task-16"));
 
@@ -89,11 +89,61 @@ class WorkerServiceReconcileTest {
     @Test
     void late_pr_created_missing_pr_meta_is_rejected_as_conflict() {
         Task t = failedTask();
-        when(taskRepo.findById(16L)).thenReturn(Optional.of(t));
+        when(taskRepo.findActiveByIdForUpdate(16L)).thenReturn(Optional.of(t));
 
         assertThatThrownBy(() -> service.recordResult(16L, prCreated(null, null)))
                 .isInstanceOf(TaskException.class);
         assertThat(t.getStatus()).isEqualTo(TaskStatus.IMPLEMENTATION_FAILED);
+    }
+
+    // ────────────────── 지각 디자인 정합화 (DESIGN_PENDING → DESIGN_REVIEW) ──────────────────
+
+    private WorkerResultRequest lateDesign(String designMarkdown, String mockupFilesJson) {
+        return WorkerResultRequest.designReview("mac-worker-1", designMarkdown, mockupFilesJson,
+                null, null, "claude log", 700_000L);
+    }
+
+    @Test
+    void late_design_review_on_stale_requeued_task_reconciles_to_design_review() {
+        // stale 회수가 DESIGNING → DESIGN_PENDING 재큐한 뒤 도착한 완성 디자인 보고 —
+        // 재생성 사이클(수 분 + claude 비용) 대신 산출물을 수용해야 한다.
+        Task t = taskIn(TaskStatus.DESIGN_PENDING);
+        when(taskRepo.findActiveByIdForUpdate(16L)).thenReturn(Optional.of(t));
+
+        service.recordResult(16L, lateDesign("# 디자인 문서", "[{\"path\":\"a.html\"}]"));
+
+        assertThat(t.getStatus()).isEqualTo(TaskStatus.DESIGN_REVIEW);
+        org.mockito.ArgumentCaptor<com.hamonsoft.netismaker.entity.TaskStatusHistory> cap =
+                org.mockito.ArgumentCaptor.forClass(com.hamonsoft.netismaker.entity.TaskStatusHistory.class);
+        verify(historyRepo).save(cap.capture());
+        assertThat(cap.getValue().getFromStatus()).isEqualTo(TaskStatus.DESIGN_PENDING.dbValue());
+        assertThat(cap.getValue().getToStatus()).isEqualTo(TaskStatus.DESIGN_REVIEW.dbValue());
+        assertThat(cap.getValue().getReason()).contains("지각 보고 정합화");
+    }
+
+    @Test
+    void late_design_review_with_blank_artifacts_is_rejected_as_conflict() {
+        // 산출물이 비면 정합화 분기 불충족 → in-flight 가드에서 409 (재큐 상태 유지)
+        Task t = taskIn(TaskStatus.DESIGN_PENDING);
+        when(taskRepo.findActiveByIdForUpdate(16L)).thenReturn(Optional.of(t));
+
+        assertThatThrownBy(() -> service.recordResult(16L, lateDesign(" ", "[]")))
+                .isInstanceOf(TaskException.class);
+        assertThat(t.getStatus()).isEqualTo(TaskStatus.DESIGN_PENDING);
+    }
+
+    @Test
+    void late_design_review_after_reclaim_by_another_worker_is_rejected() {
+        // 재큐분을 다른 워커가 이미 claim(DESIGNING, w2)했으면 이전 워커의 지각 보고는 거절 —
+        // 진행 중인 재생성이 이긴다.
+        Task t = taskIn(TaskStatus.DESIGNING);
+        t.setWorkerId("w2");
+        when(taskRepo.findActiveByIdForUpdate(16L)).thenReturn(Optional.of(t));
+
+        assertThatThrownBy(() -> service.recordResult(16L, lateDesign("# 디자인", "[]")))
+                .isInstanceOf(TaskException.class)
+                .hasMessageContaining("다른 워커");
+        assertThat(t.getStatus()).isEqualTo(TaskStatus.DESIGNING);
     }
 
     // ───────────────────────── 지각 분석 정합화 (FAILED → COMPLETED) ─────────────────────────
@@ -110,7 +160,7 @@ class WorkerServiceReconcileTest {
     void late_completed_on_stale_failed_task_reconciles_to_completed() {
         Task t = taskIn(TaskStatus.FAILED);
         t.setFailureReason("Stale 회수 한도 초과: 워커 응답 없음");
-        when(taskRepo.findById(16L)).thenReturn(Optional.of(t));
+        when(taskRepo.findActiveByIdForUpdate(16L)).thenReturn(Optional.of(t));
 
         service.recordResult(16L, lateCompleted("## 분석 결과"));
 
@@ -136,7 +186,7 @@ class WorkerServiceReconcileTest {
     void late_completed_with_blank_markdown_is_rejected_as_conflict() {
         Task t = taskIn(TaskStatus.FAILED);
         t.setFailureReason("Stale 회수 한도 초과");
-        when(taskRepo.findById(16L)).thenReturn(Optional.of(t));
+        when(taskRepo.findActiveByIdForUpdate(16L)).thenReturn(Optional.of(t));
 
         assertThatThrownBy(() -> service.recordResult(16L, lateCompleted("  ")))
                 .isInstanceOf(TaskException.class)
@@ -150,7 +200,7 @@ class WorkerServiceReconcileTest {
     void late_completed_on_pending_task_is_rejected_as_conflict() {
         // PENDING은 정합화 대상이 아님 — stale 회수가 재큐한 뒤 재클레임과 경합하므로 재분석에 맡긴다.
         Task t = taskIn(TaskStatus.PENDING);
-        when(taskRepo.findById(16L)).thenReturn(Optional.of(t));
+        when(taskRepo.findActiveByIdForUpdate(16L)).thenReturn(Optional.of(t));
 
         assertThatThrownBy(() -> service.recordResult(16L, lateCompleted("## 분석 결과")))
                 .isInstanceOf(TaskException.class)
@@ -174,7 +224,7 @@ class WorkerServiceReconcileTest {
     void late_deployed_on_stale_deploy_failed_task_reconciles_to_deployed() {
         Task t = taskIn(TaskStatus.DEPLOY_FAILED);
         t.setFailureReason("Stale 회수: 워커 응답 없음 (배포 중단)");
-        when(taskRepo.findById(16L)).thenReturn(Optional.of(t));
+        when(taskRepo.findActiveByIdForUpdate(16L)).thenReturn(Optional.of(t));
 
         service.recordResult(16L, lateDeployed("http://localhost:19001"));
 
@@ -199,7 +249,7 @@ class WorkerServiceReconcileTest {
     @Test
     void late_deployed_without_deploy_url_is_rejected_as_conflict() {
         Task t = taskIn(TaskStatus.DEPLOY_FAILED);
-        when(taskRepo.findById(16L)).thenReturn(Optional.of(t));
+        when(taskRepo.findActiveByIdForUpdate(16L)).thenReturn(Optional.of(t));
 
         assertThatThrownBy(() -> service.recordResult(16L, lateDeployed(null)))
                 .isInstanceOf(TaskException.class)
@@ -214,7 +264,7 @@ class WorkerServiceReconcileTest {
         // 정합화 분기 미적용 — in-flight 가드 통과 후 기존 recordDeployResult 흐름 회귀 확인.
         Task t = taskIn(TaskStatus.DEPLOYING);
         t.setWorkerId("mac-worker-1");
-        when(taskRepo.findById(16L)).thenReturn(Optional.of(t));
+        when(taskRepo.findActiveByIdForUpdate(16L)).thenReturn(Optional.of(t));
 
         service.recordResult(16L, lateDeployed("http://localhost:19001"));
 
@@ -232,7 +282,7 @@ class WorkerServiceReconcileTest {
     void late_deployed_on_deploy_lost_task_is_rejected_as_conflict() {
         // DEPLOY_LOST는 DEPLOYED에서만 진입하는 상태 — 지각 배포 보고의 정합화 대상이 아니다.
         Task t = taskIn(TaskStatus.DEPLOY_LOST);
-        when(taskRepo.findById(16L)).thenReturn(Optional.of(t));
+        when(taskRepo.findActiveByIdForUpdate(16L)).thenReturn(Optional.of(t));
 
         assertThatThrownBy(() -> service.recordResult(16L, lateDeployed("http://localhost:19001")))
                 .isInstanceOf(TaskException.class)

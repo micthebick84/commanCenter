@@ -125,7 +125,13 @@ export class InterviewRunner {
     // Wall-clock 절대 백스톱 (task쪽 StaleTaskRecoveryJob hungBackstop 미러): SDK/git이 행업해도
     // HeartbeatTicker는 계속 돌므로 서버 스윕만으로는 이 워커 슬롯이 풀리지 않는다(ClaimLoop 직렬).
     // 턴 전체를 하나의 데드라인으로 묶고, 초과 시 SDK abort + FAILED 보고로 슬롯을 회수한다.
-    const timeoutMs = this.deps.turnTimeoutMs ?? 1_800_000;
+    // ??는 NaN/0을 통과시킨다 — NaN은 setTimeout에서 1ms로 클램프돼 전 턴 즉시 abort가 되므로
+    // 여기서도 방어한다 (config posNum과 이중 방어).
+    const rawTimeout = this.deps.turnTimeoutMs;
+    const timeoutMs =
+      typeof rawTimeout === 'number' && Number.isFinite(rawTimeout) && rawTimeout > 0
+        ? rawTimeout
+        : 1_800_000;
     const controller = new AbortController();
     let timer: ReturnType<typeof setTimeout> | null = null;
     const turn = this.runTurn(claim, controller, guard, poster);
@@ -192,12 +198,17 @@ export class InterviewRunner {
       const forceFinish = assistantTurns >= this.deps.forceFinishTurns;
 
       // CLONE: ensure the checkout exists at workDir before the (fresh OR resume) turn.
+      // signal 전파: 타임아웃 abort가 git 자식 프로세스까지 종료해 좀비를 남기지 않는다.
       poster.push({ type: 'tool', label: '환경 준비', detail: claim.githubRepo });
       await this.ensureRepo({
         githubRepo: claim.githubRepo,
         githubBranch: claim.githubBranch,
         workDir: claim.workDir,
+        signal: controller.signal,
       });
+      // 좀비 턴 가드: 타임아웃으로 이미 abort된 뒤 낙오한 이 턴이 늦게 여기 도달하면
+      // (signal을 무시하는 주입 ensureRepo 등) SDK에 진입하지 않고 즉시 중단한다.
+      controller.signal.throwIfAborted();
 
       const options = buildOptions({
         superpowersPluginPath: this.deps.superpowersPluginPath,
@@ -234,6 +245,7 @@ export class InterviewRunner {
       const handoff = detectHandoff(assistantText);
       const hasPlan = tryHarvest(assistantText).ok;
       if (handoff && !hasPlan && sessionId) {
+        controller.signal.throwIfAborted(); // relay 사이 gap에서 abort됐으면 SDK 재진입 금지
         const splice = buildWritingPlansSplice(this.deps.superpowersPluginPath, this.deps.spliceRead);
         const second = await relay(
           this.query({
@@ -264,6 +276,7 @@ export class InterviewRunner {
       // near-miss 보정: 추출 실패 + plan 의도 신호 시, 같은 세션에 정규 형식 재요청 1회.
       // force-finish는 이미 reformat 프롬프트이므로 이중 splice 방지.
       if (!harvested.ok && !forceFinish && detectPlanIntent(assistantText) && sessionId) {
+        controller.signal.throwIfAborted(); // relay 사이 gap에서 abort됐으면 SDK 재진입 금지
         const reformatSplice = buildPlanReformatSplice();
         const retry = await relay(
           this.query({

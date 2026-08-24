@@ -59,7 +59,7 @@ class WorkerServiceRuntimeStatusTest {
     @Test
     void deployed_and_not_running_transitions_to_deploy_lost_with_system_history() {
         Task t = taskWithStatus(TaskStatus.DEPLOYED);
-        when(taskRepo.findActiveById(13L)).thenReturn(Optional.of(t));
+        when(taskRepo.findActiveByIdForUpdate(13L)).thenReturn(Optional.of(t));
 
         service.recordRuntimeStatus(13L, new WorkerRuntimeStatusRequest("mac-worker-1", false, "컨테이너 비실행"));
 
@@ -74,7 +74,7 @@ class WorkerServiceRuntimeStatusTest {
     @Test
     void deploy_lost_and_running_recovers_to_deployed() {
         Task t = taskWithStatus(TaskStatus.DEPLOY_LOST);
-        when(taskRepo.findActiveById(13L)).thenReturn(Optional.of(t));
+        when(taskRepo.findActiveByIdForUpdate(13L)).thenReturn(Optional.of(t));
 
         service.recordRuntimeStatus(13L, new WorkerRuntimeStatusRequest("mac-worker-1", true, "실행 확인"));
 
@@ -85,7 +85,7 @@ class WorkerServiceRuntimeStatusTest {
     @Test
     void deployed_and_running_is_noop() {
         Task t = taskWithStatus(TaskStatus.DEPLOYED);
-        when(taskRepo.findActiveById(13L)).thenReturn(Optional.of(t));
+        when(taskRepo.findActiveByIdForUpdate(13L)).thenReturn(Optional.of(t));
 
         service.recordRuntimeStatus(13L, new WorkerRuntimeStatusRequest("mac-worker-1", true, null));
 
@@ -97,7 +97,7 @@ class WorkerServiceRuntimeStatusTest {
     void report_racing_with_redeploy_is_noop() {
         // 관측 시점엔 배포완료였지만 보고 도착 전에 관리자가 재배포를 시작한 경우
         Task t = taskWithStatus(TaskStatus.DEPLOYING);
-        when(taskRepo.findActiveById(13L)).thenReturn(Optional.of(t));
+        when(taskRepo.findActiveByIdForUpdate(13L)).thenReturn(Optional.of(t));
 
         service.recordRuntimeStatus(13L, new WorkerRuntimeStatusRequest("mac-worker-1", false, "컨테이너 비실행"));
 
@@ -108,7 +108,7 @@ class WorkerServiceRuntimeStatusTest {
     @Test
     void repeated_lost_report_is_idempotent() {
         Task t = taskWithStatus(TaskStatus.DEPLOY_LOST);
-        when(taskRepo.findActiveById(13L)).thenReturn(Optional.of(t));
+        when(taskRepo.findActiveByIdForUpdate(13L)).thenReturn(Optional.of(t));
 
         service.recordRuntimeStatus(13L, new WorkerRuntimeStatusRequest("mac-worker-1", false, "컨테이너 비실행"));
 
@@ -119,7 +119,7 @@ class WorkerServiceRuntimeStatusTest {
     @Test
     void report_for_deleted_task_is_rejected() {
         // 관측 목록 수신 후 삭제된 task의 지각 보고 — 삭제 row를 변이시키지 않는다
-        when(taskRepo.findActiveById(13L)).thenReturn(Optional.empty());
+        when(taskRepo.findActiveByIdForUpdate(13L)).thenReturn(Optional.empty());
 
         org.assertj.core.api.Assertions.assertThatThrownBy(() ->
                 service.recordRuntimeStatus(13L, new WorkerRuntimeStatusRequest("mac-worker-1", false, "비실행")))

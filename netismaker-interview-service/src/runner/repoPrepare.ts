@@ -9,10 +9,12 @@ export interface RepoInput {
   githubRepo: string; // "owner/repo"
   githubBranch: string;
   workDir: string; // = claim.workDir, also options.cwd
+  /** 턴 wall-clock 타임아웃 전파용 — abort 시 git 자식 프로세스를 종료해 좀비를 남기지 않는다. */
+  signal?: AbortSignal;
 }
 
 export interface RepoOps {
-  run: (cmd: string, args: string[], opts: { cwd?: string }) => Promise<unknown>;
+  run: (cmd: string, args: string[], opts: { cwd?: string; signal?: AbortSignal }) => Promise<unknown>;
   exists: (path: string) => boolean;
   /** Create the checkout dir before a fresh clone. Optional so unit tests can omit fs side effects. */
   mkdir?: (path: string) => void;
@@ -34,13 +36,14 @@ const defaultOps: RepoOps = {
  */
 export async function ensureRepo(input: RepoInput, ops: RepoOps = defaultOps): Promise<void> {
   const { githubRepo, githubBranch, workDir } = input;
+  const abort = input.signal ? { signal: input.signal } : {};
   const gitDir = join(workDir, '.git');
   if (ops.exists(gitDir)) {
-    await ops.run('git', ['fetch', '--depth', '1', 'origin', githubBranch], { cwd: workDir });
-    await ops.run('git', ['reset', '--hard', `origin/${githubBranch}`], { cwd: workDir });
+    await ops.run('git', ['fetch', '--depth', '1', 'origin', githubBranch], { cwd: workDir, ...abort });
+    await ops.run('git', ['reset', '--hard', `origin/${githubBranch}`], { cwd: workDir, ...abort });
     return;
   }
   ops.mkdir?.(workDir);
   const url = `https://github.com/${githubRepo}.git`;
-  await ops.run('git', ['clone', '--depth', '1', '--branch', githubBranch, url, workDir], {});
+  await ops.run('git', ['clone', '--depth', '1', '--branch', githubBranch, url, workDir], { ...abort });
 }

@@ -18,7 +18,8 @@ import java.time.OffsetDateTime;
  *    1a) RUNNING + claimed_at이 stale-running-minutes 초과 → fail (SDK 턴 wall-clock 절대 백스톱.
  *        claimed_at은 claim에서만 기록되고 heartbeat는 갱신하지 않으므로, 워커가 살아서
  *        heartbeat를 계속 보내는 행업도 여기서 회수된다)
- *    1b) RUNNING + last_activity_at이 running-dead-seconds 초과 → fail (heartbeat 두절 = 워커 사망)
+ *    1b) RUNNING + last_activity_at이 running-dead-seconds 초과 → fail (heartbeat 두절 = 워커 사망.
+ *        부팅 후 running-dead-seconds 동안은 유예 — API 다운 중 실패한 heartbeat 오탐 방지)
  *    2)  AWAITING_INPUT + last_activity_at이 idle-ttl-minutes 초과 → expire (사람 미복귀)
  *    3)  QUEUED + last_activity_at이 queued-ttl-minutes 초과 → expire (인터뷰 서비스 미가동)
  *
@@ -40,9 +41,17 @@ public class InterviewStaleRecoveryJob {
     @Value("${app.interview.stale-running-minutes:60}")
     private int staleRunningMinutes;
 
-    /** RUNNING 세션의 heartbeat 두절(워커 사망) 판정 임계 — heartbeat 주기(15s)의 넉넉한 배수. */
-    @Value("${app.interview.running-dead-seconds:180}")
+    /**
+     * RUNNING 세션의 heartbeat 두절(워커 사망) 판정 임계 — heartbeat 주기(15s)의 넉넉한 배수.
+     * API 자체가 내려가 있는 동안엔 살아있는 워커의 heartbeat도 실패해 last_activity_at이
+     * 낡으므로, 짧으면 API 복구 직후 스윕이 정상 인터뷰를 오살한다 — 재기동/짧은 장애를
+     * 흡수할 만큼 크게 (기본 10분; wall-clock 백스톱이 주 방어라 여기는 보조).
+     */
+    @Value("${app.interview.running-dead-seconds:600}")
     private int runningDeadSeconds;
+
+    /** 부팅 시각 — API 재기동 직후 1b 오탐 방지 유예의 기준. */
+    private OffsetDateTime startedAt = OffsetDateTime.now();
 
     /** QUEUED 체류 한도 — 초과 시 인터뷰 서비스 미가동으로 보고 만료시킨다. */
     @Value("${app.interview.queued-ttl-minutes:60}")
@@ -80,18 +89,23 @@ public class InterviewStaleRecoveryJob {
 
         // 1b) RUNNING heartbeat 두절 → FAILED. last_activity_at(heartbeat가 갱신)이 runningDeadSeconds 초과.
         //     1a에서 이미 처리한 세션은 스킵(두 후보 조회가 겹칠 수 있다).
-        OffsetDateTime deadCutoff = now.minusSeconds(runningDeadSeconds);
-        for (InterviewSession s : sessionRepo.findDeadRunning(deadCutoff)) {
-            Long id = s.getId();
-            if (!recovered.add(id)) continue;
-            try {
-                interviewService.fail(id, "stale-recovery",
-                        "heartbeat 두절(" + runningDeadSeconds + "초) — 워커 사망 회수");
-                stream.pushStatus(id, InterviewStatus.FAILED);
-                stream.finish(id);
-                log.warn("Stale 회수: interview={} RUNNING → FAILED (heartbeat 두절)", id);
-            } catch (Exception e) {
-                log.error("Stale 회수 실패: interview={}", id, e);
+        //     기동 유예: API가 내려가 있던 동안의 heartbeat 실패는 워커 사망이 아니다 — 부팅 후
+        //     워커가 다시 heartbeat를 보낼 시간을 준다. (DB만 죽었다 살아난 무재기동 장애의 첫 스윕
+        //     vs 15s 주기 heartbeat 복구 레이스는 잔존하나, 임계 10분 + 스윕 60s 주기라 창이 좁다.)
+        if (startedAt.isBefore(now.minusSeconds(runningDeadSeconds))) {
+            OffsetDateTime deadCutoff = now.minusSeconds(runningDeadSeconds);
+            for (InterviewSession s : sessionRepo.findDeadRunning(deadCutoff)) {
+                Long id = s.getId();
+                if (!recovered.add(id)) continue;
+                try {
+                    interviewService.fail(id, "stale-recovery",
+                            "heartbeat 두절(" + runningDeadSeconds + "초) — 워커 사망 회수");
+                    stream.pushStatus(id, InterviewStatus.FAILED);
+                    stream.finish(id);
+                    log.warn("Stale 회수: interview={} RUNNING → FAILED (heartbeat 두절)", id);
+                } catch (Exception e) {
+                    log.error("Stale 회수 실패: interview={}", id, e);
+                }
             }
         }
 

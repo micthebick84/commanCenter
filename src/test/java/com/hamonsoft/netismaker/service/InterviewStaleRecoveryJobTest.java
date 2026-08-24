@@ -25,6 +25,15 @@ class InterviewStaleRecoveryJobTest {
         ReflectionTestUtils.setField(j, "staleRunningMinutes", 60);
         ReflectionTestUtils.setField(j, "runningDeadSeconds", 180);
         ReflectionTestUtils.setField(j, "queuedTtlMinutes", 60L);
+        // 기동 유예를 지나 1b(heartbeat 두절) 스윕이 활성인 상태를 기본으로 한다.
+        ReflectionTestUtils.setField(j, "startedAt", OffsetDateTime.now().minusHours(1));
+        return j;
+    }
+
+    /** 방금 부팅한 잡 — 1b 기동 유예 검증용. */
+    private InterviewStaleRecoveryJob freshlyBootedJob() {
+        InterviewStaleRecoveryJob j = job();
+        ReflectionTestUtils.setField(j, "startedAt", OffsetDateTime.now());
         return j;
     }
 
@@ -81,6 +90,22 @@ class InterviewStaleRecoveryJobTest {
         job().recover();
 
         verify(interviewService, times(1)).fail(eq(9L), any(), any());
+    }
+
+    @Test
+    void dead_running_sweep_is_suppressed_during_boot_grace() {
+        // API 재기동 직후엔 다운타임 동안 실패한 heartbeat 때문에 last_activity_at이 낡아 있다 —
+        // 살아있는 워커의 RUNNING 인터뷰를 오살하지 않도록 부팅 후 runningDeadSeconds 동안 1b를 쉰다.
+        when(sessionRepo.findStaleRunning(any())).thenReturn(List.of());
+        when(sessionRepo.findIdleAwaitingInput(any())).thenReturn(List.of());
+
+        freshlyBootedJob().recover();
+
+        verify(sessionRepo, never()).findDeadRunning(any());
+        verify(interviewService, never()).fail(any(), any(), any());
+        // 유예는 1b에만 적용 — idle/queued 스윕은 부팅 직후에도 돈다.
+        verify(sessionRepo).findIdleAwaitingInput(any());
+        verify(sessionRepo).findStaleQueued(any());
     }
 
     @Test

@@ -438,8 +438,11 @@ public class WorkerService {
      */
     @Transactional
     public void recordRuntimeStatus(Long taskId, WorkerRuntimeStatusRequest req) {
-        // findActiveById: 관측 목록 수신 후 삭제된 task의 지각 보고가 삭제 row를 변이시키지 않게
-        Task t = taskRepo.findActiveById(taskId).orElseThrow(TaskException::notFound);
+        // findActiveByIdForUpdate: ① 관측 목록 수신 후 삭제된 task의 지각 보고가 삭제 row를
+        // 변이시키지 않게(findActive) ② 관측·보고 사이에 시작된 재배포/중지(FOR UPDATE 보유)의
+        // 커밋을 기다렸다가 갱신된 상태로 재판정 — 무락이면 stale 스냅샷(DEPLOYED)이
+        // DEPLOY_PENDING을 DEPLOY_LOST로 되덮는 lost update가 가능하다.
+        Task t = taskRepo.findActiveByIdForUpdate(taskId).orElseThrow(TaskException::notFound);
         TaskStatus from = t.getStatus();
         boolean running = Boolean.TRUE.equals(req.running());
 

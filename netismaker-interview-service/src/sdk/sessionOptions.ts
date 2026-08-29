@@ -9,6 +9,12 @@ export interface SessionOptionsInput {
   claudeSessionId: string | null;
   /** 인터뷰별 추가 MCP 서버 스냅샷 (Java InterviewClaimResponse.mcpsExtra, TaskMcpSpec[] = {name,url,transport}). */
   mcpsExtra?: unknown;
+  /**
+   * ~/.claude.json 글로벌+프로젝트 합본 (mcpBase.loadBaseMcpServers, 부팅 시 1회 스냅샷) —
+   * 디자인/구현 워커의 --mcp-config 베이스와 동일. 이름 충돌 시 mcpsExtra가 prevails
+   * (WorkerMcpSupport.buildClaudeArgsForTask 정책).
+   */
+  mcpsBase?: Record<string, unknown>;
   /** 선택 모델 (blank/미지정이면 CLI 기본값). */
   model?: string;
   /** 추론 effort (blank/미지정이면 CLI 기본값). */
@@ -42,6 +48,9 @@ function toMcpServers(mcpsExtra: unknown): Record<string, { type: string; url: s
  *   settingSources (settingSources:['user','project'] would load ALL user plugins, spike 04 caveat 2).
  *   'Skill' is whitelisted so the Skill tool appears in init.tools.
  * - cwd = workDir; resume reuses the identical cwd (the on-disk session store is cwd-hashed, spike 02).
+ * - MCP: settingSources를 안 쓰는 대신 mcpsBase(~/.claude.json 합본 스냅샷)를 options.mcpServers로
+ *   명시 주입 — 디자인/구현 워커(--mcp-config + --strict-mcp-config + --allowedTools mcp__*)와 동일 목록.
+ *   플러그인 격리(superpowers만 로드)는 그대로 유지된다.
  * - PERMISSIONS: Write/Bash/Edit MUST NOT be in allowedTools. Tools listed in allowedTools are
  *   PRE-APPROVED by the CLI and skip the canUseTool callback entirely — so listing Write/Bash there
  *   made buildCanUseTool's confinement (Write→docs/superpowers, Bash read-only) dead code and let the
@@ -51,11 +60,16 @@ function toMcpServers(mcpsExtra: unknown): Record<string, { type: string; url: s
  *   through canUseTool because they are no longer pre-approved.)
  */
 export function buildOptions(input: SessionOptionsInput): Record<string, unknown> {
-  const mcpServers = toMcpServers(input.mcpsExtra);
+  // 베이스(글로벌+프로젝트 합본) + 작업별 extras — 충돌 시 extras 우선 (워커 패리티).
+  // settingSources 미설정이므로 여기 명시한 것 외 다른 MCP 소스는 안 붙는다 (--strict-mcp-config 등가).
+  const merged: Record<string, unknown> = { ...(input.mcpsBase ?? {}), ...(toMcpServers(input.mcpsExtra) ?? {}) };
+  const mcpServers = Object.keys(merged).length > 0 ? merged : undefined;
   return {
     pathToClaudeCodeExecutable: input.claudeCliPath,
     plugins: [{ type: 'local', path: input.superpowersPluginPath }],
-    allowedTools: ['Skill', 'Read', 'Grep', 'Glob'],
+    // mcp__<server>는 해당 서버의 모든 도구 매칭 — 워커의 --allowedTools 와일드카드와 동일.
+    // MCP 도구는 어차피 canUseTool 기본 분기(allow)를 타므로 보안 경계 변화 없음; Write/Bash/Edit 불변식 유지.
+    allowedTools: ['Skill', 'Read', 'Grep', 'Glob', ...Object.keys(merged).map((n) => `mcp__${n}`)],
     cwd: input.workDir,
     permissionMode: 'default',
     // 활동 스트림: stream_event(텍스트/thinking 델타)를 relay가 실시간 방출할 수 있게 켠다 (스펙 §5.1).

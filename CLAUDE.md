@@ -47,7 +47,7 @@ WORKER_ID=mac-worker-1 \
 - **claude 구독 1개 = macOS 1대 = 워커 1대 = 직렬 처리** (DESIGN.md P6). 분석/구현이 같은 큐를 공유. 동시성은 V2 이후.
 - **워커는 사내망 외부에서 폴링**: `/worker/*` 엔드포인트는 `X-Worker-API-Key` 인증. JWT 아님.
 - **모든 분석 결과는 한국어 마크다운**: `application-worker.yml`의 `prompt-template` 참고. 섹션 헤더는 파서가 사용하므로 변경 금지.
-- **MCP 자동 주입**: `WorkerMcpSupport`가 `~/.claude.json`의 글로벌+프로젝트 mcpServers를 머지해 `~/netis-maker/worker-mcp.json` 생성. claude -p 호출 시 `--mcp-config + --strict-mcp-config + --allowedTools` prepend.
+- **MCP 자동 주입**: `WorkerMcpSupport`가 `~/.claude.json`의 글로벌+프로젝트 mcpServers를 머지해 `~/netis-maker/worker-mcp.json` 생성. claude -p 호출 시 `--mcp-config + --strict-mcp-config + --allowedTools` prepend. 인터뷰 세션도 동일 합본을 씀 — `netismaker-interview-service/src/sdk/mcpBase.ts`가 부팅 시 1회 스냅샷해 SDK `options.mcpServers`로 주입(작업별 extras와 머지, 충돌 시 extras 우선).
 - **프롬프트는 stdin으로 전달**: `--allowedTools <tools...>` variadic이 뒤따라오는 prompt arg를 삼키므로 arg 대신 stdin 사용. ARG_MAX/ps 노출 동시 회피.
 
 ## 다중 워커 운영 (V1.2)

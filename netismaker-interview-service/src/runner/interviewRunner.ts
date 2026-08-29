@@ -20,6 +20,11 @@ export interface RunnerDeps {
   maxTurns: number;
   /** 이 턴 수 이상이면 force-finish 프롬프트 사용. */
   forceFinishTurns: number;
+  /**
+   * ~/.claude.json 글로벌+프로젝트 MCP 합본 스냅샷 (부팅 시 loadBaseMcpServers 1회) —
+   * 디자인/구현 워커와 동일한 베이스 MCP를 인터뷰 세션에도 주입. 미지정이면 extras만.
+   */
+  mcpsBase?: Record<string, unknown>;
   /** Injectable repo prepare (defaults to the real git clone/fetch). */
   ensureRepo?: (input: RepoInput) => Promise<void>;
   /** Injectable SKILL.md reader for the writing-plans splice fallback (defaults to real fs read). */
@@ -216,6 +221,7 @@ export class InterviewRunner {
         claudeCliPath: this.deps.claudeCliPath,
         claudeSessionId: claim.claudeSessionId,
         mcpsExtra: claim.mcpsExtra,
+        mcpsBase: this.deps.mcpsBase,
         model: claim.model,
         effort: claim.effort,
         abortController: controller,
@@ -258,6 +264,7 @@ export class InterviewRunner {
               claudeCliPath: this.deps.claudeCliPath,
               claudeSessionId: sessionId,
               mcpsExtra: claim.mcpsExtra,
+              mcpsBase: this.deps.mcpsBase,
               model: claim.model,
               effort: claim.effort,
               abortController: controller,
@@ -287,6 +294,7 @@ export class InterviewRunner {
               claudeCliPath: this.deps.claudeCliPath,
               claudeSessionId: sessionId,
               mcpsExtra: claim.mcpsExtra,
+              mcpsBase: this.deps.mcpsBase,
               model: claim.model,
               effort: claim.effort,
               abortController: controller,

@@ -62,6 +62,62 @@ describe('buildOptions', () => {
     expect(o.mcpServers).toEqual({ ctx7: { type: 'http', url: 'https://ctx7' } });
   });
 
+  it('injects mcpsBase (글로벌+프로젝트 합본) into mcpServers — 디자인/구현 워커 패리티', () => {
+    const o = buildOptions({
+      ...base,
+      claudeSessionId: null,
+      mcpsBase: {
+        'local-db': { command: 'npx', args: ['x'] },
+        'obsidian-vault': { type: 'http', url: 'http://127.0.0.1:27123/mcp' },
+      },
+    });
+    expect(o.mcpServers).toEqual({
+      'local-db': { command: 'npx', args: ['x'] },
+      'obsidian-vault': { type: 'http', url: 'http://127.0.0.1:27123/mcp' },
+    });
+  });
+
+  it('merges mcpsBase with mcpsExtra; on a name conflict extras prevail (buildClaudeArgsForTask 정책)', () => {
+    const o = buildOptions({
+      ...base,
+      claudeSessionId: null,
+      mcpsBase: {
+        'local-db': { command: 'npx', args: ['x'] },
+        dup: { type: 'http', url: 'http://base' },
+      },
+      mcpsExtra: [{ name: 'dup', url: 'http://extra', transport: 'sse' }],
+    });
+    expect(o.mcpServers).toEqual({
+      'local-db': { command: 'npx', args: ['x'] },
+      dup: { type: 'sse', url: 'http://extra' },
+    });
+  });
+
+  it('omits mcpServers when mcpsBase is empty and no extras', () => {
+    const o = buildOptions({ ...base, claudeSessionId: null, mcpsBase: {} });
+    expect(o.mcpServers).toBeUndefined();
+  });
+
+  it('pre-approves mcp__<server> wildcards for every active server (worker --allowedTools 패리티)', () => {
+    const o = buildOptions({
+      ...base,
+      claudeSessionId: null,
+      mcpsBase: { 'local-db': { command: 'npx' } },
+      mcpsExtra: [{ name: 'ctx7', url: 'https://ctx7', transport: 'http' }],
+    });
+    const allowed = o.allowedTools as string[];
+    expect(allowed).toEqual(expect.arrayContaining(['mcp__local-db', 'mcp__ctx7']));
+    // 보안 불변식 유지: MCP 와일드카드가 늘어나도 Write/Bash/Edit는 여전히 canUseTool 게이트.
+    expect(allowed).not.toContain('Write');
+    expect(allowed).not.toContain('Bash');
+    expect(allowed).not.toContain('Edit');
+  });
+
+  it('adds no mcp__ wildcard when no MCP server is active', () => {
+    const o = buildOptions({ ...base, claudeSessionId: null });
+    expect((o.allowedTools as string[]).filter((t) => t.startsWith('mcp__'))).toEqual([]);
+  });
+
   it('passes model and effort through to options when present', () => {
     const o = buildOptions({ ...base, claudeSessionId: null, model: 'claude-sonnet-4-6', effort: 'medium' });
     expect(o.model).toBe('claude-sonnet-4-6');

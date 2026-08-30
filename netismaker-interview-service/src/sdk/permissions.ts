@@ -146,10 +146,15 @@ const DANGEROUS_FLAGS: Record<string, readonly string[]> = {
 };
 
 // 짧은 옵션이 한 토큰에 뭉친 클러스터(`-RS`, `-rS`, `-nL` 등)는 정확 토큰 매치로 못 잡는다 — 토큰 안에
-// 위험한 "글자"가 하나라도 있으면 거부한다. find는 symlink 플래그가 전부 단독 토큰(-L/-H)이라 불필요.
+// 위험한 "글자"가 하나라도 있으면 거부한다.
+//   find(라운드4 후속): -H/-L/-P는 BSD find에서 상호배타적인 "융합" 플래그 패밀리로, 마지막 것이 이긴다
+//   (`실측: /usr/bin/find`) — 즉 `-HL` ≡ `-L`(전체 symlink 추종), `-PL` ≡ `-L`도 마찬가지. 단독 토큰
+//   매치(DANGEROUS_FLAGS의 '-L'/'-H')만으로는 이 융합 형태를 못 잡으므로 클러스터 검사에도 포함한다.
+//   `-P`(추종 안 함, 기본값)만 단독으로 오면 안전 — 문자 목록에 P는 없으므로 통과한다.
 const DANGEROUS_FLAG_LETTERS: Record<string, readonly string[]> = {
   grep: ['R', 'S'],
   rg: ['L'],
+  find: ['L', 'H'],
 };
 
 function matchesDangerousFlag(token: string, denylist: readonly string[]): boolean {

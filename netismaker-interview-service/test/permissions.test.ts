@@ -307,3 +307,19 @@ describe('canUseTool — kind=QUESTION round 4 (grep/rg/find symlink-follow flag
     expect((await i('Bash', { command: 'grep -R x .' })).behavior).toBe('allow');
   });
 });
+
+describe('canUseTool — kind=QUESTION round 4 follow-up (BSD find fused -H/-L/-P cluster)', () => {
+  const q = buildCanUseTool('/tmp/repo', 'QUESTION');
+
+  it('denies find -H/-L fused into one token — BSD find treats -H/-L/-P as a mutually exclusive family where the last wins, so -HL ≡ -L', async () => {
+    for (const cmd of ['find -HL .', 'find -LH .', 'find -PL .', 'find -HL . -name x']) {
+      expect((await q('Bash', { command: cmd })).behavior, cmd).toBe('deny');
+    }
+  });
+
+  it('keeps non-cluster find usages allowed, including -P alone (never follow symlinks)', async () => {
+    for (const cmd of ['find . -name x -print', 'find . -type l', 'find . -maxdepth 2 -name x', 'find -P .']) {
+      expect((await q('Bash', { command: cmd })).behavior, cmd).toBe('allow');
+    }
+  });
+});

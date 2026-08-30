@@ -149,3 +149,49 @@ describe('buildOptions', () => {
     expect('abortController' in without).toBe(false);
   });
 });
+
+describe('buildOptions — sessionKind QUESTION (스펙 §6-①)', () => {
+  const mcps = {
+    mcpsBase: { 'local-db': { command: 'npx', args: ['x'] } },
+    mcpsExtra: [{ name: 'ctx7', url: 'https://ctx7', transport: 'http' }],
+  };
+
+  it('loads NO plugins and pre-approves ONLY Read/Grep/Glob — no Skill, no mcp__ wildcard', () => {
+    const o = buildOptions({ ...base, claudeSessionId: null, sessionKind: 'QUESTION', ...mcps });
+    expect(o.plugins).toEqual([]);
+    expect(o.allowedTools).toEqual(['Read', 'Grep', 'Glob']);
+  });
+
+  it('still injects merged mcpServers (base+extras, 워커 패리티) — 게이트는 canUseTool 단일 관문', () => {
+    const o = buildOptions({ ...base, claudeSessionId: null, sessionKind: 'QUESTION', ...mcps });
+    expect(o.mcpServers).toEqual({
+      'local-db': { command: 'npx', args: ['x'] },
+      ctx7: { type: 'http', url: 'https://ctx7' },
+    });
+  });
+
+  it('canUseTool is the QUESTION gate (denies Write even under docs/superpowers)', async () => {
+    const o = buildOptions({ ...base, claudeSessionId: null, sessionKind: 'QUESTION' });
+    const gate = o.canUseTool as (t: string, i: Record<string, unknown>) => Promise<{ behavior: string }>;
+    expect((await gate('Write', { file_path: '/tmp/repo/docs/superpowers/x.md' })).behavior).toBe('deny');
+    expect((await gate('Read', { file_path: '/tmp/repo/a.ts' })).behavior).toBe('allow');
+  });
+
+  it('keeps resume/cwd/model/effort/includePartialMessages wiring identical to INTERVIEW', () => {
+    const o = buildOptions({
+      ...base, claudeSessionId: 'sess-q', sessionKind: 'QUESTION', model: 'claude-sonnet-5', effort: 'medium',
+    });
+    expect(o.resume).toBe('sess-q');
+    expect(o.cwd).toBe('/tmp/repo');
+    expect(o.model).toBe('claude-sonnet-5');
+    expect(o.effort).toBe('medium');
+    expect(o.includePartialMessages).toBe(true);
+    expect(o.permissionMode).toBe('default');
+  });
+
+  it('sessionKind omitted → INTERVIEW behaviour (superpowers plugin + Skill + mcp__ wildcards)', () => {
+    const o = buildOptions({ ...base, claudeSessionId: null, ...mcps });
+    expect(o.plugins).toEqual([{ type: 'local', path: '/sp/5.1.0' }]);
+    expect(o.allowedTools).toEqual(['Skill', 'Read', 'Grep', 'Glob', 'mcp__local-db', 'mcp__ctx7']);
+  });
+});

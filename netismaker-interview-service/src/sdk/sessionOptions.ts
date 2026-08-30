@@ -1,4 +1,5 @@
 import { buildCanUseTool } from './permissions.js';
+import type { SessionKind } from '../types.js';
 
 export interface SessionOptionsInput {
   superpowersPluginPath: string;
@@ -21,6 +22,11 @@ export interface SessionOptionsInput {
   effort?: string;
   /** 턴 wall-clock 타임아웃용 — abort 시 SDK가 claude CLI 자식 프로세스를 종료한다. */
   abortController?: AbortController;
+  /**
+   * 세션 종류. 'QUESTION'이면 superpowers 미로드 + Skill/mcp__ 사전승인 없음 + default-deny 게이트
+   * (스펙 2026-08-30 §6-①). 미지정 = INTERVIEW(기존 동작 그대로).
+   */
+  sessionKind?: SessionKind;
 }
 
 /**
@@ -64,12 +70,17 @@ export function buildOptions(input: SessionOptionsInput): Record<string, unknown
   // settingSources 미설정이므로 여기 명시한 것 외 다른 MCP 소스는 안 붙는다 (--strict-mcp-config 등가).
   const merged: Record<string, unknown> = { ...(input.mcpsBase ?? {}), ...(toMcpServers(input.mcpsExtra) ?? {}) };
   const mcpServers = Object.keys(merged).length > 0 ? merged : undefined;
+  const question = input.sessionKind === 'QUESTION';
   return {
     pathToClaudeCodeExecutable: input.claudeCliPath,
-    plugins: [{ type: 'local', path: input.superpowersPluginPath }],
-    // mcp__<server>는 해당 서버의 모든 도구 매칭 — 워커의 --allowedTools 와일드카드와 동일.
-    // MCP 도구는 어차피 canUseTool 기본 분기(allow)를 타므로 보안 경계 변화 없음; Write/Bash/Edit 불변식 유지.
-    allowedTools: ['Skill', 'Read', 'Grep', 'Glob', ...Object.keys(merged).map((n) => `mcp__${n}`)],
+    // QUESTION: 플러그인 자체를 안 붙인다(스킬 없음). INTERVIEW: superpowers만 로컬 플러그인으로.
+    plugins: question ? [] : [{ type: 'local', path: input.superpowersPluginPath }],
+    // INTERVIEW: mcp__<server>는 해당 서버의 모든 도구 매칭 — 워커의 --allowedTools 와일드카드와 동일.
+    //   MCP 도구는 어차피 canUseTool 기본 분기(allow)를 타므로 보안 경계 변화 없음; Write/Bash/Edit 불변식 유지.
+    // QUESTION: mcp__ 와일드카드도 미등재 → MCP 호출까지 canUseTool(default-deny) 단일 관문 경유.
+    allowedTools: question
+      ? ['Read', 'Grep', 'Glob']
+      : ['Skill', 'Read', 'Grep', 'Glob', ...Object.keys(merged).map((n) => `mcp__${n}`)],
     cwd: input.workDir,
     permissionMode: 'default',
     // 활동 스트림: stream_event(텍스트/thinking 델타)를 relay가 실시간 방출할 수 있게 켠다 (스펙 §5.1).
@@ -79,6 +90,6 @@ export function buildOptions(input: SessionOptionsInput): Record<string, unknown
     ...(input.model ? { model: input.model } : {}),
     ...(input.effort ? { effort: input.effort } : {}),
     ...(input.abortController ? { abortController: input.abortController } : {}),
-    canUseTool: buildCanUseTool(input.workDir),
+    canUseTool: buildCanUseTool(input.workDir, input.sessionKind ?? 'INTERVIEW'),
   };
 }

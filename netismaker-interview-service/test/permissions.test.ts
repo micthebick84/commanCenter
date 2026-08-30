@@ -50,3 +50,42 @@ describe('canUseTool', () => {
     expect((await canUse('Skill', { name: 'writing-plans' })).behavior).toBe('allow');
   });
 });
+
+describe('canUseTool — kind=QUESTION (default-deny, 스펙 §6-①)', () => {
+  const q = buildCanUseTool('/tmp/repo', 'QUESTION');
+
+  it('denies every write tool even inside docs/superpowers (인터뷰 예외조차 없음)', async () => {
+    for (const tool of ['Write', 'Edit', 'MultiEdit', 'NotebookEdit']) {
+      const r = await q(tool, { file_path: '/tmp/repo/docs/superpowers/specs/x.md' });
+      expect(r.behavior, tool).toBe('deny');
+    }
+  });
+
+  it('denies Skill and any unknown/future tool (허용 목록 외 전부 deny)', async () => {
+    expect((await q('Skill', { name: 'brainstorming' })).behavior).toBe('deny');
+    expect((await q('FutureWriteTool', {})).behavior).toBe('deny');
+    expect((await q('WebFetch', { url: 'http://x' })).behavior).toBe('deny');
+  });
+
+  it('allows Read/Grep/Glob and mcp__ tools (base+extras)', async () => {
+    expect((await q('Read', { file_path: '/tmp/repo/src/main.ts' })).behavior).toBe('allow');
+    expect((await q('Grep', { pattern: 'x' })).behavior).toBe('allow');
+    expect((await q('Glob', { pattern: '**/*.ts' })).behavior).toBe('allow');
+    expect((await q('mcp__local-db__query', { sql: 'select 1' })).behavior).toBe('allow');
+  });
+
+  it('keeps the same read-only Bash whitelist + metachar block as the interview gate', async () => {
+    for (const cmd of ['git status', 'git log --oneline', 'ls -la', 'rg foo', 'wc -l a.ts', 'pwd']) {
+      expect((await q('Bash', { command: cmd })).behavior, cmd).toBe('allow');
+    }
+    for (const cmd of ['git push origin main', 'git commit -m x', 'rm -rf /', 'npm install', 'git status; rm -rf /']) {
+      expect((await q('Bash', { command: cmd })).behavior, cmd).toBe('deny');
+    }
+  });
+
+  it('kind omitted → interview gate unchanged (Write inside docs/superpowers still allowed)', async () => {
+    const i = buildCanUseTool('/tmp/repo');
+    expect((await i('Write', { file_path: '/tmp/repo/docs/superpowers/specs/x.md' })).behavior).toBe('allow');
+    expect((await i('NotebookEdit', {})).behavior).toBe('allow');
+  });
+});

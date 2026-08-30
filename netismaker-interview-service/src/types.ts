@@ -1,3 +1,6 @@
+/** 세션 종류 — Java InterviewKind. QUESTION = Q&A 전용(superpowers 미로드, default-deny 게이트, plan 경로 없음). */
+export type SessionKind = 'INTERVIEW' | 'QUESTION';
+
 /** One persisted turn echoed back on the claim (plan 01 InterviewTurn). */
 export interface InterviewTurn {
   seq: number;
@@ -61,6 +64,11 @@ export interface InterviewClaimResponse {
    * 자체가 없다 — 읽는 쪽은 무조건 Array.isArray 가드 (스펙 §7/§11, mcpsExtra 선례).
    */
   attachments?: AttachmentRef[];
+  /**
+   * 세션 종류. 구버전 백엔드는 필드가 없다 — 미존재는 INTERVIEW로 취급(attachments 선례).
+   * 러너는 `kind === 'QUESTION'`로만 판정한다.
+   */
+  kind?: SessionKind;
 }
 
 /** SSE activity 와이어 계약의 활동 type (스펙 §4.1). */

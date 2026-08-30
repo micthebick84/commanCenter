@@ -3,7 +3,7 @@ import { useQuasar } from 'quasar'
 import { useInterviewStream } from '~/composables/useInterviewStream'
 import type { InterviewStatus, InterviewSnapshot } from '~/composables/useInterviewStream'
 import { useAutoScroll } from '~/composables/useAutoScroll'
-import { INTERVIEW_STATUS_LABELS } from '~/composables/interviewLabels'
+import { interviewStatusLabel, type SessionKind } from '~/composables/interviewLabels'
 import ChatBubble from '~/components/chat/ChatBubble.vue'
 import TypingIndicator from '~/components/chat/TypingIndicator.vue'
 import PendingBubble from '~/components/chat/PendingBubble.vue'
@@ -13,8 +13,43 @@ const props = defineProps<{
   model?: string
   effort?: string
   readonly?: boolean
+  /** 'QUESTION'이면 Q&A 모드 — /api/questions 경로, 설계·플랜 컬럼 미렌더, 질문 문맥 문구 (스펙 2026-08-30 §7). */
+  kind?: SessionKind
 }>()
 const emit = defineEmits<{ (e: 'confirmed', taskId: number): void; (e: 'close'): void }>()
+
+const isQuestion = computed(() => props.kind === 'QUESTION')
+const apiBase = computed(() => (isQuestion.value ? '/api/questions' : '/api/interviews'))
+// 문맥 문구 — 인터뷰/질문 분기를 한 곳에 모은다.
+const ui = computed(() =>
+  isQuestion.value
+    ? {
+        send: '추가 질문',
+        placeholder: '추가 질문을 입력하세요…',
+        cancel: '세션 종료',
+        cancelTitle: '질문 세션을 종료할까요?',
+        cancelBody: '종료 후에는 추가 질문을 할 수 없습니다. 지금까지의 문답은 읽기 전용으로 남습니다.',
+        cancelConfirm: '종료하기',
+        preparing: '답변을 준비 중입니다…',
+        starting: '질문 세션을 시작합니다…',
+        expired: '세션이 만료되었습니다. 새 질문 세션을 열어 주세요.',
+        cancelled: '질문 세션이 종료되었습니다.',
+        failed: '답변 실패',
+      }
+    : {
+        send: '전송',
+        placeholder: '답변을 입력하세요…',
+        cancel: '대화 취소',
+        cancelTitle: '진행 중인 분석을 취소할까요?',
+        cancelBody: '지금까지의 대화와 분석 진행 상황이 사라집니다. 작업은 등록되지 않습니다.',
+        cancelConfirm: '취소하기',
+        preparing: '첫 질문을 준비 중입니다…',
+        starting: '인터뷰를 시작합니다…',
+        expired: '세션이 만료되었습니다. 다시 인터뷰를 시작해 주세요.',
+        cancelled: '인터뷰가 취소되었습니다.',
+        failed: '인터뷰 실패',
+      },
+)
 
 const stream = useInterviewStream()
 const { connState, status, turns, designSections, plan, error, pending } = stream
@@ -43,7 +78,7 @@ const canAnswer = computed(
 // 화면 표시 전용 한글 라벨 (공유 상수 — interviewLabels.ts).
 // 상태 비교/터미널 판정은 영문 enum 이름으로만 한다.
 const statusLabel = computed(() =>
-  status.value ? (INTERVIEW_STATUS_LABELS[status.value] ?? status.value) : '연결 중',
+  status.value ? interviewStatusLabel(status.value, props.kind ?? 'INTERVIEW') : '연결 중',
 )
 
 const confirming = ref(false)
@@ -105,7 +140,7 @@ async function sendAnswer() {
   const replyToSeq = lastQuestionSeq.value
   sending.value = true
   try {
-    await useApi(`/api/interviews/${props.sessionId}/answer`, {
+    await useApi(`${apiBase.value}/${props.sessionId}/${isQuestion.value ? 'ask' : 'answer'}`, {
       method: 'POST',
       body: { answer: text, replyToSeq },
     })
@@ -127,6 +162,9 @@ async function sendAnswer() {
     const st = e?.statusCode ?? e?.response?.status ?? e?.status
     if (st === 409) {
       $q.notify({ type: 'warning', message: '세션이 만료되었거나 이미 처리된 답변입니다' })
+    } else if (st === 400) {
+      // 질문 세션 문답 상한 등 — 서버 메시지 그대로, 입력은 유지
+      $q.notify({ type: 'warning', message: e?.data?.message ?? '요청이 거부되었습니다' })
     } else {
       $q.notify({ type: 'negative', message: e?.data?.message ?? '답변 전송 실패' })
     }
@@ -157,7 +195,7 @@ const showCancelConfirm = ref(false)
 
 async function cancelInterview() {
   try {
-    await useApi(`/api/interviews/${props.sessionId}/cancel`, { method: 'POST' })
+    await useApi(`${apiBase.value}/${props.sessionId}/${isQuestion.value ? 'close' : 'cancel'}`, { method: 'POST' })
   } catch {
     /* 취소 실패는 무시 — 세션은 어차피 닫는다 */
   }
@@ -179,12 +217,12 @@ onMounted(async () => {
   // 새로고침 복원: SSE replay는 어시스턴트 질문/설계만 주므로, 내 답변·status·plan은
   // REST 스냅샷으로 먼저 시드한 뒤 스트림을 연다(seq dedup으로 중복 없음). 스냅샷 실패는 비치명적.
   try {
-    const snapshot = await useApi<InterviewSnapshot>(`/api/interviews/${props.sessionId}`)
+    const snapshot = await useApi<InterviewSnapshot>(`${apiBase.value}/${props.sessionId}`)
     stream.hydrate(snapshot)
   } catch {
     /* 스냅샷 실패 — 스트림만으로 진행 */
   }
-  stream.open(props.sessionId)
+  stream.open(props.sessionId, apiBase.value)
   await nextTick()
   scrollToBottom('auto')
 })
@@ -204,13 +242,13 @@ onUnmounted(() => stream.close())
       <q-chip v-if="props.model" dense size="sm" outline icon="smart_toy" :label="props.model" />
       <q-chip v-if="props.effort" dense size="sm" outline icon="tune" :label="props.effort" />
       <q-banner v-if="status === 'EXPIRED'" dense class="bg-orange-1 text-orange-10 col"
-        >세션이 만료되었습니다. 다시 인터뷰를 시작해 주세요.</q-banner
+        >{{ ui.expired }}</q-banner
       >
       <q-banner v-else-if="status === 'CANCELLED'" dense class="bg-grey-2 text-grey-9 col"
-        >인터뷰가 취소되었습니다.</q-banner
+        >{{ ui.cancelled }}</q-banner
       >
       <q-banner v-else-if="status === 'FAILED'" dense class="bg-red-1 text-red-9 col"
-        >인터뷰 실패: {{ error ?? '알 수 없는 오류가 발생했습니다' }}</q-banner
+        >{{ ui.failed }}: {{ error ?? '알 수 없는 오류가 발생했습니다' }}</q-banner
       >
       <q-banner v-else-if="error" dense class="bg-red-1 text-red-9 col">{{ error }}</q-banner>
       <q-space />
@@ -233,7 +271,7 @@ onUnmounted(() => stream.close())
         no-caps
         color="grey-7"
         icon="stop_circle"
-        label="대화 취소"
+        :label="ui.cancel"
         class="cancel-btn"
         @click="showCancelConfirm = true"
       />
@@ -251,7 +289,13 @@ onUnmounted(() => stream.close())
     </div>
 
     <!-- 좁은 화면 탭 전환 -->
-    <q-tabs v-model="activeTab" class="lt-md text-primary interview-tabs" dense align="justify">
+    <q-tabs
+      v-if="!isQuestion"
+      v-model="activeTab"
+      class="lt-md text-primary interview-tabs"
+      dense
+      align="justify"
+    >
       <q-tab name="chat" icon="forum" label="대화" />
       <q-tab name="design" icon="design_services" label="설계·플랜" />
     </q-tabs>
@@ -277,13 +321,13 @@ onUnmounted(() => stream.close())
             class="text-grey-6 q-mt-xs text-center"
             style="font-size: 12px"
           >
-            첫 질문을 준비 중입니다…
+            {{ ui.preparing }}
           </div>
           <div
             v-if="turns.length === 0 && !waitingForAi"
             class="text-grey-6 q-pa-md text-center"
           >
-            인터뷰를 시작합니다…
+            {{ ui.starting }}
           </div>
           <div
             v-if="unread > 0"
@@ -302,7 +346,7 @@ onUnmounted(() => stream.close())
             dense
             autogrow
             :disable="status !== 'AWAITING_INPUT' || sending"
-            placeholder="답변을 입력하세요…"
+            :placeholder="ui.placeholder"
             @keydown.enter.exact.prevent="sendAnswer"
           />
           <div class="row justify-end q-mt-xs">
@@ -311,7 +355,7 @@ onUnmounted(() => stream.close())
               unelevated
               color="primary"
               icon="send"
-              label="전송"
+              :label="ui.send"
               :loading="sending"
               :disable="!canAnswer"
               @click="sendAnswer"
@@ -320,10 +364,11 @@ onUnmounted(() => stream.close())
         </div>
       </section>
 
-      <q-separator vertical class="gt-sm" />
+      <q-separator v-if="!isQuestion" vertical class="gt-sm" />
 
       <!-- 우: 설계 섹션 + 플랜 (기능 동일) -->
       <section
+        v-if="!isQuestion"
         class="design-col column no-wrap"
         :class="{ 'mobile-hidden': activeTab !== 'design' }"
       >
@@ -384,10 +429,10 @@ onUnmounted(() => stream.close())
     <q-dialog v-model="showCancelConfirm">
       <q-card style="min-width: 320px">
         <q-card-section class="text-subtitle1 text-weight-bold">
-          진행 중인 분석을 취소할까요?
+          {{ ui.cancelTitle }}
         </q-card-section>
         <q-card-section class="q-pt-none text-grey-8">
-          지금까지의 대화와 분석 진행 상황이 사라집니다. 작업은 등록되지 않습니다.
+          {{ ui.cancelBody }}
         </q-card-section>
         <q-card-actions align="right">
           <q-btn
@@ -402,7 +447,7 @@ onUnmounted(() => stream.close())
             unelevated
             color="negative"
             no-caps
-            label="취소하기"
+            :label="ui.cancelConfirm"
             @click="confirmCancel"
           />
         </q-card-actions>

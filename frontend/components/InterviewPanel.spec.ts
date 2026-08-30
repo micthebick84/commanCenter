@@ -4,10 +4,14 @@ import InterviewPanel from './InterviewPanel.vue'
 import { FakeEventSource } from '../test/mocks/eventsource'
 import { authStub, useApiMock } from '../test/mocks/nuxt'
 
-async function mountPanel(sessionId = 5, snapshot: any = { statusName: null, turns: [], plan: null }) {
+async function mountPanel(
+  sessionId = 5,
+  snapshot: any = { statusName: null, turns: [], plan: null },
+  props: Record<string, unknown> = {},
+) {
   authStub.accessToken = 'jwt'
   useApiMock.mockResolvedValueOnce(snapshot) // onMounted의 GET /{id}가 소비
-  const w = mount(InterviewPanel, { props: { sessionId } })
+  const w = mount(InterviewPanel, { props: { sessionId, ...props } })
   await flushPromises() // 마운트 스냅샷 GET 해소 + hydrate 완료
   return w
 }
@@ -358,6 +362,88 @@ describe('InterviewPanel — 진행 활동(pending) 버블', () => {
     await flushPromises()
     expect(w.find('[data-test="pending-bubble"]').exists()).toBe(false)
     expect(w.text()).toContain('어떤 인증을 쓰나요?') // ChatBubble 확정 턴
+    w.unmount()
+  })
+})
+
+describe('InterviewPanel — kind=QUESTION (스펙 2026-08-30 §7)', () => {
+  afterEach(() => {
+    document.querySelectorAll('.q-dialog').forEach((n) => n.remove())
+  })
+
+  const answered = {
+    statusName: 'AWAITING_INPUT',
+    turns: [{ seq: 1, role: 'assistant', kind: 'question', content: 'AuthController에서 처리합니다' }],
+    plan: null,
+  }
+
+  it('snapshot GET과 SSE를 /api/questions 아래로 연다', async () => {
+    const w = await mountPanel(9, answered, { kind: 'QUESTION' })
+    expect(useApiMock).toHaveBeenCalledWith('/api/questions/9')
+    expect(FakeEventSource.last().url).toBe('/api/questions/9/stream?access_token=jwt')
+    w.unmount()
+  })
+
+  it('설계·플랜 컬럼/탭/확정 버튼을 렌더하지 않고 대화 컬럼만 남긴다', async () => {
+    const w = await mountPanel(9, answered, { kind: 'QUESTION' })
+    expect(w.find('.design-col').exists()).toBe(false)
+    expect(w.find('.interview-tabs').exists()).toBe(false)
+    expect(w.find('[data-test="confirm"]').exists()).toBe(false)
+    expect(w.find('.chat-col').exists()).toBe(true)
+    expect(w.text()).toContain('AuthController에서 처리합니다')
+    w.unmount()
+  })
+
+  it('질문 문맥 라벨/버튼: 답변 완료 · 추가 질문 · 세션 종료', async () => {
+    const w = await mountPanel(9, answered, { kind: 'QUESTION' })
+    expect(w.text()).toContain('답변 완료')
+    expect(w.find('[data-test="send-answer"]').text()).toContain('추가 질문')
+    expect(w.find('[data-test="cancel-interview"]').text()).toContain('세션 종료')
+    expect(w.find('textarea').attributes('placeholder')).toBe('추가 질문을 입력하세요…')
+    w.unmount()
+  })
+
+  it('추가 질문은 POST /api/questions/{id}/ask 로 (replyToSeq = 마지막 답변 seq)', async () => {
+    const w = await mountPanel(9, answered, { kind: 'QUESTION' })
+    await w.find('textarea').setValue('토큰 검증은요?')
+    await w.find('[data-test="send-answer"]').trigger('click')
+    await flushPromises()
+    expect(useApiMock).toHaveBeenCalledWith('/api/questions/9/ask', {
+      method: 'POST',
+      body: { answer: '토큰 검증은요?', replyToSeq: 1 },
+    })
+    expect(w.text()).toContain('토큰 검증은요?')
+    w.unmount()
+  })
+
+  it('턴 상한 400은 경고 토스트로 안내하고 입력을 지우지 않는다', async () => {
+    const w = await mountPanel(9, answered, { kind: 'QUESTION' })
+    await w.find('textarea').setValue('또?')
+    useApiMock.mockRejectedValueOnce({ statusCode: 400, data: { message: '최대 문답 수(10)에 도달했습니다' } })
+    await w.find('[data-test="send-answer"]').trigger('click')
+    await flushPromises()
+    expect((w.find('textarea').element as HTMLTextAreaElement).value).toBe('또?')
+    expect(document.body.textContent).toContain('최대 문답 수')
+    w.unmount()
+  })
+
+  it('세션 종료는 확인 다이얼로그 후 POST /api/questions/{id}/close', async () => {
+    const w = await mountPanel(7, answered, { kind: 'QUESTION' })
+    await w.find('[data-test="cancel-interview"]').trigger('click')
+    await flushPromises()
+    expect(document.body.textContent).toContain('질문 세션을 종료할까요?')
+    ;(document.querySelector('[data-test="cancel-confirm"]') as HTMLElement).click()
+    await flushPromises()
+    expect(useApiMock).toHaveBeenCalledWith('/api/questions/7/close', { method: 'POST' })
+    expect(w.emitted('close')).toBeTruthy()
+    w.unmount()
+  })
+
+  it('kind 미지정 → 기존 인터뷰 경로/컬럼 유지', async () => {
+    const w = await mountPanel(9, answered)
+    expect(useApiMock).toHaveBeenCalledWith('/api/interviews/9')
+    expect(w.find('.design-col').exists()).toBe(true)
+    expect(w.find('[data-test="send-answer"]').text()).toContain('전송')
     w.unmount()
   })
 })

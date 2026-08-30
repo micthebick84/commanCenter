@@ -26,6 +26,7 @@ function handleLogout() {
         </q-toolbar-title>
         <q-tabs v-if="auth.isAuthenticated" shrink>
           <q-route-tab to="/tasks" label="작업" />
+          <q-route-tab to="/questions" label="질문" />
           <q-route-tab v-if="auth.isAdmin" to="/admin/workers" label="워커 헬스" />
           <q-route-tab v-if="auth.isAdmin" to="/admin/mcp-catalog" label="MCP 카탈로그" />
           <q-route-tab v-if="auth.isAdmin" to="/admin/repo-catalog" label="레포 카탈로그" />

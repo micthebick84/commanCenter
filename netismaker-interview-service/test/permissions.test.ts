@@ -268,3 +268,42 @@ describe('canUseTool — kind=QUESTION round 3 (command-word exact match, ~, rea
     expect((await i('Bash', { command: 'cat/evil' })).behavior).toBe('allow');
   });
 });
+
+describe('canUseTool — kind=QUESTION round 4 (grep/rg/find symlink-follow flags)', () => {
+  const q = buildCanUseTool('/tmp/repo', 'QUESTION');
+
+  it('denies grep/rg/find symlink-follow flags (standalone and clustered)', async () => {
+    for (const cmd of [
+      'grep -RS x .', // BSD -S alone already dangerous; clustered with -R here
+      'grep -rS x .', // lowercase -r (safe) clustered with -S (dangerous) — cluster must still catch it
+      'grep -R x .', // GNU -R follows symlinks
+      'grep --dereference-recursive x .',
+      'grep -Rx foo .', // -R clustered with an unrelated letter — still dangerous
+      'rg -L x',
+      'rg --follow x',
+      'rg -nL x', // -L clustered behind -n
+      'find -L .',
+      'find . -follow',
+      'find -H .',
+    ]) {
+      expect((await q('Bash', { command: cmd })).behavior, cmd).toBe('deny');
+    }
+  });
+
+  it('keeps legitimate non-following usages allowed (BSD/GNU grep -r does not follow symlinks)', async () => {
+    for (const cmd of [
+      'grep -rn x .', // lowercase -r only — does not follow symlinks
+      'grep -r x src',
+      'rg -n x',
+      'rg -i x src',
+      'find . -name x -print',
+    ]) {
+      expect((await q('Bash', { command: cmd })).behavior, cmd).toBe('allow');
+    }
+  });
+
+  it('INTERVIEW gate is unaffected by round 4 (admin-driven, out of scope)', async () => {
+    const i = buildCanUseTool('/tmp/repo');
+    expect((await i('Bash', { command: 'grep -R x .' })).behavior).toBe('allow');
+  });
+});

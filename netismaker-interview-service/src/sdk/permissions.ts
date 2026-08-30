@@ -130,28 +130,56 @@ function questionBashArgsGate(repoDir: string, cmd: string): PermissionResult | 
 }
 
 // 명령별 위험 플래그 — 정확 토큰 매치 또는 `flag=` 접두. 경로를 안 실어도 그 자체로 위험하다.
-//   git: 전역 옵션(-c/-C/--git-dir 등)은 BASH_WHITELIST 자체가 `^git (status|log|diff|show|branch)\b`로
-//        서브커맨드를 맨 앞에 고정하므로 애초에 화이트리스트 정규식을 통과하지 못한다 — --output만 명시 차단.
-//   rg:  --pre/--pre-glob는 전처리 명령 실행(임의 코드 실행), -z/--search-zip은 압축 해제 파이프라인.
+//   git:  전역 옵션(-c/-C/--git-dir 등)은 BASH_WHITELIST 자체가 `^git (status|log|diff|show|branch)\b`로
+//         서브커맨드를 맨 앞에 고정하므로 애초에 화이트리스트 정규식을 통과하지 못한다 — --output만 명시 차단.
+//   rg:   --pre/--pre-glob는 전처리 명령 실행(임의 코드 실행), -z/--search-zip은 압축 해제 파이프라인,
+//         -L/--follow는 symlink 추종(라운드4) — 재귀 탐색 중 커밋된 symlink를 몰래 따라가 레포 밖을 읽는다
+//         (insideRepoReal은 "이름 있는 인자"만 보므로 순회 중 만나는 symlink는 못 본다).
+//   find: -L/-H/-follow도 symlink 추종(라운드4) — -L은 전체 추종, -H는 커맨드라인 인자만이지만 동일 위협.
+//   grep: -R(대문자, GNU)/-S(BSD)/--dereference-recursive는 재귀 시 symlink 추종(라운드4). 소문자 -r은
+//         (BSD·GNU 모두) symlink를 따라가지 않으므로 허용 유지 — 아래 클러스터 검사도 대소문자를 구분한다.
 const DANGEROUS_FLAGS: Record<string, readonly string[]> = {
-  find: ['-delete', '-exec', '-execdir', '-ok', '-okdir', '-fprint', '-fprint0', '-fprintf', '-fls'],
+  find: ['-delete', '-exec', '-execdir', '-ok', '-okdir', '-fprint', '-fprint0', '-fprintf', '-fls', '-L', '-H', '-follow'],
   git: ['--output'],
-  rg: ['--pre', '--pre-glob', '-z', '--search-zip'],
+  rg: ['--pre', '--pre-glob', '-z', '--search-zip', '-L', '--follow'],
+  grep: ['-R', '-S', '--dereference-recursive'],
+};
+
+// 짧은 옵션이 한 토큰에 뭉친 클러스터(`-RS`, `-rS`, `-nL` 등)는 정확 토큰 매치로 못 잡는다 — 토큰 안에
+// 위험한 "글자"가 하나라도 있으면 거부한다. find는 symlink 플래그가 전부 단독 토큰(-L/-H)이라 불필요.
+const DANGEROUS_FLAG_LETTERS: Record<string, readonly string[]> = {
+  grep: ['R', 'S'],
+  rg: ['L'],
 };
 
 function matchesDangerousFlag(token: string, denylist: readonly string[]): boolean {
   return denylist.some((flag) => token === flag || token.startsWith(flag + '='));
 }
 
-/** 질문 세션 전용: find/git/rg 명령별 위험 플래그(쓰기·임의실행) 차단 (finding #2, bypass #5/#6). */
+/** `-abc` 형태(단일 대시 + 문자만)의 클러스터 토큰에 위험한 글자가 하나라도 섞여 있으면 true. */
+function matchesDangerousFlagCluster(token: string, letters: readonly string[]): boolean {
+  if (!/^-[A-Za-z]+$/.test(token)) return false;
+  return letters.some((letter) => token.includes(letter));
+}
+
+/**
+ * 질문 세션 전용: find/git/rg/grep 명령별 위험 플래그(쓰기·임의실행·symlink 추종) 차단
+ * (finding #2 bypass #5/#6, 라운드4 symlink-follow 클러스터).
+ */
 function questionBashDangerousFlagsGate(cmd: string): PermissionResult | null {
   const tokens = cmd.split(/\s+/).filter((t) => t.length > 0);
   const head = tokens[0];
   if (!head) return null;
   const denylist = DANGEROUS_FLAGS[head];
-  if (!denylist) return null;
-  if (tokens.slice(1).some((t) => matchesDangerousFlag(t, denylist))) {
-    return { behavior: 'deny', message: `질문 세션 Bash 위험 플래그 금지: ${cmd}` };
+  const clusterLetters = DANGEROUS_FLAG_LETTERS[head];
+  if (!denylist && !clusterLetters) return null;
+  for (const t of tokens.slice(1)) {
+    if (denylist && matchesDangerousFlag(t, denylist)) {
+      return { behavior: 'deny', message: `질문 세션 Bash 위험 플래그 금지: ${cmd}` };
+    }
+    if (clusterLetters && matchesDangerousFlagCluster(t, clusterLetters)) {
+      return { behavior: 'deny', message: `질문 세션 Bash symlink 추종 플래그 금지: ${cmd}` };
+    }
   }
   return null;
 }

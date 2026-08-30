@@ -1,4 +1,7 @@
-import { describe, expect, it } from 'vitest';
+import { afterAll, describe, expect, it } from 'vitest';
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { buildCanUseTool } from '../src/sdk/permissions.js';
 
 const canUse = buildCanUseTool('/tmp/repo');
@@ -192,5 +195,76 @@ describe('canUseTool — kind=QUESTION Bash token policy round 2 (verified-by-ex
 
   it('control: rg --glob=<path> is denied (flag-with-path, acceptable loss — use a positional path arg instead)', async () => {
     expect((await q('Bash', { command: 'rg --glob=src/*.ts foo' })).behavior).toBe('deny');
+  });
+});
+
+describe('canUseTool — kind=QUESTION round 3 (command-word exact match, ~, realpath/symlink confinement)', () => {
+  const q = buildCanUseTool('/tmp/repo', 'QUESTION');
+
+  it('(a) command word must exactly match the allow-list — a path-shaped "command" is not a whitelist prefix match', async () => {
+    for (const cmd of [
+      'cat/evil', // an executable committed at <repo>/cat/evil — the whitelist regex is prefix/word-boundary only
+      'ls/../../target/echo',
+      'head/../../../usr/bin/id',
+      'git status-foo', // BASH_WHITELIST's \b matches the '-' boundary — sloppy but harmless without this gate
+    ]) {
+      expect((await q('Bash', { command: cmd })).behavior, cmd).toBe('deny');
+    }
+  });
+
+  it('(a) legitimate exact command words stay allowed', async () => {
+    for (const cmd of ['cat README.md', 'git log main..HEAD', 'pwd']) {
+      expect((await q('Bash', { command: cmd })).behavior, cmd).toBe('allow');
+    }
+  });
+
+  it('(b) leading ~ is denied before path resolution (insideRepo/resolve does not expand ~)', async () => {
+    expect((await q('Read', { file_path: '~/.ssh/id_rsa' })).behavior).toBe('deny');
+    expect((await q('Grep', { pattern: 'x', path: '~' })).behavior).toBe('deny');
+    expect((await q('Glob', { pattern: '~/**' })).behavior).toBe('deny');
+  });
+
+  describe('(c) realpath confinement against a committed symlink (real temp dir)', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'qgate-'));
+    writeFileSync(join(dir, 'README.md'), 'hello');
+    // link -> /etc/hosts: lexically inside the repo checkout, but points outside via a committed symlink.
+    symlinkSync('/etc/hosts', join(dir, 'link'));
+    mkdirSync(join(dir, 'sub'));
+    // sub/ok -> ../README.md's real file: a symlink whose target still resolves inside the repo.
+    symlinkSync(join(dir, 'README.md'), join(dir, 'sub', 'ok'));
+    const sq = buildCanUseTool(dir, 'QUESTION');
+
+    afterAll(() => {
+      rmSync(dir, { recursive: true, force: true });
+    });
+
+    it('denies Read of a symlink pointing outside the repo', async () => {
+      expect((await sq('Read', { file_path: join(dir, 'link') })).behavior).toBe('deny');
+    });
+
+    it('denies Bash cat of a symlink pointing outside the repo', async () => {
+      expect((await sq('Bash', { command: 'cat link' })).behavior).toBe('deny');
+    });
+
+    it('denies Bash head of a symlink pointing outside the repo via a relative arg', async () => {
+      expect((await sq('Bash', { command: 'head -n 1 ./link' })).behavior).toBe('deny');
+    });
+
+    it('allows Read of a symlink whose target resolves back inside the repo', async () => {
+      expect((await sq('Read', { file_path: join(dir, 'sub', 'ok') })).behavior).toBe('allow');
+    });
+
+    it('allows Bash cat of a real in-repo file', async () => {
+      expect((await sq('Bash', { command: 'cat README.md' })).behavior).toBe('allow');
+    });
+
+    it('allows Bash cat of a nonexistent file (falls through to lexical — the tool fails on its own)', async () => {
+      expect((await sq('Bash', { command: 'cat nope.txt' })).behavior).toBe('allow');
+    });
+  });
+
+  it('INTERVIEW gate is unaffected by round 3 too (admin-driven, out of scope)', async () => {
+    const i = buildCanUseTool('/tmp/repo');
+    expect((await i('Bash', { command: 'cat/evil' })).behavior).toBe('allow');
   });
 });

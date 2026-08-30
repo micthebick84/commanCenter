@@ -49,6 +49,7 @@ WORKER_ID=mac-worker-1 \
 - **모든 분석 결과는 한국어 마크다운**: `application-worker.yml`의 `prompt-template` 참고. 섹션 헤더는 파서가 사용하므로 변경 금지.
 - **MCP 자동 주입**: `WorkerMcpSupport`가 `~/.claude.json`의 글로벌+프로젝트 mcpServers를 머지해 `~/netis-maker/worker-mcp.json` 생성. claude -p 호출 시 `--mcp-config + --strict-mcp-config + --allowedTools` prepend. 인터뷰 세션도 동일 합본을 씀 — `netismaker-interview-service/src/sdk/mcpBase.ts`가 부팅 시 1회 스냅샷해 SDK `options.mcpServers`로 주입(작업별 extras와 머지, 충돌 시 extras 우선).
 - **프롬프트는 stdin으로 전달**: `--allowedTools <tools...>` variadic이 뒤따라오는 prompt arg를 삼키므로 arg 대신 stdin 사용. ARG_MAX/ps 노출 동시 회피.
+- **질문 세션(Q&A)**: `InterviewSession.kind=QUESTION`. 승인 없이 등록 즉시 큐 진입, USER+ADMIN 공용(본인+관리자 조회). 인터뷰 서비스는 QUESTION이면 superpowers 미로드 + **default-deny 도구 게이트**(Read/Grep/Glob/읽기전용 Bash/`mcp__*`만) + plan 경로 미진입(`postPlan` 없음). 서버는 `recordPlan`/`confirm`을 400으로 막는다. 스펙: `docs/superpowers/specs/2026-08-30-question-sessions-design.md`. **배포 순서: interview-service 먼저, API 나중** (구버전 러너가 QUESTION을 인터뷰로 처리해 방어 무력화).
 
 ## 다중 워커 운영 (V1.2)
 
@@ -81,6 +82,13 @@ WORKER_ID=mac-worker-2 ./gradlew bootRun --args='--spring.profiles.active=worker
 
 레거시 자동분석: [작업대기] → [분석중] → [분석완료] ──(승인)──→ [구현대기]/[디자인대기]  (현재 진입점 없음)
 ```
+
+질문 세션(kind=QUESTION, task 없음 — `/api/questions`):
+```
+[답변 대기중(QUEUED)] ──(claim)──→ [답변 중(RUNNING)] ──→ [답변 완료(AWAITING_INPUT)] ──(추가 질문)──→ [QUEUED]
+[답변 완료] ──→ [종료됨(CANCELLED)] | [만료됨(EXPIRED)] | [실패(FAILED)]      ※ PLAN_READY/REGISTERED 도달 불가
+```
+- 상한: `app.question.max-active-per-user`(기본 3, 초과 429) · `app.question.max-qa-turns`(기본 10, `ask` 400). 불변식: `max-qa-turns` < 러너 `INTERVIEW_MAX_TURNS`(20).
 
 - **등록**: 사용자는 레포/브랜치/제목/설명만 입력. 모델·effort·MCP는 관리자가 승인 시 결정.
 - **분석**(레거시 자동분석, 현재 진입점 없음): PENDING → IN_PROGRESS → COMPLETED/FAILED. 결과는 `task_analysis.markdown_result`. `TaskService.create`는 항상 `AWAITING_APPROVAL`을 쓰고, `PENDING`은 `retry`(FAILED에서만)로만 도달 가능 — 즉 이 경로와 워커의 `kind=ANALYSIS` 분기는 현재 프로덕션에서 도달 불가능하다. "인터뷰 없이 바로 구현" 라우트(스펙 §7 엣지 케이스, 범위 밖)를 위해 코드만 보존.
@@ -121,6 +129,9 @@ PR 본문/브랜치 prefix/timeout은 `application-worker.yml`의 `netis-maker.w
 | 작업 상세 + 구현 승인 + PR 링크 | `frontend/pages/tasks/[id].vue` |
 | 승인 다이얼로그 | `frontend/components/ApproveDialog.vue` |
 | 워커 헬스 (관리자) | `frontend/pages/admin/workers.vue`, `controller/WorkerHealthController.java` |
+| 질문 세션 등록/목록/ask/close (kind 가드) | `service/QuestionService.java`, `controller/QuestionController.java` |
+| 질문 세션 러너 분기 (default-deny, Q&A 킥오프) | `netismaker-interview-service/src/runner/interviewRunner.ts` (`runQuestionTurn`), `src/sdk/permissions.ts` |
+| 질문 목록/상세 화면 | `frontend/pages/questions/index.vue`, `frontend/pages/questions/[id].vue` (`InterviewPanel kind="QUESTION"`) |
 
 ## 운영자 환경 권장 셋업
 

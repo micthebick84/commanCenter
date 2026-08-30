@@ -101,6 +101,30 @@ async function* promptFor(claim: InterviewClaimResponse): AsyncIterable<UserTurn
 }
 
 /**
+ * 질문 세션(Q&A) 프롬프트 — 스킬 언급 없음. fresh = Q&A 전용 계약 + 읽기 전용 규칙 + 질문 본문(스펙 §6-④),
+ * resume = 후속 질문(lastAnswer) 주입. 허용 Bash 목록은 permissions.ts BASH_WHITELIST와 동일하게 유지할 것.
+ */
+async function* questionPromptFor(claim: InterviewClaimResponse): AsyncIterable<UserTurn> {
+  if (!claim.claudeSessionId) {
+    yield userTurn(
+      `당신은 \`${claim.githubRepo}\` (브랜치 ${claim.githubBranch}) 레포에 대한 질문에 답하는 코드 분석 어시스턴트입니다. ` +
+        '현재 작업 디렉토리에 이 레포가 체크아웃되어 있습니다.\n\n' +
+        `제목: ${claim.title}\n질문: ${claim.description}\n\n` +
+        '규칙:\n' +
+        '- 이 세션은 질문·답변(Q&A) 전용입니다. 구현 계획 작성, 작업 등록, 코드 수정은 이 세션에서 불가능합니다. ' +
+        '그런 요청을 받으면 "작업 등록(인터뷰) 기능을 이용해 주세요"라고 안내하세요.\n' +
+        '- 레포는 읽기 전용입니다: 파일 생성/수정, 빌드/설치/테스트 실행, git commit/push를 하지 마세요. ' +
+        'Read/Grep/Glob, 읽기 전용 셸 명령(git status/log/diff/show/branch, ls, cat, grep, rg, find, head, tail, wc, pwd), ' +
+        '연결된 MCP 도구로만 조사하세요.\n' +
+        '- 한국어 마크다운으로 답하고, 근거는 `파일경로:라인` 형식으로 제시하세요. 확실하지 않으면 모른다고 답하세요.\n' +
+        '- 스킬(Skill) 도구는 없습니다. 바로 조사하고 답하세요.',
+    );
+  } else {
+    yield userTurn(claim.lastAnswer ?? '');
+  }
+}
+
+/**
  * Runs exactly ONE turn for a claimed session, then returns. Resume-per-answer is the
  * DEFAULT loop: pending state comes from the claim payload (DB), never held in memory.
  * The repo is (re)prepared at claim.workDir before EVERY turn — fresh or resume — because
@@ -192,11 +216,14 @@ export class InterviewRunner {
     const onActivity = (e: ActivityInput) => poster.push(e);
     {
       // 턴 상한: claim.turns의 assistant 턴 수로 진행도 판정(백엔드 변경 불필요).
+      const isQuestion = claim.kind === 'QUESTION';
       const assistantTurns = claim.turns.filter((t) => t.role === 'assistant').length;
       if (assistantTurns >= this.deps.maxTurns) {
         await this.safeFail(
           claim.sessionId,
-          `최대 질문 턴(${this.deps.maxTurns}) 초과 — plan 미완성`,
+          isQuestion
+            ? `최대 문답 수(${this.deps.maxTurns}) 초과 — 새 질문 세션을 열어주세요`
+            : `최대 질문 턴(${this.deps.maxTurns}) 초과 — plan 미완성`,
         );
         return;
       }
@@ -214,6 +241,13 @@ export class InterviewRunner {
       // 좀비 턴 가드: 타임아웃으로 이미 abort된 뒤 낙오한 이 턴이 늦게 여기 도달하면
       // (signal을 무시하는 주입 ensureRepo 등) SDK에 진입하지 않고 즉시 중단한다.
       controller.signal.throwIfAborted();
+
+      // 질문 세션: plan 기계장치(forceFinish 삼항식·handoff splice·near-miss reformat·harvest→postPlan)에
+      // 진입하지 않는 조기 분기 — 스펙 §6 kind 가드 4곳을 한 번에 만족한다.
+      if (isQuestion) {
+        await this.runQuestionTurn(claim, controller, guard, poster);
+        return;
+      }
 
       const options = buildOptions({
         superpowersPluginPath: this.deps.superpowersPluginPath,
@@ -331,5 +365,43 @@ export class InterviewRunner {
         costUsd,
       });
     }
+  }
+
+  /**
+   * 질문 세션(Q&A) 턴 — relay → postQuestion 직행. 모델이 plan 형식 텍스트를 내놔도 그냥 답변이다
+   * (`postPlan` 호출 경로가 이 메서드에 없다). 옵션은 sessionKind:'QUESTION' (superpowers 미로드, default-deny).
+   */
+  private async runQuestionTurn(
+    claim: InterviewClaimResponse,
+    controller: AbortController,
+    guard: CostGuard,
+    poster: ActivityPoster,
+  ): Promise<void> {
+    const onActivity = (e: ActivityInput) => poster.push(e);
+    const stream: AsyncIterable<SdkMessage> = this.query({
+      prompt: questionPromptFor(claim),
+      options: buildOptions({
+        superpowersPluginPath: this.deps.superpowersPluginPath,
+        workDir: claim.workDir,
+        claudeCliPath: this.deps.claudeCliPath,
+        claudeSessionId: claim.claudeSessionId,
+        mcpsExtra: claim.mcpsExtra,
+        mcpsBase: this.deps.mcpsBase,
+        model: claim.model,
+        effort: claim.effort,
+        abortController: controller,
+        sessionKind: 'QUESTION',
+      }),
+    });
+    const result = await relay(stream, { onActivity, workDir: claim.workDir });
+    guard.add(result.costUsd);
+    // trailing 활동 배치가 답변보다 늦게 도착하지 않도록 확정 POST 전에 큐를 비운다 (인터뷰 경로와 동일).
+    await poster.stop();
+    await this.client.postQuestion(claim.sessionId, {
+      content: result.assistantText,
+      claudeSessionId: result.sessionId ?? claim.claudeSessionId ?? '',
+      kind: 'question',
+      costUsd: result.costUsd,
+    });
   }
 }

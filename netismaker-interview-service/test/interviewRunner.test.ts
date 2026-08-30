@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { InterviewRunner } from '../src/runner/interviewRunner.js';
-import { freshClaim, resumeClaim, freshClaimWithAttachments } from './fixtures/claims.js';
+import { freshClaim, resumeClaim, freshClaimWithAttachments, questionClaim } from './fixtures/claims.js';
 import { planCompleteStream, questionStream, streamingQuestionStream } from './fixtures/sdkMessages.js';
 import { detectHandoff } from '../src/runner/skillDispatch.js';
 
@@ -263,6 +263,134 @@ function turns(assistantCount: number) {
   }
   return out;
 }
+
+describe('InterviewRunner kind=QUESTION (스펙 §6 — plan 경로 미진입, Q&A 전용)', () => {
+  type Captured = { prompt: string; options: Record<string, unknown> };
+  /** 프롬프트 텍스트 + options를 캡처하고 주어진 스트림을 돌려주는 fakeQuery. */
+  function capturing(streamFactory: () => AsyncIterable<unknown>) {
+    const captured: Captured = { prompt: '', options: {} };
+    const fakeQuery = vi.fn((args: { prompt: AsyncIterable<{ message?: { content?: string } }>; options: Record<string, unknown> }) => {
+      captured.options = args.options;
+      (async () => { for await (const p of args.prompt) captured.prompt += p.message?.content ?? ''; })();
+      return streamFactory();
+    });
+    return { fakeQuery, captured };
+  }
+
+  it('fresh: Q&A 계약 킥오프(질문 본문 포함, 스킬/plan 문구 없음) + QUESTION 옵션 + 답변은 postQuestion', async () => {
+    const client = makeClient();
+    const { fakeQuery, captured } = capturing(() => questionStream());
+    const runner = new InterviewRunner(client as never, fakeQuery as never, deps as never);
+    await runner.run(questionClaim);
+
+    expect(captured.prompt).toContain('로그인은 어디서 처리되나요?');
+    expect(captured.prompt).toContain('Q&A');
+    expect(captured.prompt).toContain('읽기 전용');
+    expect(captured.prompt).not.toContain('brainstorming');
+    expect(captured.prompt).not.toContain('### 작업 N:');
+    expect(captured.options.plugins).toEqual([]);
+    expect(captured.options.allowedTools).toEqual(['Read', 'Grep', 'Glob']);
+    expect(captured.options.cwd).toBe(questionClaim.workDir);
+    expect(client.postQuestion).toHaveBeenCalledWith(77, expect.objectContaining({
+      content: 'Which columns should the CSV include?',
+      claudeSessionId: 'sess-new-1',
+      kind: 'question',
+      costUsd: 0.12,
+    }));
+    expect(client.postPlan).not.toHaveBeenCalled();
+  });
+
+  it('resume: 후속 질문(lastAnswer)을 그대로 주입하고 options.resume을 쓴다', async () => {
+    const client = makeClient();
+    const { fakeQuery, captured } = capturing(() => questionStream());
+    const runner = new InterviewRunner(client as never, fakeQuery as never, deps as never);
+    await runner.run({ ...questionClaim, claudeSessionId: 'sess-q-1', lastAnswer: '토큰 검증은요?', turns: turns(1) });
+    expect(captured.prompt).toBe('토큰 검증은요?');
+    expect(captured.options.resume).toBe('sess-q-1');
+  });
+
+  it('가드①: forceFinish 턴수(19)에서도 reformat 프롬프트가 아니라 후속 질문을 보낸다', async () => {
+    const client = makeClient();
+    const { fakeQuery, captured } = capturing(() => questionStream());
+    const runner = new InterviewRunner(client as never, fakeQuery as never, deps as never); // forceFinishTurns 19
+    await runner.run({ ...questionClaim, claudeSessionId: 'sess-q-1', lastAnswer: '마지막 질문', turns: turns(19) });
+    expect(fakeQuery).toHaveBeenCalledTimes(1);
+    expect(captured.prompt).toBe('마지막 질문');
+    expect(captured.prompt).not.toContain('### 작업 N:');
+    expect(client.postQuestion).toHaveBeenCalledTimes(1);
+  });
+
+  it('가드②: handoff 문구가 와도 splice 재질의 없이 그 텍스트가 답변으로 저장된다', async () => {
+    const client = makeClient();
+    async function* handoffText() {
+      yield { type: 'system', subtype: 'init', session_id: 'sess-h' };
+      yield { type: 'assistant', message: { content: [{ type: 'text', text: 'Spec approved. Invoke writing-plans skill now.' }] } };
+      yield { type: 'result', subtype: 'success', usage: { total_cost_usd: 0.05 }, duration_ms: 100 };
+    }
+    const fakeQuery = vi.fn(() => handoffText());
+    const spliceRead = vi.fn();
+    const runner = new InterviewRunner(client as never, fakeQuery as never, { ...deps, spliceRead } as never);
+    await runner.run(questionClaim);
+    expect(fakeQuery).toHaveBeenCalledTimes(1);
+    expect(spliceRead).not.toHaveBeenCalled();
+    expect(client.postQuestion).toHaveBeenCalledWith(77, expect.objectContaining({ content: expect.stringContaining('Invoke writing-plans') }));
+    expect(client.postPlan).not.toHaveBeenCalled();
+  });
+
+  it('가드③: plan 의도 문구(구조 없음)도 reformat 재질의 없이 답변', async () => {
+    const client = makeClient();
+    async function* intentNoStructure() {
+      yield { type: 'system', subtype: 'init', session_id: 'sess-n' };
+      yield { type: 'assistant', message: { content: [{ type: 'text', text: '이제 구현 계획을 정리하겠습니다.' }] } };
+      yield { type: 'result', subtype: 'success', usage: { total_cost_usd: 0.1 }, duration_ms: 100 };
+    }
+    const fakeQuery = vi.fn(() => intentNoStructure());
+    const runner = new InterviewRunner(client as never, fakeQuery as never, deps as never);
+    await runner.run(questionClaim);
+    expect(fakeQuery).toHaveBeenCalledTimes(1);
+    expect(client.postQuestion).toHaveBeenCalledTimes(1);
+    expect(client.postPlan).not.toHaveBeenCalled();
+  });
+
+  it('가드④: plan 정규 형식 답변이 와도 postPlan이 아니라 postQuestion', async () => {
+    const client = makeClient();
+    const fakeQuery = vi.fn(() => planCompleteStream());
+    const runner = new InterviewRunner(client as never, fakeQuery as never, deps as never);
+    await runner.run({ ...questionClaim, claudeSessionId: 'sess-q-1', lastAnswer: '계획 써줘', turns: turns(1) });
+    expect(client.postPlan).not.toHaveBeenCalled();
+    expect(client.postQuestion).toHaveBeenCalledWith(77, expect.objectContaining({
+      content: expect.stringContaining('Implementation Plan'),
+      costUsd: 0.31,
+    }));
+  });
+
+  it('turn cap: 중립 문구로 fail (plan 언급 없음), 턴 미실행', async () => {
+    const client = makeClient();
+    const fakeQuery = vi.fn(() => questionStream());
+    const runner = new InterviewRunner(client as never, fakeQuery as never, deps as never); // maxTurns 20
+    await runner.run({ ...questionClaim, claudeSessionId: 'sess-q-1', turns: turns(20) });
+    expect(fakeQuery).not.toHaveBeenCalled();
+    expect(client.fail).toHaveBeenCalledWith(77, expect.stringContaining('최대 문답 수'));
+    expect(client.fail).not.toHaveBeenCalledWith(77, expect.stringContaining('plan'));
+  });
+
+  it('환경 준비(ensureRepo)는 QUESTION에서도 매 턴 실행된다 (방어 계층 ⑤)', async () => {
+    const client = makeClient();
+    ensureRepo.mockClear();
+    const runner = new InterviewRunner(client as never, vi.fn(() => questionStream()) as never, deps as never);
+    await runner.run(questionClaim);
+    expect(ensureRepo).toHaveBeenCalledWith(expect.objectContaining({ githubRepo: 'acme/widgets', workDir: questionClaim.workDir }));
+  });
+
+  it('kind 미존재(구버전 백엔드) → 인터뷰 킥오프 그대로', async () => {
+    const client = makeClient();
+    const { fakeQuery, captured } = capturing(() => questionStream());
+    const runner = new InterviewRunner(client as never, fakeQuery as never, deps as never);
+    await runner.run(freshClaim);
+    expect(captured.prompt).toContain('brainstorming');
+    expect(captured.options.plugins).toEqual([{ type: 'local', path: '/sp/5.1.0' }]);
+  });
+});
 
 describe('InterviewRunner turn cap + force-finish', () => {
   it('turn cap: assistant turns >= maxTurns → fail WITHOUT running the turn', async () => {

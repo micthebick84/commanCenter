@@ -54,3 +54,12 @@ export const freshClaimWithAttachments: InterviewClaimResponse = {
     },
   ],
 };
+
+/** 질문 세션(Q&A) fresh claim — kind='QUESTION' (스펙 2026-08-30 §5). description = 질문 본문. */
+export const questionClaim: InterviewClaimResponse = {
+  ...freshClaim,
+  sessionId: 77,
+  kind: 'QUESTION',
+  title: '인증 흐름',
+  description: '로그인은 어디서 처리되나요?',
+};

@@ -323,3 +323,53 @@ describe('canUseTool — kind=QUESTION round 4 follow-up (BSD find fused -H/-L/-
     }
   });
 });
+
+describe('canUseTool — kind=QUESTION MCP gate (Obsidian read allowlist + generic mutating-verb denylist, 사용자 결정 2026-08-30)', () => {
+  const q = buildCanUseTool('/tmp/repo', 'QUESTION');
+
+  it('allows read-only tools (Obsidian read allowlist + non-mutating tools on other servers)', async () => {
+    for (const tool of [
+      'mcp__obsidian-vault__vault_read',
+      'mcp__obsidian-vault__search_simple',
+      'mcp__obsidian-vault__vault_get_document_map',
+      'mcp__obsidian-vault__tag_list',
+      'mcp__obsidian-vault__command_list',
+      'mcp__local-db__query',
+      'mcp__ctx7__resolve_library_id',
+    ]) {
+      expect((await q(tool, {})).behavior, tool).toBe('allow');
+    }
+  });
+
+  it('denies Obsidian writes/deletes/moves/execution regardless of which obsidian* server', async () => {
+    for (const tool of [
+      'mcp__obsidian-vault__vault_write',
+      'mcp__obsidian-vault__vault_delete',
+      'mcp__obsidian-vault__vault_move',
+      'mcp__obsidian-vault__vault_copy',
+      'mcp__obsidian-vault__vault_patch',
+      'mcp__obsidian-vault__vault_append',
+      'mcp__obsidian-vault__command_execute',
+      'mcp__obsidian-vault__open_file',
+      'mcp__obsidian__write_note', // unknown tool on the second Obsidian server — allowlist denies by default
+      'mcp__obsidian__vault_read_and_write', // not literally in the allowlist
+    ]) {
+      const r = await q(tool, {});
+      expect(r.behavior, tool).toBe('deny');
+      expect(r.message, tool).toBe(`질문 세션에서는 MCP 쓰기/실행 도구를 사용할 수 없습니다: ${tool}`);
+    }
+  });
+
+  it('denies mutating-verb tools on other servers, and malformed tool names', async () => {
+    for (const tool of ['mcp__local-db__execute_sql', 'mcp__foo__delete_item', 'mcp__foo__set_value', 'mcp__foo', 'mcp__foo__']) {
+      const r = await q(tool, {});
+      expect(r.behavior, tool).toBe('deny');
+      expect(r.message, tool).toBe(`질문 세션에서는 MCP 쓰기/실행 도구를 사용할 수 없습니다: ${tool}`);
+    }
+  });
+
+  it('INTERVIEW gate stays unaffected — mcp__* still unconditionally allowed', async () => {
+    const i = buildCanUseTool('/tmp/repo');
+    expect((await i('mcp__obsidian-vault__vault_write', {})).behavior).toBe('allow');
+  });
+});

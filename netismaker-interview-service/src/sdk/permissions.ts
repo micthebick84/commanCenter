@@ -274,6 +274,81 @@ function questionGlobGate(repoDir: string, input: Record<string, unknown>): Perm
   return { behavior: 'allow' };
 }
 
+// Obsidian(계열) MCP 서버의 읽기전용 도구 allowlist — 사용자 결정(2026-08-30): QUESTION 세션에서
+// Obsidian 쓰기/삭제는 불가능해야 한다. denylist가 아니라 allowlist인 이유: 서버가 둘(`obsidian-vault`,
+// `obsidian`)이고 두 번째 서버의 정확한 도구 이름 목록을 모른다 — 모르는 도구를 안전 쪽(deny)으로 기본값
+// 삼아야, 미래에 추가되는 쓰기형 도구(이름을 모르는)도 자동으로 막힌다.
+const OBSIDIAN_READ_ALLOWLIST = new Set([
+  'vault_read',
+  'vault_list',
+  'vault_get_document_map',
+  'search_query',
+  'search_simple',
+  'tag_list',
+  'active_file_get_path',
+  'command_list',
+]);
+
+// 기타(Obsidian 아닌) MCP 서버용 변경 동사 denylist. Obsidian처럼 allowlist로 하면 `mcp__local-db__query`
+// 같은 정상적인 읽기 도구까지 이름을 몰라서 막히므로, 여기는 반대로 "위험해 보이는 동사가 섞이면 차단"
+// 방식을 쓴다 (`_`로 분리한 각 세그먼트를 검사 — 예: `execute_sql`의 `execute`, `delete_item`의 `delete`).
+const MCP_MUTATING_VERBS = new Set([
+  'write',
+  'delete',
+  'remove',
+  'move',
+  'copy',
+  'patch',
+  'append',
+  'create',
+  'update',
+  'rename',
+  'execute',
+  'exec',
+  'run',
+  'insert',
+  'upload',
+  'put',
+  'set',
+  'drop',
+  'truncate',
+  'kill',
+  'send',
+  'post',
+  'edit',
+  'modify',
+]);
+
+/**
+ * 질문 세션 전용 MCP 게이트 (사용자 결정 2026-08-30): `mcp__<server>__<tool>`을 파싱해
+ *  - Obsidian 계열 서버(`obsidian`으로 시작, 대소문자 무시 — `obsidian-vault`, `obsidian` 둘 다 포함)는
+ *    읽기 도구 allowlist만 통과(미지 도구는 기본 deny — vault_write/delete/move/copy/patch/append,
+ *    command_execute, open_file 전부 여기서 막힌다).
+ *  - 그 외 서버는 변경 동사 denylist(위 MCP_MUTATING_VERBS)로만 차단 — `mcp__local-db__query`처럼
+ *    이름을 모르는 읽기 도구가 과차단되지 않게 한다.
+ * INTERVIEW 게이트는 건드리지 않는다 — 여전히 `mcp__*` 무조건 allow.
+ */
+function questionMcpGate(toolName: string): PermissionResult {
+  const deny: PermissionResult = {
+    behavior: 'deny',
+    message: `질문 세션에서는 MCP 쓰기/실행 도구를 사용할 수 없습니다: ${toolName}`,
+  };
+  const rest = toolName.slice('mcp__'.length);
+  const sepIdx = rest.indexOf('__');
+  if (sepIdx === -1) return deny; // 서버/도구 구분자가 없는 형태 (예: `mcp__foo`) — malformed.
+  const server = rest.slice(0, sepIdx);
+  const tool = rest.slice(sepIdx + 2);
+  if (server.length === 0 || tool.length === 0) return deny; // 서버 또는 도구명이 비어있음.
+
+  if (server.toLowerCase().startsWith('obsidian')) {
+    return OBSIDIAN_READ_ALLOWLIST.has(tool) ? { behavior: 'allow' } : deny;
+  }
+
+  const segments = tool.toLowerCase().split('_');
+  if (segments.some((seg) => MCP_MUTATING_VERBS.has(seg))) return deny;
+  return { behavior: 'allow' };
+}
+
 /**
  * INTERVIEW(기본): Write/Edit/MultiEdit은 docs/superpowers/** 로 경로 제한, Bash는 화이트리스트, 나머지 allow.
  *   (관리자가 승인 시작하는 세션이라 Read/Grep/Glob/Bash 인자에 경로 confinement가 없다 — 그대로 유지.)
@@ -282,7 +357,9 @@ function questionGlobGate(repoDir: string, input: Record<string, unknown>): Perm
  *   일치해야 하고(화이트리스트 접두사 정규식만으로는 `cat/evil` 같은 "명령어처럼 보이는 경로"를 못 거른다),
  *   그 위에 화이트리스트+메타문자, (b) 명령별 위험 플래그 정확매치(find -delete/-exec.../-fprint0...,
  *   git --output, rg --pre/-z...), (c) 인자 토큰 정책(따옴표·백슬래시 전면 금지 + 포지셔널 인자 경로 탈출
- *   금지 + realpath/symlink confinement + 플래그 인자 경로문자 전면 금지)을 추가 차단, mcp__* 만 allow.
+ *   금지 + realpath/symlink confinement + 플래그 인자 경로문자 전면 금지)을 추가 차단, mcp__*는
+ *   questionMcpGate로 검사(Obsidian 계열은 읽기 도구 allowlist, 기타 서버는 변경 동사 denylist —
+ *   사용자 결정 2026-08-30, 상세는 questionMcpGate 주석 참고).
  *   쓰기형·미지 도구는 전부 deny(이름 모를 미래 도구도 자동 차단). Q&A 산출물은 대화 텍스트뿐이라 Write
  *   예외가 필요 없다.
  */
@@ -293,7 +370,7 @@ export function buildCanUseTool(repoDir: string, kind: SessionKind = 'INTERVIEW'
       if (toolName === 'Read') return questionReadGate(repoDir, input);
       if (toolName === 'Grep') return questionPathScopedGate(repoDir, input, 'Grep');
       if (toolName === 'Glob') return questionGlobGate(repoDir, input);
-      if (toolName.startsWith('mcp__')) return { behavior: 'allow' };
+      if (toolName.startsWith('mcp__')) return questionMcpGate(toolName);
       return { behavior: 'deny', message: `질문 세션에서는 ${toolName} 도구를 사용할 수 없습니다 (읽기 전용 Q&A)` };
     };
   }

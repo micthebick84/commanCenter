@@ -49,7 +49,7 @@ WORKER_ID=mac-worker-1 \
 - **모든 분석 결과는 한국어 마크다운**: `application-worker.yml`의 `prompt-template` 참고. 섹션 헤더는 파서가 사용하므로 변경 금지.
 - **MCP 자동 주입**: `WorkerMcpSupport`가 `~/.claude.json`의 글로벌+프로젝트 mcpServers를 머지해 `~/netis-maker/worker-mcp.json` 생성. claude -p 호출 시 `--mcp-config + --strict-mcp-config + --allowedTools` prepend. 인터뷰 세션도 동일 합본을 씀 — `netismaker-interview-service/src/sdk/mcpBase.ts`가 부팅 시 1회 스냅샷해 SDK `options.mcpServers`로 주입(작업별 extras와 머지, 충돌 시 extras 우선).
 - **프롬프트는 stdin으로 전달**: `--allowedTools <tools...>` variadic이 뒤따라오는 prompt arg를 삼키므로 arg 대신 stdin 사용. ARG_MAX/ps 노출 동시 회피.
-- **질문 세션(Q&A)**: `InterviewSession.kind=QUESTION`. 승인 없이 등록 즉시 큐 진입, USER+ADMIN 공용(본인+관리자 조회). 인터뷰 서비스는 QUESTION이면 superpowers 미로드 + **default-deny 도구 게이트**(Read/Grep/Glob/읽기전용 Bash/`mcp__*`만) + plan 경로 미진입(`postPlan` 없음). 서버는 `recordPlan`/`confirm`을 400으로 막는다. 스펙: `docs/superpowers/specs/2026-08-30-question-sessions-design.md`. **배포 순서: interview-service 먼저, API 나중** (구버전 러너가 QUESTION을 인터뷰로 처리해 방어 무력화).
+- **질문 세션(Q&A)**: `InterviewSession.kind=QUESTION`. 승인 없이 등록 즉시 큐 진입, USER+ADMIN 공용(본인+관리자 조회). 인터뷰 서비스는 QUESTION이면 superpowers 미로드 + **default-deny 도구 게이트**(Read/Grep/Glob/읽기전용 Bash/`mcp__*`(Obsidian 계열은 읽기 도구 allowlist, 기타 서버는 쓰기/실행 동사 denylist)만) + plan 경로 미진입(`postPlan` 없음). 서버는 `recordPlan`/`confirm`을 400으로 막는다. 스펙: `docs/superpowers/specs/2026-08-30-question-sessions-design.md`. **배포 순서: interview-service 먼저, API 나중** (구버전 러너가 QUESTION을 인터뷰로 처리해 방어 무력화).
 
 ## 다중 워커 운영 (V1.2)
 

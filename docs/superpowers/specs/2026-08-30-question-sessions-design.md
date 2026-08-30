@@ -19,7 +19,7 @@
 | 모델·effort | **등록자가 선택** (`ModelEffortPolicy` 재사용). 추가 MCP도 등록 시 카탈로그에서 선택 |
 | 조회 범위 | **본인 + 관리자**. 조작(추가 질문·종료)도 본인+관리자만 |
 | base MCP | **주입한다** — 디자인/구현 워커·인터뷰와 완전 패리티(`mcpsBase` + extras 머지) |
-| MCP 쓰기 리스크 | **수용 결정**: 레포 무수정 방어는 파일시스템/Bash 도구 계층에서 담보(§6). MCP를 통한 레포 밖 부수효과는 base가 운영자 `~/.claude.json`, extras가 관리자 큐레이션 카탈로그로 통제되는 것을 근거로 수용 |
+| MCP 쓰기 리스크 | **수용 결정**: 레포 무수정 방어는 파일시스템/Bash 도구 계층에서 담보(§6). MCP를 통한 레포 밖 부수효과는 base가 운영자 `~/.claude.json`, extras가 관리자 큐레이션 카탈로그로 통제되는 것을 근거로 수용 — **2026-08-30 결정 갱신**: QUESTION 세션에서 Obsidian 계열 MCP는 읽기 도구 allowlist, 기타 서버는 변경 동사 denylist로 차단(`permissions.ts questionMcpGate`) |
 | 남용 가드 | 사용자당 **활성(QUEUED/RUNNING/AWAITING_INPUT) 질문 세션 상한** (설정키 `netis-maker.question.max-active-per-user`, 기본 3) 초과 등록 시 429 (`TaskException.tooMany` 재사용) |
 | 첨부파일 | v1 범위 제외 (YAGNI) |
 

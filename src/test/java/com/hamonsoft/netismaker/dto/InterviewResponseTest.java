@@ -42,4 +42,14 @@ class InterviewResponseTest {
         assertThat(r.status()).isEqualTo("입력대기");          // 한글 dbValue (표시용) — 유지
         assertThat(r.statusName()).isEqualTo("AWAITING_INPUT"); // 영문 enum name (로직용) — 신규
     }
+
+    @Test
+    void of_carries_kind_and_total_cost() {
+        InterviewSession q = InterviewSession.createQuestion("o/r", "main", "t", "q?", "user1",
+                List.of(), "claude-opus-5", "high");
+        q.setTotalCostUsd(new java.math.BigDecimal("1.25"));
+        InterviewResponse r = InterviewResponse.of(q, List.of(), null);
+        assertThat(r.kind()).isEqualTo("QUESTION");
+        assertThat(r.totalCostUsd()).isEqualByComparingTo("1.25");
+    }
 }

@@ -49,4 +49,18 @@ class InterviewClaimResponseTest {
         assertThat(r.attachments()).containsExactly(ref);
         assertThat(r.attachments().get(0).absolutePath()).startsWith("/abs/");
     }
+
+    @Test
+    void of_carries_session_kind_as_enum_name() {
+        InterviewSession q = InterviewSession.createQuestion("o/r", "main", "t", "q?", "user1",
+                List.of(), "claude-opus-5", "high");
+        ReflectionTestUtils.setField(q, "id", 1L); // of()가 sessionId(long)로 unbox — 미영속 세션은 id set 필요
+        InterviewClaimResponse r = InterviewClaimResponse.of(q, List.of(), List.of());
+        assertThat(r.kind()).isEqualTo("QUESTION");
+
+        InterviewSession i = InterviewSession.create("o/r", "main", "t", "d", "user1",
+                List.of(), "claude-opus-5", "high");
+        ReflectionTestUtils.setField(i, "id", 2L);
+        assertThat(InterviewClaimResponse.of(i, List.of(), List.of()).kind()).isEqualTo("INTERVIEW");
+    }
 }

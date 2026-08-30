@@ -31,7 +31,9 @@ public record InterviewClaimResponse(
         /** 세션 누적 SHADOW 비용. 워커가 CostGuard를 이 값으로 시드해 세션 전체 누적 가드로 쓴다(단일 턴 아님). */
         double totalCostUsd,
         /** 등록 시 업로드된 첨부(절대경로 — work_dir과 동일한 단일 호스트 전제). 항상 non-null. */
-        List<AttachmentRef> attachments
+        List<AttachmentRef> attachments,
+        /** 세션 종류 'INTERVIEW' | 'QUESTION' (InterviewKind.name()). 인터뷰 서비스가 Q&A 모드 판정에 사용. */
+        String kind
 ) {
     /** 어느 경로로 생성돼도 non-null 계약 유지 (스펙 §5.4). */
     public InterviewClaimResponse {
@@ -65,6 +67,6 @@ public record InterviewClaimResponse(
                 s.getClaudeSessionId(), s.getCurrentPhase(), s.getWorkDir(),
                 lastAnswer, replyToSeq,
                 s.getMcpsExtra() == null ? List.of() : List.copyOf(s.getMcpsExtra()),
-                mapped, s.getModel(), s.getEffort(), totalCostUsd, attachments);
+                mapped, s.getModel(), s.getEffort(), totalCostUsd, attachments, s.getKind().name());
     }
 }

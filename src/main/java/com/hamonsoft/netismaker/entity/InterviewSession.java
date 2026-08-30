@@ -49,6 +49,11 @@ public class InterviewSession {
     @Setter   // 서비스 레이어에서만 변경
     private InterviewStatus status;
 
+    /** 세션 종류. QUESTION은 플랜/등록 전이 불가, 인터뷰 서비스가 Q&A 모드로 실행 (스펙 2026-08-30 §4). */
+    @Enumerated(EnumType.STRING)
+    @Column(name = "kind", nullable = false, length = 20)
+    private InterviewKind kind = InterviewKind.INTERVIEW;
+
     /** SDK 세션 resume 키. null이면 brainstorming 신규 시작, 있으면 resume. */
     @Column(name = "claude_session_id", length = 100)
     @Setter
@@ -151,6 +156,23 @@ public class InterviewSession {
         s.updatedAt = now;
         s.lastActivityAt = now;
         return s;
+    }
+
+    /**
+     * 질문 세션(Q&A). taskId 없음, description = 질문 본문. 나머지 컬럼은 인터뷰와 의미 동일
+     * (레포/브랜치/모델/effort/MCP 스냅샷) — claim 응답 전파 경로도 그대로.
+     */
+    public static InterviewSession createQuestion(String githubRepo, String githubBranch, String title,
+                                                  String question, String requesterId,
+                                                  List<TaskMcpSpec> mcpsExtra, String model, String effort) {
+        InterviewSession s = create(githubRepo, githubBranch, title, question, requesterId,
+                mcpsExtra, model, effort);
+        s.kind = InterviewKind.QUESTION;
+        return s;
+    }
+
+    public boolean isQuestion() {
+        return kind == InterviewKind.QUESTION;
     }
 
     public boolean isOwnedBy(String userId) {

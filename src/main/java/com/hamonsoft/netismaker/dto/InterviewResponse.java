@@ -4,6 +4,7 @@ import com.hamonsoft.netismaker.entity.InterviewPlan;
 import com.hamonsoft.netismaker.entity.InterviewSession;
 import com.hamonsoft.netismaker.entity.InterviewTurn;
 
+import java.math.BigDecimal;
 import java.time.OffsetDateTime;
 import java.util.List;
 
@@ -24,7 +25,11 @@ public record InterviewResponse(
         List<TurnView> turns,
         PlanView plan,
         OffsetDateTime createdAt,
-        OffsetDateTime updatedAt
+        OffsetDateTime updatedAt,
+        /** 'INTERVIEW' | 'QUESTION' — 프론트가 질문 세션 UI 분기에 사용. */
+        String kind,
+        /** 세션 누적 SHADOW 비용(상세 헤더 칩). */
+        BigDecimal totalCostUsd
 ) {
     public record TurnView(int seq, String role, String kind, String content,
                            Integer replyToSeq, OffsetDateTime createdAt) {}
@@ -43,6 +48,7 @@ public record InterviewResponse(
         return new InterviewResponse(
                 s.getId(), s.getGithubRepo(), s.getGithubBranch(), s.getTitle(), s.getDescription(),
                 s.getStatus().dbValue(), s.getStatus().name(), s.getCurrentPhase(), s.getWorkDir(), s.getTaskId(),
-                s.getModel(), s.getEffort(), tvs, pv, s.getCreatedAt(), s.getUpdatedAt());
+                s.getModel(), s.getEffort(), tvs, pv, s.getCreatedAt(), s.getUpdatedAt(),
+                s.getKind().name(), s.getTotalCostUsd());
     }
 }

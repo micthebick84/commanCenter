@@ -4,7 +4,6 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.hamonsoft.netismaker.dto.ApproveRequest;
 import com.hamonsoft.netismaker.dto.TaskCreateRequest;
 import com.hamonsoft.netismaker.entity.EnvVar;
-import com.hamonsoft.netismaker.entity.McpCatalogEntry;
 import com.hamonsoft.netismaker.entity.Task;
 import com.hamonsoft.netismaker.entity.TaskAnalysis;
 import com.hamonsoft.netismaker.entity.TaskAttachment;
@@ -162,26 +161,9 @@ public class TaskService {
         return attachmentStorage.resolve(att.getStoredPath());
     }
 
-    /** 카탈로그 id 리스트 → snapshot 스펙. 비활성/누락 id는 거절. */
+    /** 카탈로그 id 리스트 → snapshot 스펙. 비활성/누락 id는 거절. 실제 구현은 McpCatalogService가 소유(질문 등록과 공유). */
     private List<TaskMcpSpec> resolveMcpExtras(List<Long> catalogIds) {
-        if (catalogIds == null || catalogIds.isEmpty()) return new ArrayList<>();
-        List<McpCatalogEntry> entries = mcpCatalogService.resolveByIds(catalogIds);
-        if (entries.size() != catalogIds.size()) {
-            throw new TaskException(HttpStatus.BAD_REQUEST,
-                    "존재하지 않는 MCP 카탈로그 id 포함. 요청=" + catalogIds.size()
-                            + " 매칭=" + entries.size());
-        }
-        for (McpCatalogEntry e : entries) {
-            if (!e.isEnabled()) {
-                throw new TaskException(HttpStatus.BAD_REQUEST,
-                        "비활성화된 MCP 카탈로그 항목: " + e.getName());
-            }
-        }
-        List<TaskMcpSpec> out = new ArrayList<>(entries.size());
-        for (McpCatalogEntry e : entries) {
-            out.add(new TaskMcpSpec(e.getName(), e.getUrl(), e.getTransport()));
-        }
-        return out;
+        return mcpCatalogService.resolveExtras(catalogIds);
     }
 
     @Transactional(readOnly = true)

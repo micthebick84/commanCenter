@@ -1,5 +1,6 @@
 package com.hamonsoft.netismaker.repository;
 
+import com.hamonsoft.netismaker.entity.InterviewKind;
 import com.hamonsoft.netismaker.entity.InterviewSession;
 import com.hamonsoft.netismaker.entity.InterviewStatus;
 import jakarta.persistence.LockModeType;
@@ -133,4 +134,21 @@ public interface InterviewSessionRepository extends JpaRepository<InterviewSessi
                            com.hamonsoft.netismaker.entity.InterviewStatus.PLAN_READY)
     """)
     List<InterviewSession> findOpenByTaskId(@Param("taskId") Long taskId);
+
+    /** 질문 세션 남용 가드 — 사용자당 활성(QUEUED/RUNNING/AWAITING_INPUT) 질문 수 (스펙 §2). */
+    @Query("""
+        SELECT COUNT(s) FROM InterviewSession s
+        WHERE s.requesterId = :requesterId
+          AND s.kind = com.hamonsoft.netismaker.entity.InterviewKind.QUESTION
+          AND s.status IN (com.hamonsoft.netismaker.entity.InterviewStatus.QUEUED,
+                           com.hamonsoft.netismaker.entity.InterviewStatus.RUNNING,
+                           com.hamonsoft.netismaker.entity.InterviewStatus.AWAITING_INPUT)
+    """)
+    long countActiveQuestionsByRequester(@Param("requesterId") String requesterId);
+
+    /** 질문 목록 — 본인, 최신순 (V20 idx_interview_session_kind_requester 커버). */
+    List<InterviewSession> findByKindAndRequesterIdOrderByCreatedAtDesc(InterviewKind kind, String requesterId);
+
+    /** 질문 목록 — 관리자 전체, 최신순. */
+    List<InterviewSession> findByKindOrderByCreatedAtDesc(InterviewKind kind);
 }

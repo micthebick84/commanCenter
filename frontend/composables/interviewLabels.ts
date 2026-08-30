@@ -30,10 +30,30 @@ export const INTERVIEW_STATUS_CHIP: Partial<Record<InterviewStatus, [string, str
   REGISTERED: ['#e0f2f1', '#00695c'], // 초록 계열
 }
 
-// 서버 statusName(string)을 안전하게 라벨로 — 알 수 없는 값은 그대로 노출.
-export function interviewStatusLabel(name: string | null | undefined): string {
+// 세션 종류 — 서버 InterviewKind. 프론트는 라벨/경로 분기에만 쓴다.
+export type SessionKind = 'INTERVIEW' | 'QUESTION'
+
+// 질문 세션(Q&A) 표기 — 같은 enum, 문맥만 다르다 (스펙 2026-08-30 §7 표).
+// PLAN_READY/REGISTERED는 질문 세션에서 도달 불가 — 방어적으로만 둔다.
+export const QUESTION_STATUS_LABELS: Record<InterviewStatus, string> = {
+  QUEUED: '답변 대기중',
+  RUNNING: '답변 중',
+  AWAITING_INPUT: '답변 완료',
+  PLAN_READY: '플랜 완료',
+  REGISTERED: '등록됨',
+  CANCELLED: '종료됨',
+  EXPIRED: '만료됨',
+  FAILED: '실패',
+}
+
+// 서버 statusName(string)을 안전하게 라벨로 — 알 수 없는 값은 그대로 노출. kind로 문맥 표기 분기.
+export function interviewStatusLabel(
+  name: string | null | undefined,
+  kind: SessionKind = 'INTERVIEW',
+): string {
   if (!name) return ''
-  return (INTERVIEW_STATUS_LABELS as Record<string, string>)[name] ?? name
+  const table = kind === 'QUESTION' ? QUESTION_STATUS_LABELS : INTERVIEW_STATUS_LABELS
+  return (table as Record<string, string>)[name] ?? name
 }
 
 // statusName → 칩 색상. 미정의 상태는 회색 기본값.

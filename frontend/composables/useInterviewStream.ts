@@ -83,19 +83,22 @@ export function useInterviewStream() {
   let sessionId: number | null = null
   let reconnectTimer: ReturnType<typeof setTimeout> | null = null
   let attempts = 0
+  let basePath = '/api/interviews'
 
   // Literal `/api` prefix proxied through Nitro devProxy — identical convention to
   // pages/tasks/[id].vue's log stream and the useApi() REST wrapper. We deliberately do
   // NOT read runtimeConfig.public.apiBaseUrl (it may hold an absolute origin, which would
   // bypass the SSE proxy path).
   function streamUrl(id: number): string {
-    return `/api/interviews/${id}/stream?access_token=${encodeURIComponent(
+    return `${basePath}/${id}/stream?access_token=${encodeURIComponent(
       auth.accessToken as string,
     )}`
   }
 
-  function open(id: number) {
+  // apiBase: 질문 세션은 '/api/questions' (스펙 2026-08-30 §7). 재연결(onError→connect)에서도 유지되도록 클로저에 보관.
+  function open(id: number, apiBase = '/api/interviews') {
     sessionId = id
+    basePath = apiBase
     error.value = null
     if (!auth.accessToken) {
       error.value = '인증 토큰이 없습니다'

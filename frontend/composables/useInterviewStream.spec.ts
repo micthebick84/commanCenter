@@ -20,6 +20,14 @@ describe('useInterviewStream — connect', () => {
     expect(FakeEventSource.instances.length).toBe(0)
     expect(s.error.value).toBe('인증 토큰이 없습니다')
   })
+
+  it('opens EventSource under a custom apiBase (질문 세션: /api/questions)', () => {
+    authStub.accessToken = 'jwt-xyz'
+    const s = useInterviewStream()
+    s.open(7, '/api/questions')
+    expect(FakeEventSource.last().url).toBe('/api/questions/7/stream?access_token=jwt-xyz')
+    s.close()
+  })
 })
 
 describe('useInterviewStream — question events', () => {

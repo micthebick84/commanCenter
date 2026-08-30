@@ -94,4 +94,44 @@ describe('pages/questions/index — 목록 + 질문하기 (스펙 2026-08-30 §7
     expect(navigateToMock).not.toHaveBeenCalled()
     w.unmount()
   })
+
+  it('레포를 빠르게 전환하면 늦게 도착한 이전 레포의 브랜치 콜백이 현재 선택을 덮어쓰지 않는다', async () => {
+    let resolveA!: (v: unknown) => void
+    let resolveB!: (v: unknown) => void
+    const pendingA = new Promise((resolve) => { resolveA = resolve })
+    const pendingB = new Promise((resolve) => { resolveB = resolve })
+
+    useApiMock.mockImplementation((url: string, opts?: { method?: string; params?: any }) => {
+      if (url === '/api/questions' && opts?.method === 'POST') return Promise.resolve({ id: 12 })
+      if (url === '/api/questions') return Promise.resolve(list)
+      if (url === '/api/repo-catalog') return Promise.resolve([
+        { id: 1, alias: 'A', ownerRepo: 'org/a', defaultBranch: 'main' },
+        { id: 2, alias: 'B', ownerRepo: 'org/b', defaultBranch: 'develop' },
+      ])
+      if (url === '/api/mcp-catalog') return Promise.resolve([])
+      if (url === '/api/repos/branches' && opts?.params?.repo === 'org/a') return pendingA
+      if (url === '/api/repos/branches' && opts?.params?.repo === 'org/b') return pendingB
+      return Promise.resolve(null)
+    })
+
+    const w = mount(PageWrapper)
+    await flushPromises()
+    const vm = w.findComponent(QuestionsIndex).vm as any
+    vm.openCreate()
+    await flushPromises()
+
+    vm.onRepoSelected(1) // 레포 A 선택 — 브랜치 조회 진행 중
+    vm.onRepoSelected(2) // 곧바로 레포 B로 전환 — inflightRepo가 org/b로 바뀜
+    await flushPromises()
+
+    // B의 응답이 먼저 도착
+    resolveB({ defaultBranch: 'develop', branches: [{ name: 'develop', sha: 'y' }] })
+    await flushPromises()
+    // A의 응답이 뒤늦게 도착 — 가드가 없으면 이 콜백이 draft.githubBranch를 'main'으로 덮어쓴다
+    resolveA({ defaultBranch: 'main', branches: [{ name: 'main', sha: 'x' }] })
+    await flushPromises()
+
+    expect(vm.draft.githubBranch).toBe('develop')
+    w.unmount()
+  })
 })

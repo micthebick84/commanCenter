@@ -150,6 +150,8 @@ function onRepoSelected(catalogId: number | null) {
   const entry = repoCatalog.value.find((r) => r.id === catalogId)
   if (!entry || !entry.ownerRepo) return
   loadBranches(entry.ownerRepo).then(() => {
+    // 늦게 도착한 이전 레포의 콜백이 현재 선택을 덮어쓰지 않게 — loadBranches 내부 가드와 동일 기준.
+    if (inflightRepo !== entry.ownerRepo) return
     if (entry.defaultBranch) draft.githubBranch = entry.defaultBranch
   })
 }
@@ -219,7 +221,7 @@ function fmt(iso: string) {
 }
 
 // 테스트에서 q-select 조작 대신 직접 호출 (McpPicker.toggle 선례)
-defineExpose({ openCreate, draft, submit })
+defineExpose({ openCreate, draft, submit, onRepoSelected })
 </script>
 
 <template>

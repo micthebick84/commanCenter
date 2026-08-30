@@ -149,3 +149,48 @@ describe('canUseTool — kind=QUESTION path/flag confinement (finding #1/#2)', (
     expect((await i('Bash', { command: 'cat /etc/passwd' })).behavior).toBe('allow');
   });
 });
+
+describe('canUseTool — kind=QUESTION Bash token policy round 2 (verified-by-execution bypasses)', () => {
+  const q = buildCanUseTool('/tmp/repo', 'QUESTION');
+
+  it('bypass 1: quote-splicing (cat ""/etc/passwd) is denied — shell collapses "" and reveals /etc/passwd', async () => {
+    expect((await q('Bash', { command: 'cat ""/etc/passwd' })).behavior).toBe('deny');
+  });
+
+  it('bypass 2: backslash-escaped slash (cat \\/etc/passwd) is denied — shell strips the backslash', async () => {
+    expect((await q('Bash', { command: 'cat \\/etc/passwd' })).behavior).toBe('deny');
+  });
+
+  it('bypass 3: Glob pattern traversal (../../../etc/passwd) is denied even without a leading / or ~', async () => {
+    expect((await q('Glob', { pattern: '../../../etc/passwd' })).behavior).toBe('deny');
+  });
+
+  it('bypass 4: fused short option carrying a path (grep -f/etc/passwd) is denied — flags may not carry paths', async () => {
+    expect((await q('Bash', { command: 'grep -f/etc/passwd README.md' })).behavior).toBe('deny');
+  });
+
+  it('bypass 5: find -fprint0 (missing from round-1 denylist) is denied — would create an untracked file', async () => {
+    expect((await q('Bash', { command: 'find . -fprint0 leaked.bin' })).behavior).toBe('deny');
+  });
+
+  it('bypass 6: ripgrep --pre/--pre= is denied — the preprocessor flag is arbitrary command execution', async () => {
+    expect((await q('Bash', { command: 'rg --pre sh pattern .' })).behavior).toBe('deny');
+    expect((await q('Bash', { command: 'rg --pre=/bin/sh pattern .' })).behavior).toBe('deny');
+  });
+
+  it('controls: legitimate whitelisted usages stay allowed', async () => {
+    for (const cmd of [
+      'git log main..HEAD', // '..' here is a revision range, not a path segment
+      'git log -- src/a.ts',
+      'rg -g src/*.ts foo',
+      'find . -name x -print',
+      'grep -rn foo src',
+    ]) {
+      expect((await q('Bash', { command: cmd })).behavior, cmd).toBe('allow');
+    }
+  });
+
+  it('control: rg --glob=<path> is denied (flag-with-path, acceptable loss — use a positional path arg instead)', async () => {
+    expect((await q('Bash', { command: 'rg --glob=src/*.ts foo' })).behavior).toBe('deny');
+  });
+});

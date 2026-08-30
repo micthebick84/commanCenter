@@ -36,66 +36,95 @@ function insideRepo(repoDir: string, p: string): boolean {
   return abs === repoDir || abs.startsWith(repoDir + '/');
 }
 
-/** 토큰 양끝의 홑/겹따옴표 한 겹을 벗겨낸다 ("../../.env" → ../../.env). */
-function stripQuotes(token: string): string {
-  if (token.length >= 2) {
-    const first = token.charAt(0);
-    const last = token.charAt(token.length - 1);
-    if ((first === '"' && last === '"') || (first === "'" && last === "'")) {
-      return token.slice(1, -1);
-    }
-  }
-  return token;
+/**
+ * 라운드2 재검토(final-review round 2)에서 실행으로 검증된 우회 6종 — 문자열 블록리스트만으로는
+ * 실제 셸의 이스케이프/치환을 흉내낼 수 없다는 게 핵심 반례였다. 대신 토큰 단위 POLICY로 전환한다:
+ *  1) 인자에 따옴표/백슬래시가 하나라도 있으면 통째로 거부(구조적 차단 — 셸이 이를 벗겨내며
+ *     `""/etc/passwd`, `\/etc/passwd` 같은 검사 우회를 만들어내므로, "벗겨서 검사"가 아니라
+ *     "있으면 거부"로 우회 표면 자체를 없앤다).
+ *  2) '-'로 시작하지 않는 값 인자만 절대경로/홈/상위 탈출을 검사(포지셔널 경로 정책).
+ *  3) '-'로 시작하는 플래그 인자는 경로 문자(/,~,..)를 아예 금지(퓨전 옵션 `-f/etc/passwd`,
+ *     `--git-dir=/x` 류를 개별 나열 없이 구조적으로 차단).
+ *  4) 명령별 위험 플래그 정확매치(+`flag=` 접두)는 여전히 필요 — `-exec`/`--output`/`--pre`처럼
+ *     경로를 안 실어도 그 자체로 위험한 플래그이기 때문.
+ */
+const QUOTE_OR_BACKSLASH = /["'\\]/;
+
+/** 값 인자(플래그가 아닌 토큰)가 레포 밖을 가리키는지 검사: 절대경로/홈/상위 디렉토리 탈출. */
+function isPathEscapingArg(token: string): boolean {
+  return (
+    token.startsWith('/') ||
+    token.startsWith('~') ||
+    token === '..' ||
+    token.startsWith('../') || // 선두 ../
+    /\/\.\.\//.test(token) || // 중간 /../
+    token.endsWith('/..') // 말미 /..  (예: main..HEAD 같은 리비전 범위는 여기 걸리지 않음)
+  );
+}
+
+/** 플래그 토큰('-'로 시작)이 경로 문자를 포함하는지 검사 — 플래그는 경로를 실어 나를 수 없다(퓨전 옵션 차단). */
+function flagCarriesPath(token: string): boolean {
+  return token.includes('/') || token.includes('~') || token.includes('..');
 }
 
 /**
- * 질문 세션 전용 Bash 인자 게이트 (finding #1). 화이트리스트 명령(cat/git/rg/find/ls/head/tail/wc)
- * 뒤에 절대경로·홈(~)·상위 디렉토리 탈출 인자를 붙여 레포 밖(.env, ~/.ssh, /etc/passwd 등)을 읽는
- * 것을 막는다. 명령어 자체(첫 토큰)는 검사하지 않는다.
+ * 질문 세션 전용 Bash 인자 토큰 정책 (finding #1, 라운드2). 화이트리스트 명령(cat/git/rg/find/ls/
+ * head/tail/wc) 뒤에 붙는 각 인자를 토큰 단위로 검사한다. 명령어 자체(첫 토큰)는 검사하지 않는다.
  */
 function questionBashArgsGate(cmd: string): PermissionResult | null {
-  const tokens = cmd.split(/\s+/).filter((t) => t.length > 0).map(stripQuotes);
-  for (const token of tokens.slice(1)) {
-    if (
-      token.startsWith('/') ||
-      token.startsWith('~') ||
-      token === '..' ||
-      token.startsWith('../') ||
-      token.endsWith('/..') ||
-      token.includes('/../')
-    ) {
+  const tokens = cmd.split(/\s+/).filter((t) => t.length > 0);
+  const args = tokens.slice(1);
+  // 1) 따옴표/백슬래시 우선 차단 — 셸의 이스케이프 해석에 기댄 우회(bypass #1, #2)를 구조적으로 봉쇄.
+  //    읽기전용 조사 명령(cat/grep/find/git 등)은 애초에 따옴표/이스케이프가 필요 없다.
+  if (args.some((t) => QUOTE_OR_BACKSLASH.test(t))) {
+    return { behavior: 'deny', message: `질문 세션 Bash 인자에 따옴표/이스케이프 문자 금지: ${cmd}` };
+  }
+  // 2)/3) 플래그 vs 포지셔널 인자를 구분해 각각의 경로 정책 적용.
+  for (const token of args) {
+    if (token.startsWith('-')) {
+      if (flagCarriesPath(token)) {
+        return { behavior: 'deny', message: `질문 세션 Bash 플래그에 경로 금지: ${cmd}` };
+      }
+    } else if (isPathEscapingArg(token)) {
       return { behavior: 'deny', message: `질문 세션 Bash는 레포 체크아웃 안의 상대 경로만 허용합니다: ${cmd}` };
     }
   }
   return null;
 }
 
-// find/git 화이트리스트에 숨어있는 파일 쓰기 플래그 (finding #2).
-const FIND_WRITE_FLAG = /^-(delete|exec|execdir|ok|okdir|fprint|fprintf|fls)$/;
-const GIT_OUTPUT_FLAG = /^--output(=.*)?$/;
+// 명령별 위험 플래그 — 정확 토큰 매치 또는 `flag=` 접두. 경로를 안 실어도 그 자체로 위험하다.
+//   git: 전역 옵션(-c/-C/--git-dir 등)은 BASH_WHITELIST 자체가 `^git (status|log|diff|show|branch)\b`로
+//        서브커맨드를 맨 앞에 고정하므로 애초에 화이트리스트 정규식을 통과하지 못한다 — --output만 명시 차단.
+//   rg:  --pre/--pre-glob는 전처리 명령 실행(임의 코드 실행), -z/--search-zip은 압축 해제 파이프라인.
+const DANGEROUS_FLAGS: Record<string, readonly string[]> = {
+  find: ['-delete', '-exec', '-execdir', '-ok', '-okdir', '-fprint', '-fprint0', '-fprintf', '-fls'],
+  git: ['--output'],
+  rg: ['--pre', '--pre-glob', '-z', '--search-zip'],
+};
 
-/**
- * 질문 세션 전용: `find -delete/-exec/-execdir/-ok/-okdir/-fprint/-fprintf/-fls`,
- * `git log|diff|show --output[=FILE]` 등 레포 밖에 파일을 쓰거나 실행할 수 있는 플래그를 차단한다.
- */
-function questionBashWriteFlagsGate(cmd: string): PermissionResult | null {
+function matchesDangerousFlag(token: string, denylist: readonly string[]): boolean {
+  return denylist.some((flag) => token === flag || token.startsWith(flag + '='));
+}
+
+/** 질문 세션 전용: find/git/rg 명령별 위험 플래그(쓰기·임의실행) 차단 (finding #2, bypass #5/#6). */
+function questionBashDangerousFlagsGate(cmd: string): PermissionResult | null {
   const tokens = cmd.split(/\s+/).filter((t) => t.length > 0);
   const head = tokens[0];
-  if (head === 'find' && tokens.some((t) => FIND_WRITE_FLAG.test(t))) {
-    return { behavior: 'deny', message: `질문 세션 Bash 쓰기 플래그 금지: ${cmd}` };
-  }
-  if (head === 'git' && tokens.some((t) => GIT_OUTPUT_FLAG.test(t))) {
-    return { behavior: 'deny', message: `질문 세션 Bash 쓰기 플래그 금지: ${cmd}` };
+  if (!head) return null;
+  const denylist = DANGEROUS_FLAGS[head];
+  if (!denylist) return null;
+  if (tokens.slice(1).some((t) => matchesDangerousFlag(t, denylist))) {
+    return { behavior: 'deny', message: `질문 세션 Bash 위험 플래그 금지: ${cmd}` };
   }
   return null;
 }
 
-/** 질문 세션 Bash 게이트: 기존 bashGate(화이트리스트+메타문자) 통과 후 쓰기 플래그·경로 탈출 인자를 추가 검사. */
+/** 질문 세션 Bash 게이트: 기존 bashGate(화이트리스트+메타문자) 통과 후 위험 플래그·인자 토큰 정책을 추가 검사. */
 function questionBashGate(input: Record<string, unknown>): PermissionResult {
   const base = bashGate(input);
   if (base.behavior === 'deny') return base;
   const cmd = String(input.command ?? '').trim();
-  return questionBashWriteFlagsGate(cmd) ?? questionBashArgsGate(cmd) ?? base;
+  return questionBashDangerousFlagsGate(cmd) ?? questionBashArgsGate(cmd) ?? base;
 }
 
 /** 질문 세션 Read 게이트: file_path 필수 + repoDir 안쪽 경로만 허용. */
@@ -120,13 +149,17 @@ function questionPathScopedGate(repoDir: string, input: Record<string, unknown>,
   return { behavior: 'allow' };
 }
 
-/** Glob 게이트: path confinement(공용) + pattern이 절대/홈 경로로 시작하면 거부(pattern은 glob 패턴이지 정규식이 아니므로 경로 취급). */
+/**
+ * Glob 게이트: path confinement(공용) + pattern이 절대/홈 경로로 시작하거나 `..`를 포함하면 거부
+ * (pattern은 glob 패턴이지 정규식이 아니므로 경로 취급 — bypass #3: `../../../etc/passwd`는 `/`나
+ * `~`로 시작하지 않지만 여전히 레포를 탈출한다).
+ */
 function questionGlobGate(repoDir: string, input: Record<string, unknown>): PermissionResult {
   const pathResult = questionPathScopedGate(repoDir, input, 'Glob');
   if (pathResult.behavior === 'deny') return pathResult;
   const pattern = input.pattern;
-  if (typeof pattern === 'string' && (pattern.startsWith('/') || pattern.startsWith('~'))) {
-    return { behavior: 'deny', message: `질문 세션 Glob pattern은 절대/홈 경로를 허용하지 않습니다: ${pattern}` };
+  if (typeof pattern === 'string' && (pattern.startsWith('/') || pattern.startsWith('~') || pattern.includes('..'))) {
+    return { behavior: 'deny', message: `질문 세션 Glob pattern은 절대/홈 경로 또는 상위 디렉토리 탈출을 허용하지 않습니다: ${pattern}` };
   }
   return { behavior: 'allow' };
 }
@@ -134,10 +167,11 @@ function questionGlobGate(repoDir: string, input: Record<string, unknown>): Perm
 /**
  * INTERVIEW(기본): Write/Edit/MultiEdit은 docs/superpowers/** 로 경로 제한, Bash는 화이트리스트, 나머지 allow.
  *   (관리자가 승인 시작하는 세션이라 Read/Grep/Glob/Bash 인자에 경로 confinement가 없다 — 그대로 유지.)
- * QUESTION: default-deny — Read/Grep/Glob는 repoDir 안쪽 경로로 confinement, 읽기전용 Bash는 화이트리스트에
- *   더해 쓰기 플래그(find -delete/-exec.../-fprint... , git --output)와 절대/홈/상위 탈출 인자를 추가 차단,
- *   mcp__* 만 allow. 쓰기형·미지 도구는 전부 deny(이름 모를 미래 도구도 자동 차단).
- *   Q&A 산출물은 대화 텍스트뿐이라 Write 예외가 필요 없다.
+ * QUESTION: default-deny — Read/Grep/Glob는 repoDir 안쪽 경로로 confinement(Glob은 pattern의 `..`도 차단),
+ *   읽기전용 Bash는 화이트리스트에 더해 (a) 명령별 위험 플래그 정확매치(find -delete/-exec.../-fprint0...,
+ *   git --output, rg --pre/-z...)와 (b) 인자 토큰 정책(따옴표·백슬래시 전면 금지 + 포지셔널 인자 경로 탈출
+ *   금지 + 플래그 인자 경로문자 전면 금지)을 추가 차단, mcp__* 만 allow. 쓰기형·미지 도구는 전부 deny
+ *   (이름 모를 미래 도구도 자동 차단). Q&A 산출물은 대화 텍스트뿐이라 Write 예외가 필요 없다.
  */
 export function buildCanUseTool(repoDir: string, kind: SessionKind = 'INTERVIEW'): CanUseTool {
   if (kind === 'QUESTION') {

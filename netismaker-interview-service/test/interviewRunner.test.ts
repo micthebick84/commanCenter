@@ -382,6 +382,19 @@ describe('InterviewRunner kind=QUESTION (스펙 §6 — plan 경로 미진입, Q
     expect(ensureRepo).toHaveBeenCalledWith(expect.objectContaining({ githubRepo: 'acme/widgets', workDir: questionClaim.workDir }));
   });
 
+  it('SDK 쿼리가 throw하면 fail 사유는 "답변 생성 실패"이지 인터뷰 문구가 아니다 (final-review finding, minor)', async () => {
+    const client = makeClient();
+    const fakeQuery = vi.fn(() => {
+      throw new Error('boom');
+    });
+    const runner = new InterviewRunner(client as never, fakeQuery as never, deps as never);
+    await runner.run(questionClaim);
+    expect(client.fail).toHaveBeenCalledTimes(1);
+    const message = client.fail.mock.calls[0]![1] as string;
+    expect(message).toContain('답변 생성 실패');
+    expect(message).not.toContain('interview turn failed');
+  });
+
   it('kind 미존재(구버전 백엔드) → 인터뷰 킥오프 그대로', async () => {
     const client = makeClient();
     const { fakeQuery, captured } = capturing(() => questionStream());

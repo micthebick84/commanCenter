@@ -188,7 +188,12 @@ export class InterviewRunner {
         await this.safeFail(claim.sessionId, err.message);
         return;
       }
-      await this.safeFail(claim.sessionId, `interview turn failed: ${(err as Error).message}`);
+      await this.safeFail(
+        claim.sessionId,
+        claim.kind === 'QUESTION'
+          ? `답변 생성 실패: ${(err as Error).message}`
+          : `interview turn failed: ${(err as Error).message}`,
+      );
     } finally {
       if (timer) clearTimeout(timer);
       ticker.stop();

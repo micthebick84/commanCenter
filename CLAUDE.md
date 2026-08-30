@@ -90,7 +90,7 @@ WORKER_ID=mac-worker-2 ./gradlew bootRun --args='--spring.profiles.active=worker
 ```
 - 상한: `app.question.max-active-per-user`(기본 3, 초과 429) · `app.question.max-qa-turns`(기본 10, `ask` 400). 불변식: `max-qa-turns` < 러너 `INTERVIEW_MAX_TURNS`(20).
 
-- **등록**: 사용자는 레포/브랜치/제목/설명만 입력. 모델·effort·MCP는 관리자가 승인 시 결정.
+- **(작업) 등록**: 사용자는 레포/브랜치/제목/설명만 입력. 모델·effort·MCP는 관리자가 승인 시 결정.
 - **분석**(레거시 자동분석, 현재 진입점 없음): PENDING → IN_PROGRESS → COMPLETED/FAILED. 결과는 `task_analysis.markdown_result`. `TaskService.create`는 항상 `AWAITING_APPROVAL`을 쓰고, `PENDING`은 `retry`(FAILED에서만)로만 도달 가능 — 즉 이 경로와 워커의 `kind=ANALYSIS` 분기는 현재 프로덕션에서 도달 불가능하다. "인터뷰 없이 바로 구현" 라우트(스펙 §7 엣지 케이스, 범위 밖)를 위해 코드만 보존.
 - **승인**: `/tasks/{id}/approve`가 상태에 따라 분기 — `승인대기`면 인터뷰 세션 생성, `분석완료`면 기존 구현 큐 진입(`analysis.approved=true` + `task.status=APPROVED`).
 - **확정**: `/interviews/{sid}/confirm`이 `TaskAnalysis`를 프리필하고(approved=true) 구현/디자인 큐로 보냄.

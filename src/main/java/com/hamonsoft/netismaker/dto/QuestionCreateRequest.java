@@ -21,8 +21,9 @@ public record QuestionCreateRequest(
         @Size(max = 500)
         String title,
 
-        /** 질문 본문 — InterviewSession.description에 저장. */
+        /** 질문 본문 — InterviewSession.description에 저장되고 킥오프 프롬프트에 그대로 삽입되므로 길이 상한 필요. */
         @NotBlank
+        @Size(max = 20000)
         String question,
 
         String model,

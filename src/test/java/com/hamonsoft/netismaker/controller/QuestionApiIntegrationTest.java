@@ -18,6 +18,7 @@ import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.request.RequestPostProcessor;
 
 import java.util.List;
+import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.hamcrest.Matchers.containsString;
@@ -97,6 +98,19 @@ class QuestionApiIntegrationTest {
         createQuestion(userJwt("user1"));
         mvc.perform(post("/api/questions").with(userJwt("user1")).contentType(APPLICATION_JSON).content(CREATE_BODY))
                 .andExpect(status().isTooManyRequests());
+    }
+
+    /** question은 킥오프 프롬프트에 그대로 삽입되므로 @Size(max=20000) 상한이 있어야 한다 (final-review minor). */
+    @Test
+    void POST_with_question_over_length_limit_returns_400() throws Exception {
+        String tooLong = "a".repeat(20001);
+        String body = json.writeValueAsString(Map.of(
+                "repoCatalogId", 1,
+                "githubBranch", "main",
+                "title", "인증 흐름",
+                "question", tooLong));
+        mvc.perform(post("/api/questions").with(userJwt("user1")).contentType(APPLICATION_JSON).content(body))
+                .andExpect(status().isBadRequest());
     }
 
     @Test

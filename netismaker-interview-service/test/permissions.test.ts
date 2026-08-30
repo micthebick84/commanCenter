@@ -89,3 +89,63 @@ describe('canUseTool — kind=QUESTION (default-deny, 스펙 §6-①)', () => {
     expect((await i('NotebookEdit', {})).behavior).toBe('allow');
   });
 });
+
+describe('canUseTool — kind=QUESTION path/flag confinement (finding #1/#2)', () => {
+  const q = buildCanUseTool('/tmp/repo', 'QUESTION');
+
+  it('Read: requires file_path and confines it to repoDir', async () => {
+    expect((await q('Read', { file_path: '/tmp/repo/src/a.ts' })).behavior).toBe('allow');
+    expect((await q('Read', { file_path: '/tmp/repo/../other/x' })).behavior).toBe('deny');
+    expect((await q('Read', { file_path: '/etc/passwd' })).behavior).toBe('deny');
+    expect((await q('Read', { file_path: '/Users/me/.claude.json' })).behavior).toBe('deny');
+    expect((await q('Read', {})).behavior).toBe('deny');
+  });
+
+  it('Grep/Glob: path confined only when present (pattern is a regex, not path-checked)', async () => {
+    expect((await q('Grep', { pattern: 'x' })).behavior).toBe('allow');
+    expect((await q('Glob', { pattern: '**/*.ts' })).behavior).toBe('allow');
+    expect((await q('Grep', { pattern: 'x', path: '/tmp/repo/src' })).behavior).toBe('allow');
+    expect((await q('Grep', { pattern: 'x', path: '/tmp' })).behavior).toBe('deny');
+    expect((await q('Glob', { pattern: '/**/*.json' })).behavior).toBe('deny');
+    expect((await q('Glob', { pattern: '~/**' })).behavior).toBe('deny');
+  });
+
+  it('Bash: whitelisted commands accept only repo-relative path args', async () => {
+    for (const cmd of ['cat README.md', 'git log -- src/a.ts', 'rg foo src/', 'ls -la .']) {
+      expect((await q('Bash', { command: cmd })).behavior, cmd).toBe('allow');
+    }
+    for (const cmd of [
+      'cat /etc/passwd',
+      'cat ~/.claude.json',
+      'head "../../.env"',
+      "ls '/Users/me'",
+      'find .. -name x',
+      'tail -n 5 ./docs/../../.env',
+    ]) {
+      expect((await q('Bash', { command: cmd })).behavior, cmd).toBe('deny');
+    }
+  });
+
+  it('Bash: denies find/git write flags smuggled through the read-only whitelist', async () => {
+    for (const cmd of [
+      'find . -name x -delete',
+      'find . -exec rm {} +', // {} already caught by SHELL_METACHARS too — still must deny
+      'find . -exec pwd +', // no braces/metachars — exercises the write-flag gate itself
+      'find . -fprint out.txt',
+      'find . -fls out.txt',
+      'git log --output=x.txt',
+      'git diff --output x.txt',
+    ]) {
+      expect((await q('Bash', { command: cmd })).behavior, cmd).toBe('deny');
+    }
+    for (const cmd of ['find . -name x -print', 'git log --oneline']) {
+      expect((await q('Bash', { command: cmd })).behavior, cmd).toBe('allow');
+    }
+  });
+
+  it('INTERVIEW gate stays path-unconfined (admin-driven session, out of scope for this hardening)', async () => {
+    const i = buildCanUseTool('/tmp/repo');
+    expect((await i('Read', { file_path: '/etc/passwd' })).behavior).toBe('allow');
+    expect((await i('Bash', { command: 'cat /etc/passwd' })).behavior).toBe('allow');
+  });
+});

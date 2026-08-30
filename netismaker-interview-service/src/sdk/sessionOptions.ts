@@ -64,6 +64,12 @@ function toMcpServers(mcpsExtra: unknown): Record<string, { type: string; url: s
  *   tools are pre-approved here; Write/Bash/Edit fall through to canUseTool, which confines them.
  *   ('Skill' stays so the Skill tool appears in init.tools; skill-internal Write/Bash still route
  *   through canUseTool because they are no longer pre-approved.)
+ *
+ * QUESTION variant (sessionKind:'QUESTION'): plugins is [] (superpowers not loaded, no Skill tool),
+ *   allowedTools is only ['Read','Grep','Glob'] (no mcp__* pre-approval — MCP calls also go through
+ *   canUseTool). canUseTool itself is buildCanUseTool(repoDir,'QUESTION'): default-deny with
+ *   Read/Grep/Glob path-confined to repoDir and Bash further restricted beyond the read-only
+ *   whitelist (see permissions.ts).
  */
 export function buildOptions(input: SessionOptionsInput): Record<string, unknown> {
   // 베이스(글로벌+프로젝트 합본) + 작업별 extras — 충돌 시 extras 우선 (워커 패리티).

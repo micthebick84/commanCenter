@@ -5,6 +5,7 @@ import com.hamonsoft.netismaker.entity.*;
 import com.hamonsoft.netismaker.repository.*;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.springframework.http.HttpStatus;
 import org.springframework.test.util.ReflectionTestUtils;
 
 import java.math.BigDecimal;
@@ -54,6 +55,14 @@ class InterviewServiceTest {
 
     private InterviewSession session(long id, InterviewStatus status) {
         InterviewSession s = InterviewSession.create("owner/repo", "main", "T", "d", "u1",
+                List.of(), "claude-opus-4-8", "high");
+        ReflectionTestUtils.setField(s, "id", id);
+        s.setStatus(status);
+        return s;
+    }
+
+    private InterviewSession questionSession(long id, InterviewStatus status) {
+        InterviewSession s = InterviewSession.createQuestion("owner/repo", "main", "T", "q?", "u1",
                 List.of(), "claude-opus-4-8", "high");
         ReflectionTestUtils.setField(s, "id", id);
         s.setStatus(status);
@@ -332,6 +341,53 @@ class InterviewServiceTest {
         when(sessionRepo.findByIdForUpdate(12L)).thenReturn(Optional.of(s));
         assertThatThrownBy(() -> service.expire(12L, "x"))
                 .isInstanceOf(TaskException.class);
+    }
+
+    @Test
+    void recordQuestion_on_question_session_does_not_set_current_phase_and_touches_no_task() {
+        InterviewSession s = questionSession(5L, InterviewStatus.RUNNING);
+        s.setWorkerId("w1");
+        when(sessionRepo.findByIdForUpdate(5L)).thenReturn(Optional.of(s));
+        when(turnRepo.findMaxSeq(5L)).thenReturn(null);
+        service.recordQuestion(5L, "w1", new com.hamonsoft.netismaker.dto.WorkerQuestionRequest("답변입니다", "sess-q", "question",
+                new BigDecimal("0.01")));
+        assertThat(s.getStatus()).isEqualTo(InterviewStatus.AWAITING_INPUT);
+        assertThat(s.getCurrentPhase()).isNull();
+        assertThat(s.getClaudeSessionId()).isEqualTo("sess-q");
+        verify(taskRepo, never()).findActiveByIdForUpdate(any()); // taskId null → mirrorTask no-op
+    }
+
+    @Test
+    void recordPlan_on_question_session_throws_400_and_keeps_running() {
+        InterviewSession s = questionSession(6L, InterviewStatus.RUNNING);
+        s.setWorkerId("w1");
+        when(sessionRepo.findByIdForUpdate(6L)).thenReturn(Optional.of(s));
+        assertThatThrownBy(() -> service.recordPlan(6L, "w1",
+                new WorkerPlanRequest("# 설계", "# 플랜", "[]", BigDecimal.ONE, 1L)))
+                .isInstanceOf(TaskException.class)
+                .satisfies(e -> assertThat(((TaskException) e).getStatus()).isEqualTo(HttpStatus.BAD_REQUEST));
+        assertThat(s.getStatus()).isEqualTo(InterviewStatus.RUNNING);
+        verify(planRepo, never()).save(any());
+    }
+
+    @Test
+    void confirm_on_question_session_throws_400_regardless_of_status() {
+        InterviewSession s = questionSession(7L, InterviewStatus.PLAN_READY);
+        when(sessionRepo.findByIdForUpdate(7L)).thenReturn(Optional.of(s));
+        assertThatThrownBy(() -> service.confirm(7L, "admin", false))
+                .isInstanceOf(TaskException.class)
+                .satisfies(e -> assertThat(((TaskException) e).getStatus()).isEqualTo(HttpStatus.BAD_REQUEST));
+        verify(taskRepo, never()).findActiveByIdForUpdate(any());
+    }
+
+    @Test
+    void requireKind_returns_session_on_match_and_404_on_mismatch() {
+        InterviewSession s = questionSession(8L, InterviewStatus.QUEUED);
+        when(sessionRepo.findActiveById(8L)).thenReturn(Optional.of(s));
+        assertThat(service.requireKind(8L, InterviewKind.QUESTION)).isSameAs(s);
+        assertThatThrownBy(() -> service.requireKind(8L, InterviewKind.INTERVIEW))
+                .isInstanceOf(TaskException.class)
+                .satisfies(e -> assertThat(((TaskException) e).getStatus()).isEqualTo(HttpStatus.NOT_FOUND));
     }
 
 }

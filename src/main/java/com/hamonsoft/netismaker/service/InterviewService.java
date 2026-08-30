@@ -181,7 +181,8 @@ public class InterviewService {
         s.setStatus(InterviewStatus.AWAITING_INPUT);
         s.setWorkerId(null);
         s.setClaimedAt(null);
-        s.setCurrentPhase("brainstorming");
+        // 질문 세션은 phase 개념이 없다 (스펙 §4) — brainstorming 표기를 남기지 않는다.
+        if (!s.isQuestion()) s.setCurrentPhase("brainstorming");
         touch(s);
         mirrorTask(s, TaskStatus.INTERVIEW_INPUT, workerId, "인터뷰 질문 도착 → 관리자 답변 대기");
         return turn;
@@ -193,6 +194,7 @@ public class InterviewService {
     @Transactional
     public InterviewPlan recordPlan(Long sessionId, String workerId, WorkerPlanRequest req) {
         InterviewSession s = requireSessionForUpdate(sessionId);
+        requireNotQuestion(s, "플랜 보고");
         if (s.getStatus() != InterviewStatus.RUNNING) {
             throw TaskException.conflict("인터뷰중 상태에서만 플랜을 보고할 수 있습니다 (현재: "
                     + s.getStatus().dbValue() + ")");
@@ -346,6 +348,7 @@ public class InterviewService {
     @Transactional
     public Long confirm(Long sessionId, String adminId, boolean designRequested) {
         InterviewSession s = requireSessionForUpdate(sessionId);
+        requireNotQuestion(s, "확정");
         if (s.getStatus() != InterviewStatus.PLAN_READY) {
             throw TaskException.conflict("플랜완료 상태에서만 확정할 수 있습니다 (현재: "
                     + s.getStatus().dbValue() + ")");
@@ -437,6 +440,24 @@ public class InterviewService {
             s.setClaimedAt(null);
             touch(s);
         }
+    }
+
+    /** 질문 세션은 플랜/등록 경로 진입 불가 (스펙 §6-③). 상태와 무관하게 400. */
+    private void requireNotQuestion(InterviewSession s, String action) {
+        if (s.isQuestion()) {
+            throw new TaskException(HttpStatus.BAD_REQUEST, "질문 세션에서는 " + action + "이(가) 불가능합니다");
+        }
+    }
+
+    /**
+     * 컨트롤러 교차 kind 가드 — 다른 kind의 세션은 다른 리소스로 취급한다(404, 스펙 §5).
+     * /api/interviews/*는 INTERVIEW만, /api/questions/*는 QUESTION만 조작 가능.
+     */
+    @Transactional(readOnly = true)
+    public InterviewSession requireKind(Long id, InterviewKind kind) {
+        InterviewSession s = sessionRepo.findActiveById(id).orElseThrow(TaskException::notFound);
+        if (s.getKind() != kind) throw TaskException.notFound();
+        return s;
     }
 
     private void requireOwner(InterviewSession s, String actorId, boolean isAdmin) {

@@ -3,6 +3,7 @@ package com.hamonsoft.netismaker.controller;
 import com.hamonsoft.netismaker.dto.AnswerRequest;
 import com.hamonsoft.netismaker.dto.InterviewResponse;
 import com.hamonsoft.netismaker.dto.RegisterResponse;
+import com.hamonsoft.netismaker.entity.InterviewKind;
 import com.hamonsoft.netismaker.entity.InterviewStatus;
 import com.hamonsoft.netismaker.service.InterviewService;
 import com.hamonsoft.netismaker.service.InterviewStreamService;
@@ -20,6 +21,7 @@ import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
  * 관리자가 승인 시점에 인터뷰를 진행시키는 구조이므로 ROLE_ADMIN 전용(@PreAuthorize).
  * 세션은 오직 관리자 승인(TaskService.approve → InterviewService.createForTask)에서만 태어난다.
  * 모든 상태 전이는 Phase 1 InterviewService 메서드 위임 — 컨트롤러는 SSE push만 추가.
+ * kind=QUESTION 세션은 /api/questions로만 접근 가능 — 여기서는 404.
  */
 @RestController
 @RequestMapping("/api/interviews")
@@ -36,12 +38,14 @@ public class InterviewController {
 
     @GetMapping("/{id}")
     public InterviewResponse get(@PathVariable Long id, JwtAuthenticationToken auth) {
+        interviewService.requireKind(id, InterviewKind.INTERVIEW); // 질문 세션은 이 API로 조작 불가 (404)
         String userId = AuthContext.requireUserId(auth);
         return interviewService.getResponse(id, userId, AuthContext.isAdmin(auth));
     }
 
     @GetMapping(value = "/{id}/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
     public SseEmitter stream(@PathVariable Long id, JwtAuthenticationToken auth) {
+        interviewService.requireKind(id, InterviewKind.INTERVIEW); // 질문 세션은 이 API로 조작 불가 (404)
         String userId = AuthContext.requireUserId(auth);
         interviewService.getForView(id, userId, AuthContext.isAdmin(auth)); // ACL 검증 (없으면 예외)
         return interviewStream.subscribe(id);
@@ -51,6 +55,7 @@ public class InterviewController {
     @PreAuthorize("hasAuthority('ROLE_ADMIN')")
     public InterviewResponse answer(@PathVariable Long id, @RequestBody @Valid AnswerRequest req,
                                     JwtAuthenticationToken auth) {
+        interviewService.requireKind(id, InterviewKind.INTERVIEW); // 질문 세션은 이 API로 조작 불가 (404)
         String adminId = AuthContext.requireUserId(auth);
         interviewService.submitAnswer(id, adminId, true, req);
         interviewStream.pushStatus(id, InterviewStatus.QUEUED);
@@ -62,6 +67,7 @@ public class InterviewController {
     public RegisterResponse confirm(@PathVariable Long id,
                                     @RequestBody(required = false) InterviewConfirmRequest body,
                                     JwtAuthenticationToken auth) {
+        interviewService.requireKind(id, InterviewKind.INTERVIEW); // 질문 세션은 이 API로 조작 불가 (404)
         String adminId = AuthContext.requireUserId(auth);
         Long taskId = interviewService.confirm(id, adminId,
                 body != null && Boolean.TRUE.equals(body.designRequested()));
@@ -76,6 +82,7 @@ public class InterviewController {
     @PostMapping("/{id}/cancel")
     @PreAuthorize("hasAuthority('ROLE_ADMIN')")
     public InterviewResponse cancel(@PathVariable Long id, JwtAuthenticationToken auth) {
+        interviewService.requireKind(id, InterviewKind.INTERVIEW); // 질문 세션은 이 API로 조작 불가 (404)
         String adminId = AuthContext.requireUserId(auth);
         interviewService.cancel(id, adminId, true);
         interviewStream.pushStatus(id, InterviewStatus.CANCELLED);

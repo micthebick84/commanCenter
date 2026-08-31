@@ -89,4 +89,21 @@ describe('task detail — stage usage chips', () => {
     await flushPromises()
     expect(w.text()).not.toContain('$0.92')
   })
+
+  it('첫 시도부터 DESIGN_FAILED라 task.design이 null이어도 DESIGN usage chip은 노출된다', async () => {
+    // 회귀 가드: DESIGN chip 래퍼가 `task.design && usageByStage['DESIGN']`이면 design이
+    // null인 이 케이스에서 usage가 있어도 chip이 숨는다 — 래퍼는 usageByStage만 봐야 한다.
+    useApiMock.mockResolvedValueOnce({
+      ...taskFixture,
+      design: null,
+      stageUsage: [
+        ...taskFixture.stageUsage,
+        { stage: 'DESIGN', costUsd: 0.33, inputTokens: 1000, outputTokens: 200,
+          cacheCreationTokens: 0, cacheReadTokens: 500 },
+      ],
+    })
+    const w = mount(PageWrapper, mountOpts)
+    await flushPromises()
+    expect(w.text()).toContain('$0.33')
+  })
 })

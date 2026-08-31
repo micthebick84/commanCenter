@@ -815,7 +815,7 @@ async function downloadAttachment(att: AttachmentMeta) {
         </q-card>
       </q-dialog>
 
-      <div v-if="task.design && usageByStage['DESIGN']" class="row items-center q-mb-xs">
+      <div v-if="usageByStage['DESIGN']" class="row items-center q-mb-xs">
         <q-chip dense size="sm" outline icon="bolt"
                 :label="`${fmtTokens(usageByStage['DESIGN'].inputTokens)} 입력 · ${fmtTokens(usageByStage['DESIGN'].outputTokens)} 출력 · ${fmtCost(usageByStage['DESIGN'].costUsd)}`">
           <q-tooltip>

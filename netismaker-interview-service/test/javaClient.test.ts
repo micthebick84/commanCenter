@@ -37,6 +37,10 @@ describe('JavaApiClient', () => {
       claudeSessionId: 'sess-1',
       kind: 'question',
       costUsd: 0.1,
+      inputTokens: 100,
+      outputTokens: 50,
+      cacheCreationTokens: 0,
+      cacheReadTokens: 0,
     });
     const [url, init] = fetchMock.mock.calls[0]!;
     // Java @RequestParam String workerId is REQUIRED on every worker endpoint (query, not body).
@@ -65,6 +69,10 @@ describe('JavaApiClient', () => {
       planJson: planJsonStr,
       costUsd: 0.3,
       durationMs: 5000,
+      inputTokens: 200,
+      outputTokens: 100,
+      cacheCreationTokens: 0,
+      cacheReadTokens: 0,
     });
     const [url, init] = fetchMock.mock.calls[0]!;
     expect(url).toBe('http://api:8090/worker/interviews/42/plan?workerId=iw-1');

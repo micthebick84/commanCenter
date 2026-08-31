@@ -40,8 +40,22 @@ public record WorkerResultRequest(
         String designMarkdown,
         String mockupFilesJson,
         String designProjectId,
-        String designUrl
+        String designUrl,
+        // 사용량 (전 phase 공용, 스펙 §4.1 — null이면 미수집/구버전 워커)
+        UsageReport usage
 ) {
+    /** 단계 1회 실행분의 토큰/비용. 백엔드가 task_stage_usage에 누적한다. */
+    public record UsageReport(java.math.BigDecimal costUsd, Long inputTokens, Long outputTokens,
+                              Long cacheCreationTokens, Long cacheReadTokens) {
+        /** 모든 필드가 null/0이면 기록할 것이 없다. */
+        public boolean isEmpty() {
+            return (costUsd == null || costUsd.signum() == 0)
+                    && zero(inputTokens) && zero(outputTokens)
+                    && zero(cacheCreationTokens) && zero(cacheReadTokens);
+        }
+        private static boolean zero(Long v) { return v == null || v == 0L; }
+    }
+
     /** 배포 성공 보고. */
     public static WorkerResultRequest deployed(String workerId, String deployUrl,
                                                String containerId, int hostPort,
@@ -50,7 +64,7 @@ public record WorkerResultRequest(
                 null, null, null, durationMs, null,
                 null, null, null, null, null,
                 deployUrl, containerId, hostPort, image, deployLog,
-                null, null, null, null);
+                null, null, null, null, null);
     }
 
     /** 배포 실패 보고. */
@@ -59,7 +73,7 @@ public record WorkerResultRequest(
                 null, null, null, null, reason,
                 null, null, null, null, null,
                 null, null, null, null, deployLog,
-                null, null, null, null);
+                null, null, null, null, null);
     }
 
     /** 배포 중지(undeploy) 성공 → PR생성 복귀 보고. */
@@ -68,26 +82,28 @@ public record WorkerResultRequest(
                 null, null, null, null, null,
                 null, null, null, null, null,
                 null, null, null, null, undeployLog,
-                null, null, null, null);
+                null, null, null, null, null);
     }
 
     /** 디자인 생성 성공 → 승인 대기 보고. */
     public static WorkerResultRequest designReview(String workerId, String designMarkdown,
                                                    String mockupFilesJson, String designProjectId,
-                                                   String designUrl, String claudeLog, Long durationMs) {
+                                                   String designUrl, String claudeLog, Long durationMs,
+                                                   UsageReport usage) {
         return new WorkerResultRequest(workerId, TaskStatus.DESIGN_REVIEW,
                 null, null, claudeLog, durationMs, null,
                 null, null, null, null, null,
                 null, null, null, null, null,
-                designMarkdown, mockupFilesJson, designProjectId, designUrl);
+                designMarkdown, mockupFilesJson, designProjectId, designUrl, usage);
     }
 
     /** 디자인 생성 실패 보고. */
-    public static WorkerResultRequest designFailed(String workerId, String reason, String claudeLog) {
+    public static WorkerResultRequest designFailed(String workerId, String reason, String claudeLog,
+                                                   UsageReport usage) {
         return new WorkerResultRequest(workerId, TaskStatus.DESIGN_FAILED,
                 null, null, claudeLog, null, reason,
                 null, null, null, null, null,
                 null, null, null, null, null,
-                null, null, null, null);
+                null, null, null, null, usage);
     }
 }

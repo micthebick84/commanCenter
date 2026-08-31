@@ -25,7 +25,7 @@ class DeadLetterReplayJobTest {
             "mac-worker-1", TaskStatus.COMPLETED, "## 분석", "[]", null, 1L, null,
             null, null, null, null, null,
             null, null, null, null, null,
-            null, null, null, null);
+            null, null, null, null, null);
 
     private WorkerHttpClient http;
     private SilentLossTracker tracker;

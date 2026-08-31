@@ -25,7 +25,7 @@ class WorkerTaskResponseDesignTest {
     @Test
     void designReview_팩토리는_필드를_채운다() {
         WorkerResultRequest r = WorkerResultRequest.designReview("w1", "# 디자인", "[]",
-                "proj", "https://u", "log", 100L);
+                "proj", "https://u", "log", 100L, null);
         assertThat(r.status()).isEqualTo(TaskStatus.DESIGN_REVIEW);
         assertThat(r.designMarkdown()).isEqualTo("# 디자인");
         assertThat(r.workerId()).isEqualTo("w1");

@@ -57,7 +57,7 @@ class WorkerServiceDesignResultTest {
 
         workerService.recordResult(t.getId(), WorkerResultRequest.designReview(
                 "w1", "# D", "[{\"path\":\"a.html\",\"title\":\"A\",\"html\":\"<div/>\"}]",
-                "p", "u", "log", 5L));
+                "p", "u", "log", 5L, null));
 
         Task reloaded = taskRepo.findById(t.getId()).orElseThrow();
         assertThat(reloaded.getStatus()).isEqualTo(TaskStatus.DESIGN_REVIEW);
@@ -79,7 +79,7 @@ class WorkerServiceDesignResultTest {
 
         workerService.recordResult(t.getId(), WorkerResultRequest.designReview(
                 "w1", "# 새 디자인", "[{\"path\":\"b.html\",\"title\":\"B\",\"html\":\"<div/>\"}]",
-                null, null, "new log", 10L));
+                null, null, "new log", 10L, null));
 
         TaskDesign reloaded = designRepo.findById(t.getId()).orElseThrow();
         assertThat(reloaded.getRejectCount()).isEqualTo(1);
@@ -102,7 +102,7 @@ class WorkerServiceDesignResultTest {
         Task t = designingTask(null);
 
         workerService.recordResult(t.getId(), WorkerResultRequest.designFailed(
-                "w1", "DesignSync 인증 실패", "log"));
+                "w1", "DesignSync 인증 실패", "log", null));
 
         Task reloaded = taskRepo.findById(t.getId()).orElseThrow();
         assertThat(reloaded.getStatus()).isEqualTo(TaskStatus.DESIGN_FAILED);
@@ -117,7 +117,7 @@ class WorkerServiceDesignResultTest {
                 null, null, "log", 5L, null,
                 null, null, null, null, null,
                 null, null, null, null, null,
-                null, "[{\"path\":\"a.html\"}]", "p", "u");
+                null, "[{\"path\":\"a.html\"}]", "p", "u", null);
 
         assertThatThrownBy(() -> workerService.recordResult(t.getId(), req))
                 .isInstanceOf(TaskException.class)
@@ -136,7 +136,7 @@ class WorkerServiceDesignResultTest {
 
         workerService.recordResult(t.getId(), WorkerResultRequest.designReview(
                 "w1", "# D", "[{\"path\":\"a.html\",\"title\":\"A\",\"html\":\"<div/>\"}]",
-                "new-proj", "u", "log", 5L));
+                "new-proj", "u", "log", 5L, null));
 
         RepoCatalogEntry reloaded = repoCatalogRepo.findById(cat.getId()).orElseThrow();
         assertThat(reloaded.getDesignOutputProjectId()).isEqualTo("new-proj");

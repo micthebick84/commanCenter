@@ -19,7 +19,7 @@ class SilentLossTrackerTest {
             "mac-worker-1", TaskStatus.PR_CREATED, null, null, null, 1L, null,
             "https://x/pull/1", 1, "netismaker/task-9", "sha", "log",
             null, null, null, null, null,
-            null, null, null, null);
+            null, null, null, null, null);
 
     private SilentLossTracker tracker(Path dir) {
         return new SilentLossTracker(dir.toString(), "mac-worker-1");

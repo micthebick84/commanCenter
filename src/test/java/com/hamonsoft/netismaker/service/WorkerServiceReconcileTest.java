@@ -63,7 +63,7 @@ class WorkerServiceReconcileTest {
                 null, null, null, 123L, null,
                 prUrl, 10, headBranch, "abcdef1", "impl log",
                 null, null, null, null, null,
-                null, null, null, null);
+                null, null, null, null, null);
     }
 
     @Test
@@ -100,7 +100,7 @@ class WorkerServiceReconcileTest {
 
     private WorkerResultRequest lateDesign(String designMarkdown, String mockupFilesJson) {
         return WorkerResultRequest.designReview("mac-worker-1", designMarkdown, mockupFilesJson,
-                null, null, "claude log", 700_000L);
+                null, null, "claude log", 700_000L, null);
     }
 
     @Test
@@ -153,7 +153,7 @@ class WorkerServiceReconcileTest {
                 markdown, "[]", "claude log", 456L, null,
                 null, null, null, null, null,
                 null, null, null, null, null,
-                null, null, null, null);
+                null, null, null, null, null);
     }
 
     @Test
@@ -217,7 +217,7 @@ class WorkerServiceReconcileTest {
                 null, null, null, 789L, null,
                 null, null, null, null, null,
                 deployUrl, "cid-abc", 19001, "netis-task-16:1", "deploy log",
-                null, null, null, null);
+                null, null, null, null, null);
     }
 
     @Test

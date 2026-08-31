@@ -153,7 +153,7 @@ public class WorkerMainLoop {
         if (exec.exitCode() != 0) {
             String tail = exec.stdout() == null ? "" : exec.stdout();
             if (tail.length() > 2000) tail = "…" + tail.substring(tail.length() - 2000);
-            safePostAnalysisFailure(task.id(), "claude exit=" + exec.exitCode() + "\n" + tail);
+            safePostAnalysisFailure(task.id(), "claude exit=" + exec.exitCode() + "\n" + tail, usageOf(exec));
             return;
         }
 
@@ -161,7 +161,7 @@ public class WorkerMainLoop {
         try {
             parsed = parser.parse(exec.stdout());
         } catch (PromptResultParser.ParseException e) {
-            safePostAnalysisFailure(task.id(), "파싱 실패: " + e.getMessage());
+            safePostAnalysisFailure(task.id(), "파싱 실패: " + e.getMessage(), usageOf(exec));
             return;
         }
 
@@ -175,7 +175,8 @@ public class WorkerMainLoop {
                 null,
                 null, null, null, null, null,
                 null, null, null, null, null,
-                null, null, null, null
+                null, null, null, null,
+                usageOf(exec)
         ));
         log.info("분석 완료: id={} duration={}ms warnings={}",
                 task.id(), exec.durationMs(), parsed.warnings());
@@ -236,7 +237,7 @@ public class WorkerMainLoop {
             String tail = tail(exec.stdout(), 4000);
             safePostImplementationFailure(task.id(),
                     "claude exit=" + exec.exitCode() + "\n" + tail,
-                    wt.branchName(), null, exec.stdout());
+                    wt.branchName(), null, exec.stdout(), usageOf(exec));
             return;
         }
 
@@ -253,7 +254,7 @@ public class WorkerMainLoop {
         } catch (Exception e) {
             safePostImplementationFailure(task.id(),
                     "commit/push 실패: " + e.getMessage(),
-                    wt.branchName(), null, exec.stdout());
+                    wt.branchName(), null, exec.stdout(), usageOf(exec));
             return;
         }
 
@@ -267,7 +268,7 @@ public class WorkerMainLoop {
         } catch (Exception e) {
             safePostImplementationFailure(task.id(),
                     "gh pr create 실패: " + e.getMessage(),
-                    wt.branchName(), headSha, exec.stdout());
+                    wt.branchName(), headSha, exec.stdout(), usageOf(exec));
             return;
         }
 
@@ -278,7 +279,8 @@ public class WorkerMainLoop {
                 null, null, null, exec.durationMs(), null,
                 pr.url(), pr.number(), wt.branchName(), headSha, exec.stdout(),
                 null, null, null, null, null,
-                null, null, null, null
+                null, null, null, null,
+                usageOf(exec)
         ));
         log.info("구현 완료 + PR 생성: task={} pr=#{} {}", task.id(), pr.number(), pr.url());
     }
@@ -323,7 +325,7 @@ public class WorkerMainLoop {
         if (exec.exitCode() != 0) {
             safePostDesignFailure(task.id(),
                     "claude exit=" + exec.exitCode() + "\n" + tail(exec.stdout(), 4000),
-                    exec.stdout());
+                    exec.stdout(), usageOf(exec));
             return;
         }
 
@@ -331,14 +333,14 @@ public class WorkerMainLoop {
         try {
             harvest = designHarvester.harvest(wt);
         } catch (DesignResultHarvester.HarvestException e) {
-            safePostDesignFailure(task.id(), e.getMessage(), exec.stdout());
+            safePostDesignFailure(task.id(), e.getMessage(), exec.stdout(), usageOf(exec));
             return;
         }
 
         reporter.reportTerminal(task.id(), WorkerResultRequest.designReview(
                 props.id(), harvest.designMarkdown(), harvest.mockupFilesJson(),
                 harvest.designProjectId(), harvest.designUrl(),
-                exec.stdout(), exec.durationMs()));
+                exec.stdout(), exec.durationMs(), usageOf(exec)));
         // 수확 완료 후 design worktree는 best-effort 정리 (산출물은 DB로 감 — 보존 불필요)
         worktrees.remove(repo.dir(), wt);
         log.info("디자인 생성 완료: task={} screens 포함, url={}", task.id(), harvest.designUrl());
@@ -364,7 +366,12 @@ public class WorkerMainLoop {
     }
 
     private void safePostDesignFailure(Long taskId, String reason, String log_) {
-        reporter.reportTerminal(taskId, WorkerResultRequest.designFailed(props.id(), reason, log_));
+        safePostDesignFailure(taskId, reason, log_, null);
+    }
+
+    private void safePostDesignFailure(Long taskId, String reason, String log_,
+                                       WorkerResultRequest.UsageReport usage) {
+        reporter.reportTerminal(taskId, WorkerResultRequest.designFailed(props.id(), reason, log_, usage));
     }
 
     private void processDeploy(WorkerTaskResponse task) {
@@ -481,22 +488,40 @@ public class WorkerMainLoop {
     }
 
     private void safePostAnalysisFailure(Long taskId, String reason) {
+        safePostAnalysisFailure(taskId, reason, null);
+    }
+
+    private void safePostAnalysisFailure(Long taskId, String reason, WorkerResultRequest.UsageReport usage) {
         reporter.reportTerminal(taskId, new WorkerResultRequest(
                 props.id(), TaskStatus.FAILED,
                 null, null, null, null, reason,
                 null, null, null, null, null,
                 null, null, null, null, null,
-                null, null, null, null));
+                null, null, null, null, usage));
     }
 
     private void safePostImplementationFailure(Long taskId, String reason,
                                                String headBranch, String headSha, String log_) {
+        safePostImplementationFailure(taskId, reason, headBranch, headSha, log_, null);
+    }
+
+    private void safePostImplementationFailure(Long taskId, String reason,
+                                               String headBranch, String headSha, String log_,
+                                               WorkerResultRequest.UsageReport usage) {
         reporter.reportTerminal(taskId, new WorkerResultRequest(
                 props.id(), TaskStatus.IMPLEMENTATION_FAILED,
                 null, null, null, null, reason,
                 null, null, headBranch, headSha, log_,
                 null, null, null, null, null,
-                null, null, null, null));
+                null, null, null, null, usage));
+    }
+
+    /** ExecResult → 보고 usage. envelope 파싱 실패(usage null)면 null — 수집 생략. */
+    private static WorkerResultRequest.UsageReport usageOf(ClaudeExecAdapter.ExecResult exec) {
+        ClaudeExecAdapter.Usage u = exec == null ? null : exec.usage();
+        if (u == null) return null;
+        return new WorkerResultRequest.UsageReport(u.costUsd(),
+                u.inputTokens(), u.outputTokens(), u.cacheCreationTokens(), u.cacheReadTokens());
     }
 
     private static String tail(String s, int max) {

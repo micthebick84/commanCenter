@@ -102,4 +102,52 @@ class WorkerServiceStageUsageTest {
                 null, null, null, null, null));
         assertThat(usageRepo.findByTaskIdOrderByStageAsc(t.getId())).isEmpty();
     }
+
+    @Test
+    void 지각_정합화_IMPLEMENTATION_FAILED_to_PR_CREATED는_usage를_누적한다() {
+        // 지각 정합화 분기 진입: IMPLEMENTATION_FAILED 상태 유지 + 유효한 PR 메타 + usage
+        Task t = taskIn(TaskStatus.IMPLEMENTATION_FAILED);
+        workerService.recordResult(t.getId(), new WorkerResultRequest(
+                "w1", TaskStatus.PR_CREATED,
+                null, null, null, 5L, null,
+                "http://pr-reconcile", 42, "main", "abc123", "log",
+                null, null, null, null, null,
+                null, null, null, null, USAGE_B));
+
+        // 상태 전이 확인 (분기 진입 증명)
+        Task reloaded = taskRepo.findById(t.getId()).orElseThrow();
+        assertThat(reloaded.getStatus()).isEqualTo(TaskStatus.PR_CREATED);
+        assertThat(reloaded.getPrUrl()).isEqualTo("http://pr-reconcile");
+
+        // 누적 확인
+        List<TaskStageUsage> rows = usageRepo.findByTaskIdOrderByStageAsc(t.getId());
+        assertThat(rows).hasSize(1);
+        assertThat(rows.get(0).getStage()).isEqualTo(TaskStageUsage.STAGE_IMPLEMENTATION);
+        assertThat(rows.get(0).getCostUsd()).isEqualByComparingTo("0.25");
+        assertThat(rows.get(0).getInputTokens()).isEqualTo(400);
+    }
+
+    @Test
+    void 지각_정합화_FAILED_to_COMPLETED는_usage를_누적한다() {
+        // 지각 정합화 분기 진입: FAILED 상태 유지 + 유효한 분석 결과 + usage
+        Task t = taskIn(TaskStatus.FAILED);
+        workerService.recordResult(t.getId(), new WorkerResultRequest(
+                "w1", TaskStatus.COMPLETED,
+                "## 1. a\n## 2. b\n## 3. c", "[]", "log", 5L, null,
+                null, null, null, null, null,
+                null, null, null, null, null,
+                null, null, null, null, USAGE_A));
+
+        // 상태 전이 확인 (분기 진입 증명)
+        Task reloaded = taskRepo.findById(t.getId()).orElseThrow();
+        assertThat(reloaded.getStatus()).isEqualTo(TaskStatus.COMPLETED);
+        assertThat(reloaded.getFailureReason()).isNull();
+
+        // 누적 확인
+        List<TaskStageUsage> rows = usageRepo.findByTaskIdOrderByStageAsc(t.getId());
+        assertThat(rows).hasSize(1);
+        assertThat(rows.get(0).getStage()).isEqualTo(TaskStageUsage.STAGE_ANALYSIS);
+        assertThat(rows.get(0).getCostUsd()).isEqualByComparingTo("0.10");
+        assertThat(rows.get(0).getInputTokens()).isEqualTo(1000);
+    }
 }

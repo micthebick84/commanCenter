@@ -206,7 +206,7 @@ export class InterviewRunner {
     try {
       await this.client.fail(sessionId, reason);
     } catch (err) {
-       
+      // eslint-disable-next-line no-console
       console.warn(`[runner] fail 보고 실패: session=${sessionId} — ${(err as Error).message}`);
     }
   }

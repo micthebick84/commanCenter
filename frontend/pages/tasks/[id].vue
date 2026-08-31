@@ -519,17 +519,7 @@ async function downloadAttachment(att: AttachmentMeta) {
       </q-card>
 
       <q-card v-if="isInterviewPhase && task.interviewSessionId" flat bordered class="q-mb-md">
-        <q-card-section class="row items-center q-gutter-sm">
-          <div class="text-h6">대화형 분석</div>
-          <q-space />
-          <q-chip v-if="usageByStage['INTERVIEW']" dense size="sm" outline icon="bolt"
-                  :label="`${fmtTokens(usageByStage['INTERVIEW'].inputTokens)} 입력 · ${fmtTokens(usageByStage['INTERVIEW'].outputTokens)} 출력 · ${fmtCost(usageByStage['INTERVIEW'].costUsd)}`">
-            <q-tooltip>
-              캐시 생성 {{ fmtTokens(usageByStage['INTERVIEW'].cacheCreationTokens) }} ·
-              캐시 읽기 {{ fmtTokens(usageByStage['INTERVIEW'].cacheReadTokens) }}
-            </q-tooltip>
-          </q-chip>
-        </q-card-section>
+        <q-card-section class="text-h6">대화형 분석</q-card-section>
         <q-separator />
         <q-card-section class="q-pa-none">
           <InterviewPanel
@@ -540,6 +530,18 @@ async function downloadAttachment(att: AttachmentMeta) {
           />
         </q-card-section>
       </q-card>
+
+      <!-- INTERVIEW 단계 usage chip — isInterviewPhase 카드는 인터뷰 중에만 존재하므로
+           (완료 후 영구 소멸) 여기, 상태와 무관하게 항상 렌더되는 영속 anchor에 배치한다. -->
+      <div v-if="usageByStage['INTERVIEW']" class="row items-center q-mb-xs">
+        <q-chip dense size="sm" outline icon="bolt"
+                :label="`인터뷰 ${fmtTokens(usageByStage['INTERVIEW'].inputTokens)} 입력 · ${fmtTokens(usageByStage['INTERVIEW'].outputTokens)} 출력 · ${fmtCost(usageByStage['INTERVIEW'].costUsd)}`">
+          <q-tooltip>
+            캐시 생성 {{ fmtTokens(usageByStage['INTERVIEW'].cacheCreationTokens) }} ·
+            캐시 읽기 {{ fmtTokens(usageByStage['INTERVIEW'].cacheReadTokens) }}
+          </q-tooltip>
+        </q-chip>
+      </div>
 
       <!-- 지난 인터뷰 이력 — 인터뷰 phase 여부와 무관하게 항상 마운트 (카드 스스로 숨김 판단) -->
       <InterviewHistoryCard :task-id="task.id" :task-status="task.status" />

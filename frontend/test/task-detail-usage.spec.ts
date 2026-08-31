@@ -78,6 +78,9 @@ describe('task detail — stage usage chips', () => {
     expect(w.text()).toContain('$0.92')
     expect(w.text()).toContain('26.8k')
     expect(w.text()).toContain('$0.42')
+    // 회귀 가드: task가 인터뷰 단계를 벗어난 뒤(PR_CREATED)에도 INTERVIEW 단계 usage가
+    // 영구히 숨지 않아야 한다 — 카드가 isInterviewPhase에만 anchor되어 있으면 여기서 걸린다.
+    expect(w.text()).toContain('$0.50')
   })
 
   it('usage가 없으면 usage chip을 렌더링하지 않는다', async () => {

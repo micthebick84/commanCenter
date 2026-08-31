@@ -65,6 +65,15 @@ interface AttachmentMeta {
   createdAt: string
 }
 
+interface StageUsageView {
+  stage: string
+  costUsd: number
+  inputTokens: number
+  outputTokens: number
+  cacheCreationTokens: number
+  cacheReadTokens: number
+}
+
 interface TaskResponse {
   id: number
   githubRepo: string
@@ -91,6 +100,9 @@ interface TaskResponse {
   implementation: ImplementationView | null
   deployment: DeploymentView | null
   attachments: AttachmentMeta[]
+  stageUsage: StageUsageView[]
+  totalCostUsd: number | null
+  totalTokens: number | null
 }
 
 const route = useRoute()
@@ -112,6 +124,19 @@ const subtasks = computed(() => {
     return []
   }
 })
+
+const usageByStage = computed<Record<string, StageUsageView>>(() =>
+  Object.fromEntries((task.value?.stageUsage ?? []).map((u) => [u.stage, u])),
+)
+
+function fmtTokens(n: number): string {
+  if (n >= 1_000_000) return (n / 1_000_000).toFixed(1) + 'M'
+  if (n >= 1_000) return (n / 1_000).toFixed(1) + 'k'
+  return String(n)
+}
+function fmtCost(c: number): string {
+  return '$' + (c > 0 && c < 0.01 ? c.toFixed(4) : c.toFixed(2))
+}
 
 async function approve() {
   if (
@@ -381,6 +406,9 @@ async function downloadAttachment(att: AttachmentMeta) {
         <span :class="statusClass(task.status)">{{ task.statusLabel }}</span>
         <q-chip dense size="sm" outline icon="smart_toy" :label="task.model" class="q-ml-sm" />
         <q-chip dense size="sm" outline icon="tune" :label="task.effort" />
+        <q-chip v-if="task.totalCostUsd != null" dense size="sm" outline
+                icon="paid" color="primary"
+                :label="`${fmtTokens(task.totalTokens ?? 0)} 토큰 · ${fmtCost(task.totalCostUsd)}`" />
       </div>
 
       <q-card flat bordered class="q-mb-md">
@@ -491,7 +519,17 @@ async function downloadAttachment(att: AttachmentMeta) {
       </q-card>
 
       <q-card v-if="isInterviewPhase && task.interviewSessionId" flat bordered class="q-mb-md">
-        <q-card-section class="text-h6">대화형 분석</q-card-section>
+        <q-card-section class="row items-center q-gutter-sm">
+          <div class="text-h6">대화형 분석</div>
+          <q-space />
+          <q-chip v-if="usageByStage['INTERVIEW']" dense size="sm" outline icon="bolt"
+                  :label="`${fmtTokens(usageByStage['INTERVIEW'].inputTokens)} 입력 · ${fmtTokens(usageByStage['INTERVIEW'].outputTokens)} 출력 · ${fmtCost(usageByStage['INTERVIEW'].costUsd)}`">
+            <q-tooltip>
+              캐시 생성 {{ fmtTokens(usageByStage['INTERVIEW'].cacheCreationTokens) }} ·
+              캐시 읽기 {{ fmtTokens(usageByStage['INTERVIEW'].cacheReadTokens) }}
+            </q-tooltip>
+          </q-chip>
+        </q-card-section>
         <q-separator />
         <q-card-section class="q-pa-none">
           <InterviewPanel
@@ -526,6 +564,14 @@ async function downloadAttachment(att: AttachmentMeta) {
             구현 결과
           </div>
           <q-space />
+          <q-chip v-if="usageByStage['IMPLEMENTATION']" dense size="sm" outline icon="bolt"
+                  class="q-mr-sm"
+                  :label="`${fmtTokens(usageByStage['IMPLEMENTATION'].inputTokens)} 입력 · ${fmtTokens(usageByStage['IMPLEMENTATION'].outputTokens)} 출력 · ${fmtCost(usageByStage['IMPLEMENTATION'].costUsd)}`">
+            <q-tooltip>
+              캐시 생성 {{ fmtTokens(usageByStage['IMPLEMENTATION'].cacheCreationTokens) }} ·
+              캐시 읽기 {{ fmtTokens(usageByStage['IMPLEMENTATION'].cacheReadTokens) }}
+            </q-tooltip>
+          </q-chip>
           <q-btn
             v-if="task.implementation.prUrl"
             unelevated
@@ -767,6 +813,15 @@ async function downloadAttachment(att: AttachmentMeta) {
         </q-card>
       </q-dialog>
 
+      <div v-if="task.design && usageByStage['DESIGN']" class="row items-center q-mb-xs">
+        <q-chip dense size="sm" outline icon="bolt"
+                :label="`${fmtTokens(usageByStage['DESIGN'].inputTokens)} 입력 · ${fmtTokens(usageByStage['DESIGN'].outputTokens)} 출력 · ${fmtCost(usageByStage['DESIGN'].costUsd)}`">
+          <q-tooltip>
+            캐시 생성 {{ fmtTokens(usageByStage['DESIGN'].cacheCreationTokens) }} ·
+            캐시 읽기 {{ fmtTokens(usageByStage['DESIGN'].cacheReadTokens) }}
+          </q-tooltip>
+        </q-chip>
+      </div>
       <DesignReviewCard
         v-if="task.design"
         :task-id="task.id"
@@ -779,6 +834,13 @@ async function downloadAttachment(att: AttachmentMeta) {
       <q-card v-if="task.analysis" flat bordered>
         <q-card-section class="row items-center q-gutter-sm">
           <div class="text-h6">분석 결과</div>
+          <q-chip v-if="usageByStage['ANALYSIS']" dense size="sm" outline icon="bolt"
+                  :label="`${fmtTokens(usageByStage['ANALYSIS'].inputTokens)} 입력 · ${fmtTokens(usageByStage['ANALYSIS'].outputTokens)} 출력 · ${fmtCost(usageByStage['ANALYSIS'].costUsd)}`">
+            <q-tooltip>
+              캐시 생성 {{ fmtTokens(usageByStage['ANALYSIS'].cacheCreationTokens) }} ·
+              캐시 읽기 {{ fmtTokens(usageByStage['ANALYSIS'].cacheReadTokens) }}
+            </q-tooltip>
+          </q-chip>
           <q-space />
           <!-- 승인 상태 chip -->
           <q-chip

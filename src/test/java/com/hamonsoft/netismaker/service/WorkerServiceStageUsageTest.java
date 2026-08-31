@@ -128,6 +128,21 @@ class WorkerServiceStageUsageTest {
     }
 
     @Test
+    void 디자인_완료_보고는_DESIGN에_기록된다() {
+        Task t = taskIn(TaskStatus.DESIGNING);
+        workerService.recordResult(t.getId(), WorkerResultRequest.designReview(
+                "w1", "# D",
+                "[{\"path\":\"a.html\",\"title\":\"A\",\"html\":\"<div/>\"}]",
+                null, null, "log", 5L, USAGE_A));
+
+        List<TaskStageUsage> rows = usageRepo.findByTaskIdOrderByStageAsc(t.getId());
+        assertThat(rows).hasSize(1);
+        assertThat(rows.get(0).getStage()).isEqualTo(TaskStageUsage.STAGE_DESIGN);
+        assertThat(rows.get(0).getCostUsd()).isEqualByComparingTo("0.10");
+        assertThat(rows.get(0).getInputTokens()).isEqualTo(1000);
+    }
+
+    @Test
     void 지각_정합화_FAILED_to_COMPLETED는_usage를_누적한다() {
         // 지각 정합화 분기 진입: FAILED 상태 유지 + 유효한 분석 결과 + usage
         Task t = taskIn(TaskStatus.FAILED);

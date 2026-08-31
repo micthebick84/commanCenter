@@ -28,6 +28,7 @@ interface TaskResponse {
   createdAt: string
   updatedAt: string
   implementation: ImplementationView | null
+  totalCostUsd: number | null
 }
 
 interface PageResponse<T> {
@@ -48,6 +49,19 @@ const { data: page, refresh } = useTaskPolling<PageResponse<TaskResponse>>(() =>
 )
 
 const tasks = computed<TaskResponse[]>(() => page.value?.content ?? [])
+
+// ── 총비용 배지 ──────────────────────────────────────────────────
+// 진행 중 상태 — 배지 제외 대상 (스펙 §6: 종결 상태만 표시)
+const RUNNING_STATUSES = [
+  'IN_PROGRESS', 'IMPLEMENTING', 'DESIGNING', 'DEPLOYING', 'UNDEPLOYING', 'INTERVIEWING',
+]
+
+function costBadge(t: TaskResponse): string | null {
+  if (t.totalCostUsd == null || t.totalCostUsd === 0) return null
+  if (RUNNING_STATUSES.includes(t.status)) return null
+  const c = t.totalCostUsd
+  return '$' + (c < 0.01 ? c.toFixed(4) : c.toFixed(2))
+}
 
 // ── 카드뷰(1b 여유형) ────────────────────────────────────────────
 // 단계/상태/전이 정의는 composables/taskStages.ts. 상태 필터가 걸리면 그 상태만 남으므로
@@ -464,6 +478,7 @@ function closeDialog() {
                     <span class="card-status" :style="{ background: c.bg, color: c.fg }">
                       {{ c.task.statusLabel }}
                     </span>
+                    <span v-if="costBadge(c.task)" class="card-cost">{{ costBadge(c.task) }}</span>
                     <q-space />
                     <q-icon
                       v-if="cancelable(c.task)"
@@ -758,6 +773,7 @@ function closeDialog() {
 
 .card-id { font-size: 12px; font-weight: 700; color: #9e9e9e; }
 .card-status { font-size: 11px; font-weight: 500; padding: 2px 7px; border-radius: 4px; }
+.card-cost { font-size: 11px; font-weight: 600; color: #2e7d32; padding: 2px 6px; border-radius: 4px; background: rgba(46, 125, 50, 0.08); }
 .card-title {
   font-size: 14.5px;
   font-weight: 600;

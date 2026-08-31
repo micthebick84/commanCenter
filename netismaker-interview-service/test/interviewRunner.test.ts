@@ -45,6 +45,10 @@ describe('InterviewRunner', () => {
         claudeSessionId: 'sess-new-1',
         kind: 'question',
         costUsd: 0.12,
+        inputTokens: 1000,
+        outputTokens: 250,
+        cacheCreationTokens: 30,
+        cacheReadTokens: 8000,
       }),
     );
     expect(client.postPlan).not.toHaveBeenCalled();
@@ -87,6 +91,10 @@ describe('InterviewRunner', () => {
         designMarkdown: expect.stringContaining('Export visible columns'),
         planMarkdown: expect.stringContaining('## File Structure'),
         costUsd: 0.31,
+        inputTokens: 2000,
+        outputTokens: 500,
+        cacheCreationTokens: 60,
+        cacheReadTokens: 5400,
         durationMs: 5400,
       }),
     );
@@ -296,6 +304,10 @@ describe('InterviewRunner kind=QUESTION (스펙 §6 — plan 경로 미진입, Q
       claudeSessionId: 'sess-new-1',
       kind: 'question',
       costUsd: 0.12,
+      inputTokens: 1000,
+      outputTokens: 250,
+      cacheCreationTokens: 30,
+      cacheReadTokens: 8000,
     }));
     expect(client.postPlan).not.toHaveBeenCalled();
   });
@@ -361,6 +373,10 @@ describe('InterviewRunner kind=QUESTION (스펙 §6 — plan 경로 미진입, Q
     expect(client.postQuestion).toHaveBeenCalledWith(77, expect.objectContaining({
       content: expect.stringContaining('Implementation Plan'),
       costUsd: 0.31,
+      inputTokens: 2000,
+      outputTokens: 500,
+      cacheCreationTokens: 60,
+      cacheReadTokens: 5400,
     }));
   });
 

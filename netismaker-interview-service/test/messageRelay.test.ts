@@ -11,6 +11,10 @@ describe('relay', () => {
     expect(out.costUsd).toBeCloseTo(0.12);
     expect(out.durationMs).toBe(800);
     expect(out.completed).toBe(true);
+    expect(out.inputTokens).toBe(1000);
+    expect(out.outputTokens).toBe(250);
+    expect(out.cacheCreationTokens).toBe(30);
+    expect(out.cacheReadTokens).toBe(8000);
   });
 });
 

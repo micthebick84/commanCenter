@@ -102,6 +102,10 @@ export interface WorkerQuestionRequest {
   kind: 'question' | 'design' | 'gate' | 'note';
   /** SHADOW cost for this turn (quota accounting, not dollars). */
   costUsd: number;
+  inputTokens: number;
+  outputTokens: number;
+  cacheCreationTokens: number;
+  cacheReadTokens: number;
 }
 
 /**
@@ -116,5 +120,9 @@ export interface WorkerPlanRequest {
   planJson: string;
   /** SHADOW cost for this turn (quota accounting, not dollars). */
   costUsd: number;
+  inputTokens: number;
+  outputTokens: number;
+  cacheCreationTokens: number;
+  cacheReadTokens: number;
   durationMs: number;
 }

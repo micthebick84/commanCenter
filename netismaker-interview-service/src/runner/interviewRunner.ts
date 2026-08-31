@@ -206,7 +206,7 @@ export class InterviewRunner {
     try {
       await this.client.fail(sessionId, reason);
     } catch (err) {
-      // eslint-disable-next-line no-console
+       
       console.warn(`[runner] fail 보고 실패: session=${sessionId} — ${(err as Error).message}`);
     }
   }
@@ -282,6 +282,10 @@ export class InterviewRunner {
       let assistantText = result.assistantText;
       let sessionId = result.sessionId ?? claim.claudeSessionId ?? '';
       let costUsd = result.costUsd;
+      let inputTokens = result.inputTokens;
+      let outputTokens = result.outputTokens;
+      let cacheCreationTokens = result.cacheCreationTokens;
+      let cacheReadTokens = result.cacheReadTokens;
       let durationMs = result.durationMs;
 
       // Skill-dispatch shim: if brainstorming announced the writing-plans handoff
@@ -315,6 +319,10 @@ export class InterviewRunner {
         assistantText = second.assistantText;
         sessionId = second.sessionId ?? sessionId;
         costUsd = second.costUsd;
+        inputTokens = second.inputTokens;
+        outputTokens = second.outputTokens;
+        cacheCreationTokens = second.cacheCreationTokens;
+        cacheReadTokens = second.cacheReadTokens;
         durationMs = second.durationMs;
       }
 
@@ -345,6 +353,10 @@ export class InterviewRunner {
         assistantText = retry.assistantText;
         sessionId = retry.sessionId ?? sessionId;
         costUsd = retry.costUsd;
+        inputTokens = retry.inputTokens;
+        outputTokens = retry.outputTokens;
+        cacheCreationTokens = retry.cacheCreationTokens;
+        cacheReadTokens = retry.cacheReadTokens;
         durationMs = retry.durationMs;
         harvested = tryHarvest(assistantText);
       }
@@ -358,6 +370,10 @@ export class InterviewRunner {
           planMarkdown: harvested.harvest.planMarkdown,
           planJson: JSON.stringify(harvested.harvest.planJson),
           costUsd,
+          inputTokens,
+          outputTokens,
+          cacheCreationTokens,
+          cacheReadTokens,
           durationMs,
         });
         return;
@@ -368,6 +384,10 @@ export class InterviewRunner {
         claudeSessionId: sessionId,
         kind: 'question',
         costUsd,
+        inputTokens,
+        outputTokens,
+        cacheCreationTokens,
+        cacheReadTokens,
       });
     }
   }
@@ -407,6 +427,10 @@ export class InterviewRunner {
       claudeSessionId: result.sessionId ?? claim.claudeSessionId ?? '',
       kind: 'question',
       costUsd: result.costUsd,
+      inputTokens: result.inputTokens,
+      outputTokens: result.outputTokens,
+      cacheCreationTokens: result.cacheCreationTokens,
+      cacheReadTokens: result.cacheReadTokens,
     });
   }
 }

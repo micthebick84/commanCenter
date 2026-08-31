@@ -5,6 +5,10 @@ export interface RelayResult {
   sessionId: string | null;
   assistantText: string;
   costUsd: number;
+  inputTokens: number;
+  outputTokens: number;
+  cacheCreationTokens: number;
+  cacheReadTokens: number;
   durationMs: number;
   completed: boolean;
 }
@@ -79,6 +83,10 @@ export async function relay(stream: AsyncIterable<SdkMessage>, opts?: RelayOpts)
   let sessionId: string | null = null;
   const parts: string[] = [];
   let costUsd = 0;
+  let inputTokens = 0;
+  let outputTokens = 0;
+  let cacheCreationTokens = 0;
+  let cacheReadTokens = 0;
   let durationMs = 0;
   let completed = false;
   for await (const msg of stream) {
@@ -103,11 +111,33 @@ export async function relay(stream: AsyncIterable<SdkMessage>, opts?: RelayOpts)
         }
       }
     } else if (msg.type === 'result') {
-      const usage = msg.usage as { total_cost_usd?: number } | undefined;
+      const usage = msg.usage as
+        | {
+            total_cost_usd?: number;
+            input_tokens?: number;
+            output_tokens?: number;
+            cache_creation_input_tokens?: number;
+            cache_read_input_tokens?: number;
+          }
+        | undefined;
       costUsd = usage?.total_cost_usd ?? 0;
+      inputTokens = usage?.input_tokens ?? 0;
+      outputTokens = usage?.output_tokens ?? 0;
+      cacheCreationTokens = usage?.cache_creation_input_tokens ?? 0;
+      cacheReadTokens = usage?.cache_read_input_tokens ?? 0;
       durationMs = (msg.duration_ms as number) ?? 0;
       completed = true;
     }
   }
-  return { sessionId, assistantText: parts.join('\n\n'), costUsd, durationMs, completed };
+  return {
+    sessionId,
+    assistantText: parts.join('\n\n'),
+    costUsd,
+    inputTokens,
+    outputTokens,
+    cacheCreationTokens,
+    cacheReadTokens,
+    durationMs,
+    completed,
+  };
 }

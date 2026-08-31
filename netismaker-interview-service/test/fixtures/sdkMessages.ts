@@ -12,7 +12,18 @@ export const questionStream = (): AsyncIterable<SdkMessage> =>
       type: 'assistant',
       message: { content: [{ type: 'text', text: 'Which columns should the CSV include?' }] },
     },
-    { type: 'result', subtype: 'success', usage: { total_cost_usd: 0.12 }, duration_ms: 800 },
+    {
+      type: 'result',
+      subtype: 'success',
+      usage: {
+        total_cost_usd: 0.12,
+        input_tokens: 1000,
+        output_tokens: 250,
+        cache_creation_input_tokens: 30,
+        cache_read_input_tokens: 8000,
+      },
+      duration_ms: 800,
+    },
   );
 
 /** Init -> writing-plans completes: assistant emits design+plan, then result. */
@@ -32,7 +43,18 @@ export const planCompleteStream = (): AsyncIterable<SdkMessage> =>
         ],
       },
     },
-    { type: 'result', subtype: 'success', usage: { total_cost_usd: 0.31 }, duration_ms: 5400 },
+    {
+      type: 'result',
+      subtype: 'success',
+      usage: {
+        total_cost_usd: 0.31,
+        input_tokens: 2000,
+        output_tokens: 500,
+        cache_creation_input_tokens: 60,
+        cache_read_input_tokens: 5400,
+      },
+      duration_ms: 5400,
+    },
   );
 
 /**
@@ -84,5 +106,16 @@ export const streamingQuestionStream = (): AsyncIterable<SdkMessage> =>
       event: { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: 'Which columns?' } },
     },
     { type: 'assistant', message: { content: [{ type: 'text', text: 'Which columns?' }] } },
-    { type: 'result', subtype: 'success', usage: { total_cost_usd: 0.2 }, duration_ms: 900 },
+    {
+      type: 'result',
+      subtype: 'success',
+      usage: {
+        total_cost_usd: 0.2,
+        input_tokens: 1200,
+        output_tokens: 300,
+        cache_creation_input_tokens: 45,
+        cache_read_input_tokens: 6000,
+      },
+      duration_ms: 900,
+    },
   );

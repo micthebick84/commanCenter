@@ -76,4 +76,17 @@ class ClaudeExecAdapterTest {
         assertThat(p.usage().inputTokens()).isZero();
         assertThat(p.usage().cacheReadTokens()).isZero();
     }
+
+    @Test
+    void parseEnvelope_error_subtype_without_result_but_with_usage() {
+        String raw = "{\"type\":\"result\",\"subtype\":\"error_during_execution\",\"is_error\":true," +
+                     "\"total_cost_usd\":0.05,\"usage\":{\"input_tokens\":10,\"output_tokens\":0," +
+                     "\"cache_creation_input_tokens\":0,\"cache_read_input_tokens\":0}}";
+        ClaudeExecAdapter.Parsed p = ClaudeExecAdapter.parseEnvelope(raw);
+        assertThat(p.resultText()).isEqualTo(raw);
+        assertThat(p.usage()).isNotNull();
+        assertThat(p.usage().costUsd()).isEqualByComparingTo("0.05");
+        assertThat(p.usage().inputTokens()).isEqualTo(10);
+        assertThat(p.usage().outputTokens()).isZero();
+    }
 }

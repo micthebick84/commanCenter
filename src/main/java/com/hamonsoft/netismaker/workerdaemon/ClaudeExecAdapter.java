@@ -228,24 +228,43 @@ public class ClaudeExecAdapter {
     /**
      * envelope 해제. 형식이 안 맞으면 raw 그대로 + usage=null (fallback — 수집 실패가
      * 본 파이프라인을 죽이면 안 된다, 스펙 §7).
+     *
+     * 스펙 §1: 실패한 실행의 지출도 누적에 포함한다 — result 텍스트 유효성과 usage 추출을 분리.
+     * result가 결손/null이어도 usage/cost 데이터는 수집한다 (오류 실행도 청구됨).
      */
     static Parsed parseEnvelope(String raw) {
         if (raw == null || raw.isBlank()) return new Parsed(raw == null ? "" : raw, null);
         try {
             var node = ENVELOPE_MAPPER.readTree(raw.trim());
-            if (!node.isObject() || !node.path("result").isTextual()) {
+            if (!node.isObject()) {
                 return new Parsed(raw, null);
             }
+
+            // usage 추출: total_cost_usd 또는 usage 오브젝트가 존재하면 시도
+            Usage usage = null;
             var u = node.path("usage");
-            Usage usage = new Usage(
-                    node.path("total_cost_usd").isNumber()
-                            ? node.path("total_cost_usd").decimalValue()
-                            : java.math.BigDecimal.ZERO,
-                    u.path("input_tokens").asLong(0),
-                    u.path("output_tokens").asLong(0),
-                    u.path("cache_creation_input_tokens").asLong(0),
-                    u.path("cache_read_input_tokens").asLong(0));
-            return new Parsed(node.path("result").asText(), usage);
+            if (node.path("total_cost_usd").isNumber() || u.isObject()) {
+                usage = new Usage(
+                        node.path("total_cost_usd").isNumber()
+                                ? node.path("total_cost_usd").decimalValue()
+                                : java.math.BigDecimal.ZERO,
+                        u.path("input_tokens").asLong(0),
+                        u.path("output_tokens").asLong(0),
+                        u.path("cache_creation_input_tokens").asLong(0),
+                        u.path("cache_read_input_tokens").asLong(0));
+            }
+
+            // result 텍스트 추출: textual이면 그 값, 아니면 raw 그대로
+            String resultText = node.path("result").isTextual()
+                    ? node.path("result").asText()
+                    : raw;
+
+            // usage가 추출되지 않았으면 raw fallback
+            if (usage == null) {
+                return new Parsed(raw, null);
+            }
+
+            return new Parsed(resultText, usage);
         } catch (Exception e) {
             return new Parsed(raw, null);
         }

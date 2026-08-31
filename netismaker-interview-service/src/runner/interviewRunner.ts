@@ -318,11 +318,13 @@ export class InterviewRunner {
         guard.add(second.costUsd);
         assistantText = second.assistantText;
         sessionId = second.sessionId ?? sessionId;
-        costUsd = second.costUsd;
-        inputTokens = second.inputTokens;
-        outputTokens = second.outputTokens;
-        cacheCreationTokens = second.cacheCreationTokens;
-        cacheReadTokens = second.cacheReadTokens;
+        // 누적: 이 턴에 relay가 여러 번 돌면(핸드오프 shim) 각 relay분을 합산한다 — 대입 시
+        // 1차 relay의 usage가 Java 보고에서 유실된다(스펙 §1 "모든 실행 누적").
+        costUsd += second.costUsd;
+        inputTokens += second.inputTokens;
+        outputTokens += second.outputTokens;
+        cacheCreationTokens += second.cacheCreationTokens;
+        cacheReadTokens += second.cacheReadTokens;
         durationMs = second.durationMs;
       }
 
@@ -352,11 +354,12 @@ export class InterviewRunner {
         guard.add(retry.costUsd);
         assistantText = retry.assistantText;
         sessionId = retry.sessionId ?? sessionId;
-        costUsd = retry.costUsd;
-        inputTokens = retry.inputTokens;
-        outputTokens = retry.outputTokens;
-        cacheCreationTokens = retry.cacheCreationTokens;
-        cacheReadTokens = retry.cacheReadTokens;
+        // 누적: near-miss reformat retry도 별도 relay다 — 합산 (위 handoff shim과 동일 근거).
+        costUsd += retry.costUsd;
+        inputTokens += retry.inputTokens;
+        outputTokens += retry.outputTokens;
+        cacheCreationTokens += retry.cacheCreationTokens;
+        cacheReadTokens += retry.cacheReadTokens;
         durationMs = retry.durationMs;
         harvested = tryHarvest(assistantText);
       }

@@ -228,13 +228,19 @@ describe('InterviewRunner near-miss correction', () => {
       yield { type: 'system', subtype: 'init', session_id: 'sess-n' };
       yield { type: 'assistant', message: { content: [{ type: 'text',
         text: '이제 구현 계획을 정리하겠습니다.' }] } }; // plan 의도 O, 추출 X
-      yield { type: 'result', subtype: 'success', usage: { total_cost_usd: 0.1 }, duration_ms: 100 };
+      yield {
+        type: 'result', subtype: 'success', duration_ms: 100,
+        usage: { total_cost_usd: 0.1, input_tokens: 100, output_tokens: 20, cache_creation_input_tokens: 5, cache_read_input_tokens: 200 },
+      };
     }
     async function* reformattedPlan() {
       yield { type: 'system', subtype: 'init', session_id: 'sess-n' };
       yield { type: 'assistant', message: { content: [{ type: 'text',
         text: '# 구현 계획\n\n### 작업 1: 가' }] } };
-      yield { type: 'result', subtype: 'success', usage: { total_cost_usd: 0.15 }, duration_ms: 200 };
+      yield {
+        type: 'result', subtype: 'success', duration_ms: 200,
+        usage: { total_cost_usd: 0.15, input_tokens: 300, output_tokens: 60, cache_creation_input_tokens: 15, cache_read_input_tokens: 400 },
+      };
     }
     const fakeQuery = vi.fn()
       .mockImplementationOnce(() => intentNoStructure())
@@ -243,6 +249,15 @@ describe('InterviewRunner near-miss correction', () => {
     await runner.run({ ...resumeClaim, currentPhase: 'writing-plans' });
     expect(fakeQuery).toHaveBeenCalledTimes(2); // 보정 splice 1회
     expect(client.postPlan).toHaveBeenCalledTimes(1);
+    // 누적 검증: reformat retry는 별도 relay다 — 두 relay의 usage 합이 postPlan에 실려야 한다
+    // (대입이면 retry분만 남아 첫 relay의 usage가 유실된다).
+    expect(client.postPlan).toHaveBeenCalledWith(42, expect.objectContaining({
+      costUsd: 0.25, // 0.1 + 0.15
+      inputTokens: 400, // 100 + 300
+      outputTokens: 80, // 20 + 60
+      cacheCreationTokens: 20, // 5 + 15
+      cacheReadTokens: 600, // 200 + 400
+    }));
     expect(client.fail).not.toHaveBeenCalled();
   });
 
@@ -478,7 +493,10 @@ describe('InterviewRunner handoff shim', () => {
         type: 'assistant',
         message: { content: [{ type: 'text', text: 'Spec approved. Invoke writing-plans skill now.' }] },
       };
-      yield { type: 'result', subtype: 'success', usage: { total_cost_usd: 0.05 }, duration_ms: 100 };
+      yield {
+        type: 'result', subtype: 'success', duration_ms: 100,
+        usage: { total_cost_usd: 0.05, input_tokens: 100, output_tokens: 20, cache_creation_input_tokens: 5, cache_read_input_tokens: 200 },
+      };
     }
     // first call returns handoff announcement; second (after splice) returns a plan
     const fakeQuery = vi
@@ -498,6 +516,15 @@ describe('InterviewRunner handoff shim', () => {
     // second query reuses the SAME session via resume and carries the spliced SKILL.md
     expect(fakeQuery.mock.calls[1]![0].options.resume).toBe('sess-h');
     expect(client.postPlan).toHaveBeenCalledTimes(1);
+    // 누적 검증: handoff shim(2차 relay)의 usage가 1차 relay 위에 합산돼야 한다
+    // (planCompleteStream: costUsd 0.31, inputTokens 2000, outputTokens 500, cache 60/5400).
+    expect(client.postPlan).toHaveBeenCalledWith(42, expect.objectContaining({
+      costUsd: 0.36, // 0.05 + 0.31
+      inputTokens: 2100, // 100 + 2000
+      outputTokens: 520, // 20 + 500
+      cacheCreationTokens: 65, // 5 + 60
+      cacheReadTokens: 5600, // 200 + 5400
+    }));
   });
 });
 

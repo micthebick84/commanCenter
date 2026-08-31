@@ -5,6 +5,7 @@ import com.hamonsoft.netismaker.dto.TaskCreateRequest;
 import com.hamonsoft.netismaker.entity.Task;
 import com.hamonsoft.netismaker.repository.TaskAnalysisRepository;
 import com.hamonsoft.netismaker.repository.TaskAttachmentRepository;
+import com.hamonsoft.netismaker.repository.TaskStageUsageRepository;
 import com.hamonsoft.netismaker.repository.TaskDesignRepository;
 import com.hamonsoft.netismaker.repository.TaskRepository;
 import com.hamonsoft.netismaker.repository.TaskStatusHistoryRepository;
@@ -47,6 +48,7 @@ class TaskServiceAttachmentRollbackTest {
     private InterviewService interviewService;
     private TaskAttachmentRepository attachmentRepo;
     private AttachmentStorage attachmentStorage;
+    private TaskStageUsageRepository stageUsageRepo;
     private TaskService service;
 
     @BeforeEach
@@ -60,8 +62,10 @@ class TaskServiceAttachmentRollbackTest {
         interviewService = mock(InterviewService.class);
         attachmentRepo = mock(TaskAttachmentRepository.class);
         attachmentStorage = mock(AttachmentStorage.class);
+        stageUsageRepo = mock(TaskStageUsageRepository.class);
         service = new TaskService(taskRepo, analysisRepo, designRepo, historyRepo, mcpCatalogService,
-                repoCatalogService, new ObjectMapper(), interviewService, attachmentRepo, attachmentStorage);
+                repoCatalogService, new ObjectMapper(), interviewService, attachmentRepo, attachmentStorage,
+                stageUsageRepo);
         ReflectionTestUtils.setField(service, "userConcurrentLimit", 5);
         ReflectionTestUtils.setField(service, "maxRetry", 3);
 

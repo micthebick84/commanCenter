@@ -5,6 +5,7 @@ import com.hamonsoft.netismaker.entity.Task;
 import com.hamonsoft.netismaker.entity.TaskStatus;
 import com.hamonsoft.netismaker.repository.TaskAnalysisRepository;
 import com.hamonsoft.netismaker.repository.TaskAttachmentRepository;
+import com.hamonsoft.netismaker.repository.TaskStageUsageRepository;
 import com.hamonsoft.netismaker.repository.TaskDesignRepository;
 import com.hamonsoft.netismaker.repository.TaskRepository;
 import com.hamonsoft.netismaker.repository.TaskStatusHistoryRepository;
@@ -36,6 +37,7 @@ class TaskServiceDeployTest {
     private InterviewService interviewService;
     private TaskAttachmentRepository attachmentRepo;
     private AttachmentStorage attachmentStorage;
+    private TaskStageUsageRepository stageUsageRepo;
     private TaskService service;
 
     private Task taskWithStatus(TaskStatus status) {
@@ -56,8 +58,10 @@ class TaskServiceDeployTest {
         interviewService = mock(InterviewService.class);
         attachmentRepo = mock(TaskAttachmentRepository.class);
         attachmentStorage = mock(AttachmentStorage.class);
+        stageUsageRepo = mock(TaskStageUsageRepository.class);
         service = new TaskService(taskRepo, analysisRepo, designRepo, historyRepo, mcpCatalogService,
-                repoCatalogService, new ObjectMapper(), interviewService, attachmentRepo, attachmentStorage);
+                repoCatalogService, new ObjectMapper(), interviewService, attachmentRepo, attachmentStorage,
+                stageUsageRepo);
         when(historyRepo.save(any())).thenAnswer(i -> i.getArgument(0));
     }
 

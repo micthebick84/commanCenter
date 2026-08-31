@@ -31,11 +31,13 @@ import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
+import java.math.BigDecimal;
 import java.net.URI;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
+import java.util.Map;
 
 /**
  *  사용자/관리자 작업 API. DESIGN §12 표면 그대로.
@@ -91,8 +93,14 @@ public class TaskController {
                                    JwtAuthenticationToken auth) {
         String userId = AuthContext.requireUserId(auth);
         boolean isAdmin = AuthContext.isAdmin(auth);
-        return taskService.list(userId, isAdmin, mine, status, pageable)
-                .map(t -> TaskResponse.of(t, null));
+        Page<Task> page = taskService.list(userId, isAdmin, mine, status, pageable);
+        Map<Long, BigDecimal> totals = taskService.costTotals(
+                page.getContent().stream().map(Task::getId).toList());
+        return page.map(t -> {
+            TaskResponse base = TaskResponse.of(t, null);
+            BigDecimal total = totals.get(t.getId());
+            return total == null ? base : TaskResponse.withTotalCost(base, total);
+        });
     }
 
     @GetMapping("/{id}")
@@ -100,10 +108,11 @@ public class TaskController {
         String userId = AuthContext.requireUserId(auth);
         boolean isAdmin = AuthContext.isAdmin(auth);
         Task t = taskService.getForView(id, userId, isAdmin);
-        return TaskResponse.of(t, taskService.getAnalysis(id).orElse(null),
+        return TaskResponse.ofWithUsage(t, taskService.getAnalysis(id).orElse(null),
                 taskService.getDesign(id).orElse(null),
                 interviewService.latestSessionIdForTask(id).orElse(null),
-                taskService.getAttachments(id));
+                taskService.getAttachments(id),
+                taskService.getStageUsage(id));
     }
 
     /**

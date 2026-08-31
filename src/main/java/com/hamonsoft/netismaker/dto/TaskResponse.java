@@ -8,6 +8,7 @@ import com.hamonsoft.netismaker.entity.TaskDesign;
 import com.hamonsoft.netismaker.entity.TaskMcpSpec;
 import com.hamonsoft.netismaker.entity.TaskStatus;
 
+import java.math.BigDecimal;
 import java.time.OffsetDateTime;
 import java.util.List;
 
@@ -37,7 +38,13 @@ public record TaskResponse(
         DeploymentView deployment,
         Long interviewSessionId,
         /** 항상 non-null. 목록 엔드포인트는 항상 [] — 실데이터는 상세 응답만 (스펙 §5.2). */
-        List<AttachmentView> attachments
+        List<AttachmentView> attachments,
+        /** 항상 non-null. 목록 엔드포인트는 항상 [] — 실데이터는 상세 응답만 (스펙 §7). */
+        List<StageUsageView> stageUsage,
+        /** 단계별 usage 총합(USD). usage 행이 하나도 없으면 null(미수집) — 0이 아니다. */
+        BigDecimal totalCostUsd,
+        /** input+output 토큰 합(캐시 제외). usage 행이 하나도 없으면 null(미수집). */
+        Long totalTokens
 ) {
     public record AnalysisView(
             String markdownResult,
@@ -94,6 +101,16 @@ public record TaskResponse(
         }
     }
 
+    /** 단계별 토큰/비용 (스펙 §7). */
+    public record StageUsageView(
+            String stage,
+            BigDecimal costUsd,
+            long inputTokens,
+            long outputTokens,
+            long cacheCreationTokens,
+            long cacheReadTokens
+    ) {}
+
     public static TaskResponse of(Task t, TaskAnalysis a) {
         return of(t, a, null);
     }
@@ -108,6 +125,64 @@ public record TaskResponse(
 
     public static TaskResponse of(Task t, TaskAnalysis a, TaskDesign d, Long interviewSessionId,
                                   List<TaskAttachment> attachments) {
+        return build(t, a, d, interviewSessionId, attachments, List.of(), null, null);
+    }
+
+    /** 상세 응답 — usage rows를 뷰로 변환하고 총합 계산. rows 비면 총합 null (미수집, 스펙 §7). */
+    public static TaskResponse ofWithUsage(Task t, TaskAnalysis a, TaskDesign d,
+                                           Long interviewSessionId,
+                                           List<TaskAttachment> attachments,
+                                           List<com.hamonsoft.netismaker.entity.TaskStageUsage> usage) {
+        List<StageUsageView> views = usage == null ? List.of()
+                : usage.stream().map(u -> new StageUsageView(u.getStage(), u.getCostUsd(),
+                        u.getInputTokens(), u.getOutputTokens(),
+                        u.getCacheCreationTokens(), u.getCacheReadTokens())).toList();
+        BigDecimal totalCost = views.isEmpty() ? null
+                : views.stream().map(StageUsageView::costUsd)
+                        .reduce(BigDecimal.ZERO, BigDecimal::add);
+        Long totalTokens = views.isEmpty() ? null
+                : views.stream().mapToLong(v -> v.inputTokens() + v.outputTokens()).sum();
+        return build(t, a, d, interviewSessionId, attachments, views, totalCost, totalTokens);
+    }
+
+    /** 목록 응답 — 총비용만 채워 재조립 (stageUsage는 [] 유지). record라 wither가 없어 전 컴포넌트 나열. */
+    public static TaskResponse withTotalCost(TaskResponse r, BigDecimal totalCostUsd) {
+        return new TaskResponse(
+                r.id(),
+                r.githubRepo(),
+                r.repoAlias(),
+                r.githubBranch(),
+                r.title(),
+                r.description(),
+                r.status(),
+                r.statusLabel(),
+                r.requesterId(),
+                r.retryCount(),
+                r.maxRetry(),
+                r.failureReason(),
+                r.mcpsExtra(),
+                r.envVars(),
+                r.createdAt(),
+                r.updatedAt(),
+                r.model(),
+                r.effort(),
+                r.designRequested(),
+                r.analysis(),
+                r.design(),
+                r.implementation(),
+                r.deployment(),
+                r.interviewSessionId(),
+                r.attachments(),
+                r.stageUsage(),
+                totalCostUsd,
+                r.totalTokens()
+        );
+    }
+
+    private static TaskResponse build(Task t, TaskAnalysis a, TaskDesign d, Long interviewSessionId,
+                                      List<TaskAttachment> attachments,
+                                      List<StageUsageView> stageUsage, BigDecimal totalCostUsd,
+                                      Long totalTokens) {
         AnalysisView av = (a == null) ? null : new AnalysisView(
                 a.getMarkdownResult(),
                 a.getSubtasksJson(),
@@ -168,7 +243,10 @@ public record TaskResponse(
                 dv,
                 interviewSessionId,
                 attachments == null ? List.of()
-                        : attachments.stream().map(AttachmentView::from).toList()
+                        : attachments.stream().map(AttachmentView::from).toList(),
+                stageUsage == null ? List.of() : stageUsage,
+                totalCostUsd,
+                totalTokens
         );
     }
 }

@@ -11,10 +11,12 @@ import com.hamonsoft.netismaker.entity.TaskDesign;
 import com.hamonsoft.netismaker.entity.TaskMcpSpec;
 import com.hamonsoft.netismaker.entity.TaskStatus;
 import com.hamonsoft.netismaker.entity.TaskStatusHistory;
+import com.hamonsoft.netismaker.entity.TaskStageUsage;
 import com.hamonsoft.netismaker.repository.TaskAnalysisRepository;
 import com.hamonsoft.netismaker.repository.TaskAttachmentRepository;
 import com.hamonsoft.netismaker.repository.TaskDesignRepository;
 import com.hamonsoft.netismaker.repository.TaskRepository;
+import com.hamonsoft.netismaker.repository.TaskStageUsageRepository;
 import com.hamonsoft.netismaker.repository.TaskStatusHistoryRepository;
 import org.springframework.context.annotation.Profile;
 import org.springframework.beans.factory.annotation.Value;
@@ -25,10 +27,12 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.multipart.MultipartFile;
 
+import java.math.BigDecimal;
 import java.nio.file.Path;
 import java.time.OffsetDateTime;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 
 /**
@@ -63,6 +67,7 @@ public class TaskService {
     private final InterviewService interviewService;
     private final TaskAttachmentRepository attachmentRepo;
     private final AttachmentStorage attachmentStorage;
+    private final TaskStageUsageRepository stageUsageRepo;
 
     @Value("${app.task.user-concurrent-limit:5}")
     private int userConcurrentLimit;
@@ -79,7 +84,8 @@ public class TaskService {
                        ObjectMapper objectMapper,
                        InterviewService interviewService,
                        TaskAttachmentRepository attachmentRepo,
-                       AttachmentStorage attachmentStorage) {
+                       AttachmentStorage attachmentStorage,
+                       TaskStageUsageRepository stageUsageRepo) {
         this.taskRepo = taskRepo;
         this.analysisRepo = analysisRepo;
         this.designRepo = designRepo;
@@ -90,6 +96,7 @@ public class TaskService {
         this.interviewService = interviewService;
         this.attachmentRepo = attachmentRepo;
         this.attachmentStorage = attachmentStorage;
+        this.stageUsageRepo = stageUsageRepo;
     }
 
     @Transactional
@@ -159,6 +166,20 @@ public class TaskService {
 
     public Path resolveAttachmentPath(TaskAttachment att) {
         return attachmentStorage.resolve(att.getStoredPath());
+    }
+
+    @Transactional(readOnly = true)
+    public List<TaskStageUsage> getStageUsage(Long taskId) {
+        return stageUsageRepo.findByTaskIdOrderByStageAsc(taskId);
+    }
+
+    @Transactional(readOnly = true)
+    public Map<Long, BigDecimal> costTotals(List<Long> taskIds) {
+        if (taskIds.isEmpty()) return Map.of();
+        return stageUsageRepo.sumCostByTaskIds(taskIds).stream()
+                .collect(java.util.stream.Collectors.toMap(
+                        TaskStageUsageRepository.CostTotal::getTaskId,
+                        TaskStageUsageRepository.CostTotal::getTotalCostUsd));
     }
 
     /** 카탈로그 id 리스트 → snapshot 스펙. 비활성/누락 id는 거절. 실제 구현은 McpCatalogService가 소유(질문 등록과 공유). */

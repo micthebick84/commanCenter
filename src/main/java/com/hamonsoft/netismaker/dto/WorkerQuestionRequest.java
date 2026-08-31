@@ -7,5 +7,9 @@ public record WorkerQuestionRequest(
         String content,
         String claudeSessionId,
         String kind,
-        BigDecimal costUsd
+        BigDecimal costUsd,
+        Long inputTokens,
+        Long outputTokens,
+        Long cacheCreationTokens,
+        Long cacheReadTokens
 ) {}

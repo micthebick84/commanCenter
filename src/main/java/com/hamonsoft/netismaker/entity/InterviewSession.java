@@ -90,6 +90,22 @@ public class InterviewSession {
     @Setter
     private BigDecimal totalCostUsd = BigDecimal.ZERO;
 
+    @Column(name = "input_tokens", nullable = false)
+    @Setter
+    private long inputTokens;
+
+    @Column(name = "output_tokens", nullable = false)
+    @Setter
+    private long outputTokens;
+
+    @Column(name = "cache_creation_tokens", nullable = false)
+    @Setter
+    private long cacheCreationTokens;
+
+    @Column(name = "cache_read_tokens", nullable = false)
+    @Setter
+    private long cacheReadTokens;
+
     /** 인터뷰별 추가 MCP 스펙 스냅샷 (기존 freeze 패턴, Task.mcpsExtra와 동일). */
     @JdbcTypeCode(SqlTypes.JSON)
     @Column(name = "mcps_extra", nullable = false, columnDefinition = "jsonb")

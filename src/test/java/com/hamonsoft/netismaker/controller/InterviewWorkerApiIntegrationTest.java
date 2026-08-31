@@ -100,6 +100,28 @@ class InterviewWorkerApiIntegrationTest {
     }
 
     @Test
+    void question_보고는_토큰을_세션에_누적한다() throws Exception {
+        mvc.perform(post("/worker/interviews/claim").header("X-Worker-API-Key", apiKey)
+                .param("workerId", "iw-1")).andExpect(status().isOk());
+
+        mvc.perform(post("/worker/interviews/" + sid + "/question")
+                        .header("X-Worker-API-Key", apiKey).param("workerId", "iw-1")
+                        .contentType(APPLICATION_JSON)
+                        .content("""
+                                {"content":"Q1","claudeSessionId":"cs-1","kind":"question",
+                                 "costUsd":0.12,"inputTokens":1000,"outputTokens":250,
+                                 "cacheCreationTokens":30,"cacheReadTokens":8000}
+                                """))
+                .andExpect(status().isNoContent());
+
+        InterviewSession s = sessionRepo.findById(sid).orElseThrow();
+        assertThat(s.getInputTokens()).isEqualTo(1000);
+        assertThat(s.getOutputTokens()).isEqualTo(250);
+        assertThat(s.getCacheCreationTokens()).isEqualTo(30);
+        assertThat(s.getCacheReadTokens()).isEqualTo(8000);
+    }
+
+    @Test
     void claim_requires_api_key_returns_401_or_403() throws Exception {
         mvc.perform(post("/worker/interviews/claim").param("workerId", "iw-1"))
                 .andExpect(status().is4xxClientError());

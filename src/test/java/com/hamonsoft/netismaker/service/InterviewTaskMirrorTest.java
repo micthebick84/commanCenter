@@ -48,7 +48,8 @@ class InterviewTaskMirrorTest {
     private void askQuestion() {
         interviewService.claim("iw-1");
         interviewService.recordQuestion(sid, "iw-1",
-                new WorkerQuestionRequest("권한 모델은 RBAC인가요?", "sess-1", "question", new BigDecimal("0.01")));
+                new WorkerQuestionRequest("권한 모델은 RBAC인가요?", "sess-1", "question", new BigDecimal("0.01"),
+                        null, null, null, null));
     }
 
     @Test
@@ -75,7 +76,8 @@ class InterviewTaskMirrorTest {
         // 재큐된 세션을 다시 잡아 질문을 하나 더 던진 뒤, 1차 답변을 재제출한다.
         interviewService.claim("iw-1");
         interviewService.recordQuestion(sid, "iw-1",
-                new WorkerQuestionRequest("다음 질문", "sess-1", "question", BigDecimal.ZERO));
+                new WorkerQuestionRequest("다음 질문", "sess-1", "question", BigDecimal.ZERO,
+                        null, null, null, null));
         assertThat(taskStatus()).isEqualTo(TaskStatus.INTERVIEW_INPUT);
 
         interviewService.submitAnswer(sid, "admin", true, new AnswerRequest("RBAC 맞습니다", seq));
@@ -88,7 +90,7 @@ class InterviewTaskMirrorTest {
     void plan_moves_task_to_plan_review() {
         interviewService.claim("iw-1");
         interviewService.recordPlan(sid, "iw-1", new WorkerPlanRequest(
-                "# 설계", "# 플랜", "[]", new BigDecimal("0.4"), 1000L));
+                "# 설계", "# 플랜", "[]", new BigDecimal("0.4"), null, null, null, null, 1000L));
 
         assertThat(taskStatus()).isEqualTo(TaskStatus.INTERVIEW_REVIEW);
     }

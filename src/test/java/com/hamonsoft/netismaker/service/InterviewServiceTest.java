@@ -27,6 +27,7 @@ class InterviewServiceTest {
     TaskStatusHistoryRepository historyRepo;
     TaskAttachmentRepository attachmentRepo;
     AttachmentStorage attachmentStorage;
+    TaskStageUsageRepository stageUsageRepo;
     InterviewService service;
 
     @BeforeEach
@@ -39,8 +40,9 @@ class InterviewServiceTest {
         historyRepo = mock(TaskStatusHistoryRepository.class);
         attachmentRepo = mock(TaskAttachmentRepository.class);
         attachmentStorage = mock(AttachmentStorage.class);
+        stageUsageRepo = mock(TaskStageUsageRepository.class);
         service = new InterviewService(sessionRepo, turnRepo, planRepo,
-                taskRepo, analysisRepo, historyRepo, attachmentRepo, attachmentStorage);
+                taskRepo, analysisRepo, historyRepo, attachmentRepo, attachmentStorage, stageUsageRepo);
         when(sessionRepo.save(any())).thenAnswer(i -> i.getArgument(0));
         when(turnRepo.save(any())).thenAnswer(i -> i.getArgument(0));
         when(planRepo.save(any())).thenAnswer(i -> i.getArgument(0));
@@ -109,7 +111,7 @@ class InterviewServiceTest {
         when(sessionRepo.findByIdForUpdate(2L)).thenReturn(Optional.of(s));
         when(turnRepo.findMaxSeq(2L)).thenReturn(null);
         service.recordQuestion(2L, "w1", new com.hamonsoft.netismaker.dto.WorkerQuestionRequest(
-                "어떤 화면에 추가하나요?", "sess-abc", "question", new BigDecimal("0.01")));
+                "어떤 화면에 추가하나요?", "sess-abc", "question", new BigDecimal("0.01"), null, null, null, null));
         assertThat(s.getStatus()).isEqualTo(InterviewStatus.AWAITING_INPUT);
         assertThat(s.getWorkerId()).isNull();
         assertThat(s.getClaudeSessionId()).isEqualTo("sess-abc");
@@ -122,7 +124,7 @@ class InterviewServiceTest {
         InterviewSession s = session(2L, InterviewStatus.QUEUED);
         when(sessionRepo.findByIdForUpdate(2L)).thenReturn(Optional.of(s));
         assertThatThrownBy(() -> service.recordQuestion(2L, "w1",
-                new com.hamonsoft.netismaker.dto.WorkerQuestionRequest("q", "s", "question", null)))
+                new com.hamonsoft.netismaker.dto.WorkerQuestionRequest("q", "s", "question", null, null, null, null, null)))
                 .isInstanceOf(TaskException.class)
                 .hasMessageContaining("인터뷰중");
     }
@@ -133,7 +135,7 @@ class InterviewServiceTest {
         s.setWorkerId("w1");
         when(sessionRepo.findByIdForUpdate(2L)).thenReturn(Optional.of(s));
         assertThatThrownBy(() -> service.recordQuestion(2L, "w2",
-                new com.hamonsoft.netismaker.dto.WorkerQuestionRequest("q", "s", "question", null)))
+                new com.hamonsoft.netismaker.dto.WorkerQuestionRequest("q", "s", "question", null, null, null, null, null)))
                 .isInstanceOf(TaskException.class)
                 .hasMessageContaining("다른 워커");
     }
@@ -144,7 +146,7 @@ class InterviewServiceTest {
         s.setWorkerId("w1");
         when(sessionRepo.findByIdForUpdate(3L)).thenReturn(Optional.of(s));
         service.recordPlan(3L, "w1", new WorkerPlanRequest("# 설계", "# 플랜", "[]",
-                new BigDecimal("0.05"), 4321L));
+                new BigDecimal("0.05"), null, null, null, null, 4321L));
         assertThat(s.getStatus()).isEqualTo(InterviewStatus.PLAN_READY);
         assertThat(s.getWorkerId()).isNull();
         assertThat(s.getTotalCostUsd()).isEqualByComparingTo("0.05");
@@ -350,7 +352,7 @@ class InterviewServiceTest {
         when(sessionRepo.findByIdForUpdate(5L)).thenReturn(Optional.of(s));
         when(turnRepo.findMaxSeq(5L)).thenReturn(null);
         service.recordQuestion(5L, "w1", new com.hamonsoft.netismaker.dto.WorkerQuestionRequest("답변입니다", "sess-q", "question",
-                new BigDecimal("0.01")));
+                new BigDecimal("0.01"), null, null, null, null));
         assertThat(s.getStatus()).isEqualTo(InterviewStatus.AWAITING_INPUT);
         assertThat(s.getCurrentPhase()).isNull();
         assertThat(s.getClaudeSessionId()).isEqualTo("sess-q");
@@ -363,7 +365,7 @@ class InterviewServiceTest {
         s.setWorkerId("w1");
         when(sessionRepo.findByIdForUpdate(6L)).thenReturn(Optional.of(s));
         assertThatThrownBy(() -> service.recordPlan(6L, "w1",
-                new WorkerPlanRequest("# 설계", "# 플랜", "[]", BigDecimal.ONE, 1L)))
+                new WorkerPlanRequest("# 설계", "# 플랜", "[]", BigDecimal.ONE, null, null, null, null, 1L)))
                 .isInstanceOf(TaskException.class)
                 .satisfies(e -> assertThat(((TaskException) e).getStatus()).isEqualTo(HttpStatus.BAD_REQUEST));
         assertThat(s.getStatus()).isEqualTo(InterviewStatus.RUNNING);

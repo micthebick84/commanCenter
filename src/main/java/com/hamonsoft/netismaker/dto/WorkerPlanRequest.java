@@ -8,5 +8,9 @@ public record WorkerPlanRequest(
         String planMarkdown,
         String planJson,
         BigDecimal costUsd,
+        Long inputTokens,
+        Long outputTokens,
+        Long cacheCreationTokens,
+        Long cacheReadTokens,
         Long durationMs
 ) {}

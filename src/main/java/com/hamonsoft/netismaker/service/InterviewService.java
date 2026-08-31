@@ -52,6 +52,7 @@ public class InterviewService {
     private final TaskStatusHistoryRepository historyRepo;
     private final TaskAttachmentRepository attachmentRepo;
     private final AttachmentStorage attachmentStorage;
+    private final TaskStageUsageRepository stageUsageRepo;
 
     public InterviewService(InterviewSessionRepository sessionRepo,
                             InterviewTurnRepository turnRepo,
@@ -60,7 +61,8 @@ public class InterviewService {
                             TaskAnalysisRepository analysisRepo,
                             TaskStatusHistoryRepository historyRepo,
                             TaskAttachmentRepository attachmentRepo,
-                            AttachmentStorage attachmentStorage) {
+                            AttachmentStorage attachmentStorage,
+                            TaskStageUsageRepository stageUsageRepo) {
         this.sessionRepo = sessionRepo;
         this.turnRepo = turnRepo;
         this.planRepo = planRepo;
@@ -69,6 +71,7 @@ public class InterviewService {
         this.historyRepo = historyRepo;
         this.attachmentRepo = attachmentRepo;
         this.attachmentStorage = attachmentStorage;
+        this.stageUsageRepo = stageUsageRepo;
     }
 
     /**
@@ -174,7 +177,8 @@ public class InterviewService {
         if (req.claudeSessionId() != null && !req.claudeSessionId().isBlank()) {
             s.setClaudeSessionId(req.claudeSessionId());
         }
-        addCost(s, req.costUsd());
+        addUsage(s, req.costUsd(), req.inputTokens(), req.outputTokens(),
+                req.cacheCreationTokens(), req.cacheReadTokens());
         String kind = req.kind() == null || req.kind().isBlank() ? "question" : req.kind();
         InterviewTurn turn = appendTurn(sessionId, "assistant", kind,
                 req.content() == null ? "" : req.content());
@@ -200,7 +204,8 @@ public class InterviewService {
                     + s.getStatus().dbValue() + ")");
         }
         requireWorker(s, workerId);
-        addCost(s, req.costUsd());
+        addUsage(s, req.costUsd(), req.inputTokens(), req.outputTokens(),
+                req.cacheCreationTokens(), req.cacheReadTokens());
         InterviewPlan plan = planRepo.save(InterviewPlan.create(sessionId,
                 req.designMarkdown(), req.planMarkdown(), req.planJson(),
                 req.durationMs(), s.getTotalCostUsd()));
@@ -382,6 +387,16 @@ public class InterviewService {
         historyRepo.save(TaskStatusHistory.log(t.getId(), from, to, "user", adminId,
                 "플랜 확정 → " + to.dbValue() + " (interview_session " + sessionId + ")"));
 
+        // 인터뷰 사용량 이관 (스펙 §4.2) — 세션당 confirm 1회(PLAN_READY 가드)라 이중 누적 없음.
+        if ((s.getTotalCostUsd() != null && s.getTotalCostUsd().signum() > 0)
+                || s.getInputTokens() > 0 || s.getOutputTokens() > 0
+                || s.getCacheCreationTokens() > 0 || s.getCacheReadTokens() > 0) {
+            stageUsageRepo.accumulate(t.getId(), TaskStageUsage.STAGE_INTERVIEW,
+                    s.getTotalCostUsd() == null ? BigDecimal.ZERO : s.getTotalCostUsd(),
+                    s.getInputTokens(), s.getOutputTokens(),
+                    s.getCacheCreationTokens(), s.getCacheReadTokens());
+        }
+
         s.setStatus(InterviewStatus.REGISTERED);
         touch(s);
         return t.getId();
@@ -484,12 +499,18 @@ public class InterviewService {
         }
     }
 
-    private void addCost(InterviewSession s, BigDecimal cost) {
+    private void addUsage(InterviewSession s, BigDecimal cost,
+                          Long in, Long out, Long cc, Long cr) {
         if (cost != null) {
             BigDecimal base = s.getTotalCostUsd() == null ? BigDecimal.ZERO : s.getTotalCostUsd();
             s.setTotalCostUsd(base.add(cost));
         }
+        s.setInputTokens(s.getInputTokens() + nz(in));
+        s.setOutputTokens(s.getOutputTokens() + nz(out));
+        s.setCacheCreationTokens(s.getCacheCreationTokens() + nz(cc));
+        s.setCacheReadTokens(s.getCacheReadTokens() + nz(cr));
     }
+    private static long nz(Long v) { return v == null ? 0L : v; }
 
     private void touch(InterviewSession s) {
         OffsetDateTime now = OffsetDateTime.now();

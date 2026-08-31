@@ -7,12 +7,14 @@ import com.hamonsoft.netismaker.dto.WorkerPlanRequest;
 import com.hamonsoft.netismaker.entity.InterviewStatus;
 import com.hamonsoft.netismaker.entity.Task;
 import com.hamonsoft.netismaker.entity.TaskAnalysis;
+import com.hamonsoft.netismaker.entity.TaskStageUsage;
 import com.hamonsoft.netismaker.entity.TaskStatus;
 import com.hamonsoft.netismaker.entity.TaskStatusHistory;
 import com.hamonsoft.netismaker.repository.InterviewSessionRepository;
 import com.hamonsoft.netismaker.repository.TaskAnalysisRepository;
 import com.hamonsoft.netismaker.repository.TaskDesignRepository;
 import com.hamonsoft.netismaker.repository.TaskRepository;
+import com.hamonsoft.netismaker.repository.TaskStageUsageRepository;
 import com.hamonsoft.netismaker.repository.TaskStatusHistoryRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -21,6 +23,7 @@ import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.test.context.ContextConfiguration;
 
 import java.math.BigDecimal;
+import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -37,6 +40,7 @@ class InterviewConfirmContractTest {
     @Autowired private TaskDesignRepository designRepo;
     @Autowired private InterviewSessionRepository sessionRepo;
     @Autowired private TaskStatusHistoryRepository historyRepo;
+    @Autowired private TaskStageUsageRepository stageUsageRepo;
 
     private Long taskId;
     private Long sid;
@@ -57,7 +61,7 @@ class InterviewConfirmContractTest {
         interviewService.claim("iw-1");
         interviewService.recordPlan(sid, "iw-1", new WorkerPlanRequest(
                 "# 설계 문서", "# 구현 플랜", "[{\"title\":\"A\"},{\"title\":\"B\"}]",
-                new BigDecimal("0.42"), 30000L));
+                new BigDecimal("0.42"), 1000L, 250L, 30L, 8000L, 30000L));
     }
 
     @Test
@@ -90,6 +94,23 @@ class InterviewConfirmContractTest {
         TaskStatusHistory latest = historyRepo.findByTaskIdOrderByAtDesc(taskId).get(0);
         assertThat(latest.getFromStatus()).isEqualTo(TaskStatus.INTERVIEW_REVIEW.dbValue());
         assertThat(latest.getToStatus()).isEqualTo(TaskStatus.APPROVED.dbValue());
+    }
+
+    @Test
+    void confirm_transfers_interview_usage_into_task_stage_usage() {
+        toPlanReady();
+
+        interviewService.confirm(sid, "admin", false);
+
+        List<TaskStageUsage> rows = stageUsageRepo.findByTaskIdOrderByStageAsc(taskId);
+        assertThat(rows).hasSize(1);
+        TaskStageUsage row = rows.get(0);
+        assertThat(row.getStage()).isEqualTo(TaskStageUsage.STAGE_INTERVIEW);
+        assertThat(row.getCostUsd()).isEqualByComparingTo("0.42");
+        assertThat(row.getInputTokens()).isEqualTo(1000L);
+        assertThat(row.getOutputTokens()).isEqualTo(250L);
+        assertThat(row.getCacheCreationTokens()).isEqualTo(30L);
+        assertThat(row.getCacheReadTokens()).isEqualTo(8000L);
     }
 
     @Test

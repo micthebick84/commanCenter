@@ -10,6 +10,7 @@ import com.hamonsoft.netismaker.repository.RepoCatalogRepository;
 import com.hamonsoft.netismaker.repository.TaskAnalysisRepository;
 import com.hamonsoft.netismaker.repository.TaskDesignRepository;
 import com.hamonsoft.netismaker.repository.TaskRepository;
+import com.hamonsoft.netismaker.repository.TaskStageUsageRepository;
 import com.hamonsoft.netismaker.repository.TaskStatusHistoryRepository;
 import com.hamonsoft.netismaker.repository.WorkerHeartbeatRepository;
 import org.springframework.context.annotation.Profile;
@@ -49,6 +50,7 @@ public class WorkerService {
     private final TaskDesignRepository designRepo;
     private final RepoCatalogRepository repoCatalogRepo;
     private final TaskStatusHistoryRepository historyRepo;
+    private final TaskStageUsageRepository stageUsageRepo;
     private final WorkerHeartbeatRepository heartbeatRepo;
     private final DeployLogStreamService deployLogStream;
 
@@ -57,6 +59,7 @@ public class WorkerService {
                          TaskDesignRepository designRepo,
                          RepoCatalogRepository repoCatalogRepo,
                          TaskStatusHistoryRepository historyRepo,
+                         TaskStageUsageRepository stageUsageRepo,
                          WorkerHeartbeatRepository heartbeatRepo,
                          DeployLogStreamService deployLogStream) {
         this.taskRepo = taskRepo;
@@ -64,6 +67,7 @@ public class WorkerService {
         this.designRepo = designRepo;
         this.repoCatalogRepo = repoCatalogRepo;
         this.historyRepo = historyRepo;
+        this.stageUsageRepo = stageUsageRepo;
         this.heartbeatRepo = heartbeatRepo;
         this.deployLogStream = deployLogStream;
     }
@@ -178,6 +182,7 @@ public class WorkerService {
             historyRepo.save(TaskStatusHistory.log(t.getId(),
                     TaskStatus.IMPLEMENTATION_FAILED, TaskStatus.PR_CREATED,
                     "worker", req.workerId(), "지각 보고 정합화: stale 회수 → PR_CREATED"));
+            accumulateUsage(t.getId(), TaskStageUsage.STAGE_IMPLEMENTATION, req);
             return;
         }
 
@@ -198,6 +203,7 @@ public class WorkerService {
             historyRepo.save(TaskStatusHistory.log(t.getId(),
                     TaskStatus.FAILED, TaskStatus.COMPLETED,
                     "worker", req.workerId(), "지각 보고 정합화: stale 회수 → 분석완료"));
+            accumulateUsage(t.getId(), TaskStageUsage.STAGE_ANALYSIS, req);
             return;
         }
 
@@ -294,10 +300,12 @@ public class WorkerService {
                         req.claudeLog(), req.durationMs());
                 analysisRepo.save(a);
                 t.setStatus(TaskStatus.COMPLETED);
+                accumulateUsage(t.getId(), TaskStageUsage.STAGE_ANALYSIS, req);
             }
             case FAILED -> {
                 t.setStatus(TaskStatus.FAILED);
                 t.setFailureReason(req.failureReason() == null ? "원인 미상" : req.failureReason());
+                accumulateUsage(t.getId(), TaskStageUsage.STAGE_ANALYSIS, req);
             }
             case PR_CREATED -> {
                 if (req.prUrl() == null || req.prUrl().isBlank()) {
@@ -314,6 +322,7 @@ public class WorkerService {
                 t.setHeadBranch(req.headBranch());
                 t.setHeadSha(req.headSha());
                 t.setImplementationLog(req.implementationLog());
+                accumulateUsage(t.getId(), TaskStageUsage.STAGE_IMPLEMENTATION, req);
             }
             case IMPLEMENTATION_FAILED -> {
                 t.setStatus(TaskStatus.IMPLEMENTATION_FAILED);
@@ -322,6 +331,7 @@ public class WorkerService {
                 // 일부만 진행된 경우라도 (브랜치 push 했지만 PR 실패 등) 가능한 메타 저장
                 if (req.headBranch() != null) t.setHeadBranch(req.headBranch());
                 if (req.headSha() != null) t.setHeadSha(req.headSha());
+                accumulateUsage(t.getId(), TaskStageUsage.STAGE_IMPLEMENTATION, req);
             }
             default -> throw new TaskException(HttpStatus.BAD_REQUEST,
                     "허용되지 않은 status: " + req.status());
@@ -423,11 +433,13 @@ public class WorkerService {
                 }
                 t.setStatus(TaskStatus.DESIGN_REVIEW);
                 reason = reasonOverride != null ? reasonOverride : "디자인 생성 완료 → 승인 대기";
+                accumulateUsage(t.getId(), TaskStageUsage.STAGE_DESIGN, req);
             }
             case DESIGN_FAILED -> {
                 t.setStatus(TaskStatus.DESIGN_FAILED);
                 t.setFailureReason(req.failureReason() == null ? "원인 미상" : req.failureReason());
                 reason = t.getFailureReason();
+                accumulateUsage(t.getId(), TaskStageUsage.STAGE_DESIGN, req);
             }
             default -> throw new TaskException(HttpStatus.BAD_REQUEST,
                     "디자인 단계에서 허용되지 않는 status: " + req.status());
@@ -485,4 +497,16 @@ public class WorkerService {
         }
         t.setUpdatedAt(OffsetDateTime.now());
     }
+
+    /** 보고 usage를 stage에 누적. usage 없음/전부 0이면 no-op (스펙 §7). */
+    private void accumulateUsage(Long taskId, String stage, WorkerResultRequest req) {
+        WorkerResultRequest.UsageReport u = req.usage();
+        if (u == null || u.isEmpty()) return;
+        stageUsageRepo.accumulate(taskId, stage,
+                u.costUsd() == null ? java.math.BigDecimal.ZERO : u.costUsd(),
+                nz(u.inputTokens()), nz(u.outputTokens()),
+                nz(u.cacheCreationTokens()), nz(u.cacheReadTokens()));
+    }
+
+    private static long nz(Long v) { return v == null ? 0L : v; }
 }

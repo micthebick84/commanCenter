@@ -125,6 +125,8 @@ public class ClaudeExecAdapter {
         List<String> cmd = new ArrayList<>();
         cmd.add(claudePath);
         cmd.add("-p");
+        cmd.add("--output-format");
+        cmd.add("json");
         if (dangerouslySkipPermissions) cmd.add("--dangerously-skip-permissions");
         if (model != null && !model.isBlank()) { cmd.add("--model"); cmd.add(model); }
         if (effort != null && !effort.isBlank()) { cmd.add("--effort"); cmd.add(effort); }
@@ -156,27 +158,16 @@ public class ClaudeExecAdapter {
             List<String> cmd = buildCommand(resolvedClaudePath, dangerouslySkipPermissions,
                     model, effort, mcpArgs.args());
             ProcessBuilder pb = new ProcessBuilder(cmd)
-                    .directory(workingDir)
-                    .redirectErrorStream(true);
+                    .directory(workingDir);            // redirectErrorStream(true) 제거!
             Process p = pb.start();
             try (OutputStream stdin = p.getOutputStream()) {
                 stdin.write(prompt.getBytes(StandardCharsets.UTF_8));
             }
 
             StringBuilder out = new StringBuilder();
-            Thread reader = new Thread(() -> {
-                try (BufferedReader br = new BufferedReader(
-                        new InputStreamReader(p.getInputStream(), StandardCharsets.UTF_8))) {
-                    String line;
-                    while ((line = br.readLine()) != null) {
-                        out.append(line).append('\n');
-                    }
-                } catch (IOException e) {
-                    log.warn("claude stdout 읽기 실패: {}", e.getMessage());
-                }
-            });
-            reader.setDaemon(true);
-            reader.start();
+            StringBuilder err = new StringBuilder();
+            Thread reader = drain(p.getInputStream(), out);
+            Thread errReader = drain(p.getErrorStream(), err);
 
             boolean finished = p.waitFor(timeout.toMillis(), TimeUnit.MILLISECONDS);
             long durationMs = System.currentTimeMillis() - start;
@@ -185,8 +176,19 @@ public class ClaudeExecAdapter {
                 throw new IOException("claude timeout after " + timeout);
             }
             reader.join(2000);
+            errReader.join(2000);
 
-            return new ExecResult(p.exitValue(), out.toString(), durationMs);
+            Parsed parsed = parseEnvelope(out.toString());
+            if (parsed.usage() == null) {
+                log.warn("claude envelope 파싱 실패 — usage 미수집 (stdout {} bytes)", out.length());
+            }
+            String resultText = parsed.resultText();
+            // 실패 진단: exit != 0이면 stderr tail을 결과 텍스트에 덧붙인다 (기존 stdout 병합 대체)
+            if (p.exitValue() != 0 && !err.isEmpty()) {
+                String tail = err.length() > 2000 ? "…" + err.substring(err.length() - 2000) : err.toString();
+                resultText = resultText + "\n[stderr]\n" + tail;
+            }
+            return new ExecResult(p.exitValue(), resultText, durationMs, parsed.usage());
         } finally {
             Path tmp = mcpArgs.tempConfigPath();
             if (tmp != null) {
@@ -196,5 +198,56 @@ public class ClaudeExecAdapter {
         }
     }
 
-    public record ExecResult(int exitCode, String stdout, long durationMs) {}
+    private static Thread drain(java.io.InputStream in, StringBuilder sink) {
+        Thread t = new Thread(() -> {
+            try (BufferedReader br = new BufferedReader(
+                    new InputStreamReader(in, StandardCharsets.UTF_8))) {
+                String line;
+                while ((line = br.readLine()) != null) sink.append(line).append('\n');
+            } catch (IOException e) {
+                log.warn("claude 출력 읽기 실패: {}", e.getMessage());
+            }
+        });
+        t.setDaemon(true);
+        t.start();
+        return t;
+    }
+
+    /** claude -p --output-format json envelope의 usage (스펙 §4.1). */
+    public record Usage(java.math.BigDecimal costUsd, long inputTokens, long outputTokens,
+                        long cacheCreationTokens, long cacheReadTokens) {}
+
+    /** stdout = envelope의 result 텍스트 (기존 plain stdout과 동일 내용). usage는 null 가능. */
+    public record ExecResult(int exitCode, String stdout, long durationMs, Usage usage) {}
+
+    record Parsed(String resultText, Usage usage) {}
+
+    private static final com.fasterxml.jackson.databind.ObjectMapper ENVELOPE_MAPPER =
+            new com.fasterxml.jackson.databind.ObjectMapper();
+
+    /**
+     * envelope 해제. 형식이 안 맞으면 raw 그대로 + usage=null (fallback — 수집 실패가
+     * 본 파이프라인을 죽이면 안 된다, 스펙 §7).
+     */
+    static Parsed parseEnvelope(String raw) {
+        if (raw == null || raw.isBlank()) return new Parsed(raw == null ? "" : raw, null);
+        try {
+            var node = ENVELOPE_MAPPER.readTree(raw.trim());
+            if (!node.isObject() || !node.path("result").isTextual()) {
+                return new Parsed(raw, null);
+            }
+            var u = node.path("usage");
+            Usage usage = new Usage(
+                    node.path("total_cost_usd").isNumber()
+                            ? node.path("total_cost_usd").decimalValue()
+                            : java.math.BigDecimal.ZERO,
+                    u.path("input_tokens").asLong(0),
+                    u.path("output_tokens").asLong(0),
+                    u.path("cache_creation_input_tokens").asLong(0),
+                    u.path("cache_read_input_tokens").asLong(0));
+            return new Parsed(node.path("result").asText(), usage);
+        } catch (Exception e) {
+            return new Parsed(raw, null);
+        }
+    }
 }

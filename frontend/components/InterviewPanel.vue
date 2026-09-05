@@ -15,8 +15,17 @@ const props = defineProps<{
   readonly?: boolean
   /** 'QUESTION'이면 Q&A 모드 — /api/questions 경로, 설계·플랜 컬럼 미렌더, 질문 문맥 문구 (스펙 2026-08-30 §7). */
   kind?: SessionKind
+  /** 질문 채팅 셸이 헤더(상태/비용/종료)를 직접 그릴 때 — 상태 바의 배지·칩·버튼을 숨긴다(터미널 배너는 유지). 스펙 2026-09-05 §2. */
+  hideStatusBar?: boolean
+  /** 부모 column을 채운다(70vh 고정 높이 대신). 질문 채팅 셸 전용. */
+  fill?: boolean
 }>()
-const emit = defineEmits<{ (e: 'confirmed', taskId: number): void; (e: 'close'): void }>()
+const emit = defineEmits<{
+  (e: 'confirmed', taskId: number): void
+  (e: 'close'): void
+  /** SSE 상태 변화 — 셸 헤더 배지가 폴링(5초)보다 먼저 반영하도록. immediate. */
+  (e: 'status', status: InterviewStatus | null): void
+}>()
 
 const isQuestion = computed(() => props.kind === 'QUESTION')
 const apiBase = computed(() => (isQuestion.value ? '/api/questions' : '/api/interviews'))
@@ -86,6 +95,14 @@ const designRequested = ref(false)
 
 const isTerminal = computed(() =>
   ['REGISTERED', 'CANCELLED', 'EXPIRED', 'FAILED'].includes(status.value as string),
+)
+
+// 셸 헤더용 실시간 상태 emit (스펙 2026-09-05 §6 [id].vue)
+watch(status, (s) => emit('status', s), { immediate: true })
+
+// hideStatusBar여도 만료/종료/실패/오류 배너는 사용자가 봐야 한다.
+const showBanner = computed(
+  () => ['EXPIRED', 'CANCELLED', 'FAILED'].includes(status.value as string) || !!error.value,
 )
 
 // AI 응답을 기다리는 중이면 타이핑 표시. 입력 차례/플랜 완료/종료에는 숨긴다.
@@ -227,20 +244,29 @@ onMounted(async () => {
   scrollToBottom('auto')
 })
 onUnmounted(() => stream.close())
+
+// 셸의 "세션 종료" 버튼이 같은 확인 다이얼로그를 열 수 있게 노출 (스펙 2026-09-05 §3).
+defineExpose({
+  requestCancel() {
+    showCancelConfirm.value = true
+  },
+})
 </script>
 
 <template>
-  <div class="interview-panel column no-wrap">
-    <div class="status-bar row items-center q-pa-sm q-gutter-sm">
-      <q-spinner
-        v-if="connState === 'connecting' || connState === 'reconnecting'"
-        size="18px"
-        color="primary"
-      />
-      <!-- 색상/터미널 판정은 영문 enum(status), 표시는 한글(statusLabel). -->
-      <q-badge :color="status === 'PLAN_READY' ? 'positive' : 'primary'" :label="statusLabel" />
-      <q-chip v-if="props.model" dense size="sm" outline icon="smart_toy" :label="props.model" />
-      <q-chip v-if="props.effort" dense size="sm" outline icon="tune" :label="props.effort" />
+  <div class="interview-panel column no-wrap" :class="{ 'interview-panel--fill': props.fill }">
+    <div v-if="!props.hideStatusBar || showBanner" class="status-bar row items-center q-pa-sm q-gutter-sm">
+      <template v-if="!props.hideStatusBar">
+        <q-spinner
+          v-if="connState === 'connecting' || connState === 'reconnecting'"
+          size="18px"
+          color="primary"
+        />
+        <!-- 색상/터미널 판정은 영문 enum(status), 표시는 한글(statusLabel). -->
+        <q-badge :color="status === 'PLAN_READY' ? 'positive' : 'primary'" :label="statusLabel" />
+        <q-chip v-if="props.model" dense size="sm" outline icon="smart_toy" :label="props.model" />
+        <q-chip v-if="props.effort" dense size="sm" outline icon="tune" :label="props.effort" />
+      </template>
       <q-banner v-if="status === 'EXPIRED'" dense class="bg-orange-1 text-orange-10 col"
         >{{ ui.expired }}</q-banner
       >
@@ -252,40 +278,42 @@ onUnmounted(() => stream.close())
       >
       <q-banner v-else-if="error" dense class="bg-red-1 text-red-9 col">{{ error }}</q-banner>
       <q-space />
-      <q-btn
-        v-if="!isTerminal"
-        data-test="later-interview"
-        flat
-        dense
-        no-caps
-        color="grey-7"
-        icon="schedule"
-        label="나중에"
-        @click="closePanel"
-      />
-      <q-btn
-        v-if="!isTerminal && !readonly"
-        data-test="cancel-interview"
-        outline
-        dense
-        no-caps
-        color="grey-7"
-        icon="stop_circle"
-        :label="ui.cancel"
-        class="cancel-btn"
-        @click="showCancelConfirm = true"
-      />
-      <q-btn
-        v-if="isTerminal && status !== 'REGISTERED'"
-        data-test="close-interview"
-        flat
-        dense
-        no-caps
-        color="grey-7"
-        icon="close"
-        label="닫기"
-        @click="closePanel"
-      />
+      <template v-if="!props.hideStatusBar">
+        <q-btn
+          v-if="!isTerminal"
+          data-test="later-interview"
+          flat
+          dense
+          no-caps
+          color="grey-7"
+          icon="schedule"
+          label="나중에"
+          @click="closePanel"
+        />
+        <q-btn
+          v-if="!isTerminal && !readonly"
+          data-test="cancel-interview"
+          outline
+          dense
+          no-caps
+          color="grey-7"
+          icon="stop_circle"
+          :label="ui.cancel"
+          class="cancel-btn"
+          @click="showCancelConfirm = true"
+        />
+        <q-btn
+          v-if="isTerminal && status !== 'REGISTERED'"
+          data-test="close-interview"
+          flat
+          dense
+          no-caps
+          color="grey-7"
+          icon="close"
+          label="닫기"
+          @click="closePanel"
+        />
+      </template>
     </div>
 
     <!-- 좁은 화면 탭 전환 -->
@@ -339,28 +367,38 @@ onUnmounted(() => stream.close())
           </div>
         </div>
         <div v-if="!readonly" class="answer-bar q-pa-sm">
-          <q-input
-            v-model="answer"
-            type="textarea"
-            outlined
-            dense
-            autogrow
-            :disable="status !== 'AWAITING_INPUT' || sending"
-            :placeholder="ui.placeholder"
-            @keydown.enter.exact.prevent="sendAnswer"
-          />
-          <div class="row justify-end q-mt-xs">
-            <q-btn
-              data-test="send-answer"
-              unelevated
-              color="primary"
-              icon="send"
-              :label="ui.send"
-              :loading="sending"
-              :disable="!canAnswer"
-              @click="sendAnswer"
+          <slot
+            name="composer"
+            :answer="answer"
+            :setAnswer="(v: string) => (answer = v)"
+            :canSend="canAnswer"
+            :sending="sending"
+            :send="sendAnswer"
+            :awaiting="status === 'AWAITING_INPUT'"
+          >
+            <q-input
+              v-model="answer"
+              type="textarea"
+              outlined
+              dense
+              autogrow
+              :disable="status !== 'AWAITING_INPUT' || sending"
+              :placeholder="ui.placeholder"
+              @keydown.enter.exact.prevent="sendAnswer"
             />
-          </div>
+            <div class="row justify-end q-mt-xs">
+              <q-btn
+                data-test="send-answer"
+                unelevated
+                color="primary"
+                icon="send"
+                :label="ui.send"
+                :loading="sending"
+                :disable="!canAnswer"
+                @click="sendAnswer"
+              />
+            </div>
+          </slot>
         </div>
       </section>
 
@@ -460,6 +498,11 @@ onUnmounted(() => stream.close())
 .interview-panel {
   height: 70vh;
   min-height: 420px;
+}
+.interview-panel--fill {
+  height: auto;
+  min-height: 0;
+  flex: 1 1 auto;
 }
 .interview-body {
   flex: 1;

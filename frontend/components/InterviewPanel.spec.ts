@@ -1,5 +1,6 @@
 import { mount, flushPromises } from '@vue/test-utils'
 import { describe, it, expect, afterEach } from 'vitest'
+import { h } from 'vue'
 import InterviewPanel from './InterviewPanel.vue'
 import { FakeEventSource } from '../test/mocks/eventsource'
 import { authStub, useApiMock } from '../test/mocks/nuxt'
@@ -444,6 +445,62 @@ describe('InterviewPanel — kind=QUESTION (스펙 2026-08-30 §7)', () => {
     expect(useApiMock).toHaveBeenCalledWith('/api/interviews/9')
     expect(w.find('.design-col').exists()).toBe(true)
     expect(w.find('[data-test="send-answer"]').text()).toContain('전송')
+    w.unmount()
+  })
+})
+
+describe('InterviewPanel — 질문 채팅 셸 연동 (스펙 2026-09-05 §2)', () => {
+  it('hideStatusBar면 배지·버튼을 숨기되 터미널 배너는 보여준다', async () => {
+    const w = await mountPanel(5, { statusName: null, turns: [], plan: null }, { kind: 'QUESTION', hideStatusBar: true })
+    expect(w.find('.status-bar').exists()).toBe(false)
+    expect(w.find('[data-test="cancel-interview"]').exists()).toBe(false)
+    FakeEventSource.last().emit('status', 'EXPIRED')
+    await flushPromises()
+    expect(w.text()).toContain('세션이 만료되었습니다')
+    w.unmount()
+  })
+
+  it('composer 슬롯에 답변 상태/전송 함수를 넘기고 기본 입력창은 렌더하지 않는다', async () => {
+    authStub.accessToken = 'jwt'
+    useApiMock.mockResolvedValueOnce({ statusName: null, turns: [], plan: null })
+    const w = mount(InterviewPanel, {
+      props: { sessionId: 7, kind: 'QUESTION' },
+      slots: {
+        composer: (p: any) => [
+          h('div', { 'data-test': 'slot-awaiting' }, String(p.awaiting)),
+          h('button', { 'data-test': 'slot-send', disabled: !p.canSend, onClick: () => p.send() }, 'go'),
+          h('input', {
+            'data-test': 'slot-input',
+            value: p.answer,
+            onInput: (e: Event) => p.setAnswer((e.target as HTMLInputElement).value),
+          }),
+        ],
+      },
+    })
+    await flushPromises()
+    expect(w.find('[data-test="send-answer"]').exists()).toBe(false)
+    FakeEventSource.last().emit('question', { seq: 1, content: '답변입니다' })
+    await flushPromises()
+    expect(w.find('[data-test="slot-awaiting"]').text()).toBe('true')
+    await w.find('[data-test="slot-input"]').setValue('추가 질문')
+    await w.find('[data-test="slot-send"]').trigger('click')
+    await flushPromises()
+    expect(useApiMock).toHaveBeenCalledWith('/api/questions/7/ask', {
+      method: 'POST',
+      body: { answer: '추가 질문', replyToSeq: 1 },
+    })
+    w.unmount()
+  })
+
+  it('status를 emit하고 requestCancel()이 종료 확인 다이얼로그를 연다', async () => {
+    const w = await mountPanel(5, { statusName: 'AWAITING_INPUT', turns: [], plan: null }, { kind: 'QUESTION', hideStatusBar: true })
+    FakeEventSource.last().emit('status', 'RUNNING')
+    await flushPromises()
+    const emitted = w.emitted('status')!
+    expect(emitted[emitted.length - 1]).toEqual(['RUNNING'])
+    ;(w.vm as any).requestCancel()
+    await flushPromises()
+    expect(document.body.textContent).toContain('질문 세션을 종료할까요?')
     w.unmount()
   })
 })

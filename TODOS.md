@@ -77,3 +77,23 @@
 - CI 파이프라인 구성 확정 (어느 방식으로 고정할지는 CI 셋업 작업과 함께 결정)
 
 **우선순위**: 중간. 로컬에서는 매번 걸리는 건 아니라 급하지 않지만, CI를 새로 구축하는 시점에는 반드시 셋업 단계에 포함해야 함 (안 그러면 첫 CI 실행부터 전원 매몰).
+
+### [ ] 질문 대화 중 모델·effort 변경
+
+**What**: 대화 중 입력창 툴바의 모델/추론 단계 픽커를 활성화해 다음 턴부터 다른 모델/effort로 답하게 한다. 현재는 세션 생성 시 고정(읽기 전용 표시).
+
+**Why**: 긴 질문 세션에서 "이 질문만 Haiku로 싸게" 같은 요구가 나올 수 있다. 다만 `InterviewSession.model/effort`가 세션 단위이고, SDK `resume` 세션에서 모델 교체가 컨텍스트/캐시에 미치는 영향이 미검증이다.
+
+**Context**: 스펙 `docs/superpowers/specs/2026-09-05-question-chat-ui-design.md` §9. 서버 `PATCH /api/questions/{id}/model` + `ModelEffortPolicy.validate` + 다음 claim에 반영, 프론트 `QuestionComposer mode="ask"`의 `disabled` 해제.
+
+**우선순위**: 낮음. 요청이 실제로 나오면 착수.
+
+### [ ] Claude Code 사용량 유휴 갱신 프로브
+
+**What**: 인터뷰 서비스가 유휴일 때도 주기적으로(예: 10분) 초경량 SDK 쿼리(haiku, maxTurns 1)를 돌려 `rate_limit_event`를 받아 사용량 패널을 신선하게 유지한다. 현재는 SDK 턴이 돌 때만 갱신되고 UI가 "N분 전 갱신"으로 정직하게 표기한다.
+
+**Why**: 오래 유휴한 뒤 첫 질문 전에 남은 한도를 정확히 보고 싶을 때. 대신 프로브마다 쿼터를 소모한다(운영 트레이드오프).
+
+**Context**: 스펙 §2 "사용량 신선도"·§9. `config.ts`에 `USAGE_PROBE_INTERVAL_MS`(0=off) 추가, `ClaimLoop` 유휴 틱에서 `RateLimitReporter`로 보고. Java 워커(`claude -p --output-format json`)는 이벤트가 없어 대상이 아니다.
+
+**우선순위**: 낮음. 패널의 "N분 전 갱신" 표기로 운영해 보고 불편이 확인되면 착수.

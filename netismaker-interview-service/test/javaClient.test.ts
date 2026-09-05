@@ -115,4 +115,24 @@ describe('JavaApiClient', () => {
       client.postActivity(42, { events: [{ seq: 1, type: 'text', content: 'x' }] }),
     ).rejects.toSatisfy((e: unknown) => e instanceof HttpStatusError && (e as HttpStatusError).status === 404);
   });
+
+  it('postRateLimit POSTs to /worker/usage/rate-limits?workerId=… and throws HttpStatusError on non-2xx', async () => {
+    const ok = vi.fn().mockResolvedValue(new Response(null, { status: 204 }));
+    const body = {
+      limitType: 'five_hour',
+      status: 'allowed',
+      utilization: 0.42,
+      resetsAt: '2026-09-05T04:00:00.000Z',
+      isUsingOverage: false,
+    };
+    await new JavaApiClient(cfg, ok).postRateLimit(body);
+    const [url, init] = ok.mock.calls[0]!;
+    expect(url).toBe('http://api:8090/worker/usage/rate-limits?workerId=iw-1');
+    expect(init.method).toBe('POST');
+    expect(init.headers['X-Worker-API-Key']).toBe('KEY');
+    expect(JSON.parse(init.body)).toEqual(body);
+
+    const notFound = vi.fn().mockResolvedValue(new Response(null, { status: 404 }));
+    await expect(new JavaApiClient(cfg, notFound).postRateLimit(body)).rejects.toBeInstanceOf(HttpStatusError);
+  });
 });

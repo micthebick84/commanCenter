@@ -29,7 +29,10 @@ public record InterviewResponse(
         /** 'INTERVIEW' | 'QUESTION' — 프론트가 질문 세션 UI 분기에 사용. */
         String kind,
         /** 세션 누적 SHADOW 비용(상세 헤더 칩). */
-        BigDecimal totalCostUsd
+        BigDecimal totalCostUsd,
+        /** 마지막 턴 컨텍스트 토큰 / 창 크기 (스펙 2026-09-05 §4.2). null = 미보고 → 프론트는 칩 숨김. */
+        Long contextTokens,
+        Long contextWindow
 ) {
     public record TurnView(int seq, String role, String kind, String content,
                            Integer replyToSeq, OffsetDateTime createdAt) {}
@@ -49,6 +52,6 @@ public record InterviewResponse(
                 s.getId(), s.getGithubRepo(), s.getGithubBranch(), s.getTitle(), s.getDescription(),
                 s.getStatus().dbValue(), s.getStatus().name(), s.getCurrentPhase(), s.getWorkDir(), s.getTaskId(),
                 s.getModel(), s.getEffort(), tvs, pv, s.getCreatedAt(), s.getUpdatedAt(),
-                s.getKind().name(), s.getTotalCostUsd());
+                s.getKind().name(), s.getTotalCostUsd(), s.getContextTokens(), s.getContextWindow());
     }
 }

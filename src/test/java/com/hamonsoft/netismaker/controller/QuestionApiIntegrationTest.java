@@ -213,4 +213,31 @@ class QuestionApiIntegrationTest {
         assertThat(taskRepo.count()).isZero();   // taskId null → mirrorTask no-op, task 없음 유지
         mvc.perform(post("/api/questions/" + id + "/close").with(userJwt("user1"))).andExpect(status().isConflict());
     }
+
+    /** 워커가 /question에 컨텍스트 스냅샷을 보고하면 상세·목록 응답에 그대로 노출된다 (스펙 2026-09-05 §4.2). */
+    @Test
+    void worker_context_snapshot_is_exposed_on_detail_and_list() throws Exception {
+        String created = mvc.perform(post("/api/questions").with(userJwt("user1"))
+                        .contentType(APPLICATION_JSON).content(CREATE_BODY))
+                .andExpect(status().isCreated())
+                .andReturn().getResponse().getContentAsString();
+        long id = json.readTree(created).get("id").asLong();
+
+        mvc.perform(post("/worker/interviews/claim").param("workerId", "w1").header("X-Worker-API-Key", apiKey))
+                .andExpect(status().isOk());
+        mvc.perform(post("/worker/interviews/" + id + "/question").param("workerId", "w1")
+                        .header("X-Worker-API-Key", apiKey).contentType(APPLICATION_JSON)
+                        .content("{\"content\":\"AuthController입니다\",\"claudeSessionId\":\"sess-1\",\"kind\":\"question\","
+                                + "\"costUsd\":0.01,\"inputTokens\":4,\"outputTokens\":120,\"cacheCreationTokens\":30000,"
+                                + "\"cacheReadTokens\":46000,\"contextTokens\":76004,\"contextWindow\":200000}"))
+                .andExpect(status().isNoContent());
+
+        mvc.perform(get("/api/questions/" + id).with(userJwt("user1")))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.contextTokens").value(76004))
+                .andExpect(jsonPath("$.contextWindow").value(200000));
+        mvc.perform(get("/api/questions").with(userJwt("user1")))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$[0].contextTokens").value(76004));
+    }
 }

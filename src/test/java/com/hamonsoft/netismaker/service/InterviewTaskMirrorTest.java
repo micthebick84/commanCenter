@@ -49,7 +49,7 @@ class InterviewTaskMirrorTest {
         interviewService.claim("iw-1");
         interviewService.recordQuestion(sid, "iw-1",
                 new WorkerQuestionRequest("권한 모델은 RBAC인가요?", "sess-1", "question", new BigDecimal("0.01"),
-                        null, null, null, null));
+                        null, null, null, null, null, null));
     }
 
     @Test
@@ -77,7 +77,7 @@ class InterviewTaskMirrorTest {
         interviewService.claim("iw-1");
         interviewService.recordQuestion(sid, "iw-1",
                 new WorkerQuestionRequest("다음 질문", "sess-1", "question", BigDecimal.ZERO,
-                        null, null, null, null));
+                        null, null, null, null, null, null));
         assertThat(taskStatus()).isEqualTo(TaskStatus.INTERVIEW_INPUT);
 
         interviewService.submitAnswer(sid, "admin", true, new AnswerRequest("RBAC 맞습니다", seq));

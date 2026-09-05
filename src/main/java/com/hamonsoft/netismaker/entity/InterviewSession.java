@@ -106,6 +106,19 @@ public class InterviewSession {
     @Setter
     private long cacheReadTokens;
 
+    /**
+     * 마지막 턴의 컨텍스트 토큰(input + cache_creation + cache_read, 마지막 최상위 assistant 메시지 기준).
+     * null = 미보고(구버전 인터뷰 서비스). 스펙 2026-09-05 §4.2.
+     */
+    @Column(name = "context_tokens")
+    @Setter
+    private Long contextTokens;
+
+    /** 마지막 턴 주 모델의 컨텍스트 창 크기(result.modelUsage[*].contextWindow). null = 미보고. */
+    @Column(name = "context_window")
+    @Setter
+    private Long contextWindow;
+
     /** 인터뷰별 추가 MCP 스펙 스냅샷 (기존 freeze 패턴, Task.mcpsExtra와 동일). */
     @JdbcTypeCode(SqlTypes.JSON)
     @Column(name = "mcps_extra", nullable = false, columnDefinition = "jsonb")

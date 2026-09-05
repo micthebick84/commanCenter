@@ -179,6 +179,9 @@ public class InterviewService {
         }
         addUsage(s, req.costUsd(), req.inputTokens(), req.outputTokens(),
                 req.cacheCreationTokens(), req.cacheReadTokens());
+        // 컨텍스트 스냅샷(스펙 2026-09-05 §4.2): 마지막 턴 값으로 덮어쓴다. 미보고(null)면 이전 값 유지.
+        if (req.contextTokens() != null) s.setContextTokens(req.contextTokens());
+        if (req.contextWindow() != null) s.setContextWindow(req.contextWindow());
         String kind = req.kind() == null || req.kind().isBlank() ? "question" : req.kind();
         InterviewTurn turn = appendTurn(sessionId, "assistant", kind,
                 req.content() == null ? "" : req.content());

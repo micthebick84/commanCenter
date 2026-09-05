@@ -1,69 +1,27 @@
 <script setup lang="ts">
 import { useQuasar } from 'quasar'
-import {
-  MODEL_OPTIONS,
-  DEFAULT_MODEL,
-  DEFAULT_EFFORT,
-  effortsForModel,
-  coerceEffort,
-} from '~/composables/modelEffort'
+import { DEFAULT_MODEL, DEFAULT_EFFORT } from '~/composables/modelEffort'
 import McpPicker from '~/components/McpPicker.vue'
-import { interviewStatusLabel, interviewStatusChip } from '~/composables/interviewLabels'
+import QuestionComposer from '~/components/chat/QuestionComposer.vue'
+import ClaudeUsagePanel from '~/components/ClaudeUsagePanel.vue'
 
 definePageMeta({ layout: 'default' })
 
-// GET /api/questions (QuestionSummaryResponse) 계약 미러
-interface QuestionSummary {
-  id: number
-  title: string
-  githubRepo: string
-  githubBranch: string
-  repoAlias: string | null
-  requesterId: string
-  status: string
-  statusName: string
-  model: string
-  effort: string
-  totalCostUsd: number | null
-  createdAt: string
-  updatedAt: string
-}
-
+// 새 질문 (스펙 2026-09-05 §3 NewQuestion). 제목 입력 없음 — 서버가 질문 첫 줄로 생성한다.
+// 레포/브랜치 로직은 구 질문하기 다이얼로그(스펙 2026-08-30 §7)에서 그대로 옮김 (inflightRepo 가드 포함).
 const $q = useQuasar()
-const auth = useAuthStore()
-const all = ref(false)
+const refreshList = inject<() => void>('questions:refresh', () => {})
+const openDrawer = inject<() => void>('questions:open-drawer', () => {})
 
-const { data: questions, refresh } = useTaskPolling<QuestionSummary[]>(() =>
-  useApi('/api/questions', { params: { all: String(all.value) } }),
-)
-// 배열이 아닌 응답(프록시 오류 페이지 등)도 빈 목록으로 — 렌더 중 throw 방지
-const rows = computed(() => (Array.isArray(questions.value) ? questions.value : []))
-
-function openQuestion(id: number) {
-  navigateTo(`/questions/${id}`)
-}
-
-// ── 질문하기 다이얼로그 ─────────────────────────────────────────
-// 레포/브랜치/제목/본문은 작업 등록 다이얼로그(pages/tasks/index.vue) 패턴,
-// 모델/effort/MCP는 승인 다이얼로그(ApproveDialog.vue) 패턴 — 승인 게이트가 없어 등록자가 여기서 정한다.
-const showCreate = ref(false)
 const draft = reactive({
   repoCatalogId: null as number | null,
   githubBranch: '',
-  title: '',
   question: '',
   model: DEFAULT_MODEL,
   effort: DEFAULT_EFFORT,
   mcpCatalogIds: [] as number[],
 })
 const submitting = ref(false)
-const effortOptions = computed(() => effortsForModel(draft.model))
-watch(
-  () => draft.model,
-  (m) => {
-    draft.effort = coerceEffort(m, draft.effort)
-  },
-)
 
 interface RepoCatalogEntry {
   id: number
@@ -167,37 +125,26 @@ function onBranchFilter(val: string, update: (cb: () => void) => void) {
   })
 }
 
-function openCreate() {
-  draft.repoCatalogId = null
-  draft.githubBranch = ''
-  draft.title = ''
-  draft.question = ''
-  draft.model = DEFAULT_MODEL
-  draft.effort = DEFAULT_EFFORT
-  draft.mcpCatalogIds = []
-  resetBranchState()
-  showCreate.value = true
-  loadRepoCatalog()
-}
+onMounted(loadRepoCatalog)
 
 const canSubmit = computed(
   () =>
     !submitting.value &&
     draft.repoCatalogId !== null &&
     !!draft.githubBranch &&
-    !!draft.title.trim() &&
     !!draft.question.trim(),
 )
 
 async function submit() {
+  if (!canSubmit.value) return
   submitting.value = true
   try {
+    // title 없음 — 서버가 질문 첫 줄로 생성 (QuestionService.deriveTitle)
     const created = await useApi<{ id: number }>('/api/questions', {
       method: 'POST',
       body: {
         repoCatalogId: draft.repoCatalogId,
         githubBranch: draft.githubBranch,
-        title: draft.title,
         question: draft.question,
         model: draft.model,
         effort: draft.effort,
@@ -205,7 +152,7 @@ async function submit() {
       },
     })
     $q.notify({ type: 'positive', message: '질문이 등록되었습니다 — 답변을 준비합니다' })
-    showCreate.value = false
+    refreshList()
     await navigateTo(`/questions/${created.id}`)
   } catch (e: any) {
     const st = e?.statusCode ?? e?.response?.status ?? e?.status
@@ -216,172 +163,120 @@ async function submit() {
   }
 }
 
-function fmt(iso: string) {
-  return new Date(iso).toLocaleString('ko-KR', { dateStyle: 'short', timeStyle: 'short' })
-}
-
-// 테스트에서 q-select 조작 대신 직접 호출 (McpPicker.toggle 선례)
-defineExpose({ openCreate, draft, submit, onRepoSelected })
+// 테스트에서 q-select/입력창 조작 대신 직접 호출 (McpPicker.toggle 선례)
+defineExpose({ draft, submit, onRepoSelected })
 </script>
 
 <template>
-  <q-page padding>
-    <div class="row items-center q-mb-md">
-      <div class="text-h5">질문</div>
-      <q-space />
-      <q-toggle
-        v-if="auth.isAdmin"
-        v-model="all"
-        label="전체 보기"
-        data-test="all-toggle"
-        @update:model-value="refresh"
-      />
-      <q-btn class="q-ml-md" color="primary" icon="help_outline" label="질문하기" @click="openCreate" />
+  <div class="new-question column no-wrap">
+    <div v-if="$q.screen.lt.md" class="row items-center q-px-sm q-pt-sm">
+      <q-btn flat dense round icon="menu" data-test="open-drawer" @click="openDrawer" />
     </div>
-
-    <q-list bordered separator>
-      <q-item v-if="rows.length === 0">
-        <q-item-section class="text-grey">아직 질문이 없습니다. 레포에 대해 궁금한 점을 물어보세요.</q-item-section>
-      </q-item>
-      <q-item
-        v-for="q in rows"
-        :key="q.id"
-        clickable
-        data-test="question-row"
-        @click="openQuestion(q.id)"
-      >
-        <q-item-section>
-          <q-item-label>{{ q.title }}</q-item-label>
-          <q-item-label caption>
-            {{ q.repoAlias ?? q.githubRepo }} · {{ q.githubBranch }}
-            <span v-if="all"> · {{ q.requesterId }}</span>
-          </q-item-label>
-        </q-item-section>
-        <q-item-section side>
-          <div class="row items-center q-gutter-xs">
-            <q-chip dense size="sm" outline icon="smart_toy" :label="q.model" />
-            <q-chip
-              dense
-              size="sm"
-              :style="{
-                backgroundColor: interviewStatusChip(q.statusName)[0],
-                color: interviewStatusChip(q.statusName)[1],
-              }"
-              :label="interviewStatusLabel(q.statusName, 'QUESTION')"
-            />
-          </div>
-          <q-item-label caption class="q-mt-xs">{{ fmt(q.updatedAt) }}</q-item-label>
-        </q-item-section>
-      </q-item>
-    </q-list>
-
-    <!-- 질문하기 다이얼로그 -->
-    <q-dialog v-model="showCreate" persistent>
-      <q-card style="min-width: 560px">
-        <q-card-section>
-          <div class="text-h6">질문하기</div>
-          <div class="text-caption text-grey-8">
-            선택한 레포를 읽고 답합니다. 코드는 수정되지 않으며, 구현이 필요하면 작업 등록을 이용하세요.
-          </div>
-        </q-card-section>
-        <q-card-section class="q-gutter-md">
-          <q-select
-            v-model="draft.repoCatalogId"
-            :options="repoOptions"
-            :loading="repoCatalogLoading"
-            label="레포 (별칭 선택)"
-            outlined
-            dense
-            emit-value
-            map-options
-            autofocus
-            data-test="repo-select"
-            :hint="repoCatalog.length === 0 ? '등록된 레포 없음 — 관리자에게 문의' : '관리자가 등록한 레포 중 선택'"
-            @update:model-value="onRepoSelected"
-          >
-            <template #no-option>
-              <q-item>
-                <q-item-section class="text-grey">등록된 레포가 없습니다</q-item-section>
-              </q-item>
-            </template>
-          </q-select>
-
-          <q-select
-            v-model="draft.githubBranch"
-            :options="filteredBranchOptions"
-            :disable="repoStatus !== 'ok'"
-            label="브랜치"
-            outlined
-            dense
-            use-input
-            input-debounce="0"
-            emit-value
-            map-options
-            :hint="
-              repoStatus === 'ok'
-                ? '입력해서 검색할 수 있습니다'
-                : repoStatus === 'notfound' || repoStatus === 'error'
-                  ? repoStatusMsg
-                  : '레포 선택 후 브랜치 선택 가능'
-            "
-            @filter="onBranchFilter"
-          >
-            <template #no-option>
-              <q-item>
-                <q-item-section class="text-grey">결과 없음</q-item-section>
-              </q-item>
-            </template>
-          </q-select>
-
-          <q-input v-model="draft.title" label="제목" outlined dense maxlength="500" />
-          <q-input
-            v-model="draft.question"
-            label="질문"
-            type="textarea"
-            outlined
-            autogrow
-            rows="4"
-            placeholder="예: 로그인 요청은 어느 컨트롤러가 처리하고 토큰은 어디서 검증하나요?"
-          />
-
-          <div class="row q-col-gutter-md">
-            <q-select
-              v-model="draft.model"
-              :options="MODEL_OPTIONS"
-              emit-value
-              map-options
-              outlined
-              dense
-              label="Claude 모델"
-              class="col"
-            />
-            <q-select
-              v-model="draft.effort"
-              :options="effortOptions"
-              emit-value
-              map-options
-              outlined
-              dense
-              label="Effort"
-              class="col"
-              :hint="draft.model === 'claude-haiku-4-5' ? 'Haiku는 low/medium/high만 지원' : ''"
-            />
-          </div>
-          <McpPicker v-model="draft.mcpCatalogIds" />
-        </q-card-section>
-        <q-card-actions align="right">
-          <q-btn flat label="취소" @click="showCreate = false" />
-          <q-btn
-            unelevated
-            color="primary"
-            icon="send"
-            label="질문 등록"
-            :loading="submitting"
-            :disable="!canSubmit"
-            @click="submit"
-          />
-        </q-card-actions>
-      </q-card>
-    </q-dialog>
-  </q-page>
+    <div class="col column items-center justify-center q-px-lg new-question-body">
+      <div class="hero text-center">
+        <div class="text-h5">무엇이 궁금하세요?</div>
+        <div class="text-body2 text-grey-8 q-mt-xs">
+          선택한 레포를 읽고 답합니다. 코드는 수정되지 않으며, 구현이 필요하면 작업 등록을 이용하세요.
+        </div>
+      </div>
+      <div class="composer-wrap q-mt-lg">
+        <QuestionComposer
+          v-model="draft.question"
+          v-model:model="draft.model"
+          v-model:effort="draft.effort"
+          mode="create"
+          placeholder="예: 로그인 요청은 어느 컨트롤러가 처리하고 토큰은 어디서 검증하나요?"
+          :can-send="canSubmit"
+          :sending="submitting"
+          :hint="!$q.screen.lt.md"
+          @send="submit"
+        >
+          <template #top>
+            <div class="row q-col-gutter-md q-pa-sm">
+              <q-select
+                v-model="draft.repoCatalogId"
+                :options="repoOptions"
+                :loading="repoCatalogLoading"
+                label="레포 (별칭 선택)"
+                outlined
+                dense
+                emit-value
+                map-options
+                class="col-12 col-md-6"
+                data-test="repo-select"
+                :hint="repoCatalog.length === 0 ? '등록된 레포 없음 — 관리자에게 문의' : '관리자가 등록한 레포 중 선택'"
+                @update:model-value="onRepoSelected"
+              >
+                <template #no-option>
+                  <q-item>
+                    <q-item-section class="text-grey">등록된 레포가 없습니다</q-item-section>
+                  </q-item>
+                </template>
+              </q-select>
+              <q-select
+                v-model="draft.githubBranch"
+                :options="filteredBranchOptions"
+                :disable="repoStatus !== 'ok'"
+                label="브랜치"
+                outlined
+                dense
+                use-input
+                input-debounce="0"
+                emit-value
+                map-options
+                class="col-12 col-md-6"
+                :hint="
+                  repoStatus === 'ok'
+                    ? repoStatusMsg
+                    : repoStatus === 'notfound' || repoStatus === 'error'
+                      ? repoStatusMsg
+                      : '레포 선택 후 브랜치 선택 가능'
+                "
+                @filter="onBranchFilter"
+              >
+                <template #no-option>
+                  <q-item>
+                    <q-item-section class="text-grey">결과 없음</q-item-section>
+                  </q-item>
+                </template>
+              </q-select>
+            </div>
+          </template>
+          <template #tools>
+            <q-btn flat dense no-caps icon="extension" label="MCP 도구" data-test="mcp-button">
+              <q-badge v-if="draft.mcpCatalogIds.length" color="primary" floating>
+                {{ draft.mcpCatalogIds.length }}
+              </q-badge>
+              <q-menu>
+                <div class="mcp-menu">
+                  <McpPicker v-model="draft.mcpCatalogIds" />
+                </div>
+              </q-menu>
+            </q-btn>
+          </template>
+        </QuestionComposer>
+        <ClaudeUsagePanel v-if="$q.screen.lt.md" variant="strip" class="q-mt-sm" />
+      </div>
+    </div>
+  </div>
 </template>
+
+<style scoped>
+.new-question {
+  height: 100%;
+}
+.new-question-body {
+  padding-bottom: 96px; /* 세로 중앙보다 살짝 위 — 모델 메뉴가 아래로 열릴 공간 */
+}
+.hero {
+  max-width: 760px;
+}
+.composer-wrap {
+  width: 100%;
+  max-width: 760px;
+}
+.mcp-menu {
+  min-width: 360px;
+  max-width: 480px;
+}
+</style>

@@ -1,9 +1,9 @@
 // 모델/effort 선택 옵션 + 모델별 허용 effort(단일 진실원천, 백엔드 ModelEffortPolicy와 동기화).
+// claude-fable-5는 2026-09-05 목록에서 제외(스펙 2026-09-05-question-chat-ui-design §5.4).
 export const DEFAULT_MODEL = 'claude-opus-5'
 export const DEFAULT_EFFORT = 'high'
 
 export const MODEL_OPTIONS = [
-  { label: 'Fable 5 (최상위)', value: 'claude-fable-5' },
   { label: 'Opus 5 (기본)', value: 'claude-opus-5' },
   { label: 'Sonnet 5', value: 'claude-sonnet-5' },
   { label: 'Haiku 4.5', value: 'claude-haiku-4-5' },
@@ -15,7 +15,6 @@ const FULL = ['low', 'medium', 'high', 'xhigh', 'max']
 const LIMITED = ['low', 'medium', 'high']
 
 const MODEL_EFFORT_MAP: Record<string, string[]> = {
-  'claude-fable-5': FULL,
   'claude-opus-5': FULL,
   'claude-sonnet-5': FULL,
   'claude-haiku-4-5': LIMITED,

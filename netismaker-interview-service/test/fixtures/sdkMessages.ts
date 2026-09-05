@@ -119,3 +119,72 @@ export const streamingQuestionStream = (): AsyncIterable<SdkMessage> =>
       duration_ms: 900,
     },
   );
+
+/**
+ * 사용량 인지 턴 (스펙 2026-09-05 §4): rate_limit_event 1건(실측 shape — unifiedWindows에 five_hour/seven_day 동봉, 최상위 utilization 없음) + 최상위 message_start usage +
+ * 최상위 assistant usage + 서브에이전트 assistant usage(컨텍스트 계산 제외) + result.modelUsage(주 모델 opus, 부 모델 haiku).
+ * shape 근거: sdk.d.ts:2910 SDKRateLimitEvent / :2923 SDKRateLimitInfo / :1050 ModelUsage,
+ * 실측: test/fixtures/RATE_LIMIT_FINDINGS.md. resetsAt은 epoch 초(1788580800 = 2026-09-05T04:00:00Z).
+ */
+export const usageAwareQuestionStream = (): AsyncIterable<SdkMessage> =>
+  gen(
+    { type: 'system', subtype: 'init', session_id: 'sess-usage-1' },
+    {
+      type: 'stream_event',
+      parent_tool_use_id: null,
+      event: {
+        type: 'message_start',
+        message: {
+          usage: { input_tokens: 2, cache_creation_input_tokens: 30000, cache_read_input_tokens: 0, output_tokens: 1 },
+        },
+      },
+    },
+    {
+      type: 'assistant',
+      parent_tool_use_id: null,
+      message: {
+        content: [{ type: 'text', text: 'AuthController.login()이 처리합니다.' }],
+        usage: { input_tokens: 4, cache_creation_input_tokens: 30000, cache_read_input_tokens: 46000, output_tokens: 120 },
+      },
+    },
+    {
+      type: 'assistant',
+      parent_tool_use_id: 'tu-sub', // 서브에이전트 — 컨텍스트 계산에서 제외돼야 한다
+      message: {
+        content: [{ type: 'text', text: '(sub)' }],
+        usage: { input_tokens: 999999, cache_creation_input_tokens: 0, cache_read_input_tokens: 0 },
+      },
+    },
+    {
+      // 실측 shape(RATE_LIMIT_FINDINGS.md ①): 첫 턴 message_stop 직후 1건, 최상위 utilization 없음, 창별 값은 unifiedWindows.
+      type: 'rate_limit_event',
+      rate_limit_info: {
+        status: 'allowed',
+        resetsAt: 1788580800,
+        rateLimitType: 'five_hour',
+        overageStatus: 'rejected',
+        isUsingOverage: false,
+        unifiedWindows: {
+          five_hour: { utilization: 0.42, resetsAt: 1788580800 },
+          seven_day: { utilization: 0.63, resetsAt: 1788854400 },
+        },
+      },
+      session_id: 'sess-usage-1',
+    },
+    {
+      type: 'result',
+      subtype: 'success',
+      usage: {
+        total_cost_usd: 0.05,
+        input_tokens: 4,
+        output_tokens: 120,
+        cache_creation_input_tokens: 30000,
+        cache_read_input_tokens: 46000,
+      },
+      modelUsage: {
+        'claude-haiku-4-5': { inputTokens: 500, cacheReadInputTokens: 0, cacheCreationInputTokens: 0, outputTokens: 20, contextWindow: 100000 },
+        'claude-opus-5': { inputTokens: 4, cacheReadInputTokens: 46000, cacheCreationInputTokens: 30000, outputTokens: 120, contextWindow: 200000 },
+      },
+      duration_ms: 1200,
+    },
+  );

@@ -111,7 +111,7 @@ class InterviewServiceTest {
         when(sessionRepo.findByIdForUpdate(2L)).thenReturn(Optional.of(s));
         when(turnRepo.findMaxSeq(2L)).thenReturn(null);
         service.recordQuestion(2L, "w1", new com.hamonsoft.netismaker.dto.WorkerQuestionRequest(
-                "어떤 화면에 추가하나요?", "sess-abc", "question", new BigDecimal("0.01"), null, null, null, null));
+                "어떤 화면에 추가하나요?", "sess-abc", "question", new BigDecimal("0.01"), null, null, null, null, null, null));
         assertThat(s.getStatus()).isEqualTo(InterviewStatus.AWAITING_INPUT);
         assertThat(s.getWorkerId()).isNull();
         assertThat(s.getClaudeSessionId()).isEqualTo("sess-abc");
@@ -120,11 +120,39 @@ class InterviewServiceTest {
     }
 
     @Test
+    void recordQuestion_stores_context_snapshot_when_reported() {
+        InterviewSession s = session(2L, InterviewStatus.RUNNING);
+        s.setWorkerId("w1");
+        when(sessionRepo.findByIdForUpdate(2L)).thenReturn(Optional.of(s));
+        when(turnRepo.findMaxSeq(2L)).thenReturn(null);
+        service.recordQuestion(2L, "w1", new com.hamonsoft.netismaker.dto.WorkerQuestionRequest(
+                "AuthController입니다", "sess-abc", "question", new BigDecimal("0.01"),
+                4L, 120L, 30000L, 46000L, 76004L, 200000L));
+        assertThat(s.getContextTokens()).isEqualTo(76004L);
+        assertThat(s.getContextWindow()).isEqualTo(200000L);
+    }
+
+    /** 구버전 인터뷰 서비스(컨텍스트 미보고)가 보고해도 이전 스냅샷을 지우지 않는다. */
+    @Test
+    void recordQuestion_keeps_previous_context_when_not_reported() {
+        InterviewSession s = session(2L, InterviewStatus.RUNNING);
+        s.setWorkerId("w1");
+        s.setContextTokens(50000L);
+        s.setContextWindow(200000L);
+        when(sessionRepo.findByIdForUpdate(2L)).thenReturn(Optional.of(s));
+        when(turnRepo.findMaxSeq(2L)).thenReturn(null);
+        service.recordQuestion(2L, "w1", new com.hamonsoft.netismaker.dto.WorkerQuestionRequest(
+                "답변", "sess-abc", "question", BigDecimal.ZERO, null, null, null, null, null, null));
+        assertThat(s.getContextTokens()).isEqualTo(50000L);
+        assertThat(s.getContextWindow()).isEqualTo(200000L);
+    }
+
+    @Test
     void recordQuestion_from_wrong_status_throws() {
         InterviewSession s = session(2L, InterviewStatus.QUEUED);
         when(sessionRepo.findByIdForUpdate(2L)).thenReturn(Optional.of(s));
         assertThatThrownBy(() -> service.recordQuestion(2L, "w1",
-                new com.hamonsoft.netismaker.dto.WorkerQuestionRequest("q", "s", "question", null, null, null, null, null)))
+                new com.hamonsoft.netismaker.dto.WorkerQuestionRequest("q", "s", "question", null, null, null, null, null, null, null)))
                 .isInstanceOf(TaskException.class)
                 .hasMessageContaining("인터뷰중");
     }
@@ -135,7 +163,7 @@ class InterviewServiceTest {
         s.setWorkerId("w1");
         when(sessionRepo.findByIdForUpdate(2L)).thenReturn(Optional.of(s));
         assertThatThrownBy(() -> service.recordQuestion(2L, "w2",
-                new com.hamonsoft.netismaker.dto.WorkerQuestionRequest("q", "s", "question", null, null, null, null, null)))
+                new com.hamonsoft.netismaker.dto.WorkerQuestionRequest("q", "s", "question", null, null, null, null, null, null, null)))
                 .isInstanceOf(TaskException.class)
                 .hasMessageContaining("다른 워커");
     }
@@ -352,7 +380,7 @@ class InterviewServiceTest {
         when(sessionRepo.findByIdForUpdate(5L)).thenReturn(Optional.of(s));
         when(turnRepo.findMaxSeq(5L)).thenReturn(null);
         service.recordQuestion(5L, "w1", new com.hamonsoft.netismaker.dto.WorkerQuestionRequest("답변입니다", "sess-q", "question",
-                new BigDecimal("0.01"), null, null, null, null));
+                new BigDecimal("0.01"), null, null, null, null, null, null));
         assertThat(s.getStatus()).isEqualTo(InterviewStatus.AWAITING_INPUT);
         assertThat(s.getCurrentPhase()).isNull();
         assertThat(s.getClaudeSessionId()).isEqualTo("sess-q");

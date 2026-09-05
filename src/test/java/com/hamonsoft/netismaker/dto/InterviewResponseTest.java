@@ -52,4 +52,24 @@ class InterviewResponseTest {
         assertThat(r.kind()).isEqualTo("QUESTION");
         assertThat(r.totalCostUsd()).isEqualByComparingTo("1.25");
     }
+
+    @Test
+    void of_carries_context_snapshot() {
+        InterviewSession q = InterviewSession.createQuestion("o/r", "main", "t", "q?", "user1",
+                List.of(), "claude-opus-5", "high");
+        q.setContextTokens(76004L);
+        q.setContextWindow(200000L);
+        InterviewResponse r = InterviewResponse.of(q, List.of(), null);
+        assertThat(r.contextTokens()).isEqualTo(76004L);
+        assertThat(r.contextWindow()).isEqualTo(200000L);
+    }
+
+    @Test
+    void of_leaves_context_null_when_never_reported() {
+        InterviewSession q = InterviewSession.createQuestion("o/r", "main", "t", "q?", "user1",
+                List.of(), "claude-opus-5", "high");
+        InterviewResponse r = InterviewResponse.of(q, List.of(), null);
+        assertThat(r.contextTokens()).isNull();
+        assertThat(r.contextWindow()).isNull();
+    }
 }

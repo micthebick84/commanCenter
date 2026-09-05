@@ -3,6 +3,7 @@ import type {
   WorkerActivityRequest,
   WorkerPlanRequest,
   WorkerQuestionRequest,
+  WorkerRateLimitRequest,
 } from '../types.js';
 
 type FetchLike = typeof fetch;
@@ -84,6 +85,16 @@ export class JavaApiClient {
       body: JSON.stringify(body),
     });
     if (!res.ok) throw new HttpStatusError(res.status, `activity failed: ${res.status}`);
+  }
+
+  /** 구독 한도 스냅샷 보고 (스펙 2026-09-05 §4.1). 실패 처리(비활성/경고)는 RateLimitReporter 책임 — 404 식별용 HttpStatusError. */
+  async postRateLimit(body: WorkerRateLimitRequest): Promise<void> {
+    const res = await this.fetchFn(this.url(`/worker/usage/rate-limits?${this.wq()}`), {
+      method: 'POST',
+      headers: this.headers(),
+      body: JSON.stringify(body),
+    });
+    if (!res.ok) throw new HttpStatusError(res.status, `rate-limit failed: ${res.status}`);
   }
 
   async heartbeat(id: number): Promise<void> {

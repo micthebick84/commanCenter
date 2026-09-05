@@ -1,6 +1,6 @@
 import { config } from '@vue/test-utils'
 import * as QuasarPkg from 'quasar'
-import { Quasar, Notify, Dialog, Loading } from 'quasar'
+import { Quasar, Notify, Dialog, Loading, ClosePopup, Ripple } from 'quasar'
 import { vi, beforeEach } from 'vitest'
 import * as vue from 'vue'
 import { FakeEventSource } from './mocks/eventsource'
@@ -40,6 +40,8 @@ Object.assign(globalThis as any, {
   onMounted: vue.onMounted,
   onUnmounted: vue.onUnmounted,
   nextTick: vue.nextTick,
+  provide: vue.provide,
+  inject: vue.inject,
   useApi: useApiMock,
   useAuthStore: useAuthStoreMock,
   useRuntimeConfig: useRuntimeConfigMock,
@@ -61,7 +63,14 @@ const quasarComponents: Record<string, any> = Object.fromEntries(
 // Quasar components (q-input, q-btn, ...) available in mounts, plus the same plugins
 // nuxt.config.ts registers (Notify/Dialog/Loading) so $q.notify(...) is callable.
 config.global.plugins = [
-  [Quasar, { components: quasarComponents, plugins: { Notify, Dialog, Loading } }],
+  [
+    Quasar,
+    {
+      components: quasarComponents,
+      plugins: { Notify, Dialog, Loading },
+      directives: { ClosePopup, Ripple },
+    },
+  ],
 ]
 config.global.components = quasarComponents
 

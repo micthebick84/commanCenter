@@ -1,7 +1,8 @@
 import type { JavaApiClient } from '../api/javaClient.js';
 import type { SdkMessage, SdkQuery } from '../sdk/sdkAdapter.js';
-import type { ActivityInput, AttachmentRef, InterviewClaimResponse } from '../types.js';
+import type { ActivityInput, AttachmentRef, InterviewClaimResponse, RateLimitInfo } from '../types.js';
 import { ActivityPoster } from './activityPoster.js';
+import { RateLimitReporter } from './rateLimitReport.js';
 import { buildOptions } from '../sdk/sessionOptions.js';
 import { QuotaGuardExceeded, CostGuard } from './costGuard.js';
 import { tryHarvest } from './planHarvest.js';
@@ -132,12 +133,15 @@ async function* questionPromptFor(claim: InterviewClaimResponse): AsyncIterable<
  */
 export class InterviewRunner {
   private readonly ensureRepo: (input: RepoInput) => Promise<void>;
+  /** 구독 한도 보고기 — 서비스 수명 동안 1개(404 비활성 상태가 세션을 넘어 유지된다). */
+  private readonly rateLimits: RateLimitReporter;
   constructor(
     private readonly client: JavaApiClient,
     private readonly query: SdkQuery,
     private readonly deps: RunnerDeps,
   ) {
     this.ensureRepo = deps.ensureRepo ?? defaultEnsureRepo;
+    this.rateLimits = new RateLimitReporter(client);
   }
 
   async run(claim: InterviewClaimResponse): Promise<void> {
@@ -198,6 +202,7 @@ export class InterviewRunner {
       if (timer) clearTimeout(timer);
       ticker.stop();
       await poster.stop();
+      await this.rateLimits.flush(); // 보고 큐 드레인 — fail/success 어느 경로든 턴 밖으로 새지 않게
     }
   }
 
@@ -219,6 +224,7 @@ export class InterviewRunner {
     poster: ActivityPoster,
   ): Promise<void> {
     const onActivity = (e: ActivityInput) => poster.push(e);
+    const onRateLimit = (info: RateLimitInfo) => this.rateLimits.report(info);
     {
       // 턴 상한: claim.turns의 assistant 턴 수로 진행도 판정(백엔드 변경 불필요).
       const isQuestion = claim.kind === 'QUESTION';
@@ -276,7 +282,7 @@ export class InterviewRunner {
             : promptFor(claim),
         options,
       });
-      const result = await relay(stream, { onActivity, workDir: claim.workDir });
+      const result = await relay(stream, { onActivity, onRateLimit, workDir: claim.workDir });
       guard.add(result.costUsd);
 
       let assistantText = result.assistantText;
@@ -287,6 +293,9 @@ export class InterviewRunner {
       let cacheCreationTokens = result.cacheCreationTokens;
       let cacheReadTokens = result.cacheReadTokens;
       let durationMs = result.durationMs;
+      // 컨텍스트 스냅샷은 "마지막 relay" 값 — 뒤이은 handoff/reformat relay가 있으면 그 값으로 갱신(null이면 유지).
+      let contextTokens = result.contextTokens;
+      let contextWindow = result.contextWindow;
 
       // Skill-dispatch shim: if brainstorming announced the writing-plans handoff
       // but no plan was produced, splice the writing-plans SKILL.md into the SAME
@@ -313,7 +322,7 @@ export class InterviewRunner {
               abortController: controller,
             }),
           }),
-          { onActivity, workDir: claim.workDir },
+          { onActivity, onRateLimit, workDir: claim.workDir },
         );
         guard.add(second.costUsd);
         assistantText = second.assistantText;
@@ -326,6 +335,8 @@ export class InterviewRunner {
         cacheCreationTokens += second.cacheCreationTokens;
         cacheReadTokens += second.cacheReadTokens;
         durationMs = second.durationMs;
+        contextTokens = second.contextTokens ?? contextTokens;
+        contextWindow = second.contextWindow ?? contextWindow;
       }
 
       let harvested = tryHarvest(assistantText);
@@ -349,7 +360,7 @@ export class InterviewRunner {
               abortController: controller,
             }),
           }),
-          { onActivity, workDir: claim.workDir },
+          { onActivity, onRateLimit, workDir: claim.workDir },
         );
         guard.add(retry.costUsd);
         assistantText = retry.assistantText;
@@ -361,6 +372,8 @@ export class InterviewRunner {
         cacheCreationTokens += retry.cacheCreationTokens;
         cacheReadTokens += retry.cacheReadTokens;
         durationMs = retry.durationMs;
+        contextTokens = retry.contextTokens ?? contextTokens;
+        contextWindow = retry.contextWindow ?? contextWindow;
         harvested = tryHarvest(assistantText);
       }
       // trailing 배치가 question/plan보다 늦게 도착하지 않도록, 확정 POST 전에 활동 큐를 비운다.
@@ -391,6 +404,8 @@ export class InterviewRunner {
         outputTokens,
         cacheCreationTokens,
         cacheReadTokens,
+        contextTokens,
+        contextWindow,
       });
     }
   }
@@ -406,6 +421,7 @@ export class InterviewRunner {
     poster: ActivityPoster,
   ): Promise<void> {
     const onActivity = (e: ActivityInput) => poster.push(e);
+    const onRateLimit = (info: RateLimitInfo) => this.rateLimits.report(info);
     const stream: AsyncIterable<SdkMessage> = this.query({
       prompt: questionPromptFor(claim),
       options: buildOptions({
@@ -421,7 +437,7 @@ export class InterviewRunner {
         sessionKind: 'QUESTION',
       }),
     });
-    const result = await relay(stream, { onActivity, workDir: claim.workDir });
+    const result = await relay(stream, { onActivity, onRateLimit, workDir: claim.workDir });
     guard.add(result.costUsd);
     // trailing 활동 배치가 답변보다 늦게 도착하지 않도록 확정 POST 전에 큐를 비운다 (인터뷰 경로와 동일).
     await poster.stop();
@@ -434,6 +450,9 @@ export class InterviewRunner {
       outputTokens: result.outputTokens,
       cacheCreationTokens: result.cacheCreationTokens,
       cacheReadTokens: result.cacheReadTokens,
+      // 컨텍스트 스냅샷 (스펙 2026-09-05 §4.2) — 구버전 Java는 미지 필드를 무시한다.
+      contextTokens: result.contextTokens,
+      contextWindow: result.contextWindow,
     });
   }
 }

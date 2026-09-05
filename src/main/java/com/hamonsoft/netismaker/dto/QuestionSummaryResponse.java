@@ -19,12 +19,16 @@ public record QuestionSummaryResponse(
         String effort,
         BigDecimal totalCostUsd,
         OffsetDateTime createdAt,
-        OffsetDateTime updatedAt
+        OffsetDateTime updatedAt,
+        /** 마지막 턴 컨텍스트 스냅샷 (스펙 2026-09-05 §4.2). null = 미보고. */
+        Long contextTokens,
+        Long contextWindow
 ) {
     public static QuestionSummaryResponse of(InterviewSession s) {
         return new QuestionSummaryResponse(
                 s.getId(), s.getTitle(), s.getGithubRepo(), s.getGithubBranch(), s.getRepoAlias(),
                 s.getRequesterId(), s.getStatus().dbValue(), s.getStatus().name(),
-                s.getModel(), s.getEffort(), s.getTotalCostUsd(), s.getCreatedAt(), s.getUpdatedAt());
+                s.getModel(), s.getEffort(), s.getTotalCostUsd(), s.getCreatedAt(), s.getUpdatedAt(),
+                s.getContextTokens(), s.getContextWindow());
     }
 }

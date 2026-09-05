@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { InterviewRunner } from '../src/runner/interviewRunner.js';
 import { freshClaim, resumeClaim, freshClaimWithAttachments, questionClaim } from './fixtures/claims.js';
-import { planCompleteStream, questionStream, streamingQuestionStream } from './fixtures/sdkMessages.js';
+import { planCompleteStream, questionStream, streamingQuestionStream, usageAwareQuestionStream } from './fixtures/sdkMessages.js';
 import { detectHandoff } from '../src/runner/skillDispatch.js';
 
 function makeClient() {
@@ -10,6 +10,7 @@ function makeClient() {
     postPlan: vi.fn().mockResolvedValue(undefined),
     fail: vi.fn().mockResolvedValue(undefined),
     postActivity: vi.fn().mockResolvedValue(undefined),
+    postRateLimit: vi.fn().mockResolvedValue(undefined),
   };
 }
 // ensureRepo is injected so unit tests never touch git.
@@ -692,5 +693,40 @@ describe('InterviewRunner wall-clock timeout', () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+describe('InterviewRunner rate limit reporting + context snapshot (스펙 2026-09-05 §4)', () => {
+  it('usage-aware question turn: reports rate limits in order and posts the context snapshot with the answer', async () => {
+    const client = makeClient();
+    const fakeQuery = vi.fn(() => usageAwareQuestionStream());
+    const runner = new InterviewRunner(client as never, fakeQuery as never, deps as never);
+
+    await runner.run(questionClaim);
+
+    expect(client.postRateLimit).toHaveBeenCalledTimes(2);
+    expect(client.postRateLimit).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({ limitType: 'five_hour', utilization: 0.42, resetsAt: '2026-09-05T04:00:00.000Z' }),
+    );
+    expect(client.postRateLimit).toHaveBeenNthCalledWith(2, expect.objectContaining({ limitType: 'seven_day', utilization: 0.63 }));
+    expect(client.postQuestion).toHaveBeenCalledWith(
+      questionClaim.sessionId,
+      expect.objectContaining({ contextTokens: 76004, contextWindow: 200000, claudeSessionId: 'sess-usage-1' }),
+    );
+    expect(client.fail).not.toHaveBeenCalled();
+  });
+
+  it('interview turn also carries the context snapshot; legacy streams send null', async () => {
+    const client = makeClient();
+    const runner = new InterviewRunner(client as never, vi.fn(() => usageAwareQuestionStream()) as never, deps as never);
+    await runner.run(freshClaim);
+    expect(client.postQuestion).toHaveBeenCalledWith(42, expect.objectContaining({ contextTokens: 76004, contextWindow: 200000 }));
+
+    const legacy = makeClient();
+    const runner2 = new InterviewRunner(legacy as never, vi.fn(() => questionStream()) as never, deps as never);
+    await runner2.run(freshClaim);
+    expect(legacy.postQuestion).toHaveBeenCalledWith(42, expect.objectContaining({ contextTokens: null, contextWindow: null }));
+    expect(legacy.postRateLimit).not.toHaveBeenCalled();
   });
 });

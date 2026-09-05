@@ -4571,7 +4571,7 @@ function onPanelClose() {
 }
 /* 트랜스크립트 가운데 정렬 최대 820px (캔버스 Main) — 패널 내부 스크롤 영역에만 적용 */
 .conv-panel :deep(.transcript) {
-  max-width: 860px;
+  max-width: 820px;
   width: 100%;
   margin: 0 auto;
 }

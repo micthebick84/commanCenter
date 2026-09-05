@@ -2381,7 +2381,7 @@ describe('claudeUsage (스펙 2026-09-05 §2·§3)', () => {
     expect(usagePercent({ utilization: 0.9, resetsAt: '2026-09-05T02:00:00Z' }, NOW)).toBe(0)
   })
 
-  it('formatReset: 당일은 시각만, 다른 날은 날짜 포함, 경과는 초기화됨, 없음은 빈 문자열 (로컬 시간대 무관)', () => {
+  it('formatReset: 당일은 시각만, 다른 날은 날짜 포함, 경과는 초기화됨, 없음은 빈 문자열 (로컬 시간대·ICU 버전 무관)', () => {
     const localNow = new Date(2026, 8, 5, 3, 0).getTime() // 로컬 2026-09-05 03:00
     expect(formatReset(new Date(2026, 8, 5, 7, 0).toISOString(), localNow)).toBe('오전 7시 초기화')
     const otherDay = formatReset(new Date(2026, 8, 8, 9, 0).toISOString(), localNow)
@@ -2518,25 +2518,35 @@ export function usagePercent(
   return Math.max(0, Math.min(100, Math.round(limit.utilization * 100)))
 }
 
+const WEEKDAYS_KO = ['일', '월', '화', '수', '목', '금', '토']
+
 /**
- * "오전 7시 초기화" / "9월 8일 (월) 오전 9시 초기화" / 경과 → "초기화됨 · 다음 사용 시 갱신" / 없음·파싱 실패 → "".
- * 시각은 브라우저 로컬 시간대(ko-KR).
+ * "오전 7시" / "오후 3시 30분" — 로컬 시간대 기준. Intl(ko-KR)의 오전/오후 표기는 ICU 버전에 따라 "AM/PM"으로
+ * 바뀌어(Node 24: "AM 7시") 테스트·브라우저 간 결과가 갈리므로 직접 조립한다 (실측 보정 R6, 2026-09-05).
+ */
+function formatKoTime(t: Date): string {
+  const h = t.getHours()
+  const period = h < 12 ? '오전' : '오후'
+  const h12 = h % 12 === 0 ? 12 : h % 12
+  const m = t.getMinutes()
+  return m ? `${period} ${h12}시 ${String(m).padStart(2, '0')}분` : `${period} ${h12}시`
+}
+
+/**
+ * "오전 7시 초기화" / "9월 8일 (화) 오전 9시 초기화" / 경과 → "초기화됨 · 다음 사용 시 갱신" / 없음·파싱 실패 → "".
+ * 시각·날짜는 브라우저 로컬 시간대(formatKoTime — Intl 미사용).
  */
 export function formatReset(resetsAt: string | null | undefined, now = Date.now()): string {
   if (!resetsAt) return ''
   const t = new Date(resetsAt)
   if (Number.isNaN(t.getTime())) return ''
   if (t.getTime() <= now) return '초기화됨 · 다음 사용 시 갱신'
-  const time = t.toLocaleTimeString(
-    'ko-KR',
-    t.getMinutes() ? { hour: 'numeric', minute: '2-digit' } : { hour: 'numeric' },
-  )
+  const time = formatKoTime(t)
   const n = new Date(now)
   const sameDay =
     t.getFullYear() === n.getFullYear() && t.getMonth() === n.getMonth() && t.getDate() === n.getDate()
   if (sameDay) return `${time} 초기화`
-  const date = t.toLocaleDateString('ko-KR', { month: 'long', day: 'numeric', weekday: 'short' })
-  return `${date} ${time} 초기화`
+  return `${t.getMonth() + 1}월 ${t.getDate()}일 (${WEEKDAYS_KO[t.getDay()]}) ${time} 초기화`
 }
 
 /** "방금 갱신" / "3분 전 갱신" / "2시간 전 갱신" / "2일 전 갱신" / 없음 → "". */

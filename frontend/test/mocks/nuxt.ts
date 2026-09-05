@@ -4,7 +4,7 @@ import { vi } from 'vitest'
 export const useApiMock = vi.fn()
 
 // auth store stub: composable reads auth.accessToken to build the SSE URL.
-export const authStub = { accessToken: 'test-token-abc' }
+export const authStub = { accessToken: 'test-token-abc', isAdmin: false }
 export const useAuthStoreMock = vi.fn(() => authStub)
 
 // runtime config stub: composable reads public.apiBaseUrl for URL construction.
@@ -15,5 +15,6 @@ export const useRuntimeConfigMock = vi.fn(() => ({
 export function resetNuxtMocks() {
   useApiMock.mockReset()
   authStub.accessToken = 'test-token-abc'
+  authStub.isAdmin = false
   useAuthStoreMock.mockClear()
 }

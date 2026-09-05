@@ -97,4 +97,35 @@ describe('pages/questions/[id] — 대화 (스펙 2026-09-05 §3·§6)', () => {
     expect(navigateToMock).toHaveBeenCalledWith('/questions')
     w.unmount()
   })
+
+  it('폴링 중 500 등 비403/404 오류는 목록으로 이동하지 않고 마지막 헤더를 유지한다', async () => {
+    // useTaskPolling은 전역 스텁(setup.ts) — 실제 컴포저블처럼 감싸 refresh 핸들을 잡아서
+    // "다음 폴링 틱"을 테스트에서 직접 발동시킨다 (첫 마운트는 그대로 성공시킨 뒤).
+    const originalUseTaskPolling = (globalThis as any).useTaskPolling
+    let capturedRefresh: (() => Promise<void>) | undefined
+    ;(globalThis as any).useTaskPolling = (fetcher: () => Promise<unknown>) => {
+      const handle = originalUseTaskPolling(fetcher)
+      if (!capturedRefresh) capturedRefresh = handle.refresh
+      return handle
+    }
+    try {
+      const w = mount(QuestionDetail)
+      await flushPromises()
+      expect(w.text()).toContain('인증 흐름 확인')
+      expect(w.text()).toContain('누적 비용 0.42')
+
+      useApiMock.mockImplementation((url: string) =>
+        url === '/api/questions/3' ? Promise.reject({ statusCode: 500 }) : Promise.resolve({ limits: [] }),
+      )
+      await capturedRefresh!()
+      await flushPromises()
+
+      expect(navigateToMock).not.toHaveBeenCalled()
+      expect(w.text()).toContain('인증 흐름 확인')
+      expect(w.text()).toContain('누적 비용 0.42')
+      w.unmount()
+    } finally {
+      ;(globalThis as any).useTaskPolling = originalUseTaskPolling
+    }
+  })
 })

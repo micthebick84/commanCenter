@@ -20,6 +20,9 @@ describe('QuestionComposer (스펙 2026-09-05 §3·§6)', () => {
     expect(w.emitted('send')).toHaveLength(1)
     await ta.trigger('keydown', { key: 'Enter', isComposing: true })
     expect(w.emitted('send')).toHaveLength(1)
+    // Safari: IME 조합 완료 Enter가 isComposing=false로 오지만 keyCode=229를 남기는 경우가 있다
+    await ta.trigger('keydown', { key: 'Enter', keyCode: 229 })
+    expect(w.emitted('send')).toHaveLength(1)
     w.unmount()
   })
 

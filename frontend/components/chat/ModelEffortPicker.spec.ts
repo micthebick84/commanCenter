@@ -45,10 +45,14 @@ describe('ModelEffortPicker (스펙 2026-09-05 §2·§5.4)', () => {
     w.unmount()
   })
 
-  it('disabled면 모델·effort 컨트롤 모두 비활성', () => {
-    const { w } = host('claude-sonnet-5', 'high', true)
+  it('disabled면 모델·effort 컨트롤 모두 비활성', async () => {
+    const { w, model } = host('claude-sonnet-5', 'high', true)
     expect(w.find('[data-test="model-picker"]').attributes('disabled')).toBeDefined()
     expect(w.find('[data-test="effort-toggle"] button').attributes('disabled')).toBeDefined()
+    // disabled일 때는 노출된 pickModel을 직접 호출해도(예: 테스트/오작동 경로) 모델이 바뀌면 안 된다
+    ;(w.findComponent(ModelEffortPicker).vm as any).pickModel('claude-haiku-4-5')
+    await w.vm.$nextTick()
+    expect(model.value).toBe('claude-sonnet-5')
     w.unmount()
   })
 })

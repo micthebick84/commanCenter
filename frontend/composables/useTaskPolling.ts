@@ -33,6 +33,7 @@ export function useTaskPolling<T>(fetcher: () => Promise<T>) {
 
   function schedule() {
     if (stopped) return
+    if (timer) clearTimeout(timer)
     timer = setTimeout(tick, config.pollIntervalMs)
   }
 

@@ -27,6 +27,7 @@ const haikuHint = computed(() =>
 )
 
 function pickModel(value: string) {
+  if (props.disabled) return
   model.value = value
   effort.value = coerceEffort(value, effort.value)
 }

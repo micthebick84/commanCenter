@@ -24,7 +24,8 @@ const effort = defineModel<string>('effort', { required: true })
 const emit = defineEmits<{ (e: 'send'): void }>()
 
 function onEnter(ev: KeyboardEvent) {
-  if (ev.isComposing) return
+  // Safari는 IME 조합 완료 Enter에서 isComposing=false를 주면서 keyCode=229를 남기는 경우가 있다
+  if (ev.isComposing || ev.keyCode === 229) return
   ev.preventDefault()
   if (props.canSend && !props.sending && !props.disabled) emit('send')
 }
@@ -55,6 +56,7 @@ function onEnter(ev: KeyboardEvent) {
         unelevated
         color="primary"
         icon="send"
+        aria-label="전송"
         :loading="props.sending"
         :disable="!props.canSend || props.disabled"
         data-test="composer-send"

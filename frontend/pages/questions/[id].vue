@@ -23,6 +23,8 @@ const { data: detail } = useTaskPolling<QuestionDetail | null>(async () => {
   try {
     return await useApi<QuestionDetail>(`/api/questions/${sessionId.value}`)
   } catch (e: any) {
+    const st = e?.statusCode ?? e?.response?.status ?? e?.status
+    if (st !== 403 && st !== 404) throw e // 일시적 오류(네트워크/5xx)는 마지막 detail 유지 — useTaskPolling이 error만 기록
     if (!redirected.value) {
       redirected.value = true
       $q.notify({ type: 'negative', message: e?.data?.message ?? '질문을 불러오지 못했습니다' })

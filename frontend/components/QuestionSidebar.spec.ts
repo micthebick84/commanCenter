@@ -26,7 +26,7 @@ describe('QuestionSidebar (스펙 2026-09-05 §3)', () => {
     })
   })
   afterEach(() => {
-    ;(authStub as any).isAdmin = false
+    authStub.isAdmin = false
   })
 
   it('목록을 상태·레포 캡션과 함께 그리고, 활성 행을 강조하며, 선택/새 질문을 emit한다', async () => {
@@ -49,7 +49,7 @@ describe('QuestionSidebar (스펙 2026-09-05 §3)', () => {
   })
 
   it('관리자는 전체 보기 토글이 있고, 켜면 all=true로 다시 조회하며 요청자를 캡션에 붙인다', async () => {
-    ;(authStub as any).isAdmin = true
+    authStub.isAdmin = true
     const w = mount(QuestionSidebar, { props: { activeId: null } })
     await flushPromises()
     const toggle = w.find('[data-test="all-toggle"]')

@@ -40,6 +40,8 @@ Object.assign(globalThis as any, {
   onMounted: vue.onMounted,
   onUnmounted: vue.onUnmounted,
   nextTick: vue.nextTick,
+  provide: vue.provide,
+  inject: vue.inject,
   useApi: useApiMock,
   useAuthStore: useAuthStoreMock,
   useRuntimeConfig: useRuntimeConfigMock,

@@ -29,7 +29,7 @@ exit=0
 | 1 | `rate_limit_event` 발생 여부/건수/시점 | 턴당 1건 이상, 첫 API 응답 직후 | 세션 전체(모델 턴 2회) 통틀어 **1건**. 첫 턴 `message_stop` 직후 발행(31번째 줄), 둘째 턴에는 미발행 | 존재는 MATCH · 빈도("턴당")는 MISMATCH — 실측은 "세션당 ≥1건" |
 | 2 | `rate_limit_info.rateLimitType` 종류 | five_hour / seven_day (+opus/sonnet) | 최상위 `rateLimitType`은 `"five_hour"` 1개만 관측(이벤트가 1건이므로 다른 타입이 top-level에 오는 경우는 미확인). 대신 문서화 안 된 `unifiedWindows` 객체가 `five_hour`/`seven_day` 두 키를 **동시에** 담고 있음. opus/sonnet 세분 타입은 미관측(haiku·단문 세션이라 스코프 밖 — "없다"는 증거는 아님) | 값 자체는 MATCH(문서화된 유니온 안) · 구조는 MISMATCH(아래 STOP GATE) |
 | 3 | `utilization` 단위 | 0..1 분수 | **최상위 `utilization` 필드 자체가 없음.** 실제 값은 `unifiedWindows.five_hour.utilization=0.05`, `unifiedWindows.seven_day.utilization=0.12` — 값은 0..1 분수로 가정과 일치하나 위치가 다름 | 단위는 MATCH(분수) · 위치는 MISMATCH — 아래 STOP GATE, 코드 변경 불필요 전제가 깨짐 |
-| 4 | `resetsAt` 단위 | epoch 초 | 최상위 `resetsAt=1788616200` → `date -r 1788616200` = `2026-09-05 22:50:00 KST`(캡처 시각 17:55:43 KST 기준 +4h54m, `rateLimitType:"five_hour"` 창과 정합) → **epoch 초 확인**(ms였다면 1970-01-21 근방으로 환산됐을 것). `unifiedWindows.seven_day.resetsAt=1788706800` → `2026-09-07 00:00:00 KST`(자정 고정 경계로 보임, "지금+7일"이 아님) | MATCH(epoch 초) |
+| 4 | `resetsAt` 단위 | epoch 초 | 최상위 `resetsAt=1788616200` → `date -r 1788616200` = `2026-09-05 22:50:00 KST`(실행 시각은 캡처 메시지 자체의 타임스탬프로 교차확인 — 20/32번째 줄 `timestamp:"2026-09-05T08:54:19Z"` = `17:54:19 KST`, 파일 mtime `17:54:23 KST` — resetsAt까지 +4시간55분41초, `rateLimitType:"five_hour"` 창과 정합) → **epoch 초 확인**(ms였다면 1970-01-21 근방으로 환산됐을 것). `unifiedWindows.seven_day.resetsAt=1788706800` → `2026-09-07 00:00:00 KST`(자정 고정 경계로 보임, "지금+7일"이 아님) | MATCH(epoch 초) |
 | 5 | 최상위 `assistant.message.usage` 필드 | input/cache_creation/cache_read/output | `input_tokens`,`cache_creation_input_tokens`,`cache_read_input_tokens`,`output_tokens` 전부 존재. 부가 필드 `cache_creation:{ephemeral_5m_input_tokens,ephemeral_1h_input_tokens}`,`service_tier`,`inference_geo` | MATCH(+상위집합) |
 | 6 | 최상위 `message_start` usage | 동일 필드(출력 전) | `assistant.usage`와 완전히 동일한 필드셋 관측(생성 시작 시점 스냅샷) | MATCH |
 | 7 | `result.modelUsage` 키·`contextWindow` | 모델 id 키, 200000 | 키=`"claude-haiku-4-5"`(요청 모델 id 그대로), `contextWindow:200000`. 부가 필드 `inputTokens,outputTokens,cacheReadInputTokens,cacheCreationInputTokens,webSearchRequests,costUSD,maxOutputTokens,thinkingTokens,canonicalModel,provider,costBasis` | MATCH(+상위집합) |
@@ -66,17 +66,19 @@ exit=0
 
 ## STOP GATE 판정
 
-- **#1(발생 여부)은 0건이 아니다(1건).** 브리프의 "0건이면 Task 5·7·9 착수 전 보고" 게이트는 문자 그대로는 발동하지 않는다. 컨텍스트 경로(#5~#7, 전부 MATCH)는 그대로 진행 가능.
-- **그러나 #2/#3에서 스펙 §4.3 `toRateLimitRequest` 정규화 설계를 무효화하는 구조적 불일치를 발견했다.** 브리프/스펙이 예상한 것은 "값이 있는데 단위만 다름(분수 vs 퍼센트, 초 vs ms) — 정규화가 두 경우 다 흡수"였지만, 실측은 **필드가 있어야 할 자리에 아예 없고, 실제 값은 다른 경로(`unifiedWindows`)에 있다**는 것이다:
-  - 계획서(`docs/superpowers/plans/2026-09-05-question-chat-ui.md` Task 7)의 `toRateLimitRequest(info)`는 `info.utilization`을 읽어 "숫자가 아니면 0"으로 폴백한다. 실물 이벤트를 그대로 넣으면 `info.utilization === undefined`이므로 **항상 `utilization: 0`을 Java에 보고하게 된다** — 예외도 안 나고 Task 7의 유닛테스트(전부 `{utilization: 0.42, ...}` 같은 합성 flat 객체만 검증)도 못 잡는, 배포 후 사용량 패널이 조용히 항상 0%로만 뜨는 종류의 버그다.
-  - 스펙 §4.1 "한 턴에 여러 이벤트(five_hour/seven_day 각각)가 올 수 있다 — 타입별로 각각 upsert"라는 전제도 실측과 다르다. 이번 실행에서는 **이벤트 1건에 두 타입(`five_hour`+`seven_day`)이 `unifiedWindows`로 동봉**되어 왔다(별도 이벤트 2건이 아니었다). `toRateLimitRequest(info): WorkerRateLimitRequest | null` 같은 "이벤트 1건 → 요청 0/1건" 구조로는 `unifiedWindows`의 두 번째 타입을 표현할 수 없다.
-  - `resetsAt`/`status`/`isUsingOverage`는 top-level에 실재하고 실측과 일치하므로 그대로 쓸 수 있다 — 문제는 `utilization`의 위치와 "이벤트당 type 개수" 두 가지뿐이다.
-- **권고: Task 7 착수 전에 이 구조적 불일치를 사용자에게 보고할 것.** 0건 게이트는 아니지만, "정규화가 알아서 흡수한다"던 전제 자체가 깨졌으므로 동등하게 중요한 조기 경보로 판단한다. `unifiedWindows`를 못 보고 top-level `utilization`만 보도록 그대로 구현하면 기능은 배포되지만 데이터가 항상 0%로만 나오는, 통합테스트 없이는 못 잡는 실패가 된다.
+- **#1(발생 여부)은 0건이 아니었다(1건).** 브리프의 "0건이면 Task 5·7·9 착수 전 보고" 게이트는 문자 그대로는 발동하지 않았다. 컨텍스트 경로(#5~#7, 전부 MATCH)는 그대로 진행 가능했다.
+- **그러나 #2/#3에서, 이 스파이크 시점의 스펙 §4.3 정규화 설계(단일 이벤트 → 단일 `WorkerRateLimitRequest`, top-level `utilization` 직독)를 무효화하는 구조적 불일치를 발견했다.** 당시 브리프/스펙이 예상한 것은 "값이 있는데 단위만 다름(분수 vs 퍼센트, 초 vs ms) — 정규화가 두 경우 다 흡수"였지만, 실측은 **필드가 있어야 할 자리에 아예 없고, 실제 값은 다른 경로(`unifiedWindows`)에 있다**는 것이었다:
+  - 이 스파이크 당시 계획서(Task 7)의 `toRateLimitRequest(info)`는 `info.utilization`을 읽어 "숫자가 아니면 0"으로 폴백하는 설계였다. 실물 이벤트를 그대로 넣었다면 `info.utilization === undefined`이므로 **항상 `utilization: 0`을 Java에 보고했을 것**이다 — 예외도 안 나고 당시 계획된 유닛테스트(전부 `{utilization: 0.42, ...}` 같은 합성 flat 객체만 검증)도 못 잡는, 배포 후 사용량 패널이 조용히 항상 0%로만 뜨는 종류의 버그가 됐을 것이다.
+  - 당시 스펙 §4.1의 "한 턴에 여러 이벤트(five_hour/seven_day 각각)가 올 수 있다 — 타입별로 각각 upsert"라는 서술도 실측과 달랐다. 이번 실행에서는 **이벤트 1건에 두 타입(`five_hour`+`seven_day`)이 `unifiedWindows`로 동봉**되어 왔다(별도 이벤트 2건이 아니었다). 당시 `toRateLimitRequest(info): WorkerRateLimitRequest | null` 같은 "이벤트 1건 → 요청 0/1건" 구조로는 `unifiedWindows`의 두 번째 타입을 표현할 수 없었다.
+  - `resetsAt`/`status`/`isUsingOverage`는 top-level에 실재하고 실측과 일치했으므로 그대로 쓸 수 있었다 — 문제는 `utilization`의 위치와 "이벤트당 type 개수" 두 가지뿐이었다.
+- **이 발견은 실제로 사용자에게 보고됐고, 계획·스펙은 커밋 `1427dfd`(`docs: 계획·스펙 실측 보정 — rate_limit_info.unifiedWindows 창별 펼침`)에서 이미 반영됐다.** Task 7은 이제 `toRateLimitRequests(info): WorkerRateLimitRequest[]`(배열 반환)로 바뀌어 `unifiedWindows`의 알려진 타입 키마다 1건씩 펼치고, 주 창(`rateLimitType`)이 `unifiedWindows`에 없을 때만 top-level `utilization`/`resetsAt`으로 보충하며(구형 flat 이벤트 호환), 주 창만 top-level `status`를 상속하고 나머지 창은 `allowed`로 채운다 — 계획서 Task 7 상단 "실측 보정(Task 1, 2026-09-05 …)" 콜아웃(`docs/superpowers/plans/2026-09-05-question-chat-ui.md:1608`)과 스펙 §4.1 실측 문단(`docs/superpowers/specs/2026-09-05-question-chat-ui-design.md:75`)·§4.3 `unifiedWindows` 행(같은 파일 `:93,97,99`)을 참고. 계획서 Task 7 Step 1의 첫 테스트 케이스는 이 스파이크가 캡처한 값(`utilization:0.05`/`0.12`, `resetsAt:1788616200`/`1788706800`)을 그대로 픽스처로 쓴다. Java(Task 5)·프론트(Task 9) 계약은 타입별 1행 upsert 그대로라 영향 없음.
 
-## Task 7로 넘기는 체크리스트
+## Task 7로 넘기는 체크리스트 (구현 시 실측과의 정합성 확인용)
 
-- `rate_limit_info.utilization`이 아니라 `rate_limit_info.unifiedWindows?.[rate_limit_info.rateLimitType]?.utilization`을 우선 읽고, `unifiedWindows`가 없으면(구버전 CLI 등) top-level `utilization`으로 폴백하는 순서를 권장.
-- `unifiedWindows`에 **다른 키**(이번 캡처의 `seven_day`)가 더 있으면 각각 별도 `WorkerRateLimitRequest`로 변환해 **여러 건 upsert**해야 한다 — `toRateLimitRequest`를 배열 반환으로 바꾸거나, 호출부(`RateLimitReporter.report`)가 `unifiedWindows` 순회를 맡도록 재설계가 필요하다(현재 계획서의 단일 반환 시그니처로는 표현 불가).
-- `unifiedWindows.<type>`에는 자체 `status`가 없다 — top-level `rateLimitType`과 일치하는 타입만 top-level `status`를 쓰고, 나머지는 스펙 기본 규칙대로 `allowed`로 채우는 정도가 이번 실측 범위 안에서 가능한 최선이다(다른 status를 가진 unifiedWindows 항목은 이번 스파이크로 관측 못함 — 화이트박스 가정임을 명시할 것).
-- `resetsAt`(top-level)/`isUsingOverage`/`status`는 계획서 그대로 써도 된다 — 이번 실측과 일치.
+계획서 Task 7은 이미 위 STOP GATE의 보정을 반영한 상태로 존재한다 — 구현자는 아래 기준으로 실제 코드가 이 실측과 계획서 콜아웃에 부합하는지 확인하면 된다(새로 결정할 사항이 아니라 검증 목록):
+
+- `rate_limit_info.utilization`을 직독하지 않고 `unifiedWindows`의 알려진 타입 키를 우선 채택하며, 주 창이 `unifiedWindows`에 없을 때만 top-level `utilization`/`resetsAt`으로 보충하는지 확인(계획서 Step 3 `toRateLimitRequests` 참고 — 반영됨).
+- `unifiedWindows`에 담긴 **모든** 알려진 타입 키(이번 캡처의 `five_hour`+`seven_day`)가 각각 별도 `WorkerRateLimitRequest`로 변환되어 **배열**로 나오고, 순서가 `five_hour, seven_day, seven_day_opus, seven_day_sonnet, overage` 고정인지 확인(반영됨 — `toRateLimitRequests`가 배열 반환, `LIMIT_TYPES` 순서 고정).
+- `unifiedWindows.<type>`에는 자체 `status`가 없다는 실측대로, 주 창(`rateLimitType`)만 top-level `status`를 상속하고 나머지 창은 `allowed`로 채우는지 확인(반영됨). 단, 창별로 실제로 다른 status가 오는 케이스는 이번 스파이크로 관측하지 못했다 — 그 부분은 여전히 화이트박스 가정으로 남는다.
+- `resetsAt`(top-level)/`isUsingOverage`/`status`는 이번 실측과 일치하므로 계획서의 정규화 규칙(퍼센트 판별, epoch 초/ms 판별)을 그대로 적용하면 된다 — 추가 변경 불필요.
 - `assistant.message.usage`/`message_start.usage`(컨텍스트 경로, Task 5/6)는 가정대로 안전하다 — 변경 불필요.

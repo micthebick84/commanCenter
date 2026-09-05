@@ -1,5 +1,5 @@
 import type { SdkMessage } from '../sdk/sdkAdapter.js';
-import type { ActivityInput } from '../types.js';
+import type { ActivityInput, RateLimitInfo } from '../types.js';
 
 export interface RelayResult {
   sessionId: string | null;
@@ -11,6 +11,10 @@ export interface RelayResult {
   cacheReadTokens: number;
   durationMs: number;
   completed: boolean;
+  /** 마지막 최상위 assistant 메시지(없으면 message_start) usage의 input+cache_creation+cache_read. 없으면 null. */
+  contextTokens: number | null;
+  /** result.modelUsage 중 입력 토큰 합이 최대인 모델의 contextWindow. 없으면 null. */
+  contextWindow: number | null;
 }
 
 export interface RelayOpts {
@@ -18,6 +22,8 @@ export interface RelayOpts {
   onActivity?: (e: ActivityInput) => void;
   /** tool detail의 workDir prefix 상대화용. */
   workDir?: string;
+  /** rate_limit_event(구독 한도 스냅샷) 콜백 — 미전달 시 무시. 정규화/보고는 호출자(RateLimitReporter) 책임. */
+  onRateLimit?: (info: RateLimitInfo) => void;
 }
 
 const MAX_DETAIL = 120;
@@ -41,6 +47,55 @@ export function summarizeToolUse(
   let detail = raw;
   if (workDir && detail.startsWith(workDir)) detail = detail.slice(workDir.length).replace(/^\//, '');
   return detail.length > MAX_DETAIL ? `${detail.slice(0, MAX_DETAIL)}…` : detail;
+}
+
+type UsageShape = {
+  input_tokens?: unknown;
+  cache_creation_input_tokens?: unknown;
+  cache_read_input_tokens?: unknown;
+};
+
+const CONTEXT_KEYS = ['input_tokens', 'cache_creation_input_tokens', 'cache_read_input_tokens'] as const;
+
+/** usage → 컨텍스트 토큰(input+cache_creation+cache_read). 세 필드 중 숫자가 하나도 없으면 null. */
+export function contextTokensOf(usage: unknown): number | null {
+  if (!usage || typeof usage !== 'object') return null;
+  const u = usage as UsageShape;
+  let sum = 0;
+  let seen = false;
+  for (const k of CONTEXT_KEYS) {
+    const v = u[k];
+    if (typeof v === 'number' && Number.isFinite(v)) {
+      sum += v;
+      seen = true;
+    }
+  }
+  return seen ? sum : null;
+}
+
+/** result.modelUsage(Record<model, ModelUsage>)에서 주 모델(입력 토큰 합 최대)의 contextWindow. 없으면 null. */
+export function contextWindowOf(modelUsage: unknown): number | null {
+  if (!modelUsage || typeof modelUsage !== 'object') return null;
+  const n = (x: unknown) => (typeof x === 'number' && Number.isFinite(x) ? x : 0);
+  let best: { total: number; window: number } | null = null;
+  for (const v of Object.values(modelUsage as Record<string, unknown>)) {
+    if (!v || typeof v !== 'object') continue;
+    const m = v as {
+      inputTokens?: unknown;
+      cacheReadInputTokens?: unknown;
+      cacheCreationInputTokens?: unknown;
+      contextWindow?: unknown;
+    };
+    if (typeof m.contextWindow !== 'number' || !(m.contextWindow > 0)) continue;
+    const total = n(m.inputTokens) + n(m.cacheReadInputTokens) + n(m.cacheCreationInputTokens);
+    if (!best || total > best.total) best = { total, window: m.contextWindow };
+  }
+  return best ? best.window : null;
+}
+
+/** parent_tool_use_id가 있으면 서브에이전트 스트림 — 최상위 컨텍스트가 아니다. */
+function isTopLevel(msg: SdkMessage): boolean {
+  return !(msg as { parent_tool_use_id?: string | null }).parent_tool_use_id;
 }
 
 type ContentBlock = { type: string; text?: string; name?: string; input?: Record<string, unknown> };
@@ -89,14 +144,31 @@ export async function relay(stream: AsyncIterable<SdkMessage>, opts?: RelayOpts)
   let cacheReadTokens = 0;
   let durationMs = 0;
   let completed = false;
+  let assistantContext: number | null = null;
+  let startContext: number | null = null;
+  let contextWindow: number | null = null;
   for await (const msg of stream) {
     if (msg.type === 'system' && msg.subtype === 'init') {
       sessionId = (msg.session_id as string) ?? null;
+    } else if (msg.type === 'rate_limit_event') {
+      // 구독 한도 스냅샷 — 보고 여부/정규화는 콜백 소유자가 결정한다.
+      const info = msg.rate_limit_info;
+      if (opts?.onRateLimit && info && typeof info === 'object') opts.onRateLimit(info as RateLimitInfo);
     } else if (msg.type === 'stream_event') {
+      // message_start usage = 이 API 호출의 요청 컨텍스트(출력 전). assistant usage가 없을 때의 폴백.
+      const ev = msg.event as { type?: string; message?: { usage?: unknown } } | undefined;
+      if (ev?.type === 'message_start' && isTopLevel(msg)) {
+        const ct = contextTokensOf(ev.message?.usage);
+        if (ct !== null) startContext = ct;
+      }
       if (!opts?.onActivity) continue;
       const activity = deltaActivity(msg);
       if (activity) opts.onActivity(activity);
     } else if (msg.type === 'assistant') {
+      if (isTopLevel(msg)) {
+        const ct = contextTokensOf((msg.message as { usage?: unknown } | undefined)?.usage);
+        if (ct !== null) assistantContext = ct;
+      }
       const t = extractText(msg);
       if (t) parts.push(t);
       if (opts?.onActivity) {
@@ -126,6 +198,7 @@ export async function relay(stream: AsyncIterable<SdkMessage>, opts?: RelayOpts)
       cacheCreationTokens = usage?.cache_creation_input_tokens ?? 0;
       cacheReadTokens = usage?.cache_read_input_tokens ?? 0;
       durationMs = (msg.duration_ms as number) ?? 0;
+      contextWindow = contextWindowOf(msg.modelUsage);
       completed = true;
     }
   }
@@ -139,5 +212,7 @@ export async function relay(stream: AsyncIterable<SdkMessage>, opts?: RelayOpts)
     cacheReadTokens,
     durationMs,
     completed,
+    contextTokens: assistantContext ?? startContext,
+    contextWindow,
   };
 }

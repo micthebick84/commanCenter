@@ -106,6 +106,10 @@ export interface WorkerQuestionRequest {
   outputTokens: number;
   cacheCreationTokens: number;
   cacheReadTokens: number;
+  /** 마지막 최상위 assistant 메시지의 컨텍스트 토큰(input+cache_creation+cache_read). 없으면 null (스펙 2026-09-05 §4.2). */
+  contextTokens: number | null;
+  /** result.modelUsage 주 모델의 contextWindow. 없으면 null. */
+  contextWindow: number | null;
 }
 
 /**
@@ -125,4 +129,33 @@ export interface WorkerPlanRequest {
   cacheCreationTokens: number;
   cacheReadTokens: number;
   durationMs: number;
+}
+
+/**
+ * SDK SDKRateLimitInfo 부분집합 (@anthropic-ai/claude-agent-sdk@0.2.117 sdk.d.ts:2923).
+ * relay는 그대로 넘기고, 정규화는 runner/rateLimitReport.ts가 한다 (스펙 2026-09-05 §4.3).
+ */
+export interface RateLimitInfo {
+  status?: 'allowed' | 'allowed_warning' | 'rejected';
+  resetsAt?: number;
+  rateLimitType?: 'five_hour' | 'seven_day' | 'seven_day_opus' | 'seven_day_sonnet' | 'overage';
+  /** 구형(flat) 이벤트에만 존재. 실측(CLI 2.1.261)에서는 없고 unifiedWindows 안에 창별로 온다. */
+  utilization?: number;
+  isUsingOverage?: boolean;
+  /**
+   * sdk.d.ts 미선언 — 실측(test/fixtures/RATE_LIMIT_FINDINGS.md ①): 한 이벤트에 five_hour/seven_day 창이 동봉되고
+   * 각 창의 utilization(0..1 분수)/resetsAt(epoch 초)은 여기에만 있다. 키는 rateLimitType 유니온과 같은 문자열.
+   */
+  unifiedWindows?: Record<string, { utilization?: number; resetsAt?: number } | undefined>;
+}
+
+/** Body for POST /worker/usage/rate-limits?workerId=… (Java WorkerRateLimitRequest). */
+export interface WorkerRateLimitRequest {
+  limitType: string;
+  status: string;
+  /** 0..1 분수 (정규화 완료). */
+  utilization: number;
+  /** ISO-8601 또는 null. */
+  resetsAt: string | null;
+  isUsingOverage: boolean;
 }

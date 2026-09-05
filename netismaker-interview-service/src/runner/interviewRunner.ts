@@ -391,6 +391,8 @@ export class InterviewRunner {
         outputTokens,
         cacheCreationTokens,
         cacheReadTokens,
+        contextTokens: result.contextTokens,
+        contextWindow: result.contextWindow,
       });
     }
   }
@@ -434,6 +436,8 @@ export class InterviewRunner {
       outputTokens: result.outputTokens,
       cacheCreationTokens: result.cacheCreationTokens,
       cacheReadTokens: result.cacheReadTokens,
+      contextTokens: result.contextTokens,
+      contextWindow: result.contextWindow,
     });
   }
 }

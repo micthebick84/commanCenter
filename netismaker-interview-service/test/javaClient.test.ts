@@ -41,6 +41,8 @@ describe('JavaApiClient', () => {
       outputTokens: 50,
       cacheCreationTokens: 0,
       cacheReadTokens: 0,
+      contextTokens: null,
+      contextWindow: null,
     });
     const [url, init] = fetchMock.mock.calls[0]!;
     // Java @RequestParam String workerId is REQUIRED on every worker endpoint (query, not body).

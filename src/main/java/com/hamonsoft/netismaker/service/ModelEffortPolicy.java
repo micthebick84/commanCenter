@@ -30,15 +30,15 @@ public final class ModelEffortPolicy {
     private static final List<String> LIMITED = List.of("low", "medium", "high");
 
     /**
-     * 모델 → 허용 effort. Claude 5 제품군 + Haiku 4.5 (claude-api 레퍼런스 기준).
+     * 모델 → 허용 effort. Claude 5 제품군(Opus/Sonnet) + Haiku 4.5 (claude-api 레퍼런스 기준).
      * Haiku만 low/medium/high — 나머지는 xhigh/max까지.
      *
-     * 여기서 뺀 구세대 모델(opus-4-8/4-7, sonnet-4-6)도 CLI에서는 여전히 유효하다.
-     * 즉 이 맵은 "새로 고를 수 있는 목록"이고, 과거 작업에 박제된 모델 값은
+     * claude-fable-5는 2026-09-05 선택 목록에서 뺐다(스펙 2026-09-05-question-chat-ui-design §5.4).
+     * 여기서 뺀 모델(fable-5, opus-4-8/4-7, sonnet-4-6)도 CLI에서는 여전히 유효하다.
+     * 즉 이 맵은 "새로 고를 수 있는 목록"이고, 과거 작업/세션에 박제된 모델 값은
      * 검증을 타지 않으므로 그대로 실행된다(배포 Dockerfile 생성 등).
      */
     private static final Map<String, List<String>> ALLOWED = Map.of(
-            "claude-fable-5", FULL,
             "claude-opus-5", FULL,
             "claude-sonnet-5", FULL,
             "claude-haiku-4-5", LIMITED);

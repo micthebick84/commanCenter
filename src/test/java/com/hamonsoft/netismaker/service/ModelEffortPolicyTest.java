@@ -22,11 +22,18 @@ class ModelEffortPolicyTest {
     }
 
     @Test
-    void validate_accepts_fable_opus_and_sonnet_with_max() {
-        ModelEffortPolicy.validate("claude-fable-5", "max");
+    void validate_accepts_opus_and_sonnet_with_max() {
         ModelEffortPolicy.validate("claude-opus-5", "max");
         ModelEffortPolicy.validate("claude-opus-5", "xhigh");
         ModelEffortPolicy.validate("claude-sonnet-5", "max");
+    }
+
+    /** Fable은 2026-09-05 선택 목록에서 뺐다(스펙 2026-09-05 §5.4). 과거 세션의 박제 값은 검증을 타지 않는다. */
+    @Test
+    void validate_rejects_fable_removed_from_picker() {
+        assertThatThrownBy(() -> ModelEffortPolicy.validate("claude-fable-5", "high"))
+                .isInstanceOf(TaskException.class)
+                .hasMessageContaining("모델");
     }
 
     /** 구세대 모델은 선택 목록에서 빠졌다 — 새로 고를 수 없다(과거 작업의 박제 값은 검증을 타지 않음). */

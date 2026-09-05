@@ -9,10 +9,11 @@ describe('modelEffort', () => {
     expect(DEFAULT_EFFORT).toBe('high')
   })
 
-  it('exposes the four models', () => {
+  it('exposes the three picker models (Fable 제외 — 스펙 2026-09-05 §5.4)', () => {
     expect(MODEL_OPTIONS.map((m) => m.value)).toEqual([
-      'claude-fable-5', 'claude-opus-5', 'claude-sonnet-5', 'claude-haiku-4-5',
+      'claude-opus-5', 'claude-sonnet-5', 'claude-haiku-4-5',
     ])
+    expect(MODEL_OPTIONS.find((m) => m.value === 'claude-fable-5')).toBeUndefined()
   })
 
   it('haiku allows only low/medium/high; others allow all five', () => {

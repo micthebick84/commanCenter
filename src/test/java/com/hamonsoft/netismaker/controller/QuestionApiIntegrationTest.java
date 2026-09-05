@@ -214,6 +214,16 @@ class QuestionApiIntegrationTest {
         mvc.perform(post("/api/questions/" + id + "/close").with(userJwt("user1"))).andExpect(status().isConflict());
     }
 
+    /** 프론트 새 질문 입력창은 제목을 보내지 않는다 — 서버가 첫 줄로 생성 (스펙 2026-09-05 §2). */
+    @Test
+    void create_without_title_derives_title_from_question() throws Exception {
+        mvc.perform(post("/api/questions").with(userJwt("user1")).contentType(APPLICATION_JSON)
+                        .content("{\"repoCatalogId\":1,\"githubBranch\":\"main\","
+                                + "\"question\":\"로그인은 어디서 처리되나요?\\n상세 설명\"}"))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.title").value("로그인은 어디서 처리되나요?"));
+    }
+
     /** 워커가 /question에 컨텍스트 스냅샷을 보고하면 상세·목록 응답에 그대로 노출된다 (스펙 2026-09-05 §4.2). */
     @Test
     void worker_context_snapshot_is_exposed_on_detail_and_list() throws Exception {

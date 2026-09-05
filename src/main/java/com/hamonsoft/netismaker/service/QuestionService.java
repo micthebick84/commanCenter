@@ -27,6 +27,9 @@ import java.util.List;
 @Profile("api")
 public class QuestionService {
 
+    /** 자동 생성 제목 최대 길이(초과 시 절단 + '…'). 스펙 2026-09-05 §2. */
+    static final int DERIVED_TITLE_MAX = 60;
+
     private final InterviewService interviewService;
     private final InterviewSessionRepository sessionRepo;
     private final InterviewTurnRepository turnRepo;
@@ -65,7 +68,7 @@ public class QuestionService {
         ModelEffortPolicy.validate(model, effort);   // 검증이 먼저 — 실패 시 세션이 생기면 안 된다
 
         InterviewSession s = InterviewSession.createQuestion(repo.ownerRepo(), req.githubBranch(),
-                req.title(), req.question(), requesterId, extras, model, effort);
+                deriveTitle(req.title(), req.question()), req.question(), requesterId, extras, model, effort);
         s.setGitUrl(repo.gitUrl());
         s.setRepoAlias(repo.alias());
         s.setRepoCatalogId(repo.catalogId());
@@ -114,5 +117,17 @@ public class QuestionService {
     public InterviewSession close(Long id, String actorId, boolean isAdmin) {
         interviewService.requireKind(id, InterviewKind.QUESTION);
         return interviewService.cancel(id, actorId, isAdmin);
+    }
+
+    /**
+     * 제목 미입력 시 질문 첫 줄에서 생성: strip → 첫 줄 → 연속 공백 1칸 → 60자 초과면 절단+'…'.
+     * 명시 제목은 trim만 한다. question이 blank인 경우는 @NotBlank가 먼저 400으로 막는다.
+     */
+    static String deriveTitle(String title, String question) {
+        if (title != null && !title.isBlank()) return title.trim();
+        String firstLine = question.strip().lines().findFirst().orElse("")
+                .replaceAll("\\s+", " ").trim();
+        if (firstLine.length() <= DERIVED_TITLE_MAX) return firstLine;
+        return firstLine.substring(0, DERIVED_TITLE_MAX) + "…";
     }
 }

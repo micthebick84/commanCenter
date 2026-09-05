@@ -55,6 +55,10 @@ class QuestionServiceTest {
         return new QuestionCreateRequest(1L, "dev", "인증 흐름", "로그인은 어디서 처리되나요?", model, effort, mcpIds);
     }
 
+    private static QuestionCreateRequest reqWithTitle(String title, String question) {
+        return new QuestionCreateRequest(1L, "dev", title, question, null, null, null);
+    }
+
     @Test
     void create_builds_question_session_from_catalog_repo_and_selected_model() {
         when(sessionRepo.countActiveQuestionsByRequester("user1")).thenReturn(0L);
@@ -109,6 +113,30 @@ class QuestionServiceTest {
                 .isInstanceOf(TaskException.class)
                 .satisfies(e -> assertThat(((TaskException) e).getStatus()).isEqualTo(HttpStatus.BAD_REQUEST));
         verify(sessionRepo, never()).save(any());
+    }
+
+    @Test
+    void create_derives_title_from_first_line_when_blank() {
+        when(sessionRepo.countActiveQuestionsByRequester("user1")).thenReturn(0L);
+        InterviewSession s = service.create(
+                reqWithTitle(null, "  로그인은   어디서 처리되나요?\n두 번째 줄은 제목에 안 들어간다"), "user1");
+        assertThat(s.getTitle()).isEqualTo("로그인은 어디서 처리되나요?");
+        // 본문(킥오프 프롬프트에 그대로 삽입)은 원문 유지
+        assertThat(s.getDescription()).isEqualTo("  로그인은   어디서 처리되나요?\n두 번째 줄은 제목에 안 들어간다");
+    }
+
+    @Test
+    void create_truncates_derived_title_to_60_chars_with_ellipsis() {
+        when(sessionRepo.countActiveQuestionsByRequester("user1")).thenReturn(0L);
+        InterviewSession s = service.create(reqWithTitle("   ", "가".repeat(70)), "user1");
+        assertThat(s.getTitle()).hasSize(61).startsWith("가".repeat(60)).endsWith("…");
+    }
+
+    @Test
+    void create_keeps_explicit_title_trimmed() {
+        when(sessionRepo.countActiveQuestionsByRequester("user1")).thenReturn(0L);
+        InterviewSession s = service.create(reqWithTitle("  인증 흐름  ", "질문 본문"), "user1");
+        assertThat(s.getTitle()).isEqualTo("인증 흐름");
     }
 
     @Test

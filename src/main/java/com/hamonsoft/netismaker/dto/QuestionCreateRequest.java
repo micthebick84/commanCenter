@@ -17,7 +17,7 @@ public record QuestionCreateRequest(
         @Size(max = 255)
         String githubBranch,
 
-        @NotBlank
+        /** 선택. blank면 서버가 질문 첫 줄로 생성한다 (QuestionService.deriveTitle, 스펙 2026-09-05 §2). */
         @Size(max = 500)
         String title,
 

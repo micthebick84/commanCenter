@@ -47,7 +47,7 @@
 - Create `scripts/spikeRateLimit.ts`, `test/fixtures/RATE_LIMIT_FINDINGS.md` — 실측.
 - Modify `src/types.ts` — `RateLimitInfo`, `WorkerRateLimitRequest`, `WorkerQuestionRequest.contextTokens/contextWindow`.
 - Modify `src/runner/messageRelay.ts` — `contextTokensOf`, `contextWindowOf`, `onRateLimit`, `RelayResult.contextTokens/contextWindow`.
-- Create `src/runner/rateLimitReport.ts` — `toRateLimitRequest()`, `RateLimitReporter`.
+- Create `src/runner/rateLimitReport.ts` — `toRateLimitRequests()`(실측 shape `unifiedWindows` 창별 펼침), `RateLimitReporter`.
 - Modify `src/api/javaClient.ts` — `postRateLimit()`.
 - Modify `src/runner/interviewRunner.ts` — 콜백 배선 + postQuestion 컨텍스트 필드.
 - Modify `test/fixtures/sdkMessages.ts` — `usageAwareQuestionStream()`.
@@ -1239,8 +1239,14 @@ export interface RateLimitInfo {
   status?: 'allowed' | 'allowed_warning' | 'rejected';
   resetsAt?: number;
   rateLimitType?: 'five_hour' | 'seven_day' | 'seven_day_opus' | 'seven_day_sonnet' | 'overage';
+  /** 구형(flat) 이벤트에만 존재. 실측(CLI 2.1.261)에서는 없고 unifiedWindows 안에 창별로 온다. */
   utilization?: number;
   isUsingOverage?: boolean;
+  /**
+   * sdk.d.ts 미선언 — 실측(test/fixtures/RATE_LIMIT_FINDINGS.md ①): 한 이벤트에 five_hour/seven_day 창이 동봉되고
+   * 각 창의 utilization(0..1 분수)/resetsAt(epoch 초)은 여기에만 있다. 키는 rateLimitType 유니온과 같은 문자열.
+   */
+  unifiedWindows?: Record<string, { utilization?: number; resetsAt?: number } | undefined>;
 }
 
 /** Body for POST /worker/usage/rate-limits?workerId=… (Java WorkerRateLimitRequest). */
@@ -1261,7 +1267,7 @@ export interface WorkerRateLimitRequest {
 
 ```ts
 /**
- * 사용량 인지 턴 (스펙 2026-09-05 §4): rate_limit_event 2건(five_hour/seven_day) + 최상위 message_start usage +
+ * 사용량 인지 턴 (스펙 2026-09-05 §4): rate_limit_event 1건(실측 shape — unifiedWindows에 five_hour/seven_day 동봉, 최상위 utilization 없음) + 최상위 message_start usage +
  * 최상위 assistant usage + 서브에이전트 assistant usage(컨텍스트 계산 제외) + result.modelUsage(주 모델 opus, 부 모델 haiku).
  * shape 근거: sdk.d.ts:2910 SDKRateLimitEvent / :2923 SDKRateLimitInfo / :1050 ModelUsage,
  * 실측: test/fixtures/RATE_LIMIT_FINDINGS.md. resetsAt은 epoch 초(1788580800 = 2026-09-05T04:00:00Z).
@@ -1269,11 +1275,6 @@ export interface WorkerRateLimitRequest {
 export const usageAwareQuestionStream = (): AsyncIterable<SdkMessage> =>
   gen(
     { type: 'system', subtype: 'init', session_id: 'sess-usage-1' },
-    {
-      type: 'rate_limit_event',
-      rate_limit_info: { status: 'allowed', rateLimitType: 'five_hour', utilization: 0.42, resetsAt: 1788580800 },
-      session_id: 'sess-usage-1',
-    },
     {
       type: 'stream_event',
       parent_tool_use_id: null,
@@ -1301,8 +1302,19 @@ export const usageAwareQuestionStream = (): AsyncIterable<SdkMessage> =>
       },
     },
     {
+      // 실측 shape(RATE_LIMIT_FINDINGS.md ①): 첫 턴 message_stop 직후 1건, 최상위 utilization 없음, 창별 값은 unifiedWindows.
       type: 'rate_limit_event',
-      rate_limit_info: { status: 'allowed_warning', rateLimitType: 'seven_day', utilization: 0.63, resetsAt: 1788854400 },
+      rate_limit_info: {
+        status: 'allowed',
+        resetsAt: 1788580800,
+        rateLimitType: 'five_hour',
+        overageStatus: 'rejected',
+        isUsingOverage: false,
+        unifiedWindows: {
+          five_hour: { utilization: 0.42, resetsAt: 1788580800 },
+          seven_day: { utilization: 0.63, resetsAt: 1788854400 },
+        },
+      },
       session_id: 'sess-usage-1',
     },
     {
@@ -1365,11 +1377,13 @@ describe('relay — 컨텍스트 스냅샷 + rate limit (스펙 2026-09-05 §4)'
     expect(out.contextWindow).toBeNull();
   });
 
-  it('rate_limit_event를 스트림 순서대로 onRateLimit에 넘기고, 콜백이 없으면 무시한다', async () => {
+  it('rate_limit_event의 rate_limit_info를 가공 없이 onRateLimit에 넘기고(unifiedWindows 포함), 콜백이 없으면 무시한다', async () => {
     const seen: RateLimitInfo[] = [];
     await relay(usageAwareQuestionStream(), { onRateLimit: (i) => seen.push(i) });
-    expect(seen.map((i) => i.rateLimitType)).toEqual(['five_hour', 'seven_day']);
-    expect(seen[0]!.utilization).toBe(0.42);
+    expect(seen).toHaveLength(1);
+    expect(seen[0]!.rateLimitType).toBe('five_hour');
+    expect(seen[0]!.utilization).toBeUndefined(); // 실측: 최상위 utilization 없음 — 정규화(Task 7)가 unifiedWindows를 본다
+    expect(seen[0]!.unifiedWindows?.seven_day?.utilization).toBe(0.63);
     await expect(relay(usageAwareQuestionStream())).resolves.toMatchObject({ completed: true });
   });
 });
@@ -1591,6 +1605,8 @@ Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
 
 ### Task 7: interview-service — 정규화·보고 배선 (`RateLimitReporter`, `postRateLimit`, 러너)
 
+> **실측 보정(Task 1, 2026-09-05 — `netismaker-interview-service/test/fixtures/RATE_LIMIT_FINDINGS.md`):** 실제 `rate_limit_info`에는 최상위 `utilization`이 없고, 타입 선언에 없는 `unifiedWindows: { five_hour: {utilization, resetsAt}, seven_day: {…} }`에 창별 값이 **한 이벤트에 동봉**된다(세션당 1건 이상, 턴당 아님). 따라서 정규화는 이벤트 1건을 **창마다 1건의 `WorkerRateLimitRequest`로 펼친다**(`toRateLimitRequests` → 배열). 규칙: `unifiedWindows`의 알려진 타입 키만 채택(미지 키 무시), 주 창(`rateLimitType`)이 `unifiedWindows`에 없으면 최상위 `utilization`/`resetsAt`으로 보충(구형 flat 이벤트 호환), `status`는 주 창만 최상위 값(없으면 `allowed`)이고 나머지 창은 `allowed`, `isUsingOverage`는 계정 단위라 전 행 공통(`=== true`), 출력 순서는 `five_hour, seven_day, seven_day_opus, seven_day_sonnet, overage` 고정. 단위 정규화(분수/퍼센트, 초/ms)는 스펙 §4.3 그대로. Java(Task 5)·프론트(Task 9)는 타입별 1행 upsert 계약 그대로라 영향 없다.
+
 **Files:**
 - Create: `netismaker-interview-service/src/runner/rateLimitReport.ts`
 - Modify: `netismaker-interview-service/src/api/javaClient.ts` (`postRateLimit`)
@@ -1599,47 +1615,88 @@ Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
 
 **Interfaces:**
 - Consumes: Task 6의 `RelayOpts.onRateLimit`, `RelayResult.contextTokens/contextWindow`, `types.ts` 타입들; Task 5의 `POST /worker/usage/rate-limits`.
-- Produces: `toRateLimitRequest(info): WorkerRateLimitRequest | null`, `class RateLimitReporter { report(info): void; flush(): Promise<void> }`, `JavaApiClient.postRateLimit(body): Promise<void>` (non-2xx → `HttpStatusError`). 러너는 인터뷰·질문 두 경로의 `postQuestion`에 `contextTokens`/`contextWindow`를 싣는다.
+- Produces: `toRateLimitRequests(info): WorkerRateLimitRequest[]`(이벤트 1건 → 창별 0..N건; 실측 `unifiedWindows` 펼침 + 구형 flat 폴백), `class RateLimitReporter { report(info): void; flush(): Promise<void> }`, `JavaApiClient.postRateLimit(body): Promise<void>` (non-2xx → `HttpStatusError`). 러너는 인터뷰·질문 두 경로의 `postQuestion`에 `contextTokens`/`contextWindow`를 싣는다.
 
 - [ ] **Step 1: 실패 테스트 — `test/rateLimitReport.test.ts`**
 
 ```ts
 import { describe, expect, it, vi } from 'vitest';
-import { RateLimitReporter, toRateLimitRequest } from '../src/runner/rateLimitReport.js';
+import { RateLimitReporter, toRateLimitRequests } from '../src/runner/rateLimitReport.js';
 import { HttpStatusError } from '../src/api/javaClient.js';
+import type { RateLimitInfo } from '../src/types.js';
 
-describe('toRateLimitRequest (스펙 2026-09-05 §4.3)', () => {
-  it('분수 utilization + epoch 초 resetsAt → 그대로 + ISO', () => {
-    expect(
-      toRateLimitRequest({ status: 'allowed', rateLimitType: 'five_hour', utilization: 0.42, resetsAt: 1788580800 }),
-    ).toEqual({
-      limitType: 'five_hour',
+describe('toRateLimitRequests (스펙 2026-09-05 §4.3 + 실측 보정 RATE_LIMIT_FINDINGS.md)', () => {
+  it('실측 shape: unifiedWindows 창마다 1건, 최상위 utilization 없음 → five_hour/seven_day 2건 (캡처 원문)', () => {
+    const real = {
       status: 'allowed',
-      utilization: 0.42,
-      resetsAt: '2026-09-05T04:00:00.000Z',
+      resetsAt: 1788616200,
+      rateLimitType: 'five_hour',
+      overageStatus: 'rejected',
+      overageDisabledReason: 'org_level_disabled',
       isUsingOverage: false,
-    });
+      unifiedWindows: {
+        five_hour: { utilization: 0.05, resetsAt: 1788616200 },
+        seven_day: { utilization: 0.12, resetsAt: 1788706800 },
+      },
+    } as RateLimitInfo;
+    expect(toRateLimitRequests(real)).toEqual([
+      { limitType: 'five_hour', status: 'allowed', utilization: 0.05, resetsAt: '2026-09-05T13:50:00.000Z', isUsingOverage: false },
+      { limitType: 'seven_day', status: 'allowed', utilization: 0.12, resetsAt: '2026-09-06T15:00:00.000Z', isUsingOverage: false },
+    ]);
   });
 
-  it('퍼센트(1 초과)는 /100, 범위 밖은 0..1 클램프, ms resetsAt은 그대로 ISO', () => {
-    const pct = toRateLimitRequest({ status: 'allowed', rateLimitType: 'seven_day', utilization: 63, resetsAt: 1788854400000 })!;
-    expect(pct.utilization).toBe(0.63);
-    expect(pct.resetsAt).toBe('2026-09-08T08:00:00.000Z');
-    expect(toRateLimitRequest({ status: 'rejected', rateLimitType: 'seven_day', utilization: 250 })!.utilization).toBe(1);
-    expect(toRateLimitRequest({ status: 'allowed', rateLimitType: 'seven_day', utilization: -3 })!.utilization).toBe(0);
+  it('주 창만 최상위 status를 받고 나머지 창은 allowed; 미지 키는 버린다; 순서는 고정', () => {
+    const out = toRateLimitRequests({
+      status: 'allowed_warning',
+      rateLimitType: 'seven_day',
+      unifiedWindows: { weird: { utilization: 0.5 }, seven_day: { utilization: 0.8 }, five_hour: { utilization: 0.1 } },
+    } as RateLimitInfo);
+    expect(out.map((r) => [r.limitType, r.status, r.utilization])).toEqual([
+      ['five_hour', 'allowed', 0.1],
+      ['seven_day', 'allowed_warning', 0.8],
+    ]);
   });
 
-  it('rateLimitType 없음/미지·비객체 → null; utilization 없음 → 0; status 없음 → allowed; overage 플래그', () => {
-    expect(toRateLimitRequest({ status: 'allowed' })).toBeNull();
-    expect(toRateLimitRequest({ status: 'allowed', rateLimitType: 'weird' as never })).toBeNull();
-    expect(toRateLimitRequest(null)).toBeNull();
-    expect(toRateLimitRequest({ rateLimitType: 'overage', isUsingOverage: true })).toEqual({
-      limitType: 'overage',
+  it('구형(flat) 이벤트: 분수 utilization + epoch 초 resetsAt → 1건, ISO', () => {
+    expect(toRateLimitRequests({ status: 'allowed', rateLimitType: 'five_hour', utilization: 0.42, resetsAt: 1788580800 })).toEqual([
+      { limitType: 'five_hour', status: 'allowed', utilization: 0.42, resetsAt: '2026-09-05T04:00:00.000Z', isUsingOverage: false },
+    ]);
+  });
+
+  it('unifiedWindows에 주 창이 빠졌으면 최상위 utilization/resetsAt으로 주 창을 보충한다', () => {
+    const out = toRateLimitRequests({
       status: 'allowed',
-      utilization: 0,
-      resetsAt: null,
-      isUsingOverage: true,
+      rateLimitType: 'five_hour',
+      utilization: 0.3,
+      resetsAt: 1788580800,
+      unifiedWindows: { seven_day: { utilization: 0.6, resetsAt: 1788854400 } },
     });
+    expect(out.map((r) => [r.limitType, r.utilization, r.resetsAt])).toEqual([
+      ['five_hour', 0.3, '2026-09-05T04:00:00.000Z'],
+      ['seven_day', 0.6, '2026-09-08T08:00:00.000Z'],
+    ]);
+  });
+
+  it('퍼센트(1 초과)는 /100, 범위 밖은 0..1 클램프, ms resetsAt은 그대로 ISO, 소수 4자리', () => {
+    const [pct] = toRateLimitRequests({ status: 'allowed', rateLimitType: 'seven_day', utilization: 63, resetsAt: 1788854400000 });
+    expect(pct!.utilization).toBe(0.63);
+    expect(pct!.resetsAt).toBe('2026-09-08T08:00:00.000Z');
+    expect(toRateLimitRequests({ status: 'rejected', rateLimitType: 'seven_day', utilization: 250 })[0]!.utilization).toBe(1);
+    expect(toRateLimitRequests({ status: 'allowed', rateLimitType: 'seven_day', utilization: -3 })[0]!.utilization).toBe(0);
+    expect(toRateLimitRequests({ rateLimitType: 'five_hour', unifiedWindows: { five_hour: { utilization: 0.123456 } } })[0]!.utilization).toBe(0.1235);
+  });
+
+  it('rateLimitType 없음/미지·비객체·창 없음 → []; utilization 없음 → 0; status 없음 → allowed; overage 플래그는 전 행 공통', () => {
+    expect(toRateLimitRequests({ status: 'allowed' })).toEqual([]);
+    expect(toRateLimitRequests({ status: 'allowed', rateLimitType: 'weird' as never })).toEqual([]);
+    expect(toRateLimitRequests(null)).toEqual([]);
+    expect(toRateLimitRequests({ rateLimitType: 'weird' as never, unifiedWindows: { weird: { utilization: 0.5 } } })).toEqual([]);
+    expect(toRateLimitRequests({ rateLimitType: 'overage', isUsingOverage: true })).toEqual([
+      { limitType: 'overage', status: 'allowed', utilization: 0, resetsAt: null, isUsingOverage: true },
+    ]);
+    expect(
+      toRateLimitRequests({ rateLimitType: 'five_hour', isUsingOverage: true, unifiedWindows: { five_hour: {}, seven_day: {} } }).map((r) => r.isUsingOverage),
+    ).toEqual([true, true]);
   });
 });
 
@@ -1654,6 +1711,22 @@ describe('RateLimitReporter', () => {
     expect(postRateLimit).toHaveBeenCalledTimes(2);
     expect(postRateLimit.mock.calls[0]![0].limitType).toBe('five_hour');
     expect(postRateLimit.mock.calls[1]![0].limitType).toBe('seven_day');
+  });
+
+  it('실측 shape 이벤트 1건은 창별로 펼쳐 five_hour → seven_day 순으로 2건 POST한다', async () => {
+    const postRateLimit = vi.fn().mockResolvedValue(undefined);
+    const r = new RateLimitReporter({ postRateLimit });
+    r.report({
+      status: 'allowed',
+      rateLimitType: 'five_hour',
+      resetsAt: 1788580800,
+      unifiedWindows: { five_hour: { utilization: 0.42, resetsAt: 1788580800 }, seven_day: { utilization: 0.63, resetsAt: 1788854400 } },
+    });
+    await r.flush();
+    expect(postRateLimit.mock.calls.map((c) => [c[0].limitType, c[0].utilization])).toEqual([
+      ['five_hour', 0.42],
+      ['seven_day', 0.63],
+    ]);
   });
 
   it('404(구버전 API)면 이후 보고를 비활성화하고 경고는 1회만 남긴다', async () => {
@@ -1756,38 +1829,68 @@ Expected: FAIL — 모듈 없음 / `postRateLimit is not a function` / `contextT
 import { HttpStatusError, type JavaApiClient } from '../api/javaClient.js';
 import type { RateLimitInfo, WorkerRateLimitRequest } from '../types.js';
 
-const LIMIT_TYPES = new Set(['five_hour', 'seven_day', 'seven_day_opus', 'seven_day_sonnet', 'overage']);
+/** 보고 대상 창. 순서 = 프론트 LIMIT_ORDER(+overage) — 펼침 결과의 출력 순서이기도 하다. */
+const LIMIT_TYPES = ['five_hour', 'seven_day', 'seven_day_opus', 'seven_day_sonnet', 'overage'] as const;
+type LimitType = (typeof LIMIT_TYPES)[number];
 
-/**
- * SDKRateLimitInfo → Java WorkerRateLimitRequest 정규화 (스펙 2026-09-05 §4.3).
- * - rateLimitType 없음/미지 → null(보고 안 함)
- * - utilization: 0..1 분수. 비숫자 → 0. 1 초과면 퍼센트로 간주해 /100. 0..1 클램프, 소수 4자리
- * - resetsAt: 양수만. 1e12 미만이면 epoch 초 → ms. ISO-8601 문자열. 없으면 null
- * 실단위는 test/fixtures/RATE_LIMIT_FINDINGS.md — 어느 쪽이든 여기서 흡수하므로 코드 분기가 없다.
- */
-export function toRateLimitRequest(info: RateLimitInfo | null | undefined): WorkerRateLimitRequest | null {
-  if (!info || typeof info !== 'object') return null;
-  const type = info.rateLimitType;
-  if (!type || !LIMIT_TYPES.has(type)) return null;
-  let util = typeof info.utilization === 'number' && Number.isFinite(info.utilization) ? info.utilization : 0;
+const isLimitType = (v: unknown): v is LimitType => typeof v === 'string' && (LIMIT_TYPES as readonly string[]).includes(v);
+
+/** 0..1 분수. 비숫자 → 0. 1 초과면 퍼센트로 간주해 /100. 0..1 클램프, 소수 4자리. */
+function normalizeUtilization(v: unknown): number {
+  let util = typeof v === 'number' && Number.isFinite(v) ? v : 0;
   if (util > 1) util = util / 100;
   util = Math.min(1, Math.max(0, util));
-  let resetsAt: string | null = null;
-  if (typeof info.resetsAt === 'number' && Number.isFinite(info.resetsAt) && info.resetsAt > 0) {
-    const ms = info.resetsAt < 1e12 ? info.resetsAt * 1000 : info.resetsAt;
-    resetsAt = new Date(ms).toISOString();
-  }
-  return {
-    limitType: type,
-    status: info.status || 'allowed',
-    utilization: Number(util.toFixed(4)),
-    resetsAt,
-    isUsingOverage: info.isUsingOverage === true,
-  };
+  return Number(util.toFixed(4));
+}
+
+/** 양수만. 1e12 미만이면 epoch 초 → ms. ISO-8601. 없으면 null. */
+function normalizeResetsAt(v: unknown): string | null {
+  if (typeof v !== 'number' || !Number.isFinite(v) || v <= 0) return null;
+  return new Date(v < 1e12 ? v * 1000 : v).toISOString();
+}
+
+interface WindowSnapshot {
+  utilization?: unknown;
+  resetsAt?: unknown;
 }
 
 /**
- * rate_limit_event → POST /worker/usage/rate-limits. 인터뷰 서비스 수명 동안 1개(러너 필드).
+ * SDKRateLimitInfo → Java WorkerRateLimitRequest[] 정규화 (스펙 2026-09-05 §4.3 + 실측 보정 RATE_LIMIT_FINDINGS.md).
+ * 실측(CLI 2.1.261): 최상위 utilization은 없고, sdk.d.ts 미선언 unifiedWindows에 창별 {utilization, resetsAt}이
+ * 한 이벤트에 동봉된다 → 창마다 1건으로 펼친다.
+ * - unifiedWindows의 알려진 타입 키만 채택(미지 키 무시). 주 창(rateLimitType)이 빠져 있으면 최상위 utilization/resetsAt으로
+ *   보충한다 — 구형(flat) 이벤트는 이 경로로 1건이 된다.
+ * - status: 주 창만 최상위 값(없으면 allowed), 나머지 창은 allowed(창별 status는 이벤트에 없다).
+ * - isUsingOverage: 계정 단위라 전 행 공통(=== true만 true).
+ * - 출력 순서는 LIMIT_TYPES 고정. rateLimitType 없음/미지 + 창 없음 → [] (보고 안 함).
+ */
+export function toRateLimitRequests(info: RateLimitInfo | null | undefined): WorkerRateLimitRequest[] {
+  if (!info || typeof info !== 'object') return [];
+  const primary = info.rateLimitType;
+  const windows = new Map<LimitType, WindowSnapshot>();
+  const uw = info.unifiedWindows;
+  if (uw && typeof uw === 'object') {
+    for (const [type, w] of Object.entries(uw)) {
+      if (isLimitType(type) && w && typeof w === 'object') windows.set(type, w as WindowSnapshot);
+    }
+  }
+  if (isLimitType(primary) && !windows.has(primary)) {
+    windows.set(primary, { utilization: info.utilization, resetsAt: info.resetsAt });
+  }
+  return LIMIT_TYPES.filter((t) => windows.has(t)).map((type) => {
+    const w = windows.get(type)!;
+    return {
+      limitType: type,
+      status: type === primary ? info.status || 'allowed' : 'allowed',
+      utilization: normalizeUtilization(w.utilization),
+      resetsAt: normalizeResetsAt(w.resetsAt ?? (type === primary ? info.resetsAt : undefined)),
+      isUsingOverage: info.isUsingOverage === true,
+    };
+  });
+}
+
+/**
+ * rate_limit_event → POST /worker/usage/rate-limits (창마다 1건). 인터뷰 서비스 수명 동안 1개(러너 필드).
  * - 직렬 체이닝(순서 보장). 실패는 경고 1회 후 계속. 404(구버전 Java)면 서비스 수명 동안 비활성(ActivityPoster 선례).
  * - 어떤 경로로도 throw하지 않는다 — 사용량 보고가 인터뷰/답변을 죽이면 안 된다.
  */
@@ -1800,8 +1903,10 @@ export class RateLimitReporter {
 
   report(info: RateLimitInfo): void {
     if (this.disabled) return;
-    const body = toRateLimitRequest(info);
-    if (!body) return;
+    for (const body of toRateLimitRequests(info)) this.enqueue(body);
+  }
+
+  private enqueue(body: WorkerRateLimitRequest): void {
     this.chain = this.chain
       .then(() => (this.disabled ? undefined : this.client.postRateLimit(body)))
       .catch((err: unknown) => {

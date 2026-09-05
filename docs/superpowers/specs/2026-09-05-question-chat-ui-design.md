@@ -22,7 +22,7 @@
 | 모델 목록 | **Fable 제외.** `claude-opus-5`(기본) · `claude-sonnet-5` · `claude-haiku-4-5`. 백엔드 `ModelEffortPolicy.ALLOWED`(권위)와 프론트 `modelEffort.ts MODEL_OPTIONS`(미러)를 **동시에** 수정. Flyway DEFAULT/엔티티 초기자는 opus-5라 변경 없음. 과거 세션에 박제된 `claude-fable-5`는 검증을 타지 않으므로 그대로 실행된다(마이그레이션 없음) |
 | 모델/effort 변경 시점 | **세션 생성 시에만.** 대화 중에는 툴바 픽커를 세션 값으로 **읽기 전용** 표시(툴팁 "세션 생성 시 고정 — 바꾸려면 새 질문"). 대화 중 변경은 범위 밖(§9) — 백엔드 `InterviewSession.model/effort`가 세션 단위이고 SDK resume 세션의 모델 교체 동작이 미검증 |
 | 제목 | 입력 제거. **서버가 질문 첫 줄에서 자동 생성**(공백 정규화, 60자 초과 시 절단+`…`). `QuestionCreateRequest.title`은 optional로 완화(보내면 그대로 사용 — 구 클라이언트/테스트 호환) |
-| 사용량 데이터 소스 | **SDK `rate_limit_event`** (`@anthropic-ai/claude-agent-sdk@0.2.117` sdk.d.ts:2910 `SDKRateLimitEvent`, :2923 `SDKRateLimitInfo{status, resetsAt?, rateLimitType?, utilization?, isUsingOverage?}`)를 인터뷰 서비스 relay가 수신 → `POST /worker/usage/rate-limits` → `com.claude_rate_limit`(limit_type당 1행 upsert) → `GET /api/usage/claude`. **외부 usage 엔드포인트·Keychain 접근·응답 헤더 파싱은 하지 않는다**(비공식 API 의존 회피) |
+| 사용량 데이터 소스 | **SDK `rate_limit_event`** (`@anthropic-ai/claude-agent-sdk@0.2.117` sdk.d.ts:2910 `SDKRateLimitEvent`, :2923 `SDKRateLimitInfo{status, resetsAt?, rateLimitType?, utilization?, isUsingOverage?}` + 선언에 없는 실측 필드 `unifiedWindows{<type>:{utilization, resetsAt}}` — 2026-09-05 Task 1 실측 `netismaker-interview-service/test/fixtures/RATE_LIMIT_FINDINGS.md`)를 인터뷰 서비스 relay가 수신 → `POST /worker/usage/rate-limits` → `com.claude_rate_limit`(limit_type당 1행 upsert) → `GET /api/usage/claude`. **외부 usage 엔드포인트·Keychain 접근·응답 헤더 파싱은 하지 않는다**(비공식 API 의존 회피) |
 | 사용량 신선도 | 이벤트는 SDK 턴이 돌 때만 도착한다. UI는 `updated_at` 기준 **"N분 전 갱신"** 을 항상 표기하고, `resets_at`이 지났으면 **0% + "초기화됨 · 다음 사용 시 갱신"** 으로 표시한다. 유휴 프로브(주기적 더미 쿼리)는 범위 밖(§9) |
 | 컨텍스트 상태 | **대화별** 값. relay가 마지막 최상위 assistant 메시지 `message.usage`(input+cache_creation+cache_read)를 컨텍스트 토큰으로, `result.modelUsage[*].contextWindow`(입력 토큰 합이 최대인 모델)를 창 크기로 잡아 `/worker/interviews/{id}/question`에 `contextTokens`/`contextWindow`로 보고 → `interview_session.context_tokens/context_window`(null = 미보고) → `InterviewResponse`/`QuestionSummaryResponse`. 표시 = 대화 헤더 링 칩 "컨텍스트 N%"(모바일은 입력창 아래 스트립) |
 | 답변 렌더링 | **markdown-it** (`html:false`, `breaks:true`, `linkify:false`). 원시 HTML을 렌더하지 않으므로 별도 sanitizer 없이 XSS 차단, `javascript:` 링크는 markdown-it 기본 `validateLink`가 거른다. 링크는 `target=_blank rel="noopener noreferrer"`. 사용자 말풍선·시스템 노트·진행 미리보기(PendingBubble)는 기존 그대로 평문 |
@@ -72,7 +72,7 @@ claude CLI ─(stream-json)─► SDK query() ─► relay(): msg.type==='rate_l
 ```
 
 - 보고 실패는 **경고 1회 + 계속 진행**, 404(구 API)면 서비스 수명 동안 비활성(`ActivityPoster` 선례). 인터뷰/답변을 절대 죽이지 않는다.
-- 한 턴에 여러 이벤트(five_hour/seven_day 각각)가 올 수 있다 — 타입별로 각각 upsert.
+- 실측(2026-09-05, `RATE_LIMIT_FINDINGS.md`): 이벤트는 **세션당 1건 이상**(턴당 아님)이고, 한 이벤트의 `unifiedWindows`에 five_hour/seven_day 창이 **동봉**되며 최상위 `utilization`은 없다. 인터뷰 서비스가 창마다 1건(`WorkerRateLimitRequest`)으로 펼쳐 보고 → Java는 타입별로 각각 upsert(Java/프론트 계약은 불변).
 
 ### 4.2 컨텍스트 상태
 
@@ -90,12 +90,13 @@ Java:   recordQuestion → s.setContextTokens/ContextWindow (null이면 이전 �
 | 필드 | 규칙 |
 |---|---|
 | `rateLimitType` | 없거나 `five_hour/seven_day/seven_day_opus/seven_day_sonnet/overage` 외 → **보고 안 함**(null) |
-| `utilization` | 0..1 분수로 전달. 숫자 아님 → 0. **1 초과면 퍼센트로 간주해 /100**, 0..1 클램프, 소수 4자리 |
+| `utilization` | **출처: `unifiedWindows.<type>.utilization`(실측). 주 창이 `unifiedWindows`에 없으면 최상위 `utilization`(구형 flat)으로 보충.** 0..1 분수로 전달. 숫자 아님 → 0. **1 초과면 퍼센트로 간주해 /100**, 0..1 클램프, 소수 4자리 |
 | `resetsAt` | 양수 숫자만. **1e12 미만이면 epoch 초 → ms**. ISO-8601 문자열로 전달, 없으면 null |
 | `status` | 없으면 `allowed` |
-| `isUsingOverage` | `=== true`만 true |
+| `isUsingOverage` | `=== true`만 true. 계정 단위 값이라 한 이벤트에서 펼친 전 행에 공통 적용 |
+| `unifiedWindows` | **(실측 보정)** 알려진 타입 키만 채택(미지 키 무시), **창마다 1건**으로 펼침. `status`는 주 창(`rateLimitType`)만 최상위 값, 나머지 창은 `allowed`(창별 status 없음). 출력 순서 five_hour → seven_day → seven_day_opus → seven_day_sonnet → overage |
 
-실단위(분수/퍼센트, 초/ms)는 Task 1 스파이크(`scripts/spikeRateLimit.ts` → `test/fixtures/RATE_LIMIT_FINDINGS.md`)로 확정한다. 정규화가 양쪽을 다 받으므로 코드 변경 없이 기록만 남긴다.
+실단위(분수/퍼센트, 초/ms)는 Task 1 스파이크(`scripts/spikeRateLimit.ts` → `test/fixtures/RATE_LIMIT_FINDINGS.md`)로 확정한다. 정규화가 양쪽을 다 받으므로 코드 변경 없이 기록만 남긴다. **실측 결과(2026-09-05): utilization은 분수, resetsAt은 epoch 초 — 단위는 가정과 일치. 단, 값의 위치(`unifiedWindows`)와 이벤트당 창 수(여러 창 동봉)가 가정과 달라 위 `unifiedWindows` 펼침 규칙을 추가했다.**
 
 ## 5. 계약 변경 (API / DB)
 

@@ -5,6 +5,7 @@ import InterviewPanel from '~/components/InterviewPanel.vue'
 import InterviewHistoryCard from '~/components/InterviewHistoryCard.vue'
 import TaskProgressStepper from '~/components/tasks/TaskProgressStepper.vue'
 import TaskNextAction from '~/components/tasks/TaskNextAction.vue'
+import TaskDetailMobile from '~/components/tasks/TaskDetailMobile.vue'
 import { stageSteps, nextAction, ageOf, type NextActionKind } from '~/composables/taskStages'
 import { renderMarkdown } from '~/composables/useMarkdown'
 
@@ -426,7 +427,7 @@ function onAction(kind: NextActionKind) {
 </script>
 
 <template>
-  <q-page padding>
+  <q-page padding :style="$q.screen.lt.md ? 'padding-bottom: 88px' : ''">
     <div v-if="!task" class="flex flex-center q-pa-xl">
       <q-spinner-dots color="primary" size="3em" />
     </div>
@@ -440,11 +441,14 @@ function onAction(kind: NextActionKind) {
         <div class="text-h5">{{ task.title }}</div>
         <q-space />
         <span :class="statusClass(task.status)">{{ task.statusLabel }}</span>
-        <q-chip dense size="sm" outline icon="smart_toy" :label="task.model" class="q-ml-sm" />
-        <q-chip dense size="sm" outline icon="tune" :label="task.effort" />
-        <q-chip v-if="task.totalCostUsd != null" dense size="sm" outline
-                icon="paid" color="primary"
-                :label="`${fmtTokens(task.totalTokens ?? 0)} 토큰 · ${fmtCost(task.totalCostUsd)}`" />
+        <!-- 모델/effort/비용 칩은 데스크톱 전용 — 모바일에서는 정보 섹션(section-info)이 대신 보여준다 -->
+        <div v-if="!$q.screen.lt.md" class="row items-center conv-header-chips">
+          <q-chip dense size="sm" outline icon="smart_toy" :label="task.model" class="q-ml-sm" />
+          <q-chip dense size="sm" outline icon="tune" :label="task.effort" />
+          <q-chip v-if="task.totalCostUsd != null" dense size="sm" outline
+                  icon="paid" color="primary"
+                  :label="`${fmtTokens(task.totalTokens ?? 0)} 토큰 · ${fmtCost(task.totalCostUsd)}`" />
+        </div>
       </div>
 
       <q-card flat bordered class="q-mb-md" data-test="progress-card">
@@ -461,6 +465,44 @@ function onAction(kind: NextActionKind) {
         </div>
       </q-card>
 
+      <template v-if="$q.screen.lt.md">
+        <TaskDetailMobile
+          :task="task"
+          :is-admin="auth.isAdmin"
+          :steps="steps"
+          @retry="retry"
+          @download="(id) => downloadAttachment(task!.attachments.find((a) => a.id === id)!)"
+        >
+          <template #interviews>
+            <InterviewHistoryCard :task-id="task.id" :task-status="task.status" />
+          </template>
+          <template v-if="task.design" #design>
+            <div id="design-card">
+              <DesignReviewCard
+                :task-id="task.id"
+                :status="task.status"
+                :design="task.design"
+                :is-admin="auth.isAdmin"
+                @refresh="refresh"
+              />
+            </div>
+          </template>
+        </TaskDetailMobile>
+        <q-card v-if="isInterviewPhase && task.interviewSessionId" id="interview-card" flat bordered class="q-mt-md">
+          <q-card-section class="text-h6">대화형 분석</q-card-section>
+          <q-separator />
+          <q-card-section class="q-pa-none">
+            <InterviewPanel
+              :session-id="task.interviewSessionId"
+              :readonly="!auth.isAdmin"
+              @confirmed="onInterviewConfirmed"
+              @close="refresh"
+            />
+          </q-card-section>
+        </q-card>
+        <TaskNextAction :action="action" variant="bar" @act="onAction" />
+      </template>
+      <template v-else>
       <q-card flat bordered class="q-mb-md">
         <q-card-section>
           <div class="text-caption">레포</div>
@@ -599,8 +641,6 @@ function onAction(kind: NextActionKind) {
 
       <!-- 지난 인터뷰 이력 — 인터뷰 phase 여부와 무관하게 항상 마운트 (카드 스스로 숨김 판단) -->
       <InterviewHistoryCard :task-id="task.id" :task-status="task.status" />
-
-      <ApproveDialog v-model="showApprove" :task-id="task.id" @approved="onApproved" />
 
       <!-- 구현 결과 카드 (PR 생성 또는 구현 실패 시 노출) -->
       <q-card
@@ -804,76 +844,6 @@ function onAction(kind: NextActionKind) {
         </q-card-section>
       </q-card>
 
-      <q-dialog v-model="envDialog" :maximized="$q.screen.lt.md">
-        <q-card style="width: min(480px, 100vw)">
-          <div class="dialog-body">
-            <q-card-section class="row items-center">
-              <div class="text-h6">
-                {{ envMode === 'deploy' ? '배포' : '재배포' }} — 환경변수
-              </div>
-              <q-space />
-              <q-btn v-close-popup flat round dense icon="close" />
-            </q-card-section>
-            <q-card-section class="text-caption text-grey-7">
-              컨테이너에 <code>-e KEY=VALUE</code>로 주입됩니다. DB 접속
-              정보·시크릿을 여기에 입력하세요. (예:
-              <code>SPRING_DATASOURCE_URL</code>, <code>JWT_SECRET</code>) 비밀
-              값은 마스킹 표시되지만 평문 저장됩니다.
-            </q-card-section>
-            <q-card-section class="q-gutter-sm">
-              <div
-                v-for="row in envRows"
-                :key="row.id"
-                :class="$q.screen.lt.md ? 'column q-gutter-y-xs' : 'row items-center q-gutter-xs no-wrap'"
-              >
-                <q-input
-                  v-model="row.key"
-                  dense
-                  outlined
-                  placeholder="KEY"
-                  style="flex: 1"
-                />
-                <q-input
-                  v-model="row.value"
-                  dense
-                  outlined
-                  placeholder="value"
-                  style="flex: 2"
-                  :type="row.secret && !row.reveal ? 'password' : 'text'"
-                >
-                  <template v-if="row.secret" #append>
-                    <q-icon
-                      :name="row.reveal ? 'visibility_off' : 'visibility'"
-                      class="cursor-pointer"
-                      @click="row.reveal = !row.reveal"
-                    />
-                  </template>
-                </q-input>
-                <q-toggle v-model="row.secret" label="비밀" dense />
-                <q-btn
-                  flat
-                  round
-                  dense
-                  icon="delete"
-                  color="grey"
-                  @click="removeEnvRow(row.id)"
-                />
-              </div>
-              <q-btn flat dense icon="add" label="변수 추가" @click="addEnvRow" />
-            </q-card-section>
-          </div>
-          <q-card-actions align="right">
-            <q-btn v-close-popup flat label="취소" />
-            <q-btn
-              unelevated
-              color="primary"
-              :label="envMode === 'deploy' ? '배포' : '재배포'"
-              @click="submitDeploy"
-            />
-          </q-card-actions>
-        </q-card>
-      </q-dialog>
-
       <div v-if="usageByStage['DESIGN']" class="row items-center q-mb-xs">
         <q-chip dense size="sm" outline icon="bolt"
                 :label="`${fmtTokens(usageByStage['DESIGN'].inputTokens)} 입력 · ${fmtTokens(usageByStage['DESIGN'].outputTokens)} 출력 · ${fmtCost(usageByStage['DESIGN'].costUsd)}`">
@@ -961,6 +931,80 @@ function onAction(kind: NextActionKind) {
           </q-list>
         </q-card-section>
       </q-card>
+      </template>
+
+      <ApproveDialog v-model="showApprove" :task-id="task.id" @approved="onApproved" />
+
+      <q-dialog v-model="envDialog" :maximized="$q.screen.lt.md">
+        <q-card style="width: min(480px, 100vw)">
+          <div class="dialog-body">
+            <q-card-section class="row items-center">
+              <div class="text-h6">
+                {{ envMode === 'deploy' ? '배포' : '재배포' }} — 환경변수
+              </div>
+              <q-space />
+              <q-btn v-close-popup flat round dense icon="close" />
+            </q-card-section>
+            <q-card-section class="text-caption text-grey-7">
+              컨테이너에 <code>-e KEY=VALUE</code>로 주입됩니다. DB 접속
+              정보·시크릿을 여기에 입력하세요. (예:
+              <code>SPRING_DATASOURCE_URL</code>, <code>JWT_SECRET</code>) 비밀
+              값은 마스킹 표시되지만 평문 저장됩니다.
+            </q-card-section>
+            <q-card-section class="q-gutter-sm">
+              <div
+                v-for="row in envRows"
+                :key="row.id"
+                :class="$q.screen.lt.md ? 'column q-gutter-y-xs' : 'row items-center q-gutter-xs no-wrap'"
+              >
+                <q-input
+                  v-model="row.key"
+                  dense
+                  outlined
+                  placeholder="KEY"
+                  style="flex: 1"
+                />
+                <q-input
+                  v-model="row.value"
+                  dense
+                  outlined
+                  placeholder="value"
+                  style="flex: 2"
+                  :type="row.secret && !row.reveal ? 'password' : 'text'"
+                >
+                  <template v-if="row.secret" #append>
+                    <q-icon
+                      :name="row.reveal ? 'visibility_off' : 'visibility'"
+                      class="cursor-pointer"
+                      @click="row.reveal = !row.reveal"
+                    />
+                  </template>
+                </q-input>
+                <q-toggle v-model="row.secret" label="비밀" dense />
+                <q-btn
+                  flat
+                  round
+                  dense
+                  icon="delete"
+                  color="grey"
+                  @click="removeEnvRow(row.id)"
+                />
+              </div>
+              <q-btn flat dense icon="add" label="변수 추가" @click="addEnvRow" />
+            </q-card-section>
+          </div>
+          <q-card-actions align="right">
+            <q-btn v-close-popup flat label="취소" />
+            <q-btn
+              unelevated
+              color="primary"
+              :label="envMode === 'deploy' ? '배포' : '재배포'"
+              @click="submitDeploy"
+            />
+          </q-card-actions>
+        </q-card>
+      </q-dialog>
+
     </template>
   </q-page>
 </template>

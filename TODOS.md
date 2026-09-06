@@ -158,12 +158,52 @@
 
 **우선순위**: 낮음.
 
-### [ ] 모바일 상세 배너/하단 바 주 행동 중복 정리
+### [ ] 모바일 목록 상세 필터 시트
 
-**What**: `$q.screen.lt.md`에서 작업 상세 페이지가 "다음 할 일" 배너(`TaskNextAction` `variant="banner"`)와 하단 고정 액션 바(`variant="bar"`)를 동시에 그리는데, 둘 다 같은 `action.primary` 버튼(예: 배포)을 노출한다. 배너는 문구(`action.text`)만 남기고 주 행동 버튼은 하단 바 쪽에만 두는 것으로 정리한다.
+**What**: 모바일 작업 목록(`TaskListMobile`)은 확인 필요/진행 중/완료/취소됨 4개 그룹 칩만 있고, 데스크톱의 `statusFilter`(승인대기/인터뷰중/분석실패 등 세부 상태별 필터) 같은 상세 필터가 없다. 세부 상태로 좁혀 보고 싶을 때 쓸 모바일 전용 필터 시트(바텀시트)를 추가한다.
 
-**Why**: 같은 주 행동 버튼이 화면에 두 번 보이면 공간을 낭비하고 어느 쪽을 눌러야 하는지 혼동을 줄 수 있다. 데스크톱은 배너가 유일한 주 행동 노출처라 그대로 두고, 모바일(하단 바가 따로 있는 경우)만 정리 대상이다.
+**Why**: 리뷰 파인딩 11 수정으로 모바일 목록 조회는 데스크톱 `statusFilter` 값을 아예 무시하도록 고쳤다(그룹 칩과 섞여 혼란만 주던 상태였음). 그 결과 지금은 모바일에서 세부 상태로 좁혀 볼 방법이 전혀 없다 — 그룹 칩보다 세밀한 필터가 필요해지면 별도 시트로 제공해야 한다.
 
-**Context**: `frontend/components/tasks/TaskNextAction.vue`(banner variant), `frontend/pages/tasks/[id].vue`(banner는 항상 렌더, bar는 `v-if="$q.screen.lt.md"`로만 렌더 — 라인 464/473/511 부근). 최종 리뷰 수정 웨이브에서 처리 예정.
+**Context**: `frontend/pages/tasks/index.vue`(`statusFilter`, `useTaskPolling` fetcher), `frontend/components/tasks/TaskListMobile.vue`(그룹 칩). 스펙 §9 "유보(후속)" 항목.
 
-**우선순위**: 중간.
+**우선순위**: 낮음.
+
+### [ ] 인터뷰 "대화 열기" 전체화면 시트
+
+**What**: 모바일 작업 상세의 "대화 열기"(⋮ 메뉴 `bar-more-interview`, 다음 할 일 primary)는 현재 `scrollTo('interview-card')`로 인라인 `InterviewPanel` 카드까지 스크롤만 한다. 스펙 §4.2 원안은 입력창이 하단 액션 바와 겹치지 않도록 전체화면 시트로 여는 것이었다.
+
+**Why**: 인라인 패널은 하단 고정 액션 바(`next-action--bar`)와 겹치거나, 좁은 화면에서 입력 UX가 답답할 수 있다.
+
+**Context**: `frontend/pages/tasks/[id].vue`의 `onAction('open-interview')` → `scrollTo`. 전체화면 시트로 바꾸려면 `InterviewPanel`을 `q-dialog maximized`로 감싸는 래퍼가 필요. 스펙 §9 "유보(후속)" 항목.
+
+**우선순위**: 낮음.
+
+### [ ] 태블릿(600–1023px) 다이얼로그 inline width
+
+**What**: 다이얼로그 공통 규칙(§4.3)이 `:maximized="$q.screen.lt.md"`라 1024px 미만은 폰이든 태블릿이든 전부 풀스크린이 된다. 태블릿 폭(600–1023px)에서는 화면이 넓어 굳이 풀스크린보다 `width: min(Npx, 100vw)` inline 다이얼로그가 나을 수 있다.
+
+**Why**: 태블릿에서 작업 등록·배포 환경변수 같은 짧은 폼까지 전체화면으로 뜨면 상하 여백이 과하게 남아 답답해 보일 수 있다.
+
+**Context**: `frontend/assets/css/main.css`의 `.q-dialog__inner--maximized` 규칙, 각 다이얼로그의 `:maximized="$q.screen.lt.md"` 바인딩. 별도 브레이크포인트(예: `$q.screen.lt.sm`)를 추가로 들여올지, 아니면 현행 단일 브레이크포인트 규칙(CLAUDE.md)을 유지할지부터 결정 필요. 스펙 §9 "유보(후속)" 항목.
+
+**우선순위**: 낮음.
+
+### [ ] `getHistory` Top-N 쿼리 + 동일 `at` 정렬 안정화
+
+**What**: `TaskService.getHistory`(`historyRepo.findByTaskIdOrderByAtDesc(taskId).stream().limit(limit).toList()`)가 DB에서 전체 이력을 다 가져온 뒤 애플리케이션에서 `.limit(200)`으로 자른다. 또한 정렬 키가 `at` 하나뿐이라, 같은 밀리초에 기록된 행이 여럿이면(배치성 상태 전이 등) 상대 순서가 쿼리 실행마다 달라질 수 있다.
+
+**Why**: 이력이 아주 많은 작업에서는 불필요하게 큰 결과셋을 DB에서 애플리케이션으로 옮긴 뒤 버리는 낭비가 생긴다. `at` 동률 정렬 불안정은 `TaskHistoryTimeline`이 "최신순"을 보장한다고 가정하는 프론트(및 테스트)의 전제를 이론상 깨뜨릴 수 있다.
+
+**Context**: `src/main/java/com/hamonsoft/netismaker/service/TaskService.java`의 `getHistory`, `TaskStatusHistoryRepository.findByTaskIdOrderByAtDesc`. `Pageable`/`LIMIT` 기반 쿼리로 바꾸고, 정렬을 `ORDER BY at DESC, id DESC`처럼 2차 키로 안정화하는 방향 검토.
+
+**우선순위**: 낮음.
+
+### [ ] `InterviewHistoryDialog` 767px dead media query 제거
+
+**What**: `frontend/components/InterviewHistoryDialog.vue`에 `@media (max-width: 767px) { .history-dialog-card { ... } }` 블록이 남아 있다. 이 컴포넌트를 포함해 프로젝트 전체가 모바일 분기를 `$q.screen.lt.md`(1024px) 하나로 통일하기로 한 규칙(CLAUDE.md) 이전에 쓰던 브레이크포인트라, 지금은 1023px과 767px 사이 폭에서 두 규칙이 어긋나게 겹치는 죽은/혼동 유발 코드다.
+
+**Why**: 하나로 통일하기로 한 반응형 규칙과 실제 코드가 어긋나 있으면 다음에 이 파일을 만지는 사람이 767px 분기를 실제 분기 규칙으로 착각하기 쉽다.
+
+**Context**: `frontend/components/InterviewHistoryDialog.vue` 136번째 줄 부근. 제거하고 필요하면 `$q.screen.lt.md` 기준 클래스로 대체.
+
+**우선순위**: 낮음.

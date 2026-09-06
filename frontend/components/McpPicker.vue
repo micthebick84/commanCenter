@@ -35,12 +35,15 @@ defineExpose({ toggle })   // 테스트에서 칩 클릭 대신 직접 호출 (�
 <template>
   <div v-if="props.flat" class="mcp-flat" data-test="mcp-flat">
     <div class="field-label">MCP 도구 <span class="text-grey-6 text-weight-regular">(선택)</span></div>
+    <!-- 불러오는 동안 빈 안내를 먼저 보였다가 칩으로 바뀌면 열릴 때마다 깜빡인다 — 로딩 중엔 스켈레톤 -->
+    <q-skeleton v-if="loading" type="text" width="180px" data-test="mcp-loading" />
     <div
-      v-if="catalog.length === 0"
+      v-else-if="catalog.length === 0"
       class="row items-center no-wrap text-caption text-grey-7"
       data-test="mcp-empty"
     >
       <span>등록된 MCP 도구가 없습니다.</span>
+      <!-- 새 탭(open_in_new): 같은 탭 이동은 작업 상세·다이얼로그 상태를 날린다 -->
       <q-btn
         flat
         dense
@@ -49,7 +52,9 @@ defineExpose({ toggle })   // 테스트에서 칩 클릭 대신 직접 호출 (�
         color="primary"
         label="MCP 카탈로그"
         icon-right="open_in_new"
-        to="/admin/mcp-catalog"
+        href="/admin/mcp-catalog"
+        target="_blank"
+        rel="noopener"
         class="q-ml-xs"
         data-test="mcp-catalog-link"
       />

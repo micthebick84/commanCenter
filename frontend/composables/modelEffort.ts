@@ -35,7 +35,8 @@ export function coerceEffort(model: string, effort: string): string {
 const MODEL_DESCRIPTIONS: Record<string, string> = {
   'claude-opus-5': '가장 깊은 분석 · 기본값 · 느리고 한도 소모가 큼',
   'claude-sonnet-5': '속도와 품질의 균형 · 대부분의 작업에 충분',
-  'claude-haiku-4-5': '가장 빠르고 가벼움 · 단순 작업용 · 추론 low/medium/high만',
+  'claude-haiku-4-5':
+    '가장 빠르고 가벼움 · 단순 작업용 · 추론 low/medium/high만',
 }
 
 const EFFORT_DESCRIPTIONS: Record<string, string> = {
@@ -54,4 +55,10 @@ export function describeModel(model: string): string {
 /** effort 한 줄 설명. 목록에 없는 값(ultracode 등)은 빈 문자열. */
 export function describeEffort(effort: string): string {
   return EFFORT_DESCRIPTIONS[effort] ?? ''
+}
+
+/** 픽커/칩/안내용 짧은 모델 이름 — "Opus 5 (기본)" → "Opus 5". 목록에 없는 값(박제된 과거 모델)은 그대로. */
+export function shortModelLabel(model: string): string {
+  const label = MODEL_OPTIONS.find((m) => m.value === model)?.label ?? model
+  return label.replace(/\s*\(.*\)$/, '')
 }

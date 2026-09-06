@@ -111,9 +111,10 @@ describe('ApproveDialog (승인 팝업 UI/UX 개선 2026-09-06)', () => {
     expect(text).toContain('활동 스트림 스모크')
     expect(text).toContain('Netis7.0')
     expect(text).toContain('요청자 admin')
+    // 상태 칩에 실제로 보이는 백엔드 라벨("입력대기")과 맞춘다 (리뷰 파인딩 9)
     expect(
       document.body.querySelector('[data-test="next-step"]')?.textContent,
-    ).toContain('답변 대기')
+    ).toContain('입력대기')
     expect(
       document.body.querySelector('[data-test="next-step"]')?.textContent,
     ).toContain('대화형 분석')
@@ -274,6 +275,85 @@ describe('ApproveDialog (승인 팝업 UI/UX 개선 2026-09-06)', () => {
     expect(
       w.emitted('update:modelValue')?.some((e) => e[0] === false),
     ).toBeFalsy()
+    w.unmount()
+  })
+
+  it('승인 요청 중에는 ESC/바깥 클릭으로 닫히지 않도록 persistent가 된다 (리뷰 파인딩 4)', async () => {
+    let resolveApprove!: (v: unknown) => void
+    routeApi({
+      approve: () =>
+        new Promise((resolve) => {
+          resolveApprove = resolve
+        }),
+    })
+    const w = mountDialog()
+    await flushPromises()
+    const dialog = w.findComponent({ name: 'QDialog' })
+    expect(dialog.props('persistent')).toBe(false)
+    const pending = (w.vm as any).approve()
+    await flushPromises()
+    expect(dialog.props('persistent')).toBe(true)
+    resolveApprove({})
+    await pending
+    w.unmount()
+  })
+
+  it('닫았다 다시 열면 지난 인터뷰를 다시 읽고 선택이 프리필 값으로 돌아간다 (리뷰 파인딩 10)', async () => {
+    routeApi({
+      interviews: [
+        session(22, 'CANCELLED', '취소됨', 'claude-sonnet-5', 'high'),
+      ],
+    })
+    const w = mountDialog()
+    await flushPromises()
+    const fields = w.findComponent({ name: 'ModelEffortFields' })
+    ;(fields.vm as any).pickModel('claude-haiku-4-5')
+    await flushPromises()
+    expect(
+      document.body
+        .querySelector('[data-test="model-row-claude-haiku-4-5"]')
+        ?.getAttribute('aria-checked'),
+    ).toBe('true')
+
+    await w.setProps({ modelValue: false })
+    await flushPromises()
+    await w.setProps({ modelValue: true })
+    await flushPromises()
+
+    expect(
+      useApiMock.mock.calls.filter((c) => c[0] === '/api/tasks/7/interviews'),
+    ).toHaveLength(2)
+    expect(
+      document.body
+        .querySelector('[data-test="model-row-claude-sonnet-5"]')
+        ?.getAttribute('aria-checked'),
+    ).toBe('true')
+    w.unmount()
+  })
+
+  it('마지막 세션에 모델·effort가 없으면(레거시) 안내는 상태까지만 쓰고 초기값은 기본값이다', async () => {
+    routeApi({
+      interviews: [
+        {
+          ...session(24, 'EXPIRED', '만료됨', 'claude-opus-5', 'high'),
+          model: null,
+          effort: null,
+        },
+      ],
+    })
+    const w = mountDialog()
+    await flushPromises()
+    const hint = (
+      document.body.querySelector('[data-test="previous-hint"]')?.textContent ??
+      ''
+    ).trim()
+    expect(hint).toContain('#24')
+    expect(hint.endsWith('만료됨')).toBe(true)
+    expect(
+      document.body
+        .querySelector('[data-test="model-row-claude-opus-5"]')
+        ?.getAttribute('aria-checked'),
+    ).toBe('true')
     w.unmount()
   })
 })

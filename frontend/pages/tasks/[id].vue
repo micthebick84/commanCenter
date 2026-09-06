@@ -189,8 +189,8 @@ async function cancelTask() {
 }
 
 // 승인 직후 작업을 다시 읽으면 대화형 분석 카드(#interview-card)가 생긴다 — 관리자가 바로 대화 위치를 보도록
-// 스크롤까지 이어 준다(승인 팝업 UI/UX 개선 2026-09-06). 폴링이 겹쳐 refresh가 건너뛰면 카드가 없을 수 있는데,
-// 그 경우 scrollTo는 조용히 아무것도 하지 않고 다음 폴링이 카드를 채운다.
+// 스크롤까지 이어 준다(승인 팝업 UI/UX 개선 2026-09-06). useTaskPolling.refresh()는 진행 중 폴링이 있어도
+// 그 뒤에 한 번 더 가져와 호출 시점 이후 데이터를 보장하므로, 스크롤 시점엔 카드가 있다.
 async function onApproved() {
   await refresh()
   await nextTick()

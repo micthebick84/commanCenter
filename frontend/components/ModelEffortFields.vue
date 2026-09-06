@@ -8,6 +8,7 @@ import {
   coerceEffort,
   describeModel,
   describeEffort,
+  shortModelLabel,
 } from '~/composables/modelEffort'
 
 const props = withDefaults(
@@ -29,15 +30,35 @@ const haikuHint = computed(() =>
   model.value === 'claude-haiku-4-5' ? 'Haiku는 low/medium/high만 지원' : '',
 )
 
-// "Opus 5 (기본)" → "Opus 5": 기본값 표기는 설명 줄이 맡는다
-function shortLabel(label: string): string {
-  return label.replace(/\s*\(.*\)$/, '')
-}
+// ARIA 라디오 패턴(roving tabindex): 선택된 행만 탭 순서에 들어가고, 화살표로 선택·포커스가 함께 이동한다.
+const focusIndex = computed(() =>
+  Math.max(
+    0,
+    MODEL_OPTIONS.findIndex((m) => m.value === model.value),
+  ),
+)
 
 function pickModel(value: string) {
   if (props.disabled) return
   model.value = value
   effort.value = coerceEffort(value, effort.value)
+}
+
+function onRowKeydown(e: KeyboardEvent, index: number) {
+  if (props.disabled) return
+  let next: number | null = null
+  if (e.key === 'ArrowDown' || e.key === 'ArrowRight')
+    next = (index + 1) % MODEL_OPTIONS.length
+  else if (e.key === 'ArrowUp' || e.key === 'ArrowLeft')
+    next = (index - 1 + MODEL_OPTIONS.length) % MODEL_OPTIONS.length
+  else if (e.key === 'Enter' || e.key === ' ') next = index
+  if (next === null) return
+  e.preventDefault()
+  pickModel(MODEL_OPTIONS[next]!.value)
+  const rows = (e.currentTarget as HTMLElement).parentElement?.querySelectorAll(
+    '[role="radio"]',
+  )
+  ;(rows?.[next] as HTMLElement | undefined)?.focus()
 }
 // 테스트에서 행 클릭 대신 직접 호출할 수 있게 (ModelEffortPicker.pickModel 선례)
 defineExpose({ pickModel })
@@ -48,12 +69,12 @@ defineExpose({ pickModel })
     <div class="field-label">모델</div>
     <div role="radiogroup" aria-label="Claude 모델" class="model-rows">
       <div
-        v-for="m in MODEL_OPTIONS"
+        v-for="(m, i) in MODEL_OPTIONS"
         :key="m.value"
         role="radio"
         :aria-checked="m.value === model ? 'true' : 'false'"
         :aria-disabled="props.disabled ? 'true' : undefined"
-        :tabindex="props.disabled ? -1 : 0"
+        :tabindex="props.disabled ? -1 : i === focusIndex ? 0 : -1"
         class="model-row"
         :class="{
           'model-row--active': m.value === model,
@@ -61,8 +82,7 @@ defineExpose({ pickModel })
         }"
         :data-test="`model-row-${m.value}`"
         @click="pickModel(m.value)"
-        @keydown.enter.prevent="pickModel(m.value)"
-        @keydown.space.prevent="pickModel(m.value)"
+        @keydown="onRowKeydown($event, i)"
       >
         <q-icon
           :name="
@@ -74,7 +94,7 @@ defineExpose({ pickModel })
           size="20px"
         />
         <div class="model-text">
-          <div class="model-name">{{ shortLabel(m.label) }}</div>
+          <div class="model-name">{{ shortModelLabel(m.value) }}</div>
           <div class="model-desc">{{ describeModel(m.value) }}</div>
         </div>
       </div>
@@ -90,6 +110,7 @@ defineExpose({ pickModel })
       spread
       toggle-color="primary"
       :disable="props.disabled"
+      aria-label="추론 단계"
       data-test="effort-toggle"
       class="effort-toggle"
     />

@@ -9,6 +9,7 @@ import {
   DEFAULT_MODEL,
   DEFAULT_EFFORT,
   coerceEffort,
+  shortModelLabel,
 } from '~/composables/modelEffort'
 import {
   INTERVIEW_TERMINAL_STATUSES,
@@ -49,13 +50,7 @@ const lastSession = computed(() => previous.value[0] ?? null)
 const previousHint = computed(() => {
   const s = lastSession.value
   if (!s) return ''
-  const modelName =
-    MODEL_OPTIONS.find((m) => m.value === s.model)?.label.replace(
-      /\s*\(.*\)$/,
-      '',
-    ) ??
-    s.model ??
-    ''
+  const modelName = s.model ? shortModelLabel(s.model) : ''
   const setting = [modelName, s.effort].filter(Boolean).join(' · ')
   return `이전 인터뷰 ${previous.value.length}건 · 마지막 #${s.id} ${interviewStatusLabel(s.statusName)}${
     setting ? ` · ${setting}` : ''
@@ -127,7 +122,8 @@ defineExpose({ approve })
 </script>
 
 <template>
-  <q-dialog v-model="show" :maximized="$q.screen.lt.md">
+  <!-- 승인 요청 중엔 ESC/바깥 클릭으로도 닫히지 않게(persistent) — 결과 토스트와 후속 스크롤을 놓치지 않도록 -->
+  <q-dialog v-model="show" :maximized="$q.screen.lt.md" :persistent="approving">
     <q-card class="approve-card" style="width: min(560px, 100vw)">
       <!-- 모바일: 상단 고정 바 — 전체화면이라 뒤 페이지가 안 보이므로 닫기와 제목을 항상 노출 -->
       <q-toolbar
@@ -184,12 +180,15 @@ defineExpose({ approve })
           <div class="q-mt-md">
             <McpPicker v-model="mcpCatalogIds" flat />
           </div>
-          <ClaudeUsagePanel
-            variant="strip"
-            hide-when-empty
-            prefix="Claude 사용량"
-            class="approve-usage q-mt-sm"
-          />
+          <!-- 첫 폴링 뒤에 strip이 나타나며 아래 섹션이 밀리지 않도록 높이를 미리 확보한다 -->
+          <div class="usage-slot q-mt-sm">
+            <ClaudeUsagePanel
+              variant="strip"
+              hide-when-empty
+              prefix="Claude 사용량"
+              class="approve-usage"
+            />
+          </div>
         </q-card-section>
 
         <q-separator />
@@ -202,9 +201,11 @@ defineExpose({ approve })
             size="18px"
             class="q-mr-sm text-grey-6 next-step-icon"
           />
+          <!-- 상태 칩에 실제로 보이는 백엔드 라벨(입력대기)로 쓴다 -->
           <div>
-            승인하면 인터뷰가 큐에 들어가고, 첫 질문이 오면 <b>답변 대기</b>로
-            바뀝니다. 답변은 이 작업 화면의 <b>대화형 분석</b> 카드에서 합니다.
+            승인하면 인터뷰가 큐에 들어가고, 첫 질문이 오면 상태가
+            <b>입력대기</b>로 바뀝니다. 답변은 이 작업 화면의
+            <b>대화형 분석</b> 카드에서 합니다.
           </div>
         </q-card-section>
       </div>
@@ -236,6 +237,9 @@ defineExpose({ approve })
   font-size: 13px;
   color: #424242;
   line-height: 1.4;
+}
+.usage-slot {
+  min-height: 26px;
 }
 .hint-icon {
   margin-top: 2px;

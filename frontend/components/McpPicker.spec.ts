@@ -49,9 +49,28 @@ describe('McpPicker flat 모드 (승인 다이얼로그 — 접힘 없이 칩 �
     expect(w.find('[data-test="mcp-empty"]').text()).toContain(
       '등록된 MCP 도구가 없습니다',
     )
-    expect(w.find('[data-test="mcp-catalog-link"]').text()).toContain(
-      'MCP 카탈로그',
+    const link = w.find('[data-test="mcp-catalog-link"]')
+    expect(link.text()).toContain('MCP 카탈로그')
+    // 새 탭 아이콘(open_in_new)과 동작을 맞춘다 — 같은 탭 이동은 상세 페이지·다이얼로그 상태를 날린다 (리뷰 파인딩 5)
+    expect(link.attributes('href')).toBe('/admin/mcp-catalog')
+    expect(link.attributes('target')).toBe('_blank')
+    w.unmount()
+  })
+
+  it('flat: 카탈로그를 불러오는 동안에는 빈 안내를 보여주지 않는다 (리뷰 파인딩 2)', async () => {
+    let resolveCatalog!: (v: unknown) => void
+    useApiMock.mockReturnValue(
+      new Promise((resolve) => {
+        resolveCatalog = resolve
+      }),
     )
+    const w = mount(McpPicker, { props: { flat: true, modelValue: [] } })
+    await flushPromises()
+    expect(w.find('[data-test="mcp-empty"]').exists()).toBe(false)
+    expect(w.findAll('.q-chip')).toHaveLength(0)
+    resolveCatalog([])
+    await flushPromises()
+    expect(w.find('[data-test="mcp-empty"]').exists()).toBe(true)
     w.unmount()
   })
 

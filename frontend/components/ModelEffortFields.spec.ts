@@ -70,6 +70,24 @@ describe('ModelEffortFields (승인 다이얼로그 — 모델 라디오 + 추�
     w.unmount()
   })
 
+  it('라디오 접근성: 선택된 행만 탭 순서에 들어가고 ArrowDown/ArrowUp으로 선택이 이동한다 (리뷰 파인딩 8)', async () => {
+    const { w, model } = host()
+    const rows = w.findAll('[data-test^="model-row-"]')
+    expect(rows[0]!.attributes('tabindex')).toBe('0')
+    expect(rows[1]!.attributes('tabindex')).toBe('-1')
+    await rows[0]!.trigger('keydown', { key: 'ArrowDown' })
+    expect(model.value).toBe('claude-sonnet-5')
+    await w.vm.$nextTick()
+    const sonnet = w.find('[data-test="model-row-claude-sonnet-5"]')
+    expect(sonnet.attributes('tabindex')).toBe('0')
+    await sonnet.trigger('keydown', { key: 'ArrowUp' })
+    expect(model.value).toBe('claude-opus-5')
+    expect(w.find('[data-test="effort-toggle"]').attributes('aria-label')).toBe(
+      '추론 단계',
+    )
+    w.unmount()
+  })
+
   it('disabled면 모델 행 클릭도 세그먼트도 먹지 않는다', async () => {
     const { w, model } = host('claude-sonnet-5', 'high', true)
     await w.find('[data-test="model-row-claude-haiku-4-5"]').trigger('click')

@@ -43,12 +43,16 @@ const interviewing = {
   interviewSessionId: 99,
 }
 
+// happy-dom엔 scrollIntoView가 없어 스파이로 대체한다 — 테스트 뒤 원래 값으로 되돌린다 (리뷰 파인딩 10)
+const originalScrollIntoView = Element.prototype.scrollIntoView
+
 describe('pages/tasks/[id] — 승인 다이얼로그 연동 (승인 팝업 UI/UX 개선 2026-09-06)', () => {
   beforeEach(() => {
     authStub.isAdmin = true
   })
   afterEach(() => {
     document.body.innerHTML = ''
+    Element.prototype.scrollIntoView = originalScrollIntoView
   })
 
   it('승인 — 인터뷰 시작을 누르면 다이얼로그가 이 작업의 요약(번호·제목)을 보여준다', async () => {

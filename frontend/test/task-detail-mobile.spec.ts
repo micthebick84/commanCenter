@@ -1,5 +1,5 @@
 import { mount, flushPromises } from '@vue/test-utils'
-import { describe, it, expect, afterEach } from 'vitest'
+import { describe, it, expect, afterEach, vi } from 'vitest'
 import { defineComponent, h } from 'vue'
 import { QLayout, QPageContainer } from 'quasar'
 import TaskDetail from '../pages/tasks/[id].vue'
@@ -73,6 +73,127 @@ describe('pages/tasks/[id] — 모바일 (스펙 2026-09-06 §4.2)', () => {
     await flushPromises()
     expect(document.body.querySelector('.q-dialog__inner--maximized')).not.toBeNull()
     expect(document.body.querySelector('[data-test="markdown-viewer"] h1')?.textContent).toBe('요약')
+    w.unmount()
+  })
+
+  it('분석/디자인/구현/배포 데이터가 모두 없으면 분석·디자인 섹션은 아예 없고 구현·배포는 폴백 문구를 보여준다', async () => {
+    authStub.isAdmin = true
+    useApiMock.mockResolvedValue({
+      ...baseTask, status: 'AWAITING_APPROVAL', statusLabel: '승인대기',
+      analysis: null, design: null, implementation: null, deployment: null,
+    })
+    await setViewportWidth(390)
+    const w = mount(PageWrapper, mountOpts)
+    await flushPromises()
+    expect(w.find('[data-test="section-analysis"]').exists()).toBe(false)
+    expect(w.find('[data-test="section-design"]').exists()).toBe(false)
+    await w.find('[data-test="section-impl"] .q-item').trigger('click')
+    await flushPromises()
+    await w.find('[data-test="section-deploy"] .q-item').trigger('click')
+    await flushPromises()
+    expect(w.find('[data-test="section-impl"]').text()).toContain('플랜 확정·승인 뒤 워커가 구현합니다.')
+    expect(w.find('[data-test="section-deploy"]').text()).toContain('PR생성 상태에서 관리자가 배포할 수 있습니다.')
+    w.unmount()
+  })
+
+  it('정보 섹션의 첨부 칩을 클릭하면 download가 downloadAttachment까지 이어진다', async () => {
+    authStub.isAdmin = true
+    const attTask = {
+      ...baseTask,
+      attachments: [{ id: 7, fileName: 'spec.pdf', contentType: 'application/pdf', sizeBytes: 2048, createdAt: '2026-08-16T00:00:00Z' }],
+    }
+    useApiMock.mockImplementation((url: string) => {
+      if (url === '/api/tasks/42/attachments/7') return Promise.resolve(new Blob(['pdf']))
+      return Promise.resolve(attTask)
+    })
+    if (!URL.createObjectURL) (URL as any).createObjectURL = () => ''
+    if (!URL.revokeObjectURL) (URL as any).revokeObjectURL = () => {}
+    vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob:mock')
+    vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => {})
+    await setViewportWidth(390)
+    const w = mount(PageWrapper, mountOpts)
+    await flushPromises()
+    await w.find('[data-test="section-info"] .q-item').trigger('click')
+    await flushPromises()
+    const chip = w.findAll('.q-chip').find((c) => c.text().includes('spec.pdf'))
+    expect(chip).toBeTruthy()
+    await chip!.trigger('click')
+    await flushPromises()
+    await new Promise((r) => setTimeout(r, 0))
+    expect(useApiMock).toHaveBeenCalledWith('/api/tasks/42/attachments/7', expect.objectContaining({ responseType: 'blob' }))
+    w.unmount()
+    vi.restoreAllMocks()
+  })
+
+  it('정보 섹션의 재시도 버튼을 클릭하면 retry API를 호출한다', async () => {
+    authStub.isAdmin = true
+    useApiMock.mockResolvedValue({
+      ...baseTask, status: 'FAILED', statusLabel: '분석실패', failureReason: '타임아웃',
+      analysis: null, implementation: null,
+    })
+    await setViewportWidth(390)
+    const w = mount(PageWrapper, mountOpts)
+    await flushPromises()
+    await w.find('[data-test="section-info"] .q-item').trigger('click')
+    await flushPromises()
+    useApiMock.mockClear()
+    const retryBtn = w.findAll('button').find((b) => b.text().includes('재시도'))
+    expect(retryBtn).toBeTruthy()
+    await retryBtn!.trigger('click')
+    await flushPromises()
+    expect(useApiMock).toHaveBeenCalledWith('/api/tasks/42/retry', { method: 'POST' })
+    w.unmount()
+  })
+
+  it('하단 바 ⋮ 메뉴에 PR 링크가 있다 (관리자, PR생성)', async () => {
+    authStub.isAdmin = true
+    useApiMock.mockResolvedValue(baseTask)
+    await setViewportWidth(390)
+    const w = mount(PageWrapper, mountOpts)
+    await flushPromises()
+    await w.find('[data-test="bar-more"]').trigger('click')
+    await flushPromises()
+    expect(document.body.querySelector('[data-test="bar-more-pr"]')?.getAttribute('href')).toBe(
+      'https://github.com/acme/widgets/pull/1',
+    )
+    w.unmount()
+  })
+
+  it('하단 바 ⋮ 메뉴에서 취소를 실행하면 cancel API를 호출한다 (요청자, 승인대기)', async () => {
+    authStub.isAdmin = false
+    useApiMock.mockResolvedValue({
+      ...baseTask, status: 'AWAITING_APPROVAL', statusLabel: '승인대기',
+      analysis: null, implementation: null,
+    })
+    await setViewportWidth(390)
+    const w = mount(PageWrapper, mountOpts)
+    await flushPromises()
+    await w.find('[data-test="bar-more"]').trigger('click')
+    await flushPromises()
+    const cancelItem = document.body.querySelector('[data-test="bar-more-cancel"]') as HTMLElement | null
+    expect(cancelItem).not.toBeNull()
+    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true)
+    useApiMock.mockClear()
+    cancelItem!.click()
+    await flushPromises()
+    expect(useApiMock).toHaveBeenCalledWith('/api/tasks/42/cancel', { method: 'POST' })
+    confirmSpy.mockRestore()
+    w.unmount()
+  })
+
+  it('아코디언 헤더의 aria-controls는 펼친 콘텐츠의 id와 일치한다', async () => {
+    authStub.isAdmin = true
+    useApiMock.mockResolvedValue(baseTask)
+    await setViewportWidth(390)
+    const w = mount(PageWrapper, mountOpts)
+    await flushPromises()
+    const header = w.find('[data-test="section-info"] [role="button"]')
+    await header.trigger('click')
+    await flushPromises()
+    const controls = header.attributes('aria-controls')
+    expect(controls).toBeTruthy()
+    const content = w.find('[data-test="section-info"] .q-expansion-item__content')
+    expect(content.attributes('id')).toBe(controls)
     w.unmount()
   })
 })

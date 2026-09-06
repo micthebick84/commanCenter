@@ -500,7 +500,36 @@ function onAction(kind: NextActionKind) {
             />
           </q-card-section>
         </q-card>
-        <TaskNextAction :action="action" variant="bar" @act="onAction" />
+        <TaskNextAction :action="action" variant="bar" @act="onAction">
+          <template #extra>
+            <q-btn outline color="grey-7" icon="more_vert" aria-label="더 보기" class="bar-more" data-test="bar-more">
+              <q-menu anchor="top right" self="bottom right">
+                <q-list style="min-width: 200px">
+                  <q-item v-if="task.implementation?.prUrl" v-close-popup clickable tag="a" :href="task.implementation.prUrl" target="_blank" rel="noopener" data-test="bar-more-pr">
+                    <q-item-section avatar><q-icon name="open_in_new" /></q-item-section>
+                    <q-item-section>PR #{{ task.implementation.prNumber }} 열기</q-item-section>
+                  </q-item>
+                  <q-item v-if="task.deployment?.deployUrl" v-close-popup clickable tag="a" :href="task.deployment.deployUrl" target="_blank" rel="noopener" data-test="bar-more-url">
+                    <q-item-section avatar><q-icon name="open_in_new" /></q-item-section>
+                    <q-item-section>접속 URL 열기</q-item-section>
+                  </q-item>
+                  <q-item v-if="isInterviewPhase && task.interviewSessionId" v-close-popup clickable data-test="bar-more-interview" @click="onAction('open-interview')">
+                    <q-item-section avatar><q-icon name="forum" /></q-item-section>
+                    <q-item-section>대화 열기</q-item-section>
+                  </q-item>
+                  <q-item v-if="task.status === 'FAILED' || task.status === 'DESIGN_FAILED'" v-close-popup clickable data-test="bar-more-retry" @click="retry">
+                    <q-item-section avatar><q-icon name="refresh" /></q-item-section>
+                    <q-item-section>재시도</q-item-section>
+                  </q-item>
+                  <q-item v-if="task.status === 'AWAITING_APPROVAL' || task.status === 'PENDING'" v-close-popup clickable class="text-warning" data-test="bar-more-cancel" @click="cancelTask">
+                    <q-item-section avatar><q-icon name="block" color="warning" /></q-item-section>
+                    <q-item-section>취소</q-item-section>
+                  </q-item>
+                </q-list>
+              </q-menu>
+            </q-btn>
+          </template>
+        </TaskNextAction>
       </template>
       <template v-else>
       <q-card flat bordered class="q-mb-md">
@@ -1010,6 +1039,10 @@ function onAction(kind: NextActionKind) {
 </template>
 
 <style scoped>
+.bar-more {
+  min-width: 44px;
+  min-height: 44px;
+}
 .deploy-log {
   max-height: 240px;
   overflow: auto;

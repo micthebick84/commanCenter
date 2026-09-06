@@ -39,6 +39,10 @@ const open = reactive<Record<string, boolean>>({
   analysis: currentKey.value === 'analysis', design: currentKey.value === 'design',
   impl: currentKey.value === 'impl', deploy: currentKey.value === 'deploy', interviews: false, info: false,
 })
+// 헤더 aria-controls ↔ 콘텐츠 id 연결 — 인스턴스 두 개가 동시에 마운트돼도 충돌하지 않도록 task.id를 접두어로 둔다.
+function contentId(key: string) {
+  return `task-${props.task.id}-${key}-content`
+}
 const analysisPreview = computed(() => renderMarkdown(props.task.analysis?.markdownResult))
 const viewer = reactive({ open: false, title: '', markdown: null as string | null })
 function openViewer(title: string, markdown: string | null) {
@@ -68,19 +72,19 @@ function fmtSize(bytes: number) {
     -->
     <q-list bordered class="rounded-borders bg-white sections">
       <div class="acc-section" data-test="section-history">
-        <q-item clickable class="acc-header" role="button" :aria-expanded="open.history" @click="open.history = !open.history">
+        <q-item clickable class="acc-header" role="button" :aria-expanded="open.history" :aria-controls="contentId('history')" @click="open.history = !open.history">
           <q-item-section><q-item-label>진행 이력</q-item-label></q-item-section>
           <q-item-section side><q-icon :name="open.history ? 'expand_less' : 'expand_more'" /></q-item-section>
         </q-item>
         <q-slide-transition>
-          <div v-if="open.history" class="q-expansion-item__content">
+          <div v-if="open.history" class="q-expansion-item__content" :id="contentId('history')">
             <slot name="history" />
           </div>
         </q-slide-transition>
       </div>
 
       <div class="acc-section" data-test="section-request">
-        <q-item clickable class="acc-header" role="button" :aria-expanded="open.request" @click="open.request = !open.request">
+        <q-item clickable class="acc-header" role="button" :aria-expanded="open.request" :aria-controls="contentId('request')" @click="open.request = !open.request">
           <q-item-section>
             <q-item-label>요청 상세</q-item-label>
             <q-item-label caption>{{ task.repoAlias ?? task.githubRepo }} · {{ task.githubBranch }}</q-item-label>
@@ -88,14 +92,14 @@ function fmtSize(bytes: number) {
           <q-item-section side><q-icon :name="open.request ? 'expand_less' : 'expand_more'" /></q-item-section>
         </q-item>
         <q-slide-transition>
-          <div v-if="open.request" class="q-expansion-item__content">
+          <div v-if="open.request" class="q-expansion-item__content" :id="contentId('request')">
             <q-card-section><div class="md-scroll"><pre class="req">{{ task.description }}</pre></div></q-card-section>
           </div>
         </q-slide-transition>
       </div>
 
       <div v-if="task.analysis" class="acc-section" data-test="section-analysis">
-        <q-item clickable class="acc-header" role="button" :aria-expanded="open.analysis" @click="open.analysis = !open.analysis">
+        <q-item clickable class="acc-header" role="button" :aria-expanded="open.analysis" :aria-controls="contentId('analysis')" @click="open.analysis = !open.analysis">
           <q-item-section>
             <q-item-label>분석 결과</q-item-label>
             <q-item-label caption>마크다운</q-item-label>
@@ -103,7 +107,7 @@ function fmtSize(bytes: number) {
           <q-item-section side><q-icon :name="open.analysis ? 'expand_less' : 'expand_more'" /></q-item-section>
         </q-item>
         <q-slide-transition>
-          <div v-if="open.analysis" class="q-expansion-item__content">
+          <div v-if="open.analysis" class="q-expansion-item__content" :id="contentId('analysis')">
             <q-card-section>
               <div class="md-preview"><div class="md-scroll markdown" v-html="analysisPreview" /><div class="fade" /></div>
               <q-btn outline color="primary" class="full-width q-mt-sm" label="전체 보기" data-test="analysis-open-viewer" @click="openViewer('분석 결과', task.analysis.markdownResult)" />
@@ -113,7 +117,7 @@ function fmtSize(bytes: number) {
       </div>
 
       <div v-if="task.design" class="acc-section" data-test="section-design">
-        <q-item clickable class="acc-header" role="button" :aria-expanded="open.design" @click="open.design = !open.design">
+        <q-item clickable class="acc-header" role="button" :aria-expanded="open.design" :aria-controls="contentId('design')" @click="open.design = !open.design">
           <q-item-section>
             <q-item-label>디자인 문서</q-item-label>
             <q-item-label caption>{{ task.status === 'DESIGN_REVIEW' ? '검토 대기' : '마크다운' }}</q-item-label>
@@ -121,7 +125,7 @@ function fmtSize(bytes: number) {
           <q-item-section side><q-icon :name="open.design ? 'expand_less' : 'expand_more'" /></q-item-section>
         </q-item>
         <q-slide-transition>
-          <div v-if="open.design" class="q-expansion-item__content">
+          <div v-if="open.design" class="q-expansion-item__content" :id="contentId('design')">
             <slot name="design">
               <q-card-section>
                 <q-btn outline color="primary" class="full-width" label="전체 보기" @click="openViewer('디자인 문서', task.design.designMarkdown)" />
@@ -132,7 +136,7 @@ function fmtSize(bytes: number) {
       </div>
 
       <div class="acc-section" data-test="section-impl">
-        <q-item clickable class="acc-header" role="button" :aria-expanded="open.impl" @click="open.impl = !open.impl">
+        <q-item clickable class="acc-header" role="button" :aria-expanded="open.impl" :aria-controls="contentId('impl')" @click="open.impl = !open.impl">
           <q-item-section>
             <q-item-label>구현 결과</q-item-label>
             <q-item-label caption>{{ task.implementation?.prNumber ? `PR #${task.implementation.prNumber}` : '아직 구현 전' }}</q-item-label>
@@ -140,7 +144,7 @@ function fmtSize(bytes: number) {
           <q-item-section side><q-icon :name="open.impl ? 'expand_less' : 'expand_more'" /></q-item-section>
         </q-item>
         <q-slide-transition>
-          <div v-if="open.impl" class="q-expansion-item__content">
+          <div v-if="open.impl" class="q-expansion-item__content" :id="contentId('impl')">
             <q-card-section v-if="task.implementation" class="kv">
               <div v-if="task.implementation.prUrl"><span class="k">PR</span><a :href="task.implementation.prUrl" target="_blank" rel="noopener">#{{ task.implementation.prNumber }} 열기</a></div>
               <div v-if="task.implementation.headBranch"><span class="k">브랜치</span><code>{{ task.implementation.headBranch }}</code></div>
@@ -152,7 +156,7 @@ function fmtSize(bytes: number) {
       </div>
 
       <div class="acc-section" data-test="section-deploy">
-        <q-item clickable class="acc-header" role="button" :aria-expanded="open.deploy" @click="open.deploy = !open.deploy">
+        <q-item clickable class="acc-header" role="button" :aria-expanded="open.deploy" :aria-controls="contentId('deploy')" @click="open.deploy = !open.deploy">
           <q-item-section>
             <q-item-label>배포</q-item-label>
             <q-item-label caption>{{ task.deployment?.deployUrl ?? '아직 배포 전' }}</q-item-label>
@@ -160,7 +164,7 @@ function fmtSize(bytes: number) {
           <q-item-section side><q-icon :name="open.deploy ? 'expand_less' : 'expand_more'" /></q-item-section>
         </q-item>
         <q-slide-transition>
-          <div v-if="open.deploy" class="q-expansion-item__content">
+          <div v-if="open.deploy" class="q-expansion-item__content" :id="contentId('deploy')">
             <q-card-section v-if="task.deployment?.deployUrl" class="kv">
               <div><span class="k">URL</span><a :href="task.deployment.deployUrl" target="_blank" rel="noopener">{{ task.deployment.deployUrl }}</a></div>
               <div><span class="k">포트</span><code>{{ task.deployment.deployHostPort }}</code></div>
@@ -172,19 +176,19 @@ function fmtSize(bytes: number) {
       </div>
 
       <div class="acc-section" data-test="section-interviews">
-        <q-item clickable class="acc-header" role="button" :aria-expanded="open.interviews" @click="open.interviews = !open.interviews">
+        <q-item clickable class="acc-header" role="button" :aria-expanded="open.interviews" :aria-controls="contentId('interviews')" @click="open.interviews = !open.interviews">
           <q-item-section><q-item-label>지난 인터뷰</q-item-label></q-item-section>
           <q-item-section side><q-icon :name="open.interviews ? 'expand_less' : 'expand_more'" /></q-item-section>
         </q-item>
         <q-slide-transition>
-          <div v-if="open.interviews" class="q-expansion-item__content">
+          <div v-if="open.interviews" class="q-expansion-item__content" :id="contentId('interviews')">
             <slot name="interviews" />
           </div>
         </q-slide-transition>
       </div>
 
       <div class="acc-section" data-test="section-info">
-        <q-item clickable class="acc-header" role="button" :aria-expanded="open.info" @click="open.info = !open.info">
+        <q-item clickable class="acc-header" role="button" :aria-expanded="open.info" :aria-controls="contentId('info')" @click="open.info = !open.info">
           <q-item-section>
             <q-item-label>정보</q-item-label>
             <q-item-label caption>모델 · 사용량 · 첨부</q-item-label>
@@ -192,7 +196,7 @@ function fmtSize(bytes: number) {
           <q-item-section side><q-icon :name="open.info ? 'expand_less' : 'expand_more'" /></q-item-section>
         </q-item>
         <q-slide-transition>
-          <div v-if="open.info" class="q-expansion-item__content">
+          <div v-if="open.info" class="q-expansion-item__content" :id="contentId('info')">
             <q-card-section class="kv">
               <div><span class="k">모델</span>{{ task.model }} · {{ task.effort }}</div>
               <div v-if="task.totalCostUsd != null"><span class="k">사용량</span>{{ fmtTokens(task.totalTokens ?? 0) }} 토큰 · ${{ Number(task.totalCostUsd).toFixed(2) }}</div>

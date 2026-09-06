@@ -165,7 +165,9 @@ async function submitReject() {
     <q-separator />
 
     <q-card-section>
-      <pre style="white-space: pre-wrap; font-family: 'Pretendard', sans-serif">{{ design.designMarkdown }}</pre>
+      <div class="md-scroll">
+        <pre style="white-space: pre-wrap; font-family: 'Pretendard', sans-serif; margin: 0">{{ design.designMarkdown }}</pre>
+      </div>
     </q-card-section>
 
     <template v-if="feedbackHistory.length">
@@ -183,20 +185,22 @@ async function submitReject() {
       </q-card-section>
     </template>
 
-    <q-dialog v-model="rejectDialog" persistent>
-      <q-card style="min-width: 480px">
-        <q-card-section class="text-h6">디자인 반려</q-card-section>
-        <q-card-section>
-          <q-input
-            v-model="rejectFeedback"
-            type="textarea"
-            outlined
-            autofocus
-            label="반려 피드백 (필수)"
-            hint="워커가 이 피드백을 반영해 디자인을 수정합니다"
-            :rules="[(v: string) => !!v?.trim() || '피드백을 입력하세요']"
-          />
-        </q-card-section>
+    <q-dialog v-model="rejectDialog" persistent :maximized="$q.screen.lt.md">
+      <q-card style="width: min(480px, 100vw)">
+        <div class="dialog-body">
+          <q-card-section class="text-h6">디자인 반려</q-card-section>
+          <q-card-section>
+            <q-input
+              v-model="rejectFeedback"
+              type="textarea"
+              outlined
+              autofocus
+              label="반려 피드백 (필수)"
+              hint="워커가 이 피드백을 반영해 디자인을 수정합니다"
+              :rules="[(v: string) => !!v?.trim() || '피드백을 입력하세요']"
+            />
+          </q-card-section>
+        </div>
         <q-card-actions align="right">
           <q-btn v-close-popup flat label="취소" />
           <q-btn

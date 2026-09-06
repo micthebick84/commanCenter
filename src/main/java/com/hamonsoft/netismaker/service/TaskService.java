@@ -196,6 +196,12 @@ public class TaskService {
         return t;
     }
 
+    /** 상태 변경 이력, 최신순, 상한 limit. ACL은 호출자가 getForView로 먼저 검증한다. */
+    @Transactional(readOnly = true)
+    public List<TaskStatusHistory> getHistory(Long taskId, int limit) {
+        return historyRepo.findByTaskIdOrderByAtDesc(taskId).stream().limit(limit).toList();
+    }
+
     @Transactional(readOnly = true)
     public Optional<TaskAnalysis> getAnalysis(Long taskId) {
         return analysisRepo.findById(taskId);

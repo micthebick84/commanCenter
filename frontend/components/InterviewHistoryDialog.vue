@@ -66,7 +66,7 @@ function bubbleRole(role: string): 'assistant' | 'user' {
 </script>
 
 <template>
-  <q-dialog v-model="show">
+  <q-dialog v-model="show" :maximized="$q.screen.lt.md">
     <q-card data-test="history-dialog" class="history-dialog-card">
       <q-card-section class="row items-center q-pb-sm">
         <div class="text-h6" data-test="history-title">
@@ -121,8 +121,8 @@ function bubbleRole(role: string): 'assistant' | 'user' {
 
 <style scoped>
 .history-dialog-card {
-  min-width: 720px;
-  max-width: 90vw;
+  width: min(720px, 100vw);
+  max-width: 100vw;
 }
 .history-body {
   max-height: 65vh;

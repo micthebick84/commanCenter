@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import {
   STAGES, CHIP, MOVES, buildStages, moveFor, stageAccepts, ageOf, agePct, ageColor,
+  attentionGroup, sortForMobile, stageSteps, nextAction, cancelable, DEPLOY_ACTIVE_STATUSES,
 } from './taskStages'
 
 // entity/TaskStatus.java 의 전체 상태. 백엔드에 상태를 추가하면 여기도 추가해야 하고,
@@ -145,5 +146,95 @@ describe('taskStages — 경과 표시', () => {
     expect(ageColor('2026-07-29T00:00:00Z', NOW)).toBe('#43a047') // 7일 이내
     expect(ageColor('2026-07-20T00:00:00Z', NOW)).toBe('#ef6c00') // 7일 초과
     expect(ageColor('2026-06-01T00:00:00Z', NOW)).toBe('#c62828') // 30일 초과
+  })
+})
+
+describe('attentionGroup / sortForMobile (스펙 2026-09-06 §4.1)', () => {
+  const t = (id: number, status: string, updatedAt: string) => ({ id, status, updatedAt })
+  it.each([
+    ['INTERVIEW_INPUT', false, 'attention'], ['INTERVIEW_REVIEW', false, 'attention'],
+    ['FAILED', false, 'attention'], ['IMPLEMENTATION_FAILED', false, 'attention'], ['DESIGN_FAILED', false, 'attention'],
+    ['DEPLOY_FAILED', false, 'attention'], ['DEPLOY_LOST', false, 'attention'],
+    ['AWAITING_APPROVAL', true, 'attention'], ['COMPLETED', true, 'attention'], ['DESIGN_REVIEW', true, 'attention'],
+    ['AWAITING_APPROVAL', false, 'active'], ['COMPLETED', false, 'active'], ['DESIGN_REVIEW', false, 'active'],
+    ['INTERVIEWING', false, 'active'], ['PENDING', false, 'active'], ['IN_PROGRESS', false, 'active'], ['APPROVED', false, 'active'],
+    ['IMPLEMENTING', false, 'active'], ['DESIGN_PENDING', false, 'active'], ['DESIGNING', false, 'active'],
+    ['DEPLOY_PENDING', false, 'active'], ['DEPLOYING', false, 'active'], ['UNDEPLOY_PENDING', false, 'active'], ['UNDEPLOYING', false, 'active'],
+    ['PR_CREATED', false, 'done'], ['DEPLOYED', false, 'done'], ['CANCELLED', false, 'closed'],
+  ])('%s (admin=%s) → %s', (status, isAdmin, group) => {
+    expect(attentionGroup({ status }, isAdmin)).toBe(group)
+  })
+
+  it('그룹 순서 확인 필요→진행 중→완료→취소됨, 그룹 안은 updatedAt 내림차순, 빈 그룹 제외', () => {
+    const groups = sortForMobile(
+      [t(1, 'PR_CREATED', '2026-09-01T00:00:00Z'), t(2, 'INTERVIEW_INPUT', '2026-08-01T00:00:00Z'),
+       t(3, 'PR_CREATED', '2026-09-03T00:00:00Z'), t(4, 'CANCELLED', '2026-09-02T00:00:00Z')],
+      false,
+    )
+    expect(groups.map((g) => g.key)).toEqual(['attention', 'done', 'closed'])
+    expect(groups[1]!.items.map((i) => i.id)).toEqual([3, 1])
+    expect(groups[0]!.label).toBe('확인 필요')
+  })
+})
+
+describe('stageSteps', () => {
+  it('PR생성(디자인 미요청): 분석 done · 디자인 skipped · 구현 current · 배포 future', () => {
+    expect(stageSteps({ status: 'PR_CREATED', designRequested: false }).map((s) => s.state))
+      .toEqual(['done', 'skipped', 'current', 'future'])
+  })
+  it('디자인승인대기(디자인 요청): 분석 done · 디자인 current', () => {
+    expect(stageSteps({ status: 'DESIGN_REVIEW', designRequested: true }).map((s) => s.state))
+      .toEqual(['done', 'current', 'future', 'future'])
+  })
+  it('배포실패: 배포 단계가 failed', () => {
+    const steps = stageSteps({ status: 'DEPLOY_FAILED', designRequested: true })
+    expect(steps[3]!.state).toBe('failed')
+    expect(steps.map((s) => s.label)).toEqual(['분석', '디자인', '구현', '배포'])
+  })
+  it('승인대기: 분석 current, 나머지 future(디자인 요청 시)/skipped(미요청)', () => {
+    expect(stageSteps({ status: 'AWAITING_APPROVAL', designRequested: true })[0]!.state).toBe('current')
+    expect(stageSteps({ status: 'AWAITING_APPROVAL', designRequested: false })[1]!.state).toBe('skipped')
+  })
+  it('취소됨: 전부 future', () => {
+    expect(stageSteps({ status: 'CANCELLED' }).every((s) => s.state === 'future')).toBe(true)
+  })
+})
+
+describe('nextAction (스펙 2026-09-06 §4.2 표)', () => {
+  const pr = { status: 'PR_CREATED', implementation: { prUrl: 'https://x/pull/1' }, deployment: null }
+  it('승인대기: 관리자는 승인 주 행동, 요청자는 문구만', () => {
+    expect(nextAction({ status: 'AWAITING_APPROVAL' }, true)?.primary?.kind).toBe('approve-interview')
+    expect(nextAction({ status: 'AWAITING_APPROVAL' }, false)?.primary).toBeUndefined()
+  })
+  it('입력대기/플랜승인대기: 관리자 주 행동은 인터뷰 열기', () => {
+    expect(nextAction({ status: 'INTERVIEW_INPUT' }, true)?.primary?.kind).toBe('open-interview')
+    expect(nextAction({ status: 'INTERVIEW_REVIEW' }, true)?.primary?.kind).toBe('open-interview')
+    expect(nextAction({ status: 'INTERVIEW_INPUT' }, false)?.primary).toBeUndefined()
+  })
+  it('분석완료: 관리자 구현 승인 · 디자인승인대기: 관리자 디자인 검토', () => {
+    expect(nextAction({ status: 'COMPLETED' }, true)?.primary?.kind).toBe('approve-impl')
+    expect(nextAction({ status: 'DESIGN_REVIEW' }, true)?.primary?.kind).toBe('review-design')
+  })
+  it('PR생성: 관리자 배포, 요청자 PR 열기(prUrl 있을 때만)', () => {
+    expect(nextAction(pr, true)?.primary?.kind).toBe('deploy')
+    expect(nextAction(pr, false)?.primary?.kind).toBe('open-pr')
+    expect(nextAction({ status: 'PR_CREATED', implementation: { prUrl: null } }, false)?.primary).toBeUndefined()
+  })
+  it('배포완료: 접속 URL 열기(양쪽) · 배포실패/중단: 관리자 재배포', () => {
+    expect(nextAction({ status: 'DEPLOYED', deployment: { deployUrl: 'https://t' } }, false)?.primary?.kind).toBe('open-url')
+    expect(nextAction({ status: 'DEPLOY_FAILED' }, true)?.primary?.kind).toBe('redeploy')
+    expect(nextAction({ status: 'DEPLOY_LOST' }, false)?.primary).toBeUndefined()
+  })
+  it('분석실패/디자인실패: 재시도 · 구현실패: 문구만 · 취소됨: null · 진행 중: 문구만', () => {
+    expect(nextAction({ status: 'FAILED' }, false)?.primary?.kind).toBe('retry')
+    expect(nextAction({ status: 'DESIGN_FAILED' }, true)?.primary?.kind).toBe('retry')
+    expect(nextAction({ status: 'IMPLEMENTATION_FAILED' }, true)?.primary).toBeUndefined()
+    expect(nextAction({ status: 'CANCELLED' }, true)).toBeNull()
+    expect(nextAction({ status: 'IMPLEMENTING' }, true)?.text).toContain('진행 중')
+  })
+  it('cancelable/DEPLOY_ACTIVE_STATUSES는 index.vue와 같은 집합', () => {
+    expect(cancelable({ status: 'PENDING' })).toBe(true)
+    expect(cancelable({ status: 'PR_CREATED' })).toBe(false)
+    expect(DEPLOY_ACTIVE_STATUSES).toEqual(['DEPLOYED', 'DEPLOY_LOST', 'DEPLOY_PENDING', 'DEPLOYING', 'UNDEPLOY_PENDING', 'UNDEPLOYING'])
   })
 })

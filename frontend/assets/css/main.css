@@ -70,3 +70,55 @@ body {
   background: #fbe9e7;
   color: #bf360c;
 }
+
+/* 전체화면(maximized) 다이얼로그: 카드는 세로 flex, 본문(.dialog-body)만 스크롤, 액션 바는 하단에 남는다 (스펙 2026-09-06 §4.3) */
+.q-dialog__inner--maximized > .q-card {
+  display: flex;
+  flex-direction: column;
+}
+.q-dialog__inner--maximized > .q-card > .dialog-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+}
+.q-dialog__inner--maximized > .q-card > .q-card__actions .q-btn {
+  min-height: 44px;
+  flex: 1 1 0;
+}
+
+/* 긴 표/코드 블록은 컨테이너 안에서만 가로 스크롤 — 페이지 폭을 밀어내지 않게 (스펙 2026-09-06 D1) */
+.md-scroll {
+  max-width: 100%;
+  overflow-x: auto;
+}
+.md-scroll pre,
+.md-scroll table {
+  max-width: 100%;
+}
+/* v-html로 렌더되는 분석 결과 마크다운(.markdown) 테이블/코드 블록 스타일 (Task 9a) */
+.markdown table {
+  border-collapse: collapse;
+}
+.markdown th,
+.markdown td {
+  border: 1px solid rgba(0, 0, 0, 0.12);
+  padding: 4px 8px;
+}
+.markdown pre {
+  overflow-x: auto;
+}
+/* 안전망: 페이지 레벨 가로 스크롤 금지 */
+.q-page {
+  overflow-x: clip;
+}
+
+:root {
+  --bottom-nav-height: 0px;
+}
+@media (max-width: 1023.98px) {
+  :root {
+    /* 홈 인디케이터가 있는 기기(iPhone 등)에서 하단 내비/액션 바가 세이프 에어리어 안쪽으로
+       파고들지 않도록 인셋을 더한다 (리뷰 파인딩 3). 인셋 미지원 브라우저는 0px로 폴백. */
+    --bottom-nav-height: calc(56px + env(safe-area-inset-bottom, 0px));
+  }
+}

@@ -49,38 +49,40 @@ defineExpose({ approve })
 </script>
 
 <template>
-  <q-dialog v-model="show">
-    <q-card style="min-width: 480px">
-      <q-card-section class="text-h6">승인 — 인터뷰 시작</q-card-section>
-      <q-card-section class="q-pt-none text-grey-8">
-        승인하면 관리자와의 대화형 분석이 시작됩니다. 여기서 고른 모델·도구로 인터뷰가 진행됩니다.
-      </q-card-section>
-      <q-card-section class="q-gutter-md">
-        <div class="row q-col-gutter-md">
-          <q-select
-            v-model="model"
-            :options="MODEL_OPTIONS"
-            emit-value
-            map-options
-            outlined
-            dense
-            label="Claude 모델"
-            class="col"
-          />
-          <q-select
-            v-model="effort"
-            :options="effortOptions"
-            emit-value
-            map-options
-            outlined
-            dense
-            label="Effort"
-            class="col"
-            :hint="model === 'claude-haiku-4-5' ? 'Haiku는 low/medium/high만 지원' : ''"
-          />
-        </div>
-        <McpPicker v-model="mcpCatalogIds" />
-      </q-card-section>
+  <q-dialog v-model="show" :maximized="$q.screen.lt.md">
+    <q-card style="width: min(480px, 100vw)">
+      <div class="dialog-body">
+        <q-card-section class="text-h6">승인 — 인터뷰 시작</q-card-section>
+        <q-card-section class="q-pt-none text-grey-8">
+          승인하면 관리자와의 대화형 분석이 시작됩니다. 여기서 고른 모델·도구로 인터뷰가 진행됩니다.
+        </q-card-section>
+        <q-card-section class="q-gutter-md">
+          <div class="row q-col-gutter-md">
+            <q-select
+              v-model="model"
+              :options="MODEL_OPTIONS"
+              emit-value
+              map-options
+              outlined
+              dense
+              label="Claude 모델"
+              class="col"
+            />
+            <q-select
+              v-model="effort"
+              :options="effortOptions"
+              emit-value
+              map-options
+              outlined
+              dense
+              label="Effort"
+              class="col"
+              :hint="model === 'claude-haiku-4-5' ? 'Haiku는 low/medium/high만 지원' : ''"
+            />
+          </div>
+          <McpPicker v-model="mcpCatalogIds" />
+        </q-card-section>
+      </div>
       <q-card-actions align="right">
         <q-btn v-close-popup flat label="취소" />
         <q-btn

@@ -1,6 +1,8 @@
 <script setup lang="ts">
 import { useQuasar } from 'quasar'
-import { buildStages, stageAccepts, type MoveDef, type StageCard } from '~/composables/taskStages'
+import TaskListMobile from '~/components/tasks/TaskListMobile.vue'
+import type { CardTask } from '~/components/tasks/TaskCardCompact.vue'
+import { buildStages, stageAccepts, cancelable, DEPLOY_ACTIVE_STATUSES, type MoveDef, type StageCard } from '~/composables/taskStages'
 
 definePageMeta({ layout: 'default' })
 
@@ -42,9 +44,15 @@ const auth = useAuthStore()
 const mine = ref(true)
 const statusFilter = ref<string | null>(null)
 
+// statusFilter는 데스크톱 보드 전용 셀렉트 — 모바일 리스트는 그룹 칩으로 따로 좁히므로,
+// 데스크톱에서 필터를 골라둔 채로 화면이 좁아져도 서버 조회까지 몰래 좁아지면 안 된다(리뷰 파인딩 11).
 const { data: page, refresh } = useTaskPolling<PageResponse<TaskResponse>>(() =>
   useApi('/api/tasks', {
-    params: { mine: String(mine.value), status: statusFilter.value || undefined, size: 50 },
+    params: {
+      mine: String(mine.value),
+      status: $q.screen.lt.md ? undefined : statusFilter.value || undefined,
+      size: 50,
+    },
   }),
 )
 
@@ -144,21 +152,9 @@ function initialOf(t: TaskResponse) {
   return String(t.requesterId ?? '?').trim().charAt(0).toUpperCase() || '?'
 }
 
-// 서버 softDelete 가드와 동일 집합 — 배포 이력이 활성이면 먼저 중지 후 삭제
-const DEPLOY_ACTIVE_STATUSES = [
-  'DEPLOYED',
-  'DEPLOY_LOST',
-  'DEPLOY_PENDING',
-  'DEPLOYING',
-  'UNDEPLOY_PENDING',
-  'UNDEPLOYING',
-]
-
-function cancelable(t: TaskResponse) {
-  return ['PENDING', 'AWAITING_APPROVAL'].includes(t.status)
-}
-
-async function cancel(t: TaskResponse) {
+// CardTask(모바일 시트/카드 공용 타입)로 받는다 — TaskResponse는 구조적으로 CardTask를 만족하므로
+// 데스크톱 보드(TaskResponse)·모바일 리스트(CardTask emit) 양쪽에서 그대로 호출할 수 있다.
+async function cancel(t: CardTask) {
   if (!confirm(`작업 #${t.id} '${t.title}'을 취소하시겠습니까?`)) return
   try {
     await useApi(`/api/tasks/${t.id}/cancel`, { method: 'POST' })
@@ -168,7 +164,7 @@ async function cancel(t: TaskResponse) {
   }
 }
 
-async function remove(t: TaskResponse) {
+async function remove(t: CardTask) {
   if (DEPLOY_ACTIVE_STATUSES.includes(t.status)) {
     $q.notify({
       type: 'warning',
@@ -183,6 +179,13 @@ async function remove(t: TaskResponse) {
   } catch (e: any) {
     $q.notify({ type: 'negative', message: e?.data?.message ?? '삭제 실패' })
   }
+}
+
+// 모바일 리스트 카드 탭 → 상세 이동. navigateTo는 템플릿에서 직접 부르면 Vue SFC 컴파일러가
+// 스크립트 setup 바인딩으로 인식하지 못해 `_ctx.navigateTo`(런타임 미정의)로 컴파일된다 —
+// 스크립트 함수를 거치면 다른 Nuxt auto-import(useApi 등)와 같은 방식으로 전역에서 해석된다.
+function openTaskDetail(task: { id: number }) {
+  navigateTo(`/tasks/${task.id}`)
 }
 
 // ── 등록 다이얼로그 ──────────────────────────────────────────────
@@ -382,6 +385,19 @@ function closeDialog() {
 
 <template>
   <q-page padding>
+    <TaskListMobile
+      v-if="$q.screen.lt.md"
+      v-model:mine="mine"
+      :tasks="tasks"
+      :is-admin="auth.isAdmin"
+      @update:mine="refresh"
+      @create="openCreate"
+      @open="openTaskDetail"
+      @move="(t, m) => applyMove(t.id, m)"
+      @cancel="cancel"
+      @remove="remove"
+    />
+    <template v-else>
     <QueueStatsBar />
 
     <div class="row items-center q-mb-md">
@@ -587,89 +603,92 @@ function closeDialog() {
       <q-space />
       <span>총 {{ tasks.length }}건</span>
     </div>
+    </template>
 
     <q-inner-loading :showing="moving" />
 
     <!-- 등록 다이얼로그 -->
-    <q-dialog v-model="showCreate" persistent>
-      <q-card style="min-width: 520px">
-        <q-card-section>
-          <div class="text-h6">작업 등록</div>
-        </q-card-section>
-        <q-card-section class="q-gutter-md">
-          <q-select
-            v-model="draft.repoCatalogId"
-            :options="repoOptions"
-            :loading="repoCatalogLoading"
-            label="레포 (별칭 선택)"
-            outlined
-            dense
-            emit-value
-            map-options
-            autofocus
-            data-test="repo-select"
-            :hint="repoCatalog.length === 0 ? '등록된 레포 없음 — 관리자에게 문의' : '관리자가 등록한 레포 중 선택'"
-            @update:model-value="onRepoSelected"
-          >
-            <template #no-option>
-              <q-item>
-                <q-item-section class="text-grey">등록된 레포가 없습니다</q-item-section>
-              </q-item>
-            </template>
-          </q-select>
+    <q-dialog v-model="showCreate" persistent :maximized="$q.screen.lt.md">
+      <q-card style="width: min(520px, 100vw)">
+        <div class="dialog-body">
+          <q-card-section>
+            <div class="text-h6">작업 등록</div>
+          </q-card-section>
+          <q-card-section class="q-gutter-md">
+            <q-select
+              v-model="draft.repoCatalogId"
+              :options="repoOptions"
+              :loading="repoCatalogLoading"
+              label="레포 (별칭 선택)"
+              outlined
+              dense
+              emit-value
+              map-options
+              autofocus
+              data-test="repo-select"
+              :hint="repoCatalog.length === 0 ? '등록된 레포 없음 — 관리자에게 문의' : '관리자가 등록한 레포 중 선택'"
+              @update:model-value="onRepoSelected"
+            >
+              <template #no-option>
+                <q-item>
+                  <q-item-section class="text-grey">등록된 레포가 없습니다</q-item-section>
+                </q-item>
+              </template>
+            </q-select>
 
-          <q-select
-            v-model="draft.githubBranch"
-            :options="filteredBranchOptions"
-            :disable="repoStatus !== 'ok'"
-            label="브랜치"
-            outlined
-            dense
-            use-input
-            input-debounce="0"
-            emit-value
-            map-options
-            :hint="
-              repoStatus === 'ok'
-                ? '입력해서 검색할 수 있습니다'
-                : repoStatus === 'notfound' || repoStatus === 'error'
-                  ? repoStatusMsg
-                  : '레포 선택 후 브랜치 선택 가능'
-            "
-            @filter="onBranchFilter"
-          >
-            <template #no-option>
-              <q-item>
-                <q-item-section class="text-grey">결과 없음</q-item-section>
-              </q-item>
-            </template>
-          </q-select>
+            <q-select
+              v-model="draft.githubBranch"
+              :options="filteredBranchOptions"
+              :disable="repoStatus !== 'ok'"
+              label="브랜치"
+              outlined
+              dense
+              use-input
+              input-debounce="0"
+              emit-value
+              map-options
+              :hint="
+                repoStatus === 'ok'
+                  ? '입력해서 검색할 수 있습니다'
+                  : repoStatus === 'notfound' || repoStatus === 'error'
+                    ? repoStatusMsg
+                    : '레포 선택 후 브랜치 선택 가능'
+              "
+              @filter="onBranchFilter"
+            >
+              <template #no-option>
+                <q-item>
+                  <q-item-section class="text-grey">결과 없음</q-item-section>
+                </q-item>
+              </template>
+            </q-select>
 
-          <q-input v-model="draft.title" label="작업 제목" outlined dense maxlength="500" />
-          <q-input
-            v-model="draft.description"
-            label="작업 상세"
-            type="textarea"
-            outlined
-            autogrow
-            rows="4"
-          />
-          <q-file
-            v-model="draftFiles"
-            :label="attachmentLabel"
-            outlined
-            dense
-            multiple
-            use-chips
-            counter
-            append
-            data-test="attachment-input"
-          >
-            <template #prepend>
-              <q-icon name="attach_file" />
-            </template>
-          </q-file>
-        </q-card-section>
+            <q-input v-model="draft.title" label="작업 제목" outlined dense maxlength="500" />
+            <q-input
+              v-model="draft.description"
+              label="작업 상세"
+              type="textarea"
+              outlined
+              autogrow
+              rows="4"
+            />
+            <q-file
+              v-model="draftFiles"
+              :label="attachmentLabel"
+              outlined
+              dense
+              multiple
+              use-chips
+              counter
+              append
+              data-test="attachment-input"
+            >
+              <template #prepend>
+                <q-icon name="attach_file" />
+              </template>
+            </q-file>
+          </q-card-section>
+        </div>
         <q-card-actions align="right">
           <q-btn flat label="취소" @click="closeDialog" />
           <q-btn

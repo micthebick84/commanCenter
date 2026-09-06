@@ -3,6 +3,12 @@ import { useQuasar } from 'quasar'
 import ApproveDialog from '~/components/ApproveDialog.vue'
 import InterviewPanel from '~/components/InterviewPanel.vue'
 import InterviewHistoryCard from '~/components/InterviewHistoryCard.vue'
+import TaskProgressStepper from '~/components/tasks/TaskProgressStepper.vue'
+import TaskNextAction from '~/components/tasks/TaskNextAction.vue'
+import TaskDetailMobile from '~/components/tasks/TaskDetailMobile.vue'
+import TaskHistoryTimeline from '~/components/tasks/TaskHistoryTimeline.vue'
+import { stageSteps, nextAction, ageOf, type NextActionKind } from '~/composables/taskStages'
+import { renderMarkdown } from '~/composables/useMarkdown'
 
 definePageMeta({ layout: 'default' })
 
@@ -162,6 +168,12 @@ const showApprove = ref(false)
 function openApprove() {
   showApprove.value = true
 }
+
+// q-expansion-item은 접힌 상태에서도 콘텐츠를 always-mount(v-show)하므로, 진행 이력 카드는
+// historyOpen을 별도로 두고 v-if로 TaskHistoryTimeline을 게이팅해 첫 펼침 때만 조회한다.
+const historyOpen = ref(false)
+// 모바일 아코디언 헤더에 건수를 보여주기 위한 값 — TaskHistoryTimeline의 loaded(count)를 받는다.
+const historyCount = ref<number | null>(null)
 
 // 승인대기 취소: 요청자 본인 또는 admin — getForView가 이미 조회 시점에 두 경우만
 // 통과시키므로(그 외 403) 별도 소유권 가드 없이 재시도 버튼과 동일한 패턴을 따른다.
@@ -355,7 +367,9 @@ function formatSize(bytes: number): string {
 
 // 반드시 useApi 경유 — 전역 $fetch는 Authorization 미첨부로 401 (스펙 §8.2).
 // 파일명은 응답 헤더가 아니라 메타 fileName 사용 ($fetch는 헤더를 안 돌려준다).
-async function downloadAttachment(att: AttachmentMeta) {
+// 파라미터 타입은 실제로 쓰는 필드(id/fileName)만 요구하는 부분집합 — 데스크톱 칩(a: AttachmentMeta)과
+// 모바일 TaskDetailMobile의 download emit({id,fileName,sizeBytes}) 양쪽에서 그대로 바인딩할 수 있게 한다.
+async function downloadAttachment(att: Pick<AttachmentMeta, 'id' | 'fileName'>) {
   try {
     const blob = await useApi<Blob>(`/api/tasks/${taskId.value}/attachments/${att.id}`, {
       responseType: 'blob',
@@ -387,10 +401,42 @@ async function downloadAttachment(att: AttachmentMeta) {
     $q.notify({ type: 'negative', message })
   }
 }
+
+// 진행 스테퍼 + 다음 할 일 배너 (스펙 2026-09-06 §4.2, 결정 6: 데스크톱도 노출) — 데스크톱/모바일 공용.
+const steps = computed(() => (task.value ? stageSteps(task.value) : []))
+const action = computed(() => (task.value ? nextAction(task.value, auth.isAdmin) : null))
+const stepCaption = computed(() => {
+  const t = task.value
+  if (!t) return ''
+  const parts = [t.statusLabel]
+  if (t.implementation?.prNumber) parts.push(`PR #${t.implementation.prNumber}`)
+  parts.push(`${ageOf(t.updatedAt)} 전 갱신`)
+  return parts.join(' · ')
+})
+const analysisHtml = computed(() => renderMarkdown(task.value?.analysis?.markdownResult))
+
+function scrollTo(id: string) {
+  document.getElementById(id)?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+}
+function onAction(kind: NextActionKind) {
+  const t = task.value
+  if (!t) return
+  switch (kind) {
+    case 'approve-interview': return openApprove()
+    case 'approve-impl': return approve()
+    case 'deploy': return openDeployDialog('deploy')
+    case 'redeploy': return openDeployDialog('redeploy')
+    case 'retry': return retry()
+    case 'open-pr': return void window.open(t.implementation?.prUrl ?? '', '_blank', 'noopener')
+    case 'open-url': return void window.open(t.deployment?.deployUrl ?? '', '_blank', 'noopener')
+    case 'open-interview': return scrollTo('interview-card')
+    case 'review-design': return scrollTo('design-card')
+  }
+}
 </script>
 
 <template>
-  <q-page padding>
+  <q-page padding :style="$q.screen.lt.md ? 'padding-bottom: 88px' : ''">
     <div v-if="!task" class="flex flex-center q-pa-xl">
       <q-spinner-dots color="primary" size="3em" />
     </div>
@@ -404,13 +450,124 @@ async function downloadAttachment(att: AttachmentMeta) {
         <div class="text-h5">{{ task.title }}</div>
         <q-space />
         <span :class="statusClass(task.status)">{{ task.statusLabel }}</span>
-        <q-chip dense size="sm" outline icon="smart_toy" :label="task.model" class="q-ml-sm" />
-        <q-chip dense size="sm" outline icon="tune" :label="task.effort" />
-        <q-chip v-if="task.totalCostUsd != null" dense size="sm" outline
-                icon="paid" color="primary"
-                :label="`${fmtTokens(task.totalTokens ?? 0)} 토큰 · ${fmtCost(task.totalCostUsd)}`" />
+        <!-- 모델/effort/비용 칩은 데스크톱 전용 — 모바일에서는 정보 섹션(section-info)이 대신 보여준다 -->
+        <div v-if="!$q.screen.lt.md" class="row items-center conv-header-chips">
+          <q-chip dense size="sm" outline icon="smart_toy" :label="task.model" class="q-ml-sm" />
+          <q-chip dense size="sm" outline icon="tune" :label="task.effort" />
+          <q-chip v-if="task.totalCostUsd != null" dense size="sm" outline
+                  icon="paid" color="primary"
+                  :label="`${fmtTokens(task.totalTokens ?? 0)} 토큰 · ${fmtCost(task.totalCostUsd)}`" />
+        </div>
       </div>
 
+      <q-card flat bordered class="q-mb-md" data-test="progress-card">
+        <div :class="$q.screen.lt.md ? 'column' : 'row items-stretch no-wrap'">
+          <div class="col q-pa-md">
+            <TaskProgressStepper :steps="steps" :caption="stepCaption" />
+            <!-- 모바일 전용: 하단 액션 바 옆에 실패 사유가 없으면 안 보이므로 여기 1줄로 노출한다
+                 (리뷰 파인딩 5). 데스크톱은 기존 실패 사유 카드/배포실패 배너가 이미 있으므로
+                 $q.screen.lt.md로 게이트해 중복 표시를 막는다(리뷰 파인딩 5 후속). -->
+            <div
+              v-if="$q.screen.lt.md && task.failureReason && steps.some((s) => s.state === 'failed')"
+              class="text-negative text-caption ellipsis q-mt-xs"
+              data-test="failure-line"
+            >
+              {{ task.failureReason }}
+            </div>
+          </div>
+          <q-separator :vertical="!$q.screen.lt.md" />
+          <div :class="$q.screen.lt.md ? '' : 'col-4'">
+            <!-- 모바일은 하단 액션 바(variant="bar")가 이미 같은 주 행동을 노출하므로 배너 쪽은
+                 문구만 남긴다 — 중복 노출 정리 (리뷰 파인딩 1) -->
+            <TaskNextAction :action="action" variant="banner" :hide-primary="$q.screen.lt.md" @act="onAction">
+              <template #extra>
+                <q-btn v-if="auth.isAdmin && task.implementation?.prUrl" outline color="primary" icon="open_in_new" :label="`PR #${task.implementation.prNumber} 열기`" :href="task.implementation.prUrl" target="_blank" />
+              </template>
+            </TaskNextAction>
+          </div>
+        </div>
+      </q-card>
+
+      <template v-if="$q.screen.lt.md">
+        <TaskDetailMobile
+          :task="task"
+          :is-admin="auth.isAdmin"
+          :steps="steps"
+          :history-count="historyCount"
+          @retry="retry"
+          @download="downloadAttachment"
+        >
+          <template #history>
+            <TaskHistoryTimeline :task-id="task.id" @loaded="historyCount = $event" />
+          </template>
+          <template #interviews>
+            <InterviewHistoryCard :task-id="task.id" :task-status="task.status" />
+          </template>
+          <template v-if="task.design" #design>
+            <div id="design-card">
+              <DesignReviewCard
+                :task-id="task.id"
+                :status="task.status"
+                :design="task.design"
+                :is-admin="auth.isAdmin"
+                @refresh="refresh"
+              />
+            </div>
+          </template>
+        </TaskDetailMobile>
+        <q-card v-if="isInterviewPhase && task.interviewSessionId" id="interview-card" flat bordered class="q-mt-md">
+          <q-card-section class="text-h6">대화형 분석</q-card-section>
+          <q-separator />
+          <q-card-section class="q-pa-none">
+            <InterviewPanel
+              :session-id="task.interviewSessionId"
+              :readonly="!auth.isAdmin"
+              @confirmed="onInterviewConfirmed"
+              @close="refresh"
+            />
+          </q-card-section>
+        </q-card>
+        <TaskNextAction :action="action" variant="bar" @act="onAction">
+          <template #extra>
+            <q-btn outline color="grey-7" icon="more_vert" aria-label="더 보기" class="bar-more" data-test="bar-more">
+              <q-menu anchor="top right" self="bottom right">
+                <q-list style="min-width: 200px">
+                  <q-item v-if="task.implementation?.prUrl" v-close-popup clickable tag="a" :href="task.implementation.prUrl" target="_blank" rel="noopener" data-test="bar-more-pr">
+                    <q-item-section avatar><q-icon name="open_in_new" /></q-item-section>
+                    <q-item-section>PR #{{ task.implementation.prNumber }} 열기</q-item-section>
+                  </q-item>
+                  <q-item v-if="task.deployment?.deployUrl" v-close-popup clickable tag="a" :href="task.deployment.deployUrl" target="_blank" rel="noopener" data-test="bar-more-url">
+                    <q-item-section avatar><q-icon name="open_in_new" /></q-item-section>
+                    <q-item-section>접속 URL 열기</q-item-section>
+                  </q-item>
+                  <!-- 관리자 재배포/중지 — 모바일 상세에는 데스크톱 배포 카드의 버튼이 없어 여기로만 접근 가능했다 (리뷰 파인딩 4) -->
+                  <q-item v-if="auth.isAdmin && ['DEPLOYED','DEPLOY_FAILED','DEPLOY_LOST'].includes(task.status)" v-close-popup clickable data-test="bar-more-redeploy" @click="openDeployDialog('redeploy')">
+                    <q-item-section avatar><q-icon name="refresh" /></q-item-section>
+                    <q-item-section>재배포</q-item-section>
+                  </q-item>
+                  <q-item v-if="auth.isAdmin && ['DEPLOYED','DEPLOY_LOST'].includes(task.status)" v-close-popup clickable class="text-negative" data-test="bar-more-undeploy" @click="undeploy">
+                    <q-item-section avatar><q-icon name="stop" color="negative" /></q-item-section>
+                    <q-item-section>중지</q-item-section>
+                  </q-item>
+                  <q-item v-if="isInterviewPhase && task.interviewSessionId" v-close-popup clickable data-test="bar-more-interview" @click="onAction('open-interview')">
+                    <q-item-section avatar><q-icon name="forum" /></q-item-section>
+                    <q-item-section>대화 열기</q-item-section>
+                  </q-item>
+                  <q-item v-if="task.status === 'FAILED' || task.status === 'DESIGN_FAILED'" v-close-popup clickable data-test="bar-more-retry" @click="retry">
+                    <q-item-section avatar><q-icon name="refresh" /></q-item-section>
+                    <q-item-section>재시도</q-item-section>
+                  </q-item>
+                  <q-item v-if="task.status === 'AWAITING_APPROVAL' || task.status === 'PENDING'" v-close-popup clickable class="text-warning" data-test="bar-more-cancel" @click="cancelTask">
+                    <q-item-section avatar><q-icon name="block" color="warning" /></q-item-section>
+                    <q-item-section>취소</q-item-section>
+                  </q-item>
+                </q-list>
+              </q-menu>
+            </q-btn>
+          </template>
+        </TaskNextAction>
+      </template>
+      <template v-else>
       <q-card flat bordered class="q-mb-md">
         <q-card-section>
           <div class="text-caption">레포</div>
@@ -422,7 +579,9 @@ async function downloadAttachment(att: AttachmentMeta) {
         <q-separator />
         <q-card-section>
           <div class="text-caption">요청 상세</div>
-          <pre style="white-space: pre-wrap">{{ task.description }}</pre>
+          <div class="md-scroll">
+            <pre style="white-space: pre-wrap; margin: 0">{{ task.description }}</pre>
+          </div>
         </q-card-section>
         <q-separator v-if="task.mcpsExtra && task.mcpsExtra.length" />
         <q-card-section v-if="task.mcpsExtra && task.mcpsExtra.length">
@@ -465,9 +624,11 @@ async function downloadAttachment(att: AttachmentMeta) {
         <q-separator />
         <q-card-section v-if="task.failureReason || task.status === 'DESIGN_FAILED'">
           <div class="text-caption text-negative">실패 사유</div>
-          <pre style="white-space: pre-wrap; color: #c62828">{{
-            task.failureReason
-          }}</pre>
+          <div class="md-scroll">
+            <pre style="white-space: pre-wrap; color: #c62828; margin: 0">{{
+              task.failureReason
+            }}</pre>
+          </div>
           <!-- 재시도는 백엔드가 분석실패(FAILED)/디자인실패(DESIGN_FAILED)만 허용 — 그 외 실패 상태는 버튼 비노출.
                디자인 재시도는 retryCount를 소비하지 않으므로(admin 수동 조작) 한도 비활성/카운트 표시 제외 -->
           <q-btn
@@ -518,7 +679,7 @@ async function downloadAttachment(att: AttachmentMeta) {
         </q-card-section>
       </q-card>
 
-      <q-card v-if="isInterviewPhase && task.interviewSessionId" flat bordered class="q-mb-md">
+      <q-card v-if="isInterviewPhase && task.interviewSessionId" id="interview-card" flat bordered class="q-mb-md">
         <q-card-section class="text-h6">대화형 분석</q-card-section>
         <q-separator />
         <q-card-section class="q-pa-none">
@@ -545,8 +706,6 @@ async function downloadAttachment(att: AttachmentMeta) {
 
       <!-- 지난 인터뷰 이력 — 인터뷰 phase 여부와 무관하게 항상 마운트 (카드 스스로 숨김 판단) -->
       <InterviewHistoryCard :task-id="task.id" :task-status="task.status" />
-
-      <ApproveDialog v-model="showApprove" :task-id="task.id" @approved="onApproved" />
 
       <!-- 구현 결과 카드 (PR 생성 또는 구현 실패 시 노출) -->
       <q-card
@@ -618,16 +777,19 @@ async function downloadAttachment(att: AttachmentMeta) {
           dense
         >
           <q-card-section>
-            <pre
-              style="
-                white-space: pre-wrap;
-                max-height: 400px;
-                overflow: auto;
-                font-size: 11px;
-                font-family: 'Menlo', monospace;
-              "
-              >{{ task.implementation.implementationLog }}</pre
-            >
+            <div class="md-scroll">
+              <pre
+                style="
+                  white-space: pre-wrap;
+                  max-height: 400px;
+                  overflow: auto;
+                  font-size: 11px;
+                  font-family: 'Menlo', monospace;
+                  margin: 0;
+                "
+                >{{ task.implementation.implementationLog }}</pre
+              >
+            </div>
           </q-card-section>
         </q-expansion-item>
       </q-card>
@@ -747,74 +909,6 @@ async function downloadAttachment(att: AttachmentMeta) {
         </q-card-section>
       </q-card>
 
-      <q-dialog v-model="envDialog">
-        <q-card style="min-width: 480px; max-width: 90vw">
-          <q-card-section class="row items-center">
-            <div class="text-h6">
-              {{ envMode === 'deploy' ? '배포' : '재배포' }} — 환경변수
-            </div>
-            <q-space />
-            <q-btn v-close-popup flat round dense icon="close" />
-          </q-card-section>
-          <q-card-section class="text-caption text-grey-7">
-            컨테이너에 <code>-e KEY=VALUE</code>로 주입됩니다. DB 접속
-            정보·시크릿을 여기에 입력하세요. (예:
-            <code>SPRING_DATASOURCE_URL</code>, <code>JWT_SECRET</code>) 비밀
-            값은 마스킹 표시되지만 평문 저장됩니다.
-          </q-card-section>
-          <q-card-section class="q-gutter-sm">
-            <div
-              v-for="row in envRows"
-              :key="row.id"
-              class="row items-center q-gutter-xs no-wrap"
-            >
-              <q-input
-                v-model="row.key"
-                dense
-                outlined
-                placeholder="KEY"
-                style="flex: 1"
-              />
-              <q-input
-                v-model="row.value"
-                dense
-                outlined
-                placeholder="value"
-                style="flex: 2"
-                :type="row.secret && !row.reveal ? 'password' : 'text'"
-              >
-                <template v-if="row.secret" #append>
-                  <q-icon
-                    :name="row.reveal ? 'visibility_off' : 'visibility'"
-                    class="cursor-pointer"
-                    @click="row.reveal = !row.reveal"
-                  />
-                </template>
-              </q-input>
-              <q-toggle v-model="row.secret" label="비밀" dense />
-              <q-btn
-                flat
-                round
-                dense
-                icon="delete"
-                color="grey"
-                @click="removeEnvRow(row.id)"
-              />
-            </div>
-            <q-btn flat dense icon="add" label="변수 추가" @click="addEnvRow" />
-          </q-card-section>
-          <q-card-actions align="right">
-            <q-btn v-close-popup flat label="취소" />
-            <q-btn
-              unelevated
-              color="primary"
-              :label="envMode === 'deploy' ? '배포' : '재배포'"
-              @click="submitDeploy"
-            />
-          </q-card-actions>
-        </q-card>
-      </q-dialog>
-
       <div v-if="usageByStage['DESIGN']" class="row items-center q-mb-xs">
         <q-chip dense size="sm" outline icon="bolt"
                 :label="`${fmtTokens(usageByStage['DESIGN'].inputTokens)} 입력 · ${fmtTokens(usageByStage['DESIGN'].outputTokens)} 출력 · ${fmtCost(usageByStage['DESIGN'].costUsd)}`">
@@ -824,14 +918,16 @@ async function downloadAttachment(att: AttachmentMeta) {
           </q-tooltip>
         </q-chip>
       </div>
-      <DesignReviewCard
-        v-if="task.design"
-        :task-id="task.id"
-        :status="task.status"
-        :design="task.design"
-        :is-admin="auth.isAdmin"
-        @refresh="refresh"
-      />
+      <div id="design-card">
+        <DesignReviewCard
+          v-if="task.design"
+          :task-id="task.id"
+          :status="task.status"
+          :design="task.design"
+          :is-admin="auth.isAdmin"
+          @refresh="refresh"
+        />
+      </div>
 
       <q-card v-if="task.analysis" flat bordered>
         <q-card-section class="row items-center q-gutter-sm">
@@ -880,10 +976,7 @@ async function downloadAttachment(att: AttachmentMeta) {
           <div class="text-caption">
             소요 시간: {{ task.analysis.durationMs }} ms
           </div>
-          <pre
-            style="white-space: pre-wrap; font-family: 'Pretendard', sans-serif"
-            >{{ task.analysis.markdownResult }}</pre
-          >
+          <div class="md-scroll markdown" data-test="analysis-markdown" v-html="analysisHtml" />
         </q-card-section>
         <q-separator />
         <q-card-section v-if="subtasks.length">
@@ -903,11 +996,95 @@ async function downloadAttachment(att: AttachmentMeta) {
           </q-list>
         </q-card-section>
       </q-card>
+
+      <q-card flat bordered class="q-mt-md">
+        <q-expansion-item v-model="historyOpen" icon="history" label="진행 이력" header-class="text-subtitle1" data-test="history-desktop">
+          <TaskHistoryTimeline v-if="historyOpen" :task-id="task.id" />
+        </q-expansion-item>
+      </q-card>
+      </template>
+
+      <ApproveDialog v-model="showApprove" :task-id="task.id" @approved="onApproved" />
+
+      <q-dialog v-model="envDialog" :maximized="$q.screen.lt.md">
+        <q-card style="width: min(480px, 100vw)">
+          <div class="dialog-body">
+            <q-card-section class="row items-center">
+              <div class="text-h6">
+                {{ envMode === 'deploy' ? '배포' : '재배포' }} — 환경변수
+              </div>
+              <q-space />
+              <q-btn v-close-popup flat round dense icon="close" />
+            </q-card-section>
+            <q-card-section class="text-caption text-grey-7">
+              컨테이너에 <code>-e KEY=VALUE</code>로 주입됩니다. DB 접속
+              정보·시크릿을 여기에 입력하세요. (예:
+              <code>SPRING_DATASOURCE_URL</code>, <code>JWT_SECRET</code>) 비밀
+              값은 마스킹 표시되지만 평문 저장됩니다.
+            </q-card-section>
+            <q-card-section class="q-gutter-sm">
+              <div
+                v-for="row in envRows"
+                :key="row.id"
+                :class="$q.screen.lt.md ? 'column q-gutter-y-xs' : 'row items-center q-gutter-xs no-wrap'"
+              >
+                <q-input
+                  v-model="row.key"
+                  dense
+                  outlined
+                  placeholder="KEY"
+                  style="flex: 1"
+                />
+                <q-input
+                  v-model="row.value"
+                  dense
+                  outlined
+                  placeholder="value"
+                  style="flex: 2"
+                  :type="row.secret && !row.reveal ? 'password' : 'text'"
+                >
+                  <template v-if="row.secret" #append>
+                    <q-icon
+                      :name="row.reveal ? 'visibility_off' : 'visibility'"
+                      class="cursor-pointer"
+                      @click="row.reveal = !row.reveal"
+                    />
+                  </template>
+                </q-input>
+                <q-toggle v-model="row.secret" label="비밀" dense />
+                <q-btn
+                  flat
+                  round
+                  dense
+                  icon="delete"
+                  color="grey"
+                  @click="removeEnvRow(row.id)"
+                />
+              </div>
+              <q-btn flat dense icon="add" label="변수 추가" @click="addEnvRow" />
+            </q-card-section>
+          </div>
+          <q-card-actions align="right">
+            <q-btn v-close-popup flat label="취소" />
+            <q-btn
+              unelevated
+              color="primary"
+              :label="envMode === 'deploy' ? '배포' : '재배포'"
+              @click="submitDeploy"
+            />
+          </q-card-actions>
+        </q-card>
+      </q-dialog>
+
     </template>
   </q-page>
 </template>
 
 <style scoped>
+.bar-more {
+  min-width: 44px;
+  min-height: 44px;
+}
 .deploy-log {
   max-height: 240px;
   overflow: auto;

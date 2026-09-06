@@ -5,6 +5,7 @@ import com.hamonsoft.netismaker.dto.DeployRequest;
 import com.hamonsoft.netismaker.dto.InterviewSummaryResponse;
 import com.hamonsoft.netismaker.dto.RejectDesignRequest;
 import com.hamonsoft.netismaker.dto.TaskCreateRequest;
+import com.hamonsoft.netismaker.dto.TaskHistoryResponse;
 import com.hamonsoft.netismaker.dto.TaskResponse;
 import com.hamonsoft.netismaker.entity.Task;
 import com.hamonsoft.netismaker.entity.TaskAttachment;
@@ -123,6 +124,17 @@ public class TaskController {
     public List<InterviewSummaryResponse> interviews(@PathVariable Long id, JwtAuthenticationToken auth) {
         String userId = AuthContext.requireUserId(auth);
         return interviewService.listForTask(id, userId, AuthContext.isAdmin(auth));
+    }
+
+    /**
+     * 상태 변경 이력(최신순, 최대 200). ACL = 작업 조회와 동일(소유자 또는 관리자, 삭제된 작업 404).
+     * 스펙 2026-09-06 §6 — 모바일 상세 "진행 이력" 타임라인.
+     */
+    @GetMapping("/{id}/history")
+    public List<TaskHistoryResponse> history(@PathVariable Long id, JwtAuthenticationToken auth) {
+        String userId = AuthContext.requireUserId(auth);
+        taskService.getForView(id, userId, AuthContext.isAdmin(auth));
+        return taskService.getHistory(id, 200).stream().map(TaskHistoryResponse::of).toList();
     }
 
     @PostMapping("/{id}/cancel")

@@ -1,6 +1,7 @@
 # 작업 탭 모바일 재설계 — 디자인 스펙
 
 - 날짜: 2026-09-06 · 상태: **결정 반영(2026-09-06 사용자 답변 6건, §9)** — Claude Design 캔버스 목업 검토 후 `docs/superpowers/plans/`에 구현 계획
+- 디자인 캔버스(Claude Design, 아트보드 6: 목록·액션 시트·상세·이력 펼침·등록 시트·데스크톱 상세): https://claude.ai/code/artifact/b22b91bf-013d-41e7-993f-7fde7e41c7e6 · 작업 파일 `/Users/micthebick/IdeaProjects/design_netismaker_tasks_mobile/`
 - 대상: `frontend/pages/tasks/index.vue`(목록), `frontend/pages/tasks/[id].vue`(상세), 관련 다이얼로그(`ApproveDialog`, 배포 환경변수, 작업 등록), `composables/taskStages.ts`, (선택) 신규 API `GET /api/tasks/{id}/history`
 - 원칙: **데스크톱(≥1024px) 화면은 바꾸지 않는다.** 모바일 분기 기준은 질문 탭과 같은 `$q.screen.lt.md`(<1024px).
 

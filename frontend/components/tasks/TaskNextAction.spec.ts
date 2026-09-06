@@ -33,4 +33,13 @@ describe('TaskNextAction (스펙 2026-09-06 §4.2)', () => {
     expect(w.find('[data-test="next-action"]').exists()).toBe(false)
     w.unmount()
   })
+  it('banner: primary가 없어도 extra 슬롯은 그린다', () => {
+    const w = mount(TaskNextAction, {
+      props: { action: { text: 'PR 생성됨' }, variant: 'banner' },
+      slots: { extra: '<button data-test="extra-btn">PR 열기</button>' },
+    })
+    expect(w.find('[data-test="extra-btn"]').exists()).toBe(true)
+    expect(w.find('[data-test="next-action-primary"]').exists()).toBe(false)
+    w.unmount()
+  })
 })

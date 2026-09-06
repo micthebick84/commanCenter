@@ -24,8 +24,10 @@ const emit = defineEmits<{ (e: 'act', kind: NextActionKind): void }>()
       <div class="text-body1" data-test="next-action-text">
         {{ action.text }}
       </div>
-      <div v-if="action.primary" class="row" style="gap: 8px">
+      <!-- primary가 없어도 extra(예: PR 열기 버튼) 슬롯이 채워졌으면 행은 그대로 그린다 -->
+      <div v-if="action.primary || $slots.extra" class="row" style="gap: 8px">
         <q-btn
+          v-if="action.primary"
           unelevated
           color="primary"
           :icon="action.primary.icon"

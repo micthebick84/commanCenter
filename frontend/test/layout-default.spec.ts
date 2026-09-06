@@ -5,6 +5,9 @@ import DefaultLayout from '../layouts/default.vue'
 import { authStub } from './mocks/nuxt'
 import { setViewportWidth } from './mocks/screen'
 
+// useRoute는 Nuxt 자동 임포트 — setup.ts에 없어 전역 주입(관리 탭 활성 판정용).
+Object.assign(globalThis, { useRoute: () => ({ path: '/tasks' }) })
+
 // Nuxt 전용 컴포넌트/라우터 의존 탭은 렌더 함수 스텁으로 대체 (문자열 템플릿은 런타임 컴파일러가 없어 못 쓴다).
 const NuxtLinkStub = defineComponent({
   setup:
@@ -13,7 +16,7 @@ const NuxtLinkStub = defineComponent({
       h('a', { 'data-test': 'brand-link' }, slots.default?.()),
 })
 const QRouteTabStub = defineComponent({
-  props: { label: String, to: String },
+  props: { label: String, to: String, icon: String },
   setup: (props) => () => h('div', { class: 'q-tab-stub' }, props.label),
 })
 
@@ -61,5 +64,47 @@ describe('layouts/default — 상단 툴바 반응형 (2026-09-06 모바일 QA)'
     } finally {
       await setViewportWidth(1024)
     }
+  })
+})
+
+describe('layouts/default — 하단 내비 (스펙 2026-09-06 §4.4, 결정 4)', () => {
+  beforeEach(() => {
+    Object.assign(authStub, { isAuthenticated: true, isAdmin: true, me: { username: 'admin', email: null } })
+  })
+
+  it('lt.md: 헤더 탭은 사라지고 하단 내비에 작업·질문·관리 3탭', async () => {
+    await setViewportWidth(390)
+    try {
+      const w = mountLayout()
+      await flushPromises()
+      expect(w.find('.q-header .q-tab-stub').exists()).toBe(false)
+      const nav = w.find('[data-test="bottom-nav"]')
+      expect(nav.exists()).toBe(true)
+      expect(nav.findAll('.q-tab-stub').map((t) => t.text())).toEqual(['작업', '질문', '관리'])
+      w.unmount()
+    } finally {
+      await setViewportWidth(1024)
+    }
+  })
+
+  it('lt.md + 일반 사용자: 관리 탭 없음', async () => {
+    authStub.isAdmin = false
+    await setViewportWidth(390)
+    try {
+      const w = mountLayout()
+      await flushPromises()
+      expect(w.find('[data-test="bottom-nav"]').findAll('.q-tab-stub').map((t) => t.text())).toEqual(['작업', '질문'])
+      w.unmount()
+    } finally {
+      await setViewportWidth(1024)
+    }
+  })
+
+  it('데스크톱: 헤더 탭 5개, 하단 내비 없음', async () => {
+    const w = mountLayout()
+    await flushPromises()
+    expect(w.findAll('.q-header .q-tab-stub')).toHaveLength(5)
+    expect(w.find('[data-test="bottom-nav"]').exists()).toBe(false)
+    w.unmount()
   })
 })

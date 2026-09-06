@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { useQuasar } from 'quasar'
+import AdminSectionTabs from '~/components/tasks/AdminSectionTabs.vue'
 
 definePageMeta({ layout: 'default' })
 
@@ -153,6 +154,7 @@ const canSubmit = computed(
 
 <template>
   <q-page padding>
+    <AdminSectionTabs />
     <div class="row items-center q-mb-md">
       <div class="text-h5">레포 카탈로그</div>
       <q-space />

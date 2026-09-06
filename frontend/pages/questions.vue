@@ -50,7 +50,7 @@ provide('questions:open-drawer', () => {
 
 <style scoped>
 .questions-shell {
-  height: calc(100vh - 50px);
+  height: calc(100vh - 50px - var(--bottom-nav-height, 0px));
   overflow: hidden;
 }
 .questions-main {

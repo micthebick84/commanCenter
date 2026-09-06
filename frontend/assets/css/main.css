@@ -115,3 +115,8 @@ body {
 :root {
   --bottom-nav-height: 0px;
 }
+@media (max-width: 1023.98px) {
+  :root {
+    --bottom-nav-height: 56px;
+  }
+}

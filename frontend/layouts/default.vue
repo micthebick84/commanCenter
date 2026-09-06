@@ -3,6 +3,8 @@ import { useQuasar } from 'quasar'
 
 const auth = useAuthStore()
 const $q = useQuasar()
+const route = useRoute()
+const isAdminRoute = computed(() => route.path.startsWith('/admin'))
 
 function handleLogout() {
   $q.dialog({
@@ -26,7 +28,7 @@ function handleLogout() {
         <q-toolbar-title :class="{ 'toolbar-brand--fixed': $q.screen.lt.md }">
           <NuxtLink to="/tasks" style="color: inherit; text-decoration: none">netisMaker</NuxtLink>
         </q-toolbar-title>
-        <q-tabs v-if="auth.isAuthenticated" shrink>
+        <q-tabs v-if="auth.isAuthenticated && !$q.screen.lt.md" shrink>
           <q-route-tab to="/tasks" label="작업" />
           <q-route-tab to="/questions" label="질문" />
           <q-route-tab v-if="auth.isAdmin" to="/admin/workers" label="워커 헬스" />
@@ -49,6 +51,13 @@ function handleLogout() {
         <q-btn v-if="auth.isAuthenticated" flat dense icon="logout" @click="handleLogout" />
       </q-toolbar>
     </q-header>
+    <q-footer v-if="auth.isAuthenticated && $q.screen.lt.md" bordered class="bg-white bottom-nav" data-test="bottom-nav">
+      <q-tabs dense no-caps align="justify" active-color="primary" indicator-color="transparent" class="text-grey-7">
+        <q-route-tab to="/tasks" icon="assignment" label="작업" />
+        <q-route-tab to="/questions" icon="forum" label="질문" />
+        <q-route-tab v-if="auth.isAdmin" to="/admin/workers" icon="settings" label="관리" :class="{ 'q-tab--active text-primary': isAdminRoute }" />
+      </q-tabs>
+    </q-footer>
     <q-page-container>
       <slot />
     </q-page-container>
@@ -59,5 +68,11 @@ function handleLogout() {
 /* 좁은 화면 브랜드: 내용 폭 고정(줄어들지 않음). q-toolbar(.row)의 .col-shrink/.q-toolbar__title 규칙보다 구체적이어야 한다. */
 .q-toolbar > .toolbar-brand--fixed {
   flex: 0 0 auto;
+}
+.bottom-nav {
+  padding-bottom: env(safe-area-inset-bottom);
+}
+.bottom-nav :deep(.q-tab) {
+  min-height: 56px;
 }
 </style>

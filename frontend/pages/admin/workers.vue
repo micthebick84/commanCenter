@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import AdminSectionTabs from '~/components/tasks/AdminSectionTabs.vue'
 definePageMeta({ layout: 'default' })
 
 interface WorkerHealth {
@@ -35,6 +36,7 @@ function bool(b: boolean | null): string {
 
 <template>
   <q-page padding>
+    <AdminSectionTabs />
     <div class="row items-center q-mb-md">
       <div class="text-h5">워커 헬스</div>
       <q-space />

@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { useQuasar } from 'quasar'
-import { buildStages, stageAccepts, type MoveDef, type StageCard } from '~/composables/taskStages'
+import { buildStages, stageAccepts, cancelable, DEPLOY_ACTIVE_STATUSES, type MoveDef, type StageCard } from '~/composables/taskStages'
 
 definePageMeta({ layout: 'default' })
 
@@ -142,20 +142,6 @@ function repoLabel(t: TaskResponse) {
 
 function initialOf(t: TaskResponse) {
   return String(t.requesterId ?? '?').trim().charAt(0).toUpperCase() || '?'
-}
-
-// 서버 softDelete 가드와 동일 집합 — 배포 이력이 활성이면 먼저 중지 후 삭제
-const DEPLOY_ACTIVE_STATUSES = [
-  'DEPLOYED',
-  'DEPLOY_LOST',
-  'DEPLOY_PENDING',
-  'DEPLOYING',
-  'UNDEPLOY_PENDING',
-  'UNDEPLOYING',
-]
-
-function cancelable(t: TaskResponse) {
-  return ['PENDING', 'AWAITING_APPROVAL'].includes(t.status)
 }
 
 async function cancel(t: TaskResponse) {

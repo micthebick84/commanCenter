@@ -297,3 +297,167 @@ export function stageAccepts(stageKey: string, move: MoveDef | null): boolean {
   const s = STAGES.find((x) => x.key === stageKey)
   return !!s && s.statuses.includes(move.to)
 }
+
+// ── 모바일 리스트 (스펙 2026-09-06 §4.1) ─────────────────────────────────
+
+export type AttentionGroup = 'attention' | 'active' | 'done' | 'closed'
+
+export const ATTENTION_GROUPS: { key: AttentionGroup; label: string; color: string }[] = [
+  { key: 'attention', label: '확인 필요', color: '#ef6c00' },
+  { key: 'active', label: '진행 중', color: '#1565c0' },
+  { key: 'done', label: '완료', color: '#00695c' },
+  { key: 'closed', label: '취소됨', color: '#757575' },
+]
+
+/** 서버 softDelete 가드와 동일 집합 — 배포 이력이 활성이면 먼저 중지 후 삭제 */
+export const DEPLOY_ACTIVE_STATUSES = [
+  'DEPLOYED', 'DEPLOY_LOST', 'DEPLOY_PENDING', 'DEPLOYING', 'UNDEPLOY_PENDING', 'UNDEPLOYING',
+]
+
+export function cancelable(task: { status: string }): boolean {
+  return ['PENDING', 'AWAITING_APPROVAL'].includes(task.status)
+}
+
+const FAILED_STATUSES = ['FAILED', 'IMPLEMENTATION_FAILED', 'DESIGN_FAILED', 'DEPLOY_FAILED', 'DEPLOY_LOST']
+/** 사람 입력을 기다리는 상태 — 요청자에게도 "확인 필요"로 보인다 */
+const HUMAN_INPUT_STATUSES = ['INTERVIEW_INPUT', 'INTERVIEW_REVIEW']
+/** 관리자 판단을 기다리는 상태 — 관리자에게만 "확인 필요" */
+const ADMIN_GATE_STATUSES = ['AWAITING_APPROVAL', 'COMPLETED', 'DESIGN_REVIEW']
+const DONE_STATUSES = ['PR_CREATED', 'DEPLOYED']
+
+export function attentionGroup(task: { status: string }, isAdmin: boolean): AttentionGroup {
+  const s = task.status
+  if (s === 'CANCELLED') return 'closed'
+  if (FAILED_STATUSES.includes(s) || HUMAN_INPUT_STATUSES.includes(s)) return 'attention'
+  if (isAdmin && ADMIN_GATE_STATUSES.includes(s)) return 'attention'
+  if (DONE_STATUSES.includes(s)) return 'done'
+  return 'active'
+}
+
+export interface MobileGroup<T> {
+  key: AttentionGroup
+  label: string
+  color: string
+  items: T[]
+}
+
+/** 확인 필요 → 진행 중 → 완료 → 취소됨. 그룹 안은 updatedAt 내림차순. 빈 그룹은 제외. */
+export function sortForMobile<T extends { status: string; updatedAt: string }>(
+  tasks: T[],
+  isAdmin: boolean,
+): MobileGroup<T>[] {
+  return ATTENTION_GROUPS.map((g) => ({
+    ...g,
+    items: tasks
+      .filter((t) => attentionGroup(t, isAdmin) === g.key)
+      .sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime()),
+  })).filter((g) => g.items.length > 0)
+}
+
+// ── 스테퍼 (스펙 §4.2) ──────────────────────────────────────────────────
+
+export type StepState = 'done' | 'current' | 'future' | 'skipped' | 'failed'
+export interface StageStep {
+  key: string
+  label: string
+  color: string
+  state: StepState
+}
+
+const DESIGN_STATUSES = STAGES.find((s) => s.key === 'design')!.statuses
+
+/**
+ * 파이프라인 4단계의 표시 상태. 디자인 미요청 작업은 디자인 단계를 skipped로 표시한다.
+ *
+ * ⚠️ 두 skipped 오버라이드는 `idx >= 0`(작업이 4단계 파이프라인 안에 있을 때)에만 적용한다.
+ *    취소됨처럼 파이프라인 밖(terminal) 상태는 idx=-1이 되는데, 여기서도 오버라이드가 돌면
+ *    승인/디자인 요청 여부와 무관하게 디자인 세그먼트가 무조건 skipped로 보인다(스펙 위반 —
+ *    취소됨은 4단계 전부 future). idx>=0 가드로 파이프라인 밖 상태는 그대로 future 유지.
+ */
+export function stageSteps(task: { status: string; designRequested?: boolean }): StageStep[] {
+  const pipeline = STAGES.filter((s) => !s.terminal)
+  const idx = pipeline.findIndex((s) => s.statuses.includes(task.status))
+  const failed = FAILED_STATUSES.includes(task.status)
+  const inDesign = DESIGN_STATUSES.includes(task.status)
+  return pipeline.map((s, i) => {
+    let state: StepState = 'future'
+    if (idx >= 0) {
+      if (i < idx) state = 'done'
+      else if (i === idx) state = failed ? 'failed' : 'current'
+      if (s.key === 'design' && !task.designRequested && !inDesign && state !== 'done') state = 'skipped'
+      if (s.key === 'design' && !task.designRequested && state === 'done') state = 'skipped'
+    }
+    return { key: s.key, label: s.name, color: s.color, state }
+  })
+}
+
+// ── 다음 할 일 (스펙 §4.2 표) ───────────────────────────────────────────
+
+export type NextActionKind =
+  | 'approve-interview' | 'open-interview' | 'approve-impl' | 'review-design'
+  | 'deploy' | 'redeploy' | 'open-pr' | 'open-url' | 'retry'
+
+export interface NextAction {
+  text: string
+  primary?: { label: string; icon: string; kind: NextActionKind }
+}
+
+const RUNNING_TEXT = '진행 중 — 완료되면 상태가 바뀝니다'
+
+export function nextAction(
+  task: {
+    status: string
+    implementation?: { prUrl: string | null } | null
+    deployment?: { deployUrl: string | null } | null
+  },
+  isAdmin: boolean,
+): NextAction | null {
+  const s = task.status
+  switch (s) {
+    case 'CANCELLED':
+      return null
+    case 'AWAITING_APPROVAL':
+      return isAdmin
+        ? { text: '승인 대기 — 승인하면 인터뷰가 시작됩니다', primary: { label: '승인 — 인터뷰 시작', icon: 'forum', kind: 'approve-interview' } }
+        : { text: '관리자 승인을 기다리는 중입니다' }
+    case 'INTERVIEWING':
+      return { text: '인터뷰 진행 중', primary: { label: '대화 열기', icon: 'forum', kind: 'open-interview' } }
+    case 'INTERVIEW_INPUT':
+      return isAdmin
+        ? { text: '답변 대기 — 인터뷰 질문에 답해 주세요', primary: { label: '답변하기', icon: 'reply', kind: 'open-interview' } }
+        : { text: '관리자 답변을 기다리는 중입니다' }
+    case 'INTERVIEW_REVIEW':
+      return isAdmin
+        ? { text: '플랜 검토 — 확인 후 구현을 진행하세요', primary: { label: '플랜 확인', icon: 'fact_check', kind: 'open-interview' } }
+        : { text: '플랜 검토 중입니다' }
+    case 'COMPLETED':
+      return isAdmin
+        ? { text: '분석 완료 — 구현 승인 대기', primary: { label: '구현 승인', icon: 'rocket_launch', kind: 'approve-impl' } }
+        : { text: '분석 완료 — 관리자 승인을 기다리는 중입니다' }
+    case 'DESIGN_REVIEW':
+      return isAdmin
+        ? { text: '디자인 검토 — 승인 또는 피드백', primary: { label: '디자인 검토', icon: 'palette', kind: 'review-design' } }
+        : { text: '디자인 검토 중입니다' }
+    case 'PR_CREATED':
+      if (isAdmin) return { text: 'PR 생성됨 — 배포할 수 있습니다', primary: { label: '배포', icon: 'rocket_launch', kind: 'deploy' } }
+      return task.implementation?.prUrl
+        ? { text: 'PR 생성됨', primary: { label: 'PR 열기', icon: 'open_in_new', kind: 'open-pr' } }
+        : { text: 'PR 생성됨' }
+    case 'DEPLOYED':
+      return task.deployment?.deployUrl
+        ? { text: '배포 완료', primary: { label: '접속 URL 열기', icon: 'open_in_new', kind: 'open-url' } }
+        : { text: '배포 완료' }
+    case 'FAILED':
+    case 'DESIGN_FAILED':
+      return { text: '실패 — 사유 확인 후 재시도', primary: { label: '재시도', icon: 'refresh', kind: 'retry' } }
+    case 'IMPLEMENTATION_FAILED':
+      return { text: '구현 실패 — 사유를 확인하세요' }
+    case 'DEPLOY_FAILED':
+    case 'DEPLOY_LOST':
+      return isAdmin
+        ? { text: s === 'DEPLOY_LOST' ? '배포 컨테이너 중단 — 재배포 필요' : '배포 실패 — 사유 확인 후 재배포', primary: { label: '재배포', icon: 'refresh', kind: 'redeploy' } }
+        : { text: '배포 실패 — 관리자 확인이 필요합니다' }
+    default:
+      return { text: RUNNING_TEXT }
+  }
+}

@@ -6,6 +6,7 @@ import ClaudeUsagePanel from '~/components/ClaudeUsagePanel.vue'
 import { interviewStatusLabel, interviewStatusChip } from '~/composables/interviewLabels'
 import { contextPercent, type QuestionDetail } from '~/composables/questions'
 import { usageColor } from '~/composables/claudeUsage'
+import { DEFAULT_MODEL, DEFAULT_EFFORT } from '~/composables/modelEffort'
 import type { InterviewStatus } from '~/composables/useInterviewStream'
 
 definePageMeta({ layout: 'default' })
@@ -32,6 +33,17 @@ const { data: detail } = useTaskPolling<QuestionDetail | null>(async () => {
     }
     return null
   }
+})
+
+// 대화 중 모델·effort 변경(스펙 2026-09-05 §2 개정): 픽커는 "다음 질문에 쓸 값"의 초안. 첫 조회 때 세션 값으로 시드하고
+// 이후엔 사용자가 고른 값을 유지한다 — 전송 시 ask 바디에 실려 세션 값이 되므로 서버와 다시 일치한다.
+const picked = reactive({ model: DEFAULT_MODEL, effort: DEFAULT_EFFORT })
+const pickedSeeded = ref(false)
+watch(detail, (d) => {
+  if (pickedSeeded.value || !d?.model) return
+  picked.model = d.model
+  picked.effort = d.effort ?? DEFAULT_EFFORT
+  pickedSeeded.value = true
 })
 
 const liveStatus = ref<InterviewStatus | null>(null)
@@ -151,16 +163,15 @@ function onPanelClose() {
       <template #composer="{ answer, setAnswer, canSend, sending, send, awaiting }">
         <div class="composer-wrap">
           <QuestionComposer
+            v-model:model="picked.model"
+            v-model:effort="picked.effort"
             :model-value="answer"
-            :model="detail?.model ?? 'claude-opus-5'"
-            :effort="detail?.effort ?? 'high'"
-            mode="ask"
             :can-send="canSend"
             :sending="sending"
             :disabled="!awaiting"
             :hint="!$q.screen.lt.md"
             @update:model-value="setAnswer"
-            @send="send"
+            @send="send({ model: picked.model, effort: picked.effort })"
           >
             <template #tools>
               <q-btn

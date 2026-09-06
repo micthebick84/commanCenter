@@ -1,6 +1,7 @@
 package com.hamonsoft.netismaker.service;
 
 import com.hamonsoft.netismaker.dto.AnswerRequest;
+import com.hamonsoft.netismaker.dto.QuestionAskRequest;
 import com.hamonsoft.netismaker.dto.QuestionCreateRequest;
 import com.hamonsoft.netismaker.entity.InterviewKind;
 import com.hamonsoft.netismaker.entity.InterviewSession;
@@ -142,7 +143,7 @@ class QuestionServiceTest {
     @Test
     void ask_at_turn_cap_throws_400_and_does_not_delegate() {
         when(turnRepo.countBySessionIdAndRole(5L, "assistant")).thenReturn(10L);
-        assertThatThrownBy(() -> service.ask(5L, "user1", false, new AnswerRequest("더 자세히?", 9)))
+        assertThatThrownBy(() -> service.ask(5L, "user1", false, new QuestionAskRequest("더 자세히?", 9, null, null)))
                 .isInstanceOf(TaskException.class)
                 .satisfies(e -> assertThat(((TaskException) e).getStatus()).isEqualTo(HttpStatus.BAD_REQUEST));
         verify(interviewService).requireKind(5L, InterviewKind.QUESTION);
@@ -152,10 +153,98 @@ class QuestionServiceTest {
     @Test
     void ask_below_cap_delegates_to_submitAnswer_with_real_isAdmin() {
         when(turnRepo.countBySessionIdAndRole(5L, "assistant")).thenReturn(9L);
-        AnswerRequest req = new AnswerRequest("더 자세히?", 9);
-        service.ask(5L, "user1", false, req);
+        service.ask(5L, "user1", false, new QuestionAskRequest("더 자세히?", 9, null, null));
         verify(interviewService).requireKind(5L, InterviewKind.QUESTION);
-        verify(interviewService).submitAnswer(5L, "user1", false, req);
+        // 상태 전이에는 답변 부분만 AnswerRequest로 넘긴다 (record 동등성)
+        verify(interviewService).submitAnswer(5L, "user1", false, new AnswerRequest("더 자세히?", 9));
+    }
+
+    private static InterviewSession questionSession(String model, String effort) {
+        return InterviewSession.createQuestion("micthebick84/netis7.0", "main", "인증 흐름",
+                "로그인은 어디서 처리되나요?", "user1", null, model, effort);
+    }
+
+    @Test
+    void ask_with_model_and_effort_applies_them_to_the_session_after_requeue() {
+        // 대화 중 모델·effort 변경(스펙 2026-09-05 §2 개정): 세션 값이 바뀌어야 다음 claim이 새 값을 싣는다.
+        when(turnRepo.countBySessionIdAndRole(5L, "assistant")).thenReturn(1L);
+        InterviewSession s = questionSession("claude-opus-5", "high");
+        when(interviewService.submitAnswer(eq(5L), eq("user1"), eq(false), any())).thenReturn(s);
+
+        InterviewSession out = service.ask(5L, "user1", false,
+                new QuestionAskRequest("이번 건 싸게 답해줘", 3, "claude-haiku-4-5", "low"));
+
+        assertThat(out).isSameAs(s);
+        assertThat(s.getModel()).isEqualTo("claude-haiku-4-5");
+        assertThat(s.getEffort()).isEqualTo("low");
+        verify(interviewService).submitAnswer(5L, "user1", false, new AnswerRequest("이번 건 싸게 답해줘", 3));
+    }
+
+    @Test
+    void ask_with_only_effort_keeps_the_current_model_instead_of_policy_default() {
+        when(turnRepo.countBySessionIdAndRole(5L, "assistant")).thenReturn(1L);
+        InterviewSession s = questionSession("claude-sonnet-5", "medium");
+        when(interviewService.submitAnswer(eq(5L), eq("user1"), eq(false), any())).thenReturn(s);
+
+        service.ask(5L, "user1", false, new QuestionAskRequest("더?", 3, null, "xhigh"));
+
+        assertThat(s.getModel()).isEqualTo("claude-sonnet-5");   // resolveModel(null)=opus로 리셋되면 안 된다
+        assertThat(s.getEffort()).isEqualTo("xhigh");
+    }
+
+    @Test
+    void ask_with_only_model_validates_the_combination_with_the_current_effort() {
+        // 세션 effort가 max인데 Haiku로만 바꾸면 Haiku는 max를 지원하지 않으므로 400 — 조합은 항상 함께 검증한다.
+        when(turnRepo.countBySessionIdAndRole(5L, "assistant")).thenReturn(1L);
+        InterviewSession s = questionSession("claude-opus-5", "max");
+        when(interviewService.submitAnswer(eq(5L), eq("user1"), eq(false), any())).thenReturn(s);
+
+        assertThatThrownBy(() -> service.ask(5L, "user1", false,
+                new QuestionAskRequest("더?", 3, "claude-haiku-4-5", "")))
+                .isInstanceOf(TaskException.class)
+                .satisfies(e -> assertThat(((TaskException) e).getStatus()).isEqualTo(HttpStatus.BAD_REQUEST));
+        assertThat(s.getModel()).isEqualTo("claude-opus-5");
+        assertThat(s.getEffort()).isEqualTo("max");
+    }
+
+    @Test
+    void ask_with_unsupported_model_throws_400_and_leaves_session_untouched() {
+        when(turnRepo.countBySessionIdAndRole(5L, "assistant")).thenReturn(1L);
+        InterviewSession s = questionSession("claude-sonnet-5", "medium");
+        when(interviewService.submitAnswer(eq(5L), eq("user1"), eq(false), any())).thenReturn(s);
+
+        assertThatThrownBy(() -> service.ask(5L, "user1", false,
+                new QuestionAskRequest("더?", 3, "claude-fable-5", "high")))
+                .isInstanceOf(TaskException.class)
+                .satisfies(e -> assertThat(((TaskException) e).getStatus()).isEqualTo(HttpStatus.BAD_REQUEST));
+        assertThat(s.getModel()).isEqualTo("claude-sonnet-5");
+        assertThat(s.getEffort()).isEqualTo("medium");
+    }
+
+    @Test
+    void ask_with_unchanged_model_effort_is_a_noop_even_for_a_legacy_model_no_longer_selectable() {
+        // 프론트는 픽커의 현재 값을 항상 동봉한다 — 과거 세션에 박제된 fable-5처럼 목록에서 빠진 모델도
+        // "변경 없음"이면 검증 없이 그대로 이어간다(ModelEffortPolicy 주석: 박제 값은 검증을 타지 않는다).
+        when(turnRepo.countBySessionIdAndRole(5L, "assistant")).thenReturn(1L);
+        InterviewSession s = questionSession("claude-fable-5", "high");
+        when(interviewService.submitAnswer(eq(5L), eq("user1"), eq(false), any())).thenReturn(s);
+
+        service.ask(5L, "user1", false, new QuestionAskRequest("더?", 3, "claude-fable-5", "high"));
+
+        assertThat(s.getModel()).isEqualTo("claude-fable-5");
+        assertThat(s.getEffort()).isEqualTo("high");
+    }
+
+    @Test
+    void ask_without_model_effort_leaves_the_session_values_alone() {
+        when(turnRepo.countBySessionIdAndRole(5L, "assistant")).thenReturn(1L);
+        InterviewSession s = questionSession("claude-sonnet-5", "medium");
+        when(interviewService.submitAnswer(eq(5L), eq("user1"), eq(false), any())).thenReturn(s);
+
+        service.ask(5L, "user1", false, new QuestionAskRequest("더?", 3, "", null));
+
+        assertThat(s.getModel()).isEqualTo("claude-sonnet-5");
+        assertThat(s.getEffort()).isEqualTo("medium");
     }
 
     @Test

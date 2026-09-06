@@ -1,17 +1,17 @@
 <script setup lang="ts">
 // 채팅 입력창 (스펙 2026-09-05 §3·§6): textarea + 툴바(모델/effort 픽커 · #tools 슬롯 · 전송).
-// create = 새 질문(픽커 활성, #top 슬롯에 레포/브랜치), ask = 추가 질문(픽커는 세션 값으로 고정 표시).
+// 새 질문(#top 슬롯에 레포/브랜치)과 대화 페이지의 추가 질문 공용 — 픽커는 양쪽 모두 활성이며(§2 개정: 대화 중
+// 변경은 다음 질문부터 적용) 입력이 막힌 동안(disabled/sending)만 함께 잠긴다.
 // Enter 전송 · Shift+Enter 줄바꿈 · 한글 IME 조합 중 Enter는 무시(keydown.isComposing).
 import ModelEffortPicker from '~/components/chat/ModelEffortPicker.vue'
 
 const props = withDefaults(
   defineProps<{
-    mode: 'create' | 'ask'
     placeholder?: string
     /** 전송 가능 여부 — 부모가 판정(텍스트/상태/레포 선택 등) */
     canSend: boolean
     sending?: boolean
-    /** ask 모드: 세션이 입력 대기가 아니면 입력 자체를 막는다 */
+    /** 대화 페이지: 세션이 입력 대기가 아니면 입력·픽커를 함께 막는다 */
     disabled?: boolean
     /** 하단 안내 문구(모바일은 부모가 끈다) */
     hint?: boolean
@@ -47,7 +47,7 @@ function onEnter(ev: KeyboardEvent) {
       @keydown.enter.exact="onEnter"
     />
     <div class="row items-center no-wrap composer-bar">
-      <ModelEffortPicker v-model:model="model" v-model:effort="effort" :disabled="props.mode === 'ask'" />
+      <ModelEffortPicker v-model:model="model" v-model:effort="effort" :disabled="props.disabled || props.sending" />
       <slot name="tools" />
       <q-space />
       <q-btn

@@ -1,6 +1,7 @@
 import { mount, flushPromises } from '@vue/test-utils'
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import QuestionDetail from '../pages/questions/[id].vue'
+import ModelEffortPicker from '../components/chat/ModelEffortPicker.vue'
 import { authStub, useApiMock } from './mocks/nuxt'
 import { FakeEventSource } from './mocks/eventsource'
 import { setViewportWidth } from './mocks/screen'
@@ -64,14 +65,15 @@ describe('pages/questions/[id] — 대화 (스펙 2026-09-05 §3·§6)', () => {
     expect(w.find('[data-test="send-answer"]').exists()).toBe(false) // 기본 입력창 대신 슬롯
     expect(
       w.find('[data-test="model-picker"]').attributes('disabled'),
-    ).toBeDefined() // ask 모드 = 고정
+    ).toBeUndefined() // 입력 대기 중엔 모델·effort도 바꿀 수 있다 (스펙 §2 개정)
+    expect(w.find('[data-test="model-picker"]').text()).toContain('Sonnet 5') // 세션 값으로 시드
     expect(w.find('.bubble.assistant strong').text()).toBe('AuthController')
     expect(w.find('[data-test="close-session"]').text()).toContain('세션 종료') // 넓은 화면: 라벨 노출
     expect(w.find('[data-test="open-drawer"]').exists()).toBe(false)
     w.unmount()
   })
 
-  it('입력창에서 Enter로 추가 질문을 보낸다 (replyToSeq = 마지막 assistant seq)', async () => {
+  it('입력창에서 Enter로 추가 질문을 보낸다 (replyToSeq = 마지막 assistant seq, 현재 세션 model/effort 동봉)', async () => {
     const w = mount(QuestionDetail)
     await flushPromises()
     const ta = w.find('textarea')
@@ -80,8 +82,48 @@ describe('pages/questions/[id] — 대화 (스펙 2026-09-05 §3·§6)', () => {
     await flushPromises()
     expect(useApiMock).toHaveBeenCalledWith('/api/questions/3/ask', {
       method: 'POST',
-      body: { answer: '리프레시 토큰은요?', replyToSeq: 1 },
+      body: {
+        answer: '리프레시 토큰은요?',
+        replyToSeq: 1,
+        model: 'claude-sonnet-5',
+        effort: 'medium',
+      },
     })
+    w.unmount()
+  })
+
+  it('대화 중 모델을 바꿔 보내면 ask 바디에 새 model/effort가 실린다 (다음 답변부터 적용)', async () => {
+    const w = mount(QuestionDetail)
+    await flushPromises()
+    ;(w.findComponent(ModelEffortPicker).vm as any).pickModel(
+      'claude-haiku-4-5',
+    )
+    await flushPromises()
+    expect(w.find('[data-test="model-picker"]').text()).toContain('Haiku 4.5')
+    const ta = w.find('textarea')
+    await ta.setValue('이번 건 싸게 답해줘')
+    await ta.trigger('keydown', { key: 'Enter' })
+    await flushPromises()
+    expect(useApiMock).toHaveBeenCalledWith('/api/questions/3/ask', {
+      method: 'POST',
+      body: {
+        answer: '이번 건 싸게 답해줘',
+        replyToSeq: 1,
+        model: 'claude-haiku-4-5',
+        effort: 'medium',
+      },
+    })
+    w.unmount()
+  })
+
+  it('답변 중(RUNNING)에는 입력창과 함께 픽커도 잠긴다', async () => {
+    const w = mount(QuestionDetail)
+    await flushPromises()
+    FakeEventSource.last().emit('status', 'RUNNING')
+    await flushPromises()
+    expect(
+      w.find('[data-test="model-picker"]').attributes('disabled'),
+    ).toBeDefined()
     w.unmount()
   })
 

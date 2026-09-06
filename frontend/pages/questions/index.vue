@@ -184,7 +184,6 @@ defineExpose({ draft, submit, onRepoSelected })
           v-model="draft.question"
           v-model:model="draft.model"
           v-model:effort="draft.effort"
-          mode="create"
           placeholder="예: 로그인 요청은 어느 컨트롤러가 처리하고 토큰은 어디서 검증하나요?"
           :can-send="canSubmit"
           :sending="submitting"

@@ -151,15 +151,24 @@ watch(
   },
 )
 
-async function sendAnswer() {
+/** composer 슬롯의 send(extra) — 질문 세션은 다음 턴에 쓸 모델·effort를 ask 바디에 싣는다 (스펙 2026-09-05 §2 개정). */
+type AskExtra = { model?: string; effort?: string }
+
+async function sendAnswer(extra?: AskExtra) {
   const text = answer.value.trim()
   if (!text || status.value !== 'AWAITING_INPUT') return
   const replyToSeq = lastQuestionSeq.value
+  const body: Record<string, unknown> = { answer: text, replyToSeq }
+  // 질문 세션만: 서버가 검증 후 세션 값을 갱신해 다음 claim부터 적용한다. 인터뷰 answer 바디는 그대로.
+  if (isQuestion.value) {
+    if (typeof extra?.model === 'string') body.model = extra.model
+    if (typeof extra?.effort === 'string') body.effort = extra.effort
+  }
   sending.value = true
   try {
     await useApi(`${apiBase.value}/${props.sessionId}/${isQuestion.value ? 'ask' : 'answer'}`, {
       method: 'POST',
-      body: { answer: text, replyToSeq },
+      body,
     })
     // 낙관적 추가: 서버 재큐 후 다음 질문이 새 seq로 도착한다.
     turns.value = [
@@ -384,7 +393,7 @@ defineExpose({
               autogrow
               :disable="status !== 'AWAITING_INPUT' || sending"
               :placeholder="ui.placeholder"
-              @keydown.enter.exact.prevent="sendAnswer"
+              @keydown.enter.exact.prevent="sendAnswer()"
             />
             <div class="row justify-end q-mt-xs">
               <q-btn
@@ -395,7 +404,7 @@ defineExpose({
                 :label="ui.send"
                 :loading="sending"
                 :disable="!canAnswer"
-                @click="sendAnswer"
+                @click="sendAnswer()"
               />
             </div>
           </slot>

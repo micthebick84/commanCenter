@@ -6,7 +6,7 @@ import { MODEL_OPTIONS, effortsForModel, coerceEffort } from '~/composables/mode
 
 const props = withDefaults(
   defineProps<{
-    /** 세션 생성 후에는 고정 — 읽기 전용 표시 (스펙 §2 "모델/effort 변경 시점"). */
+    /** 입력이 막힌 동안(답변 생성 중·전송 중·종료된 세션) 부모가 함께 잠근다. 세션 생성 후 고정은 아니다(스펙 §2 개정). */
     disabled?: boolean
   }>(),
   { disabled: false },
@@ -66,7 +66,6 @@ defineExpose({ pickModel })
           </q-item-section>
         </q-item>
       </q-list>
-      <q-tooltip v-if="props.disabled">세션 생성 시 고정 — 바꾸려면 새 질문</q-tooltip>
     </q-btn-dropdown>
 
     <div class="row items-center no-wrap q-ml-sm effort-group">

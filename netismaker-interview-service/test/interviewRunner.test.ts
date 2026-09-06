@@ -337,6 +337,22 @@ describe('InterviewRunner kind=QUESTION (스펙 §6 — plan 경로 미진입, Q
     expect(captured.options.resume).toBe('sess-q-1');
   });
 
+  it('resume: 대화 중 바뀐 claim.model/effort가 그 턴의 SDK 옵션에 그대로 실린다 (claim당 조립, 첫 턴 값 캐시 없음)', async () => {
+    // 계약 고정 테스트(스펙 2026-09-05 §2 개정 "대화 중 모델·effort 변경"): Java가 ask 바디의 model/effort로 세션을
+    // 갱신하면 다음 claim이 새 값을 싣고, 러너는 그 값을 resume 턴 옵션에 넣어야 다음 답변부터 모델이 바뀐다.
+    // CLI는 --resume 세션에서도 --model/--effort를 적용한다(2026-09-06 실측: sonnet 세션 + haiku → modelUsage=haiku).
+    const client = makeClient();
+    const { fakeQuery, captured } = capturing(() => questionStream());
+    const runner = new InterviewRunner(client as never, fakeQuery as never, deps as never);
+    await runner.run({
+      ...questionClaim, claudeSessionId: 'sess-q-1', lastAnswer: '이번 건 싸게 답해줘', turns: turns(1),
+      model: 'claude-haiku-4-5', effort: 'low',
+    });
+    expect(captured.options.resume).toBe('sess-q-1');
+    expect(captured.options.model).toBe('claude-haiku-4-5');
+    expect(captured.options.effort).toBe('low');
+  });
+
   it('가드①: forceFinish 턴수(19)에서도 reformat 프롬프트가 아니라 후속 질문을 보낸다', async () => {
     const client = makeClient();
     const { fakeQuery, captured } = capturing(() => questionStream());

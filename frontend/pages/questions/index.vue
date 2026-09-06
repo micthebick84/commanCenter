@@ -243,7 +243,16 @@ defineExpose({ draft, submit, onRepoSelected })
             </div>
           </template>
           <template #tools>
-            <q-btn flat dense no-caps icon="extension" label="MCP 도구" data-test="mcp-button">
+            <!-- xs(<600px)에서는 라벨이 두 줄로 꺾이므로 아이콘만 — 이름은 aria-label로 유지 (2026-09-06 모바일 QA) -->
+            <q-btn
+              flat
+              dense
+              no-caps
+              icon="extension"
+              :label="$q.screen.xs ? undefined : 'MCP 도구'"
+              aria-label="MCP 도구"
+              data-test="mcp-button"
+            >
               <q-badge v-if="draft.mcpCatalogIds.length" color="primary" floating>
                 {{ draft.mcpCatalogIds.length }}
               </q-badge>

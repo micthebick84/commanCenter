@@ -177,4 +177,19 @@ describe('pages/questions/[id] — 대화 (스펙 2026-09-05 §3·§6)', () => {
       await setViewportWidth(1024)
     }
   })
+
+  it('xs 화면(<600px)에서는 (고정된) MCP 도구 버튼도 라벨 없이 아이콘만 남긴다', async () => {
+    await setViewportWidth(390)
+    try {
+      const w = mount(QuestionDetail)
+      await flushPromises()
+      const btn = w.find('[data-test="mcp-button"]')
+      expect(btn.exists()).toBe(true)
+      expect(btn.text()).not.toContain('MCP 도구')
+      expect(btn.attributes('aria-label')).toBe('MCP 도구')
+      w.unmount()
+    } finally {
+      await setViewportWidth(1024)
+    }
+  })
 })

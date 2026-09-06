@@ -2,6 +2,7 @@ import { mount, flushPromises } from '@vue/test-utils'
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import QuestionsIndex from '../pages/questions/index.vue'
 import { useApiMock } from './mocks/nuxt'
+import { setViewportWidth } from './mocks/screen'
 
 // navigateTo는 Nuxt 자동 임포트 — setup.ts에 없어 여기서 전역 주입.
 const navigateToMock = vi.fn()
@@ -30,6 +31,7 @@ describe('pages/questions/index — 새 질문 입력창 (스펙 2026-09-05 §3�
     expect(useApiMock).toHaveBeenCalledWith('/api/repo-catalog')
     expect(w.find('[data-test="composer-send"]').attributes('disabled')).toBeDefined()
     expect(w.find('[data-test="model-picker"]').attributes('disabled')).toBeUndefined() // create 모드 = 픽커 활성
+    expect(w.find('[data-test="mcp-button"]').text()).toContain('MCP 도구') // 넓은 화면: 라벨 노출
     w.unmount()
   })
 
@@ -104,5 +106,21 @@ describe('pages/questions/index — 새 질문 입력창 (스펙 2026-09-05 §3�
 
     expect(vm.draft.githubBranch).toBe('develop')
     w.unmount()
+  })
+
+  it('xs 화면(<600px)에서는 MCP 도구 버튼이 라벨 없이 아이콘만 남기고 aria-label로 이름을 유지한다', async () => {
+    // 390px에서 "MCP 도구" 라벨이 두 줄로 꺾이던 결함(2026-09-06 모바일 QA).
+    await setViewportWidth(390)
+    try {
+      const w = mount(QuestionsIndex)
+      await flushPromises()
+      const btn = w.find('[data-test="mcp-button"]')
+      expect(btn.exists()).toBe(true)
+      expect(btn.text()).not.toContain('MCP 도구')
+      expect(btn.attributes('aria-label')).toBe('MCP 도구')
+      w.unmount()
+    } finally {
+      await setViewportWidth(1024)
+    }
   })
 })

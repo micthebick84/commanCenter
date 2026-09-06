@@ -170,6 +170,22 @@ describe('useInterviewStream — reconnect', () => {
 })
 
 describe('useInterviewStream — hydrate (refresh resume)', () => {
+  it('system/note 턴(예: 사용자 취소)은 assistant 질문이 아니라 system 노트로 시드한다', () => {
+    // 새로고침 후 "사용자 취소"가 AI 말풍선으로 그려지던 표시 결함(2026-09-06 모바일 QA 부수 발견).
+    authStub.accessToken = 'jwt'
+    const s = useInterviewStream()
+    s.hydrate({
+      statusName: 'CANCELLED',
+      turns: [
+        { seq: 0, role: 'assistant', kind: 'question', content: 'Q1' },
+        { seq: 1, role: 'system', kind: 'note', content: '사용자 취소' },
+      ],
+      plan: null,
+    })
+    expect(s.turns.value).toHaveLength(2)
+    expect(s.turns.value[1]).toMatchObject({ seq: 1, role: 'system', kind: 'note', content: '사용자 취소' })
+  })
+
   it('seeds turns (incl. user answers), status, and plan from a REST snapshot', () => {
     authStub.accessToken = 'jwt'
     const s = useInterviewStream()

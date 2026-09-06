@@ -169,6 +169,10 @@ function openApprove() {
   showApprove.value = true
 }
 
+// q-expansion-item은 접힌 상태에서도 콘텐츠를 always-mount(v-show)하므로, 진행 이력 카드는
+// historyOpen을 별도로 두고 v-if로 TaskHistoryTimeline을 게이팅해 첫 펼침 때만 조회한다.
+const historyOpen = ref(false)
+
 // 승인대기 취소: 요청자 본인 또는 admin — getForView가 이미 조회 시점에 두 경우만
 // 통과시키므로(그 외 403) 별도 소유권 가드 없이 재시도 버튼과 동일한 패턴을 따른다.
 async function cancelTask() {
@@ -966,8 +970,8 @@ function onAction(kind: NextActionKind) {
       </q-card>
 
       <q-card flat bordered class="q-mt-md">
-        <q-expansion-item icon="history" label="진행 이력" header-class="text-subtitle1" data-test="history-desktop">
-          <TaskHistoryTimeline :task-id="task.id" />
+        <q-expansion-item v-model="historyOpen" icon="history" label="진행 이력" header-class="text-subtitle1" data-test="history-desktop">
+          <TaskHistoryTimeline v-if="historyOpen" :task-id="task.id" />
         </q-expansion-item>
       </q-card>
       </template>

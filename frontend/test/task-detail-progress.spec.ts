@@ -51,4 +51,18 @@ describe('pages/tasks/[id] — 진행 스테퍼 + 다음 할 일 (스펙 2026-09
     expect(md.classes()).toContain('md-scroll')
     w.unmount()
   })
+
+  it('데스크톱 진행 이력 카드는 펼치기 전에는 조회하지 않고, 첫 펼침 때 조회한다(지연 로딩)', async () => {
+    useApiMock.mockImplementation((url: string) => {
+      if (url === '/api/tasks/42/history') return Promise.resolve([])
+      return Promise.resolve(baseTask)
+    })
+    const w = mount(PageWrapper, mountOpts)
+    await flushPromises()
+    expect(useApiMock).not.toHaveBeenCalledWith('/api/tasks/42/history')
+    await w.find('[data-test="history-desktop"] .q-item').trigger('click')
+    await flushPromises()
+    expect(useApiMock).toHaveBeenCalledWith('/api/tasks/42/history')
+    w.unmount()
+  })
 })

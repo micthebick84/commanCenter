@@ -40,17 +40,19 @@ describe('layouts/default — 상단 툴바 반응형 (2026-09-06 모바일 QA)'
     const user = w.find('[data-test="toolbar-user"]')
     expect(user.text()).toContain('admin')
     expect(user.text()).toContain('ADMIN')
+    expect(w.find('.q-toolbar__title').classes()).not.toContain('toolbar-brand--fixed') // 데스크톱 배치 불변
     expect(w.find('[data-test="page"]').exists()).toBe(true)
     w.unmount()
   })
 
-  it('xs 화면(<600px)에서는 브랜드가 줄어들지 않고(col-shrink) 사용자명은 숨기되 ADMIN 칩은 남긴다', async () => {
+  it('좁은 화면(lt.md)에서는 브랜드가 줄어들지 않고(toolbar-brand--fixed) 사용자명은 숨기되 ADMIN 칩은 남긴다', async () => {
     // 390px에서 브랜드가 "n"으로 잘리고 사용자 블록이 두 줄로 꺾이던 결함.
     await setViewportWidth(390)
     try {
       const w = mountLayout()
       await flushPromises()
-      expect(w.find('.q-toolbar__title').classes()).toContain('col-shrink')
+      // Quasar `col-shrink`는 flex: 0 1 auto라 여전히 줄어든다 — flex-shrink: 0을 주는 자체 클래스가 있어야 브랜드가 "net…"으로 잘리지 않는다.
+      expect(w.find('.q-toolbar__title').classes()).toContain('toolbar-brand--fixed')
       const user = w.find('[data-test="toolbar-user"]')
       expect(user.exists()).toBe(true)
       expect(user.text()).not.toContain('admin')

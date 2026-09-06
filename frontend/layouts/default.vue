@@ -21,8 +21,9 @@ function handleLogout() {
   <q-layout view="hHh lpR fFf">
     <q-header elevated class="bg-primary text-white">
       <q-toolbar>
-        <!-- 좁은 화면(lt.md)에서는 제목이 탭에 밀려 "n"까지 줄어들므로 내용 폭으로 고정(shrink) — 데스크톱 배치는 그대로 (2026-09-06 모바일 QA) -->
-        <q-toolbar-title :shrink="$q.screen.lt.md">
+        <!-- 좁은 화면(lt.md)에서는 제목이 탭에 밀려 "n"까지 줄어들므로 flex-shrink:0으로 고정 — Quasar shrink(col-shrink)는
+             flex: 0 1 auto라 여전히 줄어든다. 데스크톱 배치는 그대로 (2026-09-06 모바일 QA) -->
+        <q-toolbar-title :class="{ 'toolbar-brand--fixed': $q.screen.lt.md }">
           <NuxtLink to="/tasks" style="color: inherit; text-decoration: none">netisMaker</NuxtLink>
         </q-toolbar-title>
         <q-tabs v-if="auth.isAuthenticated" shrink>
@@ -53,3 +54,10 @@ function handleLogout() {
     </q-page-container>
   </q-layout>
 </template>
+
+<style scoped>
+/* 좁은 화면 브랜드: 내용 폭 고정(줄어들지 않음). q-toolbar(.row)의 .col-shrink/.q-toolbar__title 규칙보다 구체적이어야 한다. */
+.q-toolbar > .toolbar-brand--fixed {
+  flex: 0 0 auto;
+}
+</style>

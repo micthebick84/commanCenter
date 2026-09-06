@@ -165,7 +165,9 @@ async function submitReject() {
     <q-separator />
 
     <q-card-section>
-      <pre style="white-space: pre-wrap; font-family: 'Pretendard', sans-serif">{{ design.designMarkdown }}</pre>
+      <div class="md-scroll">
+        <pre style="white-space: pre-wrap; font-family: 'Pretendard', sans-serif; margin: 0">{{ design.designMarkdown }}</pre>
+      </div>
     </q-card-section>
 
     <template v-if="feedbackHistory.length">

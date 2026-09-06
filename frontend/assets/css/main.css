@@ -85,3 +85,17 @@ body {
   min-height: 44px;
   flex: 1 1 0;
 }
+
+/* 긴 표/코드 블록은 컨테이너 안에서만 가로 스크롤 — 페이지 폭을 밀어내지 않게 (스펙 2026-09-06 D1) */
+.md-scroll {
+  max-width: 100%;
+  overflow-x: auto;
+}
+.md-scroll pre,
+.md-scroll table {
+  max-width: 100%;
+}
+/* 안전망: 페이지 레벨 가로 스크롤 금지 */
+.q-page {
+  overflow-x: clip;
+}

@@ -422,7 +422,9 @@ async function downloadAttachment(att: AttachmentMeta) {
         <q-separator />
         <q-card-section>
           <div class="text-caption">요청 상세</div>
-          <pre style="white-space: pre-wrap">{{ task.description }}</pre>
+          <div class="md-scroll">
+            <pre style="white-space: pre-wrap; margin: 0">{{ task.description }}</pre>
+          </div>
         </q-card-section>
         <q-separator v-if="task.mcpsExtra && task.mcpsExtra.length" />
         <q-card-section v-if="task.mcpsExtra && task.mcpsExtra.length">
@@ -465,9 +467,11 @@ async function downloadAttachment(att: AttachmentMeta) {
         <q-separator />
         <q-card-section v-if="task.failureReason || task.status === 'DESIGN_FAILED'">
           <div class="text-caption text-negative">실패 사유</div>
-          <pre style="white-space: pre-wrap; color: #c62828">{{
-            task.failureReason
-          }}</pre>
+          <div class="md-scroll">
+            <pre style="white-space: pre-wrap; color: #c62828; margin: 0">{{
+              task.failureReason
+            }}</pre>
+          </div>
           <!-- 재시도는 백엔드가 분석실패(FAILED)/디자인실패(DESIGN_FAILED)만 허용 — 그 외 실패 상태는 버튼 비노출.
                디자인 재시도는 retryCount를 소비하지 않으므로(admin 수동 조작) 한도 비활성/카운트 표시 제외 -->
           <q-btn
@@ -618,16 +622,19 @@ async function downloadAttachment(att: AttachmentMeta) {
           dense
         >
           <q-card-section>
-            <pre
-              style="
-                white-space: pre-wrap;
-                max-height: 400px;
-                overflow: auto;
-                font-size: 11px;
-                font-family: 'Menlo', monospace;
-              "
-              >{{ task.implementation.implementationLog }}</pre
-            >
+            <div class="md-scroll">
+              <pre
+                style="
+                  white-space: pre-wrap;
+                  max-height: 400px;
+                  overflow: auto;
+                  font-size: 11px;
+                  font-family: 'Menlo', monospace;
+                  margin: 0;
+                "
+                >{{ task.implementation.implementationLog }}</pre
+              >
+            </div>
           </q-card-section>
         </q-expansion-item>
       </q-card>
@@ -882,10 +889,12 @@ async function downloadAttachment(att: AttachmentMeta) {
           <div class="text-caption">
             소요 시간: {{ task.analysis.durationMs }} ms
           </div>
-          <pre
-            style="white-space: pre-wrap; font-family: 'Pretendard', sans-serif"
-            >{{ task.analysis.markdownResult }}</pre
-          >
+          <div class="md-scroll">
+            <pre
+              style="white-space: pre-wrap; font-family: 'Pretendard', sans-serif; margin: 0"
+              >{{ task.analysis.markdownResult }}</pre
+            >
+          </div>
         </q-card-section>
         <q-separator />
         <q-card-section v-if="subtasks.length">

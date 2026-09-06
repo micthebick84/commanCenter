@@ -131,7 +131,7 @@ PR 본문/브랜치 prefix/timeout은 `application-worker.yml`의 `netis-maker.w
 | git commit/push + `gh pr create` | `workerdaemon/GitOpsService.java` |
 | 작업 등록 다이얼로그 (브랜치 자동 동기화 + MCP 안내) | `frontend/pages/tasks/index.vue` |
 | 작업 상세 + 구현 승인 + PR 링크 | `frontend/pages/tasks/[id].vue` |
-| 승인 다이얼로그 | `frontend/components/ApproveDialog.vue` |
+| 승인 다이얼로그 (작업 요약 · 지난 인터뷰 프리필 · 모델 라디오/추론 세그먼트 · MCP flat · 사용량 strip · 다음 단계 안내) | `frontend/components/ApproveDialog.vue`, `frontend/components/tasks/ApproveTaskSummary.vue`, `frontend/components/ModelEffortFields.vue`, `frontend/components/McpPicker.vue`(`flat`) + `McpChipList.vue`, 설명 문구 `frontend/composables/modelEffort.ts`(describeModel/describeEffort) |
 | 워커 헬스 (관리자) | `frontend/pages/admin/workers.vue`, `controller/WorkerHealthController.java` |
 | 질문 세션 등록/목록/ask/close (kind 가드) | `service/QuestionService.java`, `controller/QuestionController.java` |
 | 질문 세션 러너 분기 (default-deny, Q&A 킥오프) | `netismaker-interview-service/src/runner/interviewRunner.ts` (`runQuestionTurn`), `src/sdk/permissions.ts` |

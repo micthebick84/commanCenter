@@ -1,14 +1,9 @@
 <script setup lang="ts">
-interface CatalogEntry {
-  id: number
-  name: string
-  displayName: string
-  url: string
-  transport: string
-  description: string | null
-  lastCheckStatus: string | null
-}
+// MCP 카탈로그 선택. 기본은 접힘(q-expansion-item, 질문 탭 메뉴 안), flat=true면 승인 다이얼로그처럼
+// 접힘 없이 라벨 + 칩을 바로 노출하고 빈 카탈로그는 안내 한 줄 + 카탈로그 링크로 축소한다(2026-09-06).
+import McpChipList, { type McpCatalogEntry as CatalogEntry } from '~/components/McpChipList.vue'
 
+const props = withDefaults(defineProps<{ flat?: boolean }>(), { flat: false })
 const model = defineModel<number[]>({ default: () => [] })
 
 const catalog = ref<CatalogEntry[]>([])
@@ -33,21 +28,37 @@ function toggle(id: number) {
   model.value = next
 }
 
-function dotColor(s: string | null): string {
-  if (!s) return 'grey-5'
-  return { HEALTHY: 'positive', DEGRADED: 'warning', DOWN: 'negative' }[s] ?? 'grey-5'
-}
-
-const selectedHasDown = computed(() =>
-  catalog.value.some((c) => model.value.includes(c.id) && c.lastCheckStatus === 'DOWN'),
-)
-
 onMounted(load)
 defineExpose({ toggle })   // 테스트에서 칩 클릭 대신 직접 호출 (기본 접힘 상태라 DOM에 없음)
 </script>
 
 <template>
+  <div v-if="props.flat" class="mcp-flat" data-test="mcp-flat">
+    <div class="field-label">MCP 도구 <span class="text-grey-6 text-weight-regular">(선택)</span></div>
+    <div
+      v-if="catalog.length === 0"
+      class="row items-center no-wrap text-caption text-grey-7"
+      data-test="mcp-empty"
+    >
+      <span>등록된 MCP 도구가 없습니다.</span>
+      <q-btn
+        flat
+        dense
+        no-caps
+        size="sm"
+        color="primary"
+        label="MCP 카탈로그"
+        icon-right="open_in_new"
+        to="/admin/mcp-catalog"
+        class="q-ml-xs"
+        data-test="mcp-catalog-link"
+      />
+    </div>
+    <McpChipList v-else :catalog="catalog" :selected="model" @toggle="toggle" />
+  </div>
+
   <q-expansion-item
+    v-else
     icon="extension"
     label="이 인터뷰에 추가할 MCP 도구"
     :caption="
@@ -63,35 +74,17 @@ defineExpose({ toggle })   // 테스트에서 칩 클릭 대신 직접 호출 (�
       관리자가 등록한 SSE MCP 카탈로그가 없습니다.
     </q-banner>
     <div v-else class="q-pa-sm">
-      <q-chip
-        v-for="entry in catalog"
-        :key="entry.id"
-        clickable
-        :color="model.includes(entry.id) ? 'indigo-6' : 'grey-3'"
-        :text-color="model.includes(entry.id) ? 'white' : 'grey-9'"
-        :icon="model.includes(entry.id) ? 'check' : 'add'"
-        @click="toggle(entry.id)"
-      >
-        <q-badge
-          rounded
-          :color="dotColor(entry.lastCheckStatus)"
-          class="q-mr-xs"
-          style="min-height: 8px; min-width: 8px; padding: 0"
-        />
-        {{ entry.displayName }}
-        <q-tooltip>
-          <div><strong>{{ entry.name }}</strong> ({{ entry.transport }})</div>
-          <div style="max-width: 360px; word-break: break-all">{{ entry.url }}</div>
-          <div class="q-mt-xs">헬스: <strong>{{ entry.lastCheckStatus ?? 'UNKNOWN' }}</strong></div>
-        </q-tooltip>
-      </q-chip>
-      <div
-        v-if="selectedHasDown"
-        class="text-caption text-negative q-mt-sm row items-center q-gutter-xs"
-      >
-        <q-icon name="warning" size="14px" />
-        <span>DOWN 상태 MCP가 포함됨 — 연결 실패해도 인터뷰는 진행되지만 해당 도구는 사용 안 됨.</span>
-      </div>
+      <McpChipList :catalog="catalog" :selected="model" @toggle="toggle" />
     </div>
   </q-expansion-item>
 </template>
+
+<style scoped>
+.field-label {
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  color: #616161;
+  margin-bottom: 6px;
+}
+</style>

@@ -59,4 +59,35 @@ describe('ClaudeUsagePanel (스펙 2026-09-05 §3)', () => {
     expect(strip.findAll('.q-linear-progress')[2]!.classes()).toContain('text-negative')
     w.unmount()
   })
+
+  it('strip: 수집 전에는 "사용량 미수집"을 쓰지만, hideWhenEmpty면 줄 자체를 그리지 않는다 (승인 다이얼로그)', async () => {
+    useApiMock.mockResolvedValue({ limits: [] })
+    const plain = mount(ClaudeUsagePanel, { props: { variant: 'strip' } })
+    await flushPromises()
+    expect(plain.find('[data-test="usage-strip"]').text()).toContain('사용량 미수집')
+    plain.unmount()
+
+    const hidden = mount(ClaudeUsagePanel, { props: { variant: 'strip', hideWhenEmpty: true } })
+    await flushPromises()
+    expect(hidden.find('[data-test="usage-strip"]').exists()).toBe(false)
+    hidden.unmount()
+  })
+
+  it('strip: prefix를 주면 맨 앞에 라벨을 붙인다 (승인 다이얼로그 "Claude 사용량")', async () => {
+    useApiMock.mockResolvedValue({ limits })
+    const w = mount(ClaudeUsagePanel, { props: { variant: 'strip', prefix: 'Claude 사용량' } })
+    await flushPromises()
+    const strip = w.find('[data-test="usage-strip"]')
+    expect(strip.text().startsWith('Claude 사용량')).toBe(true)
+    expect(strip.text()).toContain('42%')
+    w.unmount()
+  })
+
+  it('strip: hideWhenEmpty여도 수집된 값이 있으면 그린다', async () => {
+    useApiMock.mockResolvedValue({ limits })
+    const w = mount(ClaudeUsagePanel, { props: { variant: 'strip', hideWhenEmpty: true } })
+    await flushPromises()
+    expect(w.find('[data-test="usage-strip"]').text()).toContain('42%')
+    w.unmount()
+  })
 })

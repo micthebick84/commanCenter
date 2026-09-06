@@ -29,3 +29,29 @@ export function effortsForModel(model: string): string[] {
 export function coerceEffort(model: string, effort: string): string {
   return effortsForModel(model).includes(effort) ? effort : DEFAULT_EFFORT
 }
+
+// 승인 다이얼로그(2026-09-06)에서 보여주는 한 줄 설명 — 원시값("high")만으로는 속도·깊이·한도 소모를
+// 가늠할 수 없다는 사용자 지적. 목록(MODEL_OPTIONS/FULL)과 같이 관리한다.
+const MODEL_DESCRIPTIONS: Record<string, string> = {
+  'claude-opus-5': '가장 깊은 분석 · 기본값 · 느리고 한도 소모가 큼',
+  'claude-sonnet-5': '속도와 품질의 균형 · 대부분의 작업에 충분',
+  'claude-haiku-4-5': '가장 빠르고 가벼움 · 단순 작업용 · 추론 low/medium/high만',
+}
+
+const EFFORT_DESCRIPTIONS: Record<string, string> = {
+  low: '빠른 답변 · 얕은 추론',
+  medium: '보통 깊이 · 빠른 편',
+  high: '기본값 · 깊은 추론',
+  xhigh: '더 깊은 추론 · 느림',
+  max: '가장 깊은 추론 · 가장 느리고 한도 소모가 큼',
+}
+
+/** 모델 한 줄 설명. 목록에 없는 값은 빈 문자열(박제된 과거 모델 등). */
+export function describeModel(model: string): string {
+  return MODEL_DESCRIPTIONS[model] ?? ''
+}
+
+/** effort 한 줄 설명. 목록에 없는 값(ultracode 등)은 빈 문자열. */
+export function describeEffort(effort: string): string {
+  return EFFORT_DESCRIPTIONS[effort] ?? ''
+}

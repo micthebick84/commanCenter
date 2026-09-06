@@ -34,6 +34,8 @@ cd netismaker-interview-service && npm run dev              # 인터뷰 워커 (
 - `npm run lint`(eslint)은 ESLint v9 flat config 부재로 현재 동작하지 않음(별도 정비 필요).
 - **클래스명에 Quasar 반응형 표시 헬퍼 이름(`xs sm md lg xl`, `gt-*`, `lt-*`, `*-hide`)을 쓰지 말 것** — 전역 CSS가 해당 폭 밖에서 `display:none !important`를 건다. 2026-09-06 `ChatBubble` 말풍선 클래스 `md`가 1440px 이상/1024px 미만에서 답변을 통째로 숨긴 라이브 회귀 사례(`ChatBubble.spec.ts`가 가드). vitest는 Quasar CSS를 로드하지 않아 이 계열 회귀를 못 잡는다.
 - **`q-dialog` 안 콘텐츠의 루트 요소는 `<div>`로 둘 것** — Quasar CSS가 `.q-dialog__inner { pointer-events:none }`에 `.q-dialog__inner > div { pointer-events:all }` 예외만 주므로, 루트가 `<aside>` 등이면 다이얼로그 안 모든 탭이 백드롭으로 새어 닫히기만 한다. 2026-09-06 질문 탭 모바일 서랍(`pages/questions.vue`) 사례(`questions-shell.spec.ts`가 가드). 좁은 화면 분기 테스트는 `test/mocks/screen.ts`의 `setViewportWidth()`로 Quasar Screen 폭을 바꿔서 한다.
+- **모바일 분기는 `$q.screen.lt.md` 하나로.** 다이얼로그는 `:maximized="$q.screen.lt.md"` + `width: min(Npx, 100vw)`, 긴 마크다운/pre는 `.md-scroll`로 감싼다(2026-09-06 작업 탭 재설계).
+- **`q-expansion-item`은 접힌 상태에도 슬롯 콘텐츠를 마운트한다(v-show).** 펼칠 때만 마운트해야 하면(API 조회 등) `v-model` + 내용 `v-if`로 게이트하거나 `components/tasks/TaskDetailMobile.vue`처럼 q-item + q-slide-transition + v-if 아코디언을 쓴다(2026-09-06 Task 9b/11 교훈).
 
 워커 실행 환경변수:
 ```bash
@@ -138,6 +140,8 @@ PR 본문/브랜치 prefix/timeout은 `application-worker.yml`의 `netis-maker.w
 | 채팅 입력창 · 모델/effort 픽커 | `frontend/components/chat/QuestionComposer.vue`, `frontend/components/chat/ModelEffortPicker.vue` |
 | 구독 사용량 | `service/ClaudeUsageService.java`, `controller/UsageWorkerController.java`, `controller/UsageController.java`, `frontend/components/ClaudeUsagePanel.vue`, `frontend/composables/claudeUsage.ts` |
 | 사용량/컨텍스트 수집(인터뷰 서비스) | `netismaker-interview-service/src/runner/messageRelay.ts`, `src/runner/rateLimitReport.ts` |
+| 작업 탭 모바일(리스트·카드·시트·스테퍼·다음 할 일·이력·관리 세그먼트) | `frontend/components/tasks/*.vue`, 순수 함수 `frontend/composables/taskStages.ts`(attentionGroup/sortForMobile/stageSteps/nextAction) |
+| 모바일 전역 내비(하단 바) | `frontend/layouts/default.vue`(lt.md `q-footer`), CSS 변수 `--bottom-nav-height` |
 
 ## 운영자 환경 권장 셋업
 

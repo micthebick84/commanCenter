@@ -1,6 +1,6 @@
 # 작업 탭 모바일 재설계 — 디자인 스펙
 
-- 날짜: 2026-09-06 · 상태: **결정 반영(2026-09-06 사용자 답변 6건, §9)** — Claude Design 캔버스 목업 검토 후 `docs/superpowers/plans/`에 구현 계획
+- 날짜: 2026-09-06 · 상태: **구현 완료 (브랜치 feature/tasks-mobile-redesign, 2026-09-06)** — 계획 docs/superpowers/plans/2026-09-06-tasks-mobile-redesign.md
 - 디자인 캔버스(Claude Design, 아트보드 6: 목록·액션 시트·상세·이력 펼침·등록 시트·데스크톱 상세): https://claude.ai/code/artifact/b22b91bf-013d-41e7-993f-7fde7e41c7e6 · 작업 파일 `/Users/micthebick/IdeaProjects/design_netismaker_tasks_mobile/`
 - 대상: `frontend/pages/tasks/index.vue`(목록), `frontend/pages/tasks/[id].vue`(상세), 관련 다이얼로그(`ApproveDialog`, 배포 환경변수, 작업 등록), `composables/taskStages.ts`, (선택) 신규 API `GET /api/tasks/{id}/history`
 - 원칙: **데스크톱(≥1024px) 화면은 바꾸지 않는다.** 모바일 분기 기준은 질문 탭과 같은 `$q.screen.lt.md`(<1024px).
@@ -209,6 +209,12 @@
 | 4 | 툴바 탭 잘림 | **하단 내비 바로 전환** — 이번 범위 포함(§4.4, S5) |
 | 5 | Claude Design 캔버스 목업 | **제작** (목록·카드/액션 시트·상세·하단 내비/시트) — 구현 계획 전 검토 |
 | 6 | 스테퍼·다음 할 일의 데스크톱 노출 | **노출** (§5) |
+
+**구현 노트** (2026-09-06, 구현 완료 시점 기록):
+- 아코디언은 `QExpansionItem` 대신 `q-item` + `q-slide-transition` + `v-if`로 직접 구현 — `QExpansionItem`은 접힌 상태에도 슬롯을 마운트해(`v-show`) API 조회 등을 지연시킬 수 없기 때문(Task 9b/11).
+- 하단 액션 바에 `⋮` 메뉴(PR 링크·URL 복사·대화로 이동·재시도·취소) 추가.
+- 필터 칩/토글 탭 타깃 44px로 통일.
+- 데스크톱 진행 이력 카드는 최초 펼침 시점에만 조회(지연 로드).
 
 ## 10. 범위 밖
 

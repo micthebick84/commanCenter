@@ -147,3 +147,23 @@
 **Context**: 서버에 `note` 이벤트(`{seq, content}`) 추가 + 프론트 `es.addEventListener('note')` → `pushTurn(system/note)`. Java 변경이라 API 재기동이 필요해 2026-09-06 프론트 핫픽스(모바일 폴리시 PR)에서는 제외했다.
 
 **우선순위**: 낮음.
+
+### [ ] 하단 내비 "확인 필요" 배지
+
+**What**: 작업 탭 하단 내비(`q-footer`)의 "작업" 탭에 확인 필요 건수 배지를 붙인다.
+
+**Why**: 스펙 `docs/superpowers/specs/2026-09-06-tasks-mobile-redesign-design.md` §4.4에서 "배지(확인 필요 건수)는 후속(YAGNI)"으로 명시적으로 범위에서 뺐다.
+
+**Context**: `frontend/layouts/default.vue`의 푸터 `q-tabs`/`q-route-tab`("작업")에 붙이면 되고, 건수는 이미 있는 `composables/taskStages.ts`의 `sortForMobile`/`attentionGroup`(주의 필요 그룹 판정)을 재사용해 계산할 수 있다.
+
+**우선순위**: 낮음.
+
+### [ ] 모바일 상세 배너/하단 바 주 행동 중복 정리
+
+**What**: `$q.screen.lt.md`에서 작업 상세 페이지가 "다음 할 일" 배너(`TaskNextAction` `variant="banner"`)와 하단 고정 액션 바(`variant="bar"`)를 동시에 그리는데, 둘 다 같은 `action.primary` 버튼(예: 배포)을 노출한다. 배너는 문구(`action.text`)만 남기고 주 행동 버튼은 하단 바 쪽에만 두는 것으로 정리한다.
+
+**Why**: 같은 주 행동 버튼이 화면에 두 번 보이면 공간을 낭비하고 어느 쪽을 눌러야 하는지 혼동을 줄 수 있다. 데스크톱은 배너가 유일한 주 행동 노출처라 그대로 두고, 모바일(하단 바가 따로 있는 경우)만 정리 대상이다.
+
+**Context**: `frontend/components/tasks/TaskNextAction.vue`(banner variant), `frontend/pages/tasks/[id].vue`(banner는 항상 렌더, bar는 `v-if="$q.screen.lt.md"`로만 렌더 — 라인 464/473/511 부근). 최종 리뷰 수정 웨이브에서 처리 예정.
+
+**우선순위**: 중간.

@@ -1,5 +1,7 @@
 <script setup lang="ts">
 import { useQuasar } from 'quasar'
+import TaskListMobile from '~/components/tasks/TaskListMobile.vue'
+import type { CardTask } from '~/components/tasks/TaskCardCompact.vue'
 import { buildStages, stageAccepts, cancelable, DEPLOY_ACTIVE_STATUSES, type MoveDef, type StageCard } from '~/composables/taskStages'
 
 definePageMeta({ layout: 'default' })
@@ -144,7 +146,9 @@ function initialOf(t: TaskResponse) {
   return String(t.requesterId ?? '?').trim().charAt(0).toUpperCase() || '?'
 }
 
-async function cancel(t: TaskResponse) {
+// CardTask(모바일 시트/카드 공용 타입)로 받는다 — TaskResponse는 구조적으로 CardTask를 만족하므로
+// 데스크톱 보드(TaskResponse)·모바일 리스트(CardTask emit) 양쪽에서 그대로 호출할 수 있다.
+async function cancel(t: CardTask) {
   if (!confirm(`작업 #${t.id} '${t.title}'을 취소하시겠습니까?`)) return
   try {
     await useApi(`/api/tasks/${t.id}/cancel`, { method: 'POST' })
@@ -154,7 +158,7 @@ async function cancel(t: TaskResponse) {
   }
 }
 
-async function remove(t: TaskResponse) {
+async function remove(t: CardTask) {
   if (DEPLOY_ACTIVE_STATUSES.includes(t.status)) {
     $q.notify({
       type: 'warning',
@@ -169,6 +173,13 @@ async function remove(t: TaskResponse) {
   } catch (e: any) {
     $q.notify({ type: 'negative', message: e?.data?.message ?? '삭제 실패' })
   }
+}
+
+// 모바일 리스트 카드 탭 → 상세 이동. navigateTo는 템플릿에서 직접 부르면 Vue SFC 컴파일러가
+// 스크립트 setup 바인딩으로 인식하지 못해 `_ctx.navigateTo`(런타임 미정의)로 컴파일된다 —
+// 스크립트 함수를 거치면 다른 Nuxt auto-import(useApi 등)와 같은 방식으로 전역에서 해석된다.
+function openTaskDetail(task: { id: number }) {
+  navigateTo(`/tasks/${task.id}`)
 }
 
 // ── 등록 다이얼로그 ──────────────────────────────────────────────
@@ -368,6 +379,19 @@ function closeDialog() {
 
 <template>
   <q-page padding>
+    <TaskListMobile
+      v-if="$q.screen.lt.md"
+      v-model:mine="mine"
+      :tasks="tasks"
+      :is-admin="auth.isAdmin"
+      @update:mine="refresh"
+      @create="openCreate"
+      @open="openTaskDetail"
+      @move="(t, m) => applyMove(t.id, m)"
+      @cancel="cancel"
+      @remove="remove"
+    />
+    <template v-else>
     <QueueStatsBar />
 
     <div class="row items-center q-mb-md">
@@ -573,6 +597,7 @@ function closeDialog() {
       <q-space />
       <span>총 {{ tasks.length }}건</span>
     </div>
+    </template>
 
     <q-inner-loading :showing="moving" />
 

@@ -99,3 +99,7 @@ body {
 .q-page {
   overflow-x: clip;
 }
+
+:root {
+  --bottom-nav-height: 0px;
+}

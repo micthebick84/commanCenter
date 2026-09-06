@@ -20,7 +20,7 @@
 |---|---|
 | 진입 구조 | `/questions` = 셸(좌측 세션 목록 + `<NuxtPage>`). 자식 라우트 `/questions`(index) = 새 질문 작성, `/questions/{id}` = 대화. Nuxt 중첩 라우트(`pages/questions.vue` + `pages/questions/*.vue`) |
 | 모델 목록 | **Fable 제외.** `claude-opus-5`(기본) · `claude-sonnet-5` · `claude-haiku-4-5`. 백엔드 `ModelEffortPolicy.ALLOWED`(권위)와 프론트 `modelEffort.ts MODEL_OPTIONS`(미러)를 **동시에** 수정. Flyway DEFAULT/엔티티 초기자는 opus-5라 변경 없음. 과거 세션에 박제된 `claude-fable-5`는 검증을 타지 않으므로 그대로 실행된다(마이그레이션 없음) |
-| 모델/effort 변경 시점 | **세션 생성 시에만.** 대화 중에는 툴바 픽커를 세션 값으로 **읽기 전용** 표시(툴팁 "세션 생성 시 고정 — 바꾸려면 새 질문"). 대화 중 변경은 범위 밖(§9) — 백엔드 `InterviewSession.model/effort`가 세션 단위이고 SDK resume 세션의 모델 교체 동작이 미검증 |
+| 모델/effort 변경 시점 | **세션 생성 시 + 대화 중(2026-09-06 개정).** 대화 페이지 툴바 픽커는 세션 값으로 시드된 "다음 질문에 쓸 값"의 초안이며 입력 대기 중엔 언제든 바꿀 수 있다(답변 생성 중·전송 중·종료 세션은 입력창과 함께 잠김). 전송 시 `POST /api/questions/{id}/ask` 바디(`QuestionAskRequest`)에 `model`/`effort`가 실리고 서버가 `ModelEffortPolicy.validate` 후 `InterviewSession.model/effort`를 갱신 → **다음 claim부터** 반영(러너는 claim마다 옵션을 조립하므로 변경 없음). blank는 현재 값 유지, 현재 값과 같으면 검증 없는 no-op(목록에서 빠진 박제 모델 세션도 그대로 이어감), 조합 불일치는 400이며 같은 트랜잭션이라 재큐·답변 턴도 롤백. CLI가 `--resume` 세션에서도 `--model/--effort`를 적용함을 실측(2026-09-06, sonnet 세션 resume + haiku → `modelUsage`=haiku). MCP 도구는 여전히 세션 생성 시 고정 |
 | 제목 | 입력 제거. **서버가 질문 첫 줄에서 자동 생성**(공백 정규화, 60자 초과 시 절단+`…`). `QuestionCreateRequest.title`은 optional로 완화(보내면 그대로 사용 — 구 클라이언트/테스트 호환) |
 | 사용량 데이터 소스 | **SDK `rate_limit_event`** (`@anthropic-ai/claude-agent-sdk@0.2.117` sdk.d.ts:2910 `SDKRateLimitEvent`, :2923 `SDKRateLimitInfo{status, resetsAt?, rateLimitType?, utilization?, isUsingOverage?}` + 선언에 없는 실측 필드 `unifiedWindows{<type>:{utilization, resetsAt}}` — 2026-09-05 Task 1 실측 `netismaker-interview-service/test/fixtures/RATE_LIMIT_FINDINGS.md`)를 인터뷰 서비스 relay가 수신 → `POST /worker/usage/rate-limits` → `com.claude_rate_limit`(limit_type당 1행 upsert) → `GET /api/usage/claude`. **외부 usage 엔드포인트·Keychain 접근·응답 헤더 파싱은 하지 않는다**(비공식 API 의존 회피) |
 | 사용량 신선도 | 이벤트는 SDK 턴이 돌 때만 도착한다. UI는 `updated_at` 기준 **"N분 전 갱신"** 을 항상 표기하고, `resets_at`이 지났으면 **0% + "초기화됨 · 다음 사용 시 갱신"** 으로 표시한다. 유휴 프로브(주기적 더미 쿼리)는 범위 밖(§9) |
@@ -171,7 +171,7 @@ CREATE TABLE IF NOT EXISTS com.claude_rate_limit (
 
 ## 9. 범위 밖 / 후속
 
-- 대화 중 모델·effort 변경(세션 값 갱신 + resume 시 SDK 옵션 반영 검증 필요).
+- ~~대화 중 모델·effort 변경~~ — 2026-09-06 구현(§2 "모델/effort 변경 시점").
 - 유휴 시 사용량 자동 갱신 프로브(주기적 haiku 더미 쿼리 — 쿼터 소모 vs 신선도 트레이드오프, 운영 판단).
 - Java 워커(`claude -p --output-format json`)의 rate limit 보고 — json 봉투에는 이벤트가 없어 stream-json 전환이 선행돼야 함.
 - 작업(인터뷰) 화면에 사용량 패널 노출.

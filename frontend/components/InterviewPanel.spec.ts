@@ -417,6 +417,62 @@ describe('InterviewPanel — kind=QUESTION (스펙 2026-08-30 §7)', () => {
     w.unmount()
   })
 
+  it('composer 슬롯의 send({model, effort})는 QUESTION ask 바디에 모델·effort를 싣는다 (대화 중 변경)', async () => {
+    authStub.accessToken = 'jwt'
+    useApiMock.mockResolvedValueOnce(answered)
+    const w = mount(InterviewPanel, {
+      props: { sessionId: 9, kind: 'QUESTION' },
+      slots: {
+        composer: ({ setAnswer, send }: any) =>
+          h('button', {
+            'data-test': 'slot-send',
+            onClick: () => {
+              setAnswer('이번 건 싸게')
+              send({ model: 'claude-haiku-4-5', effort: 'low' })
+            },
+          }),
+      },
+    })
+    await flushPromises()
+    await w.find('[data-test="slot-send"]').trigger('click')
+    await flushPromises()
+    expect(useApiMock).toHaveBeenCalledWith('/api/questions/9/ask', {
+      method: 'POST',
+      body: { answer: '이번 건 싸게', replyToSeq: 1, model: 'claude-haiku-4-5', effort: 'low' },
+    })
+    w.unmount()
+  })
+
+  it('INTERVIEW 세션의 answer 바디는 send(extra)가 와도 model/effort를 싣지 않는다', async () => {
+    authStub.accessToken = 'jwt'
+    useApiMock.mockResolvedValueOnce({
+      statusName: 'AWAITING_INPUT',
+      turns: [{ seq: 1, role: 'assistant', kind: 'question', content: '어떤 DB인가요?' }],
+      plan: null,
+    })
+    const w = mount(InterviewPanel, {
+      props: { sessionId: 9 },
+      slots: {
+        composer: ({ setAnswer, send }: any) =>
+          h('button', {
+            'data-test': 'slot-send',
+            onClick: () => {
+              setAnswer('PostgreSQL')
+              send({ model: 'claude-haiku-4-5', effort: 'low' })
+            },
+          }),
+      },
+    })
+    await flushPromises()
+    await w.find('[data-test="slot-send"]').trigger('click')
+    await flushPromises()
+    expect(useApiMock).toHaveBeenCalledWith('/api/interviews/9/answer', {
+      method: 'POST',
+      body: { answer: 'PostgreSQL', replyToSeq: 1 },
+    })
+    w.unmount()
+  })
+
   it('턴 상한 400은 경고 토스트로 안내하고 입력을 지우지 않는다', async () => {
     const w = await mountPanel(9, answered, { kind: 'QUESTION' })
     await w.find('textarea').setValue('또?')

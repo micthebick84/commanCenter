@@ -1,7 +1,7 @@
 package com.hamonsoft.netismaker.service;
 
-import com.hamonsoft.netismaker.dto.AnswerRequest;
 import com.hamonsoft.netismaker.dto.InterviewResponse;
+import com.hamonsoft.netismaker.dto.QuestionAskRequest;
 import com.hamonsoft.netismaker.dto.QuestionCreateRequest;
 import com.hamonsoft.netismaker.dto.QuestionSummaryResponse;
 import com.hamonsoft.netismaker.entity.InterviewKind;
@@ -20,7 +20,7 @@ import java.util.List;
 /**
  * 질문 세션(Q&A) — 스펙 docs/superpowers/specs/2026-08-30-question-sessions-design.md.
  * 상태 전이는 전부 InterviewService에 위임하고, 여기서는 (1) kind=QUESTION 교차 가드(404),
- * (2) 등록 시 남용 가드(429)와 모델/MCP 스냅샷, (3) 문답 턴 상한(400)만 담당한다.
+ * (2) 등록 시 남용 가드(429)와 모델/MCP 스냅샷, (3) 문답 턴 상한(400), (4) 대화 중 모델·effort 변경만 담당한다.
  * 등록 즉시 QUEUED — 승인 게이트 없음. taskId는 항상 null(만료/취소의 Task 부수효과는 mirrorTask가 no-op).
  */
 @Service
@@ -100,16 +100,41 @@ public class QuestionService {
     /**
      * 추가 질문 = submitAnswer 재사용(재큐). 문답 상한(assistant 답변 수)은 여기서 400으로 우아하게 막는다 —
      * 러너의 maxTurns 가드(FAILED)는 방어선으로만 남긴다 (불변식: maxQaTurns < INTERVIEW_MAX_TURNS).
+     *
+     * model/effort가 오면(대화 중 변경, 스펙 2026-09-05 §2 개정) ACL·상태 가드를 통과한 세션에 검증 후 반영한다.
+     * 같은 트랜잭션이므로 조합이 틀리면(400) 답변 턴·재큐까지 함께 롤백된다. 인터뷰 서비스는 claim마다
+     * claim.model/effort로 SDK 옵션을 조립하므로(캐시 없음) 다음 턴부터 새 값으로 답한다 — CLI는 --resume 세션에서도
+     * --model/--effort를 그대로 적용한다(2026-09-06 실측: sonnet 세션 resume + haiku → modelUsage=haiku).
      */
     @Transactional
-    public InterviewSession ask(Long id, String actorId, boolean isAdmin, AnswerRequest req) {
+    public InterviewSession ask(Long id, String actorId, boolean isAdmin, QuestionAskRequest req) {
         interviewService.requireKind(id, InterviewKind.QUESTION);
         long answered = turnRepo.countBySessionIdAndRole(id, "assistant");
         if (answered >= maxQaTurns) {
             throw new TaskException(HttpStatus.BAD_REQUEST,
                     "최대 문답 수(" + maxQaTurns + ")에 도달했습니다 — 새 질문 세션을 열어주세요");
         }
-        return interviewService.submitAnswer(id, actorId, isAdmin, req);
+        InterviewSession s = interviewService.submitAnswer(id, actorId, isAdmin, req.toAnswerRequest());
+        applyModelChange(s, req.model(), req.effort());
+        return s;
+    }
+
+    /**
+     * blank = 현재 값 유지(등록 시의 resolve*와 달리 기본값으로 되돌리지 않는다).
+     * 한쪽만 바뀌어도 model×effort 조합은 항상 함께 검증한다 (예: effort=max 세션을 Haiku로만 바꾸면 400).
+     * 단, 결과가 현재 값과 같으면 no-op(검증 생략) — 프론트가 픽커 값을 매 질문에 동봉하므로, 목록에서 빠진
+     * 박제 모델(fable-5 등) 세션도 값을 바꾸지 않는 한 그대로 이어간다(ModelEffortPolicy 주석의 "박제 값은 검증을 타지 않는다").
+     */
+    private static void applyModelChange(InterviewSession s, String model, String effort) {
+        boolean hasModel = model != null && !model.isBlank();
+        boolean hasEffort = effort != null && !effort.isBlank();
+        if (!hasModel && !hasEffort) return;
+        String nextModel = hasModel ? model : s.getModel();
+        String nextEffort = hasEffort ? effort : s.getEffort();
+        if (nextModel.equals(s.getModel()) && nextEffort.equals(s.getEffort())) return;
+        ModelEffortPolicy.validate(nextModel, nextEffort);
+        s.setModel(nextModel);
+        s.setEffort(nextEffort);
     }
 
     /** 종료 = cancel 재사용 → CANCELLED (질문 문맥 라벨 "종료됨"). */

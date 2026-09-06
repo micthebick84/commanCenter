@@ -192,6 +192,44 @@ class QuestionApiIntegrationTest {
     }
 
     @Test
+    void ask_with_new_model_persists_it_and_the_next_worker_claim_carries_it() throws Exception {
+        // 대화 중 모델·effort 변경(스펙 2026-09-05 §2 개정): ask 바디의 model/effort → 세션 갱신 → 다음 claim.
+        long id = createQuestion(userJwt("user1"));          // sonnet/medium으로 생성
+        workerAnswers(id, "답변 1");
+        mvc.perform(post("/api/questions/" + id + "/ask").with(userJwt("user1"))
+                        .contentType(APPLICATION_JSON)
+                        .content("{\"answer\":\"이번 건 싸게 답해줘\",\"replyToSeq\":1,"
+                                + "\"model\":\"claude-haiku-4-5\",\"effort\":\"low\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.statusName").value("QUEUED"))
+                .andExpect(jsonPath("$.model").value("claude-haiku-4-5"))
+                .andExpect(jsonPath("$.effort").value("low"));
+        mvc.perform(post("/worker/interviews/claim").header("X-Worker-API-Key", apiKey).param("workerId", "iw-1"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.sessionId").value(id))
+                .andExpect(jsonPath("$.model").value("claude-haiku-4-5"))
+                .andExpect(jsonPath("$.effort").value("low"))
+                .andExpect(jsonPath("$.claudeSessionId").value("sess-q"));   // 같은 SDK 세션을 resume한다
+    }
+
+    @Test
+    void ask_with_incompatible_model_effort_returns_400_and_rolls_back_the_requeue() throws Exception {
+        long id = createQuestion(userJwt("user1"));
+        workerAnswers(id, "답변 1");
+        mvc.perform(post("/api/questions/" + id + "/ask").with(userJwt("user1"))
+                        .contentType(APPLICATION_JSON)
+                        .content("{\"answer\":\"x\",\"replyToSeq\":1,\"model\":\"claude-haiku-4-5\",\"effort\":\"max\"}"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.message", containsString("effort")));
+        // 검증 실패는 트랜잭션 롤백 — 답변 턴도, 재큐도 남지 않고 모델도 그대로.
+        mvc.perform(get("/api/questions/" + id).with(userJwt("user1")))
+                .andExpect(jsonPath("$.statusName").value("AWAITING_INPUT"))
+                .andExpect(jsonPath("$.model").value("claude-sonnet-5"))
+                .andExpect(jsonPath("$.effort").value("medium"))
+                .andExpect(jsonPath("$.turns", hasSize(1)));
+    }
+
+    @Test
     void worker_plan_on_question_session_returns_400() throws Exception {
         long id = createQuestion(userJwt("user1"));
         mvc.perform(post("/worker/interviews/claim").header("X-Worker-API-Key", apiKey).param("workerId", "iw-1"))

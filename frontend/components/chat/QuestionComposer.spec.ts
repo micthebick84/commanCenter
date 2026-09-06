@@ -1,11 +1,12 @@
 import { mount } from '@vue/test-utils'
 import { describe, it, expect } from 'vitest'
 import QuestionComposer from './QuestionComposer.vue'
+import ModelEffortPicker from './ModelEffortPicker.vue'
 
 function mountComposer(props: Record<string, unknown> = {}) {
   return mount(QuestionComposer, {
     props: {
-      mode: 'create', canSend: true, model: 'claude-opus-5', effort: 'high', modelValue: '질문', ...props,
+      canSend: true, model: 'claude-opus-5', effort: 'high', modelValue: '질문', ...props,
     },
   })
 }
@@ -34,11 +35,25 @@ describe('QuestionComposer (스펙 2026-09-05 §3·§6)', () => {
     w.unmount()
   })
 
-  it('ask 모드는 픽커를 고정(비활성)하고, disabled면 입력 자체를 막는다', () => {
-    const w = mountComposer({ mode: 'ask', disabled: true })
+  it('픽커는 대화 중에도 활성이며 모델을 바꾸면 update:model(+강등된 update:effort)로 올라간다', async () => {
+    // 스펙 2026-09-05 §2 개정: 모델·effort는 세션 생성 시 고정이 아니라 다음 질문에 쓸 값이다.
+    const w = mountComposer({ effort: 'max' })
+    expect(w.find('[data-test="model-picker"]').attributes('disabled')).toBeUndefined()
+    ;(w.findComponent(ModelEffortPicker).vm as any).pickModel('claude-haiku-4-5')
+    await w.vm.$nextTick()
+    expect(w.emitted('update:model')![0]).toEqual(['claude-haiku-4-5'])
+    expect(w.emitted('update:effort')![0]).toEqual(['high']) // Haiku는 max 미지원 → 강등
+    w.unmount()
+  })
+
+  it('disabled(입력 대기 아님)면 입력과 픽커를 함께 막고, sending 중에도 픽커를 잠근다', () => {
+    const w = mountComposer({ disabled: true })
     expect(w.find('[data-test="model-picker"]').attributes('disabled')).toBeDefined()
     expect(w.find('textarea').attributes('disabled')).toBeDefined()
     w.unmount()
+    const w2 = mountComposer({ sending: true })
+    expect(w2.find('[data-test="model-picker"]').attributes('disabled')).toBeDefined()
+    w2.unmount()
   })
 
   it('입력은 v-model로 올라가고 hint 문구를 보여준다', async () => {

@@ -1,7 +1,7 @@
 package com.hamonsoft.netismaker.controller;
 
-import com.hamonsoft.netismaker.dto.AnswerRequest;
 import com.hamonsoft.netismaker.dto.InterviewResponse;
+import com.hamonsoft.netismaker.dto.QuestionAskRequest;
 import com.hamonsoft.netismaker.dto.QuestionCreateRequest;
 import com.hamonsoft.netismaker.dto.QuestionSummaryResponse;
 import com.hamonsoft.netismaker.entity.InterviewSession;
@@ -64,9 +64,12 @@ public class QuestionController {
         return interviewStream.subscribe(id);
     }
 
-    /** 추가 질문 — 바디는 AnswerRequest {answer, replyToSeq} 그대로(프론트 InterviewPanel 재사용). */
+    /**
+     * 추가 질문 — 바디 {answer, replyToSeq}는 AnswerRequest와 동일(프론트 InterviewPanel 재사용) +
+     * 선택 {model, effort}(대화 중 변경 → 다음 턴부터 적용). 응답의 model/effort는 갱신된 세션 값.
+     */
     @PostMapping("/{id}/ask")
-    public InterviewResponse ask(@PathVariable Long id, @RequestBody @Valid AnswerRequest req,
+    public InterviewResponse ask(@PathVariable Long id, @RequestBody @Valid QuestionAskRequest req,
                                  JwtAuthenticationToken auth) {
         String userId = AuthContext.requireUserId(auth);
         boolean isAdmin = AuthContext.isAdmin(auth);

@@ -183,8 +183,8 @@ async function submitReject() {
       </q-card-section>
     </template>
 
-    <q-dialog v-model="rejectDialog" persistent>
-      <q-card style="min-width: 480px">
+    <q-dialog v-model="rejectDialog" persistent :maximized="$q.screen.lt.md">
+      <q-card style="width: min(480px, 100vw)">
         <q-card-section class="text-h6">디자인 반려</q-card-section>
         <q-card-section>
           <q-input

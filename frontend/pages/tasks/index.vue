@@ -591,8 +591,8 @@ function closeDialog() {
     <q-inner-loading :showing="moving" />
 
     <!-- 등록 다이얼로그 -->
-    <q-dialog v-model="showCreate" persistent>
-      <q-card style="min-width: 520px">
+    <q-dialog v-model="showCreate" persistent :maximized="$q.screen.lt.md">
+      <q-card style="width: min(520px, 100vw)">
         <q-card-section>
           <div class="text-h6">작업 등록</div>
         </q-card-section>

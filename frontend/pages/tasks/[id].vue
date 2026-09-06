@@ -747,8 +747,8 @@ async function downloadAttachment(att: AttachmentMeta) {
         </q-card-section>
       </q-card>
 
-      <q-dialog v-model="envDialog">
-        <q-card style="min-width: 480px; max-width: 90vw">
+      <q-dialog v-model="envDialog" :maximized="$q.screen.lt.md">
+        <q-card style="width: min(480px, 100vw)">
           <q-card-section class="row items-center">
             <div class="text-h6">
               {{ envMode === 'deploy' ? '배포' : '재배포' }} — 환경변수
@@ -766,7 +766,7 @@ async function downloadAttachment(att: AttachmentMeta) {
             <div
               v-for="row in envRows"
               :key="row.id"
-              class="row items-center q-gutter-xs no-wrap"
+              :class="$q.screen.lt.md ? 'column q-gutter-y-xs' : 'row items-center q-gutter-xs no-wrap'"
             >
               <q-input
                 v-model="row.key"

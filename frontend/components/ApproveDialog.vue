@@ -49,8 +49,8 @@ defineExpose({ approve })
 </script>
 
 <template>
-  <q-dialog v-model="show">
-    <q-card style="min-width: 480px">
+  <q-dialog v-model="show" :maximized="$q.screen.lt.md">
+    <q-card style="width: min(480px, 100vw)">
       <q-card-section class="text-h6">승인 — 인터뷰 시작</q-card-section>
       <q-card-section class="q-pt-none text-grey-8">
         승인하면 관리자와의 대화형 분석이 시작됩니다. 여기서 고른 모델·도구로 인터뷰가 진행됩니다.

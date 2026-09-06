@@ -13,7 +13,9 @@ const avatarLabel = computed(() =>
   props.role === 'assistant' ? 'AI' : props.role === 'user' ? '나' : '',
 )
 // assistant만 마크다운 — 사용자 입력은 평문 pre-wrap 유지 (스펙 2026-09-05 §2).
-const html = computed(() => (props.role === 'assistant' ? renderMarkdown(props.content) : ''))
+const html = computed(() =>
+  props.role === 'assistant' ? renderMarkdown(props.content) : '',
+)
 </script>
 
 <template>
@@ -23,7 +25,11 @@ const html = computed(() => (props.role === 'assistant' ? renderMarkdown(props.c
   <div v-else class="bubble-row" :class="role">
     <div class="avatar" :class="role">{{ avatarLabel }}</div>
     <!-- renderMarkdown은 html:false라 원시 HTML을 이스케이프한다 — v-html 안전 -->
-    <div v-if="role === 'assistant'" class="bubble assistant md" v-html="html" />
+    <div
+      v-if="role === 'assistant'"
+      class="bubble assistant markdown"
+      v-html="html"
+    />
     <div v-else class="bubble" :class="role">{{ content }}</div>
   </div>
 </template>
@@ -89,63 +95,64 @@ const html = computed(() => (props.role === 'assistant' ? renderMarkdown(props.c
   padding: 3px 11px;
   border-radius: 11px;
 }
-/* 마크다운 본문 — 렌더된 블록은 pre-wrap을 끄고 여백을 말풍선에 맞춘다 */
-.bubble.md {
+/* 마크다운 본문 — 렌더된 블록은 pre-wrap을 끄고 여백을 말풍선에 맞춘다.
+   클래스명은 Quasar 반응형 표시 헬퍼(xs/sm/md/lg/xl)와 겹치지 않게 유지할 것 — 겹치면 해당 폭 밖에서 display:none. */
+.bubble.markdown {
   white-space: normal;
 }
-.bubble.md :deep(p) {
+.bubble.markdown :deep(p) {
   margin: 0 0 6px;
 }
-.bubble.md :deep(p:last-child) {
+.bubble.markdown :deep(p:last-child) {
   margin-bottom: 0;
 }
-.bubble.md :deep(ul),
-.bubble.md :deep(ol) {
+.bubble.markdown :deep(ul),
+.bubble.markdown :deep(ol) {
   margin: 4px 0;
   padding-left: 18px;
 }
-.bubble.md :deep(li) {
+.bubble.markdown :deep(li) {
   margin: 2px 0;
 }
-.bubble.md :deep(h1),
-.bubble.md :deep(h2),
-.bubble.md :deep(h3),
-.bubble.md :deep(h4) {
+.bubble.markdown :deep(h1),
+.bubble.markdown :deep(h2),
+.bubble.markdown :deep(h3),
+.bubble.markdown :deep(h4) {
   font-size: 13.5px;
   font-weight: 700;
   margin: 8px 0 4px;
 }
-.bubble.md :deep(code) {
+.bubble.markdown :deep(code) {
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   font-size: 11.5px;
   background: rgba(37, 48, 63, 0.07);
   padding: 1px 4px;
   border-radius: 3px;
 }
-.bubble.md :deep(pre) {
+.bubble.markdown :deep(pre) {
   background: rgba(37, 48, 63, 0.07);
   padding: 8px 10px;
   border-radius: 6px;
   overflow-x: auto;
   margin: 6px 0;
 }
-.bubble.md :deep(pre code) {
+.bubble.markdown :deep(pre code) {
   background: none;
   padding: 0;
 }
-.bubble.md :deep(a) {
+.bubble.markdown :deep(a) {
   color: #1565c0;
 }
-.bubble.md :deep(table) {
+.bubble.markdown :deep(table) {
   border-collapse: collapse;
   margin: 6px 0;
 }
-.bubble.md :deep(th),
-.bubble.md :deep(td) {
+.bubble.markdown :deep(th),
+.bubble.markdown :deep(td) {
   border: 1px solid #d5dbe5;
   padding: 3px 6px;
 }
-.bubble.md :deep(blockquote) {
+.bubble.markdown :deep(blockquote) {
   margin: 6px 0;
   padding-left: 10px;
   border-left: 3px solid #c9d2df;

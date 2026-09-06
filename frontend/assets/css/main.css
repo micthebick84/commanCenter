@@ -95,6 +95,18 @@ body {
 .md-scroll table {
   max-width: 100%;
 }
+/* v-html로 렌더되는 분석 결과 마크다운(.markdown) 테이블/코드 블록 스타일 (Task 9a) */
+.markdown table {
+  border-collapse: collapse;
+}
+.markdown th,
+.markdown td {
+  border: 1px solid rgba(0, 0, 0, 0.12);
+  padding: 4px 8px;
+}
+.markdown pre {
+  overflow-x: auto;
+}
 /* 안전망: 페이지 레벨 가로 스크롤 금지 */
 .q-page {
   overflow-x: clip;

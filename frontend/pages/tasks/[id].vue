@@ -3,6 +3,10 @@ import { useQuasar } from 'quasar'
 import ApproveDialog from '~/components/ApproveDialog.vue'
 import InterviewPanel from '~/components/InterviewPanel.vue'
 import InterviewHistoryCard from '~/components/InterviewHistoryCard.vue'
+import TaskProgressStepper from '~/components/tasks/TaskProgressStepper.vue'
+import TaskNextAction from '~/components/tasks/TaskNextAction.vue'
+import { stageSteps, nextAction, ageOf, type NextActionKind } from '~/composables/taskStages'
+import { renderMarkdown } from '~/composables/useMarkdown'
 
 definePageMeta({ layout: 'default' })
 
@@ -387,6 +391,38 @@ async function downloadAttachment(att: AttachmentMeta) {
     $q.notify({ type: 'negative', message })
   }
 }
+
+// 진행 스테퍼 + 다음 할 일 배너 (스펙 2026-09-06 §4.2, 결정 6: 데스크톱도 노출) — 데스크톱/모바일 공용.
+const steps = computed(() => (task.value ? stageSteps(task.value) : []))
+const action = computed(() => (task.value ? nextAction(task.value, auth.isAdmin) : null))
+const stepCaption = computed(() => {
+  const t = task.value
+  if (!t) return ''
+  const parts = [t.statusLabel]
+  if (t.implementation?.prNumber) parts.push(`PR #${t.implementation.prNumber}`)
+  parts.push(`${ageOf(t.updatedAt)} 전 갱신`)
+  return parts.join(' · ')
+})
+const analysisHtml = computed(() => renderMarkdown(task.value?.analysis?.markdownResult))
+
+function scrollTo(id: string) {
+  document.getElementById(id)?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+}
+function onAction(kind: NextActionKind) {
+  const t = task.value
+  if (!t) return
+  switch (kind) {
+    case 'approve-interview': return openApprove()
+    case 'approve-impl': return approve()
+    case 'deploy': return openDeployDialog('deploy')
+    case 'redeploy': return openDeployDialog('redeploy')
+    case 'retry': return retry()
+    case 'open-pr': return void window.open(t.implementation?.prUrl ?? '', '_blank', 'noopener')
+    case 'open-url': return void window.open(t.deployment?.deployUrl ?? '', '_blank', 'noopener')
+    case 'open-interview': return scrollTo('interview-card')
+    case 'review-design': return scrollTo('design-card')
+  }
+}
 </script>
 
 <template>
@@ -410,6 +446,20 @@ async function downloadAttachment(att: AttachmentMeta) {
                 icon="paid" color="primary"
                 :label="`${fmtTokens(task.totalTokens ?? 0)} 토큰 · ${fmtCost(task.totalCostUsd)}`" />
       </div>
+
+      <q-card flat bordered class="q-mb-md" data-test="progress-card">
+        <div :class="$q.screen.lt.md ? 'column' : 'row items-stretch no-wrap'">
+          <div class="col q-pa-md"><TaskProgressStepper :steps="steps" :caption="stepCaption" /></div>
+          <q-separator :vertical="!$q.screen.lt.md" />
+          <div :class="$q.screen.lt.md ? '' : 'col-4'">
+            <TaskNextAction :action="action" variant="banner" @act="onAction">
+              <template #extra>
+                <q-btn v-if="auth.isAdmin && task.implementation?.prUrl" outline color="primary" icon="open_in_new" :label="`PR #${task.implementation.prNumber} 열기`" :href="task.implementation.prUrl" target="_blank" />
+              </template>
+            </TaskNextAction>
+          </div>
+        </div>
+      </q-card>
 
       <q-card flat bordered class="q-mb-md">
         <q-card-section>
@@ -522,7 +572,7 @@ async function downloadAttachment(att: AttachmentMeta) {
         </q-card-section>
       </q-card>
 
-      <q-card v-if="isInterviewPhase && task.interviewSessionId" flat bordered class="q-mb-md">
+      <q-card v-if="isInterviewPhase && task.interviewSessionId" id="interview-card" flat bordered class="q-mb-md">
         <q-card-section class="text-h6">대화형 분석</q-card-section>
         <q-separator />
         <q-card-section class="q-pa-none">
@@ -833,14 +883,16 @@ async function downloadAttachment(att: AttachmentMeta) {
           </q-tooltip>
         </q-chip>
       </div>
-      <DesignReviewCard
-        v-if="task.design"
-        :task-id="task.id"
-        :status="task.status"
-        :design="task.design"
-        :is-admin="auth.isAdmin"
-        @refresh="refresh"
-      />
+      <div id="design-card">
+        <DesignReviewCard
+          v-if="task.design"
+          :task-id="task.id"
+          :status="task.status"
+          :design="task.design"
+          :is-admin="auth.isAdmin"
+          @refresh="refresh"
+        />
+      </div>
 
       <q-card v-if="task.analysis" flat bordered>
         <q-card-section class="row items-center q-gutter-sm">
@@ -889,12 +941,7 @@ async function downloadAttachment(att: AttachmentMeta) {
           <div class="text-caption">
             소요 시간: {{ task.analysis.durationMs }} ms
           </div>
-          <div class="md-scroll">
-            <pre
-              style="white-space: pre-wrap; font-family: 'Pretendard', sans-serif; margin: 0"
-              >{{ task.analysis.markdownResult }}</pre
-            >
-          </div>
+          <div class="md-scroll markdown" data-test="analysis-markdown" v-html="analysisHtml" />
         </q-card-section>
         <q-separator />
         <q-card-section v-if="subtasks.length">

@@ -464,9 +464,11 @@ function onAction(kind: NextActionKind) {
         <div :class="$q.screen.lt.md ? 'column' : 'row items-stretch no-wrap'">
           <div class="col q-pa-md">
             <TaskProgressStepper :steps="steps" :caption="stepCaption" />
-            <!-- 모바일은 하단 액션 바 옆에 실패 사유가 없으면 안 보이므로 여기 1줄로 노출 (리뷰 파인딩 5) -->
+            <!-- 모바일 전용: 하단 액션 바 옆에 실패 사유가 없으면 안 보이므로 여기 1줄로 노출한다
+                 (리뷰 파인딩 5). 데스크톱은 기존 실패 사유 카드/배포실패 배너가 이미 있으므로
+                 $q.screen.lt.md로 게이트해 중복 표시를 막는다(리뷰 파인딩 5 후속). -->
             <div
-              v-if="task.failureReason && steps.some((s) => s.state === 'failed')"
+              v-if="$q.screen.lt.md && task.failureReason && steps.some((s) => s.state === 'failed')"
               class="text-negative text-caption ellipsis q-mt-xs"
               data-test="failure-line"
             >

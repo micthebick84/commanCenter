@@ -65,4 +65,16 @@ describe('pages/tasks/[id] — 진행 스테퍼 + 다음 할 일 (스펙 2026-09
     expect(useApiMock).toHaveBeenCalledWith('/api/tasks/42/history')
     w.unmount()
   })
+
+  it('데스크톱: 실패 사유는 기존 실패 사유 카드로만 보이고 모바일 전용 1줄(failure-line)은 없다 — 리뷰 파인딩 5 후속(중복 표시 제거)', async () => {
+    useApiMock.mockResolvedValue({
+      ...baseTask, status: 'FAILED', statusLabel: '분석실패', failureReason: '타임아웃',
+      analysis: null, implementation: null,
+    })
+    const w = mount(PageWrapper, mountOpts)
+    await flushPromises()
+    expect(w.find('[data-test="failure-line"]').exists()).toBe(false)
+    expect(w.text()).toContain('타임아웃')
+    w.unmount()
+  })
 })

@@ -1,6 +1,6 @@
-# 작업 탭 모바일 재설계 — 디자인 스펙 (초안, 사용자 검토 대기)
+# 작업 탭 모바일 재설계 — 디자인 스펙
 
-- 날짜: 2026-09-06 · 상태: **초안(승인 전)** · 후속: 승인 후 `docs/superpowers/plans/`에 구현 계획, 필요 시 Claude Design 캔버스 목업
+- 날짜: 2026-09-06 · 상태: **결정 반영(2026-09-06 사용자 답변 6건, §9)** — Claude Design 캔버스 목업 검토 후 `docs/superpowers/plans/`에 구현 계획
 - 대상: `frontend/pages/tasks/index.vue`(목록), `frontend/pages/tasks/[id].vue`(상세), 관련 다이얼로그(`ApproveDialog`, 배포 환경변수, 작업 등록), `composables/taskStages.ts`, (선택) 신규 API `GET /api/tasks/{id}/history`
 - 원칙: **데스크톱(≥1024px) 화면은 바꾸지 않는다.** 모바일 분기 기준은 질문 탭과 같은 `$q.screen.lt.md`(<1024px).
 
@@ -36,7 +36,7 @@
 
 같은 패턴의 고정 폭: `ApproveDialog` 480, `DesignReviewCard` 피드백 480, `InterviewHistoryDialog` 720, 관리자 카탈로그 다이얼로그 520×2(관리자 데스크톱 위주, 범위 밖이지만 같은 규칙 적용 가능).
 
-관련(범위 밖, 후속 후보): 앱 툴바 `q-tabs` 5개가 390px에서 스크롤 화살표로 접히며 "질문" 탭이 절반 잘림 → 모바일 하단 내비게이션 검토.
+관련: 앱 툴바 `q-tabs` 5개가 390px에서 스크롤 화살표로 접히며 "질문" 탭이 절반 잘림 → §4.4 하단 내비 바로 전환(결정 §9-4).
 
 ## 2. 목표 / 비목표
 
@@ -47,7 +47,7 @@
 4. 다이얼로그는 화면 안에 들어온다(전체화면 시트).
 5. 데스크톱 레이아웃·동작 무변경. 기존 `taskStages.ts`(단계·색·전이 정의)를 재사용해 두 레이아웃의 의미가 어긋나지 않게 한다.
 
-**비목표**: 새 상태/전이 추가, 작업 등록 폼 필드 변경, 알림/푸시, 전역 내비게이션 개편(결정 §9-4).
+**비목표**: 새 상태/전이 추가, 작업 등록 폼 필드 변경, 알림/푸시.
 
 ## 3. 접근 대안
 
@@ -153,12 +153,27 @@
 
 공통 규칙: `:maximized="$q.screen.lt.md"`, 고정 `min-width` 제거(`width: min(520px, 100vw)`), 액션 버튼은 하단 고정 full-width 44px, 스크롤은 카드 본문만. 적용 대상(이번 범위): 작업 등록, 배포 환경변수, `ApproveDialog`, `DesignReviewCard` 피드백, `InterviewHistoryDialog`. `q-dialog` 콘텐츠 루트는 `<div>`(CLAUDE.md 규칙).
 
+### 4.4 전역 내비게이션 (lt.md) — 하단 내비 바
+
+```
+┌──────────────────────────────────────┐
+│ netisMaker                  ADMIN ⎋  │  ← 헤더: 브랜드 + 사용자 칩 + 로그아웃 (탭 제거)
+│ …페이지 본문…                        │
+├──────────────────────────────────────┤
+│   ▣ 작업      ✎ 질문      ⚙ 관리     │  ← QFooter + q-tabs(q-route-tab), 56px + safe-area
+└──────────────────────────────────────┘
+```
+
+- 헤더 `q-tabs`는 lt.md에서 숨기고 `QFooter` 안의 `q-tabs`(`q-route-tab`)로 옮긴다. 항목: **작업**(`/tasks`) · **질문**(`/questions`) · 관리자만 **관리**(`/admin/workers`, 활성 판정은 `/admin/*` 전체). 워커 헬스·MCP 카탈로그·레포 카탈로그는 `/admin/*` 페이지 상단의 세그먼트 탭 1줄로 오간다(이번 슬라이스 범위).
+- 높이 56px + `env(safe-area-inset-bottom)`. 본문 하단 여백은 Quasar `q-layout view="hHh lpR fFf"`의 fixed footer가 자동 처리. 질문 대화 페이지의 입력창·사용량 스트립과 작업 상세의 하단 고정 액션 바는 **내비 바 위에** 쌓인다(액션 바 `bottom` = 내비 높이).
+- 데스크톱(≥md)은 현행 헤더 탭 그대로, 푸터 없음. 배지(확인 필요 건수)는 후속(YAGNI).
+
 ## 5. 반응형 규칙 · 컴포넌트
 
 - 분기: `$q.screen.lt.md`(<1024) = 모바일 레이아웃(질문 탭과 동일). `xs`(<600)에서는 카드 메타를 2줄 허용.
 - 신규(제안): `components/tasks/TaskListMobile.vue`, `TaskCardCompact.vue`, `TaskActionSheet.vue`, `TaskProgressStepper.vue`, `TaskNextAction.vue`(카드 1줄/하단 바 두 표현), `TaskHistoryTimeline.vue`, `components/MarkdownViewerDialog.vue`.
 - `composables/taskStages.ts` 확장(순수 함수, 테스트 우선): `attentionGroup(task, isAdmin)`, `sortForMobile(tasks, isAdmin)`, `nextAction(task, isAdmin)`, `skippedDesign(task)`.
-- 목록 페이지: `<TaskListMobile v-if="$q.screen.lt.md" …/>` / 기존 보드 `v-else`. 상세 페이지: 헤더·스테퍼·액션 바·아코디언은 양쪽 공용으로 두고 데스크톱은 현행 카드 순서를 유지하는 최소 변경(스테퍼·`nextAction`은 데스크톱에도 이득이 있으나 이번 범위에서는 모바일에만 노출 — 결정 §9-6).
+- 목록 페이지: `<TaskListMobile v-if="$q.screen.lt.md" …/>` / 기존 보드 `v-else`. 상세 페이지: 스테퍼와 `nextAction`은 **데스크톱에도 노출**(결정 §9-6) — 제목 아래 한 줄 스테퍼 + "다음 할 일" 배너(주 행동 버튼 포함). 데스크톱의 기존 카드 순서·카드 내 버튼은 유지(주 행동이 중복되면 배너가 대표, 카드 버튼은 회귀 최소화를 위해 그대로). 아코디언·하단 고정 바·전체화면 뷰어는 모바일 전용.
 - 금지 사항(CLAUDE.md): 클래스명에 Quasar 반응형 헬퍼 이름 사용 금지, `q-dialog` 루트 `<div>`.
 
 ## 6. 백엔드 (선택, S4)
@@ -169,6 +184,7 @@
 
 - vitest(`test/mocks/screen.ts`의 `setViewportWidth(390)`): 목록 — 정렬/그룹/필터 칩/액션 시트(관리자·요청자 분기)/FAB/보드 미렌더; 카드 — 스테퍼 세그먼트·건너뜀·다음 할 일 문구; 상세 — 스테퍼·하단 바 주 행동(상태×역할 표)·아코디언 기본 상태·마크다운 컨테이너 오버플로 스타일; 다이얼로그 — lt.md에서 `maximized`. 1024px에서는 기존 스펙 전부 그대로 통과(데스크톱 무변경 가드).
 - `taskStages` 순수 함수: §4.1 정렬 표 · §4.2 nextAction 표를 그대로 케이스로.
+- 레이아웃(`test/layout-default.spec.ts` 확장): lt.md에서 푸터 내비 3탭(관리자)/2탭(사용자) 렌더 + 헤더 탭 미렌더, ≥md에서 현행 그대로. 데스크톱 상세: 스테퍼·다음 할 일 배너 렌더 + 기존 카드 버튼 유지.
 - Java(S4): history 엔드포인트 ACL(타인 403)·정렬·상한 + Testcontainers 통합 1건.
 - Playwright 스모크(배포 후): 390/768/1280에서 `document.documentElement.scrollWidth === innerWidth`, 첫 화면에 첫 카드 노출(y < 600), 다이얼로그 카드 `x ≥ 0`.
 
@@ -180,15 +196,18 @@
 | S2 목록 | `TaskListMobile` + 카드 + 액션 시트 + 필터 칩 + FAB (§4.1) | 중 |
 | S3 상세 | 스테퍼 + `nextAction` 하단 바 + 아코디언 + 마크다운 렌더/전체화면 뷰어 (§4.2) | 중 |
 | S4 이력 | history API + `TaskHistoryTimeline` (§6) | 소~중 |
+| S5 내비게이션 | lt.md 하단 내비 바(작업·질문·관리) + 헤더 탭 숨김 + `/admin/*` 세그먼트 탭 (§4.4) | 소 |
 
-## 9. 결정 필요 (사용자)
+## 9. 결정 사항 (2026-09-06, 사용자 답변)
 
-1. 목록 접근: **B(추천)** / C / B+"단계별 보기" 토글.
-2. 진행 이력 API(S4) 도입 여부.
-3. 관리자 전이를 모바일 액션 시트로 허용(추천: 허용, `confirm:true` 전이는 확인 유지).
-4. 전역 하단 내비게이션(작업/질문/관리) 포함 여부 — 미포함 추천(별도 PR).
-5. Claude Design 캔버스 목업(목록·카드·상세·액션 시트 4보드) 제작 여부 — 스펙 승인 뒤 제작 추천.
-6. 스테퍼·`nextAction`을 데스크톱 상세에도 노출할지(추천: 이번엔 모바일만).
+| # | 질문 | 결정 |
+|---|---|---|
+| 1 | 목록 접근 | **B** 주의 필요 우선 단일 리스트 |
+| 2 | 진행 이력 API(S4) | **도입** |
+| 3 | 관리자 전이를 모바일 액션 시트로 | **허용** (`confirm:true` 전이는 확인 다이얼로그 유지) |
+| 4 | 툴바 탭 잘림 | **하단 내비 바로 전환** — 이번 범위 포함(§4.4, S5) |
+| 5 | Claude Design 캔버스 목업 | **제작** (목록·카드/액션 시트·상세·하단 내비/시트) — 구현 계획 전 검토 |
+| 6 | 스테퍼·다음 할 일의 데스크톱 노출 | **노출** (§5) |
 
 ## 10. 범위 밖
 

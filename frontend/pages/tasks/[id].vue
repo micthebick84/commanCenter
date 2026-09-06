@@ -6,6 +6,7 @@ import InterviewHistoryCard from '~/components/InterviewHistoryCard.vue'
 import TaskProgressStepper from '~/components/tasks/TaskProgressStepper.vue'
 import TaskNextAction from '~/components/tasks/TaskNextAction.vue'
 import TaskDetailMobile from '~/components/tasks/TaskDetailMobile.vue'
+import TaskHistoryTimeline from '~/components/tasks/TaskHistoryTimeline.vue'
 import { stageSteps, nextAction, ageOf, type NextActionKind } from '~/composables/taskStages'
 import { renderMarkdown } from '~/composables/useMarkdown'
 
@@ -473,6 +474,9 @@ function onAction(kind: NextActionKind) {
           @retry="retry"
           @download="(id) => downloadAttachment(task!.attachments.find((a) => a.id === id)!)"
         >
+          <template #history>
+            <TaskHistoryTimeline :task-id="task.id" />
+          </template>
           <template #interviews>
             <InterviewHistoryCard :task-id="task.id" :task-status="task.status" />
           </template>
@@ -959,6 +963,12 @@ function onAction(kind: NextActionKind) {
             </q-item>
           </q-list>
         </q-card-section>
+      </q-card>
+
+      <q-card flat bordered class="q-mt-md">
+        <q-expansion-item icon="history" label="진행 이력" header-class="text-subtitle1" data-test="history-desktop">
+          <TaskHistoryTimeline :task-id="task.id" />
+        </q-expansion-item>
       </q-card>
       </template>
 

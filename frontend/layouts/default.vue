@@ -21,7 +21,8 @@ function handleLogout() {
   <q-layout view="hHh lpR fFf">
     <q-header elevated class="bg-primary text-white">
       <q-toolbar>
-        <q-toolbar-title>
+        <!-- 좁은 화면(lt.md)에서는 제목이 탭에 밀려 "n"까지 줄어들므로 내용 폭으로 고정(shrink) — 데스크톱 배치는 그대로 (2026-09-06 모바일 QA) -->
+        <q-toolbar-title :shrink="$q.screen.lt.md">
           <NuxtLink to="/tasks" style="color: inherit; text-decoration: none">netisMaker</NuxtLink>
         </q-toolbar-title>
         <q-tabs v-if="auth.isAuthenticated" shrink>
@@ -32,8 +33,9 @@ function handleLogout() {
           <q-route-tab v-if="auth.isAdmin" to="/admin/repo-catalog" label="레포 카탈로그" />
         </q-tabs>
         <q-space />
-        <div v-if="auth.me" class="q-mr-sm">
-          {{ auth.me.username || auth.me.email }}
+        <!-- xs(<600px)에서는 사용자명을 숨기고 역할 칩만 남긴다 — 사용자 블록이 두 줄로 꺾여 툴바가 깨지던 것 방지 -->
+        <div v-if="auth.me" class="row items-center no-wrap q-mr-sm" data-test="toolbar-user">
+          <span v-if="!$q.screen.xs" class="q-mr-xs">{{ auth.me.username || auth.me.email }}</span>
           <q-chip
             v-if="auth.isAdmin"
             color="amber"

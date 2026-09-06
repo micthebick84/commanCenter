@@ -228,7 +228,7 @@ export function useInterviewStream() {
 
   // REST 스냅샷(GET /api/interviews/{id})으로 상태 시드 — 새로고침 후 대화 복원.
   // kind==='design' → designSections(key=design-{seq}, 백엔드 DesignEvent와 동일)
-  // role==='user'   → turns(user/answer) / 그 외 → turns(assistant/question)
+  // role==='user'   → turns(user/answer) / role==='system' → turns(system/note) / 그 외 → turns(assistant/question)
   // pushTurn이 seq로 dedup하므로 직후 SSE replay와 안전하게 병합된다.
   function hydrate(snapshot: InterviewSnapshot | null | undefined) {
     if (!snapshot) return
@@ -242,6 +242,10 @@ export function useInterviewStream() {
         upsertDesign({ key: `design-${t.seq}`, title: '설계', body: t.content, approved: false })
       } else if (t.role === 'user') {
         pushTurn({ seq: t.seq, role: 'user', kind: 'answer', content: t.content })
+      } else if (t.role === 'system') {
+        // system 노트(사용자 취소 등)는 AI 말풍선이 아니라 가운데 노트 칩(ChatBubble role=system)으로.
+        // 서버 SSE replay는 아직 이 턴을 question 이벤트로 보내지만, hydrate가 먼저 seq를 채워 dedup된다 (TODOS 참고).
+        pushTurn({ seq: t.seq, role: 'system', kind: 'note', content: t.content })
       } else {
         pushTurn({ seq: t.seq, role: 'assistant', kind: 'question', content: t.content })
       }

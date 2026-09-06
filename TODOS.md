@@ -147,3 +147,13 @@
 **Context**: 기존 사용량 API 통합 테스트에 이 계약을 고정하는 단언 1건만 추가하면 된다.
 
 **우선순위**: 낮음.
+
+### [ ] SSE 재생이 system 노트 턴을 question 이벤트로 보냄
+
+**What**: `InterviewStreamService.subscribe`의 replay가 user 외 모든 턴을 (design 제외) `question` 이벤트로 보내서, system/note 턴("사용자 취소")이 클라이언트 `onQuestion`으로 들어간다. 프론트는 REST 스냅샷 hydrate(2026-09-06, system→note 매핑)가 먼저 seq를 채우고 replay는 seq dedup으로 무시되므로 실제 표시는 정상이지만, 스냅샷 요청이 실패한 경우엔 노트가 AI 말풍선으로 그려지고 `AWAITING_INPUT`으로 잘못 전환될 수 있다.
+
+**Why**: 서버가 역할을 이벤트 타입으로 구분해 보내야 클라이언트가 페이로드(`{seq, content}`)만으로 판단할 수 있다. 지금은 프론트의 hydrate-first 순서에 의존한다.
+
+**Context**: 서버에 `note` 이벤트(`{seq, content}`) 추가 + 프론트 `es.addEventListener('note')` → `pushTurn(system/note)`. Java 변경이라 API 재기동이 필요해 2026-09-06 프론트 핫픽스(모바일 폴리시 PR)에서는 제외했다.
+
+**우선순위**: 낮음.

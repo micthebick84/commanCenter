@@ -112,4 +112,24 @@ describe('pages/questions (셸) — 스펙 2026-09-05 §6', () => {
       await setViewportWidth(1024)
     }
   })
+
+  it('서랍 다이얼로그 루트는 전역 스타일 훅 클래스(questions-drawer)를 가진다 — QDialog minimized 상하 24px 패딩 제거용', async () => {
+    // 패딩이 남으면 100vh 서랍이 24px 아래로 밀려 하단 "전체 보기" 토글이 잘린다 (2026-09-06 모바일 QA).
+    await setViewportWidth(390)
+    try {
+      const w = mount(PageWrapper, {
+        global: { stubs: { NuxtPage: NuxtPageStubWithOpener } },
+      })
+      await flushPromises()
+      await w.find('[data-test="open-drawer-stub"]').trigger('click')
+      await flushPromises()
+      await nextTick()
+      const dialogRoot = document.body.querySelector('.q-dialog')
+      expect(dialogRoot).not.toBeNull()
+      expect(dialogRoot!.classList.contains('questions-drawer')).toBe(true)
+      w.unmount()
+    } finally {
+      await setViewportWidth(1024)
+    }
+  })
 })

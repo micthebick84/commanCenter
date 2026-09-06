@@ -163,7 +163,16 @@ function onPanelClose() {
             @send="send"
           >
             <template #tools>
-              <q-btn flat dense no-caps icon="extension" label="MCP 도구" disable>
+              <q-btn
+                flat
+                dense
+                no-caps
+                icon="extension"
+                :label="$q.screen.xs ? undefined : 'MCP 도구'"
+                aria-label="MCP 도구"
+                data-test="mcp-button"
+                disable
+              >
                 <q-tooltip>세션 생성 시 고정 — 바꾸려면 새 질문</q-tooltip>
               </q-btn>
             </template>

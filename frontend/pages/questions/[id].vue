@@ -121,6 +121,7 @@ function onPanelClose() {
         <q-tooltip>{{ contextTip }}</q-tooltip>
       </q-chip>
       <q-space />
+      <!-- 좁은 화면(lt.md)에서는 라벨이 두 줄로 꺾여 헤더 밖으로 넘치므로 아이콘만 남기고 이름은 aria-label로 유지 (2026-09-06 모바일 QA) -->
       <q-btn
         v-if="!isTerminal"
         outline
@@ -128,7 +129,8 @@ function onPanelClose() {
         no-caps
         color="grey-7"
         icon="stop_circle"
-        label="세션 종료"
+        :label="$q.screen.lt.md ? undefined : '세션 종료'"
+        aria-label="세션 종료"
         data-test="close-session"
         @click="requestClose"
       />

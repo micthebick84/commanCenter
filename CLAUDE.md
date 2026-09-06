@@ -33,6 +33,7 @@ cd netismaker-interview-service && npm run dev              # 인터뷰 워커 (
 - ⚠️ **그래도 `npm run lint-prettier`(=`prettier --write`)를 `frontend/` 전체에 돌리지 말 것**: 코드베이스가 긴 줄을 손으로 유지(prettier 정규형 아님)하므로 전체 실행 시 ~12–18개 파일이 **줄바꿈만으로 churn**된다(따옴표는 안전). 포맷이 필요하면 단일 파일 대상으로만 쓰거나, 별도 일회성 정규화 PR로 처리할 것.
 - `npm run lint`(eslint)은 ESLint v9 flat config 부재로 현재 동작하지 않음(별도 정비 필요).
 - **클래스명에 Quasar 반응형 표시 헬퍼 이름(`xs sm md lg xl`, `gt-*`, `lt-*`, `*-hide`)을 쓰지 말 것** — 전역 CSS가 해당 폭 밖에서 `display:none !important`를 건다. 2026-09-06 `ChatBubble` 말풍선 클래스 `md`가 1440px 이상/1024px 미만에서 답변을 통째로 숨긴 라이브 회귀 사례(`ChatBubble.spec.ts`가 가드). vitest는 Quasar CSS를 로드하지 않아 이 계열 회귀를 못 잡는다.
+- **`q-dialog` 안 콘텐츠의 루트 요소는 `<div>`로 둘 것** — Quasar CSS가 `.q-dialog__inner { pointer-events:none }`에 `.q-dialog__inner > div { pointer-events:all }` 예외만 주므로, 루트가 `<aside>` 등이면 다이얼로그 안 모든 탭이 백드롭으로 새어 닫히기만 한다. 2026-09-06 질문 탭 모바일 서랍(`pages/questions.vue`) 사례(`questions-shell.spec.ts`가 가드). 좁은 화면 분기 테스트는 `test/mocks/screen.ts`의 `setViewportWidth()`로 Quasar Screen 폭을 바꿔서 한다.
 
 워커 실행 환경변수:
 ```bash

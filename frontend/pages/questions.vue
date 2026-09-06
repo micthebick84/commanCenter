@@ -36,13 +36,11 @@ provide('questions:open-drawer', () => {
   <q-page class="questions-shell row no-wrap">
     <QuestionSidebar v-if="wide" ref="sidebar" :active-id="activeId" @select="select" @new="startNew" />
     <q-dialog v-else v-model="drawer" position="left">
-      <QuestionSidebar
-        ref="sidebar"
-        :active-id="activeId"
-        class="drawer-sidebar"
-        @select="select"
-        @new="startNew"
-      />
+      <!-- QDialog는 `.q-dialog__inner > div`에만 pointer-events:all을 준다 — 사이드바(aside)를 div로 감싸야
+           서랍 안 탭(새 질문·세션 행·전체 보기)이 백드롭으로 새어 서랍만 닫히지 않는다 (2026-09-06 모바일 QA). -->
+      <div class="drawer-sidebar">
+        <QuestionSidebar ref="sidebar" :active-id="activeId" @select="select" @new="startNew" />
+      </div>
     </q-dialog>
     <div class="col column no-wrap questions-main">
       <NuxtPage />
@@ -61,5 +59,9 @@ provide('questions:open-drawer', () => {
 }
 .drawer-sidebar {
   height: 100vh;
+}
+/* Quasar가 minimized 다이얼로그 콘텐츠에 거는 max-height: calc(100vh - 48px)를 풀어 서랍이 화면 높이를 다 쓰게 한다 */
+.q-dialog__inner--minimized > .drawer-sidebar {
+  max-height: 100vh;
 }
 </style>

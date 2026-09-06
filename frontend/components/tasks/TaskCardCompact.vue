@@ -152,7 +152,7 @@ function segStyle(state: string, color: string) {
 
     <div v-if="next" class="card-next" data-test="card-next">
       <q-icon name="play_arrow" size="18px" />
-      <span class="col"
+      <span class="card-next-text"
         >다음 할 일 · {{ next.primary?.label ?? next.text }}</span
       >
       <q-icon name="chevron_right" size="20px" />
@@ -262,5 +262,12 @@ function segStyle(state: string, color: string) {
   color: #ef6c00;
   font-size: 12.5px;
   font-weight: 600;
+}
+.card-next-text {
+  flex: 1 1 0;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 </style>

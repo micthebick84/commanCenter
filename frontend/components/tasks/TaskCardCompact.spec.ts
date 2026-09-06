@@ -74,4 +74,72 @@ describe('TaskCardCompact (스펙 2026-09-06 §4.1 카드)', () => {
     )
     w.unmount()
   })
+
+  it('디자인 미요청 배포완료: 디자인 세그먼트는 skipped, 배포는 current, 배포 URL 링크(PR 링크 아님)를 그린다', () => {
+    const deployed = {
+      ...base,
+      status: 'DEPLOYED',
+      statusLabel: '배포완료',
+      designRequested: false,
+      implementation: null,
+      deployment: { deployUrl: 'https://task-13.micthebick.dev' },
+    }
+    const w = mount(TaskCardCompact, {
+      props: { task: deployed, isAdmin: false },
+    })
+    const steps = w.findAll('[data-test="card-step"]')
+    expect(steps.map((s) => s.attributes('data-state'))).toEqual([
+      'done',
+      'skipped',
+      'done',
+      'current',
+    ])
+    const link = w.find('a[href="https://task-13.micthebick.dev"]')
+    expect(link.exists()).toBe(true)
+    expect(link.text()).toContain('task-13.micthebick.dev')
+    expect(w.text()).not.toContain('PR #')
+    w.unmount()
+  })
+
+  it('배포 실패: 배포 세그먼트는 failed', () => {
+    const failed = {
+      ...base,
+      status: 'DEPLOY_FAILED',
+      statusLabel: '배포실패',
+      designRequested: true,
+    }
+    const w = mount(TaskCardCompact, {
+      props: { task: failed, isAdmin: false },
+    })
+    const steps = w.findAll('[data-test="card-step"]')
+    expect(steps[3].attributes('data-state')).toBe('failed')
+    w.unmount()
+  })
+
+  it('구현/배포 링크가 둘 다 없으면 메타에 링크 없이 레포·브랜치만 보여준다', () => {
+    const noLinks = { ...base, implementation: null, deployment: null }
+    const w = mount(TaskCardCompact, {
+      props: { task: noLinks, isAdmin: false },
+    })
+    const meta = w.find('.card-meta')
+    expect(meta.text()).toContain('Netis7.0')
+    expect(meta.text()).toContain('main')
+    expect(meta.find('a').exists()).toBe(false)
+    w.unmount()
+  })
+
+  it('다음 할 일 텍스트는 말줄임(단일행) 구조 클래스를 갖는다', () => {
+    const waiting = {
+      ...base,
+      status: 'AWAITING_APPROVAL',
+      statusLabel: '승인대기',
+      implementation: null,
+    }
+    const admin = mount(TaskCardCompact, {
+      props: { task: waiting, isAdmin: true },
+    })
+    const text = admin.find('[data-test="card-next"] .card-next-text')
+    expect(text.exists()).toBe(true)
+    admin.unmount()
+  })
 })

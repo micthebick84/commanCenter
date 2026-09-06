@@ -28,7 +28,11 @@ const tasks = [
 
 function stubApi() {
   useApiMock.mockImplementation((url: string) =>
-    url.startsWith('/api/tasks') ? Promise.resolve({ content: tasks, totalElements: 4, totalPages: 1 }) : Promise.resolve(null),
+    url.startsWith('/api/tasks')
+      ? Promise.resolve({ content: tasks, totalElements: 4, totalPages: 1 })
+      : url === '/api/queue/stats'
+        ? Promise.resolve({ avgDurationMs: null })
+        : Promise.resolve(null),
   )
 }
 
@@ -81,6 +85,80 @@ describe('pages/tasks — 모바일 리스트 (스펙 2026-09-06 §4.1)', () => 
     await flushPromises()
     expect(w.find('.stage-row').exists()).toBe(true)
     expect(w.find('[data-test="task-card-compact"]').exists()).toBe(false)
+    w.unmount()
+  })
+
+  it('"내 작업만" 칩은 mine을 동기화하고 목록을 재조회한다(mine=false)', async () => {
+    await setViewportWidth(390)
+    const w = mount(PageWrapper, { attachTo: document.body })
+    await flushPromises()
+    await w.find('[data-test="mine-chip"]').trigger('click')
+    await flushPromises()
+    expect(useApiMock).toHaveBeenCalledWith(
+      '/api/tasks',
+      expect.objectContaining({ params: expect.objectContaining({ mine: 'false' }) }),
+    )
+    w.unmount()
+  })
+
+  it('통계 토글(관리자)은 QueueStatsBar를 펼치고 /api/queue/stats를 호출한다', async () => {
+    await setViewportWidth(390)
+    const w = mount(PageWrapper, { attachTo: document.body })
+    await flushPromises()
+    await w.find('[data-test="stats-toggle"]').trigger('click')
+    await flushPromises()
+    expect(useApiMock).toHaveBeenCalledWith('/api/queue/stats')
+    w.unmount()
+  })
+
+  it('⋮ → 시트의 취소는 확인 후 POST /api/tasks/{id}/cancel', async () => {
+    await setViewportWidth(390)
+    vi.spyOn(window, 'confirm').mockReturnValue(true)
+    const w = mount(PageWrapper, { attachTo: document.body })
+    await flushPromises()
+    const menus = w.findAll('[data-test="card-menu"]')
+    await menus[0]!.trigger('click') // #21 승인대기
+    await flushPromises()
+    ;(document.body.querySelector('[data-test="sheet-cancel"]') as HTMLElement).click()
+    await flushPromises()
+    expect(useApiMock).toHaveBeenCalledWith('/api/tasks/21/cancel', { method: 'POST' })
+    w.unmount()
+  })
+
+  it('⋮ → 시트의 삭제는 확인 후 DELETE /api/tasks/{id}', async () => {
+    await setViewportWidth(390)
+    vi.spyOn(window, 'confirm').mockReturnValue(true)
+    const w = mount(PageWrapper, { attachTo: document.body })
+    await flushPromises()
+    const menus = w.findAll('[data-test="card-menu"]')
+    await menus[1]!.trigger('click') // #18 PR생성
+    await flushPromises()
+    ;(document.body.querySelector('[data-test="sheet-remove"]') as HTMLElement).click()
+    await flushPromises()
+    expect(useApiMock).toHaveBeenCalledWith('/api/tasks/18', { method: 'DELETE' })
+    w.unmount()
+  })
+
+  it('필터 결과가 없으면 empty-filter(전체 보기로 복귀 가능), 목록 전체가 비면 empty-all', async () => {
+    await setViewportWidth(390)
+    const w = mount(PageWrapper, { attachTo: document.body })
+    await flushPromises()
+    await w.find('[data-test="filter-active"]').trigger('click') // 픽스처엔 진행 중 작업 없음
+    expect(w.find('[data-test="empty-filter"]').exists()).toBe(true)
+    expect(w.find('[data-test="empty-all"]').exists()).toBe(false)
+    await w.find('[data-test="empty-reset"]').trigger('click')
+    expect(w.find('[data-test="empty-filter"]').exists()).toBe(false)
+    expect(w.findAll('[data-test="task-card-compact"]')).toHaveLength(3)
+    w.unmount()
+  })
+
+  it('필터 칩·통계 토글은 44px 탭 타깃 구조(class 훅)를 갖는다', async () => {
+    await setViewportWidth(390)
+    const w = mount(PageWrapper, { attachTo: document.body })
+    await flushPromises()
+    expect(w.find('.chip-row').exists()).toBe(true)
+    expect(w.find('[data-test="filter-all"]').classes()).toContain('q-chip')
+    expect(w.find('[data-test="stats-toggle"]').classes()).toContain('stats-toggle')
     w.unmount()
   })
 })

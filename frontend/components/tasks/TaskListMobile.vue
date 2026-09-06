@@ -46,10 +46,9 @@ function openSheet(task: CardTask) {
       <q-btn
         v-if="isAdmin"
         flat
-        dense
         no-caps
-        size="sm"
         color="grey-7"
+        class="stats-toggle"
         :icon-right="statsOpen ? 'expand_less' : 'expand_more'"
         label="전체 통계"
         data-test="stats-toggle"
@@ -90,9 +89,21 @@ function openSheet(task: CardTask) {
       >내 작업만</q-chip>
     </div>
 
-    <div v-if="visibleGroups.length === 0" class="empty">
+    <div v-if="tasks.length === 0" class="empty" data-test="empty-all">
       <q-icon name="inbox" size="28px" color="grey-5" />
       <div>등록된 작업이 없습니다 — 우하단 + 로 첫 작업을 등록하세요</div>
+    </div>
+    <div v-else-if="visibleGroups.length === 0" class="empty" data-test="empty-filter">
+      <q-icon name="inbox" size="28px" color="grey-5" />
+      <div>이 조건에 맞는 작업이 없습니다</div>
+      <q-btn
+        flat
+        no-caps
+        color="primary"
+        label="전체 보기"
+        data-test="empty-reset"
+        @click="filter = 'all'"
+      />
     </div>
 
     <section v-for="g in visibleGroups" :key="g.key" class="group" :data-test="`group-${g.key}`">
@@ -145,6 +156,8 @@ function openSheet(task: CardTask) {
 .dot { color: #bdbdbd; margin: 0 4px; }
 .chip-row { display: flex; gap: 4px; overflow-x: auto; white-space: nowrap; margin: 0 -8px; padding: 0 8px 4px; }
 .chip-row::-webkit-scrollbar { display: none; }
+.chip-row :deep(.q-chip) { min-height: 44px; border-radius: 22px; padding: 0 14px; font-size: 13px; }
+.stats-toggle { min-height: 44px; }
 .group { display: flex; flex-direction: column; gap: 8px; }
 .group-head { display: flex; align-items: center; gap: 8px; padding: 10px 4px 0; font-size: 12px; font-weight: 700; letter-spacing: 0.02em; }
 .rule { flex: 1; height: 1px; background: rgba(0, 0, 0, 0.12); }

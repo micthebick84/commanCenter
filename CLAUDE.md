@@ -32,6 +32,7 @@ cd netismaker-interview-service && npm run dev              # 인터뷰 워커 (
 - `frontend/.prettierrc`에 `{"singleQuote": true, "semi": false}` 존재 → `lint-prettier`가 따옴표/세미콜론을 컨벤션대로 유지(예전처럼 큰따옴표로 안 뒤집힘). `.prettierignore`로 `.nuxt/` 등 생성물 제외.
 - ⚠️ **그래도 `npm run lint-prettier`(=`prettier --write`)를 `frontend/` 전체에 돌리지 말 것**: 코드베이스가 긴 줄을 손으로 유지(prettier 정규형 아님)하므로 전체 실행 시 ~12–18개 파일이 **줄바꿈만으로 churn**된다(따옴표는 안전). 포맷이 필요하면 단일 파일 대상으로만 쓰거나, 별도 일회성 정규화 PR로 처리할 것.
 - `npm run lint`(eslint)은 ESLint v9 flat config 부재로 현재 동작하지 않음(별도 정비 필요).
+- **클래스명에 Quasar 반응형 표시 헬퍼 이름(`xs sm md lg xl`, `gt-*`, `lt-*`, `*-hide`)을 쓰지 말 것** — 전역 CSS가 해당 폭 밖에서 `display:none !important`를 건다. 2026-09-06 `ChatBubble` 말풍선 클래스 `md`가 1440px 이상/1024px 미만에서 답변을 통째로 숨긴 라이브 회귀 사례(`ChatBubble.spec.ts`가 가드). vitest는 Quasar CSS를 로드하지 않아 이 계열 회귀를 못 잡는다.
 
 워커 실행 환경변수:
 ```bash

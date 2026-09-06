@@ -1782,7 +1782,7 @@ function fmtSize(bytes: number) {
       <q-expansion-item v-model="open.interviews" label="지난 인터뷰" data-test="section-interviews" expand-separator>
         <slot name="interviews" />
       </q-expansion-item>
-      <q-expansion-item v-model="open.info" label="정보" :caption="`${task.model} · ${task.effort}`" data-test="section-info" expand-separator>
+      <q-expansion-item v-model="open.info" label="정보" caption="모델 · 사용량 · 첨부" data-test="section-info" expand-separator>
         <q-card-section class="kv">
           <div><span class="k">모델</span>{{ task.model }} · {{ task.effort }}</div>
           <div v-if="task.totalCostUsd != null"><span class="k">사용량</span>{{ fmtTokens(task.totalTokens ?? 0) }} 토큰 · ${{ Number(task.totalCostUsd).toFixed(2) }}</div>

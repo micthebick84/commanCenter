@@ -44,9 +44,15 @@ const auth = useAuthStore()
 const mine = ref(true)
 const statusFilter = ref<string | null>(null)
 
+// statusFilter는 데스크톱 보드 전용 셀렉트 — 모바일 리스트는 그룹 칩으로 따로 좁히므로,
+// 데스크톱에서 필터를 골라둔 채로 화면이 좁아져도 서버 조회까지 몰래 좁아지면 안 된다(리뷰 파인딩 11).
 const { data: page, refresh } = useTaskPolling<PageResponse<TaskResponse>>(() =>
   useApi('/api/tasks', {
-    params: { mine: String(mine.value), status: statusFilter.value || undefined, size: 50 },
+    params: {
+      mine: String(mine.value),
+      status: $q.screen.lt.md ? undefined : statusFilter.value || undefined,
+      size: 50,
+    },
   }),
 )
 

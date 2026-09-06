@@ -131,7 +131,7 @@ const moveIcon = computed(() =>
           <q-item-section>취소</q-item-section>
         </q-item>
         <q-item
-          v-close-popup
+          v-close-popup="!deployActive"
           :clickable="!deployActive"
           :disable="deployActive"
           :aria-disabled="deployActive ? 'true' : 'false'"

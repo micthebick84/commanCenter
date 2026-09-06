@@ -3,7 +3,12 @@
 // 실제 동작(승인/배포/재시도…)은 부모가 act(kind)로 받아 기존 핸들러에 연결한다.
 import type { NextAction, NextActionKind } from '~/composables/taskStages'
 
-defineProps<{ action: NextAction | null; variant: 'banner' | 'bar' }>()
+// hidePrimary: banner에서 주 행동 버튼을 숨긴다 — 모바일 상세는 하단 바([id].vue variant="bar")가
+// 이미 같은 주 행동을 노출하므로, 배너 쪽에서 중복 노출하지 않기 위함(리뷰 파인딩 1).
+withDefaults(
+  defineProps<{ action: NextAction | null; variant: 'banner' | 'bar'; hidePrimary?: boolean }>(),
+  { hidePrimary: false },
+)
 const emit = defineEmits<{ (e: 'act', kind: NextActionKind): void }>()
 </script>
 
@@ -24,10 +29,11 @@ const emit = defineEmits<{ (e: 'act', kind: NextActionKind): void }>()
       <div class="text-body1" data-test="next-action-text">
         {{ action.text }}
       </div>
-      <!-- primary가 없어도 extra(예: PR 열기 버튼) 슬롯이 채워졌으면 행은 그대로 그린다 -->
-      <div v-if="action.primary || $slots.extra" class="row" style="gap: 8px">
+      <!-- primary가 없어도(혹은 hidePrimary로 숨겨도) extra(예: PR 열기 버튼) 슬롯이 채워졌으면
+           행은 그대로 그린다 -->
+      <div v-if="(action.primary && !hidePrimary) || $slots.extra" class="row" style="gap: 8px">
         <q-btn
-          v-if="action.primary"
+          v-if="action.primary && !hidePrimary"
           unelevated
           color="primary"
           :icon="action.primary.icon"

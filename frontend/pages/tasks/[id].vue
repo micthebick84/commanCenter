@@ -172,6 +172,8 @@ function openApprove() {
 // q-expansion-item은 접힌 상태에서도 콘텐츠를 always-mount(v-show)하므로, 진행 이력 카드는
 // historyOpen을 별도로 두고 v-if로 TaskHistoryTimeline을 게이팅해 첫 펼침 때만 조회한다.
 const historyOpen = ref(false)
+// 모바일 아코디언 헤더에 건수를 보여주기 위한 값 — TaskHistoryTimeline의 loaded(count)를 받는다.
+const historyCount = ref<number | null>(null)
 
 // 승인대기 취소: 요청자 본인 또는 admin — getForView가 이미 조회 시점에 두 경우만
 // 통과시키므로(그 외 403) 별도 소유권 가드 없이 재시도 버튼과 동일한 패턴을 따른다.
@@ -365,7 +367,9 @@ function formatSize(bytes: number): string {
 
 // 반드시 useApi 경유 — 전역 $fetch는 Authorization 미첨부로 401 (스펙 §8.2).
 // 파일명은 응답 헤더가 아니라 메타 fileName 사용 ($fetch는 헤더를 안 돌려준다).
-async function downloadAttachment(att: AttachmentMeta) {
+// 파라미터 타입은 실제로 쓰는 필드(id/fileName)만 요구하는 부분집합 — 데스크톱 칩(a: AttachmentMeta)과
+// 모바일 TaskDetailMobile의 download emit({id,fileName,sizeBytes}) 양쪽에서 그대로 바인딩할 수 있게 한다.
+async function downloadAttachment(att: Pick<AttachmentMeta, 'id' | 'fileName'>) {
   try {
     const blob = await useApi<Blob>(`/api/tasks/${taskId.value}/attachments/${att.id}`, {
       responseType: 'blob',
@@ -458,10 +462,22 @@ function onAction(kind: NextActionKind) {
 
       <q-card flat bordered class="q-mb-md" data-test="progress-card">
         <div :class="$q.screen.lt.md ? 'column' : 'row items-stretch no-wrap'">
-          <div class="col q-pa-md"><TaskProgressStepper :steps="steps" :caption="stepCaption" /></div>
+          <div class="col q-pa-md">
+            <TaskProgressStepper :steps="steps" :caption="stepCaption" />
+            <!-- 모바일은 하단 액션 바 옆에 실패 사유가 없으면 안 보이므로 여기 1줄로 노출 (리뷰 파인딩 5) -->
+            <div
+              v-if="task.failureReason && steps.some((s) => s.state === 'failed')"
+              class="text-negative text-caption ellipsis q-mt-xs"
+              data-test="failure-line"
+            >
+              {{ task.failureReason }}
+            </div>
+          </div>
           <q-separator :vertical="!$q.screen.lt.md" />
           <div :class="$q.screen.lt.md ? '' : 'col-4'">
-            <TaskNextAction :action="action" variant="banner" @act="onAction">
+            <!-- 모바일은 하단 액션 바(variant="bar")가 이미 같은 주 행동을 노출하므로 배너 쪽은
+                 문구만 남긴다 — 중복 노출 정리 (리뷰 파인딩 1) -->
+            <TaskNextAction :action="action" variant="banner" :hide-primary="$q.screen.lt.md" @act="onAction">
               <template #extra>
                 <q-btn v-if="auth.isAdmin && task.implementation?.prUrl" outline color="primary" icon="open_in_new" :label="`PR #${task.implementation.prNumber} 열기`" :href="task.implementation.prUrl" target="_blank" />
               </template>
@@ -475,11 +491,12 @@ function onAction(kind: NextActionKind) {
           :task="task"
           :is-admin="auth.isAdmin"
           :steps="steps"
+          :history-count="historyCount"
           @retry="retry"
-          @download="(id) => downloadAttachment(task!.attachments.find((a) => a.id === id)!)"
+          @download="downloadAttachment"
         >
           <template #history>
-            <TaskHistoryTimeline :task-id="task.id" />
+            <TaskHistoryTimeline :task-id="task.id" @loaded="historyCount = $event" />
           </template>
           <template #interviews>
             <InterviewHistoryCard :task-id="task.id" :task-status="task.status" />
@@ -520,6 +537,15 @@ function onAction(kind: NextActionKind) {
                   <q-item v-if="task.deployment?.deployUrl" v-close-popup clickable tag="a" :href="task.deployment.deployUrl" target="_blank" rel="noopener" data-test="bar-more-url">
                     <q-item-section avatar><q-icon name="open_in_new" /></q-item-section>
                     <q-item-section>접속 URL 열기</q-item-section>
+                  </q-item>
+                  <!-- 관리자 재배포/중지 — 모바일 상세에는 데스크톱 배포 카드의 버튼이 없어 여기로만 접근 가능했다 (리뷰 파인딩 4) -->
+                  <q-item v-if="auth.isAdmin && ['DEPLOYED','DEPLOY_FAILED','DEPLOY_LOST'].includes(task.status)" v-close-popup clickable data-test="bar-more-redeploy" @click="openDeployDialog('redeploy')">
+                    <q-item-section avatar><q-icon name="refresh" /></q-item-section>
+                    <q-item-section>재배포</q-item-section>
+                  </q-item>
+                  <q-item v-if="auth.isAdmin && ['DEPLOYED','DEPLOY_LOST'].includes(task.status)" v-close-popup clickable class="text-negative" data-test="bar-more-undeploy" @click="undeploy">
+                    <q-item-section avatar><q-icon name="stop" color="negative" /></q-item-section>
+                    <q-item-section>중지</q-item-section>
                   </q-item>
                   <q-item v-if="isInterviewPhase && task.interviewSessionId" v-close-popup clickable data-test="bar-more-interview" @click="onAction('open-interview')">
                     <q-item-section avatar><q-icon name="forum" /></q-item-section>

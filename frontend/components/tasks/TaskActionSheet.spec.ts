@@ -75,4 +75,21 @@ describe('TaskActionSheet (스펙 2026-09-06 §4.1 ⋮ 액션 시트)', () => {
     expect(remove.textContent).toContain('먼저 중지')
     w.unmount()
   })
+
+  it('배포 활성 상태에서는 삭제를 클릭해도 remove를 emit하지 않고 시트도 닫히지 않는다 — 리뷰 파인딩 2', async () => {
+    const w = open({ ...pr, status: 'DEPLOYED', statusLabel: '배포완료' }, true)
+    await flushPromises()
+    const remove = body().querySelector(
+      '[data-test="sheet-remove"]',
+    ) as HTMLElement
+    remove.click()
+    await flushPromises()
+    // v-close-popup의 close 처리는 setTimeout(0) 매크로태스크로 지연 실행된다(Quasar
+    // ClosePopup 디렉티브) — flushPromises만으로는 마이크로태스크만 비워지고 이 타이머는
+    // 그대로 남으므로, 실제로 시트가 닫히는지 보려면 매크로태스크 tick까지 기다려야 한다.
+    await new Promise((r) => setTimeout(r, 0))
+    expect(w.emitted('remove')).toBeUndefined()
+    expect(body().querySelector('[data-test="task-action-sheet"]')).not.toBeNull()
+    w.unmount()
+  })
 })

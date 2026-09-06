@@ -30,8 +30,17 @@ export interface DetailTask {
   deployment: { deployUrl: string | null; deployHostPort: number | null; deployImage: string | null; deployedAt: string | null; deployLog: string | null } | null
 }
 
-const props = defineProps<{ task: DetailTask; isAdmin: boolean; steps: StageStep[] }>()
-const emit = defineEmits<{ (e: 'retry'): void; (e: 'download', attachmentId: number): void }>()
+const props = defineProps<{
+  task: DetailTask
+  isAdmin: boolean
+  steps: StageStep[]
+  /** 진행 이력 아코디언 헤더 캡션용 건수 — null/undefined면 캡션을 아예 안 보여준다(아직 조회 전). */
+  historyCount?: number | null
+}>()
+const emit = defineEmits<{
+  (e: 'retry'): void
+  (e: 'download', attachment: { id: number; fileName: string; sizeBytes: number }): void
+}>()
 
 const currentKey = computed(() => props.steps.find((s) => s.state === 'current' || s.state === 'failed')?.key ?? 'analysis')
 const open = reactive<Record<string, boolean>>({
@@ -60,6 +69,17 @@ function fmtSize(bytes: number) {
   if (bytes >= 1024) return `${Math.round(bytes / 1024)}KB`
   return `${bytes}B`
 }
+
+// 배포 아코디언 헤더 캡션 — 배포 실패/진행 중일 때 "아직 배포 전"으로 잘못 보이던 것을 바로잡는다
+// (리뷰 파인딩 8).
+const IN_FLIGHT_DEPLOY_STATUSES = ['DEPLOY_PENDING', 'DEPLOYING', 'UNDEPLOY_PENDING', 'UNDEPLOYING']
+const deployCaption = computed(() => {
+  const t = props.task
+  if (t.deployment?.deployUrl) return t.deployment.deployUrl
+  if (t.status === 'DEPLOY_FAILED') return '배포 실패'
+  if (IN_FLIGHT_DEPLOY_STATUSES.includes(t.status)) return '배포 진행 중'
+  return '아직 배포 전'
+})
 </script>
 
 <template>
@@ -73,7 +93,10 @@ function fmtSize(bytes: number) {
     <q-list bordered class="rounded-borders bg-white sections">
       <div class="acc-section" data-test="section-history">
         <q-item clickable class="acc-header" role="button" :aria-expanded="open.history" :aria-controls="contentId('history')" @click="open.history = !open.history">
-          <q-item-section><q-item-label>진행 이력</q-item-label></q-item-section>
+          <q-item-section>
+            <q-item-label>진행 이력</q-item-label>
+            <q-item-label v-if="typeof historyCount === 'number'" caption>{{ historyCount }}건</q-item-label>
+          </q-item-section>
           <q-item-section side><q-icon :name="open.history ? 'expand_less' : 'expand_more'" /></q-item-section>
         </q-item>
         <q-slide-transition>
@@ -159,7 +182,7 @@ function fmtSize(bytes: number) {
         <q-item clickable class="acc-header" role="button" :aria-expanded="open.deploy" :aria-controls="contentId('deploy')" @click="open.deploy = !open.deploy">
           <q-item-section>
             <q-item-label>배포</q-item-label>
-            <q-item-label caption>{{ task.deployment?.deployUrl ?? '아직 배포 전' }}</q-item-label>
+            <q-item-label caption>{{ deployCaption }}</q-item-label>
           </q-item-section>
           <q-item-section side><q-icon :name="open.deploy ? 'expand_less' : 'expand_more'" /></q-item-section>
         </q-item>
@@ -170,6 +193,8 @@ function fmtSize(bytes: number) {
               <div><span class="k">포트</span><code>{{ task.deployment.deployHostPort }}</code></div>
               <div v-if="task.deployment.deployedAt"><span class="k">배포</span>{{ new Date(task.deployment.deployedAt).toLocaleString() }}</div>
             </q-card-section>
+            <q-card-section v-else-if="task.status === 'DEPLOY_FAILED'" class="text-negative">{{ task.failureReason }}</q-card-section>
+            <q-card-section v-else-if="IN_FLIGHT_DEPLOY_STATUSES.includes(task.status)" class="text-grey-7">배포 작업이 진행 중입니다</q-card-section>
             <q-card-section v-else class="text-grey-7">PR생성 상태에서 관리자가 배포할 수 있습니다.</q-card-section>
           </div>
         </q-slide-transition>
@@ -203,7 +228,7 @@ function fmtSize(bytes: number) {
               <div v-if="task.mcpsExtra.length"><span class="k">MCP</span>{{ task.mcpsExtra.map((m) => m.name).join(', ') }}</div>
               <div v-if="task.attachments.length" class="column" style="gap: 4px">
                 <span class="k">첨부</span>
-                <q-chip v-for="a in task.attachments" :key="a.id" clickable dense icon="attach_file" :label="`${a.fileName} (${fmtSize(a.sizeBytes)})`" @click="emit('download', a.id)" />
+                <q-chip v-for="a in task.attachments" :key="a.id" clickable dense icon="attach_file" :label="`${a.fileName} (${fmtSize(a.sizeBytes)})`" @click="emit('download', a)" />
               </div>
               <div v-if="task.failureReason" class="text-negative"><span class="k">실패 사유</span>{{ task.failureReason }}</div>
               <q-btn v-if="task.status === 'FAILED' || task.status === 'DESIGN_FAILED'" unelevated color="warning" icon="refresh" :label="task.status === 'DESIGN_FAILED' ? '재시도' : `재시도 (${task.retryCount}/${task.maxRetry})`" :disable="task.status !== 'DESIGN_FAILED' && task.retryCount >= task.maxRetry" @click="emit('retry')" />

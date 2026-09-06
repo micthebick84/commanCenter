@@ -5,6 +5,7 @@ import { QLayout, QPageContainer } from 'quasar'
 import TaskDetail from '../pages/tasks/[id].vue'
 import { useApiMock, authStub } from './mocks/nuxt'
 import { setViewportWidth } from './mocks/screen'
+import { baseTask } from './fixtures/task'
 
 ;(globalThis as any).useRoute = () => ({ params: { id: '42' } })
 
@@ -15,17 +16,6 @@ const PageWrapper = defineComponent({
 const mountOpts = {
   attachTo: document.body,
   global: { stubs: { 'router-link': { template: '<a><slot /></a>' }, DesignReviewCard: true } },
-}
-
-export const baseTask = {
-  id: 42, githubRepo: 'acme/widgets', repoAlias: 'Widgets', githubBranch: 'main', title: '제목', description: '설명',
-  status: 'PR_CREATED', statusLabel: 'PR생성', requesterId: 'user1', retryCount: 0, maxRetry: 3, failureReason: null,
-  mcpsExtra: [], envVars: [], interviewSessionId: null, createdAt: '2026-08-16T00:00:00Z', updatedAt: '2026-08-16T00:00:00Z',
-  model: 'claude-opus-5', effort: 'high', designRequested: false,
-  analysis: { markdownResult: '# 요약\n\n| a | b |\n|---|---|\n| 1 | 2 |', subtasksJson: '[]', durationMs: 1000, approved: true, approvedBy: null, approvedAt: null, completedAt: '2026-08-16T00:00:00Z' },
-  design: null,
-  implementation: { prUrl: 'https://github.com/acme/widgets/pull/1', prNumber: 1, headBranch: 'feature/x', headSha: 'abcdef1234567', implementationLog: null },
-  deployment: null, attachments: [], stageUsage: [], totalCostUsd: 0.42, totalTokens: 123000,
 }
 
 describe('pages/tasks/[id] — 가로 오버플로 봉쇄 (스펙 2026-09-06 D1)', () => {
@@ -194,6 +184,86 @@ describe('pages/tasks/[id] — 모바일 (스펙 2026-09-06 §4.2)', () => {
     expect(controls).toBeTruthy()
     const content = w.find('[data-test="section-info"] .q-expansion-item__content')
     expect(content.attributes('id')).toBe(controls)
+    w.unmount()
+  })
+
+  it('모바일에서는 주 행동 버튼이 하단 바에만 한 번 나타난다(배너는 문구만) — 리뷰 파인딩 1', async () => {
+    authStub.isAdmin = true
+    useApiMock.mockResolvedValue(baseTask)
+    await setViewportWidth(390)
+    const w = mount(PageWrapper, mountOpts)
+    await flushPromises()
+    const primaries = w.findAll('[data-test="next-action-primary"]')
+    expect(primaries).toHaveLength(1)
+    expect(primaries[0]!.element.closest('.next-action--bar')).not.toBeNull()
+    w.unmount()
+  })
+
+  it('진행 카드는 실패 사유를 1줄로 보여준다 — 리뷰 파인딩 5', async () => {
+    authStub.isAdmin = true
+    useApiMock.mockResolvedValue({
+      ...baseTask, status: 'FAILED', statusLabel: '분석실패', failureReason: '타임아웃',
+      analysis: null, implementation: null,
+    })
+    await setViewportWidth(390)
+    const w = mount(PageWrapper, mountOpts)
+    await flushPromises()
+    expect(w.find('[data-test="failure-line"]').text()).toContain('타임아웃')
+    w.unmount()
+  })
+
+  it('하단 바 ⋮ 메뉴에서 배포완료 작업은 재배포/중지를 실행할 수 있다(관리자) — 리뷰 파인딩 4', async () => {
+    authStub.isAdmin = true
+    useApiMock.mockResolvedValue({
+      ...baseTask, status: 'DEPLOYED', statusLabel: '배포완료',
+      deployment: { deployUrl: 'https://task-42.example', deployHostPort: 3100, deployImage: 'img', deployedAt: '2026-08-16T00:00:00Z', deployLog: null },
+    })
+    await setViewportWidth(390)
+    const w = mount(PageWrapper, mountOpts)
+    await flushPromises()
+    await w.find('[data-test="bar-more"]').trigger('click')
+    await flushPromises()
+    expect(document.body.querySelector('[data-test="bar-more-redeploy"]')).not.toBeNull()
+    expect(document.body.querySelector('[data-test="bar-more-undeploy"]')).not.toBeNull()
+    ;(document.body.querySelector('[data-test="bar-more-redeploy"]') as HTMLElement).click()
+    await flushPromises()
+    expect(document.body.textContent).toContain('재배포 — 환경변수')
+    w.unmount()
+  })
+
+  it('진행 이력 아코디언 헤더에 건수를 표시한다 — 리뷰 파인딩 7', async () => {
+    authStub.isAdmin = true
+    useApiMock.mockImplementation((url: string) => {
+      if (url === '/api/tasks/42/history') {
+        return Promise.resolve([
+          { fromStatus: 'PENDING', toStatus: 'COMPLETED', fromLabel: '대기', toLabel: '완료', actorType: 'system', actorId: null, reason: null, at: '2026-08-16T00:00:00Z' },
+          { fromStatus: null, toStatus: 'PENDING', fromLabel: null, toLabel: '대기', actorType: 'user', actorId: 'admin', reason: null, at: '2026-08-15T00:00:00Z' },
+        ])
+      }
+      return Promise.resolve(baseTask)
+    })
+    await setViewportWidth(390)
+    const w = mount(PageWrapper, mountOpts)
+    await flushPromises()
+    await w.find('[data-test="section-history"] .q-item').trigger('click')
+    await flushPromises()
+    expect(w.find('[data-test="section-history"]').text()).toContain('2건')
+    w.unmount()
+  })
+
+  it('배포 아코디언은 배포 실패 시 캡션과 실패 사유를 보여준다 — 리뷰 파인딩 8', async () => {
+    authStub.isAdmin = true
+    useApiMock.mockResolvedValue({
+      ...baseTask, status: 'DEPLOY_FAILED', statusLabel: '배포실패', failureReason: '포트 충돌',
+      deployment: { deployUrl: null, deployHostPort: null, deployImage: null, deployedAt: null, deployLog: null },
+    })
+    await setViewportWidth(390)
+    const w = mount(PageWrapper, mountOpts)
+    await flushPromises()
+    // DEPLOY_FAILED는 진행 스테퍼의 "현재/실패" 단계라 배포 섹션이 이미 기본 펼침 상태다
+    // (currentKey 규칙) — 그대로 캡션과 본문을 함께 확인한다.
+    expect(w.find('[data-test="section-deploy"]').text()).toContain('배포 실패')
+    expect(w.find('[data-test="section-deploy"]').text()).toContain('포트 충돌')
     w.unmount()
   })
 })

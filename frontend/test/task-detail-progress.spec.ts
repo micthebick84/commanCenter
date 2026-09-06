@@ -4,7 +4,7 @@ import { defineComponent, h } from 'vue'
 import { QLayout, QPageContainer } from 'quasar'
 import TaskDetail from '../pages/tasks/[id].vue'
 import { authStub, useApiMock } from './mocks/nuxt'
-import { baseTask } from './task-detail-mobile.spec'
+import { baseTask } from './fixtures/task'
 
 ;(globalThis as any).useRoute = () => ({ params: { id: '42' } })
 const PageWrapper = defineComponent({

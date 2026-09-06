@@ -117,6 +117,8 @@ body {
 }
 @media (max-width: 1023.98px) {
   :root {
-    --bottom-nav-height: 56px;
+    /* 홈 인디케이터가 있는 기기(iPhone 등)에서 하단 내비/액션 바가 세이프 에어리어 안쪽으로
+       파고들지 않도록 인셋을 더한다 (리뷰 파인딩 3). 인셋 미지원 브라우저는 0px로 폴백. */
+    --bottom-nav-height: calc(56px + env(safe-area-inset-bottom, 0px));
   }
 }

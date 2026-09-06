@@ -1,7 +1,7 @@
 import { mount, flushPromises } from '@vue/test-utils'
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { defineComponent, h } from 'vue'
-import { QLayout, QPageContainer } from 'quasar'
+import { QLayout, QPageContainer, QSelect } from 'quasar'
 import TasksIndex from '../pages/tasks/index.vue'
 import { authStub, useApiMock } from './mocks/nuxt'
 import { setViewportWidth } from './mocks/screen'
@@ -159,6 +159,26 @@ describe('pages/tasks — 모바일 리스트 (스펙 2026-09-06 §4.1)', () => 
     expect(w.find('.chip-row').exists()).toBe(true)
     expect(w.find('[data-test="filter-all"]').classes()).toContain('q-chip')
     expect(w.find('[data-test="stats-toggle"]').classes()).toContain('stats-toggle')
+    w.unmount()
+  })
+
+  it('데스크톱에서 상태 필터를 고른 뒤 모바일로 좁히면 서버 조회의 status가 무시된다 — 리뷰 파인딩 11', async () => {
+    const w = mount(PageWrapper, { attachTo: document.body })
+    await flushPromises()
+    await w.findComponent(QSelect).vm.$emit('update:modelValue', 'COMPLETED')
+    await flushPromises()
+    expect(useApiMock).toHaveBeenCalledWith(
+      '/api/tasks',
+      expect.objectContaining({ params: expect.objectContaining({ status: 'COMPLETED' }) }),
+    )
+    useApiMock.mockClear()
+    await setViewportWidth(390)
+    await w.find('[data-test="mine-chip"]').trigger('click')
+    await flushPromises()
+    expect(useApiMock).toHaveBeenCalledWith(
+      '/api/tasks',
+      expect.objectContaining({ params: expect.objectContaining({ status: undefined }) }),
+    )
     w.unmount()
   })
 })

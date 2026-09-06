@@ -593,83 +593,85 @@ function closeDialog() {
     <!-- 등록 다이얼로그 -->
     <q-dialog v-model="showCreate" persistent :maximized="$q.screen.lt.md">
       <q-card style="width: min(520px, 100vw)">
-        <q-card-section>
-          <div class="text-h6">작업 등록</div>
-        </q-card-section>
-        <q-card-section class="q-gutter-md">
-          <q-select
-            v-model="draft.repoCatalogId"
-            :options="repoOptions"
-            :loading="repoCatalogLoading"
-            label="레포 (별칭 선택)"
-            outlined
-            dense
-            emit-value
-            map-options
-            autofocus
-            data-test="repo-select"
-            :hint="repoCatalog.length === 0 ? '등록된 레포 없음 — 관리자에게 문의' : '관리자가 등록한 레포 중 선택'"
-            @update:model-value="onRepoSelected"
-          >
-            <template #no-option>
-              <q-item>
-                <q-item-section class="text-grey">등록된 레포가 없습니다</q-item-section>
-              </q-item>
-            </template>
-          </q-select>
+        <div class="dialog-body">
+          <q-card-section>
+            <div class="text-h6">작업 등록</div>
+          </q-card-section>
+          <q-card-section class="q-gutter-md">
+            <q-select
+              v-model="draft.repoCatalogId"
+              :options="repoOptions"
+              :loading="repoCatalogLoading"
+              label="레포 (별칭 선택)"
+              outlined
+              dense
+              emit-value
+              map-options
+              autofocus
+              data-test="repo-select"
+              :hint="repoCatalog.length === 0 ? '등록된 레포 없음 — 관리자에게 문의' : '관리자가 등록한 레포 중 선택'"
+              @update:model-value="onRepoSelected"
+            >
+              <template #no-option>
+                <q-item>
+                  <q-item-section class="text-grey">등록된 레포가 없습니다</q-item-section>
+                </q-item>
+              </template>
+            </q-select>
 
-          <q-select
-            v-model="draft.githubBranch"
-            :options="filteredBranchOptions"
-            :disable="repoStatus !== 'ok'"
-            label="브랜치"
-            outlined
-            dense
-            use-input
-            input-debounce="0"
-            emit-value
-            map-options
-            :hint="
-              repoStatus === 'ok'
-                ? '입력해서 검색할 수 있습니다'
-                : repoStatus === 'notfound' || repoStatus === 'error'
-                  ? repoStatusMsg
-                  : '레포 선택 후 브랜치 선택 가능'
-            "
-            @filter="onBranchFilter"
-          >
-            <template #no-option>
-              <q-item>
-                <q-item-section class="text-grey">결과 없음</q-item-section>
-              </q-item>
-            </template>
-          </q-select>
+            <q-select
+              v-model="draft.githubBranch"
+              :options="filteredBranchOptions"
+              :disable="repoStatus !== 'ok'"
+              label="브랜치"
+              outlined
+              dense
+              use-input
+              input-debounce="0"
+              emit-value
+              map-options
+              :hint="
+                repoStatus === 'ok'
+                  ? '입력해서 검색할 수 있습니다'
+                  : repoStatus === 'notfound' || repoStatus === 'error'
+                    ? repoStatusMsg
+                    : '레포 선택 후 브랜치 선택 가능'
+              "
+              @filter="onBranchFilter"
+            >
+              <template #no-option>
+                <q-item>
+                  <q-item-section class="text-grey">결과 없음</q-item-section>
+                </q-item>
+              </template>
+            </q-select>
 
-          <q-input v-model="draft.title" label="작업 제목" outlined dense maxlength="500" />
-          <q-input
-            v-model="draft.description"
-            label="작업 상세"
-            type="textarea"
-            outlined
-            autogrow
-            rows="4"
-          />
-          <q-file
-            v-model="draftFiles"
-            :label="attachmentLabel"
-            outlined
-            dense
-            multiple
-            use-chips
-            counter
-            append
-            data-test="attachment-input"
-          >
-            <template #prepend>
-              <q-icon name="attach_file" />
-            </template>
-          </q-file>
-        </q-card-section>
+            <q-input v-model="draft.title" label="작업 제목" outlined dense maxlength="500" />
+            <q-input
+              v-model="draft.description"
+              label="작업 상세"
+              type="textarea"
+              outlined
+              autogrow
+              rows="4"
+            />
+            <q-file
+              v-model="draftFiles"
+              :label="attachmentLabel"
+              outlined
+              dense
+              multiple
+              use-chips
+              counter
+              append
+              data-test="attachment-input"
+            >
+              <template #prepend>
+                <q-icon name="attach_file" />
+              </template>
+            </q-file>
+          </q-card-section>
+        </div>
         <q-card-actions align="right">
           <q-btn flat label="취소" @click="closeDialog" />
           <q-btn

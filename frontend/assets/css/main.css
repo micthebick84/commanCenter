@@ -70,3 +70,18 @@ body {
   background: #fbe9e7;
   color: #bf360c;
 }
+
+/* 전체화면(maximized) 다이얼로그: 카드는 세로 flex, 본문(.dialog-body)만 스크롤, 액션 바는 하단에 남는다 (스펙 2026-09-06 §4.3) */
+.q-dialog__inner--maximized > .q-card {
+  display: flex;
+  flex-direction: column;
+}
+.q-dialog__inner--maximized > .q-card > .dialog-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+}
+.q-dialog__inner--maximized > .q-card > .q-card__actions .q-btn {
+  min-height: 44px;
+  flex: 1 1 0;
+}

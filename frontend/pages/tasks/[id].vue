@@ -749,60 +749,62 @@ async function downloadAttachment(att: AttachmentMeta) {
 
       <q-dialog v-model="envDialog" :maximized="$q.screen.lt.md">
         <q-card style="width: min(480px, 100vw)">
-          <q-card-section class="row items-center">
-            <div class="text-h6">
-              {{ envMode === 'deploy' ? '배포' : '재배포' }} — 환경변수
-            </div>
-            <q-space />
-            <q-btn v-close-popup flat round dense icon="close" />
-          </q-card-section>
-          <q-card-section class="text-caption text-grey-7">
-            컨테이너에 <code>-e KEY=VALUE</code>로 주입됩니다. DB 접속
-            정보·시크릿을 여기에 입력하세요. (예:
-            <code>SPRING_DATASOURCE_URL</code>, <code>JWT_SECRET</code>) 비밀
-            값은 마스킹 표시되지만 평문 저장됩니다.
-          </q-card-section>
-          <q-card-section class="q-gutter-sm">
-            <div
-              v-for="row in envRows"
-              :key="row.id"
-              :class="$q.screen.lt.md ? 'column q-gutter-y-xs' : 'row items-center q-gutter-xs no-wrap'"
-            >
-              <q-input
-                v-model="row.key"
-                dense
-                outlined
-                placeholder="KEY"
-                style="flex: 1"
-              />
-              <q-input
-                v-model="row.value"
-                dense
-                outlined
-                placeholder="value"
-                style="flex: 2"
-                :type="row.secret && !row.reveal ? 'password' : 'text'"
+          <div class="dialog-body">
+            <q-card-section class="row items-center">
+              <div class="text-h6">
+                {{ envMode === 'deploy' ? '배포' : '재배포' }} — 환경변수
+              </div>
+              <q-space />
+              <q-btn v-close-popup flat round dense icon="close" />
+            </q-card-section>
+            <q-card-section class="text-caption text-grey-7">
+              컨테이너에 <code>-e KEY=VALUE</code>로 주입됩니다. DB 접속
+              정보·시크릿을 여기에 입력하세요. (예:
+              <code>SPRING_DATASOURCE_URL</code>, <code>JWT_SECRET</code>) 비밀
+              값은 마스킹 표시되지만 평문 저장됩니다.
+            </q-card-section>
+            <q-card-section class="q-gutter-sm">
+              <div
+                v-for="row in envRows"
+                :key="row.id"
+                :class="$q.screen.lt.md ? 'column q-gutter-y-xs' : 'row items-center q-gutter-xs no-wrap'"
               >
-                <template v-if="row.secret" #append>
-                  <q-icon
-                    :name="row.reveal ? 'visibility_off' : 'visibility'"
-                    class="cursor-pointer"
-                    @click="row.reveal = !row.reveal"
-                  />
-                </template>
-              </q-input>
-              <q-toggle v-model="row.secret" label="비밀" dense />
-              <q-btn
-                flat
-                round
-                dense
-                icon="delete"
-                color="grey"
-                @click="removeEnvRow(row.id)"
-              />
-            </div>
-            <q-btn flat dense icon="add" label="변수 추가" @click="addEnvRow" />
-          </q-card-section>
+                <q-input
+                  v-model="row.key"
+                  dense
+                  outlined
+                  placeholder="KEY"
+                  style="flex: 1"
+                />
+                <q-input
+                  v-model="row.value"
+                  dense
+                  outlined
+                  placeholder="value"
+                  style="flex: 2"
+                  :type="row.secret && !row.reveal ? 'password' : 'text'"
+                >
+                  <template v-if="row.secret" #append>
+                    <q-icon
+                      :name="row.reveal ? 'visibility_off' : 'visibility'"
+                      class="cursor-pointer"
+                      @click="row.reveal = !row.reveal"
+                    />
+                  </template>
+                </q-input>
+                <q-toggle v-model="row.secret" label="비밀" dense />
+                <q-btn
+                  flat
+                  round
+                  dense
+                  icon="delete"
+                  color="grey"
+                  @click="removeEnvRow(row.id)"
+                />
+              </div>
+              <q-btn flat dense icon="add" label="변수 추가" @click="addEnvRow" />
+            </q-card-section>
+          </div>
           <q-card-actions align="right">
             <q-btn v-close-popup flat label="취소" />
             <q-btn

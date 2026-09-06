@@ -17,8 +17,12 @@ const props = withDefaults(
     variant?: 'panel' | 'strip'
     /** strip 전용: 현재 대화의 컨텍스트 %. null이면 항목 생략. */
     contextPct?: number | null
+    /** strip 전용: 보여줄 값이 하나도 없으면("사용량 미수집") 줄 자체를 그리지 않는다 — 승인 다이얼로그용. */
+    hideWhenEmpty?: boolean
+    /** strip 전용: 맨 앞 라벨(예: "Claude 사용량"). 입력창 아래처럼 문맥이 자명한 곳은 비운다. */
+    prefix?: string
   }>(),
-  { variant: 'panel', contextPct: null },
+  { variant: 'panel', contextPct: null, hideWhenEmpty: false, prefix: '' },
 )
 
 const { data } = useTaskPolling<ClaudeUsageResponse>(() => useApi('/api/usage/claude'))
@@ -68,10 +72,11 @@ const updatedLabel = computed(() => {
 
 <template>
   <div
-    v-if="props.variant === 'strip'"
+    v-if="props.variant === 'strip' && !(props.hideWhenEmpty && rows.length === 0 && props.contextPct == null)"
     class="usage-strip row items-center no-wrap text-caption text-grey-7"
     data-test="usage-strip"
   >
+    <span v-if="props.prefix" class="strip-prefix">{{ props.prefix }}</span>
     <div v-for="r in rows.slice(0, 2)" :key="r.type" class="row items-center no-wrap strip-item">
       <span>{{ r.shortLabel }}</span>
       <q-linear-progress
@@ -146,6 +151,10 @@ const updatedLabel = computed(() => {
 }
 .strip-item {
   gap: 5px;
+}
+.strip-prefix {
+  font-weight: 500;
+  color: rgba(0, 0, 0, 0.6);
 }
 .strip-bar {
   width: 40px;

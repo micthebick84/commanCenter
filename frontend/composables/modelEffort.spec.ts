@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import {
   MODEL_OPTIONS, DEFAULT_MODEL, DEFAULT_EFFORT, effortsForModel, coerceEffort,
+  describeModel, describeEffort, shortModelLabel,
 } from './modelEffort'
 
 describe('modelEffort', () => {
@@ -32,5 +33,33 @@ describe('modelEffort', () => {
 
   it('unknown model falls back to all five (server validates authoritatively)', () => {
     expect(effortsForModel('whatever')).toEqual(['low', 'medium', 'high', 'xhigh', 'max'])
+  })
+})
+
+// 승인 다이얼로그(2026-09-06 UI/UX 개선)가 쓰는 한 줄 설명 — 고를 수 있는 모든 값에 설명이 있어야 한다.
+describe('modelEffort descriptions (승인 다이얼로그)', () => {
+  it('every selectable model has a one-line description', () => {
+    for (const m of MODEL_OPTIONS) {
+      expect(describeModel(m.value).length).toBeGreaterThan(0)
+    }
+    expect(describeModel('claude-haiku-4-5')).toContain('low')
+  })
+
+  it('every effort level has a one-line description and high is marked as the default', () => {
+    for (const e of effortsForModel('claude-opus-5')) {
+      expect(describeEffort(e).length).toBeGreaterThan(0)
+    }
+    expect(describeEffort('high')).toContain('기본')
+  })
+
+  it('unknown values describe as empty string (no crash)', () => {
+    expect(describeModel('whatever')).toBe('')
+    expect(describeEffort('ultracode')).toBe('')
+  })
+
+  it('shortModelLabel strips the "(기본)" suffix and falls back to the raw value', () => {
+    expect(shortModelLabel('claude-opus-5')).toBe('Opus 5')
+    expect(shortModelLabel('claude-haiku-4-5')).toBe('Haiku 4.5')
+    expect(shortModelLabel('claude-fable-5')).toBe('claude-fable-5')
   })
 })

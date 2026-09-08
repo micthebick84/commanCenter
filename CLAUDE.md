@@ -138,6 +138,7 @@ PR 본문/브랜치 prefix/timeout은 `application-worker.yml`의 `netis-maker.w
 | 질문 탭 셸/사이드바 | `frontend/pages/questions.vue`, `frontend/components/QuestionSidebar.vue` |
 | 새 질문 / 대화 페이지 | `frontend/pages/questions/index.vue`, `frontend/pages/questions/[id].vue` |
 | 채팅 입력창 · 모델/effort 픽커 | `frontend/components/chat/QuestionComposer.vue`, `frontend/components/chat/ModelEffortPicker.vue` |
+| 음성 입력(받아쓰기만, 자동 전송 없음) | `frontend/composables/useSpeechInput.ts`(Web Speech API 래퍼 — 지원 판정은 마운트 후, ko-KR·continuous, 자동 재시작 없음), 마이크 버튼·읽기 전용·전송 잠금은 `QuestionComposer.vue`(마이크는 툴바가 아니라 q-input `append` 슬롯 — 390px에서 툴바가 이미 꽉 차 있음), 테스트 더블 `frontend/test/mocks/speechRecognition.ts`. 제약: HTTPS 필수, Firefox·iOS 홈화면 PWA 미지원 |
 | 구독 사용량 | `service/ClaudeUsageService.java`, `controller/UsageWorkerController.java`, `controller/UsageController.java`, `frontend/components/ClaudeUsagePanel.vue`, `frontend/composables/claudeUsage.ts` |
 | 사용량/컨텍스트 수집(인터뷰 서비스) | `netismaker-interview-service/src/runner/messageRelay.ts`, `src/runner/rateLimitReport.ts` |
 | 작업 탭 모바일(리스트·카드·시트·스테퍼·다음 할 일·이력·관리 세그먼트) | `frontend/components/tasks/*.vue`, 순수 함수 `frontend/composables/taskStages.ts`(attentionGroup/sortForMobile/stageSteps/nextAction) |

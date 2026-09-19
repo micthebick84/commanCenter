@@ -291,6 +291,7 @@ class QuestionServiceTest {
 
     private static InterviewSession questionSessionWithMcp(List<Long> ids, List<TaskMcpSpec> extras) {
         InterviewSession s = questionSession("claude-opus-5", "high");
+        if (s.getId() == null) ReflectionTestUtils.setField(s, "id", 5L);   // applyMcpChange는 s.getId()로 노트를 단다
         s.setMcpCatalogIds(new ArrayList<>(ids));
         s.setMcpsExtra(new ArrayList<>(extras));
         return s;

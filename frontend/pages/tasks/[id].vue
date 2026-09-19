@@ -9,6 +9,7 @@ import TaskDetailMobile from '~/components/tasks/TaskDetailMobile.vue'
 import TaskHistoryTimeline from '~/components/tasks/TaskHistoryTimeline.vue'
 import { stageSteps, nextAction, ageOf, type NextActionKind } from '~/composables/taskStages'
 import { renderMarkdown } from '~/composables/useMarkdown'
+import { downloadAttachment as downloadBlob } from '~/composables/attachmentDownload'
 
 definePageMeta({ layout: 'default' })
 
@@ -370,40 +371,15 @@ function formatSize(bytes: number): string {
   return `${bytes}B`
 }
 
-// 반드시 useApi 경유 — 전역 $fetch는 Authorization 미첨부로 401 (스펙 §8.2).
-// 파일명은 응답 헤더가 아니라 메타 fileName 사용 ($fetch는 헤더를 안 돌려준다).
+// blob 다운로드(useApi 경유·objectURL·지연 해제·Blob 에러 본문 파싱)는 질문 세션과 공유하는
+// composables/attachmentDownload.ts에 있다 (스펙 2026-09-13 §7). 여기서는 URL·파일명만 만들고 실패 알림만 띄운다.
 // 파라미터 타입은 실제로 쓰는 필드(id/fileName)만 요구하는 부분집합 — 데스크톱 칩(a: AttachmentMeta)과
 // 모바일 TaskDetailMobile의 download emit({id,fileName,sizeBytes}) 양쪽에서 그대로 바인딩할 수 있게 한다.
 async function downloadAttachment(att: Pick<AttachmentMeta, 'id' | 'fileName'>) {
   try {
-    const blob = await useApi<Blob>(`/api/tasks/${taskId.value}/attachments/${att.id}`, {
-      responseType: 'blob',
-    })
-    const url = URL.createObjectURL(blob)
-    const a = document.createElement('a')
-    a.href = url
-    a.download = att.fileName
-    document.body.appendChild(a)
-    a.click()
-    // blob URL을 click과 같은 tick에 해제하면 일부 브라우저에서 다운로드가 시작 전에 중단된다(Chromium 41380177, Firefox 1282407).
-    setTimeout(() => {
-      URL.revokeObjectURL(url)
-      a.remove()
-    }, 0)
-  } catch (e: any) {
-    // responseType:'blob'이면 ofetch가 에러 본문도 Blob으로 파싱하므로 e.data는 {message}가 아니라 Blob이다.
-    let message = '다운로드 실패'
-    try {
-      if (e?.data instanceof Blob) {
-        const parsed = JSON.parse(await e.data.text())
-        if (parsed?.message) message = parsed.message
-      } else if (e?.data?.message) {
-        message = e.data.message
-      }
-    } catch {
-      // 본문이 JSON이 아니면 fallback 유지
-    }
-    $q.notify({ type: 'negative', message })
+    await downloadBlob(`/api/tasks/${taskId.value}/attachments/${att.id}`, att.fileName)
+  } catch (e: unknown) {
+    $q.notify({ type: 'negative', message: e instanceof Error ? e.message : '다운로드 실패' })
   }
 }
 

@@ -169,7 +169,7 @@ public class QuestionService {
                 interviewService.submitAnswer(id, actorId, isAdmin, req.toAnswerRequest());
         InterviewSession s = outcome.session();
         applyModelChange(s, req.model(), req.effort());
-        InterviewTurn note = applyMcpChange(id, s, req.mcpCatalogIds());
+        InterviewTurn note = applyMcpChange(s, req.mcpCatalogIds());
         if (outcome.turnSeq() != null) {
             writeAttachments(id, outcome.turnSeq(), attached, actorId);
         }
@@ -201,7 +201,7 @@ public class QuestionService {
      * → system note 턴. 다음 claim이 mcpsExtra를 새로 복사하므로 러너 변경 없이 반영된다.
      * @return 노트 턴(변경 시) 또는 null
      */
-    private InterviewTurn applyMcpChange(Long sessionId, InterviewSession s, List<Long> ids) {
+    private InterviewTurn applyMcpChange(InterviewSession s, List<Long> ids) {
         if (ids == null) return null;
         if (idSet(ids).equals(idSet(s.getMcpCatalogIds()))) return null;
         List<TaskMcpSpec> extras = mcpCatalogService.resolveExtras(ids);
@@ -210,7 +210,7 @@ public class QuestionService {
         String note = extras.isEmpty()
                 ? "MCP 도구 변경: 없음(전부 해제)"
                 : "MCP 도구 변경: " + extras.stream().map(TaskMcpSpec::name).collect(Collectors.joining(", "));
-        return interviewService.appendSystemNote(sessionId, note);
+        return interviewService.appendSystemNote(s.getId(), note);
     }
 
     /** jsonb 역직렬화 숫자 타입(Integer/Long)에 흔들리지 않는 집합 비교용. */

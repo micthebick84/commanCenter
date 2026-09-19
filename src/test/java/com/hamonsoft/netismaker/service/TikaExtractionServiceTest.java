@@ -36,6 +36,18 @@ class TikaExtractionServiceTest {
     }
 
     @Test
+    void 상한을_넘는_문서는_핸들러가_끊고_부분_텍스트에_표식을_붙인다() throws Exception {
+        // 상한(200,000자)보다 큰 본문 — 핸들러 상한에서 WriteLimitReachedException으로 끊겨야 한다(메모리 상한 목적)
+        String huge = "가".repeat(TikaExtractionService.MAX_CHARS + 5_000);
+        Path p = write("긴문서.docx", OfficeFixtures.minimalDocx(huge));
+        Optional<String> text = tika.extractText(p, "긴문서.docx");
+        assertThat(text).isPresent();
+        assertThat(text.get()).endsWith(TikaExtractionService.TRUNCATED_SUFFIX);
+        assertThat(text.get().length())
+                .isLessThanOrEqualTo(TikaExtractionService.MAX_CHARS + TikaExtractionService.TRUNCATED_SUFFIX.length());
+    }
+
+    @Test
     void xlsx에서_셀_텍스트를_추출한다() throws Exception {
         Path p = write("데이터.xlsx", OfficeFixtures.minimalXlsx("셀값 A1"));
         Optional<String> text = tika.extractText(p, "데이터.xlsx");

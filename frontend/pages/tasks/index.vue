@@ -3,7 +3,7 @@ import { useQuasar } from 'quasar'
 import TaskListMobile from '~/components/tasks/TaskListMobile.vue'
 import type { CardTask } from '~/components/tasks/TaskCardCompact.vue'
 import { buildStages, stageAccepts, cancelable, DEPLOY_ACTIVE_STATUSES, type MoveDef, type StageCard } from '~/composables/taskStages'
-import { MAX_FILES, MAX_FILE_MB, MAX_TOTAL_MB, validateFiles as validateAttachmentFiles } from '~/composables/attachmentLimits'
+import { MAX_FILES, MAX_FILE_MB, MAX_TOTAL_MB, validateFiles } from '~/composables/attachmentLimits'
 
 definePageMeta({ layout: 'default' })
 
@@ -203,9 +203,6 @@ const submitting = ref(false)
 const draftFiles = ref<File[]>([])
 // 라벨은 상수에서 파생 — 한도를 문자열에 다시 하드코딩하면 서버/검증과 갈라진다
 const attachmentLabel = `첨부파일 (선택 · 최대 ${MAX_FILES}개, 파일당 ${MAX_FILE_MB}MB, 합계 ${MAX_TOTAL_MB}MB)`
-// 템플릿이 쓰지 않는 import는 setupState에 오르지 않는다 — 테스트(tasks-form-attachments.spec)가 vm.validateFiles를
-// 직접 호출하므로 로컬 바인딩으로 유지 (동작 무변경; defineExpose는 findComponent 래퍼에서 exposeProxy가 안 만들어져 무효)
-const validateFiles = validateAttachmentFiles
 
 interface RepoCatalogEntry {
   id: number

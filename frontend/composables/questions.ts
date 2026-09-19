@@ -17,6 +17,14 @@ export interface QuestionSummary {
   updatedAt: string
 }
 
+/** 첨부 메타(Java AttachmentView) — 절대경로·추출경로는 브라우저로 나오지 않는다 (스펙 2026-09-13 §5.1). */
+export interface AttachmentView {
+  id: number
+  fileName: string
+  contentType: string | null
+  sizeBytes: number
+}
+
 /** GET /api/questions/{id} (InterviewResponse) 중 대화 화면이 쓰는 부분집합. */
 export interface QuestionDetail {
   id: number
@@ -29,6 +37,18 @@ export interface QuestionDetail {
   totalCostUsd: number | null
   contextTokens: number | null
   contextWindow: number | null
+  /** 세션에 현재 적용된 관리자 카탈로그 id — McpPicker 1회 시딩용 (스펙 2026-09-13 §4). 구버전 백엔드는 미제공. */
+  mcpCatalogIds?: number[]
+  /** 등록 시(킥오프) 첨부 — 첫 질문은 말풍선이 없으므로 헤더 아래 칩 줄로 (스펙 2026-09-13 §2). */
+  attachments?: AttachmentView[]
+  turns?: Array<{
+    seq: number
+    role: string
+    kind: string
+    content: string
+    /** 추가 질문(user 턴)에 붙인 첨부 — 사용자 말풍선 아래 칩 */
+    attachments?: AttachmentView[]
+  }>
 }
 
 export interface QuestionGroup {

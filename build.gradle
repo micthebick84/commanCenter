@@ -48,6 +48,11 @@ dependencies {
     implementation 'org.flywaydb:flyway-core'
     implementation 'org.flywaydb:flyway-database-postgresql'
 
+    // Apache Tika — 질문 첨부 오피스 문서(docx/xlsx/pptx/hwp) 텍스트 추출 (스펙 2026-09-13 §5.2).
+    // standard-package에 POI/HWP 파서 포함. 업로드 요청 스레드에서 동기 실행(20MB 상한 전제).
+    implementation 'org.apache.tika:tika-core:3.2.3'
+    implementation 'org.apache.tika:tika-parsers-standard-package:3.2.3'
+
     // Lombok 안정판 — 컴파일은 JDK 21 툴체인에서 돌므로 edge 불필요.
     // (edge-SNAPSHOT은 이동 타깃이라 CI 재현성 저하 — 2026-07-20 안정판 전환)
     compileOnly 'org.projectlombok:lombok:1.18.46'

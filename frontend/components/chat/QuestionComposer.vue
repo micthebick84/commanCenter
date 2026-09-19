@@ -5,9 +5,18 @@
 // Enter 전송 · Shift+Enter 줄바꿈 · 한글 IME 조합 중 Enter는 무시(keydown.isComposing).
 // 음성 입력(2026-09-08): Web Speech API 받아쓰기만 — 듣는 동안 입력창은 읽기 전용, 전송은 잠긴다. 멈춘 뒤 사용자가
 // 확인·수정하고 직접 전송한다(자동 전송 없음). 미지원 브라우저는 버튼을 그리지 않는다(지원 판정은 마운트 후).
-import { useQuasar } from 'quasar'
+// 첨부(2026-09-13 스펙 §7): 클립 버튼(입력창 prepend) → 숨은 q-file → 대기 파일 칩 줄(#top과 입력창 사이). 파일은
+// v-model:files로 부모가 들고 전송 성공 시 비운다. 한도(validateFiles)를 넘는 추가는 통째로 거부하고 경고한다.
+import { useQuasar, type QFile } from 'quasar'
 import ModelEffortPicker from '~/components/chat/ModelEffortPicker.vue'
 import { useSpeechInput, type SpeechTranscript } from '~/composables/useSpeechInput'
+import {
+  validateFiles,
+  formatSize,
+  MAX_FILES,
+  MAX_FILE_MB,
+  MAX_TOTAL_MB,
+} from '~/composables/attachmentLimits'
 
 const props = withDefaults(
   defineProps<{
@@ -25,10 +34,35 @@ const props = withDefaults(
 const text = defineModel<string>({ default: '' })
 const model = defineModel<string>('model', { required: true })
 const effort = defineModel<string>('effort', { required: true })
+const files = defineModel<File[]>('files', { default: () => [] })
 const emit = defineEmits<{ (e: 'send'): void }>()
 
 const $q = useQuasar()
 const inputLocked = computed(() => props.disabled || props.sending)
+
+// ── 첨부 ──
+const attachTip = `파일 첨부 — 최대 ${MAX_FILES}개, 파일당 ${MAX_FILE_MB}MB, 합계 ${MAX_TOTAL_MB}MB`
+const fileInput = ref<QFile | null>(null)
+function openFilePicker() {
+  fileInput.value?.pickFiles()
+}
+// q-file은 모델을 묶지 않고(:model-value="null") 선택 결과만 받는다 — 같은 파일을 다시 골라도 emit되고,
+// 기존 대기 파일에 누적한다. 합친 결과가 한도를 넘으면 이번 선택은 하나도 넣지 않는다(부분 수용 없음).
+function onPick(picked: File | FileList | File[] | null) {
+  const added =
+    picked == null ? [] : Array.isArray(picked) ? picked : picked instanceof File ? [picked] : Array.from(picked)
+  if (added.length === 0) return
+  const next = [...files.value, ...added]
+  const err = validateFiles(next)
+  if (err) {
+    $q.notify({ type: 'warning', message: err })
+    return
+  }
+  files.value = next
+}
+function removeFile(index: number) {
+  files.value = files.value.filter((_, i) => i !== index)
+}
 
 // ── 음성 입력 ──
 let dictationBase = '' // 듣기 시작 시점의 입력값 — 인식 결과는 이 뒤에 이어 붙는다
@@ -74,6 +108,22 @@ function onEnter(ev: KeyboardEvent) {
 <template>
   <div class="composer" :class="{ 'composer--disabled': props.disabled }">
     <slot name="top" />
+    <!-- 대기 파일 칩 줄 — #top(레포/브랜치)과 입력창 사이. 비면 줄 자체를 그리지 않는다. -->
+    <div v-if="files.length" class="row items-center composer-files" data-test="composer-files">
+      <q-chip
+        v-for="(f, i) in files"
+        :key="`${f.name}-${f.size}-${i}`"
+        dense
+        size="sm"
+        removable
+        icon="attach_file"
+        color="blue-grey-1"
+        text-color="blue-grey-9"
+        :label="`${f.name} (${formatSize(f.size)})`"
+        :disable="inputLocked"
+        @remove="removeFile(i)"
+      />
+    </div>
     <q-input
       v-model="text"
       type="textarea"
@@ -87,6 +137,23 @@ function onEnter(ev: KeyboardEvent) {
       data-test="composer-input"
       @keydown.enter.exact="onEnter"
     >
+      <!-- 클립은 마이크와 같은 이유로 툴바가 아니라 입력창 안(왼쪽 prepend) — 390px에서 툴바(픽커+MCP+전송)는 이미 꽉 차 있어
+           버튼을 더 넣으면 전송 버튼이 밀려 나간다(2026-09-08 프리뷰 빌드 실측). 입력창 폭만 줄어들므로 모든 폭에서 안전. -->
+      <template #prepend>
+        <q-btn
+          round
+          dense
+          flat
+          icon="attach_file"
+          color="grey-8"
+          aria-label="파일 첨부"
+          :disable="inputLocked"
+          data-test="composer-attach"
+          @click="openFilePicker"
+        >
+          <q-tooltip>{{ attachTip }}</q-tooltip>
+        </q-btn>
+      </template>
       <!-- 마이크는 툴바가 아니라 입력창 오른쪽(append) — 390px에서 툴바(픽커+MCP+전송)가 이미 꽉 차 있어 버튼을 더 넣으면
            전송 버튼이 밀려 나간다(2026-09-08 프리뷰 빌드 실측). 모델 라벨 폭에 따라 달라지는 툴바와 분리해 모든 폭에서 안전. -->
       <template v-if="micSupported" #append>
@@ -107,6 +174,16 @@ function onEnter(ev: KeyboardEvent) {
         </q-btn>
       </template>
     </q-input>
+    <!-- 숨은 파일 입력 — 클립 버튼이 pickFiles()로 연다. 모델을 묶지 않아 같은 파일 재선택도 emit된다. -->
+    <q-file
+      ref="fileInput"
+      :model-value="null"
+      multiple
+      :disable="inputLocked"
+      class="composer-file-input"
+      data-test="composer-file-input"
+      @update:model-value="onPick"
+    />
     <div class="row items-center no-wrap composer-bar">
       <ModelEffortPicker v-model:model="model" v-model:effort="effort" :disabled="inputLocked" />
       <slot name="tools" />
@@ -145,6 +222,14 @@ function onEnter(ev: KeyboardEvent) {
 .composer-bar {
   gap: 4px;
   padding-top: 4px;
+}
+.composer-files {
+  gap: 2px;
+  padding: 4px 4px 0;
+}
+/* 파일 대화상자는 클립 버튼이 연다 — 필드 자체는 화면에 두지 않는다 (display:none이어도 input.click()은 동작) */
+.composer-file-input {
+  display: none;
 }
 .composer-hint {
   padding: 4px 12px 0;

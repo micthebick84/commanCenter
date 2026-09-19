@@ -97,6 +97,30 @@ class InterviewStreamServiceTest {
         svc.pushActivity(77L, batch);   // 구독자 1 — 예외 없이 전달
     }
 
+    /**
+     * replay 계약(스펙 2026-09-13 §5.3): role=system 턴은 note 이벤트로 나간다 — 예전엔 question으로 나가
+     * 프론트 hydrate dedup에만 기대던 버그. design은 design, 나머지 assistant 턴은 question 그대로.
+     */
+    @Test
+    void replay_maps_system_turns_to_note_and_keeps_design_and_question() {
+        assertThat(InterviewStreamService.replayEventName(turn(1, "system", "note", "MCP 도구 변경: ctx7")))
+                .isEqualTo("note");
+        assertThat(InterviewStreamService.replayEventName(turn(2, "assistant", "design", "# 설계")))
+                .isEqualTo("design");
+        assertThat(InterviewStreamService.replayEventName(turn(3, "assistant", "question", "어떤 인증?")))
+                .isEqualTo("question");
+    }
+
+    @Test
+    void subscribe_replays_system_note_without_error_and_pushNote_reaches_subscribers() {
+        when(turnRepo.findBySessionIdOrderBySeqAsc(43L))
+                .thenReturn(List.of(turn(1, "assistant", "question", "답"), turn(2, "system", "note", "MCP 도구 변경: 없음(전부 해제)")));
+        var svc = new InterviewStreamService(turnRepo, json);
+        svc.subscribe(43L);
+        svc.pushNote(43L, 3, "MCP 도구 변경: ctx7");   // 구독자 1 — 예외 없이 전달
+        assertThat(svc.subscriberCount(43L)).isEqualTo(1);
+    }
+
     private static InterviewTurn turn(int seq, String role, String kind, String content) {
         return InterviewTurn.of(1L, seq, role, kind, content, null); // Phase 1 팩토리 시그니처
     }

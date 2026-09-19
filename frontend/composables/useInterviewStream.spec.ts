@@ -351,3 +351,62 @@ describe('useInterviewStream — activity events (진행 미리보기)', () => {
     s.close()
   })
 })
+
+describe('useInterviewStream — note 이벤트 · 턴 첨부 (스펙 2026-09-13 §5.3·§7)', () => {
+  it('note 이벤트({seq,content})는 system/note 턴으로 쌓이고 status·pending은 건드리지 않는다', () => {
+    authStub.accessToken = 'jwt'
+    const s = useInterviewStream()
+    s.open(1, '/api/questions')
+    const es = FakeEventSource.last()
+    es.emit('status', 'QUEUED')
+    es.emit('activity', { events: [{ seq: 1, type: 'text', content: '읽는 중' }] })
+    es.emit('note', { seq: 3, content: 'MCP 도구 변경: github' })
+    expect(s.turns.value).toEqual([
+      { seq: 3, role: 'system', kind: 'note', content: 'MCP 도구 변경: github' },
+    ])
+    expect(s.status.value).toBe('QUEUED')
+    expect(s.pending.value).not.toBeNull()
+    s.close()
+  })
+
+  it('note는 seq로 dedup되어 replay(재연결·hydrate 뒤)에 중복되지 않고, 깨진 페이로드는 무시한다', () => {
+    authStub.accessToken = 'jwt'
+    const s = useInterviewStream()
+    s.hydrate({
+      statusName: 'AWAITING_INPUT',
+      turns: [{ seq: 3, role: 'system', kind: 'note', content: 'MCP 도구 변경: github' }],
+    })
+    s.open(1, '/api/questions')
+    const es = FakeEventSource.last()
+    es.emit('note', { seq: 3, content: 'MCP 도구 변경: github' })
+    es.emit('note', 'not-json{')
+    es.emit('note', { content: 'seq 없음' })
+    expect(s.turns.value).toHaveLength(1)
+    expect(s.status.value).toBe('AWAITING_INPUT')
+    s.close()
+  })
+
+  it('hydrate는 user 턴의 attachments를 그대로 싣고, 첨부 없는 턴에는 키를 만들지 않는다', () => {
+    authStub.accessToken = 'jwt'
+    const s = useInterviewStream()
+    const att = { id: 5, fileName: '설계.docx', contentType: null, sizeBytes: 2048 }
+    s.hydrate({
+      statusName: 'AWAITING_INPUT',
+      turns: [
+        { seq: 1, role: 'assistant', kind: 'question', content: 'Q1' },
+        { seq: 2, role: 'user', kind: 'answer', content: 'A1', attachments: [att] },
+        { seq: 3, role: 'user', kind: 'answer', content: 'A2', attachments: [] },
+      ],
+      plan: null,
+    })
+    expect(s.turns.value[1]).toEqual({
+      seq: 2,
+      role: 'user',
+      kind: 'answer',
+      content: 'A1',
+      attachments: [att],
+    })
+    expect(s.turns.value[0]).not.toHaveProperty('attachments')
+    expect(s.turns.value[2]).not.toHaveProperty('attachments')
+  })
+})

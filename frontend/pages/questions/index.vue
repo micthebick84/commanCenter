@@ -21,6 +21,8 @@ const draft = reactive({
   effort: DEFAULT_EFFORT,
   mcpCatalogIds: [] as number[],
 })
+// 첨부(스펙 2026-09-13 §7): 대기 파일은 QuestionComposer가 검증·누적하고(v-model:files) 등록 성공 시 비운다 — 실패면 유지.
+const files = ref<File[]>([])
 const submitting = ref(false)
 
 interface RepoCatalogEntry {
@@ -140,17 +142,25 @@ async function submit() {
   submitting.value = true
   try {
     // title 없음 — 서버가 질문 첫 줄로 생성 (QuestionService.deriveTitle)
-    const created = await useApi<{ id: number }>('/api/questions', {
-      method: 'POST',
-      body: {
-        repoCatalogId: draft.repoCatalogId,
-        githubBranch: draft.githubBranch,
-        question: draft.question,
-        model: draft.model,
-        effort: draft.effort,
-        mcpCatalogIds: draft.mcpCatalogIds,
-      },
-    })
+    const meta = {
+      repoCatalogId: draft.repoCatalogId,
+      githubBranch: draft.githubBranch,
+      question: draft.question,
+      model: draft.model,
+      effort: draft.effort,
+      mcpCatalogIds: draft.mcpCatalogIds,
+    }
+    let created: { id: number }
+    if (files.value.length > 0) {
+      // 파일이 있으면 multipart(meta = 위 JSON 그대로 + files). Content-Type은 $fetch가 boundary와 함께 설정 (스펙 2026-09-13 §5.1)
+      const form = new FormData()
+      form.append('meta', new Blob([JSON.stringify(meta)], { type: 'application/json' }))
+      for (const f of files.value) form.append('files', f, f.name)
+      created = await useApi<{ id: number }>('/api/questions', { method: 'POST', body: form })
+    } else {
+      created = await useApi<{ id: number }>('/api/questions', { method: 'POST', body: meta })
+    }
+    files.value = []
     $q.notify({ type: 'positive', message: '질문이 등록되었습니다 — 답변을 준비합니다' })
     refreshList()
     await navigateTo(`/questions/${created.id}`)
@@ -184,6 +194,7 @@ defineExpose({ draft, submit, onRepoSelected })
           v-model="draft.question"
           v-model:model="draft.model"
           v-model:effort="draft.effort"
+          v-model:files="files"
           placeholder="예: 로그인 요청은 어느 컨트롤러가 처리하고 토큰은 어디서 검증하나요?"
           :can-send="canSubmit"
           :sending="submitting"

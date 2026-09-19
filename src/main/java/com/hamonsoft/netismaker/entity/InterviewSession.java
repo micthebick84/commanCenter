@@ -125,6 +125,16 @@ public class InterviewSession {
     @Setter
     private List<TaskMcpSpec> mcpsExtra = new ArrayList<>();
 
+    /**
+     * 선택한 MCP 카탈로그 id 스냅샷 (스펙 2026-09-13 §4). mcps_extra(런타임 계약)와 별개 —
+     * ① 프론트 McpPicker 시딩 ② QuestionService.applyMcpChange의 "현재와 같으면 검증 없는 no-op"
+     * (사후 비활성화된 카탈로그 항목이 무관한 다음 질문을 400으로 막지 않게). 인터뷰 세션은 항상 [].
+     */
+    @JdbcTypeCode(SqlTypes.JSON)
+    @Column(name = "mcp_catalog_ids", nullable = false, columnDefinition = "jsonb")
+    @Setter
+    private List<Long> mcpCatalogIds = new ArrayList<>();
+
     /** 작업 등록 시 선택된 Claude 모델. 워커가 claude --model에 사용.
      *  기본값은 ModelEffortPolicy.DEFAULT_MODEL과 반드시 일치해야 한다(둘 다 바꿀 것). */
     @Column(name = "model", nullable = false, length = 64)

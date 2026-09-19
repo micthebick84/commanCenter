@@ -225,8 +225,12 @@ function questionBashGate(repoDir: string, input: Record<string, unknown>): Perm
   return questionBashDangerousFlagsGate(cmd) ?? questionBashArgsGate(repoDir, cmd) ?? base;
 }
 
-/** 질문 세션 Read 게이트: file_path 필수 + `~` 금지(라운드3 (b)) + repoDir 안쪽 실제 경로(symlink 포함)만 허용. */
-function questionReadGate(repoDir: string, input: Record<string, unknown>): PermissionResult {
+/**
+ * 질문 세션 Read 게이트: file_path 필수 + `~` 금지(라운드3 (b)) + repoDir 안쪽 실제 경로(symlink 포함)만 허용.
+ * attachmentRoot(세션 첨부 디렉토리, 스펙 2026-09-13 §6)가 있으면 그 안쪽도 허용 — Read 전용 두 번째 루트로,
+ * 같은 insideRepoReal(realpath 대칭 비교)을 쓴다. Grep/Glob/Bash 게이트는 이 루트를 모른다(레포 한정 유지).
+ */
+function questionReadGate(repoDir: string, attachmentRoot: string | null, input: Record<string, unknown>): PermissionResult {
   const fp = input.file_path;
   if (typeof fp !== 'string' || fp.length === 0) {
     return { behavior: 'deny', message: '질문 세션 Read는 file_path가 필요합니다' };
@@ -234,10 +238,14 @@ function questionReadGate(repoDir: string, input: Record<string, unknown>): Perm
   if (fp.startsWith('~')) {
     return { behavior: 'deny', message: `질문 세션 경로에 ~ 사용 금지: ${fp}` };
   }
-  if (!insideRepoReal(repoDir, fp)) {
-    return { behavior: 'deny', message: `질문 세션 Read는 레포 체크아웃 안쪽 경로만 허용합니다: ${fp}` };
-  }
-  return { behavior: 'allow' };
+  if (insideRepoReal(repoDir, fp)) return { behavior: 'allow' };
+  if (attachmentRoot && insideRepoReal(attachmentRoot, fp)) return { behavior: 'allow' };
+  return {
+    behavior: 'deny',
+    message: attachmentRoot
+      ? `질문 세션 Read는 레포 체크아웃 또는 세션 첨부 디렉토리 안쪽 경로만 허용합니다: ${fp}`
+      : `질문 세션 Read는 레포 체크아웃 안쪽 경로만 허용합니다: ${fp}`,
+  };
 }
 
 /**
@@ -362,12 +370,19 @@ function questionMcpGate(toolName: string): PermissionResult {
  *   사용자 결정 2026-08-30, 상세는 questionMcpGate 주석 참고).
  *   쓰기형·미지 도구는 전부 deny(이름 모를 미래 도구도 자동 차단). Q&A 산출물은 대화 텍스트뿐이라 Write
  *   예외가 필요 없다.
+ *   attachmentRoot(스펙 2026-09-13 §6, 세션 첨부 디렉토리 `{dir}/question-{sid}`)가 주어지면 **Read만** 그 안쪽도
+ *   허용한다(원본 + Tika sidecar .txt를 에이전트가 읽는 경로). Grep/Glob/Bash는 여전히 repoDir 한정이고 `~` 금지도
+ *   그대로. null/미지정이면 종전과 동일. INTERVIEW 게이트는 이 인자를 무시한다(애초에 경로 confinement 없음).
  */
-export function buildCanUseTool(repoDir: string, kind: SessionKind = 'INTERVIEW'): CanUseTool {
+export function buildCanUseTool(
+  repoDir: string,
+  kind: SessionKind = 'INTERVIEW',
+  attachmentRoot: string | null = null,
+): CanUseTool {
   if (kind === 'QUESTION') {
     return async (toolName, input) => {
       if (toolName === 'Bash') return questionBashGate(repoDir, input);
-      if (toolName === 'Read') return questionReadGate(repoDir, input);
+      if (toolName === 'Read') return questionReadGate(repoDir, attachmentRoot, input);
       if (toolName === 'Grep') return questionPathScopedGate(repoDir, input, 'Grep');
       if (toolName === 'Glob') return questionGlobGate(repoDir, input);
       if (toolName.startsWith('mcp__')) return questionMcpGate(toolName);

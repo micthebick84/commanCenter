@@ -1,5 +1,6 @@
 import { mount } from '@vue/test-utils'
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import { QFile } from 'quasar'
 import QuestionComposer from './QuestionComposer.vue'
 import ModelEffortPicker from './ModelEffortPicker.vue'
 import { FakeSpeechRecognition } from '~/test/mocks/speechRecognition'
@@ -181,5 +182,117 @@ describe('QuestionComposer 음성 입력 (받아쓰기만 — 자동 전송 없�
     const { w, rec } = await mountListening()
     w.unmount()
     expect(rec.abortCalls).toBe(1)
+  })
+})
+
+describe('QuestionComposer 첨부 (스펙 2026-09-13 §7 — 클립은 prepend 슬롯, 대기 칩 줄, 한도 검증, 잠금)', () => {
+  // q-file은 숨겨져 있어 실제 파일 대화상자를 못 연다 — 선택 결과는 update:modelValue emit으로 흉내낸다
+  // (test/tasks-form-attachments.spec.ts와 동일).
+  function pick(w: ReturnType<typeof mountComposer>, files: File[]) {
+    w.findComponent(QFile).vm.$emit('update:modelValue', files)
+    return w.vm.$nextTick()
+  }
+  const fileA = () => new File(['abc'], 'a.txt', { type: 'text/plain' })
+  const fileB = () => new File(['defg'], 'b.png', { type: 'image/png' })
+
+  it('클립 버튼은 입력창 prepend 슬롯에 있고, 탭하면 숨은 q-file의 네이티브 파일 입력을 연다', async () => {
+    const w = mountComposer()
+    // 마이크(append)와 같은 이유로 툴바가 아니라 입력창 안(prepend) — 390px에서 툴바(픽커+MCP+전송)는 이미 꽉 차 있다.
+    const clip = w.find('.q-field__prepend [data-test="composer-attach"]')
+    expect(clip.exists()).toBe(true)
+    expect(clip.attributes('aria-label')).toBe('파일 첨부')
+    // q-file은 inheritAttrs:false로 attrs를 네이티브 <input type=file>에 얹는다 — data-test도 거기 붙는다
+    const input = w.find('input[type="file"][data-test="composer-file-input"]')
+    expect(input.exists()).toBe(true)
+    expect(input.attributes('multiple')).toBeDefined()
+    const nativeClick = vi.spyOn(input.element as HTMLInputElement, 'click')
+    await clip.trigger('click')
+    expect(nativeClick).toHaveBeenCalledTimes(1)
+    w.unmount()
+  })
+
+  it('파일을 고르면 #top 슬롯과 입력창 사이의 칩 줄에 이름·크기가 뜨고 update:files로 올라가며, 다시 고르면 누적된다', async () => {
+    const w = mount(QuestionComposer, {
+      props: { canSend: true, model: 'claude-opus-5', effort: 'high', modelValue: '질문' },
+      slots: { top: '<div data-test="top-marker" />' },
+    })
+    expect(w.find('[data-test="composer-files"]').exists()).toBe(false) // 대기 파일 없으면 줄 자체를 그리지 않는다
+    const a = fileA()
+    await pick(w, [a])
+    const row = w.find('[data-test="composer-files"]')
+    expect(row.exists()).toBe(true)
+    expect(row.text()).toContain('a.txt')
+    expect(row.text()).toContain('3B')
+    expect(w.emitted('update:files')!.at(-1)).toEqual([[a]])
+    // 순서: #top → 칩 줄 → 입력창
+    const top = w.find('[data-test="top-marker"]').element
+    const ta = w.find('textarea').element
+    expect(top.compareDocumentPosition(row.element) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(row.element.compareDocumentPosition(ta) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    const b = fileB()
+    await pick(w, [b])
+    expect(w.emitted('update:files')!.at(-1)).toEqual([[a, b]])
+    expect(w.findAll('[data-test="composer-files"] .q-chip')).toHaveLength(2)
+    w.unmount()
+  })
+
+  it('칩의 제거 아이콘으로 파일을 하나씩 뺀다', async () => {
+    const w = mountComposer()
+    const a = fileA()
+    const b = fileB()
+    await pick(w, [a, b])
+    const chips = w.findAll('[data-test="composer-files"] .q-chip')
+    expect(chips).toHaveLength(2)
+    await chips[0]!.find('.q-chip__icon--remove').trigger('click')
+    expect(w.emitted('update:files')!.at(-1)).toEqual([[b]])
+    expect(w.findAll('[data-test="composer-files"] .q-chip')).toHaveLength(1)
+    expect(w.find('[data-test="composer-files"]').text()).not.toContain('a.txt')
+    w.unmount()
+  })
+
+  it('한도를 넘는 추가는 통째로 거부하고 경고한다 (기존 9개 + 새 2개 = 11개)', async () => {
+    const w = mountComposer()
+    const nine = Array.from({ length: 9 }, (_, i) => new File(['x'], `f${i}.txt`))
+    await pick(w, nine)
+    const notifySpy = vi.spyOn((w.vm as any).$q, 'notify')
+    await pick(w, [new File(['y'], 'g1.txt'), new File(['y'], 'g2.txt')])
+    expect(notifySpy).toHaveBeenCalledWith(
+      expect.objectContaining({ type: 'warning', message: '첨부는 최대 10개까지 가능합니다' }),
+    )
+    expect(w.emitted('update:files')!.at(-1)).toEqual([nine]) // 새 2개 중 하나도 들어가지 않는다
+    expect(w.findAll('[data-test="composer-files"] .q-chip')).toHaveLength(9)
+    w.unmount()
+  })
+
+  it('0바이트 파일은 경고하고 칩 줄을 만들지 않는다', async () => {
+    const w = mountComposer()
+    const notifySpy = vi.spyOn((w.vm as any).$q, 'notify')
+    await pick(w, [new File([], 'empty.txt')])
+    expect(notifySpy).toHaveBeenCalledWith(
+      expect.objectContaining({ type: 'warning', message: '빈 파일(0바이트)은 첨부할 수 없습니다' }),
+    )
+    expect(w.emitted('update:files')).toBeUndefined()
+    expect(w.find('[data-test="composer-files"]').exists()).toBe(false)
+    w.unmount()
+  })
+
+  it('disabled(입력 대기 아님)·sending 중에는 클립 버튼이 잠긴다', () => {
+    const w = mountComposer({ disabled: true })
+    expect(w.find('[data-test="composer-attach"]').attributes('disabled')).toBeDefined()
+    w.unmount()
+    const w2 = mountComposer({ sending: true })
+    expect(w2.find('[data-test="composer-attach"]').attributes('disabled')).toBeDefined()
+    w2.unmount()
+    const w3 = mountComposer()
+    expect(w3.find('[data-test="composer-attach"]').attributes('disabled')).toBeUndefined()
+    w3.unmount()
+  })
+
+  it('부모가 v-model:files로 넘긴 대기 파일도 칩으로 그린다 (전송 성공 후 부모가 비우면 줄이 사라진다)', async () => {
+    const w = mountComposer({ files: [fileA()] })
+    expect(w.find('[data-test="composer-files"]').text()).toContain('a.txt')
+    await w.setProps({ files: [] })
+    expect(w.find('[data-test="composer-files"]').exists()).toBe(false)
+    w.unmount()
   })
 })

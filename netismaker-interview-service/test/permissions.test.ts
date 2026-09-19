@@ -373,3 +373,68 @@ describe('canUseTool — kind=QUESTION MCP gate (Obsidian read allowlist + gener
     expect((await i('mcp__obsidian-vault__vault_write', {})).behavior).toBe('allow');
   });
 });
+
+describe('canUseTool — kind=QUESTION attachmentRoot (스펙 2026-09-13 §6 — Read 전용 두 번째 허용 루트)', () => {
+  const q = buildCanUseTool('/tmp/repo', 'QUESTION', '/tmp/attachments/question-77');
+
+  it('Read: allows a file inside attachmentRoot (sidecar .txt included)', async () => {
+    expect((await q('Read', { file_path: '/tmp/attachments/question-77/create/1-spec.docx' })).behavior).toBe('allow');
+    expect((await q('Read', { file_path: '/tmp/attachments/question-77/4/1-spec.docx.txt' })).behavior).toBe('allow');
+  });
+
+  it('Read: still allows repoDir and still denies everything else (sibling session dir, prefix-sibling, traversal out of root, ~)', async () => {
+    expect((await q('Read', { file_path: '/tmp/repo/src/a.ts' })).behavior).toBe('allow');
+    expect((await q('Read', { file_path: '/tmp/attachments/question-78/create/1-x.pdf' })).behavior).toBe('deny');
+    expect((await q('Read', { file_path: '/tmp/attachments/question-770/create/1-x.pdf' })).behavior).toBe('deny');
+    expect((await q('Read', { file_path: '/tmp/attachments/question-77/../question-78/x' })).behavior).toBe('deny');
+    expect((await q('Read', { file_path: '/etc/passwd' })).behavior).toBe('deny');
+    expect((await q('Read', { file_path: '~/attachments/question-77/x' })).behavior).toBe('deny');
+  });
+
+  it('Grep/Glob: path stays repoDir-only even with attachmentRoot set', async () => {
+    expect((await q('Grep', { pattern: 'x', path: '/tmp/attachments/question-77' })).behavior).toBe('deny');
+    expect((await q('Glob', { pattern: '*.txt', path: '/tmp/attachments/question-77' })).behavior).toBe('deny');
+    expect((await q('Grep', { pattern: 'x', path: '/tmp/repo/src' })).behavior).toBe('allow');
+  });
+
+  it('Bash: positional args stay repo-relative only even with attachmentRoot set', async () => {
+    expect((await q('Bash', { command: 'cat /tmp/attachments/question-77/create/1-x.txt' })).behavior).toBe('deny');
+    expect((await q('Bash', { command: 'cat README.md' })).behavior).toBe('allow');
+  });
+
+  it('no attachmentRoot (omitted or null) → identical to today: Read outside repoDir denied', async () => {
+    for (const gate of [buildCanUseTool('/tmp/repo', 'QUESTION'), buildCanUseTool('/tmp/repo', 'QUESTION', null)]) {
+      expect((await gate('Read', { file_path: '/tmp/attachments/question-77/create/1-x.pdf' })).behavior).toBe('deny');
+      expect((await gate('Read', { file_path: '/tmp/repo/src/a.ts' })).behavior).toBe('allow');
+    }
+  });
+
+  it('INTERVIEW gate ignores attachmentRoot (already path-unconfined; Write confinement unchanged)', async () => {
+    const i = buildCanUseTool('/tmp/repo', 'INTERVIEW', '/tmp/attachments/question-77');
+    expect((await i('Read', { file_path: '/etc/passwd' })).behavior).toBe('allow');
+    expect((await i('Write', { file_path: '/tmp/repo/docs/superpowers/specs/x.md' })).behavior).toBe('allow');
+    expect((await i('Write', { file_path: '/tmp/attachments/question-77/x.md' })).behavior).toBe('deny');
+  });
+
+  describe('realpath confinement applies to attachmentRoot too (real temp dir)', () => {
+    const root = mkdtempSync(join(tmpdir(), 'qatt-'));
+    const repo = mkdtempSync(join(tmpdir(), 'qrepo-'));
+    writeFileSync(join(root, 'ok.txt'), 'hello');
+    // leak -> /etc/hosts: lexically inside attachmentRoot, but points outside via a symlink.
+    symlinkSync('/etc/hosts', join(root, 'leak'));
+    const sq = buildCanUseTool(repo, 'QUESTION', root);
+
+    afterAll(() => {
+      rmSync(root, { recursive: true, force: true });
+      rmSync(repo, { recursive: true, force: true });
+    });
+
+    it('allows a real file under attachmentRoot', async () => {
+      expect((await sq('Read', { file_path: join(root, 'ok.txt') })).behavior).toBe('allow');
+    });
+
+    it('denies a symlink under attachmentRoot that points outside', async () => {
+      expect((await sq('Read', { file_path: join(root, 'leak') })).behavior).toBe('deny');
+    });
+  });
+});

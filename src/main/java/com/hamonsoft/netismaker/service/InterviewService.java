@@ -17,7 +17,9 @@ import org.springframework.transaction.annotation.Transactional;
 import java.math.BigDecimal;
 import java.time.OffsetDateTime;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 
 /**
@@ -53,6 +55,7 @@ public class InterviewService {
     private final TaskAttachmentRepository attachmentRepo;
     private final AttachmentStorage attachmentStorage;
     private final TaskStageUsageRepository stageUsageRepo;
+    private final QuestionAttachmentRepository questionAttachmentRepo;
 
     public InterviewService(InterviewSessionRepository sessionRepo,
                             InterviewTurnRepository turnRepo,
@@ -62,7 +65,8 @@ public class InterviewService {
                             TaskStatusHistoryRepository historyRepo,
                             TaskAttachmentRepository attachmentRepo,
                             AttachmentStorage attachmentStorage,
-                            TaskStageUsageRepository stageUsageRepo) {
+                            TaskStageUsageRepository stageUsageRepo,
+                            QuestionAttachmentRepository questionAttachmentRepo) {
         this.sessionRepo = sessionRepo;
         this.turnRepo = turnRepo;
         this.planRepo = planRepo;
@@ -72,7 +76,14 @@ public class InterviewService {
         this.attachmentRepo = attachmentRepo;
         this.attachmentStorage = attachmentStorage;
         this.stageUsageRepo = stageUsageRepo;
+        this.questionAttachmentRepo = questionAttachmentRepo;
     }
+
+    /**
+     * submitAnswer 결과 (스펙 2026-09-13 §5.2). turnSeq = 방금 붙인 user answer 턴의 seq —
+     * 질문 첨부를 이 턴에 링크하는 키. 중복 제출 no-op이면 null(첨부는 조용히 버려진다).
+     */
+    public record AnswerOutcome(InterviewSession session, Integer turnSeq) {}
 
     /**
      * 관리자 승인 → 해당 task의 인터뷰 세션 생성(QUEUED).
@@ -111,6 +122,15 @@ public class InterviewService {
     }
 
     /**
+     * role=system,kind=note 턴 추가 — 상태 전이 없음. 호출자(QuestionService.applyMcpChange)가
+     * 같은 트랜잭션에서 세션 행을 이미 잠그고 있으므로 여기서는 잠그지 않는다 (스펙 2026-09-13 §5.2).
+     */
+    @Transactional
+    public InterviewTurn appendSystemNote(Long sessionId, String content) {
+        return appendTurn(sessionId, "system", "note", content);
+    }
+
+    /**
      * QUEUED 1건을 atomic claim → RUNNING. 없으면 Optional.empty.
      * SELECT FOR UPDATE SKIP LOCKED, last_activity_at ASC (TaskRepository.claim 패턴).
      *
@@ -136,11 +156,20 @@ public class InterviewService {
         }
         touch(s);
         List<InterviewTurn> turns = turnRepo.findBySessionIdOrderBySeqAsc(s.getId());
-        return Optional.of(InterviewClaimResponse.of(s, turns, attachmentRefsFor(s)));
+        return Optional.of(InterviewClaimResponse.of(s, turns, attachmentRefsFor(s),
+                turnAttachmentsFor(s), attachmentRootFor(s)));
     }
 
-    /** 세션 소유 task의 첨부 → 절대경로 ref (스펙 §5.4). task 없는 레거시 세션은 []. */
+    /**
+     * 세션 레벨 첨부 → 절대경로 ref (스펙 §5.4). kind 분기(스펙 2026-09-13 §5.2):
+     * INTERVIEW = 소유 task의 첨부(task 없는 레거시 세션은 []), QUESTION = turn_seq null(킥오프) 행.
+     */
     private List<InterviewClaimResponse.AttachmentRef> attachmentRefsFor(InterviewSession s) {
+        if (s.isQuestion()) {
+            return questionAttachmentRepo.findBySessionIdAndTurnSeqIsNullOrderByIdAsc(s.getId()).stream()
+                    .map(this::toRef)
+                    .toList();
+        }
         if (s.getTaskId() == null) return List.of();
         return attachmentRepo.findByTaskIdOrderByIdAsc(s.getTaskId()).stream()
                 .map(a -> new InterviewClaimResponse.AttachmentRef(
@@ -148,6 +177,30 @@ public class InterviewService {
                         attachmentStorage.absolutePathOf(a.getStoredPath()),
                         a.getContentType(), a.getSizeBytes()))
                 .toList();
+    }
+
+    /** QUESTION: 추가 질문 첨부를 답변 turn seq별로 묶는다 (id 순 유지). INTERVIEW는 빈 맵. */
+    private Map<Integer, List<InterviewClaimResponse.AttachmentRef>> turnAttachmentsFor(InterviewSession s) {
+        if (!s.isQuestion()) return Map.of();
+        Map<Integer, List<InterviewClaimResponse.AttachmentRef>> byTurn = new LinkedHashMap<>();
+        for (QuestionAttachment a : questionAttachmentRepo.findBySessionIdAndTurnSeqIsNotNullOrderByIdAsc(s.getId())) {
+            byTurn.computeIfAbsent(a.getTurnSeq(), k -> new ArrayList<>()).add(toRef(a));
+        }
+        return byTurn;
+    }
+
+    /** QUESTION이면 {dir}/question-{sid} 절대경로(러너 Read 게이트의 두 번째 허용 루트), INTERVIEW면 null. */
+    private String attachmentRootFor(InterviewSession s) {
+        if (!s.isQuestion()) return null;
+        return attachmentStorage.absolutePathOf(attachmentStorage.questionRootRelative(s.getId()));
+    }
+
+    private InterviewClaimResponse.AttachmentRef toRef(QuestionAttachment a) {
+        return new InterviewClaimResponse.AttachmentRef(
+                a.getId(), a.getOriginalFilename(),
+                attachmentStorage.absolutePathOf(a.getStoredPath()),
+                a.getContentType(), a.getSizeBytes(),
+                a.getExtractedTextPath() == null ? null : attachmentStorage.absolutePathOf(a.getExtractedTextPath()));
     }
 
     /**
@@ -282,7 +335,7 @@ public class InterviewService {
      * 같은 replyToSeq에 응답하는 user answer 턴이 이미 있으면 무시 (reply_to_seq 컬럼이 키).
      */
     @Transactional
-    public InterviewSession submitAnswer(Long sessionId, String actorId, boolean isAdmin, AnswerRequest req) {
+    public AnswerOutcome submitAnswer(Long sessionId, String actorId, boolean isAdmin, AnswerRequest req) {
         InterviewSession s = requireSessionForUpdate(sessionId);
         requireOwner(s, actorId, isAdmin);
         // idempotency: 같은 replyToSeq에 대한 user answer 턴이 이미 있으면 중복 → 무시 (상태 무관).
@@ -292,17 +345,17 @@ public class InterviewService {
             boolean already = turnRepo.findBySessionIdOrderBySeqAsc(sessionId).stream()
                     .anyMatch(t -> "user".equals(t.getRole()) && "answer".equals(t.getKind())
                             && req.replyToSeq().equals(t.getReplyToSeq()));
-            if (already) return s; // no-op, 상태 유지
+            if (already) return new AnswerOutcome(s, null); // no-op, 상태 유지, 턴 없음
         }
         if (s.getStatus() != InterviewStatus.AWAITING_INPUT) {
             throw TaskException.conflict("입력대기 상태에서만 답변할 수 있습니다 (현재: "
                     + s.getStatus().dbValue() + ")");
         }
-        appendTurn(sessionId, "user", "answer", req.answer(), req.replyToSeq());
+        InterviewTurn answer = appendTurn(sessionId, "user", "answer", req.answer(), req.replyToSeq());
         s.setStatus(InterviewStatus.QUEUED);
         touch(s);
         mirrorTask(s, TaskStatus.INTERVIEWING, actorId, "관리자 답변 → 인터뷰 재개");
-        return s;
+        return new AnswerOutcome(s, answer.getSeq());
     }
 
     /** 사용자 취소 — QUEUED/RUNNING/AWAITING_INPUT/PLAN_READY에서만. */
@@ -413,13 +466,25 @@ public class InterviewService {
         return s;
     }
 
-    /** 상세 뷰 조립 (status + turns + plan). ACL은 getForView가 강제. */
+    /**
+     * 상세 뷰 조립 (status + turns + plan [+ 질문 첨부·MCP id]). ACL은 getForView가 강제.
+     * QUESTION이면 첨부를 등록분(turn_seq null)/턴별로 나눠 싣는다 — 경로는 내보내지 않는다 (스펙 2026-09-13 §5.1).
+     */
     @Transactional(readOnly = true)
     public InterviewResponse getResponse(Long id, String viewerId, boolean isAdmin) {
         InterviewSession s = getForView(id, viewerId, isAdmin);
-        return InterviewResponse.of(s,
-                turnRepo.findBySessionIdOrderBySeqAsc(id),
-                planRepo.findById(id).orElse(null));
+        List<InterviewTurn> turns = turnRepo.findBySessionIdOrderBySeqAsc(id);
+        InterviewPlan plan = planRepo.findById(id).orElse(null);
+        if (!s.isQuestion()) return InterviewResponse.of(s, turns, plan);
+        List<InterviewResponse.AttachmentView> kickoff = new ArrayList<>();
+        Map<Integer, List<InterviewResponse.AttachmentView>> byTurn = new LinkedHashMap<>();
+        for (QuestionAttachment a : questionAttachmentRepo.findBySessionIdOrderByIdAsc(id)) {
+            InterviewResponse.AttachmentView v = new InterviewResponse.AttachmentView(
+                    a.getId(), a.getOriginalFilename(), a.getContentType(), a.getSizeBytes());
+            if (a.getTurnSeq() == null) kickoff.add(v);
+            else byTurn.computeIfAbsent(a.getTurnSeq(), k -> new ArrayList<>()).add(v);
+        }
+        return InterviewResponse.of(s, turns, plan, kickoff, byTurn);
     }
 
     /** task 상세가 열 세션 — 최신 1건. */

@@ -8,6 +8,11 @@ export interface InterviewTurn {
   kind: string;
   content: string;
   replyToSeq: number | null;
+  /**
+   * 이 턴(user/answer)에 첨부된 파일 (스펙 2026-09-13 §5.1, QUESTION 전용). 신버전 Java는 non-null
+   * 리스트를 보내지만 구버전 백엔드는 필드 자체가 없다 — 읽는 쪽은 Array.isArray 가드 (attachments 선례).
+   */
+  attachments?: AttachmentRef[];
 }
 
 /** Java TaskMcpSpec — one element of the mcps_extra JSONB array snapshot. */
@@ -25,6 +30,11 @@ export interface AttachmentRef {
   absolutePath: string;
   contentType: string | null;
   sizeBytes: number;
+  /**
+   * Tika sidecar(.txt) 절대경로 — 오피스 문서(docx/xlsx/pptx/hwp…) + 추출 성공 시만, 아니면 null
+   * (스펙 2026-09-13 §5.1). 구버전 Java는 필드 자체가 없다 — optional (attachments 선례).
+   */
+  extractedTextPath?: string | null;
 }
 
 /**
@@ -69,6 +79,12 @@ export interface InterviewClaimResponse {
    * 러너는 `kind === 'QUESTION'`로만 판정한다.
    */
   kind?: SessionKind;
+  /**
+   * 세션 첨부 디렉토리 절대경로(`{attachment.dir}/question-{sid}`) — QUESTION이면 값, INTERVIEW면 null
+   * (스펙 2026-09-13 §5.1). QUESTION Read 게이트의 두 번째 허용 루트(Read 전용 — Grep/Glob/Bash는 레포 한정).
+   * 구버전 백엔드는 필드 자체가 없다 — optional, 미존재/null은 "추가 허용 루트 없음"(attachments 선례).
+   */
+  attachmentRoot?: string | null;
 }
 
 /** SSE activity 와이어 계약의 활동 type (스펙 §4.1). */

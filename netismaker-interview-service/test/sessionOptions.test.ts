@@ -195,3 +195,30 @@ describe('buildOptions — sessionKind QUESTION (스펙 §6-①)', () => {
     expect(o.allowedTools).toEqual(['Skill', 'Read', 'Grep', 'Glob', 'mcp__local-db', 'mcp__ctx7']);
   });
 });
+
+describe('buildOptions — attachmentRoot passthrough (스펙 2026-09-13 §6)', () => {
+  type Gate = (t: string, i: Record<string, unknown>) => Promise<{ behavior: string }>;
+
+  it('QUESTION + attachmentRoot: canUseTool allows Read under the attachment root, Grep still repoDir-only', async () => {
+    const o = buildOptions({ ...base, claudeSessionId: null, sessionKind: 'QUESTION', attachmentRoot: '/att/question-77' });
+    const gate = o.canUseTool as Gate;
+    expect((await gate('Read', { file_path: '/att/question-77/create/1-a.docx.txt' })).behavior).toBe('allow');
+    expect((await gate('Read', { file_path: '/tmp/repo/a.ts' })).behavior).toBe('allow');
+    expect((await gate('Grep', { pattern: 'x', path: '/att/question-77' })).behavior).toBe('deny');
+  });
+
+  it('QUESTION without attachmentRoot (omitted or null): Read outside repoDir stays denied', async () => {
+    for (const input of [
+      { ...base, claudeSessionId: null, sessionKind: 'QUESTION' as const },
+      { ...base, claudeSessionId: null, sessionKind: 'QUESTION' as const, attachmentRoot: null },
+    ]) {
+      const gate = buildOptions(input).canUseTool as Gate;
+      expect((await gate('Read', { file_path: '/att/question-77/create/1-a.docx.txt' })).behavior).toBe('deny');
+    }
+  });
+
+  it('attachmentRoot is not leaked into the SDK options object (canUseTool-internal only)', () => {
+    const o = buildOptions({ ...base, claudeSessionId: null, sessionKind: 'QUESTION', attachmentRoot: '/att/question-77' });
+    expect('attachmentRoot' in o).toBe(false);
+  });
+});

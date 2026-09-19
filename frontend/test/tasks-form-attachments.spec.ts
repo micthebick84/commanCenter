@@ -3,6 +3,7 @@ import { describe, it, expect, vi, afterEach } from 'vitest'
 import { defineComponent, h } from 'vue'
 import { QLayout, QPageContainer, QFile } from 'quasar'
 import TasksIndex from '../pages/tasks/index.vue'
+import { validateFiles } from '../composables/attachmentLimits'
 import { useApiMock } from './mocks/nuxt'
 
 const MB = 1024 * 1024
@@ -168,33 +169,21 @@ describe('tasks form — attachments', () => {
 })
 
 // Fix round 1 (finding 4): validateFiles has 4 rules; only the >10-files rule had any
-// coverage (indirectly, via the dialog test above). Call the function directly — the
-// reviewer confirmed vm.validateFiles is reachable from the mounted page the same way
-// vm.draft already is — to cover the other 3 rules plus operator-boundary cases.
+// coverage (indirectly, via the dialog test above). 2026-09-13: the function moved to
+// composables/attachmentLimits.ts (shared with the question chat), so call the pure export
+// directly instead of reaching into the mounted page's vm.
 describe('validateFiles — 서버 한도와 동일한 검증(직접 호출)', () => {
-  async function getValidateFiles() {
-    const w = await mountPage()
-    return (
-      w.findComponent(TasksIndex).vm as unknown as {
-        validateFiles: (files: File[]) => string | null
-      }
-    ).validateFiles
-  }
-
-  it('파일당 20MB 초과 시 거부한다', async () => {
-    const validateFiles = await getValidateFiles()
+  it('파일당 20MB 초과 시 거부한다', () => {
     const big = sizedFile('big.bin', 20 * MB + 1)
     expect(validateFiles([big])).toBe('파일당 20MB 이하만 첨부할 수 있습니다: big.bin')
   })
 
-  it('0바이트 파일은 거부한다', async () => {
-    const validateFiles = await getValidateFiles()
+  it('0바이트 파일은 거부한다', () => {
     const empty = sizedFile('empty.txt', 0)
     expect(validateFiles([empty])).toBe('빈 파일(0바이트)은 첨부할 수 없습니다')
   })
 
-  it('개별 파일은 한도 이내라도 합계 50MB 초과 시 거부한다', async () => {
-    const validateFiles = await getValidateFiles()
+  it('개별 파일은 한도 이내라도 합계 50MB 초과 시 거부한다', () => {
     const files = [
       sizedFile('a.bin', 19 * MB),
       sizedFile('b.bin', 19 * MB),
@@ -203,8 +192,7 @@ describe('validateFiles — 서버 한도와 동일한 검증(직접 호출)', (
     expect(validateFiles(files)).toBe('첨부 합계는 50MB 이하여야 합니다')
   })
 
-  it('경계값 — 정확히 10개 · 파일당 정확히 20MB · 합계 정확히 50MB는 통과한다', async () => {
-    const validateFiles = await getValidateFiles()
+  it('경계값 — 정확히 10개 · 파일당 정확히 20MB · 합계 정확히 50MB는 통과한다', () => {
     // 정확히 10개, 각 5MB = 합계 정확히 50MB — 세 한도의 등호 경계를 동시에 검증
     const tenFiles = Array.from({ length: 10 }, (_, i) => sizedFile(`f${i}.bin`, 5 * MB))
     expect(validateFiles(tenFiles)).toBeNull()

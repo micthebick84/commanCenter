@@ -258,4 +258,34 @@ class AttachmentStorageTest {
         assertThatCode(() -> storage().deleteQuietly("task-9/9-none.txt"))
                 .doesNotThrowAnyException();
     }
+
+    // ── 질문 세션 첨부 경로 (스펙 2026-09-13 §5.2) ─────────────────────────────
+
+    @Test
+    void 질문_첨부_경로는_세션_메시지_순번으로_격리된다() {
+        AttachmentStorage s = storage();
+        assertThat(s.questionRootRelative(7L)).isEqualTo("question-7");
+        // turnSeq null = 등록 시(킥오프) → "create" 하위 디렉터리
+        assertThat(s.relativePathForQuestion(7L, null, 1, "요구사항.docx"))
+                .isEqualTo("question-7/create/1-요구사항.docx");
+        // 추가 질문 → 그 답변 turn seq 하위 디렉터리. sanitize 적용(경로 구분자 제거).
+        assertThat(s.relativePathForQuestion(7L, 4, 2, "../evil/로그.txt"))
+                .isEqualTo("question-7/4/2-로그.txt");
+        assertThat(s.extractedTextRelativePath("question-7/4/2-로그.docx"))
+                .isEqualTo("question-7/4/2-로그.docx.txt");
+    }
+
+    @Test
+    void writeText는_UTF8로_루트_하위에_기록하고_디렉터리를_만든다() throws Exception {
+        storage().writeText("question-7/create/1-설계.docx.txt", "추출된 본문 — 한글");
+        Path p = tmp.resolve("question-7/create/1-설계.docx.txt");
+        assertThat(Files.readString(p, StandardCharsets.UTF_8)).isEqualTo("추출된 본문 — 한글");
+    }
+
+    @Test
+    void writeText도_루트_탈출은_404다() {
+        assertThatThrownBy(() -> storage().writeText("../escape.txt", "x"))
+                .isInstanceOf(TaskException.class)
+                .satisfies(e -> assertThat(((TaskException) e).getStatus()).isEqualTo(HttpStatus.NOT_FOUND));
+    }
 }

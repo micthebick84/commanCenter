@@ -3,6 +3,7 @@ import { useQuasar } from 'quasar'
 import TaskListMobile from '~/components/tasks/TaskListMobile.vue'
 import type { CardTask } from '~/components/tasks/TaskCardCompact.vue'
 import { buildStages, stageAccepts, cancelable, DEPLOY_ACTIVE_STATUSES, type MoveDef, type StageCard } from '~/composables/taskStages'
+import { MAX_FILES, MAX_FILE_MB, MAX_TOTAL_MB, validateFiles } from '~/composables/attachmentLimits'
 
 definePageMeta({ layout: 'default' })
 
@@ -198,23 +199,10 @@ const draft = reactive({
 })
 const submitting = ref(false)
 
-// 첨부 (스펙 2026-08-16 §8.1) — 서버 한도와 동일 값의 사전 검증
-const MAX_FILES = 10
-const MAX_FILE_MB = 20
-const MAX_TOTAL_MB = 50
+// 첨부 (스펙 2026-08-16 §8.1) — 한도 상수·검증은 질문 채팅과 공유하는 composables/attachmentLimits.ts (스펙 2026-09-13 §7)
 const draftFiles = ref<File[]>([])
 // 라벨은 상수에서 파생 — 한도를 문자열에 다시 하드코딩하면 서버/검증과 갈라진다
 const attachmentLabel = `첨부파일 (선택 · 최대 ${MAX_FILES}개, 파일당 ${MAX_FILE_MB}MB, 합계 ${MAX_TOTAL_MB}MB)`
-
-function validateFiles(files: File[]): string | null {
-  if (files.length > MAX_FILES) return `첨부는 최대 ${MAX_FILES}개까지 가능합니다`
-  const over = files.find((f) => f.size > MAX_FILE_MB * 1024 * 1024)
-  if (over) return `파일당 ${MAX_FILE_MB}MB 이하만 첨부할 수 있습니다: ${over.name}`
-  if (files.some((f) => f.size === 0)) return '빈 파일(0바이트)은 첨부할 수 없습니다'
-  const total = files.reduce((s, f) => s + f.size, 0)
-  if (total > MAX_TOTAL_MB * 1024 * 1024) return `첨부 합계는 ${MAX_TOTAL_MB}MB 이하여야 합니다`
-  return null
-}
 
 interface RepoCatalogEntry {
   id: number

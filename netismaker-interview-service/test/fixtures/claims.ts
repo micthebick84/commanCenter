@@ -63,3 +63,30 @@ export const questionClaim: InterviewClaimResponse = {
   title: '인증 흐름',
   description: '로그인은 어디서 처리되나요?',
 };
+
+/**
+ * 질문 세션 fresh claim + 등록 시 첨부(오피스 1건 = sidecar 있음, PDF 1건 = 없음) + attachmentRoot
+ * (스펙 2026-09-13 §5.1). 러너는 원본 절대경로 + sidecar 경로를 프롬프트에 나열하고 Read 게이트에 root를 넘긴다.
+ */
+export const questionClaimWithAttachments: InterviewClaimResponse = {
+  ...questionClaim,
+  attachmentRoot: '/Users/micthebick/netis-maker/attachments/question-77',
+  attachments: [
+    {
+      id: 11,
+      fileName: '요구사항.docx',
+      absolutePath: '/Users/micthebick/netis-maker/attachments/question-77/create/1-요구사항.docx',
+      contentType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+      sizeBytes: 45678,
+      extractedTextPath: '/Users/micthebick/netis-maker/attachments/question-77/create/1-요구사항.docx.txt',
+    },
+    {
+      id: 12,
+      fileName: '화면.pdf',
+      absolutePath: '/Users/micthebick/netis-maker/attachments/question-77/create/2-화면.pdf',
+      contentType: 'application/pdf',
+      sizeBytes: 2048,
+      extractedTextPath: null,
+    },
+  ],
+};

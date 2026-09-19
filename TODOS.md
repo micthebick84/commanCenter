@@ -45,6 +45,7 @@
 
 **Context**:
 - 제한값은 `application.yml`의 `app.attachment.*`: per-file 20MB, task당 최대 10개, task당 합계 50MB
+- 2026-09-13 질문 세션 채팅 첨부(스펙 `2026-09-13-question-mcp-attachments-design.md`)도 같은 루트의 `question-{sessionId}/{create|턴seq}/`에 쌓인다 — 한도는 **메시지당** 동일값이라 세션 1건 worst case는 (문답 상한 10턴 + 등록) × 50MB. Tika sidecar `.txt`도 같은 디렉터리. 정리 정책은 task-*와 함께 결정
 - 즉 worst case는 task 1건당 50MB가 무기한 누적 — 레포 캐시 항목(레포 1개당 수GB)보다 단위는 작지만 등록 빈도가 훨씬 높아 누적 속도가 다를 수 있음
 - 후보안: ① task soft-delete 시 디렉터리 즉시 삭제, ② 보존 기한(예: 90일) 경과 시 배치 삭제, ③ 위 레포 캐시 정리 잡과 통합해 같은 새벽 스케줄러에서 처리
 

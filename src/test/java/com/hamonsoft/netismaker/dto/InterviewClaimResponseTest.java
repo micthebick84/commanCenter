@@ -50,6 +50,44 @@ class InterviewClaimResponseTest {
         assertThat(r.attachments().get(0).absolutePath()).startsWith("/abs/");
     }
 
+    // ── 질문 첨부·attachmentRoot (스펙 2026-09-13 §5.1) ────────────────────────
+
+    @Test
+    void of_five_arg_carries_attachment_root_and_per_turn_attachments_non_null() {
+        InterviewSession q = InterviewSession.createQuestion("o/r", "main", "t", "q?", "user1",
+                List.of(), "claude-opus-5", "high");
+        ReflectionTestUtils.setField(q, "id", 1L);
+        var t0 = com.hamonsoft.netismaker.entity.InterviewTurn.of(1L, 0, "assistant", "question", "답", null);
+        var t1 = com.hamonsoft.netismaker.entity.InterviewTurn.of(1L, 1, "user", "answer", "추가?", 0);
+        var ref = new InterviewClaimResponse.AttachmentRef(12L, "로그.txt", "/abs/question-1/1/1-로그.txt",
+                "text/plain", 5L, null);
+
+        InterviewClaimResponse r = InterviewClaimResponse.of(q, List.of(t0, t1), List.of(),
+                java.util.Map.of(1, List.of(ref)), "/abs/question-1");
+
+        assertThat(r.attachmentRoot()).isEqualTo("/abs/question-1");
+        assertThat(r.turns().get(0).attachments()).isNotNull().isEmpty();
+        assertThat(r.turns().get(1).attachments()).containsExactly(ref);
+    }
+
+    @Test
+    void three_arg_of_keeps_legacy_shape_null_root_and_empty_turn_attachments() {
+        var t0 = com.hamonsoft.netismaker.entity.InterviewTurn.of(7L, 0, "assistant", "question", "q", null);
+        InterviewClaimResponse r = InterviewClaimResponse.of(session(), List.of(t0), List.of());
+        assertThat(r.attachmentRoot()).isNull();
+        assertThat(r.turns().get(0).attachments()).isNotNull().isEmpty();
+    }
+
+    @Test
+    void turn_normalizes_null_attachments_to_empty_and_attachment_ref_defaults_extracted_path_to_null() {
+        var turn = new InterviewClaimResponse.Turn(1, "user", "answer", "x", 0, null);
+        assertThat(turn.attachments()).isNotNull().isEmpty();
+        var legacy = new InterviewClaimResponse.AttachmentRef(3L, "a.pdf", "/abs/a.pdf", "application/pdf", 1L);
+        assertThat(legacy.extractedTextPath()).isNull();
+        var office = new InterviewClaimResponse.AttachmentRef(4L, "a.docx", "/abs/a.docx", null, 1L, "/abs/a.docx.txt");
+        assertThat(office.extractedTextPath()).isEqualTo("/abs/a.docx.txt");
+    }
+
     @Test
     void of_carries_session_kind_as_enum_name() {
         InterviewSession q = InterviewSession.createQuestion("o/r", "main", "t", "q?", "user1",

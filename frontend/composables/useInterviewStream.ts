@@ -1,6 +1,7 @@
 // SSE client for a conversational-analysis interview session.
 // Mirrors the EventSource pattern in pages/tasks/[id].vue (auth via ?access_token=),
-// adds reconnect + typed handlers for question/design/plan_ready/status/done.
+// adds reconnect + typed handlers for question/design/plan_ready/status/note/done.
+import type { AttachmentView } from '~/composables/questions'
 
 export type InterviewStatus =
   | 'QUEUED'
@@ -14,11 +15,17 @@ export type InterviewStatus =
 
 export type ConnState = 'idle' | 'connecting' | 'open' | 'reconnecting' | 'closed'
 
+/** 턴에 붙는 첨부. 서버 확정분은 AttachmentView 그대로, 전송 직후의 낙관적 턴은 id 없이 fileName/sizeBytes만 (스펙 2026-09-13 §7). */
+export type TurnAttachment = Pick<AttachmentView, 'fileName' | 'sizeBytes'> &
+  Partial<Pick<AttachmentView, 'id' | 'contentType'>>
+
 export interface Turn {
   seq: number
   role: 'assistant' | 'user' | 'system'
   kind: 'question' | 'answer' | 'design' | 'gate' | 'note'
   content: string
+  /** user 턴만 — 사용자 말풍선 아래 칩. 없으면 키 자체를 두지 않는다. */
+  attachments?: TurnAttachment[]
 }
 
 export interface DesignSection {
@@ -42,7 +49,13 @@ export interface PendingActivity {
 
 export interface InterviewSnapshot {
   statusName?: string | null
-  turns?: Array<{ seq: number; role: string; kind: string; content: string }>
+  turns?: Array<{
+    seq: number
+    role: string
+    kind: string
+    content: string
+    attachments?: AttachmentView[]
+  }>
   plan?: { designMarkdown?: string; planMarkdown?: string; planJson?: unknown } | null
 }
 
@@ -121,6 +134,7 @@ export function useInterviewStream() {
     es.addEventListener('design', (e) => onDesign(e as MessageEvent))
     es.addEventListener('activity', (e) => onActivity(e as MessageEvent))
     es.addEventListener('plan_ready', (e) => onPlanReady(e as MessageEvent))
+    es.addEventListener('note', (e) => onNote(e as MessageEvent))
     es.addEventListener('done', () => close())
     es.onerror = () => onError()
   }
@@ -150,6 +164,15 @@ export function useInterviewStream() {
       status.value = 'AWAITING_INPUT'
       pending.value = null
     }
+  }
+
+  // `note` 페이로드 = {seq, content} — 대화 중 MCP 변경 등 role=system,kind=note 턴의 라이브 전달 + replay
+  // (스펙 2026-09-13 §5.3: 서버 replay도 system 턴을 question이 아니라 note로 보낸다). status·pending은 건드리지 않는다 —
+  // 노트는 진행 상태가 아니고, 확정 질문이 아니므로 진행 미리보기도 대체하지 않는다.
+  function onNote(e: MessageEvent) {
+    const data = parse(e)
+    if (!data || typeof data.seq !== 'number') return
+    pushTurn({ seq: data.seq, role: 'system', kind: 'note', content: data.content ?? '' })
   }
 
   function onDesign(e: MessageEvent) {
@@ -241,10 +264,17 @@ export function useInterviewStream() {
         // 정보 손실 없음(백엔드는 design 턴에 별도 title/approved를 저장하지 않는다).
         upsertDesign({ key: `design-${t.seq}`, title: '설계', body: t.content, approved: false })
       } else if (t.role === 'user') {
-        pushTurn({ seq: t.seq, role: 'user', kind: 'answer', content: t.content })
+        // 추가 질문에 붙인 첨부(스펙 2026-09-13 §7) — 있을 때만 키를 둔다 (빈 배열 → 키 없음, 낙관적 턴과 동일 형태)
+        pushTurn({
+          seq: t.seq,
+          role: 'user',
+          kind: 'answer',
+          content: t.content,
+          ...(t.attachments?.length ? { attachments: t.attachments } : {}),
+        })
       } else if (t.role === 'system') {
-        // system 노트(사용자 취소 등)는 AI 말풍선이 아니라 가운데 노트 칩(ChatBubble role=system)으로.
-        // 서버 SSE replay는 아직 이 턴을 question 이벤트로 보내지만, hydrate가 먼저 seq를 채워 dedup된다 (TODOS 참고).
+        // system 노트(사용자 취소·MCP 변경 등)는 AI 말풍선이 아니라 가운데 노트 칩(ChatBubble role=system)으로.
+        // 서버 SSE replay도 이 턴을 note 이벤트로 보내며(2026-09-13 수정), seq dedup으로 병합된다.
         pushTurn({ seq: t.seq, role: 'system', kind: 'note', content: t.content })
       } else {
         pushTurn({ seq: t.seq, role: 'assistant', kind: 'question', content: t.content })

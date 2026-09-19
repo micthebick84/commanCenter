@@ -27,6 +27,12 @@ export interface SessionOptionsInput {
    * (스펙 2026-08-30 §6-①). 미지정 = INTERVIEW(기존 동작 그대로).
    */
   sessionKind?: SessionKind;
+  /**
+   * 세션 첨부 디렉토리 절대경로 (Java InterviewClaimResponse.attachmentRoot, 스펙 2026-09-13 §6) —
+   * QUESTION 게이트의 Read 전용 두 번째 허용 루트로 buildCanUseTool에 전달만 한다(SDK 옵션에는 싣지 않음).
+   * null/미지정 = 추가 허용 루트 없음(종전 동작). INTERVIEW에서는 무시된다.
+   */
+  attachmentRoot?: string | null;
 }
 
 /**
@@ -67,8 +73,9 @@ function toMcpServers(mcpsExtra: unknown): Record<string, { type: string; url: s
  *
  * QUESTION variant (sessionKind:'QUESTION'): plugins is [] (superpowers not loaded, no Skill tool),
  *   allowedTools is only ['Read','Grep','Glob'] (no mcp__* pre-approval — MCP calls also go through
- *   canUseTool). canUseTool itself is buildCanUseTool(repoDir,'QUESTION'): default-deny with
- *   Read/Grep/Glob path-confined to repoDir and Bash further restricted beyond the read-only
+ *   canUseTool). canUseTool itself is buildCanUseTool(repoDir,'QUESTION',attachmentRoot): default-deny
+ *   with Read/Grep/Glob path-confined to repoDir (Read additionally allowed under attachmentRoot, the
+ *   session attachment dir — 스펙 2026-09-13 §6) and Bash further restricted beyond the read-only
  *   whitelist (see permissions.ts).
  */
 export function buildOptions(input: SessionOptionsInput): Record<string, unknown> {
@@ -96,6 +103,6 @@ export function buildOptions(input: SessionOptionsInput): Record<string, unknown
     ...(input.model ? { model: input.model } : {}),
     ...(input.effort ? { effort: input.effort } : {}),
     ...(input.abortController ? { abortController: input.abortController } : {}),
-    canUseTool: buildCanUseTool(input.workDir, input.sessionKind ?? 'INTERVIEW'),
+    canUseTool: buildCanUseTool(input.workDir, input.sessionKind ?? 'INTERVIEW', input.attachmentRoot ?? null),
   };
 }

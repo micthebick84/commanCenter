@@ -3,10 +3,13 @@ import { useQuasar } from 'quasar'
 import InterviewPanel from '~/components/InterviewPanel.vue'
 import QuestionComposer from '~/components/chat/QuestionComposer.vue'
 import ClaudeUsagePanel from '~/components/ClaudeUsagePanel.vue'
+import McpPicker from '~/components/McpPicker.vue'
 import { interviewStatusLabel, interviewStatusChip } from '~/composables/interviewLabels'
-import { contextPercent, type QuestionDetail } from '~/composables/questions'
+import { contextPercent, type QuestionDetail, type AttachmentView } from '~/composables/questions'
 import { usageColor } from '~/composables/claudeUsage'
 import { DEFAULT_MODEL, DEFAULT_EFFORT } from '~/composables/modelEffort'
+import { formatSize } from '~/composables/attachmentLimits'
+import { downloadAttachment } from '~/composables/attachmentDownload'
 import type { InterviewStatus } from '~/composables/useInterviewStream'
 
 definePageMeta({ layout: 'default' })
@@ -38,13 +41,44 @@ const { data: detail } = useTaskPolling<QuestionDetail | null>(async () => {
 // 대화 중 모델·effort 변경(스펙 2026-09-05 §2 개정): 픽커는 "다음 질문에 쓸 값"의 초안. 첫 조회 때 세션 값으로 시드하고
 // 이후엔 사용자가 고른 값을 유지한다 — 전송 시 ask 바디에 실려 세션 값이 되므로 서버와 다시 일치한다.
 const picked = reactive({ model: DEFAULT_MODEL, effort: DEFAULT_EFFORT })
+// 대화 중 MCP 변경(스펙 2026-09-13 §2·§7): 같은 원리 — 세션의 mcpCatalogIds로 1회 시드, 이후엔 "다음 질문에 쓸 초안".
+// 전송 시 항상 현재 집합을 실어 보내며 서버는 같은 집합이면 검증 없는 no-op, 다르면 갱신 + system note.
+const pickedMcp = ref<number[]>([])
 const pickedSeeded = ref(false)
 watch(detail, (d) => {
   if (pickedSeeded.value || !d?.model) return
   picked.model = d.model
   picked.effort = d.effort ?? DEFAULT_EFFORT
+  pickedMcp.value = [...(d.mcpCatalogIds ?? [])]
   pickedSeeded.value = true
 })
+
+// 첨부(스펙 2026-09-13 §7): 대기 파일은 페이지가 들고(v-model:files) 전송이 성공했을 때만 비운다 — 거부(400/409)면 유지.
+const files = ref<File[]>([])
+type SendFn = (extra: {
+  model: string
+  effort: string
+  mcpCatalogIds: number[]
+  files: File[]
+}) => Promise<boolean>
+async function onSend(send: SendFn) {
+  const ok = await send({
+    model: picked.model,
+    effort: picked.effort,
+    mcpCatalogIds: pickedMcp.value,
+    files: files.value,
+  })
+  if (ok) files.value = []
+}
+
+// 등록 시 첨부(헤더 칩 줄) 다운로드 — 말풍선 칩(InterviewPanel)과 같은 blob 헬퍼·경로.
+async function downloadSessionAttachment(a: AttachmentView) {
+  try {
+    await downloadAttachment(`/api/questions/${sessionId.value}/attachments/${a.id}`, a.fileName)
+  } catch (e: any) {
+    $q.notify({ type: 'negative', message: e?.message ?? '다운로드 실패' })
+  }
+}
 
 const liveStatus = ref<InterviewStatus | null>(null)
 const statusName = computed(() => liveStatus.value ?? detail.value?.statusName ?? null)
@@ -147,6 +181,27 @@ function onPanelClose() {
         @click="requestClose"
       />
     </div>
+    <!-- 등록 시 첨부 — 첫 질문은 말풍선이 없으므로 헤더 아래 칩 줄로 (스펙 2026-09-13 §2). 비면 숨김. -->
+    <div
+      v-if="detail?.attachments?.length"
+      class="row items-center session-attachments"
+      data-test="session-attachments"
+    >
+      <q-chip
+        v-for="a in detail.attachments"
+        :key="a.id"
+        clickable
+        dense
+        size="sm"
+        icon="attach_file"
+        color="blue-grey-1"
+        text-color="blue-grey-9"
+        :label="`${a.fileName} (${formatSize(a.sizeBytes)})`"
+        @click="downloadSessionAttachment(a)"
+      >
+        <q-tooltip>클릭하여 다운로드</q-tooltip>
+      </q-chip>
+    </div>
 
     <InterviewPanel
       ref="panel"
@@ -165,15 +220,18 @@ function onPanelClose() {
           <QuestionComposer
             v-model:model="picked.model"
             v-model:effort="picked.effort"
+            v-model:files="files"
             :model-value="answer"
             :can-send="canSend"
             :sending="sending"
             :disabled="!awaiting"
             :hint="!$q.screen.lt.md"
             @update:model-value="setAnswer"
-            @send="send({ model: picked.model, effort: picked.effort })"
+            @send="onSend(send)"
           >
             <template #tools>
+              <!-- pages/questions/index.vue와 같은 q-btn + q-badge + q-menu + McpPicker. xs(<600px)에서는 라벨이 두 줄로 꺾이므로
+                   아이콘만 — 이름은 aria-label로 유지 (2026-09-06 모바일 QA). 입력 대기가 아니면 잠근다. -->
               <q-btn
                 flat
                 dense
@@ -181,10 +239,18 @@ function onPanelClose() {
                 icon="extension"
                 :label="$q.screen.xs ? undefined : 'MCP 도구'"
                 aria-label="MCP 도구"
+                :disable="!awaiting"
                 data-test="mcp-button"
-                disable
               >
-                <q-tooltip>세션 생성 시 고정 — 바꾸려면 새 질문</q-tooltip>
+                <q-badge v-if="pickedMcp.length" color="primary" floating>
+                  {{ pickedMcp.length }}
+                </q-badge>
+                <q-tooltip>대화 중 변경 — 다음 질문부터 적용</q-tooltip>
+                <q-menu>
+                  <div class="mcp-menu">
+                    <McpPicker v-model="pickedMcp" />
+                  </div>
+                </q-menu>
               </q-btn>
             </template>
           </QuestionComposer>
@@ -210,6 +276,14 @@ function onPanelClose() {
 }
 .conv-panel {
   min-height: 0;
+}
+.session-attachments {
+  gap: 2px;
+  padding: 6px 20px 0;
+}
+.mcp-menu {
+  min-width: 360px;
+  max-width: 480px;
 }
 .composer-wrap {
   width: 100%;

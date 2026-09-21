@@ -66,4 +66,64 @@ class RepoUrlParserTest {
         assertThatThrownBy(() -> RepoUrlParser.parse("not a url"))
                 .isInstanceOf(IllegalArgumentException.class);
     }
+
+    private static final String GL = "https://gitlab.hamon.vip";
+
+    @Test
+    void gitlab_https_url_with_nested_groups() {
+        RepoUrlParser.Parsed p = RepoUrlParser.parse(
+                "https://gitlab.hamon.vip/product/netis/web/package/netis-v7.0.git", GL);
+        assertThat(p.host()).isEqualTo("gitlab");
+        assertThat(p.ownerRepo()).isEqualTo("product/netis/web/package/netis-v7.0");
+        assertThat(p.canonicalUrl())
+                .isEqualTo("https://gitlab.hamon.vip/product/netis/web/package/netis-v7.0.git");
+    }
+
+    @Test
+    void gitlab_url_without_dot_git_and_with_trailing_slash_is_normalized() {
+        RepoUrlParser.Parsed p = RepoUrlParser.parse("https://gitlab.hamon.vip/group/proj/", GL);
+        assertThat(p.host()).isEqualTo("gitlab");
+        assertThat(p.ownerRepo()).isEqualTo("group/proj");
+        assertThat(p.canonicalUrl()).isEqualTo("https://gitlab.hamon.vip/group/proj.git");
+    }
+
+    @Test
+    void gitlab_scp_and_ssh_urls_are_canonicalized_to_base_url() {
+        assertThat(RepoUrlParser.parse("git@gitlab.hamon.vip:group/sub/proj.git", GL).canonicalUrl())
+                .isEqualTo("https://gitlab.hamon.vip/group/sub/proj.git");
+        assertThat(RepoUrlParser.parse("ssh://git@gitlab.hamon.vip:2222/group/sub/proj.git", GL).ownerRepo())
+                .isEqualTo("group/sub/proj");
+    }
+
+    @Test
+    void gitlab_host_match_is_case_insensitive_and_base_trailing_slash_ignored() {
+        RepoUrlParser.Parsed p = RepoUrlParser.parse("https://GitLab.Hamon.VIP/group/proj.git",
+                "https://gitlab.hamon.vip/");
+        assertThat(p.host()).isEqualTo("gitlab");
+        assertThat(p.canonicalUrl()).isEqualTo("https://gitlab.hamon.vip/group/proj.git");
+    }
+
+    @Test
+    void other_gitlab_host_stays_other_when_base_url_differs_or_is_blank() {
+        assertThat(RepoUrlParser.parse("https://gitlab.com/group/sub/proj.git", GL).host()).isEqualTo("other");
+        assertThat(RepoUrlParser.parse("https://gitlab.hamon.vip/group/proj.git", "").host()).isEqualTo("other");
+        assertThat(RepoUrlParser.parse("https://gitlab.hamon.vip/group/proj.git").host()).isEqualTo("other");
+    }
+
+    @Test
+    void gitlab_single_segment_or_bad_segment_is_rejected() {
+        assertThatThrownBy(() -> RepoUrlParser.parse("https://gitlab.hamon.vip/onlyone.git", GL))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> RepoUrlParser.parse("https://gitlab.hamon.vip/group/../proj.git", GL))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> RepoUrlParser.parse("https://gitlab.hamon.vip/group/pr+oj.git", GL))
+                .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    @Test
+    void github_inputs_are_unaffected_by_gitlab_base_url() {
+        assertThat(RepoUrlParser.parse("owner/repo", GL).host()).isEqualTo("github");
+        assertThat(RepoUrlParser.parse("https://github.com/owner/repo.git", GL).canonicalUrl())
+                .isEqualTo("https://github.com/owner/repo.git");
+    }
 }

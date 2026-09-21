@@ -54,6 +54,8 @@ WORKER_ID=mac-worker-1 \
 - **MCP 자동 주입**: `WorkerMcpSupport`가 `~/.claude.json`의 글로벌+프로젝트 mcpServers를 머지해 `~/netis-maker/worker-mcp.json` 생성. claude -p 호출 시 `--mcp-config + --strict-mcp-config + --allowedTools` prepend. 인터뷰 세션도 동일 합본을 씀 — `netismaker-interview-service/src/sdk/mcpBase.ts`가 부팅 시 1회 스냅샷해 SDK `options.mcpServers`로 주입(작업별 extras와 머지, 충돌 시 extras 우선).
 - **프롬프트는 stdin으로 전달**: `--allowedTools <tools...>` variadic이 뒤따라오는 prompt arg를 삼키므로 arg 대신 stdin 사용. ARG_MAX/ps 노출 동시 회피.
 - **질문 세션(Q&A)**: `InterviewSession.kind=QUESTION`. 승인 없이 등록 즉시 큐 진입, USER+ADMIN 공용(본인+관리자 조회). 인터뷰 서비스는 QUESTION이면 superpowers 미로드 + **default-deny 도구 게이트**(Read/Grep/Glob/읽기전용 Bash/`mcp__*`(Obsidian 계열은 읽기 도구 allowlist, 기타 서버는 쓰기/실행 동사 denylist)만) + plan 경로 미진입(`postPlan` 없음). 서버는 `recordPlan`/`confirm`을 400으로 막는다. 스펙: `docs/superpowers/specs/2026-08-30-question-sessions-design.md`. **배포 순서(2026-08-30 Q&A 도입 당시, 이미 반영됨): interview-service 먼저, API 나중** (구버전 러너가 QUESTION을 인터뷰로 처리해 방어 무력화). **2026-09-05 채팅형 UI**(스펙 `docs/superpowers/specs/2026-09-05-question-chat-ui-design.md`): `/questions`는 중첩 라우트 셸(`pages/questions.vue` 사이드바 + `<NuxtPage>`), `index`=새 질문 입력창, `[id]`=대화. 제목은 서버가 질문 첫 줄로 생성(`QuestionService.deriveTitle`, `title` optional). 모델 목록에서 **Fable 제외**(`ModelEffortPolicy`+`modelEffort.ts` 동시 수정). 구독 사용량: 인터뷰 서비스 relay가 SDK `rate_limit_event`를 `POST /worker/usage/rate-limits`로 보고 → `com.claude_rate_limit` → `GET /api/usage/claude`(사이드바 패널, 인증 사용자 전원). 컨텍스트: `/question` 바디의 `contextTokens/contextWindow` → `interview_session.context_*` → 대화 헤더 칩. 답변 말풍선은 markdown-it(html:false). 배포 순서: API → 인터뷰 서비스 → 프론트 `.output` 재빌드. **대화 중 모델·effort 변경(2026-09-06)**: 대화 페이지 픽커는 활성(입력이 막힌 동안만 잠김) → `POST /api/questions/{id}/ask` 바디 `model`/`effort`(`QuestionAskRequest`, blank=유지) → `QuestionService.applyModelChange`가 `ModelEffortPolicy.validate` 후 세션 갱신(현재 값과 같으면 검증 없는 no-op — 박제 fable-5 세션 보호; 같은 트랜잭션 — 실패 시 재큐까지 롤백) → 다음 claim부터 반영. 인터뷰 서비스는 claim당 옵션을 조립하므로 변경 없음(CLI는 `--resume`에도 `--model/--effort` 적용, 실측). MCP는 여전히 생성 시 고정.
+- **레포 호스트는 GitHub + 사내 GitLab 1곳**(2026-09-21, 스펙 `docs/superpowers/specs/2026-09-21-gitlab-support-design.md`). 저장소는 `git.RepoRef(host, path, gitUrl)`로 다루고 **`github.com` 문자열 조립·`owner/repo` 2단계 가정을 새로 만들지 말 것** — 인증 URL/로컬 폴더 키/마스킹은 `git.GitRemotes`, PR/MR 생성은 `workerdaemon.MergeRequestCreator`(GitHub=`gh`, GitLab=REST API) 한 곳. GitLab이면 `github_repo` 컬럼에 프로젝트 **전체 경로**가 들어가고 로컬 폴더는 `_gitlab/<경로의 '/'→'+'>`. 컬럼·상태값(`PR생성`)·`prUrl/prNumber` 이름은 그대로. claim의 `gitUrl/repoHost`는 optional(없으면 GitHub). 토큰은 로그·예외·`failure_reason`에 나가면 안 된다 → `GitRemotes.mask` / `maskSecrets`.
+- **GitLab 설정**: API `GITLAB_BASE_URL` + `GITLAB_TOKEN`, 워커·인터뷰 서비스 `GITLAB_TOKEN`. 토큰 scope `api, read_repository, write_repository`. `GITLAB_BASE_URL`이 비면 GitLab URL은 `other`(등록 불가). GitLab 레포는 카탈로그에 **전체 URL**로 등록(bare `a/b`는 항상 GitHub). 배포 순서: 인터뷰 서비스+워커 → API → 프론트 → **마지막에** GitLab 카탈로그 등록.
 
 ## 다중 워커 운영 (V1.2)
 
@@ -110,6 +112,7 @@ WORKER_ID=mac-worker-2 ./gradlew bootRun --args='--spring.profiles.active=worker
 | `gh` CLI | PR 생성 | `brew install gh` + `gh auth login` (또는 `GH_TOKEN` env) |
 | git push 권한 | 브랜치 푸시 | GitRepoCache가 `https://oauth2:$GITHUB_PAT@github.com/...`로 clone하므로 PAT만 있으면 OK |
 | worktree 디스크 공간 | 브랜치당 별도 디렉토리 | 기본 `~/netis-maker/worktrees/{owner}/{repo}/task-{id}` |
+| `GITLAB_TOKEN` | 사내 GitLab clone/push + Draft MR | scope `api, read_repository, write_repository`. `glab` CLI 불필요 |
 
 PR 본문/브랜치 prefix/timeout은 `application-worker.yml`의 `netis-maker.worker.{branch-prefix,implementation-timeout,git-user-*,implementation-prompt-template}`에서 조정.
 
@@ -143,6 +146,9 @@ PR 본문/브랜치 prefix/timeout은 `application-worker.yml`의 `netis-maker.w
 | 사용량/컨텍스트 수집(인터뷰 서비스) | `netismaker-interview-service/src/runner/messageRelay.ts`, `src/runner/rateLimitReport.ts` |
 | 작업 탭 모바일(리스트·카드·시트·스테퍼·다음 할 일·이력·관리 세그먼트) | `frontend/components/tasks/*.vue`, 순수 함수 `frontend/composables/taskStages.ts`(attentionGroup/sortForMobile/stageSteps/nextAction) |
 | 모바일 전역 내비(하단 바) | `frontend/layouts/default.vue`(lt.md `q-footer`), CSS 변수 `--bottom-nav-height` |
+| 레포 호스트 판별 · 인증 URL · 폴더 키 · 토큰 마스킹 | `util/RepoUrlParser.java`, `git/RepoRef.java`, `git/GitRemotes.java`, 인터뷰 서비스 `src/sdk/gitRemote.ts` |
+| PR/MR 생성 (GitHub `gh` / GitLab REST) | `workerdaemon/MergeRequestCreator.java`, `GitHubPrCreator.java`, `GitLabMrCreator.java`, 위임 `GitOpsService.java` |
+| PR/MR 화면 문구 | `frontend/composables/mergeRequestLabel.ts` (`prUrl` 모양으로 판정) |
 
 ## 운영자 환경 권장 셋업
 

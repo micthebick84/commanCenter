@@ -263,7 +263,7 @@ public class WorkerMainLoop {
         GitOpsService.PrInfo pr;
         try {
             String body = renderPrBody(task, exec.durationMs(), headSha);
-            pr = gitOps.createDraftPr(wt.dir(), task.githubRepo(),
+            pr = gitOps.createDraftPr(wt.dir(), task.repoRef(),
                     task.githubBranch(), wt.branchName(),
                     task.title(), body);
         } catch (Exception e) {
@@ -467,6 +467,7 @@ public class WorkerMainLoop {
     }
 
     private String renderPrBody(WorkerTaskResponse task, long durationMs, String headSha) {
+        boolean gitlab = task.repoRef().isGitlab();
         boolean hasDesign = task.designMarkdown() != null && !task.designMarkdown().isBlank();
         // 마크다운 링크를 깨는 값(공백, ')', 개행 등) 방어 — 형태가 이상하면 링크만 생략
         boolean hasDesignUrl = task.designUrl() != null
@@ -475,7 +476,7 @@ public class WorkerMainLoop {
                 : "- **디자인**: 확정 디자인 기반 구현"
                 + (hasDesignUrl ? " — [Claude Design 목업](" + task.designUrl() + ")" : "")
                 + " (작업 상세의 디자인 카드 참고)\n";
-        return "## netisMaker 자동 생성 PR\n\n"
+        return "## netisMaker 자동 생성 " + (gitlab ? "MR" : "PR") + "\n\n"
                 + "- **Task**: #" + task.id() + " " + task.title() + "\n"
                 + "- **베이스**: `" + task.githubBranch() + "`\n"
                 + "- **구현 SHA**: `" + headSha.substring(0, Math.min(7, headSha.length())) + "`\n"
@@ -484,8 +485,8 @@ public class WorkerMainLoop {
                 + "## 사전 분석\n"
                 + (task.analysisMarkdown() == null ? "" : task.analysisMarkdown())
                 + "\n\n---\n"
-                + "🤖 Generated with [netisMaker](https://github.com/) by Claude Code.\n"
-                + "리뷰 후 Ready for review로 전환하세요.\n";
+                + "🤖 Generated with netisMaker by Claude Code.\n"
+                + (gitlab ? "리뷰 후 Draft 표시를 해제하세요.\n" : "리뷰 후 Ready for review로 전환하세요.\n");
     }
 
     private void safePostAnalysisFailure(Long taskId, String reason) {

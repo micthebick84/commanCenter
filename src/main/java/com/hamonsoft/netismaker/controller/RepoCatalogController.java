@@ -37,13 +37,13 @@ public class RepoCatalogController {
     @GetMapping("/api/repo-catalog")
     @PreAuthorize("isAuthenticated()")
     public List<RepoCatalogDto.View> listForUsers() {
-        return service.listEnabled().stream().map(RepoCatalogDto.View::of).toList();
+        return service.listEnabled().stream().map(service::toView).toList();
     }
 
     @GetMapping("/api/admin/repo-catalog")
     @PreAuthorize("hasAuthority('ROLE_ADMIN')")
     public List<RepoCatalogDto.View> listForAdmins() {
-        return service.listAll().stream().map(RepoCatalogDto.View::of).toList();
+        return service.listAll().stream().map(service::toView).toList();
     }
 
     @PostMapping("/api/admin/repo-catalog")
@@ -53,14 +53,14 @@ public class RepoCatalogController {
                                       JwtAuthenticationToken auth) {
         String adminId = AuthContext.requireUserId(auth);
         RepoCatalogEntry saved = service.create(req, adminId);
-        return RepoCatalogDto.View.of(saved);
+        return service.toView(saved);
     }
 
     @PutMapping("/api/admin/repo-catalog/{id}")
     @PreAuthorize("hasAuthority('ROLE_ADMIN')")
     public RepoCatalogDto.View update(@PathVariable Long id,
                                       @RequestBody @Valid RepoCatalogDto.UpsertRequest req) {
-        return RepoCatalogDto.View.of(service.update(id, req));
+        return service.toView(service.update(id, req));
     }
 
     @DeleteMapping("/api/admin/repo-catalog/{id}")

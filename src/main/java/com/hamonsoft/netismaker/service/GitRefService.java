@@ -1,6 +1,8 @@
 package com.hamonsoft.netismaker.service;
 
 import com.hamonsoft.netismaker.dto.BranchListResponse;
+import com.hamonsoft.netismaker.git.GitRemotes;
+import com.hamonsoft.netismaker.git.RepoRef;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Profile;
@@ -26,8 +28,7 @@ import java.util.regex.Pattern;
  *
  * 캐시 없음 (Phase 1). 동일 입력 즉시 재호출 가능.
  *
- * 보안: repo 인자는 컨트롤러에서 정규식으로 사전 검증되므로 셸 주입 위험 없음.
- * ProcessBuilder는 셸을 거치지 않고 직접 exec.
+ * 보안: URL은 RepoUrlParser가 검증한 정식 URL에서만 만들어진다. ProcessBuilder는 셸을 거치지 않고 직접 exec.
  */
 @Service
 @Profile("api")
@@ -37,18 +38,25 @@ public class GitRefService {
     private static final Pattern REPO_PATTERN = Pattern.compile("^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$");
     private static final long TIMEOUT_SECONDS = 10;
 
-    private final String githubPat;
+    private final GitRemotes remotes;
 
-    public GitRefService(@Value("${app.github.pat:}") String githubPat) {
-        this.githubPat = githubPat;
+    public GitRefService(@Value("${app.github.pat:}") String githubPat,
+                         @Value("${app.gitlab.token:}") String gitlabToken) {
+        this.remotes = new GitRemotes(githubPat, gitlabToken);
     }
 
+    /** 하위 호환: GitHub owner/repo 문자열. */
     public BranchListResponse listBranches(String repo) {
         if (repo == null || !REPO_PATTERN.matcher(repo).matches()) {
             throw new TaskException(HttpStatus.BAD_REQUEST,
                     "'owner/repo' 형식이어야 합니다");
         }
-        String url = buildUrl(repo);
+        return listBranches(RepoRef.fromSnapshot(repo, null));
+    }
+
+    public BranchListResponse listBranches(RepoRef ref) {
+        String url = remotes.authenticatedUrl(ref);
+        String repo = ref.path();
 
         ProcessBuilder pb = new ProcessBuilder("git", "ls-remote", "--symref", url)
                 .redirectErrorStream(false);
@@ -81,13 +89,14 @@ public class GitRefService {
         try { tOut.join(2000); tErr.join(2000); } catch (InterruptedException ignored) {}
 
         if (p.exitValue() != 0) {
-            String emsg = err.toString();
+            String emsg = GitRemotes.mask(err.toString());
             if (emsg.contains("Repository not found")
                     || emsg.contains("not found")
                     || emsg.contains("Authentication")
-                    || emsg.contains("could not read Username")) {
+                    || emsg.contains("could not read Username")
+                    || emsg.contains("HTTP Basic: Access denied")) {
                 throw new TaskException(HttpStatus.NOT_FOUND,
-                        "레포를 찾을 수 없거나 비공개 레포입니다. 비공개 레포는 사내 GitHub PAT 등록이 필요합니다.");
+                        "레포를 찾을 수 없거나 접근 권한이 없습니다. 비공개 레포는 토큰(GITHUB_PAT/GITLAB_TOKEN) 등록이 필요합니다.");
             }
             log.warn("git ls-remote 실패 repo={} stderr={}", repo, emsg);
             throw new TaskException(HttpStatus.BAD_GATEWAY,
@@ -95,13 +104,6 @@ public class GitRefService {
         }
 
         return parse(repo, out.toString());
-    }
-
-    private String buildUrl(String repo) {
-        if (githubPat == null || githubPat.isBlank()) {
-            return "https://github.com/" + repo + ".git";
-        }
-        return "https://oauth2:" + githubPat + "@github.com/" + repo + ".git";
     }
 
     private static BranchListResponse parse(String repo, String stdout) {

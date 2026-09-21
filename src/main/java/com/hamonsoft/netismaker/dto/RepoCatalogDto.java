@@ -27,6 +27,13 @@ public class RepoCatalogDto {
                     e.getDefaultBranch(), e.getDescription(), e.isEnabled(),
                     e.getCreatedBy(), e.getCreatedAt(), e.getUpdatedAt());
         }
+
+        /** host/ownerRepo를 저장값 대신 현재 설정으로 재해석한 값으로 내보낸다(스펙 §3.3). */
+        public static View of(RepoCatalogEntry e, String host, String ownerRepo) {
+            return new View(e.getId(), e.getAlias(), e.getGitUrl(), host, ownerRepo,
+                    e.getDefaultBranch(), e.getDescription(), e.isEnabled(),
+                    e.getCreatedBy(), e.getCreatedAt(), e.getUpdatedAt());
+        }
     }
 
     /** 관리자 등록/수정 요청. gitUrl 은 전체 URL / owner/repo / scp-ssh 모두 허용(서버가 정규화). */

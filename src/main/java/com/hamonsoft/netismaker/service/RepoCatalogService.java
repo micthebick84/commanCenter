@@ -2,8 +2,10 @@ package com.hamonsoft.netismaker.service;
 
 import com.hamonsoft.netismaker.dto.RepoCatalogDto;
 import com.hamonsoft.netismaker.entity.RepoCatalogEntry;
+import com.hamonsoft.netismaker.git.RepoRef;
 import com.hamonsoft.netismaker.repository.RepoCatalogRepository;
 import com.hamonsoft.netismaker.util.RepoUrlParser;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Profile;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
@@ -18,10 +20,13 @@ public class RepoCatalogService {
 
     private final RepoCatalogRepository repo;
     private final GitRefService gitRefService;
+    private final String gitlabBaseUrl;
 
-    public RepoCatalogService(RepoCatalogRepository repo, GitRefService gitRefService) {
+    public RepoCatalogService(RepoCatalogRepository repo, GitRefService gitRefService,
+                              @Value("${app.gitlab.base-url:}") String gitlabBaseUrl) {
         this.repo = repo;
         this.gitRefService = gitRefService;
+        this.gitlabBaseUrl = gitlabBaseUrl;
     }
 
     /** 등록 해석 결과 — 작업/인터뷰 스냅샷에 박제할 필드들. */
@@ -87,7 +92,7 @@ public class RepoCatalogService {
         repo.deleteById(id);
     }
 
-    /** 작업/인터뷰 등록 시: id → 검증된 owner/repo + 스냅샷 필드. 비활성/누락/비-GitHub 거절. */
+    /** 작업/인터뷰 등록 시: id → 검증된 경로 + 스냅샷 필드. 비활성/누락/지원하지 않는 호스트 거절. */
     @Transactional(readOnly = true)
     public ResolvedRepo resolveForRegistration(Long id) {
         if (id == null) {
@@ -99,12 +104,9 @@ public class RepoCatalogService {
         if (!e.isEnabled()) {
             throw new TaskException(HttpStatus.BAD_REQUEST, "비활성화된 레포 카탈로그 항목: " + e.getAlias());
         }
-        if (!"github".equals(e.getHost()) || e.getOwnerRepo() == null) {
-            throw new TaskException(HttpStatus.BAD_REQUEST,
-                    "현재 GitHub 레포만 분석/구현 가능합니다: " + e.getAlias());
-        }
-        return new ResolvedRepo(e.getId(), e.getAlias(), e.getGitUrl(),
-                e.getHost(), e.getOwnerRepo(), e.getDefaultBranch());
+        RepoUrlParser.Parsed p = reparse(e);
+        return new ResolvedRepo(e.getId(), e.getAlias(), p.canonicalUrl(),
+                p.host(), p.ownerRepo(), e.getDefaultBranch());
     }
 
     /** 라이브 도달성 체크 — ls-remote 성공 여부. DB 영속 안 함. */
@@ -112,22 +114,54 @@ public class RepoCatalogService {
     public RepoCatalogDto.CheckResult check(Long id) {
         RepoCatalogEntry e = repo.findById(id)
                 .orElseThrow(() -> new TaskException(HttpStatus.NOT_FOUND, "레포 카탈로그 항목 없음: " + id));
-        if (!"github".equals(e.getHost()) || e.getOwnerRepo() == null) {
-            return new RepoCatalogDto.CheckResult(false, null, 0, "GitHub 레포만 확인 가능");
+        RepoUrlParser.Parsed p;
+        try {
+            p = reparse(e);
+        } catch (TaskException ex) {
+            return new RepoCatalogDto.CheckResult(false, null, 0, "GitHub/사내 GitLab 레포만 확인 가능");
         }
         try {
-            var res = gitRefService.listBranches(e.getOwnerRepo());
+            var res = gitRefService.listBranches(RepoRef.fromSnapshot(p.ownerRepo(), p.canonicalUrl()));
             return new RepoCatalogDto.CheckResult(true, res.defaultBranch(), res.branches().size(), null);
         } catch (TaskException ex) {
             return new RepoCatalogDto.CheckResult(false, null, 0, ex.getMessage());
         }
     }
 
-    private static RepoUrlParser.Parsed parseOrThrow(String gitUrl) {
+    private RepoUrlParser.Parsed parseOrThrow(String gitUrl) {
         try {
-            return RepoUrlParser.parse(gitUrl);
+            return RepoUrlParser.parse(gitUrl, gitlabBaseUrl);
         } catch (IllegalArgumentException ex) {
             throw new TaskException(HttpStatus.BAD_REQUEST, ex.getMessage());
+        }
+    }
+
+    /**
+     * 저장된 host/owner_repo는 저장 시점 해석의 캐시다. GITLAB_BASE_URL 설정 전에 등록돼
+     * 'other'로 남은 GitLab 행이 있을 수 있으므로 사용 시점에 git_url을 다시 해석한다.
+     */
+    private RepoUrlParser.Parsed reparse(RepoCatalogEntry e) {
+        RepoUrlParser.Parsed p = parseOrThrow(e.getGitUrl());
+        if ("other".equals(p.host()) || p.ownerRepo() == null) {
+            throw new TaskException(HttpStatus.BAD_REQUEST,
+                    "지원하지 않는 호스트입니다(GitHub/사내 GitLab만 가능 — GITLAB_BASE_URL 설정 확인): " + e.getAlias());
+        }
+        return p;
+    }
+
+    /** 브랜치 조회용: 활성 카탈로그 id → RepoRef. */
+    @Transactional(readOnly = true)
+    public RepoRef refOf(Long id) {
+        ResolvedRepo r = resolveForRegistration(id);
+        return RepoRef.fromSnapshot(r.ownerRepo(), r.gitUrl());
+    }
+
+    public RepoCatalogDto.View toView(RepoCatalogEntry e) {
+        try {
+            RepoUrlParser.Parsed p = RepoUrlParser.parse(e.getGitUrl(), gitlabBaseUrl);
+            return RepoCatalogDto.View.of(e, p.host(), p.ownerRepo());
+        } catch (IllegalArgumentException ex) {
+            return RepoCatalogDto.View.of(e);
         }
     }
 

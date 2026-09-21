@@ -21,6 +21,8 @@ public record WorkerProperties(
         String deadLetterDir,
         String claudeCliPath,
         String githubPat,
+        // 사내 GitLab 토큰(api + read_repository + write_repository). clone/push + Draft MR 생성.
+        String gitlabToken,
         // 분석 prompt
         String promptTemplate,
         Duration analysisTimeout,

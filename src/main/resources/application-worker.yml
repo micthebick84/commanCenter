@@ -40,6 +40,7 @@ netis-maker:
     dead-letter-dir: ${DEAD_LETTER_DIR:${user.home}/netis-maker/dead-letter}
     claude-cli-path: ${CLAUDE_CLI:/opt/homebrew/bin/claude}
     github-pat: ${GITHUB_PAT:}
+    gitlab-token: ${GITLAB_TOKEN:}
     # 구현 단계 — 분석완료 + admin 승인 후 worktree에서 코드 작성 + PR 생성
     worktree-root: ${WORKTREE_ROOT:${user.home}/netis-maker/worktrees}
     branch-prefix: ${BRANCH_PREFIX:netismaker/}

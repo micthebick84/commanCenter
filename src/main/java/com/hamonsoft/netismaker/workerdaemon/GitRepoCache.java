@@ -1,5 +1,7 @@
 package com.hamonsoft.netismaker.workerdaemon;
 
+import com.hamonsoft.netismaker.git.GitRemotes;
+import com.hamonsoft.netismaker.git.RepoRef;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.annotation.Profile;
 import org.springframework.stereotype.Component;
@@ -21,10 +23,10 @@ import java.util.concurrent.locks.ReentrantLock;
 /**
  *  레포 영구 캐시.
  *
- *   ~/netis-maker/repos/{owner}/{repo}/  (DESIGN P8)
+ *   ~/netis-maker/repos/{localKey}/   — GitHub: {owner}/{repo}, GitLab: _gitlab/{경로의 '/'→'+'}
  *
- *   첫 회: git clone https://oauth2:$PAT@github.com/{owner}/{repo}.git
- *   이후: cd <dir> && git fetch && git checkout <branch> && git pull
+ *   첫 회: git clone <GitRemotes.authenticatedUrl>
+ *   이후: git remote set-url origin <인증 URL> && git fetch && git checkout <branch> && git reset --hard
  *
  *  다중 워커 안전성 (Phase 2.1):
  *   - 같은 머신에서 워커 N 프로세스가 동시에 같은 repo를 fetch하면 `.git/index.lock` 충돌
@@ -41,19 +43,18 @@ public class GitRepoCache {
     private static final long GIT_TIMEOUT_SECONDS = 600;
 
     private final WorkerProperties props;
+    private final GitRemotes remotes;
     /** 같은 JVM 내 동시 호출 직렬화. FileLock이 cross-process는 처리하지만 in-process는 ReentrantLock이 가벼움. */
     private final java.util.concurrent.ConcurrentHashMap<String, ReentrantLock> inProcessLocks =
             new java.util.concurrent.ConcurrentHashMap<>();
 
     public GitRepoCache(WorkerProperties props) {
         this.props = props;
+        this.remotes = new GitRemotes(props.githubPat(), props.gitlabToken());
     }
 
-    public CheckedOutRepo ensureFresh(String githubRepo, String branch) throws IOException, InterruptedException {
-        if (!githubRepo.matches("^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")) {
-            throw new IllegalArgumentException("invalid github_repo: " + githubRepo);
-        }
-        return withRepoLock(githubRepo, () -> doEnsureFresh(githubRepo, branch));
+    public CheckedOutRepo ensureFresh(RepoRef ref, String branch) throws IOException, InterruptedException {
+        return withRepoLock(GitRemotes.localKey(ref), () -> doEnsureFresh(ref, branch));
     }
 
     /**
@@ -71,18 +72,16 @@ public class GitRepoCache {
      *
      * @return 캐시 디렉토리 (commitSha는 캐시의 현재 HEAD — 배포에선 의미 없음)
      */
-    public CheckedOutRepo fetchOnly(String githubRepo, String headBranch) throws IOException, InterruptedException {
-        if (!githubRepo.matches("^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")) {
-            throw new IllegalArgumentException("invalid github_repo: " + githubRepo);
-        }
-        return withRepoLock(githubRepo, () -> {
-            Path target = Paths.get(props.reposDir(), githubRepo);
+    public CheckedOutRepo fetchOnly(RepoRef ref, String headBranch) throws IOException, InterruptedException {
+        return withRepoLock(GitRemotes.localKey(ref), () -> {
+            Path target = Paths.get(props.reposDir(), GitRemotes.localKey(ref));
             Files.createDirectories(target.getParent());
             if (!Files.exists(target.resolve(".git"))) {
                 // 배포는 분석/구현을 거친 repo 대상이라 보통 이미 캐시됨. 없으면 head 브랜치로 clone.
                 run(target.getParent().toFile(), "git", "clone", "--depth=1",
-                        "--branch", headBranch, repoUrl(githubRepo), target.getFileName().toString());
+                        "--branch", headBranch, remotes.authenticatedUrl(ref), target.getFileName().toString());
             } else {
+                refreshOrigin(target, ref);
                 // head 브랜치를 origin/<head> tracking ref로 명시적 fetch (단일 브랜치 클론 대비).
                 run(target.toFile(), "git", "fetch", "--force", "origin",
                         headBranch + ":refs/remotes/origin/" + headBranch);
@@ -92,14 +91,15 @@ public class GitRepoCache {
         });
     }
 
-    private CheckedOutRepo doEnsureFresh(String githubRepo, String branch) throws IOException, InterruptedException {
-        Path target = Paths.get(props.reposDir(), githubRepo);
+    private CheckedOutRepo doEnsureFresh(RepoRef ref, String branch) throws IOException, InterruptedException {
+        Path target = Paths.get(props.reposDir(), GitRemotes.localKey(ref));
         Files.createDirectories(target.getParent());
 
         if (!Files.exists(target.resolve(".git"))) {
-            String url = repoUrl(githubRepo);
-            run(target.getParent().toFile(), "git", "clone", "--depth=1", "--branch", branch, url, target.getFileName().toString());
+            run(target.getParent().toFile(), "git", "clone", "--depth=1", "--branch", branch,
+                    remotes.authenticatedUrl(ref), target.getFileName().toString());
         } else {
+            refreshOrigin(target, ref);
             run(target.toFile(), "git", "fetch", "--all", "--prune");
             run(target.toFile(), "git", "checkout", branch);
             run(target.toFile(), "git", "reset", "--hard", "origin/" + branch);
@@ -107,6 +107,11 @@ public class GitRepoCache {
 
         String sha = capture(target.toFile(), "git", "rev-parse", "HEAD").trim();
         return new CheckedOutRepo(target.toFile(), sha);
+    }
+
+    /** 토큰 교체·추가가 재clone 없이 반영되도록 매번 origin을 현재 인증 URL로 맞춘다. */
+    private void refreshOrigin(Path target, RepoRef ref) throws IOException, InterruptedException {
+        run(target.toFile(), "git", "remote", "set-url", "origin", remotes.authenticatedUrl(ref));
     }
 
     /**
@@ -117,15 +122,15 @@ public class GitRepoCache {
      *  - JVM 내 추가 직렬화: ReentrantLock per repoKey (cheaper than file lock contention)
      *  - 락 보유 중 예외 발생해도 finally에서 안전 해제
      */
-    public <T> T withRepoLock(String githubRepo, RepoOp<T> op) throws IOException, InterruptedException {
-        ReentrantLock jvmLock = inProcessLocks.computeIfAbsent(githubRepo, k -> new ReentrantLock());
+    public <T> T withRepoLock(String repoKey, RepoOp<T> op) throws IOException, InterruptedException {
+        ReentrantLock jvmLock = inProcessLocks.computeIfAbsent(repoKey, k -> new ReentrantLock());
         jvmLock.lock();
         try {
-            Path lockPath = Paths.get(props.reposDir(), githubRepo + ".lock");
+            Path lockPath = Paths.get(props.reposDir(), repoKey + ".lock");
             Files.createDirectories(lockPath.getParent());
             try (FileChannel ch = FileChannel.open(lockPath,
                     StandardOpenOption.CREATE, StandardOpenOption.WRITE);
-                 FileLock fileLock = acquireWithTimeout(ch, githubRepo)) {
+                 FileLock fileLock = acquireWithTimeout(ch, repoKey)) {
                 return op.run();
             }
         } finally {
@@ -150,18 +155,8 @@ public class GitRepoCache {
         T run() throws IOException, InterruptedException;
     }
 
-    // PAT가 있으면 인증 URL, 없으면 익명 URL (public repo).
-    // 빈 비밀번호 형태 'https://oauth2:@github.com/...'는 GitHub가 거부하므로 plain URL로 폴백.
-    private String repoUrl(String githubRepo) {
-        String pat = props.githubPat();
-        if (pat == null || pat.isBlank()) {
-            return "https://github.com/" + githubRepo + ".git";
-        }
-        return "https://oauth2:" + pat + "@github.com/" + githubRepo + ".git";
-    }
-
     private void run(File dir, String... command) throws IOException, InterruptedException {
-        log.debug("git exec ({}): {}", dir, String.join(" ", command));
+        log.debug("git exec ({}): {}", dir, GitRemotes.mask(String.join(" ", command)));
         ProcessBuilder pb = new ProcessBuilder(command).directory(dir).redirectErrorStream(true);
         Process p = pb.start();
         StringBuilder out = new StringBuilder();
@@ -173,10 +168,10 @@ public class GitRepoCache {
         boolean finished = p.waitFor(GIT_TIMEOUT_SECONDS, TimeUnit.SECONDS);
         if (!finished) {
             p.destroyForcibly();
-            throw new IOException("git timeout: " + String.join(" ", command));
+            throw new IOException("git timeout: " + GitRemotes.mask(String.join(" ", command)));
         }
         if (p.exitValue() != 0) {
-            throw new IOException("git failed (" + p.exitValue() + "): " + out);
+            throw new IOException("git failed (" + p.exitValue() + "): " + GitRemotes.mask(out.toString()));
         }
     }
 

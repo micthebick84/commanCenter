@@ -4,6 +4,7 @@ import com.hamonsoft.netismaker.dto.WorkerHeartbeatRequest;
 import com.hamonsoft.netismaker.dto.WorkerResultRequest;
 import com.hamonsoft.netismaker.dto.WorkerTaskResponse;
 import com.hamonsoft.netismaker.entity.TaskStatus;
+import com.hamonsoft.netismaker.git.GitRemotes;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.web.client.RestClientException;
 import org.springframework.context.annotation.Profile;
@@ -128,7 +129,7 @@ public class WorkerMainLoop {
     private void processAnalysis(WorkerTaskResponse task) throws Exception {
         GitRepoCache.CheckedOutRepo repo;
         try {
-            repo = repos.ensureFresh(task.githubRepo(), task.githubBranch());
+            repo = repos.ensureFresh(task.repoRef(), task.githubBranch());
         } catch (Exception e) {
             safePostAnalysisFailure(task.id(), "레포 fetch 실패: " + e.getMessage());
             return;
@@ -186,7 +187,7 @@ public class WorkerMainLoop {
         // 1. 베이스 브랜치 최신화 (worktree add 시 origin/{base} 참조)
         GitRepoCache.CheckedOutRepo repo;
         try {
-            repo = repos.ensureFresh(task.githubRepo(), task.githubBranch());
+            repo = repos.ensureFresh(task.repoRef(), task.githubBranch());
         } catch (Exception e) {
             safePostImplementationFailure(task.id(),
                     "레포 fetch 실패: " + e.getMessage(), null, null, null);
@@ -196,7 +197,7 @@ public class WorkerMainLoop {
         // 2. worktree + 새 브랜치 생성
         WorktreeService.CreatedWorktree wt;
         try {
-            wt = worktrees.create(repo.dir(), task.githubRepo(),
+            wt = worktrees.create(repo.dir(), GitRemotes.localKey(task.repoRef()),
                     task.githubBranch(), task.id(), task.title());
         } catch (Exception e) {
             safePostImplementationFailure(task.id(),
@@ -297,7 +298,7 @@ public class WorkerMainLoop {
 
         GitRepoCache.CheckedOutRepo repo;
         try {
-            repo = repos.ensureFresh(task.githubRepo(), task.githubBranch());
+            repo = repos.ensureFresh(task.repoRef(), task.githubBranch());
         } catch (Exception e) {
             safePostDesignFailure(task.id(), "레포 fetch 실패: " + e.getMessage(), null);
             return;
@@ -305,7 +306,7 @@ public class WorkerMainLoop {
 
         File wt;
         try {
-            wt = worktrees.createForDesign(repo.dir(), task.githubRepo(),
+            wt = worktrees.createForDesign(repo.dir(), GitRemotes.localKey(task.repoRef()),
                     task.githubBranch(), task.id());
         } catch (Exception e) {
             safePostDesignFailure(task.id(), "design worktree 생성 실패: " + e.getMessage(), null);

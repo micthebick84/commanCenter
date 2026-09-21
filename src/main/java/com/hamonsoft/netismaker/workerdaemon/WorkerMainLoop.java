@@ -112,9 +112,9 @@ public class WorkerMainLoop {
             }
         } catch (Throwable t) {
             // Throwable을 그대로 넘기면 slf4j가 메시지+cause 체인을 마스킹 없이 찍는다
-            // (git/gh 실패 메시지에 인증 URL이 실려 있을 수 있음) → 마스킹한 요약만 남긴다.
-            // 트레이드오프: 스택트레이스가 사라진다. 대신 cause 체인을 한 줄로 요약해 진단성을 유지.
-            log.error("작업 처리 중 예외 task={}: {}", task.id(), safeReason(causeChain(t)));
+            // (git/gh 실패 메시지에 인증 URL이 실려 있을 수 있음) → 스택트레이스를 문자열로 떠서
+            // 마스킹한 뒤 찍는다. 프레임/cause 체인은 그대로 남아 진단성 손실이 없다.
+            log.error("작업 처리 중 예외 task={}: {}", task.id(), safeReason(stackTrace(t)));
             switch (task.kind()) {
                 case IMPLEMENTATION -> safePostImplementationFailure(task.id(),
                         "처리 중 예외: " + t.getClass().getSimpleName() + ": " + t.getMessage(),
@@ -526,17 +526,16 @@ public class WorkerMainLoop {
         return GitRemotes.mask(reason);
     }
 
-    /** 예외 + cause 체인을 한 줄로. 스택트레이스 대신 쓰는 진단 문자열(마스킹은 호출부에서). */
-    static String causeChain(Throwable t) {
-        StringBuilder sb = new StringBuilder();
-        Throwable cur = t;
-        for (int depth = 0; cur != null && depth < 5; depth++) {
-            if (depth > 0) sb.append(" ← caused by ");
-            sb.append(cur);
-            if (cur.getCause() == cur) break;
-            cur = cur.getCause();
+    /**
+     * 스택트레이스를 문자열로. slf4j에 Throwable을 직접 넘기지 않고 이 문자열을 마스킹해 찍기 위한 것 —
+     * 직접 넘기면 메시지·cause 메시지가 마스킹 없이 나간다.
+     */
+    static String stackTrace(Throwable t) {
+        java.io.StringWriter sw = new java.io.StringWriter();
+        try (java.io.PrintWriter pw = new java.io.PrintWriter(sw)) {
+            t.printStackTrace(pw);
         }
-        return sb.toString();
+        return sw.toString();
     }
 
     /** ExecResult → 보고 usage. envelope 파싱 실패(usage null)면 null — 수집 생략. */

@@ -139,26 +139,44 @@ class GitRepoCacheTest {
 
     /**
      * https 경로(실제 네트워크 불가)는 명령 인자 조립만으로 가드한다:
-     * 전송(clone/fetch)은 인증 URL, origin(set-url)은 평문 URL만.
+     * 전송(clone/fetch)은 인증 URL을 쓰되 자격증명 헬퍼는 비활성화한다
+     * (운영자 머신의 osxkeychain/manager가 토큰을 저장하지 못하게).
      */
     @Test
-    void https_ref_transports_with_the_token_but_origin_gets_only_the_plain_url() {
+    void https_ref_transports_with_the_token_and_no_credential_helper() {
         RepoRef ref = RepoRef.fromSnapshot("g/p", "https://gitlab.hamon.vip/g/p.git");
         String authUrl = new GitRemotes("ghp_SECRETPAT", "glpat-SECRETTOKEN").authenticatedUrl(ref);
         assertThat(authUrl).isEqualTo("https://oauth2:glpat-SECRETTOKEN@gitlab.hamon.vip/g/p.git");
 
-        assertThat(GitRepoCache.cloneArgs(authUrl, "main", "p")).contains(authUrl);
+        assertThat(GitRepoCache.cloneArgs(authUrl, "main", "p"))
+                .containsSequence("git", "-c", "credential.helper=")
+                .contains(authUrl);
         assertThat(GitRepoCache.fetchArgs(authUrl, "main"))
+                .containsSequence("git", "-c", "credential.helper=")
                 .contains(authUrl)
                 .contains("+refs/heads/main:refs/remotes/origin/main");
         assertThat(GitRepoCache.fetchTrackingArgs(authUrl, "netismaker/task-1"))
+                .containsSequence("git", "-c", "credential.helper=")
                 .contains(authUrl)
                 .contains("netismaker/task-1:refs/remotes/origin/netismaker/task-1");
+    }
 
-        assertThat(GitRepoCache.setUrlArgs(ref.gitUrl()))
+    /**
+     * origin에 어떤 URL이 들어가는지의 **선택** 자체를 가드한다.
+     * scrubArgs는 RepoRef만 받고 토큰(GitRemotes)에 접근할 수 없어야 하며,
+     * https ref에 대해서도 평문 URL만 실어야 한다 — file:// 실git 테스트는
+     * 인증 URL == 평문 URL이라 이 회귀를 잡지 못한다.
+     */
+    @Test
+    void scrub_args_choose_the_plain_url_even_for_an_https_ref_with_a_token_configured() {
+        RepoRef ref = RepoRef.fromSnapshot("g/p", "https://gitlab.hamon.vip/g/p.git");
+
+        assertThat(GitRepoCache.scrubArgs(ref))
                 .containsExactly("git", "remote", "set-url", "origin", "https://gitlab.hamon.vip/g/p.git");
-        assertThat(String.join(" ", GitRepoCache.setUrlArgs(ref.gitUrl())))
-                .doesNotContain("oauth2:").doesNotContain("glpat-SECRETTOKEN");
+        assertThat(String.join(" ", GitRepoCache.scrubArgs(ref)))
+                .doesNotContain("oauth2:")
+                .doesNotContain("glpat-SECRETTOKEN")
+                .doesNotContain("ghp_SECRETPAT");
     }
 
     @Test

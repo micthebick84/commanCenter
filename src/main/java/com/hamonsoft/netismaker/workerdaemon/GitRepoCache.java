@@ -128,14 +128,36 @@ public class GitRepoCache {
      * 남기지 않기 위한 단일 지점 — 취약 버전이 남긴 인증 URL도 여기서 씻긴다.
      */
     private void scrubOrigin(Path target, RepoRef ref) throws IOException, InterruptedException {
-        run(target.toFile(), setUrlArgs(ref.gitUrl()));
+        run(target.toFile(), scrubArgs(ref));
     }
 
     // ── git 인자 조립 (순수 함수 — 네트워크 없이 https 경로를 테스트로 가드) ──
 
+    /**
+     * 토큰을 싣는 명령의 공통 prefix.
+     * {@code credential.helper=}(빈 값)은 헬퍼 목록을 비워 운영자 머신의
+     * osxkeychain/manager가 인증 URL의 토큰을 저장하지 못하게 한다.
+     */
+    private static final java.util.List<String> GIT_NO_HELPER =
+            java.util.List.of("git", "-c", "credential.helper=");
+
+    private static java.util.List<String> git(String... args) {
+        var cmd = new java.util.ArrayList<>(GIT_NO_HELPER);
+        cmd.addAll(java.util.List.of(args));
+        return java.util.List.copyOf(cmd);
+    }
+
     /** 신규 clone. 전송에만 인증 URL을 쓴다. */
     static java.util.List<String> cloneArgs(String authUrl, String branch, String dirName) {
-        return java.util.List.of("git", "clone", "--depth=1", "--branch", branch, authUrl, dirName);
+        return git("clone", "--depth=1", "--branch", branch, authUrl, dirName);
+    }
+
+    /**
+     * origin 갱신 인자. URL **선택**까지 여기서 끝낸다 — 토큰(GitRemotes)에 접근할 수 없는
+     * static 순수 함수라, 인증 URL이 다시 끼어드는 회귀가 구조적으로 불가능하다.
+     */
+    static java.util.List<String> scrubArgs(RepoRef ref) {
+        return setUrlArgs(ref.gitUrl());
     }
 
     /** origin 갱신. 반드시 평문 URL만 — 여기 토큰이 들어가면 config에 박힌다. */
@@ -145,13 +167,13 @@ public class GitRepoCache {
 
     /** ensureFresh용 fetch. origin 이름 대신 인증 URL + 명시 refspec(단일 브랜치 shallow clone 대비). */
     static java.util.List<String> fetchArgs(String authUrl, String branch) {
-        return java.util.List.of("git", "fetch", "--prune", authUrl,
+        return git("fetch", "--prune", authUrl,
                 "+refs/heads/" + branch + ":refs/remotes/origin/" + branch);
     }
 
     /** fetchOnly(배포)용 fetch. 기존 refspec 그대로, remote 이름만 인증 URL로 대체. */
     static java.util.List<String> fetchTrackingArgs(String authUrl, String headBranch) {
-        return java.util.List.of("git", "fetch", "--force", authUrl,
+        return git("fetch", "--force", authUrl,
                 headBranch + ":refs/remotes/origin/" + headBranch);
     }
 

@@ -22,7 +22,8 @@ import java.util.List;
  *    1) git status --porcelain → 변경 없음이면 IOException("nothing to commit")
  *    2) git add -A
  *    3) git -c user.name=... -c user.email=... commit -m {msg}
- *    4) git push {인증 URL} HEAD:refs/heads/{branch}   (upstream 추적은 쓰는 곳이 없어 -u 없음)
+ *    4) git -c credential.helper= push {인증 URL} HEAD:refs/heads/{branch}
+ *       (upstream 추적은 쓰는 곳이 없어 -u 없음 / 헬퍼 비활성으로 토큰 저장 방지)
  *    5) git rev-parse HEAD → headSha
  *    6) Draft PR(gh CLI) 또는 Draft MR(GitLab REST API) 생성 → url/number
  */
@@ -74,13 +75,15 @@ public class GitOpsService {
         );
         ProcessRunner.requireSuccess(worktreeDir, commitCmd, GIT_TIMEOUT_SECONDS);
         try {
+            // credential.helper=(빈 값): 운영자 머신의 헬퍼가 인증 URL의 토큰을 저장하지 못하게 한다.
             ProcessRunner.requireSuccess(worktreeDir,
-                    List.of("git", "push", remotes.authenticatedUrl(ref),
+                    List.of("git", "-c", "credential.helper=",
+                            "push", remotes.authenticatedUrl(ref),
                             "HEAD:refs/heads/" + branchName),
                     GIT_TIMEOUT_SECONDS);
         } catch (IOException e) {
-            // ProcessException은 실패한 명령 원문(=인증 URL 포함 argv)을 메시지에 담는다.
-            // cause로 원본을 달면 마스킹되지 않은 메시지가 같이 따라가므로 달지 않는다.
+            // ProcessRunner가 이미 마스킹하지만, 이 호출부는 토큰이 확실히 실리는 유일한 push라
+            // 방어적으로 한 번 더 가린다(mask는 멱등). cause로 원본을 달지는 않는다.
             throw new IOException(GitRemotes.mask(e.getMessage()));
         }
         String sha = ProcessRunner.requireSuccess(worktreeDir,

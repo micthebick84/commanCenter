@@ -4,12 +4,14 @@ import com.hamonsoft.netismaker.dto.WorkerResultRequest;
 import com.hamonsoft.netismaker.entity.TaskStatus;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
 import org.springframework.http.HttpStatus;
 import org.springframework.web.client.HttpClientErrorException;
 import org.springframework.web.client.ResourceAccessException;
 
 import java.util.List;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.eq;
@@ -82,6 +84,34 @@ class DeadLetterReplayJobTest {
         verify(http, never()).postResult(eq(10L), any());
         verify(tracker, never()).resolve(any());
         verify(tracker, never()).reject(any(), anyInt());
+    }
+
+    /**
+     * 취약 버전이 남긴 dead-letter 라인은 마스킹되지 않은 토큰을 담고 있을 수 있다.
+     * 재전송은 reportTerminal을 경유하지 않는 **두 번째 egress**이므로 여기서도 가린다
+     * (mask는 멱등 — 이미 가려진 라인에는 영향 없음).
+     */
+    @Test
+    void legacy_entry_is_masked_before_being_replayed() {
+        WorkerResultRequest legacy = new WorkerResultRequest(
+                "mac-worker-1", TaskStatus.IMPLEMENTATION_FAILED, null, null, null, 1L,
+                "commit/push 실패: https://oauth2:glpat-X@gitlab.hamon.vip/g/p.git",
+                null, null, null, null,
+                "log: https://oauth2:glpat-X@gitlab.hamon.vip/g/p.git",
+                null, null, null, null, null,
+                null, null, null, null, null);
+        SilentLossTracker.PendingEntry e =
+                new SilentLossTracker.PendingEntry(9L, legacy, 0, "{\"taskId\":9}");
+        when(tracker.snapshotPending()).thenReturn(List.of(e));
+
+        job.replay();
+
+        ArgumentCaptor<WorkerResultRequest> sent = ArgumentCaptor.forClass(WorkerResultRequest.class);
+        verify(http).postResult(eq(9L), sent.capture());
+        assertThat(sent.getValue().failureReason())
+                .contains("https://***@gitlab.hamon.vip").doesNotContain("glpat-X");
+        assertThat(sent.getValue().implementationLog()).doesNotContain("glpat-X");
+        verify(tracker).resolve(e);
     }
 
     @Test

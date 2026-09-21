@@ -61,7 +61,9 @@ public class DeadLetterReplayJob {
         for (int i = 0; i < pending.size(); i++) {
             SilentLossTracker.PendingEntry e = pending.get(i);
             try {
-                http.postResult(e.taskId(), e.result());
+                // 취약 버전이 남긴 라인은 마스킹 전 페이로드일 수 있다. 재전송은 reportTerminal을
+                // 경유하지 않는 두 번째 egress이므로 여기서도 가린다(mask는 멱등).
+                http.postResult(e.taskId(), e.result().masked());
                 tracker.resolve(e);
                 ok++;
                 log.info("dead-letter 재전송 성공 task={} status={}",

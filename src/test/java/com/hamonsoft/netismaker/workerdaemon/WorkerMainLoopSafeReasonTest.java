@@ -38,29 +38,21 @@ class WorkerMainLoopSafeReasonTest {
 
     /**
      * pollAndProcess의 최상위 catch는 Throwable을 slf4j에 그대로 넘기지 않는다 — 그러면
-     * 메시지와 cause 체인이 마스킹 없이 로그로 나간다. 대신 cause 체인을 한 줄로 요약해 마스킹한다.
+     * 메시지와 cause 체인이 마스킹 없이 로그로 나간다. 대신 스택트레이스를 문자열로 떠서
+     * 마스킹한 뒤 찍는다(진단성은 유지, 토큰은 제거).
      */
     @Test
-    void cause_chain_summary_is_maskable_and_covers_nested_causes() {
+    void stack_trace_string_keeps_frames_and_causes_but_masks_credentials() {
         Throwable root = new java.io.IOException(
                 "fatal: could not read Username for 'https://oauth2:glpat-X@gitlab.hamon.vip'");
         Throwable wrapper = new IllegalStateException("commit/push 실패", root);
 
-        String logged = WorkerMainLoop.safeReason(WorkerMainLoop.causeChain(wrapper));
+        String logged = WorkerMainLoop.safeReason(WorkerMainLoop.stackTrace(wrapper));
 
         assertThat(logged).contains("commit/push 실패");
+        assertThat(logged).contains("Caused by: java.io.IOException");
+        assertThat(logged).contains("at com.hamonsoft.netismaker");   // 프레임 보존
         assertThat(logged).contains("https://***@gitlab.hamon.vip");
         assertThat(logged).doesNotContain("glpat-X");
-    }
-
-    /** 자기 자신을 cause로 돌려주는 예외(직접 구현체)에도 요약이 끝나야 한다. */
-    @Test
-    void cause_chain_of_a_self_referencing_throwable_terminates() {
-        class SelfCaused extends RuntimeException {
-            SelfCaused() { super("boom"); }
-            @Override public synchronized Throwable getCause() { return this; }
-        }
-
-        assertThat(WorkerMainLoop.causeChain(new SelfCaused())).contains("boom");
     }
 }

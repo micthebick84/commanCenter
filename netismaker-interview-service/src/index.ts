@@ -22,6 +22,7 @@ async function main(): Promise<void> {
     forceFinishTurns: cfg.forceFinishTurns,
     heartbeatIntervalMs: cfg.heartbeatIntervalMs,
     turnTimeoutMs: cfg.turnTimeoutMs,
+    gitTokens: { githubPat: cfg.githubPat, gitlabToken: cfg.gitlabToken },
   });
   const loop = new ClaimLoop(client, runner, { pollIntervalMs: cfg.claimPollIntervalMs });
 
@@ -31,7 +32,7 @@ async function main(): Promise<void> {
 
   // eslint-disable-next-line no-console
   console.log(
-    `[interview-service] worker=${cfg.workerId} cli=${claudeCliPath} mcps=[${Object.keys(mcpsBase).join(', ')}] polling ${cfg.apiBaseUrl}`,
+    `[interview-service] worker=${cfg.workerId} cli=${claudeCliPath} mcps=[${Object.keys(mcpsBase).join(', ')}] polling ${cfg.apiBaseUrl} git=[${cfg.githubPat ? 'github' : ''}${cfg.gitlabToken ? ' gitlab' : ''}]`,
   );
   await loop.start();
 }

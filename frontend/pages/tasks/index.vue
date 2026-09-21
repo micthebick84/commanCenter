@@ -3,6 +3,7 @@ import { useQuasar } from 'quasar'
 import TaskListMobile from '~/components/tasks/TaskListMobile.vue'
 import type { CardTask } from '~/components/tasks/TaskCardCompact.vue'
 import { buildStages, stageAccepts, cancelable, DEPLOY_ACTIVE_STATUSES, type MoveDef, type StageCard } from '~/composables/taskStages'
+import { mrRef } from '~/composables/mergeRequestLabel'
 
 definePageMeta({ layout: 'default' })
 
@@ -219,6 +220,7 @@ function validateFiles(files: File[]): string | null {
 interface RepoCatalogEntry {
   id: number
   alias: string
+  host: string
   ownerRepo: string | null
   defaultBranch: string | null
 }
@@ -239,13 +241,19 @@ async function loadRepoCatalog() {
   }
 }
 
-// 별칭 선택 → ownerRepo로 브랜치 로드 + 기본 브랜치 프리필
+// 별칭 선택 → catalogId로 브랜치 로드 + 기본 브랜치 프리필
 function onRepoSelected(catalogId: number | null) {
   draft.githubBranch = ''
   resetBranchState()
   const entry = repoCatalog.value.find((r) => r.id === catalogId)
-  if (!entry || !entry.ownerRepo) return
-  loadBranches(entry.ownerRepo).then(() => {
+  if (!entry) return
+  if (entry.host === 'other') {
+    repoStatus.value = 'error'
+    repoStatusMsg.value = '이 레포는 지원하지 않는 호스트입니다 (GitHub/사내 GitLab만 가능)'
+    return
+  }
+  loadBranches(entry.id).then(() => {
+    if (inflightRepo !== entry.id) return
     if (entry.defaultBranch) draft.githubBranch = entry.defaultBranch
   })
 }
@@ -264,7 +272,7 @@ const branchOptions = computed(() =>
 )
 const filteredBranchOptions = ref<{ label: string; value: string }[]>([])
 
-let inflightRepo = ''  // 응답 도착 시 최신 입력과 일치하는지 가드
+let inflightRepo = 0  // 응답 도착 시 최신 입력과 일치하는지 가드
 
 function resetBranchState() {
   repoStatus.value = 'empty'
@@ -275,7 +283,7 @@ function resetBranchState() {
   draft.githubBranch = ''
 }
 
-async function loadBranches(repo: string) {
+async function loadBranches(repo: number) {
   inflightRepo = repo
   repoStatus.value = 'loading'
   repoStatusMsg.value = '브랜치 불러오는 중...'
@@ -285,7 +293,7 @@ async function loadBranches(repo: string) {
       defaultBranch: string | null
       branches: BranchEntry[]
       fetchedAt: string
-    }>('/api/repos/branches', { params: { repo } })
+    }>('/api/repos/branches', { params: { catalogId: repo } })
     if (inflightRepo !== repo) return  // 다른 입력이 그 사이 발생, 응답 무시
     branches.value = res.branches ?? []
     defaultBranch.value = res.defaultBranch
@@ -301,7 +309,7 @@ async function loadBranches(repo: string) {
     draft.githubBranch = ''
     if (status === 404) {
       repoStatus.value = 'notfound'
-      repoStatusMsg.value = e?.data?.message ?? '레포를 찾을 수 없거나 비공개 레포입니다'
+      repoStatusMsg.value = e?.data?.message ?? '레포를 찾을 수 없거나 접근 권한이 없습니다'
     } else {
       repoStatus.value = 'error'
       repoStatusMsg.value = e?.data?.message ?? '브랜치 동기화 실패'
@@ -567,7 +575,7 @@ function closeDialog() {
                       class="card-pr"
                       @click.stop
                     >
-                      PR #{{ c.task.implementation.prNumber }}
+                      {{ mrRef(c.task.implementation.prUrl, c.task.implementation.prNumber!) }}
                       <q-icon name="open_in_new" size="13px" />
                     </a>
                   </div>

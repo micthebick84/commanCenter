@@ -36,9 +36,16 @@ describe('admin/repo-catalog', () => {
         ownerRepo: 'o/r', defaultBranch: null, description: null, enabled: true,
         createdBy: 'admin', createdAt: '', updatedAt: '',
       },
+      {
+        id: 2, alias: 'GL', gitUrl: 'https://gitlab.hamon.vip/g/sub/p.git', host: 'gitlab',
+        ownerRepo: 'g/sub/p', defaultBranch: null, description: null, enabled: true,
+        createdBy: 'admin', createdAt: '2026-09-21T00:00:00Z', updatedAt: '2026-09-21T00:00:00Z',
+      },
     ])
     expect(useApiMock).toHaveBeenCalledWith('/api/admin/repo-catalog')
     expect(w.text()).toContain('Netis7.0')
+    // host:'gitlab' 행은 경고색(orange) 칩이 아니고, 'other' 행만 "등록 불가" 표시
+    expect(w.text()).toContain('gitlab')
     w.unmount()
   })
 

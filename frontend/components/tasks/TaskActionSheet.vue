@@ -9,6 +9,7 @@ import {
   type MoveDef,
 } from '~/composables/taskStages'
 import type { CardTask } from '~/components/tasks/TaskCardCompact.vue'
+import { mrRef } from '~/composables/mergeRequestLabel'
 
 const props = defineProps<{ task: CardTask | null; isAdmin: boolean }>()
 const show = defineModel<boolean>({ default: false })
@@ -93,7 +94,7 @@ const moveIcon = computed(() =>
             ><q-icon name="open_in_new" color="grey-8"
           /></q-item-section>
           <q-item-section
-            >PR #{{ task.implementation.prNumber }} 열기</q-item-section
+            >{{ mrRef(task.implementation.prUrl, task.implementation.prNumber!) }} 열기</q-item-section
           >
         </q-item>
         <q-item

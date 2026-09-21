@@ -6,6 +6,8 @@
 //    → 인터뷰 3종은 '분석' 단계에 편입, 취소됨은 terminal 단계로 분리했다.
 //    STATUS_STAGE_COVERAGE 테스트가 이 불변식을 지킨다.
 
+import { mrNoun } from './mergeRequestLabel'
+
 export interface StageDef {
   key: string
   name: string
@@ -438,11 +440,13 @@ export function nextAction(
       return isAdmin
         ? { text: '디자인 검토 — 승인 또는 피드백', primary: { label: '디자인 검토', icon: 'palette', kind: 'review-design' } }
         : { text: '디자인 검토 중입니다' }
-    case 'PR_CREATED':
-      if (isAdmin) return { text: 'PR 생성됨 — 배포할 수 있습니다', primary: { label: '배포', icon: 'rocket_launch', kind: 'deploy' } }
+    case 'PR_CREATED': {
+      const noun = mrNoun(task.implementation?.prUrl)
+      if (isAdmin) return { text: `${noun} 생성됨 — 배포할 수 있습니다`, primary: { label: '배포', icon: 'rocket_launch', kind: 'deploy' } }
       return task.implementation?.prUrl
-        ? { text: 'PR 생성됨', primary: { label: 'PR 열기', icon: 'open_in_new', kind: 'open-pr' } }
-        : { text: 'PR 생성됨' }
+        ? { text: `${noun} 생성됨`, primary: { label: `${noun} 열기`, icon: 'open_in_new', kind: 'open-pr' } }
+        : { text: `${noun} 생성됨` }
+    }
     case 'DEPLOYED':
       return task.deployment?.deployUrl
         ? { text: '배포 완료', primary: { label: '접속 URL 열기', icon: 'open_in_new', kind: 'open-url' } }

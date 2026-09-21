@@ -172,7 +172,7 @@ const canSubmit = computed(
       <template #avatar><q-icon name="info" color="primary" /></template>
       관리자가 등록한 레포. 사용자가 작업 등록 시 활성(enabled)된 항목을 한글 별칭으로 선택합니다.
       등록된 작업의 레포 정보는 작성 시점 스냅샷으로 박제되어, 카탈로그 변경/삭제 후에도 이력이 보존됩니다.
-      (비-GitHub URL은 저장은 되지만 현재 작업 등록은 GitHub 레포만 가능)
+      (GitHub와 사내 GitLab 레포를 등록할 수 있습니다. 그 밖의 호스트는 저장은 되지만 작업 등록은 불가)
     </q-banner>
 
     <q-table
@@ -185,7 +185,7 @@ const canSubmit = computed(
       :columns="[
         { name: 'enabled', label: '', field: 'enabled', align: 'center', style: 'width:60px' },
         { name: 'alias', label: '별칭', field: 'alias', align: 'left' },
-        { name: 'ownerRepo', label: 'owner/repo', field: 'ownerRepo', align: 'left' },
+        { name: 'ownerRepo', label: '경로', field: 'ownerRepo', align: 'left' },
         { name: 'gitUrl', label: 'Git URL', field: 'gitUrl', align: 'left' },
         { name: 'defaultBranch', label: '기본 브랜치', field: 'defaultBranch', align: 'center' },
         { name: 'description', label: '설명', field: 'description', align: 'left' },
@@ -205,12 +205,20 @@ const canSubmit = computed(
         <q-td :props="props">
           <span class="text-weight-medium">{{ props.row.alias }}</span>
           <q-chip
-            v-if="props.row.host !== 'github'"
+            v-if="props.row.host === 'gitlab'"
+            size="sm"
+            dense
+            color="blue-grey-2"
+            text-color="grey-9"
+            label="gitlab"
+          />
+          <q-chip
+            v-else-if="props.row.host !== 'github'"
             size="sm"
             dense
             color="orange-3"
             text-color="grey-9"
-            :label="props.row.host"
+            :label="`${props.row.host} · 등록 불가`"
           />
         </q-td>
       </template>
@@ -258,10 +266,10 @@ const canSubmit = computed(
           <q-input
             v-model="form.gitUrl"
             label="Git URL"
-            placeholder="https://github.com/owner/repo.git 또는 owner/repo"
+            placeholder="https://github.com/owner/repo.git 또는 https://gitlab.hamon.vip/group/sub/project.git"
             outlined
             dense
-            hint="전체 URL · owner/repo · git@... 모두 허용 (서버가 정규화)"
+            hint="GitHub: 전체 URL · owner/repo · git@… / 사내 GitLab: 전체 URL 필수 (서버가 정규화)"
             data-test="form-giturl"
           />
           <q-input

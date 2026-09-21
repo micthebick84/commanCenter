@@ -26,6 +26,7 @@ const submitting = ref(false)
 interface RepoCatalogEntry {
   id: number
   alias: string
+  host: string
   ownerRepo: string | null
   defaultBranch: string | null
 }
@@ -63,7 +64,7 @@ const branchOptions = computed(() =>
   })),
 )
 const filteredBranchOptions = ref<{ label: string; value: string }[]>([])
-let inflightRepo = '' // 응답 도착 시 최신 입력과 일치하는지 가드
+let inflightRepo = 0 // 응답 도착 시 최신 선택(catalogId)과 일치하는지 가드
 
 function resetBranchState() {
   repoStatus.value = 'empty'
@@ -74,7 +75,7 @@ function resetBranchState() {
   draft.githubBranch = ''
 }
 
-async function loadBranches(repo: string) {
+async function loadBranches(repo: number) {
   inflightRepo = repo
   repoStatus.value = 'loading'
   repoStatusMsg.value = '브랜치 불러오는 중...'
@@ -83,7 +84,7 @@ async function loadBranches(repo: string) {
       repo: string
       defaultBranch: string | null
       branches: BranchEntry[]
-    }>('/api/repos/branches', { params: { repo } })
+    }>('/api/repos/branches', { params: { catalogId: repo } })
     if (inflightRepo !== repo) return
     branches.value = res.branches ?? []
     defaultBranch.value = res.defaultBranch
@@ -99,17 +100,22 @@ async function loadBranches(repo: string) {
     draft.githubBranch = ''
     repoStatus.value = status === 404 ? 'notfound' : 'error'
     repoStatusMsg.value =
-      e?.data?.message ?? (status === 404 ? '레포를 찾을 수 없거나 비공개 레포입니다' : '브랜치 동기화 실패')
+      e?.data?.message ?? (status === 404 ? '레포를 찾을 수 없거나 접근 권한이 없습니다' : '브랜치 동기화 실패')
   }
 }
 
 function onRepoSelected(catalogId: number | null) {
   resetBranchState()
   const entry = repoCatalog.value.find((r) => r.id === catalogId)
-  if (!entry || !entry.ownerRepo) return
-  loadBranches(entry.ownerRepo).then(() => {
+  if (!entry) return
+  if (entry.host === 'other') {
+    repoStatus.value = 'error'
+    repoStatusMsg.value = '이 레포는 지원하지 않는 호스트입니다 (GitHub/사내 GitLab만 가능)'
+    return
+  }
+  loadBranches(entry.id).then(() => {
     // 늦게 도착한 이전 레포의 콜백이 현재 선택을 덮어쓰지 않게 — loadBranches 내부 가드와 동일 기준.
-    if (inflightRepo !== entry.ownerRepo) return
+    if (inflightRepo !== entry.id) return
     if (entry.defaultBranch) draft.githubBranch = entry.defaultBranch
   })
 }

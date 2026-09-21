@@ -30,7 +30,7 @@ import java.util.concurrent.locks.ReentrantLock;
  *
  *  다중 워커 안전성 (Phase 2.1):
  *   - 같은 머신에서 워커 N 프로세스가 동시에 같은 repo를 fetch하면 `.git/index.lock` 충돌
- *   - 해결: per-repo FileLock (`~/netis-maker/repos/{owner}/{repo}.lock`)
+ *   - 해결: per-repo FileLock (`~/netis-maker/repos/{localKey}.lock`)
  *   - 같은 JVM 내에서도 두 번 락 시도하지 않게 ReentrantLock 추가 (성능 최적화)
  *   - ensureFresh + worktree add 둘 다 같은 락 안에서 직렬화
  *     → WorktreeService도 withRepoLock(repoKey, ...)을 통해 호출
@@ -118,7 +118,7 @@ public class GitRepoCache {
      * repoKey별 cross-process 락. 같은 머신 다중 워커 프로세스가 동일 repo에서
      * fetch/clone/worktree-add 동시 호출하는 것을 방지.
      *
-     *  - 락 파일: ~/netis-maker/repos/{owner}/{repo}.lock (repo 디렉토리 옆 형제)
+     *  - 락 파일: ~/netis-maker/repos/{localKey}.lock (repo 디렉토리 옆 형제)
      *  - JVM 내 추가 직렬화: ReentrantLock per repoKey (cheaper than file lock contention)
      *  - 락 보유 중 예외 발생해도 finally에서 안전 해제
      */

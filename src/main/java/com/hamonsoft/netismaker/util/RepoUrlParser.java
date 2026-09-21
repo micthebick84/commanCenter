@@ -32,6 +32,7 @@ public final class RepoUrlParser {
     // scp 스타일: user@host:path
     private static final Pattern SCP_URL = Pattern.compile("^[^@\\s]+@([^:/\\s]+):(.+)$");
     private static final Pattern GITLAB_SEGMENT = Pattern.compile("^[A-Za-z0-9_][A-Za-z0-9_.-]*$");
+    private static final Pattern BASE_URL_HOST = Pattern.compile("^https?://(?:[^@/\\s]+@)?([^/:\\s]+)");
 
     public static Parsed parse(String input) {
         return parse(input, null);
@@ -81,7 +82,7 @@ public final class RepoUrlParser {
     }
 
     private static String hostOf(String baseUrl) {
-        Matcher m = Pattern.compile("^https?://(?:[^@/\\s]+@)?([^/:\\s]+)").matcher(baseUrl);
+        Matcher m = BASE_URL_HOST.matcher(baseUrl);
         return m.find() ? m.group(1) : null;
     }
 

@@ -173,7 +173,7 @@ class RepoCatalogServiceTest {
     @Test
     void check_catches_task_exception_from_git_ref_service() {
         when(repo.findById(1L)).thenReturn(Optional.of(entry(1L, "A", true, "github", "a/b")));
-        when(gitRefService.listBranches(any(RepoRef.class)))
+        when(gitRefService.listBranches(argThat((RepoRef r) -> !r.isGitlab() && r.path().equals("a/b"))))
                 .thenThrow(new TaskException(HttpStatus.BAD_GATEWAY, "rate limit"));
 
         RepoCatalogDto.CheckResult result = service.check(1L);
@@ -194,7 +194,8 @@ class RepoCatalogServiceTest {
                 ),
                 OffsetDateTime.now()
         );
-        when(gitRefService.listBranches(any(RepoRef.class))).thenReturn(branchList);
+        when(gitRefService.listBranches(argThat((RepoRef r) -> !r.isGitlab() && r.path().equals("a/b"))))
+                .thenReturn(branchList);
 
         RepoCatalogDto.CheckResult result = service.check(1L);
 

@@ -22,8 +22,7 @@ import java.util.List;
  *    3) git -c user.name=... -c user.email=... commit -m {msg}
  *    4) git push -u origin {branch}
  *    5) git rev-parse HEAD → headSha
- *    6) gh pr create --draft --base {baseBranch} --head {branch} --title --body → URL
- *    7) URL 파싱 → PR number
+ *    6) Draft PR(gh CLI) 또는 Draft MR(GitLab REST API) 생성 → url/number
  */
 @Component
 @Profile("worker")

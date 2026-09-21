@@ -268,7 +268,7 @@ public class WorkerMainLoop {
                     task.title(), body);
         } catch (Exception e) {
             safePostImplementationFailure(task.id(),
-                    "gh pr create 실패: " + e.getMessage(),
+                    "PR/MR 생성 실패: " + e.getMessage(),
                     wt.branchName(), headSha, exec.stdout(), usageOf(exec));
             return;
         }
@@ -372,7 +372,7 @@ public class WorkerMainLoop {
 
     private void safePostDesignFailure(Long taskId, String reason, String log_,
                                        WorkerResultRequest.UsageReport usage) {
-        reporter.reportTerminal(taskId, WorkerResultRequest.designFailed(props.id(), reason, log_, usage));
+        reporter.reportTerminal(taskId, WorkerResultRequest.designFailed(props.id(), safeReason(reason), log_, usage));
     }
 
     private void processDeploy(WorkerTaskResponse task) {
@@ -407,7 +407,7 @@ public class WorkerMainLoop {
     }
 
     private void safePostDeployFailure(Long taskId, String reason, String deployLog) {
-        reporter.reportTerminal(taskId, WorkerResultRequest.deployFailed(props.id(), reason, deployLog));
+        reporter.reportTerminal(taskId, WorkerResultRequest.deployFailed(props.id(), safeReason(reason), deployLog));
     }
 
     private String renderImplementationPrompt(WorkerTaskResponse task, String baseSha, String branchName) {
@@ -496,7 +496,7 @@ public class WorkerMainLoop {
     private void safePostAnalysisFailure(Long taskId, String reason, WorkerResultRequest.UsageReport usage) {
         reporter.reportTerminal(taskId, new WorkerResultRequest(
                 props.id(), TaskStatus.FAILED,
-                null, null, null, null, reason,
+                null, null, null, null, safeReason(reason),
                 null, null, null, null, null,
                 null, null, null, null, null,
                 null, null, null, null, usage));
@@ -512,10 +512,15 @@ public class WorkerMainLoop {
                                                WorkerResultRequest.UsageReport usage) {
         reporter.reportTerminal(taskId, new WorkerResultRequest(
                 props.id(), TaskStatus.IMPLEMENTATION_FAILED,
-                null, null, null, null, reason,
+                null, null, null, null, safeReason(reason),
                 null, null, headBranch, headSha, log_,
                 null, null, null, null, null,
                 null, null, null, null, usage));
+    }
+
+    /** 실패 사유를 보고/로그로 내보내기 직전 경계에서 자격증명을 마스킹한다(F2). */
+    static String safeReason(String reason) {
+        return GitRemotes.mask(reason);
     }
 
     /** ExecResult → 보고 usage. envelope 파싱 실패(usage null)면 null — 수집 생략. */

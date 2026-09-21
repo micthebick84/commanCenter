@@ -25,8 +25,18 @@ import java.util.concurrent.locks.ReentrantLock;
  *
  *   ~/netis-maker/repos/{localKey}/   — GitHub: {owner}/{repo}, GitLab: _gitlab/{경로의 '/'→'+'}
  *
- *   첫 회: git clone <GitRemotes.authenticatedUrl>
- *   이후: git remote set-url origin <인증 URL> && git fetch && git checkout <branch> && git reset --hard
+ *   첫 회: git clone <인증 URL> && git remote set-url origin <평문 gitUrl>
+ *   이후: git remote set-url origin <평문 gitUrl>
+ *         && git fetch --prune <인증 URL> +refs/heads/<branch>:refs/remotes/origin/<branch>
+ *         && git checkout <branch> && git reset --hard origin/<branch>
+ *
+ *  불변식: 자격증명은 전송(clone/fetch/push)에만 쓰고 `.git/config`의 origin에는 절대 남기지 않는다.
+ *   - worktree는 이 캐시 repo의 config를 공유한다 → 구현/디자인/배포 워크트리에서 도는 claude 세션이
+ *     `git remote -v`만으로 토큰을 읽을 수 있기 때문.
+ *   - 기존 캐시는 fetch 전에 먼저 origin을 씻으므로, 취약 버전(및 브랜치 도입 전 GitHub PAT 캐시)이
+ *     남긴 인증 URL도 다음 ensureFresh에서 함께 제거된다.
+ *   - 단일 브랜치 shallow clone이라 구성된 refspec은 최초 브랜치 하나뿐 → 필요한 브랜치를
+ *     명시 refspec으로 fetch한다(`git fetch --all --prune` 대체).
  *
  *  다중 워커 안전성 (Phase 2.1):
  *   - 같은 머신에서 워커 N 프로세스가 동시에 같은 repo를 fetch하면 `.git/index.lock` 충돌
@@ -76,15 +86,16 @@ public class GitRepoCache {
         return withRepoLock(GitRemotes.localKey(ref), () -> {
             Path target = Paths.get(props.reposDir(), GitRemotes.localKey(ref));
             Files.createDirectories(target.getParent());
+            String authUrl = remotes.authenticatedUrl(ref);
             if (!Files.exists(target.resolve(".git"))) {
                 // 배포는 분석/구현을 거친 repo 대상이라 보통 이미 캐시됨. 없으면 head 브랜치로 clone.
-                run(target.getParent().toFile(), "git", "clone", "--depth=1",
-                        "--branch", headBranch, remotes.authenticatedUrl(ref), target.getFileName().toString());
+                run(target.getParent().toFile(),
+                        cloneArgs(authUrl, headBranch, target.getFileName().toString()));
+                scrubOrigin(target, ref);
             } else {
-                refreshOrigin(target, ref);
+                scrubOrigin(target, ref);
                 // head 브랜치를 origin/<head> tracking ref로 명시적 fetch (단일 브랜치 클론 대비).
-                run(target.toFile(), "git", "fetch", "--force", "origin",
-                        headBranch + ":refs/remotes/origin/" + headBranch);
+                run(target.toFile(), fetchTrackingArgs(authUrl, headBranch));
             }
             String sha = capture(target.toFile(), "git", "rev-parse", "HEAD").trim();
             return new CheckedOutRepo(target.toFile(), sha);
@@ -95,12 +106,15 @@ public class GitRepoCache {
         Path target = Paths.get(props.reposDir(), GitRemotes.localKey(ref));
         Files.createDirectories(target.getParent());
 
+        String authUrl = remotes.authenticatedUrl(ref);
         if (!Files.exists(target.resolve(".git"))) {
-            run(target.getParent().toFile(), "git", "clone", "--depth=1", "--branch", branch,
-                    remotes.authenticatedUrl(ref), target.getFileName().toString());
+            run(target.getParent().toFile(),
+                    cloneArgs(authUrl, branch, target.getFileName().toString()));
+            // clone 직후 바로 씻는다 — 실패하면 인증 URL이 남으므로 예외를 그대로 전파(마스킹됨)
+            scrubOrigin(target, ref);
         } else {
-            refreshOrigin(target, ref);
-            run(target.toFile(), "git", "fetch", "--all", "--prune");
+            scrubOrigin(target, ref);
+            run(target.toFile(), fetchArgs(authUrl, branch));
             run(target.toFile(), "git", "checkout", branch);
             run(target.toFile(), "git", "reset", "--hard", "origin/" + branch);
         }
@@ -109,9 +123,36 @@ public class GitRepoCache {
         return new CheckedOutRepo(target.toFile(), sha);
     }
 
-    /** 토큰 교체·추가가 재clone 없이 반영되도록 매번 origin을 현재 인증 URL로 맞춘다. */
-    private void refreshOrigin(Path target, RepoRef ref) throws IOException, InterruptedException {
-        run(target.toFile(), "git", "remote", "set-url", "origin", remotes.authenticatedUrl(ref));
+    /**
+     * origin을 토큰 없는 평문 gitUrl로 맞춘다. 캐시 config(=worktree 공유 config)에 자격증명을
+     * 남기지 않기 위한 단일 지점 — 취약 버전이 남긴 인증 URL도 여기서 씻긴다.
+     */
+    private void scrubOrigin(Path target, RepoRef ref) throws IOException, InterruptedException {
+        run(target.toFile(), setUrlArgs(ref.gitUrl()));
+    }
+
+    // ── git 인자 조립 (순수 함수 — 네트워크 없이 https 경로를 테스트로 가드) ──
+
+    /** 신규 clone. 전송에만 인증 URL을 쓴다. */
+    static java.util.List<String> cloneArgs(String authUrl, String branch, String dirName) {
+        return java.util.List.of("git", "clone", "--depth=1", "--branch", branch, authUrl, dirName);
+    }
+
+    /** origin 갱신. 반드시 평문 URL만 — 여기 토큰이 들어가면 config에 박힌다. */
+    static java.util.List<String> setUrlArgs(String plainUrl) {
+        return java.util.List.of("git", "remote", "set-url", "origin", plainUrl);
+    }
+
+    /** ensureFresh용 fetch. origin 이름 대신 인증 URL + 명시 refspec(단일 브랜치 shallow clone 대비). */
+    static java.util.List<String> fetchArgs(String authUrl, String branch) {
+        return java.util.List.of("git", "fetch", "--prune", authUrl,
+                "+refs/heads/" + branch + ":refs/remotes/origin/" + branch);
+    }
+
+    /** fetchOnly(배포)용 fetch. 기존 refspec 그대로, remote 이름만 인증 URL로 대체. */
+    static java.util.List<String> fetchTrackingArgs(String authUrl, String headBranch) {
+        return java.util.List.of("git", "fetch", "--force", authUrl,
+                headBranch + ":refs/remotes/origin/" + headBranch);
     }
 
     /**
@@ -156,6 +197,10 @@ public class GitRepoCache {
     }
 
     private void run(File dir, String... command) throws IOException, InterruptedException {
+        run(dir, java.util.List.of(command));
+    }
+
+    private void run(File dir, java.util.List<String> command) throws IOException, InterruptedException {
         log.debug("git exec ({}): {}", dir, GitRemotes.mask(String.join(" ", command)));
         ProcessBuilder pb = new ProcessBuilder(command).directory(dir).redirectErrorStream(true);
         Process p = pb.start();

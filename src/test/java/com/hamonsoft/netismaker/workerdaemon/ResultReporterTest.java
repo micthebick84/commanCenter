@@ -131,6 +131,48 @@ class ResultReporterTest {
         assertThat(sink).isEmpty();
     }
 
+    // --- 마스킹 경계 배선 (G2): reportTerminal 밖으로 나가는 페이로드는 이미 가려져 있어야 한다 ---
+
+    private static final String DIRTY =
+            "fatal: Authentication failed for 'https://oauth2:glpat-X@gitlab.hamon.vip/g/p.git'";
+
+    private static WorkerResultRequest dirtyReq() {
+        return new WorkerResultRequest("w1", TaskStatus.IMPLEMENTATION_FAILED,
+                null, null, null, 1L, DIRTY,
+                null, null, "netismaker/task-1", "sha", DIRTY,
+                null, null, null, null, null,
+                null, null, null, null, null);
+    }
+
+    @Test
+    void payload_handed_to_the_poster_is_already_masked() {
+        java.util.concurrent.atomic.AtomicReference<WorkerResultRequest> seen =
+                new java.util.concurrent.atomic.AtomicReference<>();
+        boolean ok = reporter((id, r) -> seen.set(r)).reportTerminal(1L, dirtyReq());
+
+        assertThat(ok).isTrue();
+        assertThat(seen.get().failureReason())
+                .contains("https://***@gitlab.hamon.vip").doesNotContain("glpat-X");
+        assertThat(seen.get().implementationLog())
+                .contains("https://***@gitlab.hamon.vip").doesNotContain("glpat-X");
+    }
+
+    @Test
+    void payload_handed_to_the_loss_listener_is_already_masked() {
+        java.util.concurrent.atomic.AtomicReference<WorkerResultRequest> seen =
+                new java.util.concurrent.atomic.AtomicReference<>();
+        boolean ok = new ResultReporter(
+                (id, r) -> { throw new HttpClientErrorException(HttpStatus.CONFLICT); },
+                2, 1L, ms -> {},
+                (taskId, req, permanent, reason) -> seen.set(req)
+        ).reportTerminal(1L, dirtyReq());
+
+        assertThat(ok).isFalse();
+        // dead-letter 파일에 적히는 것도 이 페이로드 — 디스크에 평문 토큰이 남으면 안 된다
+        assertThat(seen.get().failureReason()).doesNotContain("glpat-X");
+        assertThat(seen.get().implementationLog()).doesNotContain("glpat-X");
+    }
+
     @Test
     void listener_exception_is_swallowed_returns_false() {
         boolean ok = new ResultReporter(

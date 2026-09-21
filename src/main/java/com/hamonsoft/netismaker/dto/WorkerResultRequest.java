@@ -44,6 +44,28 @@ public record WorkerResultRequest(
         // 사용량 (전 phase 공용, 스펙 §4.1 — null이면 미수집/구버전 워커)
         UsageReport usage
 ) {
+    /**
+     * 자유 텍스트 필드를 전부 마스킹한 복사본.
+     *
+     * 워커가 API로 올리는 텍스트(claude 로그·배포 로그·분석/디자인 마크다운·실패 사유)는
+     * 작업 상세 화면에 그대로 렌더되므로, 그 안에 섞여 들어온 인증 URL을 여기서 한 번에 가린다.
+     * 식별자·열거형·숫자·결과 URL(prUrl/deployUrl/designUrl 등)은 자유 텍스트가 아니라 그대로 둔다.
+     * 적용 지점은 {@code ResultReporter.reportTerminal} 한 곳(전송 + dead-letter 기록 공통).
+     */
+    public WorkerResultRequest masked() {
+        return new WorkerResultRequest(
+                workerId, status,
+                m(markdownResult), m(subtasksJson), m(claudeLog), durationMs, m(failureReason),
+                prUrl, prNumber, headBranch, headSha, m(implementationLog),
+                deployUrl, deployContainerId, deployHostPort, deployImage, m(deployLog),
+                m(designMarkdown), m(mockupFilesJson), designProjectId, designUrl,
+                usage);
+    }
+
+    private static String m(String text) {
+        return com.hamonsoft.netismaker.git.GitRemotes.mask(text);
+    }
+
     /** 단계 1회 실행분의 토큰/비용. 백엔드가 task_stage_usage에 누적한다. */
     public record UsageReport(java.math.BigDecimal costUsd, Long inputTokens, Long outputTokens,
                               Long cacheCreationTokens, Long cacheReadTokens) {

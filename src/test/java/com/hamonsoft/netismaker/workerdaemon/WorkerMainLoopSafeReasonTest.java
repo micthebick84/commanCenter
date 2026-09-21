@@ -35,4 +35,32 @@ class WorkerMainLoopSafeReasonTest {
 
         assertThat(WorkerMainLoop.safeReason(reason)).isEqualTo(reason);
     }
+
+    /**
+     * pollAndProcess의 최상위 catch는 Throwable을 slf4j에 그대로 넘기지 않는다 — 그러면
+     * 메시지와 cause 체인이 마스킹 없이 로그로 나간다. 대신 cause 체인을 한 줄로 요약해 마스킹한다.
+     */
+    @Test
+    void cause_chain_summary_is_maskable_and_covers_nested_causes() {
+        Throwable root = new java.io.IOException(
+                "fatal: could not read Username for 'https://oauth2:glpat-X@gitlab.hamon.vip'");
+        Throwable wrapper = new IllegalStateException("commit/push 실패", root);
+
+        String logged = WorkerMainLoop.safeReason(WorkerMainLoop.causeChain(wrapper));
+
+        assertThat(logged).contains("commit/push 실패");
+        assertThat(logged).contains("https://***@gitlab.hamon.vip");
+        assertThat(logged).doesNotContain("glpat-X");
+    }
+
+    /** 자기 자신을 cause로 돌려주는 예외(직접 구현체)에도 요약이 끝나야 한다. */
+    @Test
+    void cause_chain_of_a_self_referencing_throwable_terminates() {
+        class SelfCaused extends RuntimeException {
+            SelfCaused() { super("boom"); }
+            @Override public synchronized Throwable getCause() { return this; }
+        }
+
+        assertThat(WorkerMainLoop.causeChain(new SelfCaused())).contains("boom");
+    }
 }

@@ -111,7 +111,10 @@ public class WorkerMainLoop {
                 default -> processAnalysis(task);
             }
         } catch (Throwable t) {
-            log.error("작업 처리 중 예외 task={}", task.id(), t);
+            // Throwable을 그대로 넘기면 slf4j가 메시지+cause 체인을 마스킹 없이 찍는다
+            // (git/gh 실패 메시지에 인증 URL이 실려 있을 수 있음) → 마스킹한 요약만 남긴다.
+            // 트레이드오프: 스택트레이스가 사라진다. 대신 cause 체인을 한 줄로 요약해 진단성을 유지.
+            log.error("작업 처리 중 예외 task={}: {}", task.id(), safeReason(causeChain(t)));
             switch (task.kind()) {
                 case IMPLEMENTATION -> safePostImplementationFailure(task.id(),
                         "처리 중 예외: " + t.getClass().getSimpleName() + ": " + t.getMessage(),
@@ -251,7 +254,7 @@ public class WorkerMainLoop {
             String commitMsg = "feat: " + task.title()
                     + "\n\n" + "task #" + task.id()
                     + "\n\nCo-Authored-By: netisMaker <" + props.gitUserEmail() + ">";
-            headSha = gitOps.commitAndPush(wt.dir(), wt.branchName(), commitMsg);
+            headSha = gitOps.commitAndPush(wt.dir(), task.repoRef(), wt.branchName(), commitMsg);
         } catch (Exception e) {
             safePostImplementationFailure(task.id(),
                     "commit/push 실패: " + e.getMessage(),
@@ -521,6 +524,19 @@ public class WorkerMainLoop {
     /** 실패 사유를 보고/로그로 내보내기 직전 경계에서 자격증명을 마스킹한다(F2). */
     static String safeReason(String reason) {
         return GitRemotes.mask(reason);
+    }
+
+    /** 예외 + cause 체인을 한 줄로. 스택트레이스 대신 쓰는 진단 문자열(마스킹은 호출부에서). */
+    static String causeChain(Throwable t) {
+        StringBuilder sb = new StringBuilder();
+        Throwable cur = t;
+        for (int depth = 0; cur != null && depth < 5; depth++) {
+            if (depth > 0) sb.append(" ← caused by ");
+            sb.append(cur);
+            if (cur.getCause() == cur) break;
+            cur = cur.getCause();
+        }
+        return sb.toString();
     }
 
     /** ExecResult → 보고 usage. envelope 파싱 실패(usage null)면 null — 수집 생략. */

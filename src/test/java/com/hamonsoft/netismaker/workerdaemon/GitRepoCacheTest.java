@@ -100,6 +100,67 @@ class GitRepoCacheTest {
         assertThat(config).doesNotContain("oauth2:").doesNotContain("glpat-LEGACY");
     }
 
+    /** main + develop 두 브랜치를 가진 file:// bare 레포. develop에만 b.txt가 있다. */
+    private Path bareRemoteWithDevelop(String name) throws Exception {
+        Path seed = Files.createDirectories(tmp.resolve(name + "-seed"));
+        git(seed.toFile(), "init", "-b", "main");
+        Files.writeString(seed.resolve("a.txt"), "hello");
+        git(seed.toFile(), "add", "-A");
+        git(seed.toFile(), "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-m", "init");
+        git(seed.toFile(), "checkout", "-b", "develop");
+        Files.writeString(seed.resolve("b.txt"), "dev");
+        git(seed.toFile(), "add", "-A");
+        git(seed.toFile(), "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-m", "dev");
+        git(seed.toFile(), "checkout", "main");
+        Path bare = tmp.resolve(name + ".git");
+        git(tmp.toFile(), "clone", "--bare", seed.toString(), bare.toString());
+        return bare;
+    }
+
+    /**
+     * 캐시는 최초 브랜치 하나짜리 단일 브랜치 clone이라 구성된 refspec이 그 브랜치뿐이다.
+     * {@code git checkout <B>}의 추적 브랜치 자동 생성(DWIM)은 구성된 refspec만 보므로,
+     * 명시 refspec으로 origin/B를 받아 와도 "pathspec did not match"로 실패했다(실측).
+     */
+    @Test
+    void existing_clone_switches_to_a_branch_the_single_branch_clone_never_had() throws Exception {
+        Path bare = bareRemoteWithDevelop("remote3");
+        Path reposDir = Files.createDirectories(tmp.resolve("repos3"));
+        RepoRef ref = new RepoRef("github", "acme/widgets", bare.toUri().toString());
+        GitRepoCache cache = new GitRepoCache(props(reposDir));
+        cache.ensureFresh(ref, "main");
+
+        GitRepoCache.CheckedOutRepo repo = cache.ensureFresh(ref, "develop");
+
+        String develop = ProcessRunner.requireSuccess(repo.dir(),
+                List.of("git", "rev-parse", "refs/remotes/origin/develop"), 30).trim();
+        assertThat(repo.commitSha()).isEqualTo(develop);
+        assertThat(repo.dir().toPath().resolve("b.txt")).exists();
+    }
+
+    /**
+     * 대상 브랜치를 워크트리가 점유 중이어도 캐시는 최신화돼야 한다.
+     * 로컬 브랜치를 만들거나 옮기는 checkout은 "already used by worktree"로 거부된다 —
+     * 캐시는 HEAD sha와 작업 트리만 쓰이므로 origin/B를 분리(detached) 체크아웃한다.
+     */
+    @Test
+    void existing_clone_refreshes_even_when_a_worktree_holds_the_branch() throws Exception {
+        Path bare = bareRemoteWithDevelop("remote4");
+        Path reposDir = Files.createDirectories(tmp.resolve("repos4"));
+        RepoRef ref = new RepoRef("github", "acme/widgets", bare.toUri().toString());
+        GitRepoCache cache = new GitRepoCache(props(reposDir));
+        File dir = cache.ensureFresh(ref, "main").dir();
+        git(dir, "fetch", bare.toUri().toString(), "+refs/heads/develop:refs/remotes/origin/develop");
+        git(dir, "worktree", "add", "-b", "develop", tmp.resolve("wt4").toString(), "origin/develop");
+
+        GitRepoCache.CheckedOutRepo repo = cache.ensureFresh(ref, "develop");
+
+        assertThat(repo.dir().toPath().resolve("b.txt")).exists();
+        String holder = ProcessRunner.requireSuccess(tmp.resolve("wt4").toFile(),
+                List.of("git", "rev-parse", "--abbrev-ref", "HEAD"), 30).trim();
+        assertThat(holder).isEqualTo("develop");
+    }
+
     /**
      * 배포 경로(fetchOnly): 캐시는 {@code --depth=1 --branch <base>} 단일 브랜치 shallow clone이라
      * 구성된 refspec은 최초 브랜치 하나뿐이다. head 브랜치를 URL + 명시 refspec으로 fetch해

@@ -28,7 +28,7 @@ import java.util.concurrent.locks.ReentrantLock;
  *   첫 회: git clone <인증 URL> && git remote set-url origin <평문 gitUrl>
  *   이후: git remote set-url origin <평문 gitUrl>
  *         && git fetch --prune <인증 URL> +refs/heads/<branch>:refs/remotes/origin/<branch>
- *         && git checkout <branch> && git reset --hard origin/<branch>
+ *         && git checkout --force --detach origin/<branch>
  *
  *  불변식: 자격증명은 전송(clone/fetch/push)에만 쓰고 `.git/config`의 origin에는 절대 남기지 않는다.
  *   - worktree는 이 캐시 repo의 config를 공유한다 → 구현/디자인/배포 워크트리에서 도는 claude 세션이
@@ -70,10 +70,8 @@ public class GitRepoCache {
     /**
      * 브랜치 checkout 없이 fetch만 수행 (배포용).
      *
-     * ensureFresh는 {@code git checkout <branch>}를 하는데, 배포 대상 head 브랜치는
-     * 보통 구현 단계의 보존된 worktree가 이미 점유 중이라 checkout이 거부된다
-     * ("already used by worktree"). 배포는 {@code git worktree add --detach origin/<head>}로
-     * 분리 체크아웃하므로 공유 클론에서 브랜치를 checkout할 필요가 없다 — fetch만 하면 된다.
+     * 배포는 {@code git worktree add --detach origin/<head>}로 분리 체크아웃하므로
+     * 공유 클론의 작업 트리를 head 브랜치로 옮길 필요가 없다 — fetch만 하면 된다.
      *
      * 캐시는 보통 {@code --depth=1 --branch <base>} 단일 브랜치 shallow clone이라
      * {@code git fetch --all}만으로는 head 브랜치의 remote-tracking ref가 생기지 않는다.
@@ -115,8 +113,12 @@ public class GitRepoCache {
         } else {
             scrubOrigin(target, ref);
             run(target.toFile(), fetchArgs(authUrl, branch));
-            run(target.toFile(), "git", "checkout", branch);
-            run(target.toFile(), "git", "reset", "--hard", "origin/" + branch);
+            // 로컬 브랜치를 거치지 않고 origin/<branch>를 분리 체크아웃한다.
+            //  - `git checkout <branch>`의 추적 브랜치 자동 생성은 구성된 refspec(최초 브랜치 하나)만 봐서
+            //    다른 브랜치면 "pathspec did not match"로 실패한다.
+            //  - 로컬 브랜치를 만들거나 옮기면 그 브랜치를 점유한 worktree와 충돌한다.
+            //  캐시는 HEAD sha와 작업 트리만 쓰인다(worktree는 origin/<base>에서 분기). --force가 reset --hard 몫.
+            run(target.toFile(), "git", "checkout", "--force", "--detach", "origin/" + branch);
         }
 
         String sha = capture(target.toFile(), "git", "rev-parse", "HEAD").trim();

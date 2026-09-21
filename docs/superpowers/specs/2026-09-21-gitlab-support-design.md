@@ -22,6 +22,17 @@
 
 기각: **B안**(`github_repo`에 `gitlab:` 접두어) — 전달 형식은 안 바뀌지만 정규식 5곳·폴더 경로 코드가 각자 접두어를 해석해야 하고 내부 표기가 프롬프트/활동 로그에 노출된다. **C안**(B + `glab` CLI) — 워커 PC마다 설치·인증 필요, 출력 파싱의 취약함이 그대로 남는다.
 
+## 2.1 구현 계획에서 확정한 단순화 (2026-09-21)
+
+아래 항목이 본문과 다르면 **이 절이 우선**한다.
+
+1. 워커·인터뷰 서비스는 `GITLAB_TOKEN`만 읽는다. `GITLAB_BASE_URL`은 API만 쓴다(§3.1). 인증 URL은 `gitUrl`에 자격증명을 끼워 만들고, REST API base는 `gitUrl`의 `scheme://host[:port]`. GitLab 서브경로 설치는 미지원.
+2. `repoHost`는 `gitUrl` 호스트로 판정(없음/`github.com`→`github`, 그 외→`gitlab`). 설정 의존 없음(§5.1).
+3. `GitRemotes`는 빈이 아니라 각 서비스 생성자에서 `new GitRemotes(githubPat, gitlabToken)`(§4.2·§4.3). `gitlabBaseUrl` 인자 없음.
+4. 호스트 비교는 호스트명만, 대소문자 무시(§3.2의 "포트 포함 비교" 대체).
+5. 조회 DTO(`TaskResponse` 등)에 `repoHost`를 추가하지 않는다(§5.3 삭제). 프론트는 `prUrl` 모양으로 PR/MR을 판정(§9).
+6. `useRepoBranches` composable을 만들지 않는다. 두 페이지의 로딩 함수를 `catalogId` 기준으로 고친다(§9).
+
 ## 3. 저장소 식별과 설정
 
 ### 3.1 설정 키 (API · 워커 · 인터뷰 서비스 공통 환경변수)

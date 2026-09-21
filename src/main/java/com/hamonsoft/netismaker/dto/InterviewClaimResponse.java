@@ -3,6 +3,7 @@ package com.hamonsoft.netismaker.dto;
 import com.hamonsoft.netismaker.entity.InterviewSession;
 import com.hamonsoft.netismaker.entity.InterviewTurn;
 import com.hamonsoft.netismaker.entity.TaskMcpSpec;
+import com.hamonsoft.netismaker.git.RepoRef;
 
 import java.util.List;
 
@@ -33,11 +34,19 @@ public record InterviewClaimResponse(
         /** 등록 시 업로드된 첨부(절대경로 — work_dir과 동일한 단일 호스트 전제). 항상 non-null. */
         List<AttachmentRef> attachments,
         /** 세션 종류 'INTERVIEW' | 'QUESTION' (InterviewKind.name()). 인터뷰 서비스가 Q&A 모드 판정에 사용. */
-        String kind
+        String kind,
+        /** 정식 Git URL 스냅샷. null이면 GitHub로 간주(구버전 세션). */
+        String gitUrl,
+        /** "github" | "gitlab". */
+        String repoHost
 ) {
     /** 어느 경로로 생성돼도 non-null 계약 유지 (스펙 §5.4). */
     public InterviewClaimResponse {
         attachments = attachments == null ? List.of() : List.copyOf(attachments);
+    }
+
+    public RepoRef repoRef() {
+        return RepoRef.fromSnapshot(githubRepo, gitUrl);
     }
 
     public record Turn(int seq, String role, String kind, String content, Integer replyToSeq) {}
@@ -67,6 +76,7 @@ public record InterviewClaimResponse(
                 s.getClaudeSessionId(), s.getCurrentPhase(), s.getWorkDir(),
                 lastAnswer, replyToSeq,
                 s.getMcpsExtra() == null ? List.of() : List.copyOf(s.getMcpsExtra()),
-                mapped, s.getModel(), s.getEffort(), totalCostUsd, attachments, s.getKind().name());
+                mapped, s.getModel(), s.getEffort(), totalCostUsd, attachments, s.getKind().name(),
+                s.getGitUrl(), RepoRef.fromSnapshot(s.getGithubRepo(), s.getGitUrl()).host());
     }
 }

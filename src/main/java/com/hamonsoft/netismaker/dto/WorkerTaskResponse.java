@@ -5,6 +5,7 @@ import com.hamonsoft.netismaker.entity.Task;
 import com.hamonsoft.netismaker.entity.TaskAnalysis;
 import com.hamonsoft.netismaker.entity.TaskDesign;
 import com.hamonsoft.netismaker.entity.TaskMcpSpec;
+import com.hamonsoft.netismaker.git.RepoRef;
 
 import java.util.List;
 
@@ -37,8 +38,21 @@ public record WorkerTaskResponse(
         String feedbackHistoryJson,
         String designUrl,
         String designSystemProjectId,
-        String designOutputProjectId
+        String designOutputProjectId,
+        /** 정식 Git URL 스냅샷. 카탈로그 도입 전 작업·구버전 API는 null → GitHub로 간주. */
+        String gitUrl,
+        /** "github" | "gitlab" — gitUrl에서 판정한 값. null이면 github. */
+        String repoHost
 ) {
+    /** 워커가 clone/폴더/MR에 쓰는 저장소 참조. 새 필드가 없는 페이로드는 GitHub로 복원된다. */
+    public RepoRef repoRef() {
+        return RepoRef.fromSnapshot(githubRepo, gitUrl);
+    }
+
+    private static String hostOf(Task t) {
+        return RepoRef.fromSnapshot(t.getGithubRepo(), t.getGitUrl()).host();
+    }
+
     public enum Kind { ANALYSIS, IMPLEMENTATION, DEPLOY, UNDEPLOY, DESIGN }
 
     public static WorkerTaskResponse forAnalysis(Task t) {
@@ -46,7 +60,7 @@ public record WorkerTaskResponse(
                 t.getTitle(), t.getDescription(), Kind.ANALYSIS,
                 t.getMcpsExtra() == null ? List.of() : List.copyOf(t.getMcpsExtra()),
                 null, null, null, null, List.of(), t.getModel(), t.getEffort(),
-                null, null, null, null, null, null);
+                null, null, null, null, null, null, t.getGitUrl(), hostOf(t));
     }
 
     public static WorkerTaskResponse forImplementation(Task t, TaskAnalysis a, TaskDesign d) {
@@ -59,7 +73,7 @@ public record WorkerTaskResponse(
                 d == null ? null : d.getMockupFilesJson(),
                 null,
                 d == null ? null : d.getDesignUrl(),
-                null, null);
+                null, null, t.getGitUrl(), hostOf(t));
     }
 
     public static WorkerTaskResponse forDeploy(Task t) {
@@ -67,14 +81,14 @@ public record WorkerTaskResponse(
                 t.getTitle(), t.getDescription(), Kind.DEPLOY, List.of(), null, null,
                 t.getHeadBranch(), t.getHeadSha(),
                 t.getEnvVars() == null ? List.of() : List.copyOf(t.getEnvVars()), null, null,
-                null, null, null, null, null, null);
+                null, null, null, null, null, null, t.getGitUrl(), hostOf(t));
     }
 
     public static WorkerTaskResponse forUndeploy(Task t) {
         return new WorkerTaskResponse(t.getId(), t.getGithubRepo(), t.getGithubBranch(),
                 t.getTitle(), t.getDescription(), Kind.UNDEPLOY, List.of(), null, null,
                 t.getHeadBranch(), t.getHeadSha(), List.of(), null, null,
-                null, null, null, null, null, null);
+                null, null, null, null, null, null, t.getGitUrl(), hostOf(t));
     }
 
     /** 디자인 구간 claim 페이로드. prev가 있으면(반려 재실행) 이전 디자인 + 피드백 이력 동봉. */
@@ -90,6 +104,6 @@ public record WorkerTaskResponse(
                 prev == null ? null : prev.getMockupFilesJson(),
                 prev == null ? "[]" : prev.getFeedbackHistoryJson(),
                 prev == null ? null : prev.getDesignUrl(),
-                designSystemProjectId, designOutputProjectId);
+                designSystemProjectId, designOutputProjectId, t.getGitUrl(), hostOf(t));
     }
 }

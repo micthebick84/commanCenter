@@ -88,6 +88,22 @@ class InterviewServiceTest {
     }
 
     @Test
+    void claim_assigns_flattened_work_dir_for_gitlab_session() {
+        InterviewSession s = session(1L, InterviewStatus.QUEUED);
+        ReflectionTestUtils.setField(s, "githubRepo", "product/netis/web/package/netis-v7.0");
+        s.setGitUrl("https://gitlab.hamon.vip/product/netis/web/package/netis-v7.0.git");
+        when(sessionRepo.findClaimableForUpdateSkipLocked(any())).thenReturn(List.of(s));
+        when(turnRepo.findBySessionIdOrderBySeqAsc(1L)).thenReturn(List.of());
+
+        Optional<com.hamonsoft.netismaker.dto.InterviewClaimResponse> resp = service.claim("w1");
+
+        assertThat(s.getWorkDir())
+                .endsWith("/netis-maker/interviews/_gitlab/product+netis+web+package+netis-v7.0/session-1");
+        assertThat(resp.get().repoHost()).isEqualTo("gitlab");
+        assertThat(resp.get().gitUrl()).isEqualTo(s.getGitUrl());
+    }
+
+    @Test
     void claim_resume_keeps_existing_work_dir() {
         InterviewSession s = session(1L, InterviewStatus.QUEUED);
         s.setWorkDir("/preset/path/session-1");

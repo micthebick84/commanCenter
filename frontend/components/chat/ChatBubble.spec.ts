@@ -67,4 +67,67 @@ describe('ChatBubble', () => {
       expect(collisions).toEqual([])
     },
   )
+
+  describe('첨부 칩 (스펙 2026-09-13 §7 — user 말풍선 아래만, 클릭 → download(id))', () => {
+    const attachments = [
+      { id: 7, fileName: '요구사항.docx', contentType: null, sizeBytes: 1536 },
+      { id: 8, fileName: '캡처.png', contentType: 'image/png', sizeBytes: 512 },
+    ]
+
+    it('user 말풍선 아래에 첨부 칩(이름·크기)을 그리고, 클릭하면 download(id)를 emit한다', async () => {
+      const w = mount(ChatBubble, {
+        props: { role: 'user', content: '이 문서 기준으로 봐줘', attachments },
+      })
+      expect(w.find('.bubble.user').text()).toBe('이 문서 기준으로 봐줘')
+      const chips = w.findAll('.bubble-attachments .q-chip')
+      expect(chips).toHaveLength(2)
+      expect(chips[0]!.text()).toContain('요구사항.docx')
+      expect(chips[0]!.text()).toContain('2KB')
+      expect(chips[1]!.text()).toContain('512B')
+      await chips[1]!.trigger('click')
+      expect(w.emitted('download')).toEqual([[8]])
+    })
+
+    it('assistant 말풍선은 attachments가 있어도 칩을 그리지 않는다', () => {
+      const w = mount(ChatBubble, {
+        props: { role: 'assistant', content: '답변', attachments },
+      })
+      expect(w.find('.bubble-attachments').exists()).toBe(false)
+    })
+
+    it('첨부가 없거나 빈 배열이면 칩 줄을 그리지 않는다', () => {
+      expect(
+        mount(ChatBubble, { props: { role: 'user', content: 'x' } }).find('.bubble-attachments').exists(),
+      ).toBe(false)
+      expect(
+        mount(ChatBubble, { props: { role: 'user', content: 'x', attachments: [] } })
+          .find('.bubble-attachments')
+          .exists(),
+      ).toBe(false)
+    })
+
+    it('id 없는(전송 직후 낙관적) 첨부는 클릭할 수 없고 download를 내지 않는다', async () => {
+      const w = mount(ChatBubble, {
+        props: {
+          role: 'user',
+          content: '보내는 중',
+          attachments: [{ fileName: '메모.txt', sizeBytes: 3 }],
+        },
+      })
+      const chip = w.find('.bubble-attachments .q-chip')
+      expect(chip.text()).toContain('메모.txt')
+      expect(chip.classes()).not.toContain('q-chip--clickable')
+      await chip.trigger('click')
+      expect(w.emitted('download')).toBeUndefined()
+    })
+
+    it('첨부 칩 줄의 클래스명도 Quasar 반응형 표시 헬퍼와 겹치지 않는다', () => {
+      const w = mount(ChatBubble, { props: { role: 'user', content: 'x', attachments } })
+      const els = [w.element, ...Array.from(w.element.querySelectorAll('*'))]
+      const collisions = els
+        .flatMap((el) => el.className.split(/\s+/).filter(Boolean))
+        .filter((c) => QUASAR_VISIBILITY_CLASS.test(c))
+      expect(collisions).toEqual([])
+    })
+  })
 })

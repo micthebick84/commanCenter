@@ -64,6 +64,41 @@ class InterviewResponseTest {
         assertThat(r.contextWindow()).isEqualTo(200000L);
     }
 
+    // ── 질문 첨부·MCP id (스펙 2026-09-13 §5.1) ────────────────────────────────
+
+    @Test
+    void of_five_arg_carries_mcp_ids_kickoff_attachments_and_per_turn_attachments() {
+        InterviewSession q = InterviewSession.createQuestion("o/r", "main", "t", "q?", "user1",
+                List.of(), "claude-opus-5", "high");
+        q.setMcpCatalogIds(new java.util.ArrayList<>(List.of(3L, 4L)));
+        InterviewTurn t0 = InterviewTurn.of(1L, 0, "assistant", "question", "답", null);
+        InterviewTurn t1 = InterviewTurn.of(1L, 1, "user", "answer", "추가?", 0);
+        var kick = new InterviewResponse.AttachmentView(11L, "설계.docx",
+                "application/vnd.openxmlformats-officedocument.wordprocessingml.document", 100L);
+        var turnAtt = new InterviewResponse.AttachmentView(12L, "로그.txt", null, 5L);
+
+        InterviewResponse r = InterviewResponse.of(q, List.of(t0, t1), null,
+                List.of(kick), java.util.Map.of(1, List.of(turnAtt)));
+
+        assertThat(r.mcpCatalogIds()).containsExactly(3L, 4L);
+        assertThat(r.attachments()).containsExactly(kick);
+        assertThat(r.turns().get(0).attachments()).isNotNull().isEmpty();
+        assertThat(r.turns().get(1).attachments()).containsExactly(turnAtt);
+    }
+
+    @Test
+    void three_arg_of_and_six_arg_turn_view_keep_legacy_shape_with_empty_non_null_lists() {
+        InterviewSession q = InterviewSession.createQuestion("o/r", "main", "t", "q?", "user1",
+                List.of(), "claude-opus-5", "high");
+        InterviewTurn t = InterviewTurn.of(1L, 2, "assistant", "question", "어떤 인증?", null);
+        InterviewResponse r = InterviewResponse.of(q, List.of(t), null);
+        assertThat(r.mcpCatalogIds()).isNotNull().isEmpty();
+        assertThat(r.attachments()).isNotNull().isEmpty();
+        assertThat(r.turns().get(0).attachments()).isNotNull().isEmpty();
+        var tv = new InterviewResponse.TurnView(1, "user", "answer", "x", 0, t.getCreatedAt(), null);
+        assertThat(tv.attachments()).isNotNull().isEmpty();
+    }
+
     @Test
     void of_leaves_context_null_when_never_reported() {
         InterviewSession q = InterviewSession.createQuestion("o/r", "main", "t", "q?", "user1",

@@ -170,6 +170,39 @@ public class AttachmentStorage {
         return "task-" + taskId + "/" + ordinal + "-" + sanitize(originalFilename);
     }
 
+    // ── 질문 세션 첨부 (스펙 2026-09-13 §5.2) ──────────────────────────────────
+
+    /** 질문 세션 첨부 루트(상대) = question-{sid}. claim의 attachmentRoot(절대)는 absolutePathOf(이 값). */
+    public String questionRootRelative(long sessionId) {
+        return "question-" + sessionId;
+    }
+
+    /**
+     * 질문 첨부 상대경로 = question-{sid}/{create|turnSeq}/{ordinal}-{sanitized}.
+     * 순번은 메시지(등록=create, 추가 질문=그 답변 turn seq) 하위 디렉터리로 격리 → 턴을 넘나드는 충돌 없음.
+     */
+    public String relativePathForQuestion(long sessionId, Integer turnSeq, int ordinal, String originalFilename) {
+        String message = turnSeq == null ? "create" : String.valueOf(turnSeq);
+        return questionRootRelative(sessionId) + "/" + message + "/" + ordinal + "-" + sanitize(originalFilename);
+    }
+
+    /** Tika sidecar 경로 = 원본 상대경로 + ".txt" (원본 옆에 나란히 — 정리 시 함께 삭제). */
+    public String extractedTextRelativePath(String relativePath) {
+        return relativePath + ".txt";
+    }
+
+    /** 추출 텍스트(sidecar) 기록 — UTF-8. 루트 탈출은 resolve가 404로 막는다. */
+    public void writeText(String relativePath, String text) {
+        Path target = resolve(relativePath);
+        try {
+            Files.createDirectories(target.getParent());
+            Files.writeString(target, text, StandardCharsets.UTF_8);
+        } catch (IOException e) {
+            throw new TaskException(HttpStatus.INTERNAL_SERVER_ERROR,
+                    "첨부 추출 텍스트 저장에 실패했습니다: " + e.getMessage());
+        }
+    }
+
     public void write(String relativePath, MultipartFile file) {
         Path target = resolve(relativePath);
         try {

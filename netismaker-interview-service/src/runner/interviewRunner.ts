@@ -105,8 +105,42 @@ async function* promptFor(claim: InterviewClaimResponse): AsyncIterable<UserTurn
 }
 
 /**
- * 질문 세션(Q&A) 프롬프트 — 스킬 언급 없음. fresh = Q&A 전용 계약 + 읽기 전용 규칙 + 질문 본문(스펙 §6-④),
- * resume = 후속 질문(lastAnswer) 주입. 허용 Bash 목록은 permissions.ts BASH_WHITELIST와 동일하게 유지할 것.
+ * 질문 세션 첨부 섹션 (스펙 2026-09-13 §6). 줄 형식 `- {fileName}: {absolutePath}` + Tika sidecar가 있으면
+ * ` (텍스트 추출본: {extractedTextPath} — 이 경로를 Read하세요)`. 구버전 Java claim/turn에는 attachments
+ * 필드가 없으므로 Array.isArray 가드 (attachmentSection 선례). 0건이면 빈 문자열.
+ * INTERVIEW의 attachmentSection과는 별개 — 인터뷰 킥오프 문구(brainstorming 전 읽기)를 섞지 않는다.
+ */
+function questionAttachmentSection(atts: AttachmentRef[] | undefined, intro: string): string {
+  const list: AttachmentRef[] = Array.isArray(atts) ? atts : [];
+  if (list.length === 0) return '';
+  const lines = list.map((a) => {
+    const sidecar = typeof a.extractedTextPath === 'string' && a.extractedTextPath.length > 0
+      ? ` (텍스트 추출본: ${a.extractedTextPath} — 이 경로를 Read하세요)`
+      : '';
+    return `- ${a.fileName}: ${a.absolutePath}${sidecar}`;
+  });
+  return (
+    `${intro}\n` +
+    lines.join('\n') +
+    '\n\n' +
+    'Read 도구로 위 파일을 읽고 답변에 반영하세요. 읽을 수 없는 포맷이면 건너뛰고 사용자에게 확인하세요.\n\n'
+  );
+}
+
+/** claim.turns에서 마지막 `role=user, kind=answer` 턴의 첨부 (resume 시 "이 메시지" 첨부). 없으면 undefined. */
+function lastAnswerAttachments(claim: InterviewClaimResponse): AttachmentRef[] | undefined {
+  const turns = Array.isArray(claim.turns) ? claim.turns : [];
+  for (let i = turns.length - 1; i >= 0; i--) {
+    const t = turns[i];
+    if (t && t.role === 'user' && t.kind === 'answer') return t.attachments;
+  }
+  return undefined;
+}
+
+/**
+ * 질문 세션(Q&A) 프롬프트 — 스킬 언급 없음. fresh = Q&A 전용 계약 + 질문 본문 + (등록 시 첨부) + 읽기 전용 규칙
+ * (스펙 §6-④), resume = 후속 질문(lastAnswer) + (그 메시지의 첨부) 주입. 허용 Bash 목록은 permissions.ts
+ * BASH_WHITELIST와 동일하게 유지할 것.
  */
 async function* questionPromptFor(claim: InterviewClaimResponse): AsyncIterable<UserTurn> {
   if (!claim.claudeSessionId) {
@@ -114,17 +148,21 @@ async function* questionPromptFor(claim: InterviewClaimResponse): AsyncIterable<
       `당신은 \`${claim.githubRepo}\` (브랜치 ${claim.githubBranch}) 레포에 대한 질문에 답하는 코드 분석 어시스턴트입니다. ` +
         '현재 작업 디렉토리에 이 레포가 체크아웃되어 있습니다.\n\n' +
         `제목: ${claim.title}\n질문: ${claim.description}\n\n` +
+        questionAttachmentSection(claim.attachments, '질문에 첨부된 파일:') +
         '규칙:\n' +
         '- 이 세션은 질문·답변(Q&A) 전용입니다. 구현 계획 작성, 작업 등록, 코드 수정은 이 세션에서 불가능합니다. ' +
         '그런 요청을 받으면 "작업 등록(인터뷰) 기능을 이용해 주세요"라고 안내하세요.\n' +
         '- 레포는 읽기 전용입니다: 파일 생성/수정, 빌드/설치/테스트 실행, git commit/push를 하지 마세요. ' +
         'Read/Grep/Glob, 읽기 전용 셸 명령(git status/log/diff/show/branch, ls, cat, grep, rg, find, head, tail, wc, pwd), ' +
         '연결된 MCP 도구로만 조사하세요.\n' +
+        '- 첨부파일은 레포 체크아웃 밖(세션 첨부 디렉토리)에 있을 수 있으며, Read 도구로만 읽을 수 있습니다 ' +
+        '(Grep/Glob/셸 명령은 레포 안에서만 동작합니다).\n' +
         '- 한국어 마크다운으로 답하고, 근거는 `파일경로:라인` 형식으로 제시하세요. 확실하지 않으면 모른다고 답하세요.\n' +
         '- 스킬(Skill) 도구는 없습니다. 바로 조사하고 답하세요.',
     );
   } else {
-    yield userTurn(claim.lastAnswer ?? '');
+    const section = questionAttachmentSection(lastAnswerAttachments(claim), '이 메시지에 첨부된 파일:');
+    yield userTurn(section ? `${claim.lastAnswer ?? ''}\n\n${section}` : (claim.lastAnswer ?? ''));
   }
 }
 
@@ -441,6 +479,8 @@ export class InterviewRunner {
         effort: claim.effort,
         abortController: controller,
         sessionKind: 'QUESTION',
+        // 세션 첨부 디렉토리 — Read 게이트의 두 번째 허용 루트 (스펙 2026-09-13 §6). 구버전 Java는 필드 없음 → null.
+        attachmentRoot: claim.attachmentRoot ?? null,
       }),
     });
     const result = await relay(stream, { onActivity, onRateLimit, workDir: claim.workDir });

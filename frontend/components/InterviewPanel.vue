@@ -4,6 +4,7 @@ import { useInterviewStream } from '~/composables/useInterviewStream'
 import type { InterviewStatus, InterviewSnapshot } from '~/composables/useInterviewStream'
 import { useAutoScroll } from '~/composables/useAutoScroll'
 import { interviewStatusLabel, type SessionKind } from '~/composables/interviewLabels'
+import { downloadAttachment as downloadBlob } from '~/composables/attachmentDownload'
 import ChatBubble from '~/components/chat/ChatBubble.vue'
 import TypingIndicator from '~/components/chat/TypingIndicator.vue'
 import PendingBubble from '~/components/chat/PendingBubble.vue'
@@ -151,26 +152,38 @@ watch(
   },
 )
 
-/** composer 슬롯의 send(extra) — 질문 세션은 다음 턴에 쓸 모델·effort를 ask 바디에 싣는다 (스펙 2026-09-05 §2 개정). */
-type AskExtra = { model?: string; effort?: string }
+/**
+ * composer 슬롯의 send(extra) — 질문 세션은 다음 턴에 쓸 모델·effort·MCP 집합을 ask 바디에 싣고(스펙 2026-09-05 §2 개정,
+ * 2026-09-13 §7), 파일이 있으면 multipart(meta JSON + files)로 보낸다. 성공 여부를 돌려줘 페이지가 대기 파일을 비운다.
+ */
+type AskExtra = { model?: string; effort?: string; mcpCatalogIds?: number[]; files?: File[] }
 
-async function sendAnswer(extra?: AskExtra) {
+async function sendAnswer(extra?: AskExtra): Promise<boolean> {
   const text = answer.value.trim()
-  if (!text || status.value !== 'AWAITING_INPUT') return
+  if (!text || status.value !== 'AWAITING_INPUT') return false
   const replyToSeq = lastQuestionSeq.value
   const body: Record<string, unknown> = { answer: text, replyToSeq }
+  const files = isQuestion.value ? (extra?.files ?? []) : []
   // 질문 세션만: 서버가 검증 후 세션 값을 갱신해 다음 claim부터 적용한다. 인터뷰 answer 바디는 그대로.
   if (isQuestion.value) {
     if (typeof extra?.model === 'string') body.model = extra.model
     if (typeof extra?.effort === 'string') body.effort = extra.effort
+    // 배열이면 그대로 — []는 "전부 해제", 생략(null)은 "유지" (서버 QuestionAskRequest 비대칭 규칙)
+    if (Array.isArray(extra?.mcpCatalogIds)) body.mcpCatalogIds = extra.mcpCatalogIds
   }
   sending.value = true
   try {
-    await useApi(`${apiBase.value}/${props.sessionId}/${isQuestion.value ? 'ask' : 'answer'}`, {
-      method: 'POST',
-      body,
-    })
-    // 낙관적 추가: 서버 재큐 후 다음 질문이 새 seq로 도착한다.
+    const url = `${apiBase.value}/${props.sessionId}/${isQuestion.value ? 'ask' : 'answer'}`
+    if (files.length > 0) {
+      // Content-Type을 명시하지 않는다 — $fetch가 FormData boundary를 스스로 설정 (pages/tasks/index.vue와 동일)
+      const form = new FormData()
+      form.append('meta', new Blob([JSON.stringify(body)], { type: 'application/json' }))
+      for (const f of files) form.append('files', f, f.name)
+      await useApi(url, { method: 'POST', body: form })
+    } else {
+      await useApi(url, { method: 'POST', body })
+    }
+    // 낙관적 추가: 서버 재큐 후 다음 질문이 새 seq로 도착한다. 첨부는 id 없이(서버 확정 전 — 클릭 불가) 이름·크기만.
     turns.value = [
       ...turns.value,
       {
@@ -178,12 +191,16 @@ async function sendAnswer(extra?: AskExtra) {
         role: 'user',
         kind: 'answer',
         content: text,
+        ...(files.length > 0
+          ? { attachments: files.map((f) => ({ fileName: f.name, sizeBytes: f.size })) }
+          : {}),
       },
     ]
     answer.value = ''
     status.value = 'QUEUED'
     await nextTick()
     scrollToBottom() // 내가 보낸 답변은 항상 하단으로
+    return true
   } catch (e: any) {
     const st = e?.statusCode ?? e?.response?.status ?? e?.status
     if (st === 409) {
@@ -194,8 +211,19 @@ async function sendAnswer(extra?: AskExtra) {
     } else {
       $q.notify({ type: 'negative', message: e?.data?.message ?? '답변 전송 실패' })
     }
+    return false
   } finally {
     sending.value = false
+  }
+}
+
+// 말풍선 첨부 칩 클릭 — 파일명은 턴 메타에서 (스펙 2026-09-13 §7). 질문 세션 전용 경로지만 apiBase로 일반화해 둔다.
+async function downloadAttachment(id: number) {
+  const meta = turns.value.flatMap((t) => t.attachments ?? []).find((a) => a.id === id)
+  try {
+    await downloadBlob(`${apiBase.value}/${props.sessionId}/attachments/${id}`, meta?.fileName ?? `attachment-${id}`)
+  } catch (e: any) {
+    $q.notify({ type: 'negative', message: e?.message ?? '다운로드 실패' })
   }
 }
 
@@ -346,7 +374,14 @@ defineExpose({
           aria-live="polite"
           @scroll="onScroll"
         >
-          <ChatBubble v-for="t in turns" :key="t.seq" :role="t.role" :content="t.content" />
+          <ChatBubble
+            v-for="t in turns"
+            :key="t.seq"
+            :role="t.role"
+            :content="t.content"
+            :attachments="t.attachments"
+            @download="downloadAttachment"
+          />
           <PendingBubble
             v-if="waitingForAi && pending"
             data-test="pending-bubble"

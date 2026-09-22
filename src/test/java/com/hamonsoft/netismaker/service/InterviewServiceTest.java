@@ -28,6 +28,7 @@ class InterviewServiceTest {
     TaskAttachmentRepository attachmentRepo;
     AttachmentStorage attachmentStorage;
     TaskStageUsageRepository stageUsageRepo;
+    QuestionAttachmentRepository questionAttachmentRepo;
     InterviewService service;
 
     @BeforeEach
@@ -41,8 +42,10 @@ class InterviewServiceTest {
         attachmentRepo = mock(TaskAttachmentRepository.class);
         attachmentStorage = mock(AttachmentStorage.class);
         stageUsageRepo = mock(TaskStageUsageRepository.class);
+        questionAttachmentRepo = mock(QuestionAttachmentRepository.class);
         service = new InterviewService(sessionRepo, turnRepo, planRepo,
-                taskRepo, analysisRepo, historyRepo, attachmentRepo, attachmentStorage, stageUsageRepo);
+                taskRepo, analysisRepo, historyRepo, attachmentRepo, attachmentStorage, stageUsageRepo,
+                questionAttachmentRepo);
         when(sessionRepo.save(any())).thenAnswer(i -> i.getArgument(0));
         when(turnRepo.save(any())).thenAnswer(i -> i.getArgument(0));
         when(planRepo.save(any())).thenAnswer(i -> i.getArgument(0));
@@ -304,9 +307,139 @@ class InterviewServiceTest {
                 com.hamonsoft.netismaker.entity.InterviewTurn.of(10L, 3, "user", "answer", "이전 답변", 2);
         when(turnRepo.findBySessionIdOrderBySeqAsc(10L)).thenReturn(List.of(existing));
         InterviewSession result = service.submitAnswer(10L, "u1", false,
-                new com.hamonsoft.netismaker.dto.AnswerRequest("중복 재시도", 2));
+                new com.hamonsoft.netismaker.dto.AnswerRequest("중복 재시도", 2)).session();
         verify(turnRepo, never()).save(any());
         assertThat(result.getStatus()).isEqualTo(InterviewStatus.QUEUED); // no-op, 상태 유지
+    }
+
+    @Test
+    void submitAnswer_returns_the_new_answer_turn_seq() {
+        // 스펙 2026-09-13 §5.2: AnswerOutcome.turnSeq = 방금 붙인 user answer 턴의 seq (첨부 링크 키).
+        InterviewSession s = session(10L, InterviewStatus.AWAITING_INPUT);
+        when(sessionRepo.findByIdForUpdate(10L)).thenReturn(Optional.of(s));
+        when(turnRepo.findMaxSeq(10L)).thenReturn(2);
+        InterviewService.AnswerOutcome out = service.submitAnswer(10L, "u1", false,
+                new com.hamonsoft.netismaker.dto.AnswerRequest("답", 2));
+        assertThat(out.session()).isSameAs(s);
+        assertThat(out.turnSeq()).isEqualTo(3);
+    }
+
+    @Test
+    void submitAnswer_duplicate_returns_null_turn_seq() {
+        InterviewSession s = session(10L, InterviewStatus.QUEUED);
+        when(sessionRepo.findByIdForUpdate(10L)).thenReturn(Optional.of(s));
+        when(turnRepo.findBySessionIdOrderBySeqAsc(10L)).thenReturn(List.of(
+                com.hamonsoft.netismaker.entity.InterviewTurn.of(10L, 3, "user", "answer", "이전 답변", 2)));
+        InterviewService.AnswerOutcome out = service.submitAnswer(10L, "u1", false,
+                new com.hamonsoft.netismaker.dto.AnswerRequest("중복", 2));
+        assertThat(out.session()).isSameAs(s);
+        assertThat(out.turnSeq()).isNull();
+    }
+
+    @Test
+    void appendSystemNote_appends_a_system_note_turn_at_next_seq() {
+        when(turnRepo.findMaxSeq(10L)).thenReturn(4);
+        com.hamonsoft.netismaker.entity.InterviewTurn t = service.appendSystemNote(10L, "MCP 도구 변경: ctx7");
+        assertThat(t.getSessionId()).isEqualTo(10L);
+        assertThat(t.getSeq()).isEqualTo(5);
+        assertThat(t.getRole()).isEqualTo("system");
+        assertThat(t.getKind()).isEqualTo("note");
+        assertThat(t.getContent()).isEqualTo("MCP 도구 변경: ctx7");
+        verify(turnRepo).save(t);
+    }
+
+    private static com.hamonsoft.netismaker.entity.QuestionAttachment qAtt(long id, long sid, Integer turnSeq,
+                                                                            String name, String rel, String txt) {
+        var a = com.hamonsoft.netismaker.entity.QuestionAttachment.create(sid, turnSeq, name, rel,
+                "application/octet-stream", 10L, txt, "u1");
+        ReflectionTestUtils.setField(a, "id", id);
+        return a;
+    }
+
+    @Test
+    void claim_on_question_session_carries_attachment_root_kickoff_and_per_turn_attachments() {
+        InterviewSession s = questionSession(1L, InterviewStatus.QUEUED);
+        when(sessionRepo.findClaimableForUpdateSkipLocked(any())).thenReturn(List.of(s));
+        when(turnRepo.findBySessionIdOrderBySeqAsc(1L)).thenReturn(List.of(
+                com.hamonsoft.netismaker.entity.InterviewTurn.of(1L, 0, "assistant", "question", "답1", null),
+                com.hamonsoft.netismaker.entity.InterviewTurn.of(1L, 1, "user", "answer", "추가?", 0)));
+        when(questionAttachmentRepo.findBySessionIdAndTurnSeqIsNullOrderByIdAsc(1L)).thenReturn(List.of(
+                qAtt(11L, 1L, null, "설계.docx", "question-1/create/1-설계.docx", "question-1/create/1-설계.docx.txt")));
+        when(questionAttachmentRepo.findBySessionIdAndTurnSeqIsNotNullOrderByIdAsc(1L)).thenReturn(List.of(
+                qAtt(12L, 1L, 1, "로그.txt", "question-1/1/1-로그.txt", null)));
+        when(attachmentStorage.absolutePathOf(any())).thenAnswer(i -> "/abs/" + i.getArgument(0));
+        when(attachmentStorage.questionRootRelative(1L)).thenReturn("question-1");
+
+        var resp = service.claim("w1").orElseThrow();
+
+        assertThat(resp.attachmentRoot()).isEqualTo("/abs/question-1");
+        assertThat(resp.attachments()).hasSize(1);
+        assertThat(resp.attachments().get(0).fileName()).isEqualTo("설계.docx");
+        assertThat(resp.attachments().get(0).absolutePath()).isEqualTo("/abs/question-1/create/1-설계.docx");
+        assertThat(resp.attachments().get(0).extractedTextPath()).isEqualTo("/abs/question-1/create/1-설계.docx.txt");
+        assertThat(resp.turns().get(0).attachments()).isEmpty();
+        assertThat(resp.turns().get(1).attachments()).hasSize(1);
+        assertThat(resp.turns().get(1).attachments().get(0).id()).isEqualTo(12L);
+        assertThat(resp.turns().get(1).attachments().get(0).absolutePath()).isEqualTo("/abs/question-1/1/1-로그.txt");
+        assertThat(resp.turns().get(1).attachments().get(0).extractedTextPath()).isNull();
+        verify(attachmentRepo, never()).findByTaskIdOrderByIdAsc(any());   // task 첨부 경로는 안 탄다
+    }
+
+    @Test
+    void claim_on_interview_session_keeps_task_attachment_path_and_null_attachment_root() {
+        InterviewSession s = session(1L, InterviewStatus.QUEUED);
+        s.setTaskId(77L);
+        when(sessionRepo.findClaimableForUpdateSkipLocked(any())).thenReturn(List.of(s));
+        when(turnRepo.findBySessionIdOrderBySeqAsc(1L)).thenReturn(List.of(
+                com.hamonsoft.netismaker.entity.InterviewTurn.of(1L, 0, "assistant", "question", "q", null)));
+        when(attachmentRepo.findByTaskIdOrderByIdAsc(77L)).thenReturn(List.of());
+
+        var resp = service.claim("w1").orElseThrow();
+
+        assertThat(resp.attachmentRoot()).isNull();
+        assertThat(resp.attachments()).isEmpty();
+        assertThat(resp.turns().get(0).attachments()).isNotNull().isEmpty();
+        verify(attachmentRepo).findByTaskIdOrderByIdAsc(77L);
+        verifyNoInteractions(questionAttachmentRepo);
+    }
+
+    @Test
+    void getResponse_on_question_session_exposes_mcp_ids_and_attachment_views_without_paths() {
+        InterviewSession s = questionSession(1L, InterviewStatus.AWAITING_INPUT);
+        s.setMcpCatalogIds(new java.util.ArrayList<>(List.of(3L, 4L)));
+        when(sessionRepo.findActiveById(1L)).thenReturn(Optional.of(s));
+        when(turnRepo.findBySessionIdOrderBySeqAsc(1L)).thenReturn(List.of(
+                com.hamonsoft.netismaker.entity.InterviewTurn.of(1L, 0, "assistant", "question", "답1", null),
+                com.hamonsoft.netismaker.entity.InterviewTurn.of(1L, 1, "user", "answer", "추가?", 0)));
+        when(planRepo.findById(1L)).thenReturn(Optional.empty());
+        when(questionAttachmentRepo.findBySessionIdOrderByIdAsc(1L)).thenReturn(List.of(
+                qAtt(11L, 1L, null, "설계.docx", "question-1/create/1-설계.docx", "question-1/create/1-설계.docx.txt"),
+                qAtt(12L, 1L, 1, "로그.txt", "question-1/1/1-로그.txt", null)));
+
+        var r = service.getResponse(1L, "u1", false);
+
+        assertThat(r.mcpCatalogIds()).containsExactly(3L, 4L);
+        assertThat(r.attachments()).hasSize(1);
+        assertThat(r.attachments().get(0).id()).isEqualTo(11L);
+        assertThat(r.attachments().get(0).fileName()).isEqualTo("설계.docx");
+        assertThat(r.attachments().get(0).sizeBytes()).isEqualTo(10L);
+        assertThat(r.turns().get(0).attachments()).isEmpty();
+        assertThat(r.turns().get(1).attachments()).hasSize(1);
+        assertThat(r.turns().get(1).attachments().get(0).fileName()).isEqualTo("로그.txt");
+    }
+
+    @Test
+    void getResponse_on_interview_session_has_empty_attachment_fields_and_skips_question_repo() {
+        InterviewSession s = session(1L, InterviewStatus.AWAITING_INPUT);
+        when(sessionRepo.findActiveById(1L)).thenReturn(Optional.of(s));
+        when(turnRepo.findBySessionIdOrderBySeqAsc(1L)).thenReturn(List.of());
+        when(planRepo.findById(1L)).thenReturn(Optional.empty());
+
+        var r = service.getResponse(1L, "u1", false);
+
+        assertThat(r.mcpCatalogIds()).isNotNull().isEmpty();
+        assertThat(r.attachments()).isNotNull().isEmpty();
+        verifyNoInteractions(questionAttachmentRepo);
     }
 
     @Test

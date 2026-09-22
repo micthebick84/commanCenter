@@ -1,5 +1,6 @@
 import { mount, flushPromises } from '@vue/test-utils'
 import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { QFile } from 'quasar'
 import QuestionsIndex from '../pages/questions/index.vue'
 import { useApiMock } from './mocks/nuxt'
 import { setViewportWidth } from './mocks/screen'
@@ -146,6 +147,59 @@ describe('pages/questions/index — 새 질문 입력창 (스펙 2026-09-05 §3�
     expect(vm.repoStatus).toBe('error')
     expect(vm.repoStatusMsg).toContain('지원하지 않는 호스트')
     expect(useApiMock).not.toHaveBeenCalledWith('/api/repos/branches', expect.anything())
+    w.unmount()
+  })
+
+  it('파일을 첨부하면 multipart(meta JSON + files)로 POST하고, 성공 시 대기 파일을 비운다 (스펙 2026-09-13 §7)', async () => {
+    const w = mount(QuestionsIndex)
+    await flushPromises()
+    const vm = w.vm as any
+    Object.assign(vm.draft, {
+      repoCatalogId: 1, githubBranch: 'dev', question: '이 문서 기준으로 설명해줘',
+      model: 'claude-sonnet-5', effort: 'medium', mcpCatalogIds: [9],
+    })
+    const f = new File(['x'], '설계.docx', {
+      type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    })
+    w.findComponent(QFile).vm.$emit('update:modelValue', [f])
+    await flushPromises()
+    expect(w.find('[data-test="composer-files"]').text()).toContain('설계.docx')
+
+    await vm.submit()
+    await flushPromises()
+
+    const call = useApiMock.mock.calls.find((c) => c[0] === '/api/questions' && c[1]?.method === 'POST')
+    expect(call).toBeTruthy()
+    const body = call![1].body as FormData
+    expect(body).toBeInstanceOf(FormData)
+    const metaBlob = body.get('meta') as Blob
+    expect(metaBlob.type).toBe('application/json')
+    // meta = 기존 JSON 바디 그대로 (QuestionCreateRequest 무변경)
+    expect(JSON.parse(await metaBlob.text())).toEqual({
+      repoCatalogId: 1, githubBranch: 'dev', question: '이 문서 기준으로 설명해줘',
+      model: 'claude-sonnet-5', effort: 'medium', mcpCatalogIds: [9],
+    })
+    expect((body.getAll('files') as File[]).map((x) => x.name)).toEqual(['설계.docx'])
+    expect(call![1].headers?.['Content-Type']).toBeUndefined() // $fetch가 boundary를 스스로 설정
+    expect(navigateToMock).toHaveBeenCalledWith('/questions/12')
+    expect(w.find('[data-test="composer-files"]').exists()).toBe(false)
+    w.unmount()
+  })
+
+  it('등록이 실패하면 대기 파일을 유지한다', async () => {
+    const w = mount(QuestionsIndex)
+    await flushPromises()
+    const vm = w.vm as any
+    Object.assign(vm.draft, { repoCatalogId: 1, githubBranch: 'main', question: 'q' })
+    w.findComponent(QFile).vm.$emit('update:modelValue', [new File(['x'], '설계.docx')])
+    await flushPromises()
+    useApiMock.mockImplementationOnce(() =>
+      Promise.reject({ statusCode: 400, data: { message: '지원하지 않는 파일 형식입니다' } }),
+    )
+    await vm.submit()
+    await flushPromises()
+    expect(navigateToMock).not.toHaveBeenCalled()
+    expect(w.find('[data-test="composer-files"]').text()).toContain('설계.docx')
     w.unmount()
   })
 

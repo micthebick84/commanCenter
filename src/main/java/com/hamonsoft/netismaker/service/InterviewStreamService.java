@@ -25,9 +25,9 @@ import java.util.concurrent.CopyOnWriteArrayList;
 /**
  * 인터뷰 SSE 스트리밍 (api 프로파일).
  *
- *  이벤트: question | design | plan_ready | status | done | activity
- *  - subscribe: 접속 시 keepalive ping + 기존 turn replay 후 live 구독.
- *  - pushQuestion/pushDesign/pushPlanReady/pushStatus: 라이브 fan-out.
+ *  이벤트: question | design | plan_ready | status | done | activity | note
+ *  - subscribe: 접속 시 keepalive ping + 기존 turn replay 후 live 구독 (system 턴은 note로 replay).
+ *  - pushQuestion/pushDesign/pushPlanReady/pushStatus/pushNote: 라이브 fan-out.
  *  - finish: done 이벤트 + emitter complete (세션 terminal 시).
  *
  *  LOCKED CONTRACT v2:
@@ -64,11 +64,13 @@ public class InterviewStreamService {
                 // 라이브와 동일한 JSON 객체 포맷으로 replay (프론트는 question={seq,content},
                 // design={key,title,body,approved}를 JSON.parse한다). writeValueAsString의
                 // JsonProcessingException은 IOException 하위라 아래 catch가 함께 처리한다.
-                if ("design".equals(t.getKind())) {
+                String event = replayEventName(t);
+                if ("design".equals(event)) {
                     emitter.send(SseEmitter.event().name("design").data(
                             json.writeValueAsString(new DesignEvent("design-" + t.getSeq(), "설계", content, false))));
                 } else {
-                    emitter.send(SseEmitter.event().name("question").data(
+                    // question | note — 둘 다 {seq, content} 객체 (프론트가 seq로 dedup)
+                    emitter.send(SseEmitter.event().name(event).data(
                             json.writeValueAsString(new QuestionEvent(t.getSeq(), content))));
                 }
             }
@@ -84,9 +86,28 @@ public class InterviewStreamService {
         return emitter;
     }
 
+    /**
+     * replay 이벤트명 매핑 (스펙 2026-09-13 §5.3): design 턴 → design, role=system 턴 → note
+     * (예전엔 question으로 나가 프론트 hydrate dedup에만 기대던 버그), 그 외 assistant 턴 → question.
+     * user 턴은 호출 전에 걸러진다.
+     */
+    static String replayEventName(InterviewTurn t) {
+        if ("design".equals(t.getKind())) return "design";
+        if ("system".equals(t.getRole())) return "note";
+        return "question";
+    }
+
     /** question 페이로드 = {seq, content} JSON 객체 (프론트가 seq로 dedup). */
     public void pushQuestion(Long sessionId, int seq, String content) {
         sendJson(sessionId, "question", new QuestionEvent(seq, content == null ? "" : content));
+    }
+
+    /**
+     * note 페이로드 = {seq, content} JSON 객체 — role=system,kind=note 턴의 라이브 전달
+     * (대화 중 MCP 변경 노트, 스펙 2026-09-13 §5.3). 프론트는 system 말풍선으로 렌더.
+     */
+    public void pushNote(Long sessionId, int seq, String content) {
+        sendJson(sessionId, "note", new QuestionEvent(seq, content == null ? "" : content));
     }
 
     /** design 페이로드 = {key, title, body, approved} JSON 객체 (프론트가 key로 섹션 upsert). */

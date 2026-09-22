@@ -2,12 +2,25 @@
 // 대화 턴 1개를 말풍선으로. 순수 프레젠테이션, 내부 상태 없음.
 // assistant → 좌측(회색 말풍선 + AI 아바타, 마크다운 렌더), user → 우측(파란 말풍선 + 나 아바타, 평문),
 // system → 가운데 노트 칩.
+// 첨부(스펙 2026-09-13 §7): user 말풍선 아래에만 칩 줄. 클릭 → download(id). id 없는 첨부(전송 직후 낙관적 턴)는
+// 서버 확정 전이라 클릭 불가.
 import { renderMarkdown } from '~/composables/useMarkdown'
+import { formatSize } from '~/composables/attachmentLimits'
+import type { TurnAttachment } from '~/composables/useInterviewStream'
 
 const props = defineProps<{
   role: 'assistant' | 'user' | 'system'
   content: string
+  attachments?: TurnAttachment[]
 }>()
+const emit = defineEmits<{ (e: 'download', id: number): void }>()
+
+const userAttachments = computed(() =>
+  props.role === 'user' && props.attachments?.length ? props.attachments : [],
+)
+function onChipClick(a: TurnAttachment) {
+  if (a.id != null) emit('download', a.id)
+}
 
 const avatarLabel = computed(() =>
   props.role === 'assistant' ? 'AI' : props.role === 'user' ? '나' : '',
@@ -30,7 +43,26 @@ const html = computed(() =>
       class="bubble assistant markdown"
       v-html="html"
     />
-    <div v-else class="bubble" :class="role">{{ content }}</div>
+    <div v-else class="bubble-stack">
+      <div class="bubble" :class="role">{{ content }}</div>
+      <!-- 첨부 칩 줄 — 말풍선 아래 오른쪽 정렬. 클래스명은 Quasar 반응형 표시 헬퍼(xs/sm/md/lg/xl)와 겹치지 않게. -->
+      <div v-if="userAttachments.length" class="bubble-attachments">
+        <q-chip
+          v-for="(a, i) in userAttachments"
+          :key="a.id ?? `pending-${i}`"
+          dense
+          size="sm"
+          icon="attach_file"
+          color="blue-grey-1"
+          text-color="blue-grey-9"
+          :clickable="a.id != null"
+          :label="`${a.fileName} (${formatSize(a.sizeBytes)})`"
+          @click="onChipClick(a)"
+        >
+          <q-tooltip v-if="a.id != null">클릭하여 다운로드</q-tooltip>
+        </q-chip>
+      </div>
+    </div>
   </div>
 </template>
 
@@ -87,6 +119,24 @@ const html = computed(() =>
   background: #1976d2;
   color: #fff;
   border-bottom-right-radius: 4px;
+}
+/* user 말풍선 + 첨부 칩을 세로로 쌓는 컬럼 — 80% 폭 제한은 스택이 갖고, 말풍선은 스택 안에서 꽉 찬다 */
+.bubble-stack {
+  max-width: 80%;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+}
+.bubble-stack .bubble {
+  max-width: 100%;
+}
+.bubble-attachments {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 2px;
+  margin-top: 3px;
 }
 .system-note {
   font-size: 11px;

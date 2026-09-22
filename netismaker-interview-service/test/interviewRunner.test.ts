@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { InterviewRunner } from '../src/runner/interviewRunner.js';
-import { freshClaim, resumeClaim, freshClaimWithAttachments, questionClaim } from './fixtures/claims.js';
+import { freshClaim, resumeClaim, freshClaimWithAttachments, questionClaim, questionClaimWithAttachments } from './fixtures/claims.js';
 import { planCompleteStream, questionStream, streamingQuestionStream, usageAwareQuestionStream } from './fixtures/sdkMessages.js';
 import { detectHandoff } from '../src/runner/skillDispatch.js';
 
@@ -450,6 +450,110 @@ describe('InterviewRunner kind=QUESTION (스펙 §6 — plan 경로 미진입, Q
     await runner.run(freshClaim);
     expect(captured.prompt).toContain('brainstorming');
     expect(captured.options.plugins).toEqual([{ type: 'local', path: '/sp/5.1.0' }]);
+  });
+
+  describe('첨부파일 (스펙 2026-09-13 §6)', () => {
+    const ATT_ROOT = '/Users/micthebick/netis-maker/attachments/question-77';
+    const DOCX = `${ATT_ROOT}/create/1-요구사항.docx`;
+    const DOCX_TXT = `${ATT_ROOT}/create/1-요구사항.docx.txt`;
+    const PDF = `${ATT_ROOT}/create/2-화면.pdf`;
+
+    it('fresh: "질문에 첨부된 파일:" 섹션이 질문 뒤·규칙 앞에 오고, 오피스는 sidecar Read 안내를 단다', async () => {
+      const client = makeClient();
+      const { fakeQuery, captured } = capturing(() => questionStream());
+      const runner = new InterviewRunner(client as never, fakeQuery as never, deps as never);
+      await runner.run(questionClaimWithAttachments);
+
+      const p = captured.prompt;
+      expect(p).toContain('질문에 첨부된 파일:');
+      expect(p).toContain(`- 요구사항.docx: ${DOCX} (텍스트 추출본: ${DOCX_TXT} — 이 경로를 Read하세요)`);
+      expect(p).toContain(`- 화면.pdf: ${PDF}`);
+      expect(p).not.toContain(`${PDF} (텍스트 추출본`);
+      expect(p).toContain('Read 도구로 위 파일을 읽고 답변에 반영');
+      // 순서: 질문 → 첨부 섹션 → 규칙
+      expect(p.indexOf('로그인은 어디서 처리되나요?')).toBeLessThan(p.indexOf('질문에 첨부된 파일:'));
+      expect(p.indexOf('질문에 첨부된 파일:')).toBeLessThan(p.indexOf('규칙:'));
+      // 규칙 한 줄: 첨부는 체크아웃 밖(세션 첨부 디렉토리)에 있을 수 있고 Read로만 읽는다
+      expect(p).toContain('첨부');
+      expect(p).toMatch(/체크아웃 밖.*Read/);
+      // 인터뷰 킥오프의 첨부 문구는 섞이지 않는다
+      expect(p).not.toContain('첨부 자료 (요청자가 등록 시 업로드한 파일)');
+    });
+
+    it('fresh: attachmentRoot가 buildOptions → canUseTool에 전달돼 첨부 디렉토리 Read가 허용된다', async () => {
+      const client = makeClient();
+      const { fakeQuery, captured } = capturing(() => questionStream());
+      const runner = new InterviewRunner(client as never, fakeQuery as never, deps as never);
+      await runner.run(questionClaimWithAttachments);
+      const gate = captured.options.canUseTool as (t: string, i: Record<string, unknown>) => Promise<{ behavior: string }>;
+      expect((await gate('Read', { file_path: DOCX_TXT })).behavior).toBe('allow');
+      expect((await gate('Read', { file_path: '/Users/micthebick/netis-maker/attachments/question-78/x' })).behavior).toBe('deny');
+      expect((await gate('Grep', { pattern: 'x', path: ATT_ROOT })).behavior).toBe('deny');
+    });
+
+    it('fresh: 첨부 0건 / 필드 없음(구버전 Java) → 섹션 없음, 첨부 디렉토리 Read는 deny', async () => {
+      for (const claim of [
+        { ...questionClaim, attachments: [] },
+        (() => { const c = { ...questionClaim } as Partial<typeof questionClaim>; delete c.attachments; delete c.attachmentRoot; return c as typeof questionClaim; })(),
+      ]) {
+        const client = makeClient();
+        const { fakeQuery, captured } = capturing(() => questionStream());
+        const runner = new InterviewRunner(client as never, fakeQuery as never, deps as never);
+        await runner.run(claim);
+        expect(captured.prompt).toContain('로그인은 어디서 처리되나요?');
+        expect(captured.prompt).not.toContain('첨부된 파일:');
+        expect(captured.prompt).not.toContain('Read 도구로 위 파일을 읽고');
+        const gate = captured.options.canUseTool as (t: string, i: Record<string, unknown>) => Promise<{ behavior: string }>;
+        expect((await gate('Read', { file_path: DOCX_TXT })).behavior).toBe('deny');
+      }
+    });
+
+    it('resume: 마지막 user/answer 턴의 첨부를 "이 메시지에 첨부된 파일:"로 lastAnswer 뒤에 붙인다 (이전 턴 첨부는 제외)', async () => {
+      const client = makeClient();
+      const { fakeQuery, captured } = capturing(() => questionStream());
+      const runner = new InterviewRunner(client as never, fakeQuery as never, deps as never);
+      const older = { id: 21, fileName: '옛날.txt', absolutePath: `${ATT_ROOT}/2/1-옛날.txt`, contentType: 'text/plain', sizeBytes: 10, extractedTextPath: null };
+      const latest = { id: 22, fileName: '표.xlsx', absolutePath: `${ATT_ROOT}/4/1-표.xlsx`, contentType: null, sizeBytes: 20, extractedTextPath: `${ATT_ROOT}/4/1-표.xlsx.txt` };
+      await runner.run({
+        ...questionClaimWithAttachments,
+        claudeSessionId: 'sess-q-1',
+        lastAnswer: '이 표 기준으로 다시 설명해줘',
+        replyToSeq: 4,
+        turns: [
+          { seq: 1, role: 'assistant', kind: 'question', content: 'a1', replyToSeq: null },
+          { seq: 2, role: 'user', kind: 'answer', content: 'q2', replyToSeq: 1, attachments: [older] },
+          { seq: 3, role: 'assistant', kind: 'question', content: 'a3', replyToSeq: null },
+          { seq: 4, role: 'user', kind: 'answer', content: '이 표 기준으로 다시 설명해줘', replyToSeq: 3, attachments: [latest] },
+          { seq: 5, role: 'system', kind: 'note', content: 'MCP 도구 변경: ctx7', replyToSeq: null },
+        ],
+      });
+      const p = captured.prompt;
+      expect(p.startsWith('이 표 기준으로 다시 설명해줘')).toBe(true);
+      expect(p).toContain('이 메시지에 첨부된 파일:');
+      expect(p).toContain(`- 표.xlsx: ${ATT_ROOT}/4/1-표.xlsx (텍스트 추출본: ${ATT_ROOT}/4/1-표.xlsx.txt — 이 경로를 Read하세요)`);
+      expect(p).toContain('Read 도구로 위 파일을 읽고 답변에 반영');
+      expect(p).not.toContain('옛날.txt');
+      // 등록 시 첨부(claim.attachments)는 resume에서 다시 나열하지 않는다
+      expect(p).not.toContain('요구사항.docx');
+      expect(p).not.toContain('질문에 첨부된 파일:');
+      expect(captured.options.resume).toBe('sess-q-1');
+      const gate = captured.options.canUseTool as (t: string, i: Record<string, unknown>) => Promise<{ behavior: string }>;
+      expect((await gate('Read', { file_path: `${ATT_ROOT}/4/1-표.xlsx.txt` })).behavior).toBe('allow');
+    });
+
+    it('resume: 마지막 answer 턴에 첨부가 없거나(빈 배열/필드 없음) 턴이 없으면 lastAnswer만 그대로', async () => {
+      for (const t of [
+        turns(1),
+        [{ seq: 1, role: 'assistant', kind: 'question', content: 'a1', replyToSeq: null }, { seq: 2, role: 'user', kind: 'answer', content: 'x', replyToSeq: 1, attachments: [] }],
+        [],
+      ]) {
+        const client = makeClient();
+        const { fakeQuery, captured } = capturing(() => questionStream());
+        const runner = new InterviewRunner(client as never, fakeQuery as never, deps as never);
+        await runner.run({ ...questionClaimWithAttachments, claudeSessionId: 'sess-q-1', lastAnswer: '토큰 검증은요?', turns: t });
+        expect(captured.prompt).toBe('토큰 검증은요?');
+      }
+    });
   });
 });
 

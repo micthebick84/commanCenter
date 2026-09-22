@@ -1,5 +1,6 @@
 import type { JavaApiClient } from './api/javaClient.js';
 import type { InterviewRunner } from './runner/interviewRunner.js';
+import { maskSecrets } from './sdk/gitRemote.js';
 
 export interface LoopConfig {
   pollIntervalMs: number;
@@ -37,6 +38,11 @@ export class ClaimLoop {
         try {
           await this.runner.run(claim);
         } catch (err) {
+          // 런너를 빠져나온 throw는 이례적이다 — 서버 보고와 별개로 stdout에도 남긴다(interview.log).
+          // eslint-disable-next-line no-console
+          console.warn(
+            `[claim-loop] 런너 crash: session=${claim.sessionId} — ${maskSecrets((err as Error).message)}`,
+          );
           // fail 보고 자체가 실패(네트워크/409)해도 루프는 계속 돌아야 한다 — 여기서 격리.
           try {
             await this.client.fail(claim.sessionId, `runner crashed: ${(err as Error).message}`);

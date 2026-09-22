@@ -101,6 +101,28 @@ const isTerminal = computed(() =>
 // 셸 헤더용 실시간 상태 emit (스펙 2026-09-05 §6 [id].vue)
 watch(status, (s) => emit('status', s), { immediate: true })
 
+// 실패 사유 — 서버 doFail이 붙이는 system 노트("인터뷰 실패: …"/"답변 실패: …").
+// doFail은 터미널 전이라 그 뒤로 턴이 붙지 않으므로, FAILED 세션의 마지막 턴은 항상 이 노트다.
+// 라이브에서는 서버가 status보다 먼저 note 이벤트를 밀고, 새로고침 시엔 hydrate가 같은 턴을 싣는다.
+const failureNote = computed(() => {
+  const last = turns.value[turns.value.length - 1]
+  return last?.role === 'system' ? last.content : null
+})
+
+// 노트에 라벨이 이미 들어 있으므로 접두사를 덧붙이지 않는다. 노트가 없을 때만 기존 문구로 폴백.
+const failedBanner = computed(() => {
+  if (error.value) return `${ui.value.failed}: ${error.value}`
+  return failureNote.value ?? `${ui.value.failed}: 알 수 없는 오류가 발생했습니다`
+})
+
+// 배너가 실패 노트를 보여주는 동안엔 대화 칩으로 같은 문장을 반복하지 않는다.
+// 그 외 system 노트(MCP 변경 등)와 실패 전 대화는 그대로 — 빈 대화 판정(`turns.length`)도 원본을 쓴다.
+const visibleTurns = computed(() =>
+  status.value === 'FAILED' && failureNote.value !== null && !error.value
+    ? turns.value.slice(0, -1)
+    : turns.value,
+)
+
 // hideStatusBar여도 만료/종료/실패/오류 배너는 사용자가 봐야 한다.
 const showBanner = computed(
   () => ['EXPIRED', 'CANCELLED', 'FAILED'].includes(status.value as string) || !!error.value,
@@ -311,7 +333,7 @@ defineExpose({
         >{{ ui.cancelled }}</q-banner
       >
       <q-banner v-else-if="status === 'FAILED'" dense class="bg-red-1 text-red-9 col"
-        >{{ ui.failed }}: {{ error ?? '알 수 없는 오류가 발생했습니다' }}</q-banner
+        >{{ failedBanner }}</q-banner
       >
       <q-banner v-else-if="error" dense class="bg-red-1 text-red-9 col">{{ error }}</q-banner>
       <q-space />
@@ -375,7 +397,7 @@ defineExpose({
           @scroll="onScroll"
         >
           <ChatBubble
-            v-for="t in turns"
+            v-for="t in visibleTurns"
             :key="t.seq"
             :role="t.role"
             :content="t.content"

@@ -8,7 +8,7 @@ import { QuotaGuardExceeded, CostGuard } from './costGuard.js';
 import { tryHarvest } from './planHarvest.js';
 import { relay } from './messageRelay.js';
 import { ensureRepo as defaultEnsureRepo, type RepoInput } from './repoPrepare.js';
-import type { GitTokens } from '../sdk/gitRemote.js';
+import { maskSecrets, type GitTokens } from '../sdk/gitRemote.js';
 import { buildWritingPlansSplice, buildPlanReformatSplice, detectHandoff, detectPlanIntent } from './skillDispatch.js';
 import { HeartbeatTicker } from './heartbeat.js';
 
@@ -233,12 +233,9 @@ export class InterviewRunner {
         await this.safeFail(claim.sessionId, err.message);
         return;
       }
-      await this.safeFail(
-        claim.sessionId,
-        claim.kind === 'QUESTION'
-          ? `답변 생성 실패: ${(err as Error).message}`
-          : `interview turn failed: ${(err as Error).message}`,
-      );
+      // 원인만 보낸다 — 세션 종류별 라벨("답변 실패: "/"인터뷰 실패: ")은 서버 doFail이 붙이므로
+      // 여기서 접두사를 얹으면 배너가 "답변 실패: 답변 생성 실패: …"처럼 겹친다. 다른 safeFail 사유들과 동일한 형태.
+      await this.safeFail(claim.sessionId, (err as Error).message);
     } finally {
       if (timer) clearTimeout(timer);
       ticker.stop();
@@ -247,10 +244,18 @@ export class InterviewRunner {
     }
   }
 
-  /** fail 보고 자체의 실패(네트워크/409)가 런너 밖으로 새어 ClaimLoop까지 죽이지 않게 격리한다. */
+  /**
+   * fail 보고 자체의 실패(네트워크/409)가 런너 밖으로 새어 ClaimLoop까지 죽이지 않게 격리한다.
+   * 모든 실패 경로(타임아웃·쿼터·턴 에러·최대 턴)가 여기를 지나므로, 운영자가 interview.log만 보고도
+   * 원인을 알 수 있게 stdout에도 한 줄 남긴다 — 서버 보고만 하면 로그가 조용하다(2026-09-22 라이브 검증).
+   * 사유는 보고·로그 모두 maskSecrets를 거친다(repoPrepare가 이미 가린 git 오류에 대한 이중 방어).
+   */
   private async safeFail(sessionId: number, reason: string): Promise<void> {
+    const safe = maskSecrets(reason);
+    // eslint-disable-next-line no-console
+    console.warn(`[runner] 세션 실패: session=${sessionId} — ${safe}`);
     try {
-      await this.client.fail(sessionId, reason);
+      await this.client.fail(sessionId, safe);
     } catch (err) {
       // eslint-disable-next-line no-console
       console.warn(`[runner] fail 보고 실패: session=${sessionId} — ${(err as Error).message}`);

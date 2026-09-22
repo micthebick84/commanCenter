@@ -125,6 +125,41 @@ describe('InterviewRunner', () => {
     expect(client.postQuestion).not.toHaveBeenCalled();
   });
 
+  // 2026-09-22 라이브 검증: SDK 인증 만료로 턴이 죽었는데 interview.log는 기동 한 줄에 머물렀다.
+  // 서버 보고만으로는 운영자가 로그에서 원인을 볼 수 없다 — 실패 경로는 stdout에도 한 줄 남겨야 한다.
+  it('logs every session failure to stdout, not just to the server', async () => {
+    const client = makeClient();
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const fakeQuery = vi.fn(() => {
+      throw new Error('Claude Code returned an error result: OAuth session expired');
+    });
+    const runner = new InterviewRunner(client as never, fakeQuery as never, deps as never);
+
+    await runner.run(freshClaim);
+
+    expect(client.fail).toHaveBeenCalledWith(42, expect.stringContaining('OAuth session expired'));
+    const logged = warn.mock.calls.map((c) => c.join(' ')).join('\n');
+    expect(logged).toContain('42');
+    expect(logged).toContain('OAuth session expired');
+    warn.mockRestore();
+  });
+
+  it('masks credentials in the failure it logs', async () => {
+    const client = makeClient();
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const fakeQuery = vi.fn(() => {
+      throw new Error('fatal: https://oauth2:glpat-SECRET@gitlab.example.com/a/b.git not found');
+    });
+    const runner = new InterviewRunner(client as never, fakeQuery as never, deps as never);
+
+    await runner.run(freshClaim);
+
+    const logged = warn.mock.calls.map((c) => c.join(' ')).join('\n');
+    expect(logged).not.toContain('glpat-SECRET');
+    expect(logged).toContain('***@');
+    warn.mockRestore();
+  });
+
   it('fresh kickoff prompt requires the canonical plan structure (Korean header + task lines)', async () => {
     const client = makeClient();
     let seenPrompt = '';
@@ -430,7 +465,9 @@ describe('InterviewRunner kind=QUESTION (스펙 §6 — plan 경로 미진입, Q
     expect(ensureRepo).toHaveBeenCalledWith(expect.objectContaining({ githubRepo: 'acme/widgets', workDir: questionClaim.workDir }));
   });
 
-  it('SDK 쿼리가 throw하면 fail 사유는 "답변 생성 실패"이지 인터뷰 문구가 아니다 (final-review finding, minor)', async () => {
+  // 서버 doFail이 세션 종류에 맞는 라벨("답변 실패: "/"인터뷰 실패: ")을 붙이므로 러너는 원인만 보낸다.
+  // 러너가 자기 접두사를 얹으면 배너가 "답변 실패: 답변 생성 실패: …"처럼 겹친다(라이브 검증 2026-09-22).
+  it('SDK 쿼리가 throw하면 fail 사유는 원인 메시지 그대로다 — 러너 접두사 없음 (QUESTION)', async () => {
     const client = makeClient();
     const fakeQuery = vi.fn(() => {
       throw new Error('boom');
@@ -438,9 +475,18 @@ describe('InterviewRunner kind=QUESTION (스펙 §6 — plan 경로 미진입, Q
     const runner = new InterviewRunner(client as never, fakeQuery as never, deps as never);
     await runner.run(questionClaim);
     expect(client.fail).toHaveBeenCalledTimes(1);
-    const message = client.fail.mock.calls[0]![1] as string;
-    expect(message).toContain('답변 생성 실패');
-    expect(message).not.toContain('interview turn failed');
+    expect(client.fail.mock.calls[0]![1]).toBe('boom');
+  });
+
+  it('SDK 쿼리가 throw하면 fail 사유는 원인 메시지 그대로다 — 러너 접두사 없음 (INTERVIEW)', async () => {
+    const client = makeClient();
+    const fakeQuery = vi.fn(() => {
+      throw new Error('boom');
+    });
+    const runner = new InterviewRunner(client as never, fakeQuery as never, deps as never);
+    await runner.run(freshClaim);
+    expect(client.fail).toHaveBeenCalledTimes(1);
+    expect(client.fail.mock.calls[0]![1]).toBe('boom');
   });
 
   it('kind 미존재(구버전 백엔드) → 인터뷰 킥오프 그대로', async () => {

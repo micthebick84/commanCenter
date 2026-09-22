@@ -7,6 +7,8 @@ import com.hamonsoft.netismaker.dto.InterviewSummaryResponse;
 import com.hamonsoft.netismaker.dto.WorkerPlanRequest;
 import com.hamonsoft.netismaker.dto.WorkerQuestionRequest;
 import com.hamonsoft.netismaker.entity.*;
+import com.hamonsoft.netismaker.git.GitRemotes;
+import com.hamonsoft.netismaker.git.RepoRef;
 import com.hamonsoft.netismaker.repository.*;
 import org.springframework.context.annotation.Profile;
 import org.springframework.data.domain.PageRequest;
@@ -152,7 +154,7 @@ public class InterviewService {
         s.setClaimedAt(OffsetDateTime.now());
         // 첫 claim에만 work_dir 배정. resume이면 기존 값 유지.
         if (s.getWorkDir() == null || s.getWorkDir().isBlank()) {
-            s.setWorkDir(deriveWorkDir(s.getGithubRepo(), s.getId()));
+            s.setWorkDir(deriveWorkDir(s.getGithubRepo(), s.getGitUrl(), s.getId()));
         }
         touch(s);
         List<InterviewTurn> turns = turnRepo.findBySessionIdOrderBySeqAsc(s.getId());
@@ -204,15 +206,15 @@ public class InterviewService {
     }
 
     /**
-     * 결정적 체크아웃 경로: ~/netis-maker/interviews/{owner}/{repo}/session-{id}.
+     * 결정적 체크아웃 경로: ~/netis-maker/interviews/{localKey}/session-{id}.
+     * localKey는 GitHub면 owner/repo(기존 세션의 work_dir와 동일 값), GitLab이면 _gitlab/<평탄화 경로>.
      * 단일 호스트/공유 FS 전제. 같은 세션은 resume마다 항상 같은 경로 → 동일 cwd 보장.
      */
-    private String deriveWorkDir(String githubRepo, Long sessionId) {
-        String[] parts = githubRepo.split("/", 2);
-        String owner = parts.length == 2 ? parts[0] : "_";
-        String repo = parts.length == 2 ? parts[1] : githubRepo;
+    private String deriveWorkDir(String githubRepo, String gitUrl, Long sessionId) {
+        String key = GitRemotes.localKey(RepoRef.fromSnapshot(githubRepo, gitUrl));
+        if (!key.contains("/")) key = "_/" + key;   // 방어: 1단계 값(레거시 이상 데이터)
         String home = System.getProperty("user.home");
-        return home + "/netis-maker/interviews/" + owner + "/" + repo + "/session-" + sessionId;
+        return home + "/netis-maker/interviews/" + key + "/session-" + sessionId;
     }
 
     /**

@@ -2,6 +2,7 @@ package com.hamonsoft.netismaker.workerdaemon;
 
 import com.hamonsoft.netismaker.dto.WorkerTaskResponse;
 import com.hamonsoft.netismaker.entity.EnvVar;
+import com.hamonsoft.netismaker.git.GitRemotes;
 import com.hamonsoft.netismaker.workerdaemon.deploy.DeployTarget;
 import com.hamonsoft.netismaker.workerdaemon.deploy.DockerfileSupport;
 import lombok.extern.slf4j.Slf4j;
@@ -54,8 +55,8 @@ public class DeployService {
         try {
             // fetch만 — head 브랜치 checkout은 구현 worktree와 충돌하므로 금지.
             // createForDeploy가 origin/{head}를 --detach로 분리 체크아웃한다.
-            GitRepoCache.CheckedOutRepo repo = repos.fetchOnly(task.githubRepo(), task.headBranch());
-            File wt = worktrees.createForDeploy(repo.dir(), task.githubRepo(),
+            GitRepoCache.CheckedOutRepo repo = repos.fetchOnly(task.repoRef(), task.headBranch());
+            File wt = worktrees.createForDeploy(repo.dir(), GitRemotes.localKey(task.repoRef()),
                     task.headBranch(), task.id());
             Path dockerfile = wt.toPath().resolve("Dockerfile");
 

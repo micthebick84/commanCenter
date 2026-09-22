@@ -12,7 +12,7 @@ Object.assign(globalThis, { navigateTo: navigateToMock })
 function stubApi() {
   useApiMock.mockImplementation((url: string, opts?: { method?: string }) => {
     if (url === '/api/questions' && opts?.method === 'POST') return Promise.resolve({ id: 12 })
-    if (url === '/api/repo-catalog') return Promise.resolve([{ id: 1, alias: 'Netis7.0', ownerRepo: 'a/b', defaultBranch: 'main' }])
+    if (url === '/api/repo-catalog') return Promise.resolve([{ id: 1, alias: 'Netis7.0', host: 'github', ownerRepo: 'a/b', defaultBranch: 'main' }])
     if (url === '/api/mcp-catalog') return Promise.resolve([])
     if (url === '/api/usage/claude') return Promise.resolve({ limits: [] })
     return Promise.resolve(null)
@@ -82,13 +82,13 @@ describe('pages/questions/index — 새 질문 입력창 (스펙 2026-09-05 §3�
 
     useApiMock.mockImplementation((url: string, opts?: { method?: string; params?: any }) => {
       if (url === '/api/repo-catalog') return Promise.resolve([
-        { id: 1, alias: 'A', ownerRepo: 'org/a', defaultBranch: 'main' },
-        { id: 2, alias: 'B', ownerRepo: 'org/b', defaultBranch: 'develop' },
+        { id: 1, alias: 'A', host: 'github', ownerRepo: 'org/a', defaultBranch: 'main' },
+        { id: 2, alias: 'B', host: 'github', ownerRepo: 'org/b', defaultBranch: 'develop' },
       ])
       if (url === '/api/mcp-catalog') return Promise.resolve([])
       if (url === '/api/usage/claude') return Promise.resolve({ limits: [] })
-      if (url === '/api/repos/branches' && opts?.params?.repo === 'org/a') return pendingA
-      if (url === '/api/repos/branches' && opts?.params?.repo === 'org/b') return pendingB
+      if (url === '/api/repos/branches' && opts?.params?.catalogId === 1) return pendingA
+      if (url === '/api/repos/branches' && opts?.params?.catalogId === 2) return pendingB
       return Promise.resolve(null)
     })
 
@@ -106,6 +106,47 @@ describe('pages/questions/index — 새 질문 입력창 (스펙 2026-09-05 §3�
     await flushPromises()
 
     expect(vm.draft.githubBranch).toBe('develop')
+    w.unmount()
+  })
+
+  it('GitLab 카탈로그 항목(ownerRepo=다단계 경로)도 catalogId로 브랜치를 불러온다', async () => {
+    useApiMock.mockImplementation((url: string, opts?: { params?: any }) => {
+      if (url === '/api/repo-catalog') return Promise.resolve([
+        { id: 5, alias: 'Netis7(GitLab)', host: 'gitlab', ownerRepo: 'product/netis/web/netis-v7.0', defaultBranch: null },
+      ])
+      if (url === '/api/mcp-catalog') return Promise.resolve([])
+      if (url === '/api/usage/claude') return Promise.resolve({ limits: [] })
+      if (url === '/api/repos/branches' && opts?.params?.catalogId === 5)
+        return Promise.resolve({ defaultBranch: 'develop', branches: [{ name: 'develop', sha: 'z' }] })
+      return Promise.resolve(null)
+    })
+    const w = mount(QuestionsIndex)
+    await flushPromises()
+    const vm = w.vm as any
+    vm.onRepoSelected(5)
+    await flushPromises()
+    expect(vm.draft.githubBranch).toBe('develop')
+    expect(useApiMock).toHaveBeenCalledWith('/api/repos/branches', { params: { catalogId: 5 } })
+    w.unmount()
+  })
+
+  it('지원하지 않는 호스트(other)는 조용히 멈추지 않고 이유를 보여 준다', async () => {
+    useApiMock.mockImplementation((url: string) => {
+      if (url === '/api/repo-catalog') return Promise.resolve([
+        { id: 6, alias: 'Bitbucket', host: 'other', ownerRepo: null, defaultBranch: null },
+      ])
+      if (url === '/api/mcp-catalog') return Promise.resolve([])
+      if (url === '/api/usage/claude') return Promise.resolve({ limits: [] })
+      return Promise.resolve(null)
+    })
+    const w = mount(QuestionsIndex)
+    await flushPromises()
+    const vm = w.vm as any
+    vm.onRepoSelected(6)
+    await flushPromises()
+    expect(vm.repoStatus).toBe('error')
+    expect(vm.repoStatusMsg).toContain('지원하지 않는 호스트')
+    expect(useApiMock).not.toHaveBeenCalledWith('/api/repos/branches', expect.anything())
     w.unmount()
   })
 

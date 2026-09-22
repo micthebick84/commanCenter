@@ -4,6 +4,7 @@
 import MarkdownViewerDialog from '~/components/MarkdownViewerDialog.vue'
 import { renderMarkdown } from '~/composables/useMarkdown'
 import type { StageStep } from '~/composables/taskStages'
+import { mrNoun, mrRef } from '~/composables/mergeRequestLabel'
 
 // [id].vue의 TaskResponse 중 이 컴포넌트가 읽는 부분집합
 export interface DetailTask {
@@ -162,14 +163,14 @@ const deployCaption = computed(() => {
         <q-item clickable class="acc-header" role="button" :aria-expanded="open.impl" :aria-controls="contentId('impl')" @click="open.impl = !open.impl">
           <q-item-section>
             <q-item-label>구현 결과</q-item-label>
-            <q-item-label caption>{{ task.implementation?.prNumber ? `PR #${task.implementation.prNumber}` : '아직 구현 전' }}</q-item-label>
+            <q-item-label caption>{{ task.implementation?.prNumber ? mrRef(task.implementation.prUrl, task.implementation.prNumber) : '아직 구현 전' }}</q-item-label>
           </q-item-section>
           <q-item-section side><q-icon :name="open.impl ? 'expand_less' : 'expand_more'" /></q-item-section>
         </q-item>
         <q-slide-transition>
           <div v-if="open.impl" class="q-expansion-item__content" :id="contentId('impl')">
             <q-card-section v-if="task.implementation" class="kv">
-              <div v-if="task.implementation.prUrl"><span class="k">PR</span><a :href="task.implementation.prUrl" target="_blank" rel="noopener">#{{ task.implementation.prNumber }} 열기</a></div>
+              <div v-if="task.implementation.prUrl"><span class="k">{{ mrNoun(task.implementation.prUrl) }}</span><a :href="task.implementation.prUrl" target="_blank" rel="noopener">{{ mrNoun(task.implementation.prUrl) === 'MR' ? '!' : '#' }}{{ task.implementation.prNumber }} 열기</a></div>
               <div v-if="task.implementation.headBranch"><span class="k">브랜치</span><code>{{ task.implementation.headBranch }}</code></div>
               <div v-if="task.implementation.headSha"><span class="k">커밋</span><code>{{ task.implementation.headSha.slice(0, 7) }}</code></div>
             </q-card-section>

@@ -1,5 +1,6 @@
 package com.hamonsoft.netismaker.workerdaemon;
 
+import com.hamonsoft.netismaker.git.GitRemotes;
 import lombok.extern.slf4j.Slf4j;
 
 import java.io.BufferedReader;
@@ -20,11 +21,20 @@ import java.util.function.Consumer;
  *  - exitCode != 0이면 ProcessException (stdout 일부 포함)
  *
  *  GitRepoCache의 run/capture와 동일 패턴이지만 worktree/gh 호출에서도 공유.
+ *
+ *  ⚠ argv에 자격증명이 실릴 수 있다(git push/fetch/clone은 인증 URL을 인자로 받는다).
+ *  application.yml이 com.hamonsoft.netismaker를 DEBUG로 두므로 명령 원문이 worker.log로 나간다
+ *  → 명령/출력을 밖으로 내보내는 모든 지점은 {@link #describe}/{@link GitRemotes#mask}를 거친다.
  */
 @Slf4j
 public final class ProcessRunner {
 
     private ProcessRunner() {}
+
+    /** 로그·예외 메시지에 실을 명령 문자열. 자격증명은 항상 가린다. */
+    static String describe(List<String> command) {
+        return GitRemotes.mask(String.join(" ", command));
+    }
 
     public static Result run(File workingDir, List<String> command, long timeoutSeconds)
             throws IOException, InterruptedException {
@@ -34,7 +44,7 @@ public final class ProcessRunner {
     public static Result run(File workingDir, List<String> command,
                              Map<String, String> extraEnv, long timeoutSeconds)
             throws IOException, InterruptedException {
-        log.debug("exec ({}): {}", workingDir, String.join(" ", command));
+        log.debug("exec ({}): {}", workingDir, describe(command));
         ProcessBuilder pb = new ProcessBuilder(command)
                 .directory(workingDir)
                 .redirectErrorStream(true);
@@ -50,8 +60,7 @@ public final class ProcessRunner {
         boolean finished = p.waitFor(timeoutSeconds, TimeUnit.SECONDS);
         if (!finished) {
             p.destroyForcibly();
-            throw new IOException("process timeout (" + timeoutSeconds + "s): "
-                    + String.join(" ", command));
+            throw new IOException("process timeout (" + timeoutSeconds + "s): " + describe(command));
         }
         return new Result(p.exitValue(), out.toString());
     }
@@ -63,7 +72,7 @@ public final class ProcessRunner {
     public static Result runStreaming(File workingDir, List<String> command,
                                       long timeoutSeconds, Consumer<String> onLine)
             throws IOException, InterruptedException {
-        log.debug("exec-stream ({}): {}", workingDir, String.join(" ", command));
+        log.debug("exec-stream ({}): {}", workingDir, describe(command));
         ProcessBuilder pb = new ProcessBuilder(command)
                 .directory(workingDir)
                 .redirectErrorStream(true);
@@ -80,7 +89,7 @@ public final class ProcessRunner {
         boolean finished = p.waitFor(timeoutSeconds, TimeUnit.SECONDS);
         if (!finished) {
             p.destroyForcibly();
-            throw new IOException("process timeout (" + timeoutSeconds + "s): " + String.join(" ", command));
+            throw new IOException("process timeout (" + timeoutSeconds + "s): " + describe(command));
         }
         return new Result(p.exitValue(), out.toString());
     }
@@ -100,8 +109,11 @@ public final class ProcessRunner {
         private final int exitCode;
         private final String stdout;
         public ProcessException(List<String> cmd, int exitCode, String stdout) {
-            super("process failed (" + exitCode + "): " + String.join(" ", cmd)
-                    + (stdout == null || stdout.isBlank() ? "" : "\n--- output ---\n" + tail(stdout, 2000)));
+            // 명령 원문(인증 URL 포함 가능)과 캡처 출력을 생성 시점에 마스킹한다 —
+            // getMessage()를 쓰는 모든 소비자가 구성에 의해 안전해지도록.
+            super("process failed (" + exitCode + "): " + describe(cmd)
+                    + (stdout == null || stdout.isBlank() ? ""
+                        : "\n--- output ---\n" + GitRemotes.mask(tail(stdout, 2000))));
             this.exitCode = exitCode;
             this.stdout = stdout;
         }

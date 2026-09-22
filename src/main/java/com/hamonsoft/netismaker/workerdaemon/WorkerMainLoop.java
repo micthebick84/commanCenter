@@ -4,6 +4,7 @@ import com.hamonsoft.netismaker.dto.WorkerHeartbeatRequest;
 import com.hamonsoft.netismaker.dto.WorkerResultRequest;
 import com.hamonsoft.netismaker.dto.WorkerTaskResponse;
 import com.hamonsoft.netismaker.entity.TaskStatus;
+import com.hamonsoft.netismaker.git.GitRemotes;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.web.client.RestClientException;
 import org.springframework.context.annotation.Profile;
@@ -110,7 +111,10 @@ public class WorkerMainLoop {
                 default -> processAnalysis(task);
             }
         } catch (Throwable t) {
-            log.error("작업 처리 중 예외 task={}", task.id(), t);
+            // Throwable을 그대로 넘기면 slf4j가 메시지+cause 체인을 마스킹 없이 찍는다
+            // (git/gh 실패 메시지에 인증 URL이 실려 있을 수 있음) → 스택트레이스를 문자열로 떠서
+            // 마스킹한 뒤 찍는다. 프레임/cause 체인은 그대로 남아 진단성 손실이 없다.
+            log.error("작업 처리 중 예외 task={}: {}", task.id(), safeReason(stackTrace(t)));
             switch (task.kind()) {
                 case IMPLEMENTATION -> safePostImplementationFailure(task.id(),
                         "처리 중 예외: " + t.getClass().getSimpleName() + ": " + t.getMessage(),
@@ -128,7 +132,7 @@ public class WorkerMainLoop {
     private void processAnalysis(WorkerTaskResponse task) throws Exception {
         GitRepoCache.CheckedOutRepo repo;
         try {
-            repo = repos.ensureFresh(task.githubRepo(), task.githubBranch());
+            repo = repos.ensureFresh(task.repoRef(), task.githubBranch());
         } catch (Exception e) {
             safePostAnalysisFailure(task.id(), "레포 fetch 실패: " + e.getMessage());
             return;
@@ -186,7 +190,7 @@ public class WorkerMainLoop {
         // 1. 베이스 브랜치 최신화 (worktree add 시 origin/{base} 참조)
         GitRepoCache.CheckedOutRepo repo;
         try {
-            repo = repos.ensureFresh(task.githubRepo(), task.githubBranch());
+            repo = repos.ensureFresh(task.repoRef(), task.githubBranch());
         } catch (Exception e) {
             safePostImplementationFailure(task.id(),
                     "레포 fetch 실패: " + e.getMessage(), null, null, null);
@@ -196,7 +200,7 @@ public class WorkerMainLoop {
         // 2. worktree + 새 브랜치 생성
         WorktreeService.CreatedWorktree wt;
         try {
-            wt = worktrees.create(repo.dir(), task.githubRepo(),
+            wt = worktrees.create(repo.dir(), GitRemotes.localKey(task.repoRef()),
                     task.githubBranch(), task.id(), task.title());
         } catch (Exception e) {
             safePostImplementationFailure(task.id(),
@@ -250,7 +254,7 @@ public class WorkerMainLoop {
             String commitMsg = "feat: " + task.title()
                     + "\n\n" + "task #" + task.id()
                     + "\n\nCo-Authored-By: netisMaker <" + props.gitUserEmail() + ">";
-            headSha = gitOps.commitAndPush(wt.dir(), wt.branchName(), commitMsg);
+            headSha = gitOps.commitAndPush(wt.dir(), task.repoRef(), wt.branchName(), commitMsg);
         } catch (Exception e) {
             safePostImplementationFailure(task.id(),
                     "commit/push 실패: " + e.getMessage(),
@@ -262,12 +266,12 @@ public class WorkerMainLoop {
         GitOpsService.PrInfo pr;
         try {
             String body = renderPrBody(task, exec.durationMs(), headSha);
-            pr = gitOps.createDraftPr(wt.dir(), task.githubRepo(),
+            pr = gitOps.createDraftPr(wt.dir(), task.repoRef(),
                     task.githubBranch(), wt.branchName(),
                     task.title(), body);
         } catch (Exception e) {
             safePostImplementationFailure(task.id(),
-                    "gh pr create 실패: " + e.getMessage(),
+                    "PR/MR 생성 실패: " + e.getMessage(),
                     wt.branchName(), headSha, exec.stdout(), usageOf(exec));
             return;
         }
@@ -297,7 +301,7 @@ public class WorkerMainLoop {
 
         GitRepoCache.CheckedOutRepo repo;
         try {
-            repo = repos.ensureFresh(task.githubRepo(), task.githubBranch());
+            repo = repos.ensureFresh(task.repoRef(), task.githubBranch());
         } catch (Exception e) {
             safePostDesignFailure(task.id(), "레포 fetch 실패: " + e.getMessage(), null);
             return;
@@ -305,7 +309,7 @@ public class WorkerMainLoop {
 
         File wt;
         try {
-            wt = worktrees.createForDesign(repo.dir(), task.githubRepo(),
+            wt = worktrees.createForDesign(repo.dir(), GitRemotes.localKey(task.repoRef()),
                     task.githubBranch(), task.id());
         } catch (Exception e) {
             safePostDesignFailure(task.id(), "design worktree 생성 실패: " + e.getMessage(), null);
@@ -371,7 +375,7 @@ public class WorkerMainLoop {
 
     private void safePostDesignFailure(Long taskId, String reason, String log_,
                                        WorkerResultRequest.UsageReport usage) {
-        reporter.reportTerminal(taskId, WorkerResultRequest.designFailed(props.id(), reason, log_, usage));
+        reporter.reportTerminal(taskId, WorkerResultRequest.designFailed(props.id(), safeReason(reason), log_, usage));
     }
 
     private void processDeploy(WorkerTaskResponse task) {
@@ -406,7 +410,7 @@ public class WorkerMainLoop {
     }
 
     private void safePostDeployFailure(Long taskId, String reason, String deployLog) {
-        reporter.reportTerminal(taskId, WorkerResultRequest.deployFailed(props.id(), reason, deployLog));
+        reporter.reportTerminal(taskId, WorkerResultRequest.deployFailed(props.id(), safeReason(reason), deployLog));
     }
 
     private String renderImplementationPrompt(WorkerTaskResponse task, String baseSha, String branchName) {
@@ -466,6 +470,7 @@ public class WorkerMainLoop {
     }
 
     private String renderPrBody(WorkerTaskResponse task, long durationMs, String headSha) {
+        boolean gitlab = task.repoRef().isGitlab();
         boolean hasDesign = task.designMarkdown() != null && !task.designMarkdown().isBlank();
         // 마크다운 링크를 깨는 값(공백, ')', 개행 등) 방어 — 형태가 이상하면 링크만 생략
         boolean hasDesignUrl = task.designUrl() != null
@@ -474,7 +479,7 @@ public class WorkerMainLoop {
                 : "- **디자인**: 확정 디자인 기반 구현"
                 + (hasDesignUrl ? " — [Claude Design 목업](" + task.designUrl() + ")" : "")
                 + " (작업 상세의 디자인 카드 참고)\n";
-        return "## netisMaker 자동 생성 PR\n\n"
+        return "## netisMaker 자동 생성 " + (gitlab ? "MR" : "PR") + "\n\n"
                 + "- **Task**: #" + task.id() + " " + task.title() + "\n"
                 + "- **베이스**: `" + task.githubBranch() + "`\n"
                 + "- **구현 SHA**: `" + headSha.substring(0, Math.min(7, headSha.length())) + "`\n"
@@ -483,8 +488,8 @@ public class WorkerMainLoop {
                 + "## 사전 분석\n"
                 + (task.analysisMarkdown() == null ? "" : task.analysisMarkdown())
                 + "\n\n---\n"
-                + "🤖 Generated with [netisMaker](https://github.com/) by Claude Code.\n"
-                + "리뷰 후 Ready for review로 전환하세요.\n";
+                + "🤖 Generated with netisMaker by Claude Code.\n"
+                + (gitlab ? "리뷰 후 Draft 표시를 해제하세요.\n" : "리뷰 후 Ready for review로 전환하세요.\n");
     }
 
     private void safePostAnalysisFailure(Long taskId, String reason) {
@@ -494,7 +499,7 @@ public class WorkerMainLoop {
     private void safePostAnalysisFailure(Long taskId, String reason, WorkerResultRequest.UsageReport usage) {
         reporter.reportTerminal(taskId, new WorkerResultRequest(
                 props.id(), TaskStatus.FAILED,
-                null, null, null, null, reason,
+                null, null, null, null, safeReason(reason),
                 null, null, null, null, null,
                 null, null, null, null, null,
                 null, null, null, null, usage));
@@ -510,10 +515,27 @@ public class WorkerMainLoop {
                                                WorkerResultRequest.UsageReport usage) {
         reporter.reportTerminal(taskId, new WorkerResultRequest(
                 props.id(), TaskStatus.IMPLEMENTATION_FAILED,
-                null, null, null, null, reason,
+                null, null, null, null, safeReason(reason),
                 null, null, headBranch, headSha, log_,
                 null, null, null, null, null,
                 null, null, null, null, usage));
+    }
+
+    /** 실패 사유를 보고/로그로 내보내기 직전 경계에서 자격증명을 마스킹한다(F2). */
+    static String safeReason(String reason) {
+        return GitRemotes.mask(reason);
+    }
+
+    /**
+     * 스택트레이스를 문자열로. slf4j에 Throwable을 직접 넘기지 않고 이 문자열을 마스킹해 찍기 위한 것 —
+     * 직접 넘기면 메시지·cause 메시지가 마스킹 없이 나간다.
+     */
+    static String stackTrace(Throwable t) {
+        java.io.StringWriter sw = new java.io.StringWriter();
+        try (java.io.PrintWriter pw = new java.io.PrintWriter(sw)) {
+            t.printStackTrace(pw);
+        }
+        return sw.toString();
     }
 
     /** ExecResult → 보고 usage. envelope 파싱 실패(usage null)면 null — 수집 생략. */

@@ -101,4 +101,16 @@ class InterviewClaimResponseTest {
         ReflectionTestUtils.setField(i, "id", 2L);
         assertThat(InterviewClaimResponse.of(i, List.of(), List.of()).kind()).isEqualTo("INTERVIEW");
     }
+
+    @Test
+    void of_carries_git_url_and_host() {
+        InterviewSession s = InterviewSession.createQuestion("g/sub/p", "main", "t", "q", "admin",
+                List.of(), "claude-opus-5", "high");
+        s.setGitUrl("https://gitlab.hamon.vip/g/sub/p.git");
+        ReflectionTestUtils.setField(s, "id", 5L);
+        InterviewClaimResponse r = InterviewClaimResponse.of(s, List.of(), List.of());
+        assertThat(r.gitUrl()).isEqualTo("https://gitlab.hamon.vip/g/sub/p.git");
+        assertThat(r.repoHost()).isEqualTo("gitlab");
+        assertThat(r.repoRef().path()).isEqualTo("g/sub/p");
+    }
 }

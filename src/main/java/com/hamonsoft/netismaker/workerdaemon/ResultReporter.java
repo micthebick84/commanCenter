@@ -64,7 +64,10 @@ public class ResultReporter {
     }
 
     /** 결과 보고. 성공 true, 최종 실패 false. 절대 throw 안 함. */
-    public boolean reportTerminal(Long taskId, WorkerResultRequest req) {
+    public boolean reportTerminal(Long taskId, WorkerResultRequest original) {
+        // 마스킹 경계(G2): 전송본과 dead-letter 기록본이 같아야 하므로 여기서 한 번만 가린다.
+        // 이 지점 이후로는 평문 토큰이 담긴 페이로드가 프로세스 밖(네트워크/디스크)으로 나가지 않는다.
+        WorkerResultRequest req = original.masked();
         RestClientException last = null;
         for (int attempt = 0; attempt <= maxRetries; attempt++) {
             try {

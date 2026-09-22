@@ -8,6 +8,7 @@ import {
   attentionGroup,
   nextAction,
 } from '~/composables/taskStages'
+import { mrRef } from '~/composables/mergeRequestLabel'
 
 export interface CardTask {
   id: number
@@ -132,7 +133,7 @@ function segStyle(state: string, color: string) {
           class="card-link"
           @click.stop
         >
-          PR #{{ task.implementation.prNumber
+          {{ mrRef(task.implementation.prUrl, task.implementation.prNumber!)
           }}<q-icon name="open_in_new" size="13px" />
         </a>
       </template>

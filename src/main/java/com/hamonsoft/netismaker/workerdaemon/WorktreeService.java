@@ -48,27 +48,27 @@ public class WorktreeService {
      * `.git/worktrees/` 메타 파일 동시 수정 race 방지.
      *
      * @param repoCacheDir GitRepoCache.ensureFresh가 반환한 디렉토리 (origin/{baseBranch} 최신화 상태)
-     * @param githubRepo   "owner/repo" — worktree path 구성용
+     * @param repoKey      GitRemotes.localKey 값 — worktree path 구성용
      * @param baseBranch   분석 대상 브랜치 (origin/{baseBranch}을 분기점으로)
      * @param taskId       브랜치명에 포함
      * @param title        브랜치명 슬러그 생성용
      * @return 생성된 worktree 디렉토리 + 브랜치명
      */
-    public CreatedWorktree create(File repoCacheDir, String githubRepo,
+    public CreatedWorktree create(File repoCacheDir, String repoKey,
                                   String baseBranch, long taskId, String title)
             throws IOException, InterruptedException {
-        return repos.withRepoLock(githubRepo,
-                () -> doCreate(repoCacheDir, githubRepo, baseBranch, taskId, title));
+        return repos.withRepoLock(repoKey,
+                () -> doCreate(repoCacheDir, repoKey, baseBranch, taskId, title));
     }
 
-    private CreatedWorktree doCreate(File repoCacheDir, String githubRepo,
+    private CreatedWorktree doCreate(File repoCacheDir, String repoKey,
                                      String baseBranch, long taskId, String title)
             throws IOException, InterruptedException {
         String slug = sanitizeForBranch(title);
         String branchName = props.branchPrefix() + "task-" + taskId
                 + (slug.isEmpty() ? "" : "-" + slug);
 
-        Path worktreeDir = Paths.get(props.worktreeRoot(), githubRepo, "task-" + taskId);
+        Path worktreeDir = Paths.get(props.worktreeRoot(), repoKey, "task-" + taskId);
         Files.createDirectories(worktreeDir.getParent());
 
         // 멱등성: 같은 task를 재시도하는 경우 기존 worktree/브랜치 정리
@@ -105,22 +105,22 @@ public class WorktreeService {
      * 멱등: 기존 deploy worktree 있으면 강제 제거 후 재생성.
      *
      * @param repoCacheDir GitRepoCache.ensureFresh가 반환한 디렉토리 (origin/{headBranch} fetch 상태)
-     * @param githubRepo   "owner/repo"
+     * @param repoKey      GitRemotes.localKey 값
      * @param headBranch   배포 대상 브랜치 (PR head)
      * @param taskId       worktree 경로 구성용
      * @return 생성된 worktree 디렉토리 (브랜치명은 의미 없어 dir만 사용)
      */
-    public File createForDeploy(File repoCacheDir, String githubRepo,
+    public File createForDeploy(File repoCacheDir, String repoKey,
                                 String headBranch, long taskId)
             throws IOException, InterruptedException {
-        return repos.withRepoLock(githubRepo,
-                () -> doCreateForDeploy(repoCacheDir, githubRepo, headBranch, taskId));
+        return repos.withRepoLock(repoKey,
+                () -> doCreateForDeploy(repoCacheDir, repoKey, headBranch, taskId));
     }
 
-    private File doCreateForDeploy(File repoCacheDir, String githubRepo,
+    private File doCreateForDeploy(File repoCacheDir, String repoKey,
                                    String headBranch, long taskId)
             throws IOException, InterruptedException {
-        Path worktreeDir = Paths.get(props.worktreeRoot(), githubRepo, "deploy-" + taskId);
+        Path worktreeDir = Paths.get(props.worktreeRoot(), repoKey, "deploy-" + taskId);
         Files.createDirectories(worktreeDir.getParent());
 
         if (Files.exists(worktreeDir)) {
@@ -147,17 +147,17 @@ public class WorktreeService {
      * 디자인용 worktree. 새 브랜치 없이 origin/{baseBranch} detached 체크아웃 (목업 생성만, push 없음).
      * 경로 design-{id} — 구현 worktree(task-{id})와 분리되어 재실행/후속 구현과 충돌 없음.
      */
-    public File createForDesign(File repoCacheDir, String githubRepo,
+    public File createForDesign(File repoCacheDir, String repoKey,
                                 String baseBranch, long taskId)
             throws IOException, InterruptedException {
-        return repos.withRepoLock(githubRepo,
-                () -> doCreateForDesign(repoCacheDir, githubRepo, baseBranch, taskId));
+        return repos.withRepoLock(repoKey,
+                () -> doCreateForDesign(repoCacheDir, repoKey, baseBranch, taskId));
     }
 
-    private File doCreateForDesign(File repoCacheDir, String githubRepo,
+    private File doCreateForDesign(File repoCacheDir, String repoKey,
                                    String baseBranch, long taskId)
             throws IOException, InterruptedException {
-        Path worktreeDir = Paths.get(props.worktreeRoot(), githubRepo, "design-" + taskId);
+        Path worktreeDir = Paths.get(props.worktreeRoot(), repoKey, "design-" + taskId);
         Files.createDirectories(worktreeDir.getParent());
         if (Files.exists(worktreeDir)) {
             log.warn("기존 design worktree 발견, 강제 제거: {}", worktreeDir);

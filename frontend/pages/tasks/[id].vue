@@ -9,6 +9,7 @@ import TaskDetailMobile from '~/components/tasks/TaskDetailMobile.vue'
 import TaskHistoryTimeline from '~/components/tasks/TaskHistoryTimeline.vue'
 import { stageSteps, nextAction, ageOf, type NextActionKind } from '~/composables/taskStages'
 import { renderMarkdown } from '~/composables/useMarkdown'
+import { mrNoun, mrRef } from '~/composables/mergeRequestLabel'
 import { downloadAttachment as downloadBlob } from '~/composables/attachmentDownload'
 
 definePageMeta({ layout: 'default' })
@@ -148,7 +149,7 @@ function fmtCost(c: number): string {
 async function approve() {
   if (
     !confirm(
-      '이 분석 결과를 승인하시겠습니까?\n승인 즉시 워커가 worktree에서 구현 + Draft PR 생성합니다.',
+      '이 분석 결과를 승인하시겠습니까?\n승인 즉시 워커가 worktree에서 구현 + Draft PR/MR을 생성합니다.',
     )
   )
     return
@@ -390,7 +391,7 @@ const stepCaption = computed(() => {
   const t = task.value
   if (!t) return ''
   const parts = [t.statusLabel]
-  if (t.implementation?.prNumber) parts.push(`PR #${t.implementation.prNumber}`)
+  if (t.implementation?.prNumber) parts.push(mrRef(t.implementation.prUrl, t.implementation.prNumber))
   parts.push(`${ageOf(t.updatedAt)} 전 갱신`)
   return parts.join(' · ')
 })
@@ -462,7 +463,7 @@ function onAction(kind: NextActionKind) {
                  문구만 남긴다 — 중복 노출 정리 (리뷰 파인딩 1) -->
             <TaskNextAction :action="action" variant="banner" :hide-primary="$q.screen.lt.md" @act="onAction">
               <template #extra>
-                <q-btn v-if="auth.isAdmin && task.implementation?.prUrl" outline color="primary" icon="open_in_new" :label="`PR #${task.implementation.prNumber} 열기`" :href="task.implementation.prUrl" target="_blank" />
+                <q-btn v-if="auth.isAdmin && task.implementation?.prUrl" outline color="primary" icon="open_in_new" :label="`${mrRef(task.implementation.prUrl, task.implementation.prNumber!)} 열기`" :href="task.implementation.prUrl" target="_blank" />
               </template>
             </TaskNextAction>
           </div>
@@ -515,7 +516,7 @@ function onAction(kind: NextActionKind) {
                 <q-list style="min-width: 200px">
                   <q-item v-if="task.implementation?.prUrl" v-close-popup clickable tag="a" :href="task.implementation.prUrl" target="_blank" rel="noopener" data-test="bar-more-pr">
                     <q-item-section avatar><q-icon name="open_in_new" /></q-item-section>
-                    <q-item-section>PR #{{ task.implementation.prNumber }} 열기</q-item-section>
+                    <q-item-section>{{ mrRef(task.implementation.prUrl, task.implementation.prNumber!) }} 열기</q-item-section>
                   </q-item>
                   <q-item v-if="task.deployment?.deployUrl" v-close-popup clickable tag="a" :href="task.deployment.deployUrl" target="_blank" rel="noopener" data-test="bar-more-url">
                     <q-item-section avatar><q-icon name="open_in_new" /></q-item-section>
@@ -719,14 +720,14 @@ function onAction(kind: NextActionKind) {
             unelevated
             color="primary"
             icon="open_in_new"
-            :label="`PR #${task.implementation.prNumber}`"
+            :label="mrRef(task.implementation.prUrl, task.implementation.prNumber!)"
             :href="task.implementation.prUrl"
             target="_blank"
           />
         </q-card-section>
         <q-separator />
         <q-card-section v-if="task.implementation.prUrl">
-          <div class="text-caption">PR URL</div>
+          <div class="text-caption">{{ mrNoun(task.implementation.prUrl) }} URL</div>
           <a :href="task.implementation.prUrl" target="_blank">{{
             task.implementation.prUrl
           }}</a>
@@ -947,7 +948,7 @@ function onAction(kind: NextActionKind) {
               {{
                 task.analysis.approved
                   ? '이미 승인된 작업입니다. 클릭하면 즉시 구현 큐에 진입합니다.'
-                  : '승인 시 즉시 워커가 worktree에서 구현 + Draft PR 생성'
+                  : '승인 시 즉시 워커가 worktree에서 구현 + Draft PR/MR 생성'
               }}
             </q-tooltip>
           </q-btn>

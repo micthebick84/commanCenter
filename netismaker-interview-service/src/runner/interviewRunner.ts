@@ -8,6 +8,7 @@ import { QuotaGuardExceeded, CostGuard } from './costGuard.js';
 import { tryHarvest } from './planHarvest.js';
 import { relay } from './messageRelay.js';
 import { ensureRepo as defaultEnsureRepo, type RepoInput } from './repoPrepare.js';
+import type { GitTokens } from '../sdk/gitRemote.js';
 import { buildWritingPlansSplice, buildPlanReformatSplice, detectHandoff, detectPlanIntent } from './skillDispatch.js';
 import { HeartbeatTicker } from './heartbeat.js';
 
@@ -37,6 +38,8 @@ export interface RunnerDeps {
    * 기본 30분.
    */
   turnTimeoutMs?: number;
+  /** clone/fetch 인증 토큰(GITHUB_PAT / GITLAB_TOKEN). 미지정이면 익명. */
+  gitTokens?: GitTokens;
 }
 
 /**
@@ -285,6 +288,9 @@ export class InterviewRunner {
         githubRepo: claim.githubRepo,
         githubBranch: claim.githubBranch,
         workDir: claim.workDir,
+        gitUrl: claim.gitUrl,
+        repoHost: claim.repoHost,
+        tokens: this.deps.gitTokens,
         signal: controller.signal,
       });
       // 좀비 턴 가드: 타임아웃으로 이미 abort된 뒤 낙오한 이 턴이 늦게 여기 도달하면

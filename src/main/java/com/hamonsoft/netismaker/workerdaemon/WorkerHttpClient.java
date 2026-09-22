@@ -54,12 +54,22 @@ public class WorkerHttpClient {
         http.post().uri("/worker/tasks/{id}/result", taskId).body(req).retrieve().toBodilessEntity();
     }
 
+    /**
+     * 스트리밍 배포 로그 청크. 작업 상세 화면에 실시간 렌더되므로 전송 직전에 자격증명을 가린다
+     * (결과 페이로드는 ResultReporter가, 스트림 청크는 이 한 곳이 경계).
+     */
     public void postDeployLog(Long taskId, int seq, String content) {
         try {
             http.post().uri("/worker/tasks/{id}/deploy-log", taskId)
-                    .body(new com.hamonsoft.netismaker.dto.DeployLogChunkRequest(seq, content))
+                    .body(maskedChunk(seq, content))
                     .retrieve().toBodilessEntity();
         } catch (Exception ignore) { /* 로그 업로드 실패가 배포를 막지 않음 */ }
+    }
+
+    /** 전송 직전 변환(순수 함수 — 테스트 seam). postDeployLog는 이 결과만 body로 쓴다. */
+    static com.hamonsoft.netismaker.dto.DeployLogChunkRequest maskedChunk(int seq, String content) {
+        return new com.hamonsoft.netismaker.dto.DeployLogChunkRequest(
+                seq, com.hamonsoft.netismaker.git.GitRemotes.mask(content));
     }
 
     /** 배포 런타임 정합 대상(배포완료+배포중단됨) 목록. 실패 시 예외 전파 — 호출부가 스킵 판단. */

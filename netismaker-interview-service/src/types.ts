@@ -85,6 +85,12 @@ export interface InterviewClaimResponse {
    * 구버전 백엔드는 필드 자체가 없다 — optional, 미존재/null은 "추가 허용 루트 없음"(attachments 선례).
    */
   attachmentRoot?: string | null;
+  /**
+   * 정식 Git URL 스냅샷 + 호스트('github' | 'gitlab'). 구버전 백엔드는 필드가 없다 —
+   * 미존재는 GitHub로 취급(kind/attachments 선례). clone URL 조립에만 쓴다.
+   */
+  gitUrl?: string | null;
+  repoHost?: 'github' | 'gitlab' | null;
 }
 
 /** SSE activity 와이어 계약의 활동 type (스펙 §4.1). */

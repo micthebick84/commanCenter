@@ -74,6 +74,11 @@ app:
   github:
     # 비공개 레포 브랜치 조회용 GitHub PAT (선택). 비워두면 public 레포만 동작.
     pat: ${GITHUB_PAT:}
+  gitlab:
+    # 사내 GitLab 1곳. base-url의 호스트와 같은 Git URL을 GitLab 레포로 판별한다. 비우면 GitLab 지원 꺼짐.
+    base-url: ${GITLAB_BASE_URL:}
+    # 비공개 레포 브랜치 조회용 토큰(read_repository). 워커·인터뷰 서비스도 같은 GITLAB_TOKEN을 읽는다.
+    token: ${GITLAB_TOKEN:}
   worker:
     # 워커 ↔ 백엔드 공유 시크릿. 운영 환경에선 환경변수 WORKER_API_KEY로 주입
     api-key: ${WORKER_API_KEY:dev-only-change-me}

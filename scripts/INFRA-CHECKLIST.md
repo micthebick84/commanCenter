@@ -57,6 +57,7 @@ DESIGN.md §15 미결 결정사항을 운영 작업으로 정리. V1 출시 크�
   ```bash
   WORKER_API_KEY=<32+ chars random>
   GITHUB_PAT=ghp_...
+  GITLAB_TOKEN=glpat-...          # 사내 GitLab (api, read_repository, write_repository)
   API_BASE_URL=https://worker.netis-maker.<사내-도메인>
   WORKER_ID=mac-<username>-1
   WORKER_VERSION=0.1.0
@@ -72,6 +73,7 @@ DESIGN.md §15 미결 결정사항을 운영 작업으로 정리. V1 출시 크�
 - [ ] 백엔드 fat jar 배치 + systemd unit 또는 사내 표준 배포
 - [ ] application.yml 환경별 오버라이드: `WORKER_API_KEY`(macOS .env와 일치)
 - [ ] netis-auth JWKS endpoint 도달 가능 확인: `curl http://localhost:9000/oauth2/jwks`
+- [ ] (GitLab 사용 시) API 환경에 GITLAB_BASE_URL=https://gitlab.hamon.vip + GITLAB_TOKEN 주입
 
 ## 회수 절차 (Rollback)
 

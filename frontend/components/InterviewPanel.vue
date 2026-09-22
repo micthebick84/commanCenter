@@ -115,6 +115,14 @@ const failedBanner = computed(() => {
   return failureNote.value ?? `${ui.value.failed}: 알 수 없는 오류가 발생했습니다`
 })
 
+// 배너가 실패 노트를 보여주는 동안엔 대화 칩으로 같은 문장을 반복하지 않는다.
+// 그 외 system 노트(MCP 변경 등)와 실패 전 대화는 그대로 — 빈 대화 판정(`turns.length`)도 원본을 쓴다.
+const visibleTurns = computed(() =>
+  status.value === 'FAILED' && failureNote.value !== null && !error.value
+    ? turns.value.slice(0, -1)
+    : turns.value,
+)
+
 // hideStatusBar여도 만료/종료/실패/오류 배너는 사용자가 봐야 한다.
 const showBanner = computed(
   () => ['EXPIRED', 'CANCELLED', 'FAILED'].includes(status.value as string) || !!error.value,
@@ -389,7 +397,7 @@ defineExpose({
           @scroll="onScroll"
         >
           <ChatBubble
-            v-for="t in turns"
+            v-for="t in visibleTurns"
             :key="t.seq"
             :role="t.role"
             :content="t.content"

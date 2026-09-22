@@ -187,6 +187,32 @@ describe('InterviewPanel — terminal states', () => {
     w.unmount()
   })
 
+  // 배너가 실패 노트를 보여주는 동안 대화 칩까지 같은 문장을 반복하지 않는다 (라이브 검증 2026-09-22에서 발견).
+  it('does not repeat the failure note as a transcript chip while the banner shows it', async () => {
+    const w = await mountPanel(9, {
+      statusName: 'FAILED',
+      turns: [
+        { seq: 0, role: 'assistant', kind: 'question', content: '범위는?' },
+        { seq: 1, role: 'system', kind: 'note', content: '인터뷰 실패: 디스크 부족' },
+      ],
+      plan: null,
+    })
+    expect(w.text().split('디스크 부족').length - 1).toBe(1) // 배너 1회만
+    expect(w.findAll('.system-note')).toHaveLength(0)
+    expect(w.text()).toContain('범위는?') // 나머지 대화는 그대로
+    w.unmount()
+  })
+
+  it('keeps ordinary system notes (e.g. MCP change) as chips while the session is alive', async () => {
+    const w = await mountPanel(9)
+    FakeEventSource.last().emit('question', { seq: 0, content: '범위는?' })
+    FakeEventSource.last().emit('note', { seq: 1, content: 'MCP 변경: obsidian 추가' })
+    await flushPromises()
+    expect(w.findAll('.system-note')).toHaveLength(1)
+    expect(w.text()).toContain('MCP 변경: obsidian 추가')
+    w.unmount()
+  })
+
   it('falls back to the generic message when a FAILED session carries no note', async () => {
     const w = await mountPanel(9)
     FakeEventSource.last().emit('question', { seq: 0, content: '범위는?' })

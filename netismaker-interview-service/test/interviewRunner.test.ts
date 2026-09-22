@@ -125,6 +125,41 @@ describe('InterviewRunner', () => {
     expect(client.postQuestion).not.toHaveBeenCalled();
   });
 
+  // 2026-09-22 라이브 검증: SDK 인증 만료로 턴이 죽었는데 interview.log는 기동 한 줄에 머물렀다.
+  // 서버 보고만으로는 운영자가 로그에서 원인을 볼 수 없다 — 실패 경로는 stdout에도 한 줄 남겨야 한다.
+  it('logs every session failure to stdout, not just to the server', async () => {
+    const client = makeClient();
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const fakeQuery = vi.fn(() => {
+      throw new Error('Claude Code returned an error result: OAuth session expired');
+    });
+    const runner = new InterviewRunner(client as never, fakeQuery as never, deps as never);
+
+    await runner.run(freshClaim);
+
+    expect(client.fail).toHaveBeenCalledWith(42, expect.stringContaining('OAuth session expired'));
+    const logged = warn.mock.calls.map((c) => c.join(' ')).join('\n');
+    expect(logged).toContain('42');
+    expect(logged).toContain('OAuth session expired');
+    warn.mockRestore();
+  });
+
+  it('masks credentials in the failure it logs', async () => {
+    const client = makeClient();
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const fakeQuery = vi.fn(() => {
+      throw new Error('fatal: https://oauth2:glpat-SECRET@gitlab.example.com/a/b.git not found');
+    });
+    const runner = new InterviewRunner(client as never, fakeQuery as never, deps as never);
+
+    await runner.run(freshClaim);
+
+    const logged = warn.mock.calls.map((c) => c.join(' ')).join('\n');
+    expect(logged).not.toContain('glpat-SECRET');
+    expect(logged).toContain('***@');
+    warn.mockRestore();
+  });
+
   it('fresh kickoff prompt requires the canonical plan structure (Korean header + task lines)', async () => {
     const client = makeClient();
     let seenPrompt = '';

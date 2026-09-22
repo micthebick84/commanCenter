@@ -51,6 +51,27 @@ describe('ClaimLoop', () => {
     expect(client.fail).toHaveBeenCalledWith(freshClaim.sessionId, expect.stringContaining('boom'));
   });
 
+  it('logs the runner crash to stdout (interview.log must not stay silent)', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const client = {
+      claim: vi.fn().mockResolvedValueOnce(freshClaim).mockResolvedValue(null),
+      heartbeat: vi.fn(),
+      fail: vi.fn().mockResolvedValue(undefined),
+    };
+    const runner = { run: vi.fn().mockRejectedValue(new Error('boom')) };
+    const loop = new ClaimLoop(client as never, runner as never, { pollIntervalMs: 1 });
+
+    const p = loop.start();
+    await new Promise((r) => setTimeout(r, 10));
+    loop.stop();
+    await p;
+
+    const logged = warn.mock.calls.map((c) => c.join(' ')).join('\n');
+    expect(logged).toContain(String(freshClaim.sessionId));
+    expect(logged).toContain('boom');
+    warn.mockRestore();
+  });
+
   it('survives when both the runner AND the fail report throw (loop keeps polling)', async () => {
     // 회귀 가드: fail 보고가 네트워크 오류/409로 거부되면 예전엔 start()가 통째로 죽어
     // 워커가 영구 유휴가 됐다 — 보고 실패는 격리하고 다음 틱을 계속 돌아야 한다.

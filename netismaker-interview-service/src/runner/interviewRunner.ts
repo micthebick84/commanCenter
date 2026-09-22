@@ -233,12 +233,9 @@ export class InterviewRunner {
         await this.safeFail(claim.sessionId, err.message);
         return;
       }
-      await this.safeFail(
-        claim.sessionId,
-        claim.kind === 'QUESTION'
-          ? `답변 생성 실패: ${(err as Error).message}`
-          : `interview turn failed: ${(err as Error).message}`,
-      );
+      // 원인만 보낸다 — 세션 종류별 라벨("답변 실패: "/"인터뷰 실패: ")은 서버 doFail이 붙이므로
+      // 여기서 접두사를 얹으면 배너가 "답변 실패: 답변 생성 실패: …"처럼 겹친다. 다른 safeFail 사유들과 동일한 형태.
+      await this.safeFail(claim.sessionId, (err as Error).message);
     } finally {
       if (timer) clearTimeout(timer);
       ticker.stop();

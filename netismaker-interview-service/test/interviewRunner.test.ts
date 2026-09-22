@@ -465,7 +465,9 @@ describe('InterviewRunner kind=QUESTION (스펙 §6 — plan 경로 미진입, Q
     expect(ensureRepo).toHaveBeenCalledWith(expect.objectContaining({ githubRepo: 'acme/widgets', workDir: questionClaim.workDir }));
   });
 
-  it('SDK 쿼리가 throw하면 fail 사유는 "답변 생성 실패"이지 인터뷰 문구가 아니다 (final-review finding, minor)', async () => {
+  // 서버 doFail이 세션 종류에 맞는 라벨("답변 실패: "/"인터뷰 실패: ")을 붙이므로 러너는 원인만 보낸다.
+  // 러너가 자기 접두사를 얹으면 배너가 "답변 실패: 답변 생성 실패: …"처럼 겹친다(라이브 검증 2026-09-22).
+  it('SDK 쿼리가 throw하면 fail 사유는 원인 메시지 그대로다 — 러너 접두사 없음 (QUESTION)', async () => {
     const client = makeClient();
     const fakeQuery = vi.fn(() => {
       throw new Error('boom');
@@ -473,9 +475,18 @@ describe('InterviewRunner kind=QUESTION (스펙 §6 — plan 경로 미진입, Q
     const runner = new InterviewRunner(client as never, fakeQuery as never, deps as never);
     await runner.run(questionClaim);
     expect(client.fail).toHaveBeenCalledTimes(1);
-    const message = client.fail.mock.calls[0]![1] as string;
-    expect(message).toContain('답변 생성 실패');
-    expect(message).not.toContain('interview turn failed');
+    expect(client.fail.mock.calls[0]![1]).toBe('boom');
+  });
+
+  it('SDK 쿼리가 throw하면 fail 사유는 원인 메시지 그대로다 — 러너 접두사 없음 (INTERVIEW)', async () => {
+    const client = makeClient();
+    const fakeQuery = vi.fn(() => {
+      throw new Error('boom');
+    });
+    const runner = new InterviewRunner(client as never, fakeQuery as never, deps as never);
+    await runner.run(freshClaim);
+    expect(client.fail).toHaveBeenCalledTimes(1);
+    expect(client.fail.mock.calls[0]![1]).toBe('boom');
   });
 
   it('kind 미존재(구버전 백엔드) → 인터뷰 킥오프 그대로', async () => {

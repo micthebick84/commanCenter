@@ -92,7 +92,9 @@ public class InterviewWorkerController {
     @ResponseStatus(HttpStatus.NO_CONTENT)
     public void fail(@PathVariable Long id, @RequestParam String workerId,
                      @RequestParam(required = false) String reason) {
-        interviewService.failFromWorker(id, workerId, reason);
+        InterviewService.FailOutcome out = interviewService.failFromWorker(id, workerId, reason);
+        // 사유 노트가 먼저 — 프론트는 FAILED status를 받는 즉시 스트림을 닫는다.
+        interviewStream.pushNote(id, out.note().getSeq(), out.note().getContent());
         interviewStream.pushStatus(id, InterviewStatus.FAILED);
         interviewStream.finish(id);
     }

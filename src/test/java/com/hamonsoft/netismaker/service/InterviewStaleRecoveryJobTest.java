@@ -4,6 +4,7 @@ import com.hamonsoft.netismaker.entity.InterviewSession;
 import com.hamonsoft.netismaker.entity.InterviewStatus;
 import com.hamonsoft.netismaker.repository.InterviewSessionRepository;
 import org.junit.jupiter.api.Test;
+import org.mockito.InOrder;
 import org.springframework.test.util.ReflectionTestUtils;
 
 import java.time.OffsetDateTime;
@@ -18,6 +19,15 @@ class InterviewStaleRecoveryJobTest {
     private final InterviewSessionRepository sessionRepo = mock(InterviewSessionRepository.class);
     private final InterviewService interviewService = mock(InterviewService.class);
     private final InterviewStreamService stream = mock(InterviewStreamService.class);
+
+    /** fail()은 이제 실패 노트를 함께 돌려준다 — 스윕이 그 노트를 SSE로 밀기 때문. */
+    @org.junit.jupiter.api.BeforeEach
+    void stubFailOutcome() {
+        when(interviewService.fail(any(), any(), any())).thenAnswer(i -> new InterviewService.FailOutcome(
+                null,
+                com.hamonsoft.netismaker.entity.InterviewTurn.of(
+                        i.getArgument(0), 0, "system", "note", "인터뷰 실패: " + i.getArgument(2), null)));
+    }
 
     private InterviewStaleRecoveryJob job() {
         InterviewStaleRecoveryJob j = new InterviewStaleRecoveryJob(sessionRepo, interviewService, stream);
@@ -57,8 +67,11 @@ class InterviewStaleRecoveryJobTest {
         job().recover();
 
         verify(interviewService).fail(eq(1L), eq("stale-recovery"), contains("초과"));
-        verify(stream).pushStatus(1L, InterviewStatus.FAILED);
-        verify(stream).finish(1L);
+        // 사유 노트가 터미널 status보다 먼저 나가야 한다 — 프론트는 FAILED를 받는 즉시 스트림을 닫는다.
+        InOrder order = inOrder(stream);
+        order.verify(stream).pushNote(eq(1L), eq(0), contains("초과"));
+        order.verify(stream).pushStatus(1L, InterviewStatus.FAILED);
+        order.verify(stream).finish(1L);
     }
 
     @Test
@@ -74,8 +87,10 @@ class InterviewStaleRecoveryJobTest {
         job().recover();
 
         verify(interviewService).fail(eq(8L), eq("stale-recovery"), contains("heartbeat 두절"));
-        verify(stream).pushStatus(8L, InterviewStatus.FAILED);
-        verify(stream).finish(8L);
+        InOrder order = inOrder(stream);
+        order.verify(stream).pushNote(eq(8L), eq(0), contains("heartbeat 두절"));
+        order.verify(stream).pushStatus(8L, InterviewStatus.FAILED);
+        order.verify(stream).finish(8L);
     }
 
     @Test

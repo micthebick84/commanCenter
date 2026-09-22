@@ -239,6 +239,43 @@ class InterviewServiceTest {
     }
 
     @Test
+    void fail_returns_the_reason_note_so_the_caller_can_push_it() {
+        // 실패 사유는 DB에만 남으면 안 된다 — 호출자(컨트롤러/스윕)가 SSE로 밀 수 있게 턴을 돌려준다.
+        InterviewSession s = session(6L, InterviewStatus.RUNNING);
+        s.setWorkerId("w1");
+        when(sessionRepo.findByIdForUpdate(6L)).thenReturn(Optional.of(s));
+
+        InterviewService.FailOutcome out = service.failFromWorker(6L, "w1", "OAuth 세션 만료");
+
+        assertThat(out.note().getRole()).isEqualTo("system");
+        assertThat(out.note().getKind()).isEqualTo("note");
+        assertThat(out.note().getContent()).isEqualTo("인터뷰 실패: OAuth 세션 만료");
+    }
+
+    @Test
+    void fail_labels_the_note_by_session_kind() {
+        // 질문 세션 배너는 '답변 실패'다 — 노트가 그 문구 그대로여야 배너가 접두사를 덧붙이지 않는다.
+        InterviewSession s = questionSession(7L, InterviewStatus.RUNNING);
+        s.setWorkerId("w1");
+        when(sessionRepo.findByIdForUpdate(7L)).thenReturn(Optional.of(s));
+
+        InterviewService.FailOutcome out = service.failFromWorker(7L, "w1", "OAuth 세션 만료");
+
+        assertThat(out.note().getContent()).isEqualTo("답변 실패: OAuth 세션 만료");
+    }
+
+    @Test
+    void fail_without_a_reason_still_carries_a_note() {
+        InterviewSession s = session(6L, InterviewStatus.RUNNING);
+        s.setWorkerId("w1");
+        when(sessionRepo.findByIdForUpdate(6L)).thenReturn(Optional.of(s));
+
+        InterviewService.FailOutcome out = service.failFromWorker(6L, "w1", null);
+
+        assertThat(out.note().getContent()).isEqualTo("인터뷰 실패: 원인 미상");
+    }
+
+    @Test
     void failFromWorker_on_awaiting_input_throws_conflict_and_preserves_the_question() {
         // 경계 레이스 가드: postQuestion이 먼저 도착해 AWAITING_INPUT이 된 세션에
         // 지각한 턴 타임아웃 fail이 오면 방금 전달된 질문을 파괴하지 말고 409로 거절해야 한다.

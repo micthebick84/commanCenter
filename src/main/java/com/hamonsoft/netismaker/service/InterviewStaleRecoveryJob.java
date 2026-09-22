@@ -77,8 +77,10 @@ public class InterviewStaleRecoveryJob {
             Long id = s.getId();
             recovered.add(id);
             try {
-                interviewService.fail(id, "stale-recovery",
+                var out = interviewService.fail(id, "stale-recovery",
                         "처리 시간 초과(" + staleRunningMinutes + "분) — SDK 턴 wall-clock 백스톱 회수");
+                // 사유 노트가 먼저 — 프론트는 FAILED status를 받는 즉시 스트림을 닫는다.
+                stream.pushNote(id, out.note().getSeq(), out.note().getContent());
                 stream.pushStatus(id, InterviewStatus.FAILED);
                 stream.finish(id);
                 log.warn("Stale 회수: interview={} RUNNING → FAILED (wall-clock)", id);
@@ -98,8 +100,9 @@ public class InterviewStaleRecoveryJob {
                 Long id = s.getId();
                 if (!recovered.add(id)) continue;
                 try {
-                    interviewService.fail(id, "stale-recovery",
+                    var out = interviewService.fail(id, "stale-recovery",
                             "heartbeat 두절(" + runningDeadSeconds + "초) — 워커 사망 회수");
+                    stream.pushNote(id, out.note().getSeq(), out.note().getContent());
                     stream.pushStatus(id, InterviewStatus.FAILED);
                     stream.finish(id);
                     log.warn("Stale 회수: interview={} RUNNING → FAILED (heartbeat 두절)", id);

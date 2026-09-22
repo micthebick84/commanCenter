@@ -88,6 +88,12 @@ public class InterviewService {
     public record AnswerOutcome(InterviewSession session, Integer turnSeq) {}
 
     /**
+     * fail 결과. note = 실패 사유를 담은 system 턴 — 호출자가 터미널 status보다 **먼저** SSE로 밀어야 한다
+     * (프론트는 FAILED를 받는 즉시 스트림을 닫으므로, DB에만 남기면 사유가 라이브로 전달되지 않는다).
+     */
+    public record FailOutcome(InterviewSession session, InterviewTurn note) {}
+
+    /**
      * 관리자 승인 → 해당 task의 인터뷰 세션 생성(QUEUED).
      * task 필드를 스냅샷으로 복사한다 — 워커는 세션만 보고 일하므로 계약이 바뀌지 않는다.
      * task 상태 전이는 호출자(TaskService)가 담당한다.
@@ -293,7 +299,7 @@ public class InterviewService {
 
     /** 시스템/스윕용 실패 처리 → FAILED. terminal 상태에선 거부. */
     @Transactional
-    public InterviewSession fail(Long sessionId, String actor, String reason) {
+    public FailOutcome fail(Long sessionId, String actor, String reason) {
         InterviewSession s = requireSessionForUpdate(sessionId);
         InterviewStatus st = s.getStatus();
         if (st != InterviewStatus.QUEUED && st != InterviewStatus.RUNNING
@@ -312,7 +318,7 @@ public class InterviewService {
      * 스윕/시스템 경로는 기존 fail()을 그대로 쓴다.
      */
     @Transactional
-    public InterviewSession failFromWorker(Long sessionId, String workerId, String reason) {
+    public FailOutcome failFromWorker(Long sessionId, String workerId, String reason) {
         InterviewSession s = requireSessionForUpdate(sessionId);
         if (s.getStatus() != InterviewStatus.RUNNING) {
             throw TaskException.conflict("인터뷰중(워커 소유) 상태에서만 워커 실패 보고를 받을 수 있습니다 (현재: "
@@ -322,14 +328,18 @@ public class InterviewService {
         return doFail(s, workerId, reason);
     }
 
-    private InterviewSession doFail(InterviewSession s, String actor, String reason) {
-        appendTurn(s.getId(), "system", "note", "인터뷰 실패: " + (reason == null ? "원인 미상" : reason));
+    private FailOutcome doFail(InterviewSession s, String actor, String reason) {
+        // 세션 종류에 맞는 라벨을 노트에 그대로 넣는다 — 프론트 배너가 이 문장을 접두사 없이 쓴다
+        // (질문 세션 배너는 '답변 실패', 인터뷰는 '인터뷰 실패').
+        String label = s.getKind() == InterviewKind.QUESTION ? "답변 실패" : "인터뷰 실패";
+        InterviewTurn note = appendTurn(s.getId(), "system", "note",
+                label + ": " + (reason == null ? "원인 미상" : reason));
         s.setStatus(InterviewStatus.FAILED);
         s.setWorkerId(null);
         s.setClaimedAt(null);
         touch(s);
         mirrorTask(s, TaskStatus.AWAITING_APPROVAL, actor, "인터뷰 실패 → 승인대기 복귀");
-        return s;
+        return new FailOutcome(s, note);
     }
 
     /**

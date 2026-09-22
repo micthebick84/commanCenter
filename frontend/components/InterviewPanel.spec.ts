@@ -164,6 +164,37 @@ describe('InterviewPanel — terminal states', () => {
     expect(w.text()).toContain('인터뷰 실패')
     w.unmount()
   })
+
+  // doFail은 터미널 전이라 FAILED 세션의 마지막 턴은 항상 그 실패 노트다 — 배너는 그걸 그대로 쓴다.
+  it('shows the failure reason from the note the server pushes before FAILED', async () => {
+    const w = await mountPanel(9)
+    FakeEventSource.last().emit('note', { seq: 0, content: '인터뷰 실패: OAuth 세션 만료' })
+    FakeEventSource.last().emit('status', 'FAILED')
+    await flushPromises()
+    expect(w.text()).toContain('OAuth 세션 만료')
+    expect(w.text()).not.toContain('알 수 없는 오류')
+    w.unmount()
+  })
+
+  it('shows the failure reason after a reload (hydrated snapshot, no live events)', async () => {
+    const w = await mountPanel(9, {
+      statusName: 'FAILED',
+      turns: [{ seq: 0, role: 'system', kind: 'note', content: '인터뷰 실패: 디스크 부족' }],
+      plan: null,
+    })
+    expect(w.text()).toContain('디스크 부족')
+    expect(w.text()).not.toContain('알 수 없는 오류')
+    w.unmount()
+  })
+
+  it('falls back to the generic message when a FAILED session carries no note', async () => {
+    const w = await mountPanel(9)
+    FakeEventSource.last().emit('question', { seq: 0, content: '범위는?' })
+    FakeEventSource.last().emit('status', 'FAILED')
+    await flushPromises()
+    expect(w.text()).toContain('알 수 없는 오류')
+    w.unmount()
+  })
 })
 
 describe('InterviewPanel — typing indicator', () => {

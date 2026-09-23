@@ -171,12 +171,21 @@ netis-maker:
       reconcile-enabled: ${DEPLOY_RECONCILE_ENABLED:true}
       reconcile-interval-seconds: ${DEPLOY_RECONCILE_INTERVAL_SEC:300}
       public-access:
-        # true 로 켜면 공개 서브도메인 라우팅 활성 (deploy_url=https://task-N.{base-domain}).
+        # true 로 켜면 공개 서브도메인 라우팅 활성 (deploy_url=https://task-N{slug-suffix}.{base-domain}).
         # 기본 false = 인프라(Traefik + netis-deploy 네트워크) 없는 환경에서도 안전.
         # start-all.sh 는 인프라 존재를 감지해 자동으로 true 를 주입한다.
         enabled: ${DEPLOY_PUBLIC_ACCESS_ENABLED:false}
-        base-domain: micthebick.dev
+        base-domain: ${DEPLOY_PUBLIC_BASE_DOMAIN:micthebick.dev}
         network: netis-deploy
+        # 같은 base-domain을 쓰는 다른 스택과 이름이 겹치지 않게 붙이는 접미사 (Windows 스택: -win).
+        slug-suffix: ${DEPLOY_PUBLIC_SLUG_SUFFIX:}
+        # 배포별 DNS 자동 등록. none(기본) = 와일드카드 DNS에 기댄다(맥 스택).
+        # cloudflare = 배포 때 CNAME 생성, 중지/GC 때 삭제 (api-token: micthebick.dev Zone DNS Edit).
+        dns:
+          provider: ${DEPLOY_PUBLIC_DNS_PROVIDER:none}
+          api-token: ${CLOUDFLARE_API_TOKEN:}
+          zone-id: ${CLOUDFLARE_ZONE_ID:}
+          tunnel-id: ${CLOUDFLARE_TUNNEL_ID:}
       dockerfile-prompt-template: |
         당신은 DevOps 엔지니어입니다. 현재 디렉토리는 '{github_repo}'의 '{branch}' 브랜치 체크아웃입니다.
         이 프로젝트를 컨테이너로 실행하기 위한 production용 Dockerfile을 현재 디렉토리 루트에 생성하세요.

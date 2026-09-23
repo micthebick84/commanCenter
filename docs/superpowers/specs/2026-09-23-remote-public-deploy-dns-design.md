@@ -69,10 +69,13 @@ public-access:
 
 - `slug-suffix`는 DNS 라벨로 안전해야 한다: `^(-[a-z0-9]+)*$` 외에는 기동 실패(설정 오류를 배포 때가 아니라 부팅 때 드러냄).
 - `provider=cloudflare`인데 token/zone/tunnel 중 하나라도 비었거나 `enabled=false`면 기동 실패.
+- `provider`는 `none|cloudflare`만 허용한다 — 그 외 값(오타 포함)은 조용히 `none`으로 묵살하지 않고 기동 실패로 드러낸다.
+- `provider=cloudflare`면 `slug-suffix`가 비어 있어도 기동 실패 — 접미사 없이는 같은 zone의 다른 스택(맥 와일드카드)과 이름이 겹친다.
+- `base-domain`은 defaulting 뒤 소문자로 정규화한다 — 호스트명을 소문자로 비교하는 `taskIdOf`와 어긋나지 않게.
 
 ### 5.2 `PublicRoute`
 
-- `slug(taskId, suffix)` → `task-{id}{suffix}`. `publicUrl`, `dockerLabels`, 호스트명(`hostname(taskId, suffix, baseDomain)`)이 같은 슬러그를 쓴다.
+- `slug(taskId, suffix)` → `task-{id}{suffix}`. `publicUrl`, `dockerLabels`, 호스트명(`hostname(taskId, baseDomain, suffix)`)이 같은 슬러그를 쓴다. 역파싱은 `taskIdOf(hostname, baseDomain, suffix)`.
 - 기존 시그니처(suffix 없음)는 suffix `""`로 위임 — 맥 스택 결과 동일.
 
 ### 5.3 신규 `workerdaemon/deploy/PublicDnsRegistrar`
@@ -87,9 +90,8 @@ interface PublicDnsRegistrar {
 
 - 구현은 `CloudflareDnsRegistrar` 하나. provider `none`이면 registrar 빈 자체를 만들지 않는다(§5.4 데코레이터 미등록 → 현행 경로 그대로).
 - `CloudflareDnsRegistrar` — `java.net.http.HttpClient`, `Authorization: Bearer <token>`.
-  - upsert: `GET /zones/{zone}/dns_records?type=CNAME&name={host}` → 없으면 `POST`, 있으면 `PUT` (content=`{tunnelId}.cfargotunnel.com`, proxied=true, ttl=1, comment=`netis-maker:{workerId}`).
-  - delete: 이름으로 조회 → 있으면 `DELETE /dns_records/{id}`.
-  - listOwned: `GET …?type=CNAME&comment.exact=netis-maker:{workerId}&per_page=100` 페이지 순회.
+  - upsert: `GET /zones/{zone}/dns_records?type=CNAME&name.exact={host}` → 없으면 `POST`, 있으면 `PUT` (content=`{tunnelId}.cfargotunnel.com`, proxied=true, ttl=1, comment=`netis-maker:{workerId}`). 서버가 `name.exact` 필터를 무시/오해석해도 괜찮게 클라이언트가 응답의 `name`을 다시 대조한다(delete도 동일한 조회를 재사용).
+  - listOwned: `GET …?type=CNAME&comment.exact=netis-maker:{workerId}&per_page=100` 페이지 순회 — 여기서도 서버 필터를 신뢰하지 않고 응답의 `comment`을 클라이언트에서 재대조한다.
   - 응답 `success=false` / 비 2xx → 예외. 메시지에 **토큰을 넣지 않는다**(요청 헤더는 절대 로그 금지, 응답 본문 errors[].message만).
   - base URL은 생성자 주입(기본 `https://api.cloudflare.com/client/v4`) — 테스트에서 가짜 서버로 교체.
 - 필수값 검증은 `CloudflareDnsRegistrar.fromConfig(publicAccess, workerId)` 정적 팩토리에서(§5.1 규칙) — 빈 생성 시 예외 → 워커 기동 실패.

@@ -61,6 +61,12 @@ public class CloudflareDnsRegistrar implements PublicDnsRegistrar {
             throw new IllegalStateException(
                     "DEPLOY_PUBLIC_DNS_PROVIDER=cloudflare는 DEPLOY_PUBLIC_ACCESS_ENABLED=true일 때만 쓸 수 있다");
         }
+        if (pa.slugSuffix().isEmpty()) {
+            // 접미사 없이 cloudflare를 쓰면 task-N.{baseDomain} 개별 레코드가 같은 zone의 다른 스택
+            // (맥 와일드카드)과 같은 task id에서 이름이 겹쳐 그 스택의 주소를 덮어써 버린다.
+            throw new IllegalStateException(
+                    "provider=cloudflare에는 DEPLOY_PUBLIC_SLUG_SUFFIX가 필요하다 — 같은 zone의 다른 스택(와일드카드)과 이름이 겹친다");
+        }
         WorkerProperties.Deploy.PublicAccess.Dns dns = pa.dns();
         List<String> missing = new ArrayList<>();
         if (blank(dns.apiToken())) missing.add("CLOUDFLARE_API_TOKEN");

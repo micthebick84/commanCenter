@@ -252,6 +252,17 @@ class CloudflareDnsRegistrarTest {
     }
 
     @Test
+    void fromConfig_requires_a_slug_suffix_to_avoid_colliding_with_the_shared_wildcard() {
+        var pa = new WorkerProperties.Deploy.PublicAccess(true, null, null, "",
+                new WorkerProperties.Deploy.PublicAccess.Dns("cloudflare", TOKEN, "zone-1", "tun-1"));
+
+        assertThatThrownBy(() -> CloudflareDnsRegistrar.fromConfig(pa, "win-worker-1"))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("DEPLOY_PUBLIC_SLUG_SUFFIX")
+                .satisfies(e -> assertThat(e.getMessage()).doesNotContain(TOKEN));
+    }
+
+    @Test
     void fromConfig_builds_a_working_registrar() throws Exception {
         var pa = new WorkerProperties.Deploy.PublicAccess(true, null, null, "-win",
                 new WorkerProperties.Deploy.PublicAccess.Dns("cloudflare", TOKEN, "zone-1", "tun-1"));

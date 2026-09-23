@@ -67,4 +67,26 @@ class WorkerPropertiesDeployTest {
                 new WorkerProperties.Deploy.PublicAccess.Dns("cloudflare", "cf-secret-123", "zone", "tun");
         assertThat(dns.toString()).doesNotContain("cf-secret-123").contains("zone").contains("tun");
     }
+
+    @Test
+    void dns_rejects_a_misspelled_provider() {
+        assertThatThrownBy(() -> new WorkerProperties.Deploy.PublicAccess.Dns("cloudfalre", null, null, null))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("DEPLOY_PUBLIC_DNS_PROVIDER")
+                .hasMessageContaining("cloudfalre");
+    }
+
+    @Test
+    void dns_normalizes_provider_before_validating() {
+        WorkerProperties.Deploy.PublicAccess.Dns dns =
+                new WorkerProperties.Deploy.PublicAccess.Dns(" CloudFlare ", "tok", "zone", "tun");
+        assertThat(dns.provider()).isEqualTo("cloudflare");
+    }
+
+    @Test
+    void baseDomain_is_lowercased_after_defaulting() {
+        WorkerProperties.Deploy.PublicAccess pa =
+                new WorkerProperties.Deploy.PublicAccess(null, "MicTheBick.DEV", null, null, null);
+        assertThat(pa.baseDomain()).isEqualTo("micthebick.dev");
+    }
 }

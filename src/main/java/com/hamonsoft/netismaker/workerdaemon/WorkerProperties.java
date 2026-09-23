@@ -90,6 +90,8 @@ public record WorkerProperties(
             public PublicAccess {
                 if (enabled == null) enabled = false;
                 if (baseDomain == null || baseDomain.isBlank()) baseDomain = "micthebick.dev";
+                // taskIdOf가 호스트명을 소문자로 비교하므로 여기서도 맞춰둔다 — 대문자 설정값이면 매칭이 어긋난다.
+                baseDomain = baseDomain.toLowerCase(java.util.Locale.ROOT);
                 if (network == null || network.isBlank()) network = "netis-deploy";
                 slugSuffix = slugSuffix == null ? "" : slugSuffix.trim();
                 // DNS 라벨로 안전한 값만 — 잘못된 값은 배포 때가 아니라 부팅 때 드러낸다.
@@ -108,6 +110,11 @@ public record WorkerProperties(
                 public Dns {
                     provider = (provider == null || provider.isBlank())
                             ? "none" : provider.trim().toLowerCase(java.util.Locale.ROOT);
+                    // 오타(예: "cloudfalre")를 "none"으로 조용히 묵살하지 않는다 — 알아채지 못하면 DNS가 아예 등록되지 않는다.
+                    if (!"none".equals(provider) && !"cloudflare".equals(provider)) {
+                        throw new IllegalArgumentException(
+                                "DEPLOY_PUBLIC_DNS_PROVIDER는 none|cloudflare만 허용한다: '" + provider + "'");
+                    }
                 }
 
                 public boolean cloudflare() {

@@ -19,6 +19,15 @@ public final class PortAllocator {
         return allocate(from, to, inUse, PortAllocator::isBindable);
     }
 
+    /**
+     * 데몬 위치에 맞춘 할당. 원격 데몬(DOCKER_HOST=ssh://…)이면 포트는 원격 PC에 게시되므로
+     * 워커 PC의 bind 시험은 무의미하다(무관한 로컬 점유로 멀쩡한 포트를 건너뛴다) — 이때는
+     * 데몬이 게시 중인 포트(inUse)만 피하고, 원격 PC의 다른 프로그램과의 충돌은 docker run 실패로 드러난다.
+     */
+    public static int allocateFor(int from, int to, Set<Integer> inUse, boolean remoteDaemon) {
+        return remoteDaemon ? allocate(from, to, inUse, p -> true) : allocate(from, to, inUse);
+    }
+
     /** 테스트 주입용 — isFree 술어로 bindable 판정 대체. */
     static int allocate(int from, int to, Set<Integer> inUse, IntPredicate isFree) {
         for (int p = from; p <= to; p++) {

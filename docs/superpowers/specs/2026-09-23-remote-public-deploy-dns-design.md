@@ -85,21 +85,28 @@ interface PublicDnsRegistrar {
 }
 ```
 
-- `NoopDnsRegistrar` — provider `none`. 전부 no-op, `listOwned()`는 빈 집합.
+- 구현은 `CloudflareDnsRegistrar` 하나. provider `none`이면 registrar 빈 자체를 만들지 않는다(§5.4 데코레이터 미등록 → 현행 경로 그대로).
 - `CloudflareDnsRegistrar` — `java.net.http.HttpClient`, `Authorization: Bearer <token>`.
   - upsert: `GET /zones/{zone}/dns_records?type=CNAME&name={host}` → 없으면 `POST`, 있으면 `PUT` (content=`{tunnelId}.cfargotunnel.com`, proxied=true, ttl=1, comment=`netis-maker:{workerId}`).
   - delete: 이름으로 조회 → 있으면 `DELETE /dns_records/{id}`.
   - listOwned: `GET …?type=CNAME&comment.exact=netis-maker:{workerId}&per_page=100` 페이지 순회.
   - 응답 `success=false` / 비 2xx → 예외. 메시지에 **토큰을 넣지 않는다**(요청 헤더는 절대 로그 금지, 응답 본문 errors[].message만).
   - base URL은 생성자 주입(기본 `https://api.cloudflare.com/client/v4`) — 테스트에서 가짜 서버로 교체.
-- 빈 선택은 `@Configuration`에서 provider 값으로 분기.
+- 필수값 검증은 `CloudflareDnsRegistrar.fromConfig(publicAccess, workerId)` 정적 팩토리에서(§5.1 규칙) — 빈 생성 시 예외 → 워커 기동 실패.
 
-### 5.4 연결 지점
+### 5.4 연결 지점 — `DeployTarget` 데코레이터
 
-- **`DeployService.deploy`**: `target.deploy()` 성공 후 공개 모드면 `registrar.upsert(hostname)`. 실패 시 `target.stop(containerName)`(실패 무시) 후 `DeployException("공개 주소 DNS 등록 실패: …")`. 배포 로그에 `[공개 주소 DNS 등록: task-7-win.micthebick.dev]` 한 줄.
-- **`DeployService.undeploy`**: `target.stop()` 후 공개 모드면 `registrar.delete(hostname)`; 예외는 `log.warn`만.
-- **`DockerGcJob.reap`**: 기존 컨테이너 GC 뒤, 보호 목록(배포완료·배포중단됨 task id)에 해당하지 않는 `listOwned()` 호스트명을 삭제. `listOwned()` 실패 시 이번 주기 DNS 정리만 스킵. 보호 목록 조회 실패 시 기존처럼 전체 스킵(fail-closed).
-  - 호스트명 → task id 판정은 `PublicRoute`가 역파싱(`task-(\d+){suffix}.{baseDomain}`) — 패턴 불일치 레코드는 건드리지 않는다.
+`DeployService`·`DockerGcJob`·`DeployReconcileJob`은 **바꾸지 않는다.** 대신 신규 `deploy/DnsRegisteringDeployTarget implements DeployTarget`가 `LocalDockerTarget`을 감싼다. `PublicDnsConfiguration`(`@Configuration @Profile("worker")`)이 `provider=cloudflare`일 때만 `@Primary` 빈으로 등록 → `DeployTarget` 주입처가 전부 데코레이터를 받는다.
+
+- **deploy**: `delegate.deploy()` 성공 후 `registrar.upsert(hostname)`. 실패 시 `delegate.stop(containerName)`(실패 무시) 후 `DeployFailedException("공개 주소 DNS 등록 실패: …", 결과 로그 + 실패 줄)` → `DeployService`가 기존대로 배포실패 처리. 성공 시 결과 로그 끝에 `[공개 주소 DNS 등록: task-7-win.micthebick.dev]` 한 줄, logSink에도 같은 줄.
+- **stop**: `delegate.stop()` 후 `registrar.delete(hostname)`; DNS 예외는 `log.warn`만. 컨테이너 이름 `netis-task-{id}`에서 id 추출(패턴 불일치면 DNS 단계 생략).
+- **status**: 그대로 위임.
+- **gc**: `delegate.gc()` 후 `listOwned()` 중 보호 목록(`netis-task-{id}` 컨테이너 이름 집합)에 없고 **컨테이너 상태가 `STOPPED`인** 호스트명만 삭제. `RUNNING`(배포 직후 DB 보고 전 — GC 스레드와의 경합)·`UNKNOWN`(데몬 불통)은 보존. `listOwned()` 실패 시 이번 주기 DNS 정리만 스킵. 보호 목록 조회 실패 시는 `DockerGcJob`이 기존처럼 gc 자체를 호출하지 않는다(fail-closed).
+  - 호스트명 → task id 판정은 `PublicRoute.taskIdOf(hostname, baseDomain, suffix)` 역파싱(`task-(\d+){suffix}.{baseDomain}`) — 패턴 불일치 레코드는 건드리지 않는다.
+
+### 5.4.1 알려진 위험
+
+`CLOUDFLARE_API_TOKEN`은 `public.env` → 스택 전 프로세스 env로 상속되어, 워커/인터뷰 서비스가 띄우는 claude 세션도 볼 수 있다. 기존 `GITLAB_TOKEN`·`SPRING_DATASOURCE_PASSWORD`와 같은 수준의 노출이며 토큰 범위를 micthebick.dev Zone DNS Edit로 한정해 피해 반경을 줄인다. 자식 프로세스 env 스크럽은 이 작업 범위 밖.
 
 ### 5.5 영향 없음
 
@@ -129,6 +136,6 @@ DB/스키마, 프론트(deployUrl 링크 그대로), PortAllocator, readiness, L
 - `PublicRouteTest`: suffix 유/무 슬러그·Host 라벨·URL, 역파싱(일치/불일치), 기존 케이스 회귀 없음.
 - `WorkerProperties` 검증: 잘못된 suffix, cloudflare 필수값 누락 → 예외.
 - `CloudflareDnsRegistrarTest`: JDK `HttpServer` 가짜 API로 생성/갱신 분기, 삭제(있음/없음), 페이지 순회 listOwned, `success=false` 예외 메시지에 토큰 미포함.
-- `DeployService` 테스트: upsert 실패 → stop 호출 + DeployException; undeploy 시 delete, delete 예외 삼킴; 공개 모드 off면 registrar 미호출.
-- `DockerGcJob` 테스트: 보호되지 않은 태그 레코드만 삭제, listOwned 실패 시 스킵.
+- `DnsRegisteringDeployTargetTest`(가짜 delegate·registrar): upsert 실패 → delegate.stop + DeployFailedException; stop 시 delete, delete 예외 삼킴; gc가 보호되지 않은 레코드만 삭제, listOwned 실패 시 스킵.
+- `PublicDnsConfigurationTest`(`ApplicationContextRunner`): provider none → `DeployTarget`=LocalDockerTarget, cloudflare → 데코레이터.
 - 라이브 스모크: 재배포 → 외부망에서 `https://task-N-win.micthebick.dev` 200 → 배포중지 → 레코드 삭제 확인.

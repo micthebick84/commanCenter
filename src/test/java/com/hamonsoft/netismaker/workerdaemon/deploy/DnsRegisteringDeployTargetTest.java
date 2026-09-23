@@ -1,9 +1,11 @@
 package com.hamonsoft.netismaker.workerdaemon.deploy;
 
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 import java.io.IOException;
+import java.net.ConnectException;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -185,5 +187,31 @@ class DnsRegisteringDeployTargetTest {
 
         assertThat(delegate.calls).containsExactly("gc");
         assertThat(dns.calls).isEmpty();
+    }
+
+    @AfterEach
+    void clearInterruptFlag() {
+        Thread.interrupted(); // 아래 인터럽트 테스트들이 남긴 플래그가 이후 테스트로 새지 않게
+    }
+
+    @Test
+    void deploy_dns_failure_with_null_message_does_not_say_null() {
+        dns.upsertError = new ConnectException(); // JDK HttpClient가 던지는 흔한 경우 — getMessage()==null
+
+        assertThatThrownBy(() -> target.deploy(spec(), sink::add))
+                .isInstanceOf(DeployFailedException.class)
+                .hasMessageContaining("ConnectException")
+                .satisfies(e -> assertThat(e.getMessage()).doesNotContain("null"));
+    }
+
+    @Test
+    void gc_stops_the_sweep_and_restores_interrupt_flag_when_delete_is_interrupted() {
+        dns.owned.addAll(List.of("task-2-win.micthebick.dev", "task-3-win.micthebick.dev"));
+        dns.deleteError = new InterruptedException();
+
+        target.gc(60, 1, Set.of());
+
+        assertThat(dns.calls).containsExactly("delete task-2-win.micthebick.dev"); // 두 번째는 시도 안 함
+        assertThat(Thread.interrupted()).isTrue(); // 플래그 복원 확인(동시에 소비)
     }
 }

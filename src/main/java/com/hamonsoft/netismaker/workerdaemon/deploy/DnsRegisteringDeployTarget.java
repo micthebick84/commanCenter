@@ -47,14 +47,15 @@ public class DnsRegisteringDeployTarget implements DeployTarget {
         try {
             dns.upsert(host);
         } catch (Exception e) {
-            String line = "[공개 주소 DNS 등록 실패: " + host + " — " + e.getMessage() + "]";
+            if (e instanceof InterruptedException) Thread.currentThread().interrupt();
+            String line = "[공개 주소 DNS 등록 실패: " + host + " — " + describe(e) + "]";
             sink.accept(line);
             try {
                 delegate.stop(spec.containerName());
             } catch (Exception stopErr) {
-                log.warn("DNS 등록 실패 후 컨테이너 정리 실패 ({}): {}", spec.containerName(), stopErr.getMessage());
+                log.warn("DNS 등록 실패 후 컨테이너 정리 실패 ({}): {}", spec.containerName(), describe(stopErr));
             }
-            throw new DeployFailedException("공개 주소 DNS 등록 실패: " + e.getMessage(),
+            throw new DeployFailedException("공개 주소 DNS 등록 실패: " + describe(e),
                     baseLog + "\n" + line + "\n");
         }
         String line = "[공개 주소 DNS 등록: " + host + "]";
@@ -71,7 +72,8 @@ public class DnsRegisteringDeployTarget implements DeployTarget {
         try {
             dns.delete(host);
         } catch (Exception e) {
-            log.warn("공개 주소 DNS 삭제 실패 (다음 GC에서 재시도): {} — {}", host, e.getMessage());
+            if (e instanceof InterruptedException) Thread.currentThread().interrupt();
+            log.warn("공개 주소 DNS 삭제 실패 (다음 GC에서 재시도): {} — {}", host, describe(e));
         }
     }
 
@@ -87,7 +89,8 @@ public class DnsRegisteringDeployTarget implements DeployTarget {
         try {
             owned = dns.listOwned();
         } catch (Exception e) {
-            log.warn("공개 주소 DNS 목록 조회 실패 — 이번 주기 DNS 정리 스킵: {}", e.getMessage());
+            if (e instanceof InterruptedException) Thread.currentThread().interrupt();
+            log.warn("공개 주소 DNS 목록 조회 실패 — 이번 주기 DNS 정리 스킵: {}", describe(e));
             return;
         }
         int removed = 0;
@@ -101,7 +104,12 @@ public class DnsRegisteringDeployTarget implements DeployTarget {
                 dns.delete(host);
                 removed++;
             } catch (Exception e) {
-                log.warn("GC 공개 주소 DNS 삭제 실패: {} — {}", host, e.getMessage());
+                if (e instanceof InterruptedException) {
+                    Thread.currentThread().interrupt();
+                    log.warn("GC 공개 주소 DNS 삭제 중 인터럽트 — 이번 주기 스윕 중단: {}", host);
+                    break;
+                }
+                log.warn("GC 공개 주소 DNS 삭제 실패: {} — {}", host, describe(e));
             }
         }
         if (removed > 0) log.info("GC: 공개 주소 DNS 레코드 {}개 제거", removed);
@@ -111,5 +119,13 @@ public class DnsRegisteringDeployTarget implements DeployTarget {
         if (containerName == null) return OptionalLong.empty();
         Matcher m = OWN_CONTAINER.matcher(containerName);
         return m.matches() ? OptionalLong.of(Long.parseLong(m.group(1))) : OptionalLong.empty();
+    }
+
+    /**
+     * 예외 메시지가 없을 수 있다(JDK HttpClient의 ConnectException 등) — 그대로 이어붙이면
+     * "…실패: null"처럼 원인을 알 수 없는 로그/예외 메시지가 남는다. 없으면 toString()으로 대체.
+     */
+    private static String describe(Exception e) {
+        return e.getMessage() != null ? e.getMessage() : e.toString();
     }
 }

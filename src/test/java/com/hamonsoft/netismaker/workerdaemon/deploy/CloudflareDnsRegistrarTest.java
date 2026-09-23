@@ -35,6 +35,7 @@ class CloudflareDnsRegistrarTest {
     private int nextId = 1;
     private int failStatus = 0;                                   // 0 = 정상 응답
     private boolean ignoreNameFilter = false;                     // true = GET이 name.exact 필터를 무시
+    private boolean ignoreCommentFilter = false;                  // true = GET이 comment.exact 필터를 무시
 
     @BeforeEach
     void start() throws IOException {
@@ -76,7 +77,8 @@ class CloudflareDnsRegistrarTest {
                 List<Map<String, Object>> hits = records.values().stream()
                         .filter(r -> ignoreNameFilter || !q.containsKey("name.exact")
                                 || q.get("name.exact").equals(r.get("name")))
-                        .filter(r -> !q.containsKey("comment.exact") || q.get("comment.exact").equals(r.get("comment")))
+                        .filter(r -> ignoreCommentFilter || !q.containsKey("comment.exact")
+                                || q.get("comment.exact").equals(r.get("comment")))
                         .toList();
                 int per = Integer.parseInt(q.getOrDefault("per_page", "100"));
                 int page = Integer.parseInt(q.getOrDefault("page", "1"));
@@ -226,6 +228,18 @@ class CloudflareDnsRegistrarTest {
         assertThat(records).hasSize(2);
         assertThat(records.get("rec-1")).containsEntry("content", "localhost-origin");
         assertThat(seen).noneMatch(s -> s.startsWith("DELETE "));
+    }
+
+    @Test
+    void listOwned_ignores_a_comment_filter_the_api_does_not_honor() throws Exception {
+        seed("task-7-win.micthebick.dev", "tun-1.cfargotunnel.com", "netis-maker:win-worker-1");
+        seed("task-8-win.micthebick.dev", "tun-1.cfargotunnel.com", null);                    // 태그 없음
+        seed("task-9-win.micthebick.dev", "tun-1.cfargotunnel.com", "netis-maker:other-worker"); // 다른 워커
+        ignoreCommentFilter = true; // 서버가 comment.exact를 무시하고 zone 전체 레코드를 돌려준다고 가정
+
+        Set<String> owned = registrar().listOwned();
+
+        assertThat(owned).containsExactly("task-7-win.micthebick.dev");
     }
 
     @Test

@@ -107,7 +107,11 @@ public class CloudflareDnsRegistrar implements PublicDnsRegistrar {
         do {
             JsonNode res = call("GET", records() + "?type=CNAME&per_page=100&page=" + page
                     + "&comment.exact=" + enc(ownerTag), null);
-            for (JsonNode r : res.path("result")) out.add(r.path("name").asText());
+            // findId와 마찬가지로 서버 필터를 신뢰하지 않고 comment를 다시 대조한다 — 무시/오해석되면
+            // 태그 없는 레코드나 다른 워커의 레코드까지 "소유"로 오판해 GC가 지워버릴 수 있다.
+            for (JsonNode r : res.path("result")) {
+                if (ownerTag.equals(r.path("comment").asText())) out.add(r.path("name").asText());
+            }
             totalPages = res.path("result_info").path("total_pages").asInt(1);
             page++;
         } while (page <= totalPages);

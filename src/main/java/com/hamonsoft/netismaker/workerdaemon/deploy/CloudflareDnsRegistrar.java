@@ -17,6 +17,7 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
@@ -109,7 +110,15 @@ public class CloudflareDnsRegistrar implements PublicDnsRegistrar {
 
     private Optional<String> findId(String hostname) throws IOException, InterruptedException {
         JsonNode arr = call("GET", records() + "?type=CNAME&name.exact=" + enc(hostname), null).path("result");
-        return arr.isArray() && !arr.isEmpty() ? Optional.of(arr.get(0).path("id").asText()) : Optional.empty();
+        // 서버가 name.exact 필터를 무시/오해석해 다른 레코드를 섞어 보내도, 여기서 이름을 다시
+        // 대조해야 같은 zone의 다른 레코드(맥 스택 등)를 덮어쓰거나 지우지 않는다.
+        String want = hostname.toLowerCase(Locale.ROOT);
+        for (JsonNode r : arr) {
+            if (want.equals(r.path("name").asText().toLowerCase(Locale.ROOT))) {
+                return Optional.of(r.path("id").asText());
+            }
+        }
+        return Optional.empty();
     }
 
     private Map<String, Object> recordBody(String hostname) {

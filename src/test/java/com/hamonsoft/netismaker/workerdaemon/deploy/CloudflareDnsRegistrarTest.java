@@ -34,6 +34,7 @@ class CloudflareDnsRegistrarTest {
     private final Map<String, Map<String, Object>> records = new LinkedHashMap<>();   // id → record
     private int nextId = 1;
     private int failStatus = 0;                                   // 0 = 정상 응답
+    private boolean ignoreNameFilter = false;                     // true = GET이 name.exact 필터를 무시
 
     @BeforeEach
     void start() throws IOException {
@@ -73,7 +74,8 @@ class CloudflareDnsRegistrarTest {
         switch (method) {
             case "GET" -> {
                 List<Map<String, Object>> hits = records.values().stream()
-                        .filter(r -> !q.containsKey("name.exact") || q.get("name.exact").equals(r.get("name")))
+                        .filter(r -> ignoreNameFilter || !q.containsKey("name.exact")
+                                || q.get("name.exact").equals(r.get("name")))
                         .filter(r -> !q.containsKey("comment.exact") || q.get("comment.exact").equals(r.get("comment")))
                         .toList();
                 int per = Integer.parseInt(q.getOrDefault("per_page", "100"));
@@ -204,6 +206,26 @@ class CloudflareDnsRegistrarTest {
                 .hasMessageContaining("403")
                 .hasMessageContaining("Authentication error")
                 .satisfies(e -> assertThat(e.getMessage()).doesNotContain(TOKEN));
+    }
+
+    @Test
+    void findId_ignores_a_name_filter_the_api_does_not_honor() throws Exception {
+        seed("app-win.micthebick.dev", "localhost-origin", null);
+        ignoreNameFilter = true; // 서버가 name.exact를 무시하고 zone 전체 레코드를 돌려준다고 가정
+
+        registrar().upsert("task-7-win.micthebick.dev");
+
+        assertThat(records.get("rec-1")).containsEntry("content", "localhost-origin");
+        assertThat(records).hasSize(2);
+        assertThat(seen).anyMatch(s -> s.startsWith("POST " + PREFIX));
+        assertThat(seen).noneMatch(s -> s.startsWith("PUT "));
+
+        seen.clear();
+        registrar().delete("task-9-win.micthebick.dev");
+
+        assertThat(records).hasSize(2);
+        assertThat(records.get("rec-1")).containsEntry("content", "localhost-origin");
+        assertThat(seen).noneMatch(s -> s.startsWith("DELETE "));
     }
 
     @Test

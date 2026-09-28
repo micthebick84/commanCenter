@@ -77,17 +77,57 @@ public record WorkerProperties(
             if (gcKeepImagesPerTask <= 0) gcKeepImagesPerTask = 1;
             if (reconcileEnabled == null) reconcileEnabled = true;
             if (reconcileIntervalSeconds <= 0) reconcileIntervalSeconds = 300;
-            if (publicAccess == null) publicAccess = new PublicAccess(null, null, null);
+            if (publicAccess == null) publicAccess = new PublicAccess(null, null, null, null, null);
         }
         public int portFrom() { return Integer.parseInt(portRange.split("-")[0].trim()); }
         public int portTo()   { return Integer.parseInt(portRange.split("-")[1].trim()); }
 
         /** 공개 배포 주소(Traefik 라우팅) 설정. */
-        public record PublicAccess(Boolean enabled, String baseDomain, String network) {
+        public record PublicAccess(Boolean enabled, String baseDomain, String network,
+                                   // 슬러그 접미사: task-{id}{slugSuffix}. 같은 base-domain을 쓰는 다른 스택과 이름 충돌 회피용(예 "-win").
+                                   String slugSuffix,
+                                   Dns dns) {
             public PublicAccess {
                 if (enabled == null) enabled = false;
                 if (baseDomain == null || baseDomain.isBlank()) baseDomain = "micthebick.dev";
+                // taskIdOf가 호스트명을 소문자로 비교하므로 여기서도 맞춰둔다 — 대문자 설정값이면 매칭이 어긋난다.
+                baseDomain = baseDomain.toLowerCase(java.util.Locale.ROOT);
                 if (network == null || network.isBlank()) network = "netis-deploy";
+                slugSuffix = slugSuffix == null ? "" : slugSuffix.trim();
+                // DNS 라벨로 안전한 값만 — 잘못된 값은 배포 때가 아니라 부팅 때 드러낸다.
+                if (!slugSuffix.matches("(-[a-z0-9]+)*")) {
+                    throw new IllegalArgumentException(
+                            "deploy.public-access.slug-suffix는 '-소문자영숫자' 형식이어야 한다: '" + slugSuffix + "'");
+                }
+                if (dns == null) dns = new Dns(null, null, null, null);
+            }
+
+            /**
+             * 배포별 DNS 레코드 자동 등록. provider=none(기본)이면 사용하지 않는다.
+             * cloudflare: 배포마다 {slug}.{baseDomain} CNAME → {tunnelId}.cfargotunnel.com.
+             */
+            public record Dns(String provider, String apiToken, String zoneId, String tunnelId) {
+                public Dns {
+                    provider = (provider == null || provider.isBlank())
+                            ? "none" : provider.trim().toLowerCase(java.util.Locale.ROOT);
+                    // 오타(예: "cloudfalre")를 "none"으로 조용히 묵살하지 않는다 — 알아채지 못하면 DNS가 아예 등록되지 않는다.
+                    if (!"none".equals(provider) && !"cloudflare".equals(provider)) {
+                        throw new IllegalArgumentException(
+                                "DEPLOY_PUBLIC_DNS_PROVIDER는 none|cloudflare만 허용한다: '" + provider + "'");
+                    }
+                }
+
+                public boolean cloudflare() {
+                    return "cloudflare".equals(provider);
+                }
+
+                /** 토큰은 절대 출력하지 않는다(설정 덤프·로그 대비). */
+                @Override
+                public String toString() {
+                    return "Dns[provider=" + provider + ", apiToken="
+                            + (apiToken == null || apiToken.isBlank() ? "(없음)" : "•••")
+                            + ", zoneId=" + zoneId + ", tunnelId=" + tunnelId + "]";
+                }
             }
         }
     }

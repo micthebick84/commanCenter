@@ -76,7 +76,8 @@ public class LocalDockerTarget implements DeployTarget {
      * 재시작 정책은 헬스체크 통과 후 deploy()가 docker update로 부여한다.
      */
     static List<String> buildRunArgs(DeployTarget.DeploySpec spec, int hostPort,
-                                     boolean publicMode, String network, String baseDomain) {
+                                     boolean publicMode, String network, String baseDomain,
+                                     String slugSuffix) {
         List<String> run = new ArrayList<>(List.of(
                 DOCKER, "run", "-d",
                 "--name", spec.containerName(),
@@ -85,7 +86,7 @@ public class LocalDockerTarget implements DeployTarget {
         spec.env().forEach((k, v) -> { run.add("-e"); run.add(k + "=" + v); });
         if (publicMode) {
             run.add("--network"); run.add(network);
-            for (String label : PublicRoute.dockerLabels(spec.taskId(), spec.containerPort(), baseDomain)) {
+            for (String label : PublicRoute.dockerLabels(spec.taskId(), spec.containerPort(), baseDomain, slugSuffix)) {
                 run.add("--label"); run.add(label);
             }
         }
@@ -124,7 +125,8 @@ public class LocalDockerTarget implements DeployTarget {
         boolean publicMode = cfg.publicAccess().enabled();
         String pubNetwork = cfg.publicAccess().network();
         String pubBaseDomain = cfg.publicAccess().baseDomain();
-        List<String> run = buildRunArgs(spec, hostPort, publicMode, pubNetwork, pubBaseDomain);
+        String pubSuffix = cfg.publicAccess().slugSuffix();
+        List<String> run = buildRunArgs(spec, hostPort, publicMode, pubNetwork, pubBaseDomain, pubSuffix);
 
         // run 명령 echo는 env 시크릿 값이 로그/SSE 스트림에 노출되지 않도록 -e 값을 마스킹한다.
         // (정책: 주입 env 값은 출력하지 않고 키만 노출 — UI 마스킹과 일관). 실행 커맨드 run은 실제 값 유지.
@@ -134,7 +136,7 @@ public class LocalDockerTarget implements DeployTarget {
         spec.env().forEach((k, v) -> runEcho.append(" -e ").append(k).append("=•••"));
         if (publicMode) {
             runEcho.append(" --network ").append(pubNetwork);
-            for (String label : PublicRoute.dockerLabels(spec.taskId(), spec.containerPort(), pubBaseDomain))
+            for (String label : PublicRoute.dockerLabels(spec.taskId(), spec.containerPort(), pubBaseDomain, pubSuffix))
                 runEcho.append(" --label ").append(label);
         }
         runEcho.append(' ').append(spec.imageName());
@@ -214,7 +216,7 @@ public class LocalDockerTarget implements DeployTarget {
         sink.accept("--- container logs ---\n" + startupLog);
 
         String url = publicMode
-                ? PublicRoute.publicUrl(spec.taskId(), pubBaseDomain)
+                ? PublicRoute.publicUrl(spec.taskId(), pubBaseDomain, pubSuffix)
                 : "http://" + cfg.publicHost() + ":" + hostPort;
         log.info("배포 완료: container={} url={}", spec.containerName(), url);
         return new DeployResult(url, containerId, hostPort, spec.imageName(),

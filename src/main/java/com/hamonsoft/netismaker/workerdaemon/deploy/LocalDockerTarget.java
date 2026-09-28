@@ -15,10 +15,15 @@ import java.util.List;
 import java.util.Set;
 
 /**
- * 워커 로컬 docker 데몬으로 build/run/stop. DeployTarget MVP 구현.
+ * docker CLI로 build/run/stop. DeployTarget MVP 구현.
  *
  *  target=local 일 때만 빈 등록 (기본값). 멀티 워커가 같은 머신이면 docker 데몬을
  *  공유하므로 컨테이너 stop/replace가 어느 워커에서나 일관 동작.
+ *
+ *  원격 데몬: 워커 프로세스 환경에 DOCKER_HOST(예 ssh://Administrator@10.1.1.75)를 두면 docker CLI가
+ *  모든 명령을 그 데몬으로 보낸다(build 컨텍스트는 worktree에서 전송). 이 클래스가 달리 하는 것은 두 가지 —
+ *  포트 할당의 로컬 bind 시험 생략, 그리고 readiness·deploy_url이 쓰는 publicHost(DEPLOY_PUBLIC_HOST)를
+ *  원격 PC 주소로 둬야 한다는 기동 경고.
  */
 @Component
 @Profile("worker")
@@ -31,10 +36,36 @@ public class LocalDockerTarget implements DeployTarget {
 
     private final WorkerProperties.Deploy cfg;
     private final long buildTimeoutSec;
+    /** DOCKER_HOST가 원격 전송(ssh/tcp)이면 true — docker CLI가 읽는 바로 그 값. */
+    private final boolean remoteDaemon;
 
     public LocalDockerTarget(WorkerProperties props) {
         this.cfg = props.deploy();
         this.buildTimeoutSec = cfg.buildTimeout().toSeconds();
+        this.remoteDaemon = isRemoteDaemon(System.getenv("DOCKER_HOST"));
+        if (remoteDaemon) {
+            log.info("배포 docker 데몬: 원격 DOCKER_HOST 사용, publicHost={}", cfg.publicHost());
+        }
+        String warning = remoteConfigWarning(remoteDaemon, cfg.publicHost());
+        if (warning != null) log.warn(warning);
+    }
+
+    /** 비었거나 로컬 전송(npipe/unix)이면 로컬 데몬, 그 외(ssh://, tcp:// …)는 원격. */
+    static boolean isRemoteDaemon(String dockerHost) {
+        if (dockerHost == null || dockerHost.isBlank()) return false;
+        String h = dockerHost.trim().toLowerCase(java.util.Locale.ROOT);
+        return !(h.startsWith("npipe://") || h.startsWith("unix://"));
+    }
+
+    /** 원격 데몬인데 publicHost가 루프백이면 readiness·deploy_url이 워커 PC를 가리킨다 — 경고 문구, 문제없으면 null. */
+    static String remoteConfigWarning(boolean remoteDaemon, String publicHost) {
+        if (!remoteDaemon) return null;
+        String h = publicHost == null ? "" : publicHost.trim().toLowerCase(java.util.Locale.ROOT);
+        if (h.isEmpty() || h.equals("localhost") || h.startsWith("127.") || h.equals("::1")) {
+            return "DOCKER_HOST가 원격인데 DEPLOY_PUBLIC_HOST=" + publicHost
+                    + " — readiness 확인과 deploy_url이 워커 PC를 가리켜 배포가 실패한다. 원격 PC 주소로 설정할 것";
+        }
+        return null;
     }
 
     /**
@@ -87,7 +118,7 @@ public class LocalDockerTarget implements DeployTarget {
         } catch (Exception ignore) { /* 없으면 무시 */ }
 
         // 3. 포트 할당
-        int hostPort = PortAllocator.allocate(cfg.portFrom(), cfg.portTo(), dockerPublishedPorts());
+        int hostPort = PortAllocator.allocateFor(cfg.portFrom(), cfg.portTo(), dockerPublishedPorts(), remoteDaemon);
 
         // 4. run (공개 모드면 Traefik 네트워크/라벨 포함 — buildRunArgs 참조)
         boolean publicMode = cfg.publicAccess().enabled();

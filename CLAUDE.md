@@ -182,6 +182,17 @@ PR 본문/브랜치 prefix/timeout은 `application-worker.yml`의 `netis-maker.w
 - **⚠️ Traefik 버전**: docker provider가 데몬 API와 버전 호환돼야 함. `v3.1`은 Docker Engine 29와 비호환(provider가 컨테이너 디스커버리 실패→Host 라우팅 404). 현재 `v3.7` 핀. Engine 업글 시 Traefik도 맞춰 올릴 것.
 - **undeploy**: `docker rm -f` 시 Traefik 라우트 자동 소멸(별도 정리 불필요).
 
+## 원격 Docker 배포 호스트 (`DOCKER_HOST`)
+
+워커 머신에 Docker가 없을 때 배포만 다른 PC의 데몬에서 돌린다(2026-09-23, Windows 워커 → 10.1.1.75 Docker Desktop). docker 호출은 전부 CLI라 워커 프로세스 env의 `DOCKER_HOST`를 모든 `docker` 자식이 물려받는다 — build 컨텍스트는 worktree에서 전송되고 run/stop/ps/logs/GC/reconcile도 원격으로 간다. 새 `DeployTarget` 구현 없음(`LocalDockerTarget` 그대로).
+
+- **워커 env**: `DOCKER_HOST=ssh://<user>@<host>` + **`DEPLOY_PUBLIC_HOST=<host>`**(readiness와 `deploy_url`이 `http://{publicHost}:{port}` — `localhost`로 두면 워커 PC를 두드려 전부 배포실패; 기동 시 경고 로그). 반영 확인: 워커 기동 로그 `배포 docker 데몬: 원격 DOCKER_HOST 사용, publicHost=…`. Windows 스택은 `public.env`에 두고 워커만 재기동.
+- **원격이면 포트 할당의 로컬 bind 시험을 건너뛴다**(`PortAllocator.allocateFor`) — 데몬이 게시 중인 포트만 피하고, 원격 PC의 다른 프로그램과 충돌하면 `docker run` 실패로 드러난다.
+- **원격 PC**: OpenSSH 서버 + 키 인증(Windows 관리자 계정은 `~\.ssh\authorized_keys`가 무시되고 `C:\ProgramData\ssh\administrators_authorized_keys` + `icacls`로 Administrators·SYSTEM만), SSH 세션 PATH에 `docker`, 방화벽 인바운드 `DEPLOY_PORT_RANGE`(기본 19000–19099). Docker Desktop은 로그인 세션에서만 돈다.
+- **워커 PC**: docker CLI만 필요(Docker Desktop 불필요). buildx 플러그인이 없으면 구형 빌더로 동작하고 배포 로그 첫머리에 안내 문구가 섞인다(빌드는 정상).
+- ⚠️ **ssh 클라이언트 버전**: 워커가 쓰는 Windows 내장 ssh(9.5)는 OpenSSH 10.x 전용 옵션(예 `WarnWeakCrypto`)을 보면 `~/.ssh/config` 전체를 거부한다 → 그런 옵션 앞에 `IgnoreUnknown <옵션>`. ssh 설정을 바꾸면 Git Bash가 아니라 **워커와 같은 PowerShell 계보의 `ssh`로** 확인할 것.
+- 공개 라우팅(`task-N.micthebick.dev`, Traefik)은 이 구성에서 미지원 — 결과는 사내망 `http://<host>:<port>`로만 접근.
+
 ## 진행상황 노트
 
 옵시디언: `HamonSoft/netisMaker/netisMaker-진행상황-YYYY-MM-DD.md` (운영자 vault).

@@ -1,12 +1,14 @@
 // 모델/effort 선택 옵션 + 모델별 허용 effort(단일 진실원천, 백엔드 ModelEffortPolicy와 동기화).
 // claude-fable-5는 2026-09-05 목록에서 제외(스펙 2026-09-05-question-chat-ui-design §5.4). fable-5-1도 넣지 않는다(2026-09-29).
 // claude-opus-5-5를 2026-09-29 기본값으로 추가 — opus-5는 교체가 아니라 병행 유지. 첫 항목이 기본값이다.
+// claude-sonnet-5-5도 같은 날 추가(sonnet-5 병행 유지).
 export const DEFAULT_MODEL = 'claude-opus-5-5'
 export const DEFAULT_EFFORT = 'high'
 
 export const MODEL_OPTIONS = [
   { label: 'Opus 5.5 (기본)', value: 'claude-opus-5-5' },
   { label: 'Opus 5', value: 'claude-opus-5' },
+  { label: 'Sonnet 5.5', value: 'claude-sonnet-5-5' },
   { label: 'Sonnet 5', value: 'claude-sonnet-5' },
   { label: 'Haiku 4.5', value: 'claude-haiku-4-5' },
 ]
@@ -19,6 +21,7 @@ const LIMITED = ['low', 'medium', 'high']
 const MODEL_EFFORT_MAP: Record<string, string[]> = {
   'claude-opus-5-5': FULL,
   'claude-opus-5': FULL,
+  'claude-sonnet-5-5': FULL,
   'claude-sonnet-5': FULL,
   'claude-haiku-4-5': LIMITED,
 }
@@ -38,7 +41,8 @@ export function coerceEffort(model: string, effort: string): string {
 const MODEL_DESCRIPTIONS: Record<string, string> = {
   'claude-opus-5-5': '최신 Opus · 가장 깊은 분석 · 기본값 · 느리고 한도 소모가 큼',
   'claude-opus-5': '이전 Opus · 깊은 분석 · 기존 작업과 결과를 맞춰야 할 때',
-  'claude-sonnet-5': '속도와 품질의 균형 · 대부분의 작업에 충분',
+  'claude-sonnet-5-5': '최신 Sonnet · 속도와 품질의 균형 · 대부분의 작업에 충분',
+  'claude-sonnet-5': '이전 Sonnet · 속도와 품질의 균형 · 기존 작업과 결과를 맞춰야 할 때',
   'claude-haiku-4-5':
     '가장 빠르고 가벼움 · 단순 작업용 · 추론 low/medium/high만',
 }

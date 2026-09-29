@@ -43,10 +43,13 @@ public final class ModelEffortPolicy {
      * claude CLI 2.1.280 이상이 필요하다 — 그 미만은 "does not support this model" 400으로 실패한다.
      * API 기본 effort가 medium이지만 작업·세션은 effort를 항상 명시적으로 넘기므로(기본 high) 영향 없다
      * (모델·effort 없이 도는 배포 Dockerfile 생성은 CLI 기본값을 따르며 이 목록과 무관).
+     *
+     * claude-sonnet-5-5도 2026-09-29 추가(sonnet-5 병행 유지). CLI 2.1.284에서 low~max 다섯 단계 실측 통과.
      */
     private static final Map<String, List<String>> ALLOWED = Map.of(
             "claude-opus-5-5", FULL,
             "claude-opus-5", FULL,
+            "claude-sonnet-5-5", FULL,
             "claude-sonnet-5", FULL,
             "claude-haiku-4-5", LIMITED);
 

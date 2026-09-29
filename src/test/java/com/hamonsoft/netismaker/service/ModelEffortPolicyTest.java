@@ -31,6 +31,15 @@ class ModelEffortPolicyTest {
         ModelEffortPolicy.validate("claude-sonnet-5", "max");
     }
 
+    /** Sonnet 5.5(2026-09-29 추가)도 low~max 전부 — CLI 2.1.284에서 다섯 단계 모두 실측 통과. Sonnet 5는 병행 유지. */
+    @Test
+    void validate_accepts_sonnet_5_5_with_every_effort() {
+        for (String e : new String[] {"low", "medium", "high", "xhigh", "max"}) {
+            ModelEffortPolicy.validate("claude-sonnet-5-5", e);
+        }
+        ModelEffortPolicy.validate("claude-sonnet-5", "high");
+    }
+
     /** Opus 5.5가 기본이 된 뒤에도(2026-09-29) Opus 5는 계속 고를 수 있다 — 교체가 아니라 추가. */
     @Test
     void validate_keeps_opus_5_selectable_alongside_opus_5_5() {

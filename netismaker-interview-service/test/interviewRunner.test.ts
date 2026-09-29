@@ -348,7 +348,7 @@ describe('InterviewRunner kind=QUESTION (스펙 §6 — plan 경로 미진입, Q
     expect(captured.prompt).not.toContain('brainstorming');
     expect(captured.prompt).not.toContain('### 작업 N:');
     expect(captured.options.plugins).toEqual([]);
-    expect(captured.options.allowedTools).toEqual(['Read', 'Grep', 'Glob']);
+    expect(captured.options.allowedTools).toEqual([]);
     expect(captured.options.cwd).toBe(questionClaim.workDir);
     expect(client.postQuestion).toHaveBeenCalledWith(77, expect.objectContaining({
       content: 'Which columns should the CSV include?',

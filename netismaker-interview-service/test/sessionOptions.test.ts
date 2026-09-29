@@ -156,10 +156,13 @@ describe('buildOptions — sessionKind QUESTION (스펙 §6-①)', () => {
     mcpsExtra: [{ name: 'ctx7', url: 'https://ctx7', transport: 'http' }],
   };
 
-  it('loads NO plugins and pre-approves ONLY Read/Grep/Glob — no Skill, no mcp__ wildcard', () => {
+  it('loads NO plugins and pre-approves NOTHING — Read/Grep/Glob도 canUseTool 경로 confinement를 거쳐야 한다', () => {
     const o = buildOptions({ ...base, claudeSessionId: null, sessionKind: 'QUESTION', ...mcps });
     expect(o.plugins).toEqual([]);
-    expect(o.allowedTools).toEqual(['Read', 'Grep', 'Glob']);
+    // SECURITY INVARIANT: allowedTools 등재 도구는 CLI가 사전승인해 canUseTool을 아예 호출하지 않는다.
+    // Read/Grep/Glob을 여기 두면 permissions.ts의 repoDir/attachmentRoot confinement가 죽은 코드가 돼
+    // 질문 세션이 레포 밖(`C:\Windows\win.ini`, `~/.ssh` 등)을 읽는다(2026-09-29 라이브 세션 실측).
+    expect(o.allowedTools).toEqual([]);
   });
 
   it('still injects merged mcpServers (base+extras, 워커 패리티) — 게이트는 canUseTool 단일 관문', () => {

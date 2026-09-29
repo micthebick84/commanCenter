@@ -12,7 +12,7 @@ describe('loadConfig', () => {
   it('parses required env and applies defaults', () => {
     const c = loadConfig(base);
     expect(c.apiBaseUrl).toBe('http://localhost:8090');
-    expect(c.quotaGuard).toBe(5);
+    expect(c.quotaGuard).toBe(20);
     expect(c.claimPollIntervalMs).toBe(3000);
     // No ANTHROPIC_API_KEY: auth is subscription via the claude CLI.
     expect(c.claudeCliPath).toBeUndefined();

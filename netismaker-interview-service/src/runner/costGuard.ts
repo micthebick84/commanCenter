@@ -6,7 +6,7 @@ export class QuotaGuardExceeded extends Error {
 }
 
 /**
- * Accumulates the SHADOW result.usage.total_cost_usd onto the prior session total and
+ * Accumulates the SHADOW result.total_cost_usd (top-level SDK result field) onto the prior session total and
  * enforces a per-session quota guard. NOT a dollar cap — subscription auth has no per-token
  * billing (Phase-0 spike 00b); this is a turn/quota safety net.
  */

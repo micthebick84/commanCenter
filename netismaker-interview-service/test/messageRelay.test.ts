@@ -17,6 +17,22 @@ describe('relay', () => {
     expect(out.cacheCreationTokens).toBe(30);
     expect(out.cacheReadTokens).toBe(8000);
   });
+
+  it('reads total_cost_usd from the TOP LEVEL of the result message (SDK shape), not from usage', async () => {
+    // 실측(2026-09-29, SDK 0.2.117 + CLI 2.1.284): result.total_cost_usd=0.08138, result.usage에는 비용 필드 없음.
+    // usage 안에서 읽으면 항상 0이 되어 인터뷰·질문 세션 비용이 $0으로 기록되고 CostGuard가 영영 발동하지 않았다.
+    async function* sdkShapedResult(): AsyncIterable<SdkMessage> {
+      yield { type: 'system', subtype: 'init', session_id: 'sess-cost' } as SdkMessage;
+      yield { type: 'assistant', message: { content: [{ type: 'text', text: 'OK' }] } } as SdkMessage;
+      yield {
+        type: 'result', subtype: 'success', duration_ms: 1200, total_cost_usd: 0.08138,
+        usage: { input_tokens: 3, output_tokens: 50, cache_creation_input_tokens: 10, cache_read_input_tokens: 20 },
+      } as SdkMessage;
+    }
+    const out = await relay(sdkShapedResult());
+    expect(out.costUsd).toBeCloseTo(0.08138);
+    expect(out.outputTokens).toBe(50);
+  });
 });
 
 describe('relay — activity callback (includePartialMessages)', () => {
@@ -80,7 +96,7 @@ describe('relay — 컨텍스트 스냅샷 + rate limit (스펙 2026-09-05 §4)'
         event: { type: 'message_start', message: { usage: { input_tokens: 2, cache_creation_input_tokens: 30000 } } },
       };
       yield { type: 'assistant', message: { content: [{ type: 'text', text: '답' }] } };
-      yield { type: 'result', subtype: 'success', usage: { total_cost_usd: 0 }, duration_ms: 1 };
+      yield { type: 'result', subtype: 'success', total_cost_usd: 0, usage: {}, duration_ms: 1 };
     }
     const out = await relay(stream());
     expect(out.contextTokens).toBe(30002);

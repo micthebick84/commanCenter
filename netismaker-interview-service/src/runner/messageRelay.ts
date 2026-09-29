@@ -185,14 +185,15 @@ export async function relay(stream: AsyncIterable<SdkMessage>, opts?: RelayOpts)
     } else if (msg.type === 'result') {
       const usage = msg.usage as
         | {
-            total_cost_usd?: number;
             input_tokens?: number;
             output_tokens?: number;
             cache_creation_input_tokens?: number;
             cache_read_input_tokens?: number;
           }
         | undefined;
-      costUsd = usage?.total_cost_usd ?? 0;
+      // total_cost_usd는 result 최상위 필드다(SDKResultSuccess) — usage 안에는 없다. usage에서 읽던 탓에
+      // 2026-06-13 도입부터 인터뷰·질문 세션 비용이 전부 $0이었고 CostGuard도 발동하지 않았다(2026-09-29 실측).
+      costUsd = (msg.total_cost_usd as number | undefined) ?? 0;
       inputTokens = usage?.input_tokens ?? 0;
       outputTokens = usage?.output_tokens ?? 0;
       cacheCreationTokens = usage?.cache_creation_input_tokens ?? 0;

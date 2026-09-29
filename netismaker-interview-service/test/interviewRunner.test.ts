@@ -263,7 +263,7 @@ describe('InterviewRunner near-miss correction', () => {
     async function* intentNoStructure() {
       yield { type: 'system', subtype: 'init', session_id: 'sess-n' };
       yield { type: 'assistant', message: { content: [{ type: 'text',
-        text: '이제 구현 계획을 정리하겠습니다.' }] } }; // plan 의도 O, 추출 X
+        text: '# 구현 계획 (초안)\n\n1. 가' }] } }; // plan 헤딩 O(꼬리 때문에 PLAN_HEADER 불일치), 추출 X
       yield {
         type: 'result', subtype: 'success', duration_ms: 100,
         usage: { total_cost_usd: 0.1, input_tokens: 100, output_tokens: 20, cache_creation_input_tokens: 5, cache_read_input_tokens: 200 },
@@ -301,7 +301,7 @@ describe('InterviewRunner near-miss correction', () => {
     const client = makeClient();
     async function* intentNoStructure() {
       yield { type: 'system', subtype: 'init', session_id: 'sess-n2' };
-      yield { type: 'assistant', message: { content: [{ type: 'text', text: '구현 계획 초안입니다.' }] } };
+      yield { type: 'assistant', message: { content: [{ type: 'text', text: '## 구현 계획 초안\n\n- 가' }] } };
       yield { type: 'result', subtype: 'success', usage: { total_cost_usd: 0.1 }, duration_ms: 100 };
     }
     const fakeQuery = vi.fn(() => intentNoStructure()); // 매번 추출 불가
@@ -310,6 +310,29 @@ describe('InterviewRunner near-miss correction', () => {
     expect(fakeQuery).toHaveBeenCalledTimes(2);
     expect(client.postQuestion).toHaveBeenCalledTimes(1);
     expect(client.fail).not.toHaveBeenCalled();
+  });
+
+  it('질문 턴이 "구현 계획"을 언급만 하면 보정하지 않고 질문을 그대로 보낸다 (2026-09-29 세션 #11 회귀)', async () => {
+    const client = makeClient();
+    const questionText =
+      '마지막에는 정해진 형식의 구현 계획 문서를 작성하겠습니다.\n\n---\n\n' +
+      "**질문 1. '사용 방법' 섹션을 README의 어디에 넣을까요?**\n\n" +
+      '- **A) 맨 위 (추천)**\n- **B) 끝부분**';
+    async function* clarifyingQuestion() {
+      yield { type: 'system', subtype: 'init', session_id: 'sess-q1' };
+      yield { type: 'assistant', message: { content: [{ type: 'text', text: questionText }] } };
+      yield { type: 'result', subtype: 'success', usage: { total_cost_usd: 0.1 }, duration_ms: 100 };
+    }
+    const fakeQuery = vi.fn(() => clarifyingQuestion());
+    const runner = new InterviewRunner(client as never, fakeQuery as never, deps as never);
+    await runner.run(freshClaim);
+    expect(fakeQuery).toHaveBeenCalledTimes(1); // 재작성 splice 없음
+    expect(client.postQuestion).toHaveBeenCalledWith(42, expect.objectContaining({
+      content: questionText,
+      claudeSessionId: 'sess-q1',
+      kind: 'question',
+    }));
+    expect(client.postPlan).not.toHaveBeenCalled();
   });
 });
 

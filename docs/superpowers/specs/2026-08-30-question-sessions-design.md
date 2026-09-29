@@ -110,7 +110,7 @@ QUESTION이면 **무조건 `promptFor`(질문용) → relay → `postQuestion` �
 1. **도구 게이트 default-deny 전환** (핵심). 현행 인터뷰 게이트는 Write/Edit/MultiEdit을 `docs/superpowers/**`로 경로 제한 + Bash 화이트리스트, **나머지(NotebookEdit 포함)는 allow**. 질문 세션은 반대로 **허용 목록 외 전부 deny**:
    - 허용: `Read`, `Grep`, `Glob`, 읽기전용 Bash — 허용 명령은 기존 인터뷰 화이트리스트와 동일: `git status|log|diff|show|branch`, `ls`, `cat`, `grep`, `rg`, `find`, `head`, `tail`, `wc`, `pwd` (셸 메타문자 차단 그대로) — 그리고 `mcp__*`(base+extras)
    - 거부: `Write`/`Edit`/`MultiEdit`/`NotebookEdit` 및 이름 모를 미래 도구 전부
-   - `allowedTools` 사전승인은 `['Read','Grep','Glob']`만: `Skill` 제외(superpowers 미로드와 한 쌍), `mcp__` 와일드카드 미등재 → MCP 호출까지 canUseTool **단일 관문** 경유
+   - ~~`allowedTools` 사전승인은 `['Read','Grep','Glob']`만~~ → **2026-09-29 정정: `allowedTools: []`(사전승인 없음).** 사전승인 도구는 CLI가 canUseTool을 호출하지 않아 Read/Grep/Glob 경로 confinement가 죽은 코드였다(라이브 질문 세션이 `C:\Windows\win.ini`를 읽음). `Skill` 제외(superpowers 미로드와 한 쌍), `mcp__` 와일드카드 미등재 → Read/Grep/Glob/MCP 호출까지 canUseTool **단일 관문** 경유
    - `plugins: []` — superpowers 플러그인 자체를 로드하지 않음
    - 구현: `buildOptions`에 `sessionKind` 추가(단일 input 객체라 비파괴적) + **`buildCanUseTool` 시그니처도 kind 인자(또는 별도 `buildQuestionGate`)로 변경**
    - ⚠️ "미등재 `mcp__*` 호출이 canUseTool에 도달한다"는 주석·테스트로만 문서화된 전제 — **구현 전 미니 스파이크 1건으로 실증** (§9)

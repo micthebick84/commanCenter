@@ -72,8 +72,11 @@ function toMcpServers(mcpsExtra: unknown): Record<string, { type: string; url: s
  *   through canUseTool because they are no longer pre-approved.)
  *
  * QUESTION variant (sessionKind:'QUESTION'): plugins is [] (superpowers not loaded, no Skill tool),
- *   allowedTools is only ['Read','Grep','Glob'] (no mcp__* pre-approval — MCP calls also go through
- *   canUseTool). canUseTool itself is buildCanUseTool(repoDir,'QUESTION',attachmentRoot): default-deny
+ *   allowedTools is [] — NOTHING is pre-approved, so every tool call (Read/Grep/Glob/MCP included)
+ *   reaches canUseTool. Pre-approving Read/Grep/Glob made their path confinement dead code: the CLI
+ *   skipped canUseTool and a question session read `C:\Windows\win.ini` (2026-09-29 라이브 실측,
+ *   SDK 프로브로 allowedTools 등재 시 canUseTool 0회 호출 확인). canUseTool itself is
+ *   buildCanUseTool(repoDir,'QUESTION',attachmentRoot): default-deny
  *   with Read/Grep/Glob path-confined to repoDir (Read additionally allowed under attachmentRoot, the
  *   session attachment dir — 스펙 2026-09-13 §6) and Bash further restricted beyond the read-only
  *   whitelist (see permissions.ts).
@@ -90,10 +93,10 @@ export function buildOptions(input: SessionOptionsInput): Record<string, unknown
     plugins: question ? [] : [{ type: 'local', path: input.superpowersPluginPath }],
     // INTERVIEW: mcp__<server>는 해당 서버의 모든 도구 매칭 — 워커의 --allowedTools 와일드카드와 동일.
     //   MCP 도구는 어차피 canUseTool 기본 분기(allow)를 타므로 보안 경계 변화 없음; Write/Bash/Edit 불변식 유지.
-    // QUESTION: mcp__ 와일드카드도 미등재 → MCP 호출까지 canUseTool(default-deny) 단일 관문 경유.
+    // QUESTION: 사전승인 없음 → Read/Grep/Glob/MCP 전부 canUseTool(default-deny + 경로 confinement) 단일 관문 경유.
     allowedTools: question
-      ? ['Read', 'Grep', 'Glob']
-      : ['Skill', 'Read', 'Grep', 'Glob', ...Object.keys(merged).map((n) => `mcp__${n}`)],
+      ? []
+      :['Skill', 'Read', 'Grep', 'Glob', ...Object.keys(merged).map((n) => `mcp__${n}`)],
     cwd: input.workDir,
     permissionMode: 'default',
     // 활동 스트림: stream_event(텍스트/thinking 델타)를 relay가 실시간 방출할 수 있게 켠다 (스펙 §5.1).

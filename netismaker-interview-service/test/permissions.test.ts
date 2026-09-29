@@ -1,8 +1,24 @@
-import { afterAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { buildCanUseTool } from '../src/sdk/permissions.js';
+import { buildCanUseTool, type CanUseTool } from '../src/sdk/permissions.js';
+
+// 파일 symlink 생성은 Windows에서 개발자 모드/관리자 권한이 없으면 EPERM이다 — 그 환경에선 파일 symlink
+// 픽스처가 필요한 블록만 건너뛴다(디렉토리 junction은 권한 없이 되므로 'native platform paths' 블록이 대신 커버).
+function canCreateFileSymlink(): boolean {
+  const d = mkdtempSync(join(tmpdir(), 'qprobe-'));
+  try {
+    writeFileSync(join(d, 't'), '');
+    symlinkSync(join(d, 't'), join(d, 'l'));
+    return true;
+  } catch {
+    return false;
+  } finally {
+    rmSync(d, { recursive: true, force: true });
+  }
+}
+const fileSymlinks = canCreateFileSymlink();
 
 const canUse = buildCanUseTool('/tmp/repo');
 
@@ -224,15 +240,20 @@ describe('canUseTool — kind=QUESTION round 3 (command-word exact match, ~, rea
     expect((await q('Glob', { pattern: '~/**' })).behavior).toBe('deny');
   });
 
-  describe('(c) realpath confinement against a committed symlink (real temp dir)', () => {
-    const dir = mkdtempSync(join(tmpdir(), 'qgate-'));
-    writeFileSync(join(dir, 'README.md'), 'hello');
-    // link -> /etc/hosts: lexically inside the repo checkout, but points outside via a committed symlink.
-    symlinkSync('/etc/hosts', join(dir, 'link'));
-    mkdirSync(join(dir, 'sub'));
-    // sub/ok -> ../README.md's real file: a symlink whose target still resolves inside the repo.
-    symlinkSync(join(dir, 'README.md'), join(dir, 'sub', 'ok'));
-    const sq = buildCanUseTool(dir, 'QUESTION');
+  describe.skipIf(!fileSymlinks)('(c) realpath confinement against a committed symlink (real temp dir)', () => {
+    let dir = '';
+    let sq: CanUseTool;
+
+    beforeAll(() => {
+      dir = mkdtempSync(join(tmpdir(), 'qgate-'));
+      writeFileSync(join(dir, 'README.md'), 'hello');
+      // link -> /etc/hosts: lexically inside the repo checkout, but points outside via a committed symlink.
+      symlinkSync('/etc/hosts', join(dir, 'link'));
+      mkdirSync(join(dir, 'sub'));
+      // sub/ok -> ../README.md's real file: a symlink whose target still resolves inside the repo.
+      symlinkSync(join(dir, 'README.md'), join(dir, 'sub', 'ok'));
+      sq = buildCanUseTool(dir, 'QUESTION');
+    });
 
     afterAll(() => {
       rmSync(dir, { recursive: true, force: true });
@@ -421,7 +442,7 @@ describe('canUseTool — kind=QUESTION attachmentRoot (스펙 2026-09-13 §6 —
     const repo = mkdtempSync(join(tmpdir(), 'qrepo-'));
     writeFileSync(join(root, 'ok.txt'), 'hello');
     // leak -> /etc/hosts: lexically inside attachmentRoot, but points outside via a symlink.
-    symlinkSync('/etc/hosts', join(root, 'leak'));
+    if (fileSymlinks) symlinkSync('/etc/hosts', join(root, 'leak'));
     const sq = buildCanUseTool(repo, 'QUESTION', root);
 
     afterAll(() => {
@@ -433,8 +454,82 @@ describe('canUseTool — kind=QUESTION attachmentRoot (스펙 2026-09-13 §6 —
       expect((await sq('Read', { file_path: join(root, 'ok.txt') })).behavior).toBe('allow');
     });
 
-    it('denies a symlink under attachmentRoot that points outside', async () => {
+    it.skipIf(!fileSymlinks)('denies a symlink under attachmentRoot that points outside', async () => {
       expect((await sq('Read', { file_path: join(root, 'leak') })).behavior).toBe('deny');
     });
+  });
+});
+
+// 플랫폼 네이티브 경로(Windows면 `C:\...\qnative-xxx`) 회귀 가드 — 위 블록들은 '/tmp/repo' 같은 POSIX 리터럴이라
+// 비교 로직이 `/` 구분자를 가정해도 Linux CI에선 드러나지 않는다(2026-09-29 Windows 인터뷰 워커에서 QUESTION
+// Read/Grep/Bash와 INTERVIEW의 docs/superpowers Write가 전부 deny되던 실제 버그). mkdtemp 실제 경로로 검증한다.
+describe('canUseTool — native platform paths (real temp dir)', () => {
+  const repo = mkdtempSync(join(tmpdir(), 'qnative-'));
+  const outside = mkdtempSync(join(tmpdir(), 'qoutside-'));
+  const att = mkdtempSync(join(tmpdir(), 'qnatt-'));
+  writeFileSync(join(repo, 'a.ts'), 'x');
+  mkdirSync(join(repo, 'docs', 'superpowers'), { recursive: true });
+  writeFileSync(join(outside, 'secret.txt'), 's');
+  mkdirSync(join(att, 'create'));
+  writeFileSync(join(att, 'create', '1-a.docx.txt'), 't');
+  // 디렉토리 junction(Windows)/symlink(POSIX, type 인자 무시) — 권한 없이 만들 수 있어 Windows에서도 realpath 분기를 검증한다.
+  symlinkSync(outside, join(repo, 'jlink'), 'junction');
+  const q = buildCanUseTool(repo, 'QUESTION', att);
+  const i = buildCanUseTool(repo, 'INTERVIEW');
+
+  afterAll(() => {
+    for (const d of [repo, outside, att]) rmSync(d, { recursive: true, force: true });
+  });
+
+  it('QUESTION Read: existing / nonexistent / relative files inside repoDir are allowed', async () => {
+    expect((await q('Read', { file_path: join(repo, 'a.ts') })).behavior).toBe('allow');
+    expect((await q('Read', { file_path: join(repo, 'nope.ts') })).behavior).toBe('allow');
+    expect((await q('Read', { file_path: 'a.ts' })).behavior).toBe('allow');
+  });
+
+  it('QUESTION Read: traversal, prefix-sibling dir and a junction/symlink out of the repo are denied', async () => {
+    expect((await q('Read', { file_path: join(outside, 'secret.txt') })).behavior).toBe('deny');
+    expect((await q('Read', { file_path: join(repo, '..', 'x') })).behavior).toBe('deny');
+    expect((await q('Read', { file_path: repo + '-evil' + join('/', 'x') })).behavior).toBe('deny');
+    expect((await q('Read', { file_path: join(repo, 'jlink', 'secret.txt') })).behavior).toBe('deny');
+  });
+
+  it('QUESTION Read: attachmentRoot files are allowed', async () => {
+    expect((await q('Read', { file_path: join(att, 'create', '1-a.docx.txt') })).behavior).toBe('allow');
+  });
+
+  it('QUESTION Grep/Bash: in-repo path args are allowed, junction escape denied', async () => {
+    expect((await q('Grep', { pattern: 'x', path: join(repo, 'docs') })).behavior).toBe('allow');
+    expect((await q('Grep', { pattern: 'x', path: outside })).behavior).toBe('deny');
+    expect((await q('Bash', { command: 'cat a.ts' })).behavior).toBe('allow');
+    expect((await q('Bash', { command: 'cat jlink/secret.txt' })).behavior).toBe('deny');
+  });
+
+  it('INTERVIEW Write: allowed under docs/superpowers, denied elsewhere and for a prefix-sibling dir', async () => {
+    expect((await i('Write', { file_path: join(repo, 'docs', 'superpowers', 'specs', 'x.md') })).behavior).toBe('allow');
+    expect((await i('Edit', { file_path: join(repo, 'docs', 'superpowers', 'x.md') })).behavior).toBe('allow');
+    expect((await i('Write', { file_path: join(repo, 'src', 'x.ts') })).behavior).toBe('deny');
+    expect((await i('Write', { file_path: join(repo, 'docs', 'superpowers-evil', 'x.md') })).behavior).toBe('deny');
+  });
+
+  it.runIf(process.platform === 'win32')('win32: drive-letter case differences do not cause a false deny', async () => {
+    const flipped = repo.charAt(0) === repo.charAt(0).toUpperCase() ? repo.charAt(0).toLowerCase() + repo.slice(1) : repo.charAt(0).toUpperCase() + repo.slice(1);
+    expect((await q('Read', { file_path: join(flipped, 'a.ts') })).behavior).toBe('allow');
+  });
+});
+
+describe('canUseTool — QUESTION Glob pattern rejects Windows absolute forms (drive letter, UNC, backslash root)', () => {
+  const q = buildCanUseTool('/tmp/repo', 'QUESTION');
+
+  it('denies drive-letter / UNC / backslash-rooted patterns on every platform', async () => {
+    for (const pattern of ['C:/Users/**', 'c:\\Users\\**', '\\\\server\\share\\**', '\\Windows\\**']) {
+      expect((await q('Glob', { pattern })).behavior, pattern).toBe('deny');
+    }
+  });
+
+  it('keeps relative patterns allowed', async () => {
+    for (const pattern of ['**/*.ts', 'src/**/*.vue', '*.md']) {
+      expect((await q('Glob', { pattern })).behavior, pattern).toBe('allow');
+    }
   });
 });

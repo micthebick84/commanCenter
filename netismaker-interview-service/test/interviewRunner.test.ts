@@ -718,6 +718,34 @@ describe('InterviewRunner handoff shim', () => {
   });
 });
 
+describe('InterviewRunner handoff shim — question guard', () => {
+  it('설계 승인 질문이 handoff 문구를 미리 말해도 writing-plans splice 없이 질문을 그대로 보낸다', async () => {
+    const client = makeClient();
+    const questionText =
+      '## 설계 요약\n\n- `# test` 아래에 `## 사용 방법` 추가\n\n' +
+      'Once you approve this design, I will invoke writing-plans to write the plan. Does this look right?';
+    async function* approvalQuestion() {
+      yield { type: 'system', subtype: 'init', session_id: 'sess-hq' };
+      yield { type: 'assistant', message: { content: [{ type: 'text', text: questionText }] } };
+      yield { type: 'result', subtype: 'success', usage: { total_cost_usd: 0.05 }, duration_ms: 100 };
+    }
+    const fakeQuery = vi.fn(() => approvalQuestion());
+    const spliceRead = vi.fn().mockReturnValue('# Writing Plans\n\nbreak into tasks');
+    const runner = new InterviewRunner(client as never, fakeQuery as never, { ...deps, spliceRead } as never);
+
+    await runner.run({ ...resumeClaim, currentPhase: 'brainstorming' });
+
+    expect(fakeQuery).toHaveBeenCalledTimes(1); // handoff splice 재질의 없음
+    expect(spliceRead).not.toHaveBeenCalled();
+    expect(client.postQuestion).toHaveBeenCalledWith(42, expect.objectContaining({
+      content: questionText,
+      claudeSessionId: 'sess-hq',
+      kind: 'question',
+    }));
+    expect(client.postPlan).not.toHaveBeenCalled();
+  });
+});
+
 describe('InterviewRunner activity wiring', () => {
   it('활동 배선: 합성 "환경 준비" 활동이 최초로, relay 활동이 이어서 poster로 전송된다', async () => {
     const client = makeClient();

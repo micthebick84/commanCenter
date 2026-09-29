@@ -11,14 +11,19 @@ const PLAN_HEADING = /^\s{0,3}#{1,6}\s+.*(Implementation Plan|구현\s*계획)/i
 const FENCED_CODE = /(```|~~~)[\s\S]*?(\1|$)/g;
 const INLINE_CODE = /`[^`\n]*`/g;
 
-/** True when the assistant text announces the brainstorming -> writing-plans handoff. */
-export function detectHandoff(assistantText: string): boolean {
-  return HANDOFF.test(assistantText);
-}
-
 /** 코드 밖 본문에 물음표가 있으면 사용자에게 묻는 턴으로 본다(`a?.b` 같은 코드 속 '?'는 제외). */
 function asksUser(assistantText: string): boolean {
   return /[?？]/.test(assistantText.replace(FENCED_CODE, '').replace(INLINE_CODE, ''));
+}
+
+/**
+ * True when the assistant text announces the brainstorming -> writing-plans handoff.
+ * 사용자에게 묻는 턴은 false — 설계 승인 질문이 "Once you approve, I'll invoke writing-plans"처럼 handoff를
+ * 미리 말하면 splice가 승인(하드 게이트) 없이 writing-plans로 넘겨 질문이 사라진다(detectPlanIntent와 같은 가드).
+ */
+export function detectHandoff(assistantText: string): boolean {
+  if (asksUser(assistantText)) return false;
+  return HANDOFF.test(assistantText);
 }
 
 /**
@@ -27,8 +32,7 @@ function asksUser(assistantText: string): boolean {
  * 비대칭이라(놓치면 사용자 왕복 1회, 잘못 쏘면 질문 소실) 질문 쪽으로 기운다.
  */
 export function detectPlanIntent(assistantText: string): boolean {
-  if (asksUser(assistantText)) return false;
-  return HANDOFF.test(assistantText) || PLAN_HEADING.test(assistantText);
+  return detectHandoff(assistantText) || (!asksUser(assistantText) && PLAN_HEADING.test(assistantText));
 }
 
 /** 지정 정규 형식으로 plan을 한 번에 확정 제시하라는 프롬프트(near-miss 보정 / force-finish 공용). */

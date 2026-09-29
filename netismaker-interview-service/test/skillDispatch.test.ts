@@ -16,6 +16,20 @@ describe('detectHandoff', () => {
   it('does not fire on ordinary brainstorming questions', () => {
     expect(detectHandoff('Which columns should the CSV include?')).toBe(false);
   });
+
+  it('does not fire when a design-approval question merely previews the handoff', () => {
+    // brainstorming 체크리스트 문구("invoke writing-plans")를 승인 요청 턴에서 미리 말하는 경우 —
+    // handoff splice가 쏘이면 사용자 승인(하드 게이트) 없이 writing-plans로 넘어간다.
+    expect(detectHandoff(
+      '## 설계 요약\n\n- `# test` 아래에 `## 사용 방법` 추가\n\n' +
+        'Once you approve this design, I will invoke writing-plans to write the plan. Does this look right?',
+    )).toBe(false);
+    expect(detectHandoff('설계가 괜찮으면 transition to implementation 하겠습니다. 이대로 진행할까요？')).toBe(false);
+  });
+
+  it("still fires when the only '?' is inside code (announcement, not a question)", () => {
+    expect(detectHandoff('Spec approved. Invoking writing-plans now — see `cfg?.plan` for the path.')).toBe(true);
+  });
 });
 
 describe('buildWritingPlansSplice', () => {

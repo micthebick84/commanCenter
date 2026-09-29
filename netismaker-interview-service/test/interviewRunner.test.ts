@@ -244,7 +244,7 @@ describe('InterviewRunner', () => {
       yield { type: 'system', subtype: 'init', session_id: 'sess-k' };
       yield { type: 'assistant', message: { content: [{ type: 'text',
         text: '# 설계\n\n개요.\n\n# 서버관리 구현 계획\n\n### 작업 1: DTO\n- [ ] a' }] } };
-      yield { type: 'result', subtype: 'success', usage: { total_cost_usd: 0.2 }, duration_ms: 1000 };
+      yield { type: 'result', subtype: 'success', total_cost_usd: 0.2, usage: {}, duration_ms: 1000 };
     }
     const fakeQuery = vi.fn(() => koreanPlanStream());
     const runner = new InterviewRunner(client as never, fakeQuery as never, deps as never);
@@ -266,7 +266,7 @@ describe('InterviewRunner near-miss correction', () => {
         text: '# 구현 계획 (초안)\n\n1. 가' }] } }; // plan 헤딩 O(꼬리 때문에 PLAN_HEADER 불일치), 추출 X
       yield {
         type: 'result', subtype: 'success', duration_ms: 100,
-        usage: { total_cost_usd: 0.1, input_tokens: 100, output_tokens: 20, cache_creation_input_tokens: 5, cache_read_input_tokens: 200 },
+        total_cost_usd: 0.1, usage: { input_tokens: 100, output_tokens: 20, cache_creation_input_tokens: 5, cache_read_input_tokens: 200 },
       };
     }
     async function* reformattedPlan() {
@@ -275,7 +275,7 @@ describe('InterviewRunner near-miss correction', () => {
         text: '# 구현 계획\n\n### 작업 1: 가' }] } };
       yield {
         type: 'result', subtype: 'success', duration_ms: 200,
-        usage: { total_cost_usd: 0.15, input_tokens: 300, output_tokens: 60, cache_creation_input_tokens: 15, cache_read_input_tokens: 400 },
+        total_cost_usd: 0.15, usage: { input_tokens: 300, output_tokens: 60, cache_creation_input_tokens: 15, cache_read_input_tokens: 400 },
       };
     }
     const fakeQuery = vi.fn()
@@ -302,7 +302,7 @@ describe('InterviewRunner near-miss correction', () => {
     async function* intentNoStructure() {
       yield { type: 'system', subtype: 'init', session_id: 'sess-n2' };
       yield { type: 'assistant', message: { content: [{ type: 'text', text: '## 구현 계획 초안\n\n- 가' }] } };
-      yield { type: 'result', subtype: 'success', usage: { total_cost_usd: 0.1 }, duration_ms: 100 };
+      yield { type: 'result', subtype: 'success', total_cost_usd: 0.1, usage: {}, duration_ms: 100 };
     }
     const fakeQuery = vi.fn(() => intentNoStructure()); // 매번 추출 불가
     const runner = new InterviewRunner(client as never, fakeQuery as never, deps as never);
@@ -321,7 +321,7 @@ describe('InterviewRunner near-miss correction', () => {
     async function* clarifyingQuestion() {
       yield { type: 'system', subtype: 'init', session_id: 'sess-q1' };
       yield { type: 'assistant', message: { content: [{ type: 'text', text: questionText }] } };
-      yield { type: 'result', subtype: 'success', usage: { total_cost_usd: 0.1 }, duration_ms: 100 };
+      yield { type: 'result', subtype: 'success', total_cost_usd: 0.1, usage: {}, duration_ms: 100 };
     }
     const fakeQuery = vi.fn(() => clarifyingQuestion());
     const runner = new InterviewRunner(client as never, fakeQuery as never, deps as never);
@@ -427,7 +427,7 @@ describe('InterviewRunner kind=QUESTION (스펙 §6 — plan 경로 미진입, Q
     async function* handoffText() {
       yield { type: 'system', subtype: 'init', session_id: 'sess-h' };
       yield { type: 'assistant', message: { content: [{ type: 'text', text: 'Spec approved. Invoke writing-plans skill now.' }] } };
-      yield { type: 'result', subtype: 'success', usage: { total_cost_usd: 0.05 }, duration_ms: 100 };
+      yield { type: 'result', subtype: 'success', total_cost_usd: 0.05, usage: {}, duration_ms: 100 };
     }
     const fakeQuery = vi.fn(() => handoffText());
     const spliceRead = vi.fn();
@@ -444,7 +444,7 @@ describe('InterviewRunner kind=QUESTION (스펙 §6 — plan 경로 미진입, Q
     async function* intentNoStructure() {
       yield { type: 'system', subtype: 'init', session_id: 'sess-n' };
       yield { type: 'assistant', message: { content: [{ type: 'text', text: '이제 구현 계획을 정리하겠습니다.' }] } };
-      yield { type: 'result', subtype: 'success', usage: { total_cost_usd: 0.1 }, duration_ms: 100 };
+      yield { type: 'result', subtype: 'success', total_cost_usd: 0.1, usage: {}, duration_ms: 100 };
     }
     const fakeQuery = vi.fn(() => intentNoStructure());
     const runner = new InterviewRunner(client as never, fakeQuery as never, deps as never);
@@ -661,7 +661,7 @@ describe('InterviewRunner turn cap + force-finish', () => {
         type: 'assistant',
         message: { content: [{ type: 'text', text: '구현 계획을 작성합니다. 주요 작업은 다음과 같습니다.' }] },
       }; // plan 의도(detectPlanIntent=true) O, 추출 가능 구조(### 작업 N:) X
-      yield { type: 'result', subtype: 'success', usage: { total_cost_usd: 0.1 }, duration_ms: 100 };
+      yield { type: 'result', subtype: 'success', total_cost_usd: 0.1, usage: {}, duration_ms: 100 };
     }
     const fakeQuery = vi.fn(() => intentNoStructureStream());
     const runner = new InterviewRunner(client as never, fakeQuery as never, deps as never); // forceFinishTurns 19
@@ -685,7 +685,7 @@ describe('InterviewRunner handoff shim', () => {
       };
       yield {
         type: 'result', subtype: 'success', duration_ms: 100,
-        usage: { total_cost_usd: 0.05, input_tokens: 100, output_tokens: 20, cache_creation_input_tokens: 5, cache_read_input_tokens: 200 },
+        total_cost_usd: 0.05, usage: { input_tokens: 100, output_tokens: 20, cache_creation_input_tokens: 5, cache_read_input_tokens: 200 },
       };
     }
     // first call returns handoff announcement; second (after splice) returns a plan
@@ -727,7 +727,7 @@ describe('InterviewRunner handoff shim — question guard', () => {
     async function* approvalQuestion() {
       yield { type: 'system', subtype: 'init', session_id: 'sess-hq' };
       yield { type: 'assistant', message: { content: [{ type: 'text', text: questionText }] } };
-      yield { type: 'result', subtype: 'success', usage: { total_cost_usd: 0.05 }, duration_ms: 100 };
+      yield { type: 'result', subtype: 'success', total_cost_usd: 0.05, usage: {}, duration_ms: 100 };
     }
     const fakeQuery = vi.fn(() => approvalQuestion());
     const spliceRead = vi.fn().mockReturnValue('# Writing Plans\n\nbreak into tasks');

@@ -15,8 +15,8 @@ export const questionStream = (): AsyncIterable<SdkMessage> =>
     {
       type: 'result',
       subtype: 'success',
+      total_cost_usd: 0.12,
       usage: {
-        total_cost_usd: 0.12,
         input_tokens: 1000,
         output_tokens: 250,
         cache_creation_input_tokens: 30,
@@ -46,8 +46,8 @@ export const planCompleteStream = (): AsyncIterable<SdkMessage> =>
     {
       type: 'result',
       subtype: 'success',
+      total_cost_usd: 0.31,
       usage: {
-        total_cost_usd: 0.31,
         input_tokens: 2000,
         output_tokens: 500,
         cache_creation_input_tokens: 60,
@@ -109,8 +109,8 @@ export const streamingQuestionStream = (): AsyncIterable<SdkMessage> =>
     {
       type: 'result',
       subtype: 'success',
+      total_cost_usd: 0.2,
       usage: {
-        total_cost_usd: 0.2,
         input_tokens: 1200,
         output_tokens: 300,
         cache_creation_input_tokens: 45,
@@ -174,8 +174,8 @@ export const usageAwareQuestionStream = (): AsyncIterable<SdkMessage> =>
     {
       type: 'result',
       subtype: 'success',
+      total_cost_usd: 0.05,
       usage: {
-        total_cost_usd: 0.05,
         input_tokens: 4,
         output_tokens: 120,
         cache_creation_input_tokens: 30000,

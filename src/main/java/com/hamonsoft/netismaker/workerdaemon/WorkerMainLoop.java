@@ -418,6 +418,11 @@ public class WorkerMainLoop {
         if (tpl == null || tpl.isBlank()) {
             tpl = defaultImplementationPrompt();
         }
+        return fillImplementationPrompt(tpl, task, baseSha, branchName);
+    }
+
+    /** 구현 프롬프트 템플릿의 placeholder를 채운다(yml 템플릿·기본 템플릿 공용). */
+    static String fillImplementationPrompt(String tpl, WorkerTaskResponse task, String baseSha, String branchName) {
         return tpl
                 .replace("{github_repo}", task.githubRepo())
                 .replace("{github_branch}", task.githubBranch())
@@ -427,7 +432,8 @@ public class WorkerMainLoop {
                 .replace("{description}", task.description())
                 .replace("{analysis_markdown}", task.analysisMarkdown() == null ? "" : task.analysisMarkdown())
                 .replace("{subtasks_json}", task.subtasksJson() == null ? "[]" : task.subtasksJson())
-                .replace("{design_section}", renderDesignSection(task));
+                .replace("{design_section}", renderDesignSection(task))
+                .replace("{plan_section}", renderPlanSection(task));
     }
 
     /** 승인된 디자인이 있으면 구현 프롬프트에 삽입할 블록, 없으면 빈 문자열 (기존 작업 불변). */
@@ -443,7 +449,25 @@ public class WorkerMainLoop {
                 """ + task.designMarkdown();
     }
 
-    private static String defaultImplementationPrompt() {
+    /**
+     * 인터뷰에서 확정된 플랜이 있으면 구현 프롬프트에 삽입할 블록, 없으면 빈 문자열(인터뷰 없이 온 작업 불변).
+     * writing-plans 플랜에는 "git commit" 단계가 들어 있는데, 에이전트가 직접 커밋하면 워커의
+     * commitAndPush가 변경 없음("nothing to commit")으로 구현실패 처리하므로 커밋 단계는 건너뛰라고 지시한다.
+     */
+    static String renderPlanSection(WorkerTaskResponse task) {
+        if (task.planMarkdown() == null || task.planMarkdown().isBlank()) return "";
+        return """
+
+                ## 확정된 구현 계획 (인터뷰에서 승인됨 — 이 계획을 기준으로 구현)
+                아래는 요청자와의 인터뷰로 확정된 구현 계획입니다. 작업 순서·범위·파일 위치는 이 계획을 따르세요.
+                - 계획 안의 git commit / push 단계는 실행하지 마세요 — 커밋은 워커가 마지막에 한 번에 처리합니다.
+                - 계획의 확인·검증 단계(테스트, grep 등)는 가능하면 수행하고 결과를 출력에 남기세요.
+                - 계획이 가리키는 서브에이전트/실행 스킬(subagent-driven-development 등) 없이 이 세션에서 직접 구현하세요.
+
+                """ + task.planMarkdown() + "\n";
+    }
+
+    static String defaultImplementationPrompt() {
         return """
                 당신은 코드 구현 전문가입니다. 현재 디렉토리는 새 git worktree이며
                 브랜치 '{branch_name}'가 체크아웃되어 있습니다. (베이스: {github_branch} @ {commit_sha})
@@ -454,6 +478,7 @@ public class WorkerMainLoop {
                 ## 요구사항
                 {description}
                 {design_section}
+                {plan_section}
                 ## 사전 분석 결과
                 {analysis_markdown}
 

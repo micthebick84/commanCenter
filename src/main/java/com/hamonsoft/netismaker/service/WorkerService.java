@@ -6,6 +6,8 @@ import com.hamonsoft.netismaker.dto.WorkerResultRequest;
 import com.hamonsoft.netismaker.dto.WorkerRuntimeStatusRequest;
 import com.hamonsoft.netismaker.dto.WorkerTaskResponse;
 import com.hamonsoft.netismaker.entity.*;
+import com.hamonsoft.netismaker.repository.InterviewPlanRepository;
+import com.hamonsoft.netismaker.repository.InterviewSessionRepository;
 import com.hamonsoft.netismaker.repository.RepoCatalogRepository;
 import com.hamonsoft.netismaker.repository.TaskAnalysisRepository;
 import com.hamonsoft.netismaker.repository.TaskDesignRepository;
@@ -53,6 +55,8 @@ public class WorkerService {
     private final TaskStageUsageRepository stageUsageRepo;
     private final WorkerHeartbeatRepository heartbeatRepo;
     private final DeployLogStreamService deployLogStream;
+    private final InterviewSessionRepository sessionRepo;
+    private final InterviewPlanRepository planRepo;
 
     public WorkerService(TaskRepository taskRepo,
                          TaskAnalysisRepository analysisRepo,
@@ -61,7 +65,9 @@ public class WorkerService {
                          TaskStatusHistoryRepository historyRepo,
                          TaskStageUsageRepository stageUsageRepo,
                          WorkerHeartbeatRepository heartbeatRepo,
-                         DeployLogStreamService deployLogStream) {
+                         DeployLogStreamService deployLogStream,
+                         InterviewSessionRepository sessionRepo,
+                         InterviewPlanRepository planRepo) {
         this.taskRepo = taskRepo;
         this.analysisRepo = analysisRepo;
         this.designRepo = designRepo;
@@ -70,6 +76,8 @@ public class WorkerService {
         this.stageUsageRepo = stageUsageRepo;
         this.heartbeatRepo = heartbeatRepo;
         this.deployLogStream = deployLogStream;
+        this.sessionRepo = sessionRepo;
+        this.planRepo = planRepo;
     }
 
     @Transactional
@@ -142,7 +150,7 @@ public class WorkerService {
             TaskAnalysis a = analysisRepo.findById(t.getId()).orElse(null);
             TaskDesign d = designRepo.findById(t.getId()).orElse(null);
             return Optional.of(WorkerTaskResponse.forImplementation(t, a,
-                    (d != null && d.isApproved()) ? d : null));
+                    (d != null && d.isApproved()) ? d : null, registeredPlanMarkdown(t.getId())));
         }
         if (from == TaskStatus.DEPLOY_PENDING) {
             return Optional.of(WorkerTaskResponse.forDeploy(t));
@@ -151,6 +159,20 @@ public class WorkerService {
             return Optional.of(WorkerTaskResponse.forUndeploy(t));
         }
         return Optional.of(WorkerTaskResponse.forAnalysis(t));
+    }
+
+    /**
+     * 작업을 확정(confirm)한 인터뷰의 플랜 본문. confirm은 task_analysis에 design만 넣으므로(LOCKED CONTRACT v2)
+     * 플랜 본문은 interview_plan에서 가져온다. 확정된 세션은 REGISTERED — 취소·만료된 재인터뷰 세션은 건너뛴다.
+     * 인터뷰 없이 온 작업(레거시 자동분석)이면 null.
+     */
+    private String registeredPlanMarkdown(Long taskId) {
+        return sessionRepo.findByTaskIdOrderByCreatedAtDesc(taskId).stream()
+                .filter(s -> s.getStatus() == InterviewStatus.REGISTERED)
+                .findFirst()
+                .flatMap(s -> planRepo.findById(s.getId()))
+                .map(InterviewPlan::getPlanMarkdown)
+                .orElse(null);
     }
 
     @Transactional

@@ -15,7 +15,7 @@ const model = defineModel<string>('model', { required: true })
 const effort = defineModel<string>('effort', { required: true })
 
 const $q = useQuasar()
-// "Opus 5 (기본)" → "Opus 5": 툴바 칩에는 짧은 이름만
+// "Opus 5.5 (기본)" → "Opus 5.5": 툴바 칩에는 짧은 이름만
 const modelLabel = computed(() =>
   (MODEL_OPTIONS.find((m) => m.value === model.value)?.label ?? model.value).replace(/\s*\(.*\)$/, ''),
 )

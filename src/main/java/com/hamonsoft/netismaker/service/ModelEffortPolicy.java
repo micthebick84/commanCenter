@@ -8,7 +8,7 @@ import java.util.Map;
 /** 작업 등록 시 선택 가능한 모델 + effort의 단일 진실원천(허용 맵·기본값·검증). */
 public final class ModelEffortPolicy {
 
-    public static final String DEFAULT_MODEL = "claude-opus-5";
+    public static final String DEFAULT_MODEL = "claude-opus-5-5";
     public static final String DEFAULT_EFFORT = "high";
 
     /**
@@ -34,12 +34,22 @@ public final class ModelEffortPolicy {
      * Haiku만 low/medium/high — 나머지는 xhigh/max까지.
      *
      * claude-fable-5는 2026-09-05 선택 목록에서 뺐다(스펙 2026-09-05-question-chat-ui-design §5.4).
+     * claude-fable-5-1도 같은 이유로 넣지 않았다(2026-09-29).
      * 여기서 뺀 모델(fable-5, opus-4-8/4-7, sonnet-4-6)도 CLI에서는 여전히 유효하다.
      * 즉 이 맵은 "새로 고를 수 있는 목록"이고, 과거 작업/세션에 박제된 모델 값은
      * 검증을 타지 않으므로 그대로 실행된다(배포 Dockerfile 생성 등).
+     *
+     * claude-opus-5-5는 2026-09-29 기본값으로 추가했다(opus-5는 교체가 아니라 병행 유지).
+     * claude CLI 2.1.280 이상이 필요하다 — 그 미만은 "does not support this model" 400으로 실패한다.
+     * API 기본 effort가 medium이지만 작업·세션은 effort를 항상 명시적으로 넘기므로(기본 high) 영향 없다
+     * (모델·effort 없이 도는 배포 Dockerfile 생성은 CLI 기본값을 따르며 이 목록과 무관).
+     *
+     * claude-sonnet-5-5도 2026-09-29 추가(sonnet-5 병행 유지). CLI 2.1.284에서 low~max 다섯 단계 실측 통과.
      */
     private static final Map<String, List<String>> ALLOWED = Map.of(
+            "claude-opus-5-5", FULL,
             "claude-opus-5", FULL,
+            "claude-sonnet-5-5", FULL,
             "claude-sonnet-5", FULL,
             "claude-haiku-4-5", LIMITED);
 

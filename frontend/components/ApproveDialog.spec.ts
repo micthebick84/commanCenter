@@ -129,7 +129,7 @@ describe('ApproveDialog (승인 팝업 UI/UX 개선 2026-09-06)', () => {
     await flushPromises()
     expect(approveCall()?.[1]).toEqual({
       method: 'POST',
-      body: { model: 'claude-opus-5', effort: 'high', mcpCatalogIds: [] },
+      body: { model: 'claude-opus-5-5', effort: 'high', mcpCatalogIds: [] },
     })
     expect(w.emitted('approved')).toBeTruthy()
     expect(w.emitted('update:modelValue')?.at(-1)).toEqual([false])
@@ -159,7 +159,7 @@ describe('ApproveDialog (승인 팝업 UI/UX 개선 2026-09-06)', () => {
     await (w.vm as any).approve()
     expect(approveCall()?.[1]).toEqual({
       method: 'POST',
-      body: { model: 'claude-opus-5', effort: 'high', mcpCatalogIds: [3] },
+      body: { model: 'claude-opus-5-5', effort: 'high', mcpCatalogIds: [3] },
     })
     w.unmount()
   })
@@ -194,7 +194,7 @@ describe('ApproveDialog (승인 팝업 UI/UX 개선 2026-09-06)', () => {
     w.unmount()
   })
 
-  it('지난 인터뷰가 없으면 기본값(Opus 5 · high)이고 안내는 없다', async () => {
+  it('지난 인터뷰가 없으면 기본값(Opus 5.5 · high)이고 안내는 없다', async () => {
     routeApi({ interviews: [] })
     const w = mountDialog()
     await flushPromises()
@@ -203,7 +203,7 @@ describe('ApproveDialog (승인 팝업 UI/UX 개선 2026-09-06)', () => {
     ).toBeNull()
     expect(
       document.body
-        .querySelector('[data-test="model-row-claude-opus-5"]')
+        .querySelector('[data-test="model-row-claude-opus-5-5"]')
         ?.getAttribute('aria-checked'),
     ).toBe('true')
     w.unmount()
@@ -219,7 +219,7 @@ describe('ApproveDialog (승인 팝업 UI/UX 개선 2026-09-06)', () => {
     await (w.vm as any).approve()
     expect(approveCall()?.[1]).toEqual({
       method: 'POST',
-      body: { model: 'claude-opus-5', effort: 'high', mcpCatalogIds: [] },
+      body: { model: 'claude-opus-5-5', effort: 'high', mcpCatalogIds: [] },
     })
     w.unmount()
   })
@@ -237,9 +237,29 @@ describe('ApproveDialog (승인 팝업 UI/UX 개선 2026-09-06)', () => {
     ).toContain('#23')
     expect(
       document.body
+        .querySelector('[data-test="model-row-claude-opus-5-5"]')
+        ?.getAttribute('aria-checked'),
+    ).toBe('true')
+    w.unmount()
+  })
+
+  // Opus 5.5가 기본이 된 뒤(2026-09-29)에도 Opus 5는 목록에 남는다 — 박제 모델로 취급하지 않는다.
+  it('마지막 세션이 Opus 5면 기본값(Opus 5.5)이 아니라 Opus 5로 채운다', async () => {
+    routeApi({
+      interviews: [session(25, 'CANCELLED', '취소됨', 'claude-opus-5', 'xhigh')],
+    })
+    const w = mountDialog()
+    await flushPromises()
+    expect(
+      document.body
         .querySelector('[data-test="model-row-claude-opus-5"]')
         ?.getAttribute('aria-checked'),
     ).toBe('true')
+    await (w.vm as any).approve()
+    expect(approveCall()?.[1]).toEqual({
+      method: 'POST',
+      body: { model: 'claude-opus-5', effort: 'xhigh', mcpCatalogIds: [] },
+    })
     w.unmount()
   })
 
@@ -351,7 +371,7 @@ describe('ApproveDialog (승인 팝업 UI/UX 개선 2026-09-06)', () => {
     expect(hint.endsWith('만료됨')).toBe(true)
     expect(
       document.body
-        .querySelector('[data-test="model-row-claude-opus-5"]')
+        .querySelector('[data-test="model-row-claude-opus-5-5"]')
         ?.getAttribute('aria-checked'),
     ).toBe('true')
     w.unmount()

@@ -38,7 +38,7 @@ class WorkerTaskResponseRepoTest {
     void worker_side_deserialization_without_new_fields_falls_back_to_github() {
         WorkerTaskResponse r = new WorkerTaskResponse(1L, "acme/widgets", "main", "t", "d",
                 WorkerTaskResponse.Kind.ANALYSIS, null, null, null, null, null, null, null, null,
-                null, null, null, null, null, null, null, null);
+                null, null, null, null, null, null, null, null, null);
         assertThat(r.repoRef().host()).isEqualTo("github");
     }
 }

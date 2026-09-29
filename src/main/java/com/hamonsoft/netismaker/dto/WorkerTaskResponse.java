@@ -42,7 +42,12 @@ public record WorkerTaskResponse(
         /** 정식 Git URL 스냅샷. 카탈로그 도입 전 작업·구버전 API는 null → GitHub로 간주. */
         String gitUrl,
         /** "github" | "gitlab" — gitUrl에서 판정한 값. null이면 github. */
-        String repoHost
+        String repoHost,
+        /**
+         * IMPLEMENTATION 전용: 인터뷰에서 확정된 플랜 본문(interview_plan.plan_markdown). 인터뷰 없이 온
+         * 작업·구버전 API는 null → 구현 프롬프트의 {plan_section}이 비어 기존 동작 그대로.
+         */
+        String planMarkdown
 ) {
     /** 워커가 clone/폴더/MR에 쓰는 저장소 참조. 새 필드가 없는 페이로드는 GitHub로 복원된다. */
     public RepoRef repoRef() {
@@ -60,10 +65,14 @@ public record WorkerTaskResponse(
                 t.getTitle(), t.getDescription(), Kind.ANALYSIS,
                 t.getMcpsExtra() == null ? List.of() : List.copyOf(t.getMcpsExtra()),
                 null, null, null, null, List.of(), t.getModel(), t.getEffort(),
-                null, null, null, null, null, null, t.getGitUrl(), hostOf(t));
+                null, null, null, null, null, null, t.getGitUrl(), hostOf(t), null);
     }
 
     public static WorkerTaskResponse forImplementation(Task t, TaskAnalysis a, TaskDesign d) {
+        return forImplementation(t, a, d, null);
+    }
+
+    public static WorkerTaskResponse forImplementation(Task t, TaskAnalysis a, TaskDesign d, String planMarkdown) {
         return new WorkerTaskResponse(t.getId(), t.getGithubRepo(), t.getGithubBranch(),
                 t.getTitle(), t.getDescription(), Kind.IMPLEMENTATION,
                 t.getMcpsExtra() == null ? List.of() : List.copyOf(t.getMcpsExtra()),
@@ -73,7 +82,7 @@ public record WorkerTaskResponse(
                 d == null ? null : d.getMockupFilesJson(),
                 null,
                 d == null ? null : d.getDesignUrl(),
-                null, null, t.getGitUrl(), hostOf(t));
+                null, null, t.getGitUrl(), hostOf(t), planMarkdown);
     }
 
     public static WorkerTaskResponse forDeploy(Task t) {
@@ -81,14 +90,14 @@ public record WorkerTaskResponse(
                 t.getTitle(), t.getDescription(), Kind.DEPLOY, List.of(), null, null,
                 t.getHeadBranch(), t.getHeadSha(),
                 t.getEnvVars() == null ? List.of() : List.copyOf(t.getEnvVars()), null, null,
-                null, null, null, null, null, null, t.getGitUrl(), hostOf(t));
+                null, null, null, null, null, null, t.getGitUrl(), hostOf(t), null);
     }
 
     public static WorkerTaskResponse forUndeploy(Task t) {
         return new WorkerTaskResponse(t.getId(), t.getGithubRepo(), t.getGithubBranch(),
                 t.getTitle(), t.getDescription(), Kind.UNDEPLOY, List.of(), null, null,
                 t.getHeadBranch(), t.getHeadSha(), List.of(), null, null,
-                null, null, null, null, null, null, t.getGitUrl(), hostOf(t));
+                null, null, null, null, null, null, t.getGitUrl(), hostOf(t), null);
     }
 
     /** 디자인 구간 claim 페이로드. prev가 있으면(반려 재실행) 이전 디자인 + 피드백 이력 동봉. */
@@ -104,6 +113,6 @@ public record WorkerTaskResponse(
                 prev == null ? null : prev.getMockupFilesJson(),
                 prev == null ? "[]" : prev.getFeedbackHistoryJson(),
                 prev == null ? null : prev.getDesignUrl(),
-                designSystemProjectId, designOutputProjectId, t.getGitUrl(), hostOf(t));
+                designSystemProjectId, designOutputProjectId, t.getGitUrl(), hostOf(t), null);
     }
 }

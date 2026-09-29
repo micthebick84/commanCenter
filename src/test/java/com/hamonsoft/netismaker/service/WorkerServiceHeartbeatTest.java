@@ -34,7 +34,9 @@ class WorkerServiceHeartbeatTest {
         var stageUsageRepo = mock(com.hamonsoft.netismaker.repository.TaskStageUsageRepository.class);
         heartbeatRepo = mock(WorkerHeartbeatRepository.class);
         DeployLogStreamService deployLogStream = mock(DeployLogStreamService.class);
-        service = new WorkerService(taskRepo, analysisRepo, designRepo, repoCatalogRepo, historyRepo, stageUsageRepo, heartbeatRepo, deployLogStream);
+        service = new WorkerService(taskRepo, analysisRepo, designRepo, repoCatalogRepo, historyRepo, stageUsageRepo, heartbeatRepo, deployLogStream,
+                mock(com.hamonsoft.netismaker.repository.InterviewSessionRepository.class),
+                mock(com.hamonsoft.netismaker.repository.InterviewPlanRepository.class));
         when(heartbeatRepo.findById(any())).thenReturn(Optional.empty());
         when(heartbeatRepo.save(any())).thenAnswer(i -> i.getArgument(0));
     }

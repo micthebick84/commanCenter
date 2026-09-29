@@ -52,7 +52,9 @@ class WorkerServiceDeployTest {
         var stageUsageRepo = mock(com.hamonsoft.netismaker.repository.TaskStageUsageRepository.class);
         heartbeatRepo = mock(WorkerHeartbeatRepository.class);
         deployLogStream = mock(DeployLogStreamService.class);
-        service = new WorkerService(taskRepo, analysisRepo, designRepo, repoCatalogRepo, historyRepo, stageUsageRepo, heartbeatRepo, deployLogStream);
+        service = new WorkerService(taskRepo, analysisRepo, designRepo, repoCatalogRepo, historyRepo, stageUsageRepo, heartbeatRepo, deployLogStream,
+                mock(com.hamonsoft.netismaker.repository.InterviewSessionRepository.class),
+                mock(com.hamonsoft.netismaker.repository.InterviewPlanRepository.class));
         when(historyRepo.save(any())).thenAnswer(i -> i.getArgument(0));
     }
 

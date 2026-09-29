@@ -63,7 +63,7 @@ export interface InterviewClaimResponse {
   mcpsExtra: McpSpec[];
   /** Prior turns (questions + answers) for context/logging */
   turns: InterviewTurn[];
-  /** Java가 보내는 선택 모델/effort (NOT NULL — 기본 claude-opus-5/high). */
+  /** Java가 보내는 선택 모델/effort (NOT NULL — 기본 claude-opus-5-5/high). */
   model: string;
   effort: 'low' | 'medium' | 'high' | 'xhigh' | 'max';
   /** 세션 누적 SHADOW 비용(이전 턴들까지). CostGuard를 이 값으로 시드해 가드가 세션 전체에 걸쳐

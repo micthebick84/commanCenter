@@ -5,20 +5,23 @@ import {
 } from './modelEffort'
 
 describe('modelEffort', () => {
-  it('defaults are opus-5 / high', () => {
-    expect(DEFAULT_MODEL).toBe('claude-opus-5')
+  it('defaults are opus-5-5 / high', () => {
+    expect(DEFAULT_MODEL).toBe('claude-opus-5-5')
     expect(DEFAULT_EFFORT).toBe('high')
   })
 
-  it('exposes the three picker models (Fable 제외 — 스펙 2026-09-05 §5.4)', () => {
+  it('exposes the four picker models, default first (Fable 제외 — 스펙 2026-09-05 §5.4)', () => {
     expect(MODEL_OPTIONS.map((m) => m.value)).toEqual([
-      'claude-opus-5', 'claude-sonnet-5', 'claude-haiku-4-5',
+      'claude-opus-5-5', 'claude-opus-5', 'claude-sonnet-5', 'claude-haiku-4-5',
     ])
+    expect(MODEL_OPTIONS[0]!.value).toBe(DEFAULT_MODEL)
     expect(MODEL_OPTIONS.find((m) => m.value === 'claude-fable-5')).toBeUndefined()
+    expect(MODEL_OPTIONS.find((m) => m.value === 'claude-fable-5-1')).toBeUndefined()
   })
 
   it('haiku allows only low/medium/high; others allow all five', () => {
     expect(effortsForModel('claude-haiku-4-5')).toEqual(['low', 'medium', 'high'])
+    expect(effortsForModel('claude-opus-5-5')).toEqual(['low', 'medium', 'high', 'xhigh', 'max'])
     expect(effortsForModel('claude-opus-5')).toEqual(['low', 'medium', 'high', 'xhigh', 'max'])
     expect(effortsForModel('claude-sonnet-5')).toEqual(['low', 'medium', 'high', 'xhigh', 'max'])
   })
@@ -58,6 +61,7 @@ describe('modelEffort descriptions (승인 다이얼로그)', () => {
   })
 
   it('shortModelLabel strips the "(기본)" suffix and falls back to the raw value', () => {
+    expect(shortModelLabel('claude-opus-5-5')).toBe('Opus 5.5')
     expect(shortModelLabel('claude-opus-5')).toBe('Opus 5')
     expect(shortModelLabel('claude-haiku-4-5')).toBe('Haiku 4.5')
     expect(shortModelLabel('claude-fable-5')).toBe('claude-fable-5')

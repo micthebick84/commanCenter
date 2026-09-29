@@ -5,7 +5,7 @@ import ModelEffortFields from './ModelEffortFields.vue'
 
 // v-model 2개(model/effort)를 실제로 갱신하는 호스트 — ModelEffortPicker.spec 선례.
 function host(
-  initialModel = 'claude-opus-5',
+  initialModel = 'claude-opus-5-5',
   initialEffort = 'high',
   disabled = false,
 ) {
@@ -25,17 +25,19 @@ function host(
 }
 
 describe('ModelEffortFields (승인 다이얼로그 — 모델 라디오 + 추론 단계 세그먼트 + 설명)', () => {
-  it('모델 3개를 이름·한 줄 설명과 함께 라디오 행으로 그리고, 선택된 행을 표시한다', () => {
+  it('모델 4개를 이름·한 줄 설명과 함께 라디오 행으로 그리고, 선택된 행을 표시한다', () => {
     const { w } = host()
     const rows = w.findAll('[data-test^="model-row-"]')
     expect(rows.map((r) => r.attributes('data-test'))).toEqual([
+      'model-row-claude-opus-5-5',
       'model-row-claude-opus-5',
       'model-row-claude-sonnet-5',
       'model-row-claude-haiku-4-5',
     ])
-    expect(rows[0]!.text()).toContain('Opus 5')
-    expect(rows[2]!.text()).toContain('Haiku 4.5')
-    expect(rows[2]!.text()).toContain('low')
+    expect(rows[0]!.text()).toContain('Opus 5.5')
+    expect(rows[1]!.text()).toContain('Opus 5')
+    expect(rows[3]!.text()).toContain('Haiku 4.5')
+    expect(rows[3]!.text()).toContain('low')
     expect(rows[0]!.attributes('aria-checked')).toBe('true')
     expect(rows[1]!.attributes('aria-checked')).toBe('false')
     w.unmount()
@@ -76,12 +78,12 @@ describe('ModelEffortFields (승인 다이얼로그 — 모델 라디오 + 추�
     expect(rows[0]!.attributes('tabindex')).toBe('0')
     expect(rows[1]!.attributes('tabindex')).toBe('-1')
     await rows[0]!.trigger('keydown', { key: 'ArrowDown' })
-    expect(model.value).toBe('claude-sonnet-5')
-    await w.vm.$nextTick()
-    const sonnet = w.find('[data-test="model-row-claude-sonnet-5"]')
-    expect(sonnet.attributes('tabindex')).toBe('0')
-    await sonnet.trigger('keydown', { key: 'ArrowUp' })
     expect(model.value).toBe('claude-opus-5')
+    await w.vm.$nextTick()
+    const opus5 = w.find('[data-test="model-row-claude-opus-5"]')
+    expect(opus5.attributes('tabindex')).toBe('0')
+    await opus5.trigger('keydown', { key: 'ArrowUp' })
+    expect(model.value).toBe('claude-opus-5-5')
     expect(w.find('[data-test="effort-toggle"]').attributes('aria-label')).toBe(
       '추론 단계',
     )

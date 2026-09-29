@@ -45,6 +45,7 @@ WORKER_ID=mac-worker-1 \
 ./gradlew bootRun --args='--spring.profiles.active=worker'
 ```
 `CLAUDE_CLI` 미지정 시 자동 탐색 (PATH → `~/.local/bin` → `~/.claude/local` → `/opt/homebrew/bin` → `/usr/local/bin` → `/usr/bin`).
+⚠️ **claude CLI 2.1.280 이상 필수** — 기본 모델 `claude-opus-5-5`(2026-09-29)를 그 미만 CLI는 `400 … does not support this model`로 거부한다. 워커(`claude -p`)와 인터뷰 서비스(Agent SDK가 `CLAUDE_CLI`를 실행) 둘 다 해당 — 모델 목록을 바꾸기 전에 `claude --version`부터 확인할 것.
 
 ## 핵심 설계 제약
 

@@ -4,7 +4,7 @@ import { defineComponent, h, ref } from 'vue'
 import ModelEffortPicker from './ModelEffortPicker.vue'
 
 // v-model 2개(model/effort)를 실제로 갱신하는 호스트 — 픽커의 강등 동작을 관찰한다.
-function host(initialModel = 'claude-opus-5', initialEffort = 'max', disabled = false) {
+function host(initialModel = 'claude-opus-5-5', initialEffort = 'max', disabled = false) {
   const model = ref(initialModel)
   const effort = ref(initialEffort)
   const Host = defineComponent({
@@ -23,7 +23,7 @@ function host(initialModel = 'claude-opus-5', initialEffort = 'max', disabled = 
 describe('ModelEffortPicker (스펙 2026-09-05 §2·§5.4)', () => {
   it('모델 짧은 라벨과 effort 세그먼트 5개를 그린다', () => {
     const { w } = host()
-    expect(w.find('[data-test="model-picker"]').text()).toContain('Opus 5')
+    expect(w.find('[data-test="model-picker"]').text()).toContain('Opus 5.5')
     const toggle = w.find('[data-test="effort-toggle"]')
     expect(toggle.exists()).toBe(true)
     expect(toggle.findAll('button')).toHaveLength(5)

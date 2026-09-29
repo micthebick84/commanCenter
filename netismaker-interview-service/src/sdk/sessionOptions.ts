@@ -97,6 +97,10 @@ export function buildOptions(input: SessionOptionsInput): Record<string, unknown
     allowedTools: question
       ? []
       :['Skill', 'Read', 'Grep', 'Glob', ...Object.keys(merged).map((n) => `mcp__${n}`)],
+    // 헤드리스라 AskUserQuestion에 답할 사람이 없다 — canUseTool을 넘기면 CLI가 이 도구를 노출하고,
+    // 호출은 "The user did not answer"로 끝나 모델이 텍스트로 재질문한다(2026-09-29 세션 #12).
+    // 질문은 턴 종료 텍스트 → postQuestion → UI 경로로만 오가야 하므로 목록에서 뺀다(canUseTool deny로는 시도를 못 막음).
+    disallowedTools: ['AskUserQuestion'],
     cwd: input.workDir,
     permissionMode: 'default',
     // 활동 스트림: stream_event(텍스트/thinking 델타)를 relay가 실시간 방출할 수 있게 켠다 (스펙 §5.1).

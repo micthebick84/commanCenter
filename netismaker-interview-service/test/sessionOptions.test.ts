@@ -35,6 +35,17 @@ describe('buildOptions', () => {
     expect(allowed).not.toContain('Edit');
   });
 
+  it('removes AskUserQuestion from the model context for every session kind (headless — no one can answer it)', () => {
+    // canUseTool을 넘기면 CLI가 AskUserQuestion을 init.tools에 노출한다(2026-09-29 SDK 0.2.117 + CLI 2.1.284 프로브).
+    // 헤드리스라 "The user did not answer"로 끝나고, 모델이 텍스트로 재질문하며 헛턴을 쓴다(세션 #12).
+    // disallowedTools에 넣어야 도구가 목록에서 빠진다 — canUseTool deny로는 호출 시도 자체를 못 막는다.
+    for (const sessionKind of ['INTERVIEW', 'QUESTION'] as const) {
+      const o = buildOptions({ ...base, claudeSessionId: null, sessionKind });
+      expect(o.disallowedTools).toEqual(expect.arrayContaining(['AskUserQuestion']));
+      expect(o.allowedTools as string[]).not.toContain('AskUserQuestion');
+    }
+  });
+
   it('omits resume on a fresh start', () => {
     const o = buildOptions({ ...base, claudeSessionId: null });
     expect(o.resume).toBeUndefined();

@@ -1,4 +1,4 @@
-import { resolve } from 'node:path';
+import { isAbsolute, relative, resolve, sep } from 'node:path';
 import { existsSync, realpathSync } from 'node:fs';
 import type { SessionKind } from '../types.js';
 
@@ -29,6 +29,17 @@ function bashGate(input: Record<string, unknown>): PermissionResult {
   return { behavior: 'deny', message: `Bash not whitelisted: ${cmd}` };
 }
 
+/**
+ * target이 root 자신이거나 그 밑인지 — 경로 confinement 비교의 단일 지점. `root + '/'` 접두사 비교는 win32에서
+ * resolve()가 `\` 구분자를 돌려주므로 레포 안쪽까지 전부 deny가 된다(2026-09-29 Windows 인터뷰 워커 실측).
+ * path.relative는 플랫폼 구분자와 win32의 대소문자 무시 비교를 처리하고, 드라이브가 다르면 절대경로를 돌려준다.
+ * `..foo` 같은 이름은 안쪽이므로 `..` 단독/`..` + sep 접두만 탈출로 본다.
+ */
+function isWithin(root: string, target: string): boolean {
+  const rel = relative(root, target);
+  return rel === '' || (rel !== '..' && !rel.startsWith('..' + sep) && !isAbsolute(rel));
+}
+
 // ---- QUESTION 게이트 전용 경로/인자 confinement (스펙 §6-①, 최종 리뷰 finding #1/#2) ----
 
 /**
@@ -47,7 +58,7 @@ function bashGate(input: Record<string, unknown>): PermissionResult {
 function insideRepoReal(repoDir: string, p: string): boolean {
   const abs = resolve(repoDir, p);
   if (!existsSync(abs)) {
-    return abs === repoDir || abs.startsWith(repoDir + '/');
+    return isWithin(repoDir, abs);
   }
   let base = repoDir;
   try {
@@ -57,7 +68,7 @@ function insideRepoReal(repoDir: string, p: string): boolean {
   }
   try {
     const target = realpathSync(abs);
-    return target === base || target.startsWith(base + '/');
+    return isWithin(base, target);
   } catch {
     return false;
   }
@@ -264,6 +275,10 @@ function questionPathScopedGate(repoDir: string, input: Record<string, unknown>,
   return { behavior: 'allow' };
 }
 
+// Windows 절대경로 형태(드라이브 문자 `C:`, UNC `\\server`, 현재 드라이브 루트 `\Windows`) — `/`로 시작하지 않아
+// 위의 POSIX 검사를 빠져나간다. 상대 glob 패턴이 이렇게 시작할 일은 없으므로 플랫폼과 무관하게 거부한다.
+const WINDOWS_ABSOLUTE_PATTERN = /^([A-Za-z]:|\\)/;
+
 /**
  * Glob 게이트: path confinement(공용, `~` 포함) + pattern이 `~`로 시작하거나(라운드3 (b)) 절대경로로
  * 시작하거나 `..`를 포함하면 거부(pattern은 glob 패턴이지 정규식이 아니므로 경로 취급 — bypass #3:
@@ -276,7 +291,7 @@ function questionGlobGate(repoDir: string, input: Record<string, unknown>): Perm
   if (typeof pattern === 'string' && pattern.startsWith('~')) {
     return { behavior: 'deny', message: `질문 세션 경로에 ~ 사용 금지: ${pattern}` };
   }
-  if (typeof pattern === 'string' && (pattern.startsWith('/') || pattern.includes('..'))) {
+  if (typeof pattern === 'string' && (pattern.startsWith('/') || WINDOWS_ABSOLUTE_PATTERN.test(pattern) || pattern.includes('..'))) {
     return { behavior: 'deny', message: `질문 세션 Glob pattern은 절대 경로 또는 상위 디렉토리 탈출을 허용하지 않습니다: ${pattern}` };
   }
   return { behavior: 'allow' };
@@ -394,7 +409,7 @@ export function buildCanUseTool(
     if (toolName === 'Write' || toolName === 'Edit' || toolName === 'MultiEdit') {
       const fp = String(input.file_path ?? '');
       const abs = resolve(repoDir, fp);
-      if (abs === allowedWriteRoot || abs.startsWith(allowedWriteRoot + '/')) {
+      if (isWithin(allowedWriteRoot, abs)) {
         return { behavior: 'allow' };
       }
       return { behavior: 'deny', message: 'Write confined to docs/superpowers/**' };

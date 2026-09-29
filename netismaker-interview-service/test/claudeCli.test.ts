@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { join } from 'node:path';
 import { resolveClaudeCli } from '../src/sdk/claudeCli.js';
 
 describe('resolveClaudeCli', () => {
@@ -8,9 +9,10 @@ describe('resolveClaudeCli', () => {
   });
 
   it('walks the candidate list in order and returns the first that exists', () => {
-    // only ~/.local/bin/claude exists
-    const exists = (p: string) => p === '/home/me/.local/bin/claude';
-    expect(resolveClaudeCli(undefined, '/home/me', exists)).toBe('/home/me/.local/bin/claude');
+    // only ~/.local/bin/claude exists (home 기반 후보는 path.join으로 만들어지므로 win32에선 `\` 구분자)
+    const localBin = join('/home/me', '.local/bin/claude');
+    const exists = (p: string) => p === localBin;
+    expect(resolveClaudeCli(undefined, '/home/me', exists)).toBe(localBin);
   });
 
   it('falls back to bare "claude" (PATH lookup) when no candidate file exists', () => {

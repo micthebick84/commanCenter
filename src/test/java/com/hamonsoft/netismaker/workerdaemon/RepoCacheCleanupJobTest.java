@@ -271,6 +271,49 @@ class RepoCacheCleanupJobTest {
         assertThat(wt.toPath().resolve("b.txt")).exists();
     }
 
+    /**
+     * 현재 운영 흐름의 한계를 고정한다: 구현 성공(PR 생성)·배포 worktree는 지우는 곳이 없어 캐시가 계속 보존된다.
+     * 대신 회차 결과에 붙잡고 있는 worktree 경로가 남아, 그 worktree를 치우면 다음 회차에 회수된다.
+     */
+    @Test
+    void reports_which_worktrees_hold_a_cache_and_reclaims_it_once_they_are_removed() throws Exception {
+        init(true);
+        RepoRef impl = new RepoRef("github", "acme/impl", bareRemote("r17a").toUri().toString());
+        RepoRef deploy = new RepoRef("github", "acme/deploy", bareRemote("r17b").toUri().toString());
+        WorktreeService worktrees = new WorktreeService(p, cache);
+        File implCache = cache.ensureFresh(impl, "main").dir();
+        File implWt = worktrees.create(implCache, GitRemotes.localKey(impl), "main", 21, "성공 경로").dir();
+        File deployCache = cache.fetchOnly(deploy, "netismaker/task-1").dir();
+        File deployWt = worktrees.createForDeploy(deployCache, GitRemotes.localKey(deploy), "netismaker/task-1", 22);
+        age(impl, 365);
+        age(deploy, 365);
+
+        RepoCacheCleanupJob.Result r = job.runOnce();
+
+        assertThat(r.outcomes())
+                .containsEntry("acme/impl", Outcome.WORKTREE)
+                .containsEntry("acme/deploy", Outcome.WORKTREE);
+        assertThat(r.freedBytes()).isZero();
+        assertThat(realPaths(r.worktreeHolders().get("acme/impl"))).containsExactly(implWt.toPath().toRealPath());
+        assertThat(realPaths(r.worktreeHolders().get("acme/deploy"))).containsExactly(deployWt.toPath().toRealPath());
+
+        // 보존 worktree를 치우면(향후 보존 정책의 몫) 다음 회차에 회수된다
+        worktrees.remove(implCache, implWt);
+        age(impl, 365);
+        RepoCacheCleanupJob.Result next = job.runOnce();
+        assertThat(next.outcomes())
+                .containsEntry("acme/impl", Outcome.DELETED)
+                .containsEntry("acme/deploy", Outcome.WORKTREE);
+        assertThat(next.worktreeHolders()).containsOnlyKeys("acme/deploy");
+        assertThat(next.freedBytes()).isPositive();
+    }
+
+    private static List<Path> realPaths(List<String> paths) throws IOException {
+        var out = new java.util.ArrayList<Path>();
+        for (String s : paths) out.add(Path.of(s).toRealPath());
+        return out;
+    }
+
     @Test
     void stale_worktree_metadata_does_not_protect_the_cache() throws Exception {
         init(true);
@@ -339,6 +382,7 @@ class RepoCacheCleanupJobTest {
         RepoCacheCleanupJob.Result r = job.runOnce();
 
         assertThat(r.outcomes()).containsEntry("acme/widgets", Outcome.WORKTREE);
+        assertThat(r.worktreeHolders().get("acme/widgets")).singleElement().asString().endsWith("(git worktree lock)");
         assertThat(cacheDir(ref)).exists();
     }
 
@@ -630,5 +674,12 @@ class RepoCacheCleanupJobTest {
     void human_readable_sizes() {
         assertThat(RepoCacheCleanupJob.humanBytes(512)).isEqualTo("512 B");
         assertThat(RepoCacheCleanupJob.humanBytes(3L * 1024 * 1024 * 1024 / 2)).isEqualTo("1.5 GB");
+    }
+
+    @Test
+    void worktree_holder_list_is_abbreviated_for_the_log() {
+        assertThat(RepoCacheCleanupJob.abbreviate(List.of("a", "b"))).isEqualTo("a, b");
+        assertThat(RepoCacheCleanupJob.abbreviate(List.of("1", "2", "3", "4", "5", "6", "7")))
+                .isEqualTo("1, 2, 3, 4, 5 외 2개");
     }
 }

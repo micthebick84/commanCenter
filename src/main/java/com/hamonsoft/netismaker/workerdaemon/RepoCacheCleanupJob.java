@@ -52,6 +52,9 @@ import java.util.Optional;
  *               (구현 실패 보존분·배포·디자인). 가리키는 곳이 확실히 없는(NoSuchFile) stale 메타만 무시한다
  *               (캐시째 지워진다). locked 표시, 읽을 수 없는 메타, 권한·I/O 오류로 존재 여부를 판단할 수
  *               없는 경로는 살아 있다고 본다 — Files.exists는 '모름'도 false라 쓰지 않는다.
+ *               ⚠️ 한계: 지금은 구현 성공(PR 생성) worktree와 배포 worktree도 지우는 곳이 없어 영구 보존된다
+ *               (WorktreeService 'Phase 1은 보존'). 그래서 구현·배포를 한 번이라도 거친 캐시는 이 잡이 회수하지
+ *               않는다 — worktree 보존 정책이 생겨야 회수된다. 어떤 worktree가 붙잡고 있는지는 회차 로그에 남긴다.
  *   - 사용 중: per-repo 락(GitRepoCache.tryWithRepoLock)을 즉시 못 잡으면 이번 회차는 넘긴다.
  *
  *  삭제 절차: 락 안에서 판단을 다시 한 번 확인한 뒤 캐시를 repos-dir/.trash/ 로 rename(원자적)만 하고
@@ -120,6 +123,10 @@ public class RepoCacheCleanupJob implements SchedulingConfigurer {
                     r.outcomes().size(), r.count(Outcome.DELETED), humanBytes(r.freedBytes()),
                     r.count(Outcome.RECENT), r.count(Outcome.BUSY), r.count(Outcome.WORKTREE),
                     r.count(Outcome.UNKNOWN), r.count(Outcome.FAILED), r.trashLeft());
+            // worktree 보존분은 지금 자동으로 정리되지 않는다 — 무엇을 치워야 디스크가 회수되는지 남긴다
+            r.worktreeHolders().forEach((localKey, holders) ->
+                    log.info("레포 캐시 보존(worktree {}개가 사용 중): {} ← {}",
+                            holders.size(), localKey, abbreviate(holders)));
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
         } catch (Exception e) {
@@ -131,12 +138,14 @@ public class RepoCacheCleanupJob implements SchedulingConfigurer {
     enum Outcome { DELETED, RECENT, BUSY, WORKTREE, UNKNOWN, FAILED }
 
     /**
-     * @param skipped    다른 워커가 잡 락을 쥐고 있어 이번 회차를 통째로 건너뜀
-     * @param outcomes   localKey → 판단 결과 (검사한 캐시 전부)
-     * @param freedBytes 실제로 지운 파일 크기 합(이전 회차 휴지통 잔여 포함)
-     * @param trashLeft  삭제가 끝나지 않아 .trash에 남은 항목 수(다음 회차 재시도)
+     * @param skipped         다른 워커가 잡 락을 쥐고 있어 이번 회차를 통째로 건너뜀
+     * @param outcomes        localKey → 판단 결과 (검사한 캐시 전부)
+     * @param worktreeHolders WORKTREE로 건너뛴 localKey → 캐시를 붙잡고 있는 worktree 설명(경로 등)
+     * @param freedBytes      실제로 지운 파일 크기 합(이전 회차 휴지통 잔여 포함)
+     * @param trashLeft       삭제가 끝나지 않아 .trash에 남은 항목 수(다음 회차 재시도)
      */
-    record Result(boolean skipped, Map<String, Outcome> outcomes, long freedBytes, int trashLeft) {
+    record Result(boolean skipped, Map<String, Outcome> outcomes, Map<String, List<String>> worktreeHolders,
+                  long freedBytes, int trashLeft) {
         long count(Outcome o) {
             return outcomes.values().stream().filter(o::equals).count();
         }
@@ -150,7 +159,7 @@ public class RepoCacheCleanupJob implements SchedulingConfigurer {
             throw new IllegalStateException("repos-dir(REPOS_DIR)이 비어 있어 정리를 거부한다");
         }
         Path configured = Paths.get(dir).toAbsolutePath().normalize();
-        if (!Files.isDirectory(configured)) return new Result(false, Map.of(), 0, 0);
+        if (!Files.isDirectory(configured)) return new Result(false, Map.of(), Map.of(), 0, 0);
         // 링크로 잡힌 repos-dir이라도 containment는 실제 경로 기준으로 본다
         Path base = configured.toRealPath();
         if (base.getParent() == null || base.equals(realHome())) {
@@ -160,7 +169,7 @@ public class RepoCacheCleanupJob implements SchedulingConfigurer {
         try (FileChannel ch = FileChannel.open(base.resolve(JOB_LOCK),
                 StandardOpenOption.CREATE, StandardOpenOption.WRITE)) {
             FileLock jobLock = tryLockOrNull(ch);
-            if (jobLock == null) return new Result(true, Map.of(), 0, 0);
+            if (jobLock == null) return new Result(true, Map.of(), Map.of(), 0, 0);
             try (jobLock) {
                 return cleanUnder(base);
             }
@@ -196,6 +205,7 @@ public class RepoCacheCleanupJob implements SchedulingConfigurer {
         // 1) 캐시 검사 — 대상은 락 안에서 .trash로 옮기기만 한다
         Instant cutoff = Instant.now().minus(Duration.ofDays(cfg.unusedDays()));
         Map<String, Outcome> outcomes = new LinkedHashMap<>();
+        Map<String, List<String>> holders = new LinkedHashMap<>();
         for (Path owner : list(base)) {
             String ownerName = owner.getFileName().toString();
             if (ownerName.startsWith(".")) continue;                                // .trash·잡 락 등 내부용
@@ -222,7 +232,7 @@ public class RepoCacheCleanupJob implements SchedulingConfigurer {
                 }
                 Outcome o;
                 try {
-                    o = cleanOne(base, trash, cacheDir, localKey, cutoff);
+                    o = cleanOne(base, trash, cacheDir, localKey, cutoff, holders);
                 } catch (IOException | RuntimeException e) {
                     log.warn("레포 캐시 정리 실패 {}: {}", localKey, e.toString());
                     o = Outcome.FAILED;
@@ -239,19 +249,20 @@ public class RepoCacheCleanupJob implements SchedulingConfigurer {
             freed += d.freedBytes();
             if (d.failures() > 0) left++;
         }
-        return new Result(false, outcomes, freed, left);
+        return new Result(false, outcomes, holders, freed, left);
     }
 
     /** 캐시 1개 판단 + (대상이면) 락 안에서 .trash로 이동. 실제 삭제는 호출자가 락 밖에서. */
-    private Outcome cleanOne(Path base, Path trash, Path cacheDir, String localKey, Instant cutoff)
+    private Outcome cleanOne(Path base, Path trash, Path cacheDir, String localKey, Instant cutoff,
+                             Map<String, List<String>> holders)
             throws IOException, InterruptedException {
         // 락 없이 1차 판단 — 대부분 여기서 끝나 락 경합을 만들지 않는다
-        Outcome pre = judge(base, cacheDir, localKey, cutoff);
+        Outcome pre = judge(base, cacheDir, localKey, cutoff, holders);
         if (pre != null) return pre;
 
         Optional<Outcome> locked = repos.tryWithRepoLock(localKey, () -> {
             // 락 안 재확인: 1차 판단 뒤 다른 워커가 이 캐시를 쓰기 시작했을 수 있다(마커·worktree 갱신)
-            Outcome again = judge(base, cacheDir, localKey, cutoff);
+            Outcome again = judge(base, cacheDir, localKey, cutoff, holders);
             if (again != null) return again;
             requireCacheUnder(base, cacheDir);
             Path dest = trash.resolve(localKey.replace('/', '+') + "-" + System.currentTimeMillis());
@@ -271,12 +282,18 @@ public class RepoCacheCleanupJob implements SchedulingConfigurer {
 
     /**
      * 삭제 대상이면 null, 아니면 건너뛸 사유. 판단 근거를 못 읽으면 삭제하지 않는 쪽으로 기운다.
+     * WORKTREE면 붙잡고 있는 worktree 목록을 holders에 남긴다(회차 로그용).
      */
-    private Outcome judge(Path base, Path cacheDir, String localKey, Instant cutoff) {
+    private Outcome judge(Path base, Path cacheDir, String localKey, Instant cutoff,
+                          Map<String, List<String>> holders) {
         Optional<Instant> lastUsed = lastUsed(base, cacheDir, localKey);
         if (lastUsed.isEmpty()) return Outcome.UNKNOWN;
         if (!lastUsed.get().isBefore(cutoff)) return Outcome.RECENT;
-        if (hasLiveWorktree(cacheDir)) return Outcome.WORKTREE;
+        List<String> live = liveWorktrees(cacheDir);
+        if (!live.isEmpty()) {
+            holders.put(localKey, live);
+            return Outcome.WORKTREE;
+        }
         return null;
     }
 
@@ -303,19 +320,23 @@ public class RepoCacheCleanupJob implements SchedulingConfigurer {
     }
 
     /**
-     * .git/worktrees/＊/gitdir 중 하나라도 실제 존재하는 경로를 가리키면 true.
+     * 캐시를 붙잡고 있는 worktree 설명 목록 — .git/worktrees/＊/gitdir 중 실제 존재하는 경로를 가리키는 것들.
+     * 비었으면 살아 있는 worktree 없음. 보통 worktree 디렉터리 경로이고, 경로를 알 수 없는 항목은 메타 디렉터리 경로 + 사유.
      * gitdir 내용은 worktree의 .git 파일 경로 — git 2.48+ relative 모드면 메타 디렉터리 기준 상대경로.
      * .git 파일만 사라지고 worktree 디렉터리가 남아 있어도 살아 있다고 본다(보존분 산출물 보호).
      * '없음'은 확인된 부재(Files.notExists = NoSuchFile)일 때만 — 권한·I/O 오류로 판단할 수 없으면 살아 있다고 본다.
      */
-    static boolean hasLiveWorktree(Path cacheDir) {
+    static List<String> liveWorktrees(Path cacheDir) {
         Path meta = cacheDir.resolve(".git").resolve("worktrees");
-        if (Files.notExists(meta, LinkOption.NOFOLLOW_LINKS)) return false;
+        List<String> live = new ArrayList<>();
+        if (Files.notExists(meta, LinkOption.NOFOLLOW_LINKS)) return live;
         List<Path> entries;
         try {
             entries = list(meta);
         } catch (IOException e) {
-            return true;   // 목록을 못 읽으면(권한·디렉터리 아님 등) 살아 있다고 본다
+            // 목록을 못 읽으면(권한·디렉터리 아님 등) 살아 있다고 본다
+            live.add(meta + " (목록 읽기 실패)");
+            return live;
         }
         for (Path wt : entries) {
             BasicFileAttributes attrs;
@@ -324,29 +345,52 @@ public class RepoCacheCleanupJob implements SchedulingConfigurer {
             } catch (NoSuchFileException e) {
                 continue;      // 그사이 prune됨
             } catch (IOException e) {
-                return true;
+                live.add(wt + " (메타 읽기 실패)");
+                continue;
             }
             if (attrs.isRegularFile()) continue;   // worktree 메타 디렉터리가 아님
-            if (!attrs.isDirectory()) return true; // 링크 등 — 판단하지 않는다
-            if (!Files.notExists(wt.resolve("locked"), LinkOption.NOFOLLOW_LINKS)) return true;  // git worktree lock — 의도적 보존
+            if (!attrs.isDirectory()) {            // 링크 등 — 판단하지 않는다
+                live.add(wt + " (디렉터리 아님)");
+                continue;
+            }
+            if (!Files.notExists(wt.resolve("locked"), LinkOption.NOFOLLOW_LINKS)) {
+                live.add(wt + " (git worktree lock)");   // 의도적 보존
+                continue;
+            }
             String gitdir;
             try {
                 gitdir = Files.readString(wt.resolve("gitdir")).trim();
             } catch (IOException e) {
-                return true;
+                live.add(wt + " (gitdir 읽기 실패)");
+                continue;
             }
-            if (gitdir.isEmpty()) return true;
+            if (gitdir.isEmpty()) {
+                live.add(wt + " (gitdir 비어 있음)");
+                continue;
+            }
             try {
                 Path target = Paths.get(gitdir);
                 if (!target.isAbsolute()) target = wt.resolve(target).normalize();
-                if (!Files.notExists(target)) return true;
                 Path parent = target.getParent();
-                if (parent != null && !Files.notExists(parent)) return true;
+                if (!Files.notExists(target)) {
+                    // gitdir은 worktree의 .git 파일 — 운영자에겐 worktree 디렉터리를 보여 준다
+                    boolean dotGit = parent != null && ".git".equals(String.valueOf(target.getFileName()));
+                    live.add((dotGit ? parent : target).toString());
+                } else if (parent != null && !Files.notExists(parent)) {
+                    live.add(parent.toString());
+                }
             } catch (InvalidPathException e) {
-                return true;
+                live.add(wt + " (gitdir 경로 해석 실패)");
             }
         }
-        return false;
+        return live;
+    }
+
+    /** 로그용 — 앞 5개만 보이고 나머지는 개수로. */
+    static String abbreviate(List<String> items) {
+        int shown = Math.min(items.size(), 5);
+        String head = String.join(", ", items.subList(0, shown));
+        return items.size() > shown ? head + " 외 " + (items.size() - shown) + "개" : head;
     }
 
     /** 이동 직전 방어: base 바로 아래 2단계의 실제 디렉터리(링크 아님)여야 한다. */

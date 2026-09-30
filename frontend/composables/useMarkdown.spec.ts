@@ -184,4 +184,19 @@ describe('renderMarkdown — 이미지는 <img> 대신 클릭해야 열리는 �
     }
     expect(anchors[0]!.textContent).toBe('문서')
   })
+
+  // 링크 안 판정을 이미지마다 토큰열 처음부터 다시 세면 한 문단에 이미지가 많을 때 렌더가 제곱으로 늘어
+  // 에이전트 답변만으로 탭을 멈출 수 있다(수정 전 이 입력은 10초 넘게 걸렸다). 넉넉한 상한으로 선형인지만 본다.
+  it('한 문단에 링크 안/밖 이미지가 수만 개여도 선형 시간에 렌더하고 판정도 각각 맞다', () => {
+    const n = 20000
+    const src = '[![a](https://e.example/u.png)](https://example.com/v) ![b](https://e.example/w.png)\n'.repeat(n)
+    const started = performance.now()
+    const html = renderMarkdown(src)
+    const elapsed = performance.now() - started
+    expect(elapsed).toBeLessThan(3000)
+    expect(html).not.toMatch(/<img/i)
+    expect(html.match(/<a /g)).toHaveLength(2 * n)
+    expect(html.match(/class="md-image-link"/g)).toHaveLength(n)
+    expect(html.match(/href="https:\/\/e\.example\/u\.png"/g)).toBeNull()
+  })
 })

@@ -40,14 +40,24 @@ function altText(tokens: Token[] | null): string {
     .join('')
 }
 
+// 토큰열마다 한 번만 훑어 캐시 — 이미지마다 처음부터 다시 세면 한 문단에 이미지 수만 개를 넣은 입력(에이전트 답변은
+// 공격자가 조종할 수 있다)에서 렌더가 이미지 수의 제곱으로 늘어 탭이 멈춘다. 토큰열은 렌더가 끝나면 버려지므로 WeakMap.
+const insideLinkCache = new WeakMap<Token[], boolean[]>()
+
 /** 같은 인라인 토큰열에서 idx 앞에 열린 채 닫히지 않은 링크가 있는가. */
 function insideLink(tokens: Token[], idx: number): boolean {
-  let depth = 0
-  for (let i = 0; i < idx; i++) {
-    if (tokens[i]!.type === 'link_open') depth++
-    else if (tokens[i]!.type === 'link_close') depth--
+  let inside = insideLinkCache.get(tokens)
+  if (!inside) {
+    let depth = 0
+    inside = tokens.map((t) => {
+      const before = depth > 0
+      if (t.type === 'link_open') depth++
+      else if (t.type === 'link_close') depth--
+      return before
+    })
+    insideLinkCache.set(tokens, inside)
   }
-  return depth > 0
+  return inside[idx]!
 }
 
 md.renderer.rules.image = (tokens, idx) => {

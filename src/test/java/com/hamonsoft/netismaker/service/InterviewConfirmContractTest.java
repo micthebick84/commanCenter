@@ -20,6 +20,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.data.domain.Limit;
 import org.springframework.test.context.ContextConfiguration;
 
 import java.math.BigDecimal;
@@ -91,7 +92,7 @@ class InterviewConfirmContractTest {
                 .isEqualTo(InterviewStatus.REGISTERED);
 
         // TaskStatusHistory.log(...)가 확정 전이를 남긴다 (플랜승인대기 → 구현대기)
-        TaskStatusHistory latest = historyRepo.findByTaskIdOrderByAtDesc(taskId).get(0);
+        TaskStatusHistory latest = historyRepo.findByTaskIdOrderByAtDescIdDesc(taskId, Limit.of(1)).get(0);
         assertThat(latest.getFromStatus()).isEqualTo(TaskStatus.INTERVIEW_REVIEW.dbValue());
         assertThat(latest.getToStatus()).isEqualTo(TaskStatus.APPROVED.dbValue());
     }
@@ -124,7 +125,7 @@ class InterviewConfirmContractTest {
         assertThat(t.isDesignRequested()).isTrue();
 
         // 디자인대기로 가는 경우도 history에 남는다 (플랜승인대기 → 디자인대기)
-        TaskStatusHistory latest = historyRepo.findByTaskIdOrderByAtDesc(taskId).get(0);
+        TaskStatusHistory latest = historyRepo.findByTaskIdOrderByAtDescIdDesc(taskId, Limit.of(1)).get(0);
         assertThat(latest.getFromStatus()).isEqualTo(TaskStatus.INTERVIEW_REVIEW.dbValue());
         assertThat(latest.getToStatus()).isEqualTo(TaskStatus.DESIGN_PENDING.dbValue());
     }

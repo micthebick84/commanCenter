@@ -13,6 +13,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.data.domain.Limit;
 import org.springframework.http.HttpStatus;
 import org.springframework.test.context.ContextConfiguration;
 
@@ -94,7 +95,7 @@ class TaskServiceLockingTest {
         assertThat(count(results, HttpStatus.CONFLICT)).as("나머지 한 번은 409").isEqualTo(1);
         assertThat(taskRepo.findById(t.getId()).orElseThrow().getStatus())
                 .isEqualTo(TaskStatus.CANCELLED);
-        long cancelledHistoryRows = historyRepo.findByTaskIdOrderByAtDesc(t.getId()).stream()
+        long cancelledHistoryRows = historyRepo.findByTaskIdOrderByAtDescIdDesc(t.getId(), Limit.unlimited()).stream()
                 .filter(h -> TaskStatus.CANCELLED.dbValue().equals(h.getToStatus()))
                 .count();
         assertThat(cancelledHistoryRows).as("CANCELLED 히스토리 행은 정확히 1개").isEqualTo(1);

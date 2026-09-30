@@ -54,3 +54,21 @@ describe('MarkdownViewerDialog — 복사 (스펙 2026-09-06 §4.2, 리뷰 파�
     w.unmount()
   })
 })
+
+describe('MarkdownViewerDialog — 이미지 자동 요청 차단', () => {
+  afterEach(() => {
+    document.body.innerHTML = ''
+  })
+
+  it('분석 문서의 마크다운 이미지는 <img> 없이 새 탭 링크로 그린다', async () => {
+    const w = open('# 분석\n\n![흐름도](https://evil.example/flow.png?d=1)')
+    await flushPromises()
+    const viewer = body().querySelector('[data-test="markdown-viewer"]')!
+    expect(viewer.querySelector('img')).toBeNull()
+    const a = viewer.querySelector('a.md-image-link')!
+    expect(a.getAttribute('href')).toBe('https://evil.example/flow.png?d=1')
+    expect(a.getAttribute('target')).toBe('_blank')
+    expect(a.getAttribute('rel')).toBe('noopener noreferrer')
+    w.unmount()
+  })
+})

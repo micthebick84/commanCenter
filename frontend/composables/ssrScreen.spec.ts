@@ -30,16 +30,16 @@ function unmeasuredScreen(): ScreenState {
   }
 }
 
-describe('resolveScreenHint — SSR 화면 폭 추정', () => {
-  it('쿠키(직전 실제 폭)가 있으면 UA보다 우선한다', () => {
-    expect(resolveScreenHint('narrow', false)).toBe('narrow')
-    expect(resolveScreenHint('wide', true)).toBe('wide')
+describe('resolveScreenHint — SSR 화면 폭 힌트', () => {
+  it('쿠키(직전 실제 폭)를 그대로 쓴다', () => {
+    expect(resolveScreenHint('narrow')).toBe('narrow')
+    expect(resolveScreenHint('wide')).toBe('wide')
   })
 
-  it('쿠키가 없거나 알 수 없는 값이면 UA로 추정한다 — 모바일 UA는 좁은 화면(Quasar 기본값 그대로)', () => {
-    expect(resolveScreenHint(undefined, true)).toBe('narrow')
-    expect(resolveScreenHint(null, false)).toBe('wide')
-    expect(resolveScreenHint('garbage', true)).toBe('narrow')
+  it('쿠키가 없거나 알 수 없는 값이면 좁은 화면(Quasar 기본값 — 기존 동작)이다 — 데스크톱 UA 태블릿의 첫 로드 점프 방지', () => {
+    expect(resolveScreenHint(undefined)).toBe('narrow')
+    expect(resolveScreenHint(null)).toBe('narrow')
+    expect(resolveScreenHint('garbage')).toBe('narrow')
   })
 })
 

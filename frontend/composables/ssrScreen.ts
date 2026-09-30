@@ -1,9 +1,9 @@
 // SSR 화면 폭 힌트 — plugins/ssr-screen.ts가 쓰는 순수 함수 모음 (2026-09-30 SSR 하이드레이션 정리).
 // Quasar(nuxt-quasar-ui)는 SSR과 하이드레이션 동안 $q.screen을 xs(좁은 화면) 기본값으로 고정했다가 하이드레이션이
 // 끝나면(app:suspense:resolve) 실제 폭을 잰다 — 불일치 경고는 없지만 데스크톱 최초 로드가 모바일 마크업(서랍·하단
-// 내비 자리·모바일 리스트)으로 그려졌다가 데스크톱으로 뒤바뀐다. 서버가 넓은 화면을 추정하면 SSR·하이드레이션을 둘 다
-// 데스크톱 값으로 맞춰 이 점프를 없앤다. 추정이 틀려도(태블릿·좁은 데스크톱 창) 하이드레이션 뒤 실제 폭으로 바뀔 뿐
-// 불일치는 없고, 그 폭을 쿠키에 남겨 다음 로드부터는 정확해진다.
+// 내비 자리·모바일 리스트)으로 그려졌다가 데스크톱으로 뒤바뀐다. 직전 실제 폭(쿠키)이 넓은 화면이면 SSR·하이드레이션을
+// 둘 다 데스크톱 값으로 맞춰 이 점프를 없앤다. 쿠키가 틀려도(창 크기를 바꾼 뒤 다시 연 경우) 하이드레이션 뒤 실제 폭으로
+// 바뀔 뿐 불일치는 없고, 쿠키는 실제 폭을 따라 갱신된다.
 import type { Screen } from 'quasar'
 
 /** 직전 실제 폭(lt.md 여부)을 기억하는 쿠키. 값은 'wide' | 'narrow'. 레이아웃 힌트일 뿐 민감 정보 없음. */
@@ -11,13 +11,15 @@ export const SCREEN_HINT_COOKIE = 'netis-maker-screen'
 
 export type ScreenHint = 'wide' | 'narrow'
 
-/** 쿠키(직전 실제 폭)가 있으면 그대로 쓰고, 없으면 UA가 모바일이면 좁은 화면, 아니면 넓은 화면으로 추정한다. */
-export function resolveScreenHint(
-  cookie: unknown,
-  isMobileUa: boolean,
-): ScreenHint {
-  if (cookie === 'wide' || cookie === 'narrow') return cookie
-  return isMobileUa ? 'narrow' : 'wide'
+/**
+ * 쿠키(직전 실제 폭)가 있으면 그대로 쓰고, 없으면 좁은 화면(Quasar 기본값 — 기존 동작)으로 둔다.
+ * UA로 넓은 화면을 추정하지 않는다: 데스크톱 UA를 보내는 태블릿(iPadOS Safari 기본 Mac UA)·좁은 데스크톱 창의
+ * 첫 로드가 데스크톱으로 SSR됐다가 모바일로 뒤바뀌는, 기존에 없던 점프가 생긴다(2026-09-30 리뷰 재현).
+ * 첫 방문은 비로그인이라 사실상 /login(폭 의존 마크업은 눈에 안 보이는 브랜드 클래스뿐)을 거치고 거기서 쿠키가 남으므로
+ * 데스크톱 효과는 그대로다.
+ */
+export function resolveScreenHint(cookie: unknown): ScreenHint {
+  return cookie === 'wide' ? 'wide' : 'narrow'
 }
 
 type ScreenFlags = Pick<

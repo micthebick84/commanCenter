@@ -454,6 +454,23 @@ class QuestionApiIntegrationTest {
                 .andExpect(status().isNotFound());
     }
 
+    /** AttachmentCleanupJob이 종료된 질문의 디렉터리를 지운 뒤 — 메타 행은 남고 다운로드는 500이 아니라 410 + 한국어 메시지. */
+    @Test
+    void 정리된_첨부_다운로드는_410과_보존_기간_안내() throws Exception {
+        long id = createQuestionWithFile(userJwt("user1"), filePart("요구사항.txt", "내용"));
+        long attId = attachmentRepo.findBySessionIdOrderByIdAsc(id).get(0).getId();
+        mvc.perform(post("/api/questions/" + id + "/close").with(userJwt("user1"))).andExpect(status().isOk());
+        FileSystemUtils.deleteRecursively(Path.of(attachmentDir, "question-" + id));
+
+        mvc.perform(get("/api/questions/" + id + "/attachments/" + attId).with(userJwt("user1")))
+                .andExpect(status().isGone())
+                .andExpect(jsonPath("$.message").value(containsString("보존 기간")));
+        // 대화 조회는 그대로 — 첨부 메타도 계속 보인다
+        mvc.perform(get("/api/questions/" + id).with(userJwt("user1")))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.attachments", hasSize(1)));
+    }
+
     // ── 대화 중 MCP 변경 (스펙 2026-09-13 §5.2, §5.3) ──────────────────────────
 
     private long seedMcp(String name) {

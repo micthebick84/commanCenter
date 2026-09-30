@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import ts from 'typescript'
-import { transformWithEsbuild } from 'vite'
+import { createServer, type ViteDevServer } from 'vite'
 import { describe, expect, it } from 'vitest'
 import { ESBUILD_COMPILER_OPTIONS, VITEST_ESBUILD_OPTIONS } from './esbuildTsconfig'
 
@@ -39,17 +39,31 @@ function readTsconfig(file: string): { extends?: string; compilerOptions?: Recor
 }
 
 describe('vitest 트랜스폼 tsconfig (.nuxt 비의존)', () => {
-  it('tsconfig.json의 extends 대상이 없어도 vitest의 esbuild 옵션으로 트랜스폼된다', async () => {
+  // 상수만 검사하면 vitest.config.ts에서 `esbuild:` 배선이 빠지거나 plugin-vue가 서버 esbuild 설정을 안 물려받게
+  // 돼도 .nuxt가 있는 CI에서는 초록으로 남는다 — 실제 vitest.config.ts로 Vite를 띄워, extends 대상이 없는
+  // tsconfig 아래의 .ts(vite:esbuild)와 <script setup lang="ts"> SFC(@vitejs/plugin-vue) 두 경로를 다 트랜스폼해 본다.
+  it('vitest.config.ts 설정이면 tsconfig.json의 extends 대상이 없어도 .ts와 TS SFC가 트랜스폼된다', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'vitest-tsconfig-'))
+    let server: ViteDevServer | undefined
     try {
       writeFileSync(join(dir, 'tsconfig.json'), JSON.stringify({ extends: './.nuxt/tsconfig.json' }))
-      const { code } = await transformWithEsbuild(
-        'const n: number = 1\nexport { n }\n',
-        join(dir, 'a.ts'),
-        VITEST_ESBUILD_OPTIONS,
-      )
-      expect(code).toContain('const n = 1')
+      writeFileSync(join(dir, 'a.ts'), 'const n: number = 1\nexport { n }\n')
+      writeFileSync(join(dir, 'Comp.vue'), '<script setup lang="ts">\nconst label: string = \'ok\'\n</script>\n')
+      server = await createServer({
+        configFile: join(frontendRoot, 'vitest.config.ts'),
+        root: dir,
+        logLevel: 'silent',
+        appType: 'custom',
+        server: { middlewareMode: true, hmr: false, ws: false, watch: null },
+        optimizeDeps: { noDiscovery: true },
+      })
+      expect(server.config.esbuild).toMatchObject(VITEST_ESBUILD_OPTIONS)
+      // ssr 환경: 풀리지 않는 bare import('vue')를 에러 대신 그대로 두므로 임시 디렉터리에 node_modules가 없어도 된다.
+      const ssr = server.environments.ssr
+      expect((await ssr.transformRequest('/a.ts'))?.code).toContain('const n = 1')
+      expect((await ssr.transformRequest('/Comp.vue'))?.code).toContain('const label = "ok"')
     } finally {
+      await server?.close()
       rmSync(dir, { recursive: true, force: true })
     }
   })

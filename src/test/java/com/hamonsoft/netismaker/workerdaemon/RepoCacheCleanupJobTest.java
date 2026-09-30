@@ -460,6 +460,71 @@ class RepoCacheCleanupJobTest {
         assertThat(cacheDir(ref)).exists();
     }
 
+    /**
+     * worktree-root가 있는 외장·네트워크 볼륨이 잠시 분리돼 있으면 worktree 경로가 통째로 NoSuchFile이다 —
+     * '없음'이 아니라 '안 보임'이라 캐시를 지우면 볼륨이 돌아와도 그 worktree의 git이 끊긴다.
+     */
+    @Test
+    void worktree_on_a_detached_volume_protects_the_cache() throws Exception {
+        init(true);
+        RepoRef ref = github(bareRemote("r18"));
+        File dir = cache.ensureFresh(ref, "main").dir();
+        WorktreeService.CreatedWorktree wt = new WorktreeService(p, cache)
+                .create(dir, GitRemotes.localKey(ref), "main", 15, "volume");
+        age(ref, 60);
+        Path unmounted = tmp.resolve("worktrees-unmounted");
+        Files.move(worktreeRoot, unmounted);            // 볼륨 분리: worktree-root 자체가 안 보인다
+
+        RepoCacheCleanupJob.Result r = job.runOnce();
+
+        assertThat(r.outcomes()).containsEntry("acme/widgets", Outcome.WORKTREE);
+        assertThat(r.worktreeHolders().get("acme/widgets")).singleElement().asString()
+                .contains("worktree-root 접근 불가");
+        Files.move(unmounted, worktreeRoot);            // 볼륨 복귀 — worktree가 그대로 동작해야 한다
+        assertThat(ProcessRunner.requireSuccess(wt.dir(), List.of("git", "status", "--porcelain"), 30)).isEmpty();
+    }
+
+    /** worktree-root는 보이지만 gitdir이 그 밖(끊긴 링크 너머·옛 WORKTREE_ROOT)의 없는 경로를 가리키면 보존한다. */
+    @Test
+    void missing_worktree_outside_the_worktree_root_protects_the_cache() throws Exception {
+        init(true);
+        RepoRef ref = github(bareRemote("r19"));
+        File dir = cache.ensureFresh(ref, "main").dir();
+        new WorktreeService(p, cache).create(dir, GitRemotes.localKey(ref), "main", 16, "elsewhere");
+        Files.writeString(cacheDir(ref).resolve(".git/worktrees/task-16/gitdir"),
+                tmp.resolve("gone-volume/wt/acme/widgets/task-16/.git") + "\n");
+        age(ref, 60);
+
+        RepoCacheCleanupJob.Result r = job.runOnce();
+
+        assertThat(r.outcomes()).containsEntry("acme/widgets", Outcome.WORKTREE);
+        assertThat(r.worktreeHolders().get("acme/widgets")).singleElement().asString()
+                .contains("worktree-root 밖");
+        assertThat(cacheDir(ref)).exists();
+    }
+
+    /**
+     * lastUsed의 fail-closed 분기: 사용 시각 근거 중 하나라도 부재가 아닌 이유로 못 읽으면 판단불가로 보존한다.
+     * .git/logs를 파일로 바꿔 .git/logs/HEAD 조회를 ENOTDIR로 만든다 — root에서도 도는 권한 오류 대역
+     * (위 cache_whose_git_dir_cannot_be_read_is_not_deleted는 root에서 건너뛰어진다).
+     */
+    @Test
+    @DisabledOnOs(value = OS.WINDOWS, disabledReason = "경로 중간이 파일일 때의 오류 코드가 POSIX(ENOTDIR)와 다르다")
+    void last_use_evidence_that_cannot_be_read_keeps_the_cache() throws Exception {
+        init(true);
+        RepoRef ref = github(bareRemote("r20"));
+        cache.ensureFresh(ref, "main");
+        age(ref, 60);
+        Path logs = cacheDir(ref).resolve(".git/logs");
+        assertThat(RepoCacheCleanupJob.deleteTree(logs).failures()).isZero();
+        Files.writeString(logs, "not a dir");
+
+        assertThat(RepoCacheCleanupJob.lastUsed(reposDir.toRealPath(), cacheDir(ref).toRealPath(), "acme/widgets"))
+                .isEmpty();
+        assertThat(job.runOnce().outcomes()).containsEntry("acme/widgets", Outcome.UNKNOWN);
+        assertThat(cacheDir(ref).resolve("a.txt")).exists();
+    }
+
     /** 같은 JVM의 다른 스레드(예: 폴링 스레드의 ensureFresh)가 레포 락을 쥐고 있으면 기다리지 않고 건너뛴다. */
     @Test
     void skips_a_cache_whose_repo_lock_is_held_in_this_process_and_deletes_it_next_run() throws Exception {

@@ -51,7 +51,8 @@ import java.util.Optional;
  *   - worktree: .git/worktrees/＊/gitdir이 실제 존재하는 경로를 가리키면 살아 있는 worktree
  *               (구현 실패 보존분·배포·디자인). 가리키는 곳이 확실히 없는(NoSuchFile) stale 메타만 무시한다
  *               (캐시째 지워진다). locked 표시, 읽을 수 없는 메타, 권한·I/O 오류로 존재 여부를 판단할 수
- *               없는 경로는 살아 있다고 본다 — Files.exists는 '모름'도 false라 쓰지 않는다.
+ *               없는 경로는 살아 있다고 본다 — Files.exists는 '모름'도 false라 쓰지 않는다. 부재가 확인돼도
+ *               가장 가까운 존재 조상이 worktree-root 밖이거나 worktree-root 자체가 안 보이면(외장 볼륨 분리 등) 보존한다.
  *               ⚠️ 한계: 지금은 구현 성공(PR 생성) worktree와 배포 worktree도 지우는 곳이 없어 영구 보존된다
  *               (WorktreeService 'Phase 1은 보존'). 그래서 구현·배포를 한 번이라도 거친 캐시는 이 잡이 회수하지
  *               않는다 — worktree 보존 정책이 생겨야 회수된다. 어떤 worktree가 붙잡고 있는지는 회차 로그에 남긴다.
@@ -204,6 +205,7 @@ public class RepoCacheCleanupJob implements SchedulingConfigurer {
 
         // 1) 캐시 검사 — 대상은 락 안에서 .trash로 옮기기만 한다
         Instant cutoff = Instant.now().minus(Duration.ofDays(cfg.unusedDays()));
+        Path worktreeRoot = realDirOrNull(props.worktreeRoot());
         Map<String, Outcome> outcomes = new LinkedHashMap<>();
         Map<String, List<String>> holders = new LinkedHashMap<>();
         for (Path owner : list(base)) {
@@ -232,7 +234,7 @@ public class RepoCacheCleanupJob implements SchedulingConfigurer {
                 }
                 Outcome o;
                 try {
-                    o = cleanOne(base, trash, cacheDir, localKey, cutoff, holders);
+                    o = cleanOne(base, trash, cacheDir, localKey, cutoff, worktreeRoot, holders);
                 } catch (IOException | RuntimeException e) {
                     log.warn("레포 캐시 정리 실패 {}: {}", localKey, e.toString());
                     o = Outcome.FAILED;
@@ -254,15 +256,15 @@ public class RepoCacheCleanupJob implements SchedulingConfigurer {
 
     /** 캐시 1개 판단 + (대상이면) 락 안에서 .trash로 이동. 실제 삭제는 호출자가 락 밖에서. */
     private Outcome cleanOne(Path base, Path trash, Path cacheDir, String localKey, Instant cutoff,
-                             Map<String, List<String>> holders)
+                             Path worktreeRoot, Map<String, List<String>> holders)
             throws IOException, InterruptedException {
         // 락 없이 1차 판단 — 대부분 여기서 끝나 락 경합을 만들지 않는다
-        Outcome pre = judge(base, cacheDir, localKey, cutoff, holders);
+        Outcome pre = judge(base, cacheDir, localKey, cutoff, worktreeRoot, holders);
         if (pre != null) return pre;
 
         Optional<Outcome> locked = repos.tryWithRepoLock(localKey, () -> {
             // 락 안 재확인: 1차 판단 뒤 다른 워커가 이 캐시를 쓰기 시작했을 수 있다(마커·worktree 갱신)
-            Outcome again = judge(base, cacheDir, localKey, cutoff, holders);
+            Outcome again = judge(base, cacheDir, localKey, cutoff, worktreeRoot, holders);
             if (again != null) return again;
             requireCacheUnder(base, cacheDir);
             Path dest = trash.resolve(localKey.replace('/', '+') + "-" + System.currentTimeMillis());
@@ -284,12 +286,12 @@ public class RepoCacheCleanupJob implements SchedulingConfigurer {
      * 삭제 대상이면 null, 아니면 건너뛸 사유. 판단 근거를 못 읽으면 삭제하지 않는 쪽으로 기운다.
      * WORKTREE면 붙잡고 있는 worktree 목록을 holders에 남긴다(회차 로그용).
      */
-    private Outcome judge(Path base, Path cacheDir, String localKey, Instant cutoff,
+    private Outcome judge(Path base, Path cacheDir, String localKey, Instant cutoff, Path worktreeRoot,
                           Map<String, List<String>> holders) {
         Optional<Instant> lastUsed = lastUsed(base, cacheDir, localKey);
         if (lastUsed.isEmpty()) return Outcome.UNKNOWN;
         if (!lastUsed.get().isBefore(cutoff)) return Outcome.RECENT;
-        List<String> live = liveWorktrees(cacheDir);
+        List<String> live = liveWorktrees(cacheDir, worktreeRoot);
         if (!live.isEmpty()) {
             holders.put(localKey, live);
             return Outcome.WORKTREE;
@@ -325,8 +327,11 @@ public class RepoCacheCleanupJob implements SchedulingConfigurer {
      * gitdir 내용은 worktree의 .git 파일 경로 — git 2.48+ relative 모드면 메타 디렉터리 기준 상대경로.
      * .git 파일만 사라지고 worktree 디렉터리가 남아 있어도 살아 있다고 본다(보존분 산출물 보호).
      * '없음'은 확인된 부재(Files.notExists = NoSuchFile)일 때만 — 권한·I/O 오류로 판단할 수 없으면 살아 있다고 본다.
+     * 부재가 확인돼도 그 위치가 지금 보이는 worktree-root 아래일 때만 믿는다(unconfirmedAbsence).
+     *
+     * @param worktreeRoot worktree-root 실경로. 지금 접근할 수 없으면 null(부재를 하나도 믿지 않는다).
      */
-    static List<String> liveWorktrees(Path cacheDir) {
+    static List<String> liveWorktrees(Path cacheDir, Path worktreeRoot) {
         Path meta = cacheDir.resolve(".git").resolve("worktrees");
         List<String> live = new ArrayList<>();
         if (Files.notExists(meta, LinkOption.NOFOLLOW_LINKS)) return live;
@@ -378,12 +383,47 @@ public class RepoCacheCleanupJob implements SchedulingConfigurer {
                     live.add((dotGit ? parent : target).toString());
                 } else if (parent != null && !Files.notExists(parent)) {
                     live.add(parent.toString());
+                } else {
+                    String why = unconfirmedAbsence(target, worktreeRoot);
+                    if (why != null) live.add((parent != null ? parent : target) + " (" + why + ")");
                 }
             } catch (InvalidPathException e) {
                 live.add(wt + " (gitdir 경로 해석 실패)");
             }
         }
         return live;
+    }
+
+    /**
+     * worktree 경로의 부재(NoSuchFile)를 stale로 믿어도 되면 null, 아니면 사유. worktree는 전부 worktree-root
+     * 아래에 만든다(WorktreeService) — 가장 가까운 존재 조상이 worktree-root(실경로) 하위가 아니면 외장·네트워크
+     * 볼륨 분리나 끊긴 링크로 위치 자체가 안 보이는 것일 수 있다. 그때 캐시를 지우면 볼륨이 돌아와도 그 worktree의
+     * git(브랜치·push 안 된 커밋)이 끊기므로 '모름'으로 보존한다. WORKTREE_ROOT를 옮긴 뒤 옛 위치의 stale 메타도
+     * 같은 이유로 보존된다(회차 로그에 사유가 남는다).
+     */
+    static String unconfirmedAbsence(Path missing, Path worktreeRoot) {
+        if (worktreeRoot == null) return "worktree-root 접근 불가";
+        Path p = missing.toAbsolutePath().normalize();
+        while (p != null && Files.notExists(p)) p = p.getParent();
+        if (p == null) return "존재하는 상위 경로 없음";
+        if (!Files.exists(p)) return "상위 경로 존재 확인 불가: " + p;
+        try {
+            if (!p.toRealPath().startsWith(worktreeRoot)) return "worktree-root 밖 — 볼륨·링크 끊김?: " + p;
+        } catch (IOException e) {
+            return "상위 경로 해석 실패: " + p;
+        }
+        return null;
+    }
+
+    /** 설정 경로의 실제 디렉터리 경로. 비었거나 지금 접근할 수 없으면(볼륨 분리·끊긴 링크) null. */
+    private static Path realDirOrNull(String dir) {
+        if (dir == null || dir.isBlank()) return null;
+        try {
+            Path real = Paths.get(dir).toAbsolutePath().normalize().toRealPath();
+            return Files.isDirectory(real) ? real : null;
+        } catch (IOException | InvalidPathException e) {
+            return null;
+        }
     }
 
     /** 로그용 — 앞 5개만 보이고 나머지는 개수로. */

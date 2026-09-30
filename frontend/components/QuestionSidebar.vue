@@ -4,11 +4,13 @@
 import { interviewStatusLabel } from '~/composables/interviewLabels'
 import { groupByRecency, type QuestionSummary } from '~/composables/questions'
 import ClaudeUsagePanel from '~/components/ClaudeUsagePanel.vue'
+import { useHydrationSafeAuth } from '~/composables/useHydrationSafeAuth'
 
 const props = defineProps<{ activeId: number | null }>()
 const emit = defineEmits<{ (e: 'select', id: number): void; (e: 'new'): void }>()
 
-const auth = useAuthStore()
+// 데스크톱은 사이드바가 SSR로 그려진다 — 관리자 토글은 하이드레이션 결과가 SSR(비로그인)과 같도록 게이트된 값으로
+const { isAdmin } = useHydrationSafeAuth()
 const all = ref(false)
 const { data, refresh } = useTaskPolling<QuestionSummary[]>(() =>
   useApi('/api/questions', { params: { all: String(all.value) } }),
@@ -63,7 +65,7 @@ defineExpose({ refresh })
     </div>
     <ClaudeUsagePanel variant="panel" />
     <q-toggle
-      v-if="auth.isAdmin"
+      v-if="isAdmin"
       v-model="all"
       dense
       label="전체 보기"

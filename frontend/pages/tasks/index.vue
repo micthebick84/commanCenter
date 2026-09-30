@@ -5,6 +5,7 @@ import type { CardTask } from '~/components/tasks/TaskCardCompact.vue'
 import { buildStages, stageAccepts, cancelable, DEPLOY_ACTIVE_STATUSES, type MoveDef, type StageCard } from '~/composables/taskStages'
 import { mrRef } from '~/composables/mergeRequestLabel'
 import { MAX_FILES, MAX_FILE_MB, MAX_TOTAL_MB, validateFiles } from '~/composables/attachmentLimits'
+import { useHydrationSafeAuth } from '~/composables/useHydrationSafeAuth'
 
 definePageMeta({ layout: 'default' })
 
@@ -42,7 +43,8 @@ interface PageResponse<T> {
 }
 
 const $q = useQuasar()
-const auth = useAuthStore()
+// 관리자 분기는 SSR(비로그인)과 하이드레이션 결과가 같도록 게이트된 값으로 그린다
+const { isAdmin } = useHydrationSafeAuth()
 const mine = ref(true)
 const statusFilter = ref<string | null>(null)
 
@@ -78,7 +80,7 @@ function costBadge(t: TaskResponse): string | null {
 // 빈 단계는 감춘다(필터 결과가 한 줄로 보이는 편이 낫다).
 const stages = computed(() =>
   buildStages(tasks.value, {
-    isAdmin: auth.isAdmin,
+    isAdmin: isAdmin.value,
     showEmptyStages: !statusFilter.value,
   }),
 )
@@ -385,7 +387,7 @@ function closeDialog() {
       v-if="$q.screen.lt.md"
       v-model:mine="mine"
       :tasks="tasks"
-      :is-admin="auth.isAdmin"
+      :is-admin="isAdmin"
       @update:mine="refresh"
       @create="openCreate"
       @open="openTaskDetail"
@@ -591,7 +593,7 @@ function closeDialog() {
     </div>
 
     <div class="board-foot">
-      <span v-if="auth.isAdmin">
+      <span v-if="isAdmin">
         드래그로 이동 가능한 전이만 허용: 분석완료 → 구현대기 · 디자인승인대기 → 구현대기 ·
         PR생성 → 배포대기 · 배포완료 → 배포중지대기
       </span>

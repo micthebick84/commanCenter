@@ -7,6 +7,14 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.DisabledOnOs;
 import org.junit.jupiter.api.condition.OS;
 import org.junit.jupiter.api.io.TempDir;
+import org.springframework.context.annotation.AnnotationConfigApplicationContext;
+import org.springframework.context.annotation.Configuration;
+import org.springframework.core.env.MapPropertySource;
+import org.springframework.scheduling.annotation.EnableScheduling;
+import org.springframework.scheduling.config.CronTask;
+import org.springframework.scheduling.config.ScheduledTask;
+import org.springframework.scheduling.config.ScheduledTaskHolder;
+import org.springframework.scheduling.config.ScheduledTaskRegistrar;
 
 import java.io.File;
 import java.io.IOException;
@@ -16,13 +24,18 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
 import java.nio.file.attribute.FileTime;
+import java.nio.file.attribute.PosixFilePermission;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
+import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 /**
  * 레포 캐시 정리 판단을 실제 git 캐시/worktree로 검증한다(file:// bare 원격 — 네트워크 없음).
@@ -40,15 +53,23 @@ class RepoCacheCleanupJobTest {
     private RepoCacheCleanupJob job;
 
     private void init(Boolean enabled) throws IOException {
+        init(enabled, null);
+    }
+
+    private void init(Boolean enabled, String cron) throws IOException {
         reposDir = Files.createDirectories(tmp.resolve("repos"));
         worktreeRoot = Files.createDirectories(tmp.resolve("worktrees"));
-        var deploy = new WorkerProperties.Deploy(null, null, 0, null, null, null, 0, 0, null,
-                null, 0, 0, 0, null, 0, null);
-        p = new WorkerProperties("w1", null, null, null, 0, 0, 0, 0, 0, reposDir.toString(), null,
-                null, null, null, null, null, worktreeRoot.toString(), null, null, null, null, null, null, null,
-                deploy, new WorkerProperties.RepoCacheCleanup(enabled, null, 30));
+        p = props(reposDir.toString(), enabled, cron);
         cache = new GitRepoCache(p);
         job = new RepoCacheCleanupJob(p, cache);
+    }
+
+    private WorkerProperties props(String reposDirValue, Boolean enabled, String cron) {
+        var deploy = new WorkerProperties.Deploy(null, null, 0, null, null, null, 0, 0, null,
+                null, 0, 0, 0, null, 0, null);
+        return new WorkerProperties("w1", null, null, null, 0, 0, 0, 0, 0, reposDirValue, null,
+                null, null, null, null, null, tmp.resolve("worktrees").toString(), null, null, null, null, null, null,
+                null, deploy, new WorkerProperties.RepoCacheCleanup(enabled, cron, 30));
     }
 
     private static void git(File dir, String... args) throws IOException, InterruptedException {
@@ -163,8 +184,9 @@ class RepoCacheCleanupJobTest {
     @Test
     void cache_whose_last_use_cannot_be_determined_is_kept() throws Exception {
         init(true);
-        // 마커도, 읽을 git 메타도 없는 캐시 / .git 없는 디렉터리
+        // 마커도, 읽을 git 메타도 없는 캐시(소유 표식은 있음) / .git 없는 디렉터리
         Path ghost = Files.createDirectories(reposDir.resolve("acme/ghost/.git"));
+        Files.createFile(reposDir.resolve("acme/ghost" + GitRepoCache.LOCK_SUFFIX));
         Path notRepo = Files.createDirectories(reposDir.resolve("acme/not-a-repo"));
         Files.writeString(notRepo.resolve("x.txt"), "x");
 
@@ -175,6 +197,44 @@ class RepoCacheCleanupJobTest {
                 .containsEntry("acme/not-a-repo", Outcome.UNKNOWN);
         assertThat(ghost).exists();
         assertThat(notRepo.resolve("x.txt")).exists();
+    }
+
+    /**
+     * REPOS_DIR를 운영자 레포 폴더로 잘못 잡은 경우 — netisMaker가 만든 적 없는 레포({localKey}.lock 표식 없음)는
+     * 오래됐어도 지우지 않고, 락 파일도 새로 만들지 않는다.
+     */
+    @Test
+    void repo_without_the_netismaker_lock_marker_is_never_touched() throws Exception {
+        init(true);
+        Path own = Files.createDirectories(reposDir.resolve("myorg/private-notes"));
+        git(own.toFile(), "init", "-b", "main");
+        Files.writeString(own.resolve("n.md"), "local only");
+        git(own.toFile(), "add", "-A");
+        git(own.toFile(), "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-m", "local only");
+        for (String rel : GIT_META) {
+            Path f = own.resolve(rel);
+            if (Files.exists(f)) Files.setLastModifiedTime(f, daysAgo(90));
+        }
+
+        RepoCacheCleanupJob.Result r = job.runOnce();
+
+        assertThat(r.outcomes()).containsEntry("myorg/private-notes", Outcome.UNKNOWN);
+        assertThat(own.resolve("n.md")).exists();
+        assertThat(reposDir.resolve("myorg/private-notes" + GitRepoCache.LOCK_SUFFIX)).doesNotExist();
+    }
+
+    /** REPOS_DIR= (빈 값)은 JVM 현재 디렉터리로 풀린다 — 홈·루트와 함께 정리 자체를 거부한다. */
+    @Test
+    void refuses_to_clean_a_blank_home_or_root_repos_dir() throws Exception {
+        init(true);
+        List<String> refused = new java.util.ArrayList<>(List.of("", "  ", tmp.getRoot().toString()));
+        String home = System.getProperty("user.home");
+        if (Files.isDirectory(Path.of(home))) refused.add(home);
+
+        for (String dir : refused) {
+            RepoCacheCleanupJob j = new RepoCacheCleanupJob(props(dir, true, null), cache);
+            assertThatThrownBy(j::runOnce).as("repos-dir='%s'", dir).isInstanceOf(IllegalStateException.class);
+        }
     }
 
     /** 구현 실패 시 디버그용으로 보존되는 worktree(task-{id}) — 캐시를 지우면 worktree가 깨진다. */
@@ -279,6 +339,80 @@ class RepoCacheCleanupJobTest {
         RepoCacheCleanupJob.Result r = job.runOnce();
 
         assertThat(r.outcomes()).containsEntry("acme/widgets", Outcome.WORKTREE);
+        assertThat(cacheDir(ref)).exists();
+    }
+
+    /**
+     * 보존 worktree 경로를 권한 문제로 stat할 수 없을 때(예: launchd로 뜬 워커에 권한이 없는 보호 폴더)
+     * '없음'으로 보면 push 안 된 커밋이 담긴 캐시를 지우게 된다 — 판단할 수 없으면 살아 있다고 본다.
+     */
+    @Test
+    @DisabledOnOs(value = OS.WINDOWS, disabledReason = "POSIX 권한")
+    void worktree_that_cannot_be_stat_due_to_permissions_protects_the_cache() throws Exception {
+        init(true);
+        RepoRef ref = github(bareRemote("r14"));
+        File dir = cache.ensureFresh(ref, "main").dir();
+        WorktreeService.CreatedWorktree wt = new WorktreeService(p, cache)
+                .create(dir, GitRemotes.localKey(ref), "main", 12, "perm");
+        age(ref, 60);
+        Path parent = wt.dir().toPath().getParent();
+        Set<PosixFilePermission> before = Files.getPosixFilePermissions(parent);
+        Files.setPosixFilePermissions(parent, Set.of());
+        RepoCacheCleanupJob.Result r;
+        try {
+            Path gitFile = wt.dir().toPath().resolve(".git");
+            assumeTrue(!Files.exists(gitFile) && !Files.notExists(gitFile), "권한으로 막히지 않는 환경(root 등)");
+            r = job.runOnce();
+        } finally {
+            Files.setPosixFilePermissions(parent, before);
+        }
+
+        assertThat(r.outcomes()).containsEntry("acme/widgets", Outcome.WORKTREE);
+        assertThat(ProcessRunner.requireSuccess(wt.dir(), List.of("git", "status", "--porcelain"), 30)).isEmpty();
+    }
+
+    /** 캐시 .git 안을 못 읽으면 사용 시각도 worktree 여부도 모른다 — 지우지 않는다. */
+    @Test
+    @DisabledOnOs(value = OS.WINDOWS, disabledReason = "POSIX 권한")
+    void cache_whose_git_dir_cannot_be_read_is_not_deleted() throws Exception {
+        init(true);
+        RepoRef ref = github(bareRemote("r15"));
+        File dir = cache.ensureFresh(ref, "main").dir();
+        new WorktreeService(p, cache).create(dir, GitRemotes.localKey(ref), "main", 13, "perm");
+        age(ref, 60);
+        Path gitDir = cacheDir(ref).resolve(".git");
+        Set<PosixFilePermission> before = Files.getPosixFilePermissions(gitDir);
+        Files.setPosixFilePermissions(gitDir, Set.of());
+        RepoCacheCleanupJob.Result r;
+        try {
+            Path head = gitDir.resolve("HEAD");
+            assumeTrue(!Files.exists(head) && !Files.notExists(head), "권한으로 막히지 않는 환경(root 등)");
+            r = job.runOnce();
+        } finally {
+            Files.setPosixFilePermissions(gitDir, before);
+        }
+
+        assertThat(r.outcomes()).containsEntry("acme/widgets", Outcome.UNKNOWN);
+        assertThat(cacheDir(ref).resolve("a.txt")).exists();
+    }
+
+    /**
+     * 확인된 부재(NoSuchFile)만 '없음'이다. 경로 중간이 파일이면 ENOTDIR — 권한 오류처럼 부재를 확정할 수 없는
+     * 경우의 root 무관 대역이다(root로 도는 환경에선 위 권한 테스트가 건너뛰어진다).
+     */
+    @Test
+    @DisabledOnOs(value = OS.WINDOWS, disabledReason = "경로 중간이 파일일 때의 오류 코드가 POSIX(ENOTDIR)와 다르다")
+    void worktree_path_that_cannot_be_confirmed_absent_protects_the_cache() throws Exception {
+        init(true);
+        RepoRef ref = github(bareRemote("r16"));
+        File dir = cache.ensureFresh(ref, "main").dir();
+        new WorktreeService(p, cache).create(dir, GitRemotes.localKey(ref), "main", 14, "enotdir");
+        Path notADir = Files.writeString(tmp.resolve("not-a-dir"), "x");
+        Files.writeString(cacheDir(ref).resolve(".git/worktrees/task-14/gitdir"),
+                notADir.resolve("task-14/.git") + "\n");
+        age(ref, 60);
+
+        assertThat(job.runOnce().outcomes()).containsEntry("acme/widgets", Outcome.WORKTREE);
         assertThat(cacheDir(ref)).exists();
     }
 
@@ -447,6 +581,49 @@ class RepoCacheCleanupJobTest {
         job.cleanup();
 
         assertThat(cacheDir(ref)).exists();
+    }
+
+    @Test
+    void schedule_is_registered_from_the_normalized_cron() throws Exception {
+        init(true, "  ");   // REPO_CACHE_CLEANUP_CRON= (빈 값) → 기본값
+        ScheduledTaskRegistrar reg = new ScheduledTaskRegistrar();
+        job.configureTasks(reg);
+        assertThat(reg.getCronTaskList()).singleElement()
+                .extracting(CronTask::getExpression).isEqualTo("0 0 3 * * *");
+
+        // 꺼져 있거나 '-'면 등록하지 않는다
+        for (RepoCacheCleanupJob off : List.of(
+                new RepoCacheCleanupJob(props(reposDir.toString(), false, null), cache),
+                new RepoCacheCleanupJob(props(reposDir.toString(), true, "-"), cache))) {
+            ScheduledTaskRegistrar none = new ScheduledTaskRegistrar();
+            off.configureTasks(none);
+            assertThat(none.getCronTaskList()).isEmpty();
+        }
+    }
+
+    @Configuration(proxyBeanMethods = false)
+    @EnableScheduling
+    static class SchedulingOn {}
+
+    /** 빈 cron env로도 워커가 뜬다 — @Scheduled 플레이스홀더는 빈 값을 기본값으로 바꾸지 않아 부팅이 실패했었다. */
+    @Test
+    void blank_cron_boots_with_the_default_schedule() throws Exception {
+        init(true, "");
+        try (var ctx = new AnnotationConfigApplicationContext()) {
+            ctx.getEnvironment().setActiveProfiles("worker");   // @Profile("worker") — 없으면 빈 등록 자체가 빠진다
+            // yml의 ${REPO_CACHE_CLEANUP_CRON:...}에 빈 값이 export된 상태 그대로
+            ctx.getEnvironment().getPropertySources().addFirst(new MapPropertySource("env",
+                    Map.of("netis-maker.worker.repo-cache-cleanup.cron", "")));
+            ctx.register(SchedulingOn.class);
+            ctx.registerBean(RepoCacheCleanupJob.class, () -> job);
+            ctx.refresh();
+
+            assertThat(ctx.getBean(ScheduledTaskHolder.class).getScheduledTasks())
+                    .extracting(ScheduledTask::getTask)
+                    .singleElement()
+                    .isInstanceOfSatisfying(CronTask.class,
+                            t -> assertThat(t.getExpression()).isEqualTo("0 0 3 * * *"));
+        }
     }
 
     @Test

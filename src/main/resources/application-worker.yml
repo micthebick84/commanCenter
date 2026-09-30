@@ -40,7 +40,8 @@ netis-maker:
     repos-dir: ${REPOS_DIR:${user.home}/netis-maker/repos}
     # 레포 캐시 자동 정리(RepoCacheCleanupJob) — repos-dir 아래 캐시 중 unused-days 동안 안 쓰인 것을 지운다.
     # 살아 있는 worktree(구현 실패 보존분·배포·디자인)가 붙은 캐시와 락이 잡힌(사용 중) 캐시는 건너뛴다.
-    # 지운 캐시는 다음 사용 때 다시 clone된다. cron은 워커 PC 로컬 시각 기준(초 분 시 일 월 요일).
+    # 지운 캐시는 다음 사용 때 다시 clone된다. cron은 워커 PC 로컬 시각 기준(초 분 시 일 월 요일, 빈 값=기본값, '-'=끔).
+    # netisMaker가 만든 캐시({localKey}.lock 형제 파일이 있는 것)만 지운다. repos-dir이 비었거나 홈·루트면 정리를 거부한다.
     repo-cache-cleanup:
       enabled: ${REPO_CACHE_CLEANUP_ENABLED:true}
       cron: ${REPO_CACHE_CLEANUP_CRON:0 0 3 * * *}

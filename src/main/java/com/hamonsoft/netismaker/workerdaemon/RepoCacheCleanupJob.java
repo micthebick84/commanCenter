@@ -2,7 +2,8 @@ package com.hamonsoft.netismaker.workerdaemon;
 
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.annotation.Profile;
-import org.springframework.scheduling.annotation.Scheduled;
+import org.springframework.scheduling.annotation.SchedulingConfigurer;
+import org.springframework.scheduling.config.ScheduledTaskRegistrar;
 import org.springframework.stereotype.Component;
 
 import java.io.IOException;
@@ -38,14 +39,19 @@ import java.util.Optional;
  * ensureFresh/fetchOnly가 디렉터리 부재를 보고 다시 clone한다.
  *
  *  대상: repos-dir/{localKey} — GitHub {owner}/{repo}, GitLab _gitlab/{경로 평탄화}. 둘 다 2단계라
- *        repos-dir/＊/＊ 중 `.git` 디렉터리가 있는 것만 캐시로 본다. '.'으로 시작하는 최상위 항목은 잡 내부용.
+ *        repos-dir/＊/＊ 중 `.git` 디렉터리가 있고 netisMaker 소유 표식({localKey}.lock 형제 파일 —
+ *        withRepoLock이 clone 전에 항상 만든다)이 있는 것만 캐시로 본다. REPOS_DIR을 운영자 레포 폴더로
+ *        잘못 잡아도 netisMaker가 만든 적 없는 레포는 건드리지 않는다. '.'으로 시작하는 최상위 항목은 잡 내부용.
+ *        repos-dir이 비었거나(= JVM 현재 디렉터리) 홈·파일시스템 루트면 정리 자체를 거부한다.
  *
  *  건너뜀 (모르면 안 지운다 — fail-closed):
  *   - 최근 사용: {localKey}.last-used 마커와 git 메타 파일(FETCH_HEAD·HEAD·index·config 등) mtime 중 최댓값.
- *                마커가 없는 기존 캐시도 git 메타 파일로 판단하고, 읽을 수 있는 시각이 하나도 없으면 판단불가.
+ *                마커가 없는 기존 캐시도 git 메타 파일로 판단하고, 읽을 수 있는 시각이 하나도 없거나
+ *                부재가 아닌 이유(권한 등)로 못 읽는 근거가 하나라도 있으면 판단불가.
  *   - worktree: .git/worktrees/＊/gitdir이 실제 존재하는 경로를 가리키면 살아 있는 worktree
- *               (구현 실패 보존분·배포·디자인). 가리키는 곳이 없는 stale 메타는 무시(캐시째 지워진다).
- *               locked 표시나 읽을 수 없는 메타는 살아 있다고 본다.
+ *               (구현 실패 보존분·배포·디자인). 가리키는 곳이 확실히 없는(NoSuchFile) stale 메타만 무시한다
+ *               (캐시째 지워진다). locked 표시, 읽을 수 없는 메타, 권한·I/O 오류로 존재 여부를 판단할 수
+ *               없는 경로는 살아 있다고 본다 — Files.exists는 '모름'도 false라 쓰지 않는다.
  *   - 사용 중: per-repo 락(GitRepoCache.tryWithRepoLock)을 즉시 못 잡으면 이번 회차는 넘긴다.
  *
  *  삭제 절차: 락 안에서 판단을 다시 한 번 확인한 뒤 캐시를 repos-dir/.trash/ 로 rename(원자적)만 하고
@@ -60,12 +66,14 @@ import java.util.Optional;
  *  삭제는 repos-dir 하위로 엄격히 한정(정규화 + containment 확인)하고 심볼릭 링크·Windows 정션은 따라가지
  *   않는다(링크 자체만 지운다). Windows의 읽기 전용 파일(git pack/idx)은 속성을 풀고 지운다.
  *
+ *  스케줄은 @Scheduled 플레이스홀더가 아니라 정규화된 설정값(cfg.cron())으로 등록한다(configureTasks).
+ *
  *  관리자 UI 수동 트리거는 없다 — 워커는 HTTP 포트를 열지 않는다(web-application-type: none).
  */
 @Component
 @Profile("worker")
 @Slf4j
-public class RepoCacheCleanupJob {
+public class RepoCacheCleanupJob implements SchedulingConfigurer {
 
     /** 삭제 대기 캐시를 옮겨 두는 repos-dir 하위 디렉터리. GitHub owner는 '.'으로 시작할 수 없어 충돌 없음. */
     static final String TRASH_DIR = ".trash";
@@ -86,7 +94,17 @@ public class RepoCacheCleanupJob {
         this.cfg = props.repoCacheCleanup();
     }
 
-    @Scheduled(cron = "${netis-maker.worker.repo-cache-cleanup.cron:0 0 3 * * *}")
+    /**
+     * 스케줄 등록. @Scheduled(cron = "${...}")를 쓰지 않는 이유: 플레이스홀더는 빈 값(REPO_CACHE_CLEANUP_CRON=)을
+     * 기본값으로 바꾸지 않아 워커 부팅이 통째로 실패한다. WorkerProperties가 정규화·검증한 값 하나만 쓴다.
+     * enabled=false면 등록하지 않고, '-'(CRON_DISABLED)도 addCronTask가 등록하지 않는다.
+     */
+    @Override
+    public void configureTasks(ScheduledTaskRegistrar registrar) {
+        if (Boolean.FALSE.equals(cfg.enabled())) return;
+        registrar.addCronTask(this::cleanup, cfg.cron());
+    }
+
     public void cleanup() {
         if (Boolean.FALSE.equals(cfg.enabled())) return;
         long start = System.currentTimeMillis();
@@ -126,10 +144,18 @@ public class RepoCacheCleanupJob {
 
     /** 1회 실행. 스케줄 없이 테스트에서 직접 호출. */
     Result runOnce() throws IOException, InterruptedException {
-        Path configured = Paths.get(props.reposDir()).toAbsolutePath().normalize();
+        String dir = props.reposDir();
+        if (dir == null || dir.isBlank()) {
+            // REPOS_DIR= (빈 값)이면 플레이스홀더 기본값이 아니라 ""로 바인딩된다 → JVM 현재 디렉터리를 지우게 된다
+            throw new IllegalStateException("repos-dir(REPOS_DIR)이 비어 있어 정리를 거부한다");
+        }
+        Path configured = Paths.get(dir).toAbsolutePath().normalize();
         if (!Files.isDirectory(configured)) return new Result(false, Map.of(), 0, 0);
         // 링크로 잡힌 repos-dir이라도 containment는 실제 경로 기준으로 본다
         Path base = configured.toRealPath();
+        if (base.getParent() == null || base.equals(realHome())) {
+            throw new IllegalStateException("repos-dir이 홈·파일시스템 루트라 정리를 거부한다: " + base);
+        }
 
         try (FileChannel ch = FileChannel.open(base.resolve(JOB_LOCK),
                 StandardOpenOption.CREATE, StandardOpenOption.WRITE)) {
@@ -138,6 +164,15 @@ public class RepoCacheCleanupJob {
             try (jobLock) {
                 return cleanUnder(base);
             }
+        }
+    }
+
+    /** 홈 디렉터리 실제 경로. 못 구하면 null(비교 생략). */
+    private static Path realHome() {
+        try {
+            return Paths.get(System.getProperty("user.home")).toRealPath();
+        } catch (IOException | RuntimeException e) {
+            return null;
         }
     }
 
@@ -177,6 +212,12 @@ public class RepoCacheCleanupJob {
                 String localKey = ownerName + "/" + cacheDir.getFileName();
                 if (!Files.isDirectory(cacheDir.resolve(".git"), LinkOption.NOFOLLOW_LINKS)) {
                     outcomes.put(localKey, Outcome.UNKNOWN);   // clone 캐시가 아님 — 손대지 않는다
+                    continue;
+                }
+                // 소유 표식은 락 시도 전에 본다 — tryWithRepoLock이 락 파일을 새로 만들기 때문
+                if (!Files.isRegularFile(owner.resolve(cacheDir.getFileName() + GitRepoCache.LOCK_SUFFIX),
+                        LinkOption.NOFOLLOW_LINKS)) {
+                    outcomes.put(localKey, Outcome.UNKNOWN);   // netisMaker가 만든 캐시라는 표식이 없음
                     continue;
                 }
                 Outcome o;
@@ -239,7 +280,10 @@ public class RepoCacheCleanupJob {
         return null;
     }
 
-    /** 마커와 git 메타 파일 mtime 중 가장 최근. 하나도 못 읽으면 empty(판단불가). */
+    /**
+     * 마커와 git 메타 파일 mtime 중 가장 최근. 하나도 못 읽거나, 없는 게 아니라 못 읽는(권한·I/O 오류)
+     * 근거가 하나라도 있으면 empty(판단불가) — 그 근거가 '최근 사용'일 수 있다.
+     */
     static Optional<Instant> lastUsed(Path base, Path cacheDir, String localKey) {
         List<Path> candidates = new ArrayList<>();
         candidates.add(base.resolve(localKey + GitRepoCache.LAST_USED_SUFFIX));
@@ -249,8 +293,10 @@ public class RepoCacheCleanupJob {
             try {
                 Instant t = Files.getLastModifiedTime(p, LinkOption.NOFOLLOW_LINKS).toInstant();
                 if (latest == null || t.isAfter(latest)) latest = t;
-            } catch (IOException ignore) {
+            } catch (NoSuchFileException ignore) {
                 // 없는 파일은 근거에서 뺀다
+            } catch (IOException e) {
+                return Optional.empty();
             }
         }
         return Optional.ofNullable(latest);
@@ -260,19 +306,29 @@ public class RepoCacheCleanupJob {
      * .git/worktrees/＊/gitdir 중 하나라도 실제 존재하는 경로를 가리키면 true.
      * gitdir 내용은 worktree의 .git 파일 경로 — git 2.48+ relative 모드면 메타 디렉터리 기준 상대경로.
      * .git 파일만 사라지고 worktree 디렉터리가 남아 있어도 살아 있다고 본다(보존분 산출물 보호).
+     * '없음'은 확인된 부재(Files.notExists = NoSuchFile)일 때만 — 권한·I/O 오류로 판단할 수 없으면 살아 있다고 본다.
      */
     static boolean hasLiveWorktree(Path cacheDir) {
         Path meta = cacheDir.resolve(".git").resolve("worktrees");
-        if (!Files.exists(meta, LinkOption.NOFOLLOW_LINKS)) return false;
+        if (Files.notExists(meta, LinkOption.NOFOLLOW_LINKS)) return false;
         List<Path> entries;
         try {
             entries = list(meta);
         } catch (IOException e) {
-            return true;   // 목록을 못 읽으면 살아 있다고 본다
+            return true;   // 목록을 못 읽으면(권한·디렉터리 아님 등) 살아 있다고 본다
         }
         for (Path wt : entries) {
-            if (!Files.isDirectory(wt, LinkOption.NOFOLLOW_LINKS)) continue;
-            if (Files.exists(wt.resolve("locked"), LinkOption.NOFOLLOW_LINKS)) return true;  // git worktree lock — 의도적 보존
+            BasicFileAttributes attrs;
+            try {
+                attrs = Files.readAttributes(wt, BasicFileAttributes.class, LinkOption.NOFOLLOW_LINKS);
+            } catch (NoSuchFileException e) {
+                continue;      // 그사이 prune됨
+            } catch (IOException e) {
+                return true;
+            }
+            if (attrs.isRegularFile()) continue;   // worktree 메타 디렉터리가 아님
+            if (!attrs.isDirectory()) return true; // 링크 등 — 판단하지 않는다
+            if (!Files.notExists(wt.resolve("locked"), LinkOption.NOFOLLOW_LINKS)) return true;  // git worktree lock — 의도적 보존
             String gitdir;
             try {
                 gitdir = Files.readString(wt.resolve("gitdir")).trim();
@@ -283,8 +339,9 @@ public class RepoCacheCleanupJob {
             try {
                 Path target = Paths.get(gitdir);
                 if (!target.isAbsolute()) target = wt.resolve(target).normalize();
-                if (Files.exists(target)) return true;
-                if (target.getParent() != null && Files.exists(target.getParent())) return true;
+                if (!Files.notExists(target)) return true;
+                Path parent = target.getParent();
+                if (parent != null && !Files.notExists(parent)) return true;
             } catch (InvalidPathException e) {
                 return true;
             }

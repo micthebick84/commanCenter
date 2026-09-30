@@ -1,6 +1,8 @@
 package com.hamonsoft.netismaker.workerdaemon;
 
 import org.springframework.boot.context.properties.ConfigurationProperties;
+import org.springframework.scheduling.config.ScheduledTaskRegistrar;
+import org.springframework.scheduling.support.CronExpression;
 
 import java.time.Duration;
 
@@ -37,8 +39,28 @@ public record WorkerProperties(
         String designPromptTemplate,
         Duration designTimeout,
         // 배포 단계
-        Deploy deploy
+        Deploy deploy,
+        // 레포 캐시 자동 정리 (RepoCacheCleanupJob)
+        RepoCacheCleanup repoCacheCleanup
 ) {
+    /**
+     * 레포 캐시 자동 정리. unused-days 동안 쓰이지 않은 repos-dir 아래 캐시를 지운다
+     * (살아 있는 worktree가 붙은 캐시·사용 중인 캐시는 제외 — RepoCacheCleanupJob 참고).
+     * cron은 RepoCacheCleanupJob이 이 값 그대로 스케줄을 등록한다(빈 값 → 기본값, '-' → 등록 안 함).
+     */
+    public record RepoCacheCleanup(Boolean enabled, String cron, int unusedDays) {
+        public RepoCacheCleanup {
+            if (enabled == null) enabled = true;
+            cron = (cron == null || cron.isBlank()) ? "0 0 3 * * *" : cron.trim();
+            // 잘못된 식은 스케줄 등록 때가 아니라 바인딩 때 어느 설정인지 밝혀 드러낸다.
+            if (!ScheduledTaskRegistrar.CRON_DISABLED.equals(cron) && !CronExpression.isValidExpression(cron)) {
+                throw new IllegalArgumentException(
+                        "REPO_CACHE_CLEANUP_CRON은 6필드 cron(초 분 시 일 월 요일) 또는 '-'이어야 한다: '" + cron + "'");
+            }
+            if (unusedDays <= 0) unusedDays = 30;
+        }
+    }
+
     /** 배포 설정. target=local 만 MVP 구현. */
     public record Deploy(
             String target,
@@ -156,5 +178,6 @@ public record WorkerProperties(
         if (implementationTimeout == null) implementationTimeout = Duration.ofMinutes(45);
         if (designTimeout == null) designTimeout = Duration.ofMinutes(30);
         if (deploy == null) deploy = new Deploy(null, null, 0, null, null, null, 0, 0, null, null, 0, 0, 0, null, 0, null);
+        if (repoCacheCleanup == null) repoCacheCleanup = new RepoCacheCleanup(null, null, 0);
     }
 }

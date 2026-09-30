@@ -28,7 +28,7 @@ class GitOpsServicePushTest {
         return new WorkerProperties("w1", null, null, null, 0, 0, 0, 0, 0,
                 tmp.resolve("repos").toString(), null,
                 null, "ghp_SECRETPAT", "glpat-SECRETTOKEN", null, null, null, null, null, null,
-                null, null, null, null, deploy);
+                null, null, null, null, deploy, null);
     }
 
     private static void git(File dir, String... args) throws IOException, InterruptedException {

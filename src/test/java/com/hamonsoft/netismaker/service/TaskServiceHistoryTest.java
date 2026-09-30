@@ -9,6 +9,9 @@ import com.hamonsoft.netismaker.repository.InterviewSessionRepository;
 import com.hamonsoft.netismaker.repository.TaskDesignRepository;
 import com.hamonsoft.netismaker.repository.TaskRepository;
 import com.hamonsoft.netismaker.repository.TaskStatusHistoryRepository;
+import jakarta.persistence.EntityManagerFactory;
+import org.hibernate.SessionFactory;
+import org.hibernate.stat.Statistics;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
@@ -38,6 +41,7 @@ class TaskServiceHistoryTest {
     @Autowired private TaskDesignRepository designRepo;
     @Autowired private InterviewSessionRepository sessionRepo;
     @Autowired private TaskStatusHistoryRepository historyRepo;
+    @Autowired private EntityManagerFactory emf;
 
     @BeforeEach
     void clean() {
@@ -84,9 +88,24 @@ class TaskServiceHistoryTest {
         OffsetDateTime at = OffsetDateTime.now().plusMinutes(1).truncatedTo(ChronoUnit.MILLIS);
         List<Long> ids = logAtSameInstant(t.getId(), at, 5);
 
-        List<TaskStatusHistory> rows = taskService.getHistory(t.getId(), 3);
+        // 반환 목록만 보면 DB LIMIT과 "전부 가져와 메모리에서 자르기"가 구별되지 않는다 →
+        // TaskStatusHistory 엔티티 로드 수로 DB에서 limit건만 읽었는지 고정한다(메모리 자르기면 6).
+        // 통계는 SessionFactory 전역이라 이 호출 동안만 켜고 원래 값으로 되돌린다(테스트는 직렬 실행).
+        Statistics stats = emf.unwrap(SessionFactory.class).getStatistics();
+        boolean wasEnabled = stats.isStatisticsEnabled();
+        List<TaskStatusHistory> rows;
+        long loaded;
+        try {
+            stats.setStatisticsEnabled(true);
+            stats.clear();
+            rows = taskService.getHistory(t.getId(), 3);
+            loaded = stats.getEntityStatistics(TaskStatusHistory.class.getName()).getLoadCount();
+        } finally {
+            stats.setStatisticsEnabled(wasEnabled);
+        }
 
         assertThat(rows).extracting(TaskStatusHistory::getId)
                 .containsExactly(ids.get(4), ids.get(3), ids.get(2));
+        assertThat(loaded).isEqualTo(3);
     }
 }

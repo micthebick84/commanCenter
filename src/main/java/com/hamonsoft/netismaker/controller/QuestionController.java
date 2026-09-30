@@ -138,6 +138,8 @@ public class QuestionController {
     /**
      * 첨부 다운로드 (스펙 2026-09-13 §2). ACL = requireViewable(kind 404 → 소유자/관리자 403) —
      * TaskController.downloadAttachment 패턴. 한글 파일명은 RFC 5987 filename*으로.
+     * 메타 행은 있는데 파일이 없으면 410 — 종료된 질문은 목록·대화가 계속 보이지만 파일은
+     * AttachmentCleanupJob이 보존 기간 뒤 지운다(행은 감사용으로 남김). 없는 리소스(404)와 구분한다.
      */
     @GetMapping("/{id}/attachments/{attId}")
     public ResponseEntity<Resource> downloadAttachment(@PathVariable Long id,
@@ -147,7 +149,8 @@ public class QuestionController {
         QuestionAttachment att = questionService.getAttachment(id, attId);
         Path file = questionService.resolveAttachmentPath(att);
         if (!Files.exists(file)) {
-            throw new TaskException(HttpStatus.NOT_FOUND, "첨부 파일이 서버에 존재하지 않습니다");
+            throw new TaskException(HttpStatus.GONE,
+                    "첨부 파일이 서버에 남아 있지 않습니다 — 종료된 질문의 첨부는 보존 기간이 지나면 정리됩니다");
         }
         ContentDisposition cd = ContentDisposition.attachment()
                 .filename(att.getOriginalFilename(), StandardCharsets.UTF_8)

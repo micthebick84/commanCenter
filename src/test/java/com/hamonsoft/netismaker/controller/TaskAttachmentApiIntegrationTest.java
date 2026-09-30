@@ -29,6 +29,7 @@ import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.jwt;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.multipart;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
@@ -208,6 +209,19 @@ class TaskAttachmentApiIntegrationTest {
         Files.delete(Path.of(attachmentDir, "task-" + ids[0] + "/1-요구사항.txt"));
         mvc.perform(get("/api/tasks/" + ids[0] + "/attachments/" + ids[1])
                         .with(userJwt("user1")))
+                .andExpect(status().isNotFound());
+    }
+
+    /**
+     * 첨부 정리 정책의 전제 — AttachmentCleanupJob은 soft-delete된 작업의 디렉터리만 지우는데, 그런 작업의 첨부는
+     * 파일이 남아 있어도 이미 404다(getForView). 즉 작업 다운로드는 정리된 파일을 마주칠 일이 없다.
+     */
+    @Test
+    void 삭제된_작업의_첨부는_파일이_남아_있어도_404다() throws Exception {
+        long[] ids = registerWithFile();
+        mvc.perform(delete("/api/tasks/" + ids[0]).with(userJwt("user1"))).andExpect(status().isNoContent());
+        assertThat(Files.exists(Path.of(attachmentDir, "task-" + ids[0] + "/1-요구사항.txt"))).isTrue();
+        mvc.perform(get("/api/tasks/" + ids[0] + "/attachments/" + ids[1]).with(adminJwt("admin")))
                 .andExpect(status().isNotFound());
     }
 

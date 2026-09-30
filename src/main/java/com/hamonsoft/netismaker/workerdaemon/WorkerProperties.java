@@ -37,8 +37,23 @@ public record WorkerProperties(
         String designPromptTemplate,
         Duration designTimeout,
         // 배포 단계
-        Deploy deploy
+        Deploy deploy,
+        // 레포 캐시 자동 정리 (RepoCacheCleanupJob)
+        RepoCacheCleanup repoCacheCleanup
 ) {
+    /**
+     * 레포 캐시 자동 정리. unused-days 동안 쓰이지 않은 repos-dir 아래 캐시를 지운다
+     * (살아 있는 worktree가 붙은 캐시·사용 중인 캐시는 제외 — RepoCacheCleanupJob 참고).
+     * cron은 @Scheduled가 같은 키를 직접 읽는다(기본값도 동일) — 이 필드는 바인딩 확인용 미러.
+     */
+    public record RepoCacheCleanup(Boolean enabled, String cron, int unusedDays) {
+        public RepoCacheCleanup {
+            if (enabled == null) enabled = true;
+            if (cron == null || cron.isBlank()) cron = "0 0 3 * * *";
+            if (unusedDays <= 0) unusedDays = 30;
+        }
+    }
+
     /** 배포 설정. target=local 만 MVP 구현. */
     public record Deploy(
             String target,
@@ -156,5 +171,6 @@ public record WorkerProperties(
         if (implementationTimeout == null) implementationTimeout = Duration.ofMinutes(45);
         if (designTimeout == null) designTimeout = Duration.ofMinutes(30);
         if (deploy == null) deploy = new Deploy(null, null, 0, null, null, null, 0, 0, null, null, 0, 0, 0, null, 0, null);
+        if (repoCacheCleanup == null) repoCacheCleanup = new RepoCacheCleanup(null, null, 0);
     }
 }

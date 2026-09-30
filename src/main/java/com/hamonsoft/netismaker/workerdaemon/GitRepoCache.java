@@ -44,6 +44,10 @@ import java.util.concurrent.locks.ReentrantLock;
  *   - 같은 JVM 내에서도 두 번 락 시도하지 않게 ReentrantLock 추가 (성능 최적화)
  *   - ensureFresh + worktree add 둘 다 같은 락 안에서 직렬화
  *     → WorktreeService도 withRepoLock(repoKey, ...)을 통해 호출
+ *
+ *  마지막 사용 시각: withRepoLock을 잡을 때마다 `{localKey}.last-used`(락 파일 옆 형제)를 갱신한다.
+ *   캐시를 쓰는 경로(ensureFresh·fetchOnly·worktree 생성)가 전부 이 락을 거치므로 한 곳에서 기록된다.
+ *   RepoCacheCleanupJob이 이 mtime으로 미사용 기간을 판단하고, 삭제는 tryWithRepoLock(비차단, 마커 미갱신)으로 한다.
  */
 @Component
 @Profile("worker")
@@ -51,6 +55,10 @@ import java.util.concurrent.locks.ReentrantLock;
 public class GitRepoCache {
 
     private static final long GIT_TIMEOUT_SECONDS = 600;
+    /** 락 파일 접미사: {localKey}.lock */
+    static final String LOCK_SUFFIX = ".lock";
+    /** 마지막 사용 시각 마커 접미사: {localKey}.last-used (판단은 mtime, 내용은 사람이 보는 용도) */
+    static final String LAST_USED_SUFFIX = ".last-used";
 
     private final WorkerProperties props;
     private final GitRemotes remotes;
@@ -188,14 +196,15 @@ public class GitRepoCache {
      *  - 락 보유 중 예외 발생해도 finally에서 안전 해제
      */
     public <T> T withRepoLock(String repoKey, RepoOp<T> op) throws IOException, InterruptedException {
-        ReentrantLock jvmLock = inProcessLocks.computeIfAbsent(repoKey, k -> new ReentrantLock());
+        ReentrantLock jvmLock = jvmLockFor(repoKey);
         jvmLock.lock();
         try {
-            Path lockPath = Paths.get(props.reposDir(), repoKey + ".lock");
+            Path lockPath = Paths.get(props.reposDir(), repoKey + LOCK_SUFFIX);
             Files.createDirectories(lockPath.getParent());
             try (FileChannel ch = FileChannel.open(lockPath,
                     StandardOpenOption.CREATE, StandardOpenOption.WRITE);
                  FileLock fileLock = acquireWithTimeout(ch, repoKey)) {
+                touchLastUsed(repoKey);
                 return op.run();
             }
         } finally {
@@ -203,11 +212,73 @@ public class GitRepoCache {
         }
     }
 
+    /**
+     * JVM 내 락은 대소문자를 무시한 키로 공유한다. GitHub/GitLab 경로는 대소문자를 가리지 않아 같은 레포가
+     * 다른 표기로 들어올 수 있고, 대소문자 무시 파일시스템(macOS 기본)에선 같은 락 파일을 가리킨다 —
+     * 키가 갈리면 두 스레드가 같은 파일에 FileLock을 겹쳐 잡으려 하게 된다(정리 잡은 디스크의 실제 이름을 쓴다).
+     */
+    private ReentrantLock jvmLockFor(String repoKey) {
+        return inProcessLocks.computeIfAbsent(repoKey.toLowerCase(java.util.Locale.ROOT), k -> new ReentrantLock());
+    }
+
+    /**
+     * withRepoLock의 비차단 버전 — RepoCacheCleanupJob 전용.
+     * JVM 내 ReentrantLock과 FileLock을 즉시 잡지 못하면 기다리지 않고 빈 Optional(= 사용 중, 이번 회차 건너뜀).
+     * 사용 시각 마커는 갱신하지 않는다 — 정리 판단이 스스로를 '사용'으로 오인하지 않게.
+     *
+     * @return op 결과(null이면 안 됨). 락을 못 잡았으면 empty.
+     */
+    public <T> java.util.Optional<T> tryWithRepoLock(String repoKey, RepoOp<T> op)
+            throws IOException, InterruptedException {
+        ReentrantLock jvmLock = jvmLockFor(repoKey);
+        if (!jvmLock.tryLock()) return java.util.Optional.empty();
+        try {
+            Path lockPath = Paths.get(props.reposDir(), repoKey + LOCK_SUFFIX);
+            Files.createDirectories(lockPath.getParent());
+            try (FileChannel ch = FileChannel.open(lockPath,
+                    StandardOpenOption.CREATE, StandardOpenOption.WRITE)) {
+                FileLock fileLock = tryLockOrNull(ch);
+                if (fileLock == null) return java.util.Optional.empty();
+                try (fileLock) {
+                    return java.util.Optional.of(op.run());
+                }
+            }
+        } finally {
+            jvmLock.unlock();
+        }
+    }
+
+    /**
+     * 마지막 사용 시각 기록. 실패해도 작업은 계속한다 — 마커가 없으면 정리 잡이 git 메타 파일의
+     * mtime으로 보수적으로 판단하므로, 기록 실패가 곧바로 삭제로 이어지지 않는다.
+     */
+    private void touchLastUsed(String repoKey) {
+        Path marker = Paths.get(props.reposDir(), repoKey + LAST_USED_SUFFIX);
+        try {
+            Files.writeString(marker, java.time.Instant.now().toString());
+        } catch (IOException e) {
+            log.warn("레포 캐시 사용 시각 기록 실패 (계속): {} — {}", marker, e.getMessage());
+        }
+    }
+
+    /**
+     * FileLock 즉시 시도. 다른 프로세스가 잡고 있으면 null.
+     * 같은 JVM의 다른 채널이 잡고 있어도(OverlappingFileLockException — 대소문자만 다른 repoKey가
+     * 대소문자 무시 파일시스템에서 같은 락 파일을 가리키는 경우 등) 예외 대신 null로 '사용 중' 취급한다.
+     */
+    private static FileLock tryLockOrNull(FileChannel ch) throws IOException {
+        try {
+            return ch.tryLock();
+        } catch (java.nio.channels.OverlappingFileLockException e) {
+            return null;
+        }
+    }
+
     /** 60초 타임아웃 안에서 락 획득 시도. 실패 시 IOException. */
     private FileLock acquireWithTimeout(FileChannel ch, String repoKey) throws IOException, InterruptedException {
         long deadline = System.currentTimeMillis() + TimeUnit.SECONDS.toMillis(60);
         while (System.currentTimeMillis() < deadline) {
-            FileLock tried = ch.tryLock();
+            FileLock tried = tryLockOrNull(ch);
             if (tried != null) return tried;
             log.debug("repo lock 대기 중: {}", repoKey);
             Thread.sleep(500);

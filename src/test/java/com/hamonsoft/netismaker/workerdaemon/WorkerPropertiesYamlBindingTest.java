@@ -68,5 +68,26 @@ class WorkerPropertiesYamlBindingTest {
         assertThat(pa.enabled()).isFalse();
         assertThat(pa.slugSuffix()).isEmpty();
         assertThat(pa.dns().provider()).isEqualTo("none");
+
+        WorkerProperties.RepoCacheCleanup cleanup = props.repoCacheCleanup();
+        assertThat(cleanup.enabled()).isTrue();
+        assertThat(cleanup.cron()).isEqualTo("0 0 3 * * *");
+        assertThat(cleanup.unusedDays()).isEqualTo(30);
+    }
+
+    @Test
+    void binds_repo_cache_cleanup_env_overrides() throws Exception {
+        StandardEnvironment env = loadYaml();
+        env.getPropertySources().addFirst(new MapPropertySource("test-env-overrides", Map.of(
+                "REPO_CACHE_CLEANUP_ENABLED", "false",
+                "REPO_CACHE_CLEANUP_CRON", "0 30 4 * * SUN",
+                "REPO_CACHE_CLEANUP_UNUSED_DAYS", "14")));
+
+        WorkerProperties.RepoCacheCleanup cleanup =
+                Binder.get(env).bind("netis-maker.worker", WorkerProperties.class).get().repoCacheCleanup();
+
+        assertThat(cleanup.enabled()).isFalse();
+        assertThat(cleanup.cron()).isEqualTo("0 30 4 * * SUN");
+        assertThat(cleanup.unusedDays()).isEqualTo(14);
     }
 }

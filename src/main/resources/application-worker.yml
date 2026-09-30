@@ -15,10 +15,11 @@ spring:
   # @Scheduled 스레드 풀. 기본 1이라 heartbeat(10s)과 pollAndProcess(5s, 블로킹 N분)가
   # 같은 thread를 공유 → task 처리 중 heartbeat 못 보내서 UI에서 DOWN 오인.
   # 4로 늘려 heartbeat/poll/stale-recovery 등이 독립 스레드에서 동작.
+  # 5 = 레포 캐시 정리(수GB 삭제로 수십 초 걸릴 수 있음)가 GC/reconcile과 겹쳐도 heartbeat 몫이 남도록.
   task:
     scheduling:
       pool:
-        size: 4
+        size: 5
 
 netis-maker:
   worker:
@@ -37,6 +38,13 @@ netis-maker:
     replay-interval-seconds: 60
     replay-max-attempts: 3
     repos-dir: ${REPOS_DIR:${user.home}/netis-maker/repos}
+    # 레포 캐시 자동 정리(RepoCacheCleanupJob) — repos-dir 아래 캐시 중 unused-days 동안 안 쓰인 것을 지운다.
+    # 살아 있는 worktree(구현 실패 보존분·배포·디자인)가 붙은 캐시와 락이 잡힌(사용 중) 캐시는 건너뛴다.
+    # 지운 캐시는 다음 사용 때 다시 clone된다. cron은 워커 PC 로컬 시각 기준(초 분 시 일 월 요일).
+    repo-cache-cleanup:
+      enabled: ${REPO_CACHE_CLEANUP_ENABLED:true}
+      cron: ${REPO_CACHE_CLEANUP_CRON:0 0 3 * * *}
+      unused-days: ${REPO_CACHE_CLEANUP_UNUSED_DAYS:30}
     dead-letter-dir: ${DEAD_LETTER_DIR:${user.home}/netis-maker/dead-letter}
     claude-cli-path: ${CLAUDE_CLI:/opt/homebrew/bin/claude}
     github-pat: ${GITHUB_PAT:}

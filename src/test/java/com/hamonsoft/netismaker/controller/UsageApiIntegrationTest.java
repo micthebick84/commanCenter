@@ -69,6 +69,25 @@ class UsageApiIntegrationTest {
                 .andExpect(jsonPath("$.limits[0].updatedAt").exists());
     }
 
+    /**
+     * 필드명 계약: 워커는 SDK 이름 그대로 `isUsingOverage`로 보내고(WorkerRateLimitRequest record 컴포넌트),
+     * 조회 응답은 `usingOverage`로 나간다(프론트 claudeUsage.ts). 한쪽 이름이 바뀌면 조용히 false가 된다.
+     */
+    @Test
+    void isUsingOverage_report_is_returned_as_usingOverage() throws Exception {
+        mvc.perform(post("/worker/usage/rate-limits").param("workerId", "iw-1").header("X-Worker-API-Key", apiKey)
+                        .contentType(APPLICATION_JSON)
+                        .content("{\"limitType\":\"seven_day\",\"status\":\"allowed_warning\",\"utilization\":0.97,"
+                                + "\"isUsingOverage\":true}"))
+                .andExpect(status().isNoContent());
+
+        mvc.perform(get("/api/usage/claude").with(userJwt("user1")))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.limits", hasSize(1)))
+                .andExpect(jsonPath("$.limits[0].limitType").value("seven_day"))
+                .andExpect(jsonPath("$.limits[0].usingOverage").value(true));
+    }
+
     @Test
     void utilization_outside_0_1_is_rejected() throws Exception {
         mvc.perform(post("/worker/usage/rate-limits").param("workerId", "iw-1").header("X-Worker-API-Key", apiKey)

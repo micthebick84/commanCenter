@@ -119,7 +119,10 @@ public class ClaudeExecAdapter {
         return exec(prompt, workingDir, timeout, extras, dangerouslySkipPermissions, null, null);
     }
 
-    /** claude 명령 조립. --model/--effort는 -p(및 skip) 뒤, mcpArgs(--allowedTools variadic) 앞. blank면 생략. */
+    /**
+     * claude 명령 조립. --setting-sources project 고정. --model/--effort는 -p(및 skip) 뒤,
+     * mcpArgs(--allowedTools variadic) 앞. blank면 생략.
+     */
     static List<String> buildCommand(String claudePath, boolean dangerouslySkipPermissions,
                                      String model, String effort, List<String> mcpArgs) {
         List<String> cmd = new ArrayList<>();
@@ -127,6 +130,10 @@ public class ClaudeExecAdapter {
         cmd.add("-p");
         cmd.add("--output-format");
         cmd.add("json");
+        // 운영자 ~/.claude/settings.json(플러그인·훅·permissions) 차단, 대상 레포 CLAUDE.md는 유지.
+        // 생략하면 CLI가 user/project/local을 전부 읽는다 — --strict-mcp-config는 MCP만 막음(2026-10-01 프로브).
+        cmd.add("--setting-sources");
+        cmd.add("project");
         if (dangerouslySkipPermissions) cmd.add("--dangerously-skip-permissions");
         if (model != null && !model.isBlank()) { cmd.add("--model"); cmd.add(model); }
         if (effort != null && !effort.isBlank()) { cmd.add("--effort"); cmd.add(effort); }

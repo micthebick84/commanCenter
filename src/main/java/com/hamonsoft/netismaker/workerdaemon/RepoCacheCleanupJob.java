@@ -1,5 +1,6 @@
 package com.hamonsoft.netismaker.workerdaemon;
 
+import com.hamonsoft.netismaker.util.FileDeletion;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.annotation.Profile;
 import org.springframework.scheduling.annotation.SchedulingConfigurer;
@@ -10,9 +11,7 @@ import java.io.IOException;
 import java.nio.channels.FileChannel;
 import java.nio.channels.FileLock;
 import java.nio.channels.OverlappingFileLockException;
-import java.nio.file.AccessDeniedException;
 import java.nio.file.DirectoryStream;
-import java.nio.file.FileSystems;
 import java.nio.file.FileVisitResult;
 import java.nio.file.Files;
 import java.nio.file.InvalidPathException;
@@ -24,7 +23,6 @@ import java.nio.file.SimpleFileVisitor;
 import java.nio.file.StandardCopyOption;
 import java.nio.file.StandardOpenOption;
 import java.nio.file.attribute.BasicFileAttributes;
-import java.nio.file.attribute.DosFileAttributeView;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
@@ -511,25 +509,10 @@ public class RepoCacheCleanupJob implements SchedulingConfigurer {
         return new DeleteResult(freed[0], failures[0]);
     }
 
-    /** DOS 읽기 전용 속성이 실제 삭제를 막는 파일시스템(= POSIX 권한이 없는 Windows). */
-    private static final boolean DOS_READ_ONLY_BLOCKS_DELETE =
-            !FileSystems.getDefault().supportedFileAttributeViews().contains("posix");
-
-    /** 항목 1개 삭제. 이미 없으면 성공으로 본다. */
+    /** 항목 1개 삭제. 이미 없으면 성공으로 본다. Windows: git pack/idx는 읽기 전용 속성이라 FileDeletion이 풀고 지운다. */
     private static boolean deleteEntry(Path p) {
         try {
-            try {
-                Files.delete(p);
-            } catch (AccessDeniedException e) {
-                // Windows: git pack/idx 파일은 읽기 전용 속성이라 그대로는 안 지워진다 → 속성을 풀고 한 번 더.
-                // 링크를 따라가지 않도록 NOFOLLOW_LINKS 뷰로만 만진다.
-                DosFileAttributeView dos = DOS_READ_ONLY_BLOCKS_DELETE
-                        ? Files.getFileAttributeView(p, DosFileAttributeView.class, LinkOption.NOFOLLOW_LINKS)
-                        : null;
-                if (dos == null) throw e;
-                dos.setReadOnly(false);
-                Files.delete(p);
-            }
+            FileDeletion.deleteClearingReadOnly(p);
             return true;
         } catch (NoSuchFileException e) {
             return true;

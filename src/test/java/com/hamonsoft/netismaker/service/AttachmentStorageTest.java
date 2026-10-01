@@ -319,6 +319,27 @@ class AttachmentStorageTest {
         assertThat(tmp.resolve("task-2")).exists();
     }
 
+    /**
+     * Windows는 DOS 읽기 전용 속성이 붙은 파일을 Files.delete로 못 지운다(AccessDeniedException) — 백업·동기화
+     * 도구가 붙인 속성 하나로 매일 밤 '삭제 실패'가 반복되면 안 된다. POSIX에선 dos 뷰가 없어 쓰기 권한만 뺀다
+     * (디렉터리에 쓰기 권한이 있으면 지워지므로 그대로 통과 — 양쪽 플랫폼 공통 계약).
+     */
+    @Test
+    void deleteOwnerDirectory는_읽기_전용_파일도_지운다() throws Exception {
+        Path dir = Files.createDirectories(tmp.resolve("question-7/create"));
+        Path ro = Files.writeString(dir.resolve("1-a.txt"), "내용");
+        if (Files.getFileStore(ro).supportsFileAttributeView("dos")) {
+            Files.setAttribute(ro, "dos:readonly", true);
+        } else {
+            assertThat(ro.toFile().setWritable(false)).isTrue();
+        }
+
+        long freed = storage().deleteOwnerDirectory(ownerDir("question-7"));
+
+        assertThat(tmp.resolve("question-7")).doesNotExist();
+        assertThat(freed).isEqualTo("내용".getBytes(StandardCharsets.UTF_8).length);
+    }
+
     @Test
     void scanOwnerDirectories는_정규형_실제_디렉터리만_돌려주고_나머지는_건너뜀으로_센다() throws Exception {
         Files.createDirectories(tmp.resolve("task-3/sub"));

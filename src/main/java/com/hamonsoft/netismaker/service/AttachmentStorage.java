@@ -1,5 +1,6 @@
 package com.hamonsoft.netismaker.service;
 
+import com.hamonsoft.netismaker.util.FileDeletion;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Profile;
@@ -292,6 +293,7 @@ public class AttachmentStorage {
      * 소유 디렉터리를 통째로 지우고 해제한 바이트(일반 파일 합계)를 돌려준다.
      * 방어: 정규형 이름 재확인 + 루트 직속 containment + 삭제 직전 링크/디렉터리 재검사.
      * walkFileTree는 FOLLOW_LINKS 없이 돌므로 하위의 심볼릭 링크는 링크 자체만 지워지고 대상은 건드리지 않는다.
+     * Windows 읽기 전용 속성이 붙은 항목은 FileDeletion이 속성을 풀고 지운다(RepoCacheCleanupJob과 같은 규칙).
      */
     public long deleteOwnerDirectory(AttachmentCleanupPlanner.OwnerDir dir) throws IOException {
         if (AttachmentCleanupPlanner.parse(dir.name(), null).isEmpty()) {
@@ -310,14 +312,14 @@ public class AttachmentStorage {
             @Override
             public FileVisitResult visitFile(Path file, BasicFileAttributes a) throws IOException {
                 if (a.isRegularFile()) freed[0] += a.size();
-                Files.delete(file);
+                FileDeletion.deleteClearingReadOnly(file);   // Windows 읽기 전용 속성이면 풀고 지운다
                 return FileVisitResult.CONTINUE;
             }
 
             @Override
             public FileVisitResult postVisitDirectory(Path d, IOException exc) throws IOException {
                 if (exc != null) throw exc;
-                Files.delete(d);
+                FileDeletion.deleteClearingReadOnly(d);
                 return FileVisitResult.CONTINUE;
             }
         });

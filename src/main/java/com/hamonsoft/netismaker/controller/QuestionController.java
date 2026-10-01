@@ -10,14 +10,12 @@ import com.hamonsoft.netismaker.entity.InterviewTurn;
 import com.hamonsoft.netismaker.entity.QuestionAttachment;
 import com.hamonsoft.netismaker.service.InterviewStreamService;
 import com.hamonsoft.netismaker.service.QuestionService;
-import com.hamonsoft.netismaker.service.TaskException;
 import jakarta.validation.Valid;
 import org.springframework.context.annotation.Profile;
 import org.springframework.core.io.FileSystemResource;
 import org.springframework.core.io.Resource;
 import org.springframework.http.ContentDisposition;
 import org.springframework.http.HttpHeaders;
-import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.oauth2.server.resource.authentication.JwtAuthenticationToken;
@@ -27,7 +25,6 @@ import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
 import java.net.URI;
 import java.nio.charset.StandardCharsets;
-import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
 
@@ -138,8 +135,8 @@ public class QuestionController {
     /**
      * 첨부 다운로드 (스펙 2026-09-13 §2). ACL = requireViewable(kind 404 → 소유자/관리자 403) —
      * TaskController.downloadAttachment 패턴. 한글 파일명은 RFC 5987 filename*으로.
-     * 메타 행은 있는데 파일이 없으면 410 — 종료된 질문은 목록·대화가 계속 보이지만 파일은
-     * AttachmentCleanupJob이 보존 기간 뒤 지운다(행은 감사용으로 남김). 없는 리소스(404)와 구분한다.
+     * 메타 행은 있는데 파일이 없으면 QuestionService.requireAttachmentFile이 가른다 — 종료된 질문이면 410
+     * (AttachmentCleanupJob이 보존 기간 뒤 지움, 행은 감사용으로 남김), 진행 중이면 404(정리 대상이 아니므로 실제 유실).
      */
     @GetMapping("/{id}/attachments/{attId}")
     public ResponseEntity<Resource> downloadAttachment(@PathVariable Long id,
@@ -147,11 +144,7 @@ public class QuestionController {
                                                        JwtAuthenticationToken auth) {
         questionService.requireViewable(id, AuthContext.requireUserId(auth), AuthContext.isAdmin(auth));
         QuestionAttachment att = questionService.getAttachment(id, attId);
-        Path file = questionService.resolveAttachmentPath(att);
-        if (!Files.exists(file)) {
-            throw new TaskException(HttpStatus.GONE,
-                    "첨부 파일이 서버에 남아 있지 않습니다 — 종료된 질문의 첨부는 보존 기간이 지나면 정리됩니다");
-        }
+        Path file = questionService.requireAttachmentFile(att);
         ContentDisposition cd = ContentDisposition.attachment()
                 .filename(att.getOriginalFilename(), StandardCharsets.UTF_8)
                 .build();

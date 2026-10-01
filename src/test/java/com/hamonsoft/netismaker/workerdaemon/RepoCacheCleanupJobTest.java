@@ -69,7 +69,7 @@ class RepoCacheCleanupJobTest {
                 null, 0, 0, 0, null, 0, null);
         return new WorkerProperties("w1", null, null, null, 0, 0, 0, 0, 0, reposDirValue, null,
                 null, null, null, null, null, tmp.resolve("worktrees").toString(), null, null, null, null, null, null,
-                null, deploy, new WorkerProperties.RepoCacheCleanup(enabled, cron, 30));
+                null, deploy, new WorkerProperties.RepoCacheCleanup(enabled, cron, 30), null);
     }
 
     private static void git(File dir, String... args) throws IOException, InterruptedException {

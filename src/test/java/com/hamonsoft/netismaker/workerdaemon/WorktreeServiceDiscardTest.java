@@ -55,7 +55,7 @@ class WorktreeServiceDiscardTest {
                 null, 0, 0, 0, null, 0, null);
         props = new WorkerProperties("w1", null, null, null, 0, 0, 0, 0, 0, tmp.resolve("repos").toString(), null,
                 null, null, null, null, null, tmp.resolve("worktrees").toString(), null, null, null, null, null, null,
-                null, deploy, null);
+                null, deploy, null, null);
         cache = new GitRepoCache(props);
         worktrees = new WorktreeService(props, cache);
         ref = new RepoRef("github", "acme/widgets", bare.toUri().toString());

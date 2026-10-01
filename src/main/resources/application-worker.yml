@@ -47,6 +47,13 @@ netis-maker:
       enabled: ${REPO_CACHE_CLEANUP_ENABLED:true}
       cron: ${REPO_CACHE_CLEANUP_CRON:0 0 3 * * *}
       unused-days: ${REPO_CACHE_CLEANUP_UNUSED_DAYS:30}
+    # worktree 보존 기간 정리 (WorktreeCleanupJob) — 성공한 작업의 worktree는 작업 끝에 바로 지우고,
+    # 이 잡은 실패 보존분·과거 누적분 중 만든 지 retention-days가 지난 것을 지운다(진행 중 작업은 API 조회로 보호,
+    # 조회 실패면 그 회차는 아무것도 안 지움). 03:00 레포 캐시 정리보다 먼저 돌아 같은 밤에 캐시 회수 후보가 된다.
+    worktree-cleanup:
+      enabled: ${WORKTREE_CLEANUP_ENABLED:true}
+      cron: ${WORKTREE_CLEANUP_CRON:0 30 2 * * *}
+      retention-days: ${WORKTREE_CLEANUP_RETENTION_DAYS:7}
     dead-letter-dir: ${DEAD_LETTER_DIR:${user.home}/netis-maker/dead-letter}
     claude-cli-path: ${CLAUDE_CLI:/opt/homebrew/bin/claude}
     github-pat: ${GITHUB_PAT:}

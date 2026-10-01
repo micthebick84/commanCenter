@@ -50,6 +50,7 @@
 
 - **제거는 best-effort.** 제거 실패는 경고 로그만 남기고 작업 결과(보고·상태)에 영향을 주지 않는다. 남은 폴더는 4.2가 7일 뒤 치운다.
 - **`WorktreeService.remove`를 레포 락 안으로.** 지금은 생성만 `withRepoLock` 안이고 제거는 락 밖이라 같은 레포의 다른 worktree 생성과 `.git/worktrees/` 메타 수정이 겹칠 수 있다. 제거 절차(4.1·4.2 공통):
+  0. `git worktree lock`이 걸려 있으면 손대지 않는다 — 사람이 일부러 남긴 것(레포 캐시 정리가 locked를 "의도적 보존"으로 보는 것과 같은 규칙). `.git` 파일을 못 읽거나 형식이 다르면 잠긴 것으로 본다. 디버그용으로 오래 남기고 싶은 worktree는 이렇게 표시하면 된다.
   1. `git worktree remove --force <dir>` (캐시 디렉터리에서)
   2. 폴더가 남아 있으면 심볼릭 링크를 따라가지 않는 재귀 삭제(기존 `deleteRecursively`와 같은 규칙)
   3. `git worktree prune`
@@ -70,7 +71,7 @@
 **한 회차**
 
 1. **잡 단위 락** `worktree-root/.worktree-cleanup.lock`(`RepoCacheCleanupJob`의 `.repo-cache-cleanup.lock`과 같은 방식). 다른 프로세스가 잡고 있으면 회차 건너뜀.
-2. **진행 중 조회** `GET /worker/active-worktree-tasks`(4.3). 실패(네트워크·401·404 포함)면 **회차 전체 건너뜀** — 로그 한 줄.
+2. **진행 중 조회** `GET /worker/active-worktree-tasks`(4.3). 실패(네트워크·인증 실패 4xx·404 포함)면 **회차 전체 건너뜀** — 로그 한 줄.
 3. **후보 열거** `worktree-root/{a}/{b}/{kind}-{id}` 중 정확히 이 형태만. `kind ∈ {task, deploy, design}`, `id`는 10진 양의 정수. 이름이 다르거나 심볼릭 링크(어느 단계든)인 것은 손대지 않는다. `{a}/{b}`가 곧 `localKey`(GitHub `owner/repo`, GitLab `_gitlab/{경로의 '/'→'+'}`) — 둘 다 2단계.
 4. **1차 판정(락 밖)** — `WorktreeCleanupPlanner`(순수 함수):
    - `ACTIVE`: id가 진행 중 목록에 있음 → 건너뜀
@@ -79,7 +80,7 @@
    - `REMOVE`: 그 외
 5. **레포 락 안 재확인 후 제거** — `GitRepoCache.tryWithRepoLock(localKey, …)`. 락을 못 잡으면 `BUSY`(이번 회차 건너뜀). 락 안에서 나이를 다시 판정(그사이 재시도로 재생성됐으면 mtime이 새것 → `TOO_NEW`). 통과하면 4.1 제거 절차.
 6. **캐시 부재** — `repos-dir/{localKey}/.git`이 없으면 git 명령 없이 폴더만 재귀 삭제(prune·브랜치 삭제 생략).
-7. **회차 로그** `worktree 정리 완료 — 삭제 {n} / 진행 중 {n} / 기간 미달 {n} / 사용 중(락) {n} / 판단 불가 {n} · 실패 {n}`, 삭제한 경로는 한 줄씩. 실패(삭제 중 예외)는 경로와 사유를 남기고 다음 후보로 진행.
+7. **회차 로그** `worktree 정리 완료 — 삭제 {n} / 진행 중 {n} / 기간 미달 {n} / 사용 중(락) {n} / git lock {n} / 판단 불가 {n} · 실패 {n}`, 삭제한 경로는 한 줄씩. 실패(삭제 중 예외)는 경로와 사유를 남기고 다음 후보로 진행.
 
 **왜 나이만으로 충분한가(진행 중 목록과의 이중 보호)**: worktree는 작업 시작 때 만들어지고 작업은 시간 단위 타임아웃 안에 끝난다. stale 회수가 살아 있는 느린 워커의 작업을 대기로 되돌려 진행 중 목록에서 빠져도, 그 worktree는 7일보다 훨씬 새것이라 `TOO_NEW`로 보호된다.
 
@@ -119,7 +120,8 @@
   - 잡 락 점유 시 회차 건너뜀, `enabled=false`면 no-op
 - **즉시 정리**: `WorkerMainLoop` 구현 성공 → `remove` 호출(보고 뒤 순서), 구현 실패 경로 → 호출 안 함, `remove` 예외에도 성공 보고 유지. `DeployService` 배포 성공 → 제거, 배포 실패 → 보존.
 - **`WorktreeService` 제거 절차**: 실제 git으로 remove → prune → 브랜치 삭제, 접두 일치 브랜치 보호.
-- **API**: 네 상태만 반환(다른 상태·대기 상태 제외), 워커 키 없으면 401.
+- **API**: 네 상태만 반환(다른 상태·대기 상태 제외), 워커 키 없으면 4xx(워커 필터 체인에 진입점 설정이 없어 403이 될 수 있다 — 코드는 바꾸지 않는다).
+- **git lock**: 잠긴 worktree는 즉시 정리·주기 정리 모두 남는다(주기 정리 결과 `GIT_LOCKED`).
 - **설정 바인딩**: 잘못된 cron·retention-days ≤ 0 → 바인딩 실패 메시지에 설정 이름, `-`는 끔.
 
 ## 7. 배포·하위 호환

@@ -8,13 +8,29 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 class ClaudeExecAdapterTest {
 
+    /**
+     * 보안 불변식(2026-10-01 CLI 2.1.284 init 프로브): `--setting-sources`를 생략하면 CLI가 운영자
+     * ~/.claude/settings.json까지 읽어 enabledPlugins 16개·플러그인 스킬 67개·훅(claude-mem 등)이
+     * --dangerously-skip-permissions 구현 세션에 붙는다(--strict-mcp-config는 MCP만 막는다).
+     * `project`만 두면 운영자 설정은 빠지고 대상 레포 CLAUDE.md(코드 규약)는 계속 읽힌다.
+     */
+    @Test
+    void buildCommand_limits_setting_sources_to_project_for_every_mode() {
+        for (boolean skip : new boolean[]{false, true}) {
+            List<String> cmd = ClaudeExecAdapter.buildCommand("/bin/claude", skip, null, null, List.of());
+            int i = cmd.indexOf("--setting-sources");
+            assertThat(i).as("skip=%s", skip).isPositive();
+            assertThat(cmd.get(i + 1)).isEqualTo("project");
+        }
+    }
+
     @Test
     void buildCommand_inserts_model_and_effort_after_p_before_mcp_args() {
         List<String> cmd = ClaudeExecAdapter.buildCommand(
                 "/bin/claude", false, "claude-opus-4-8", "high",
                 List.of("--mcp-config", "/tmp/x", "--strict-mcp-config", "--allowedTools", "mcp__a"));
         assertThat(cmd).containsExactly(
-                "/bin/claude", "-p", "--output-format", "json", "--model", "claude-opus-4-8", "--effort", "high",
+                "/bin/claude", "-p", "--output-format", "json", "--setting-sources", "project", "--model", "claude-opus-4-8", "--effort", "high",
                 "--mcp-config", "/tmp/x", "--strict-mcp-config", "--allowedTools", "mcp__a");
     }
 
@@ -23,7 +39,7 @@ class ClaudeExecAdapterTest {
         List<String> cmd = ClaudeExecAdapter.buildCommand(
                 "/bin/claude", true, "claude-sonnet-4-6", "medium", List.of("--allowedTools", "mcp__a"));
         assertThat(cmd).containsExactly(
-                "/bin/claude", "-p", "--output-format", "json", "--dangerously-skip-permissions",
+                "/bin/claude", "-p", "--output-format", "json", "--setting-sources", "project", "--dangerously-skip-permissions",
                 "--model", "claude-sonnet-4-6", "--effort", "medium", "--allowedTools", "mcp__a");
     }
 
@@ -31,14 +47,14 @@ class ClaudeExecAdapterTest {
     void buildCommand_omits_model_and_effort_when_blank() {
         List<String> cmd = ClaudeExecAdapter.buildCommand(
                 "/bin/claude", false, null, "  ", List.of("--allowedTools", "mcp__a"));
-        assertThat(cmd).containsExactly("/bin/claude", "-p", "--output-format", "json", "--allowedTools", "mcp__a");
+        assertThat(cmd).containsExactly("/bin/claude", "-p", "--output-format", "json", "--setting-sources", "project", "--allowedTools", "mcp__a");
     }
 
     @Test
     void buildCommand_includes_output_format_json() {
         List<String> cmd = ClaudeExecAdapter.buildCommand(
                 "/bin/claude", false, null, null, List.of());
-        assertThat(cmd).containsExactly("/bin/claude", "-p", "--output-format", "json");
+        assertThat(cmd).containsExactly("/bin/claude", "-p", "--output-format", "json", "--setting-sources", "project");
     }
 
     @Test

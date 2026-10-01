@@ -348,6 +348,22 @@ describe('InterviewPanel — refresh resume (snapshot hydration)', () => {
     expect(w.text()).toContain('폴백 질문')
     w.unmount()
   })
+
+  // 스냅샷이 실패하면 hydrate가 seq를 먼저 채워 주지 않아 replay만으로 판단해야 한다. 서버는 system 턴을 note로
+  // replay하고(InterviewApiIntegrationTest가 와이어 고정), 패널은 이를 AI 말풍선이 아닌 노트 칩으로 그리며 입력 대기로 넘기지 않는다.
+  it('renders a replayed system note as a note chip without flipping to 입력 대기 when the snapshot fetch fails', async () => {
+    authStub.accessToken = 'jwt'
+    useApiMock.mockRejectedValueOnce(new Error('500'))
+    const w = mount(InterviewPanel, { props: { sessionId: 9 } })
+    await flushPromises()
+    FakeEventSource.last().emit('note', { seq: 1, content: '사용자 취소' })
+    await flushPromises()
+    expect(w.findAll('.system-note').map((n) => n.text())).toEqual(['사용자 취소'])
+    expect(w.findAll('.bubble.assistant')).toHaveLength(0)
+    expect(w.find('.q-badge').text()).toBe('연결 중')
+    expect(w.emitted('status')?.flat()).not.toContain('AWAITING_INPUT')
+    w.unmount()
+  })
 })
 
 describe('InterviewPanel — 확정 / 읽기 전용', () => {

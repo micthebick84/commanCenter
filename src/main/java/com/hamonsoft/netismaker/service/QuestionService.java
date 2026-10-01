@@ -19,6 +19,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.multipart.MultipartFile;
 
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.HashSet;
@@ -264,6 +265,26 @@ public class QuestionService {
 
     public Path resolveAttachmentPath(QuestionAttachment att) {
         return attachmentStorage.resolve(att.getStoredPath());
+    }
+
+    /**
+     * 다운로드할 첨부 파일 경로. 메타 행은 있는데 파일이 없으면 —
+     *  - 종료된 질문(AttachmentCleanupPlanner.QUESTION_CLOSED): 정리 잡이 보존 기간 뒤 지운 것 → 410 + 보존 기간 안내.
+     *  - 그 밖(진행 중·답변 완료): 정리 잡은 이 디렉터리를 절대 지우지 않는다 → 실제 유실이므로 404.
+     *    여기에 410 안내를 붙이면 디스크 장애·운영 실수가 '정상 정리'로 보인다.
+     */
+    @Transactional(readOnly = true)
+    public Path requireAttachmentFile(QuestionAttachment att) {
+        Path file = resolveAttachmentPath(att);
+        if (Files.exists(file)) return file;
+        boolean cleanedUp = sessionRepo.findById(att.getSessionId())
+                .map(s -> AttachmentCleanupPlanner.QUESTION_CLOSED.contains(s.getStatus()))
+                .orElse(false);
+        if (cleanedUp) {
+            throw new TaskException(HttpStatus.GONE,
+                    "첨부 파일이 서버에 남아 있지 않습니다 — 종료된 질문의 첨부는 보존 기간이 지나면 정리됩니다");
+        }
+        throw new TaskException(HttpStatus.NOT_FOUND, "첨부 파일이 서버에 존재하지 않습니다");
     }
 
     /** 종료 = cancel 재사용 → CANCELLED (질문 문맥 라벨 "종료됨"). */

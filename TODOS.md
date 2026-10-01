@@ -2,82 +2,18 @@
 
 ## V1.1 — 운영 안정성
 
-### [ ] 레포 캐시 자동 정리 정책
+### [ ] worktree 보존 정책 (구현 성공·배포 worktree 정리)
 
-**What**: macOS 운영자 PC의 `~/netis-maker/repos/{owner}/{repo}/`에 누적되는 레포 캐시를 주기적으로 정리하는 자동화.
+**What**: `~/netis-maker/worktrees/{localKey}/{task-N|deploy-N}`는 PR 생성 성공 후에도, 배포 후에도 지우는 곳이 없다(`WorktreeService` "Phase 1은 보존"; 디자인 worktree만 수확 후 remove). PR/MR 병합·종료, task 삭제, 배포 중지 후 N일 지난 worktree를 캐시 락 안에서 `git worktree remove --force`로 정리한다.
 
-**Why**: Netis 레포 1개당 수GB. V1 운영 중 다양한 레포 분석 누적되면 운영자 macOS 디스크가 차서 워커 정지 시나리오 발생 가능.
-
-**Pros**:
-- 운영 리스크 사전 차단
-- 운영자 수동 개입 불필요
-- 디스크 모니터링 알림 없이도 안전
-
-**Cons**:
-- 정책 결정 필요 (얼마 미사용이면 삭제? 디스크 사용량 임계점?)
-- 다시 사용되는 레포는 재clone 시간 발생
+**Why**: 2026-09-30 도입한 레포 캐시 정리 잡(`RepoCacheCleanupJob`)은 살아 있는 worktree가 붙은 캐시를 절대 지우지 않는다 → 구현·배포를 한 번이라도 거친 캐시(운영 캐시 대부분)는 회수되지 않아 "레포당 수GB 누적"이 실질적으로 풀리지 않는다. worktree 자체도 체크아웃 크기만큼 디스크를 쓴다.
 
 **Context**:
-- V1 §15 #6에 이미 명시된 deferred 항목
-- 후보 정책: ① 30일 미사용 레포 자동 삭제, ② 디스크 사용량 80% 초과 시 LRU 정리, ③ 운영자 수동 트리거
-- 워커 데몬 내부 `@Scheduled(cron="0 0 3 * * *")` 새벽 3시 정리 잡 + admin UI 트리거 버튼
-- 정리 후 task_analysis에 사용된 레포 캐시 메타데이터 기록 → 통계로 추적
+- 정리 잡 회차 로그 `레포 캐시 보존(worktree N개가 사용 중): {localKey} ← {경로…}`에 캐시를 붙잡고 있는 worktree가 나온다 — 운영 중 실제 규모를 먼저 확인.
+- 배포 worktree는 재배포·`DeployReconcileJob`이 다시 쓰므로 컨테이너가 없어진 뒤에만. 구현 실패 보존분(디버그용)은 별도 보존 기한.
+- PR/MR 상태는 워커가 모른다 → API 조회(claim/heartbeat 계열 확장) 필요. 레포 캐시 정리와 같은 새벽 스케줄에 묶는 안.
 
-**Depends on / blocked by**:
-- V1 운영 데이터 1~3개월 누적 (어떤 레포가 자주 쓰이는지 패턴 보고 정책 결정)
-- 운영자 macOS 디스크 가용량 베이스라인 측정
-
-**우선순위**: 중간. V1 디스크 압박이 실제로 발생하면 즉시 작업 착수.
-
-### [ ] 첨부파일 정리 정책
-
-**What**: 작업 등록 시 첨부된 파일이 저장되는 `~/netis-maker/attachments/task-{id}/`를 정리하는 자동화/정책. 현재는 생성 후 자동 삭제가 전혀 없다(인터뷰 `work_dir`와 동일 정책).
-
-**Why**: task가 soft-delete되거나 완료 후 오래 방치돼도 디렉터리는 그대로 남는다. 등록이 반복될수록 운영자 macOS 디스크에 무기한 누적되어, 위 "레포 캐시 자동 정리 정책"과 동일한 디스크 압박 실패 시나리오로 이어질 수 있다.
-
-**Pros**:
-- 운영 리스크 사전 차단 (레포 캐시와 같은 이유)
-- task soft-delete 시 같이 지우면 사용자 관점에서도 "삭제됐다"는 기대와 일치
-
-**Cons**:
-- soft-delete된 task를 나중에 복구/재조회해야 하는 경우가 생기면 첨부도 같이 날아가 복구 불가
-- 보존 기한 정책 결정 필요 (며칠/몇 개월? 상태별로 다르게?)
-
-**Context**:
-- 제한값은 `application.yml`의 `app.attachment.*`: per-file 20MB, task당 최대 10개, task당 합계 50MB
-- 2026-09-13 질문 세션 채팅 첨부(스펙 `2026-09-13-question-mcp-attachments-design.md`)도 같은 루트의 `question-{sessionId}/{create|턴seq}/`에 쌓인다 — 한도는 **메시지당** 동일값이라 세션 1건 worst case는 (문답 상한 10턴 + 등록) × 50MB. Tika sidecar `.txt`도 같은 디렉터리. 정리 정책은 task-*와 함께 결정
-- 즉 worst case는 task 1건당 50MB가 무기한 누적 — 레포 캐시 항목(레포 1개당 수GB)보다 단위는 작지만 등록 빈도가 훨씬 높아 누적 속도가 다를 수 있음
-- 후보안: ① task soft-delete 시 디렉터리 즉시 삭제, ② 보존 기한(예: 90일) 경과 시 배치 삭제, ③ 위 레포 캐시 정리 잡과 통합해 같은 새벽 스케줄러에서 처리
-
-**Depends on / blocked by**:
-- soft-delete 이후 첨부 복구가 실제로 필요한 운영 시나리오가 있는지 확인
-- 레포 캐시 정리 정책(위 항목)과 동일 스케줄러로 묶을지 별도로 갈지 결정
-
-**우선순위**: 낮음. 파일당/건당 상한이 이미 걸려 있어 레포 캐시보다 급하지 않음. 등록 건수가 누적되며 디스크 압박 조짐이 보이면 착수.
-
-### [ ] 프론트 테스트가 생성물 `.nuxt`에 의존
-
-**What**: `frontend/tsconfig.json`이 Nuxt 빌드 시점 생성물인 `./.nuxt/tsconfig.json`을 extends한다. 이 파일은 `nuxi prepare`(보통 `postinstall`이 실행)가 만들어야 존재한다.
-
-**Why**: 신규 clone, 새 git worktree, 또는 `node_modules`만 캐시하고 `.nuxt`는 캐시하지 않는 CI 잡에서는 `.nuxt/tsconfig.json`이 없다. 이 상태에서 vitest를 돌리면 테스트를 한 건도 수집하기 전에 transform 단계에서 `Cannot find module './.nuxt/tsconfig.json'`로 죽는다. 에러 메시지가 실제 원인(Nuxt prepare 미실행)을 가리키지 않아 원인 파악에 시간이 든다.
-
-**Pros**:
-- CI에서 원인불명 실패로 시간 낭비하는 일을 사전 차단
-- 신규 기여자/새 워크트리에서 온보딩 마찰 감소 (지금은 `.nuxt` 심볼릭 링크라는 비공식 우회를 각자 알아내야 함)
-
-**Cons**:
-- `.nuxt` 캐싱을 선택하면 CI 캐시 용량/무효화 관리가 하나 더 늘어남
-- extends를 그만두고 tsconfig를 직접 명시하면 Nuxt가 관리하는 경로 별칭(alias) 등을 수동으로 동기화해야 할 수 있음
-
-**Context**:
-- 이번 `spec/task-attachments` 브랜치 작업 중 리뷰어 2명이 독립적으로 이 문제를 겪었고, 각자 `.nuxt`를 심볼릭 링크로 우회해 진행함
-- 복구법: `nuxi prepare` 명시 실행. `postinstall`이 보통 이를 실행하지만, `node_modules`만 복원되고 `npm install`을 다시 안 돌리면 postinstall도 안 돈다
-- 후보 해결책: ① CI에서 테스트 전에 `nuxi prepare`를 명시적으로 실행, ② `node_modules`와 함께 `.nuxt`도 캐싱, ③ 생성물을 extends하지 않도록 tsconfig를 직접 명시
-
-**Depends on / blocked by**:
-- CI 파이프라인 구성 확정 (어느 방식으로 고정할지는 CI 셋업 작업과 함께 결정)
-
-**우선순위**: 중간. 로컬에서는 매번 걸리는 건 아니라 급하지 않지만, CI를 새로 구축하는 시점에는 반드시 셋업 단계에 포함해야 함 (안 그러면 첫 CI 실행부터 전원 매몰).
+**우선순위**: 중간. 레포 캐시 정리의 실효가 이 항목에 달려 있다.
 
 ### [ ] Claude Code 사용량 유휴 갱신 프로브
 
@@ -89,16 +25,6 @@
 
 **우선순위**: 낮음. 패널의 "N분 전 갱신" 표기로 운영해 보고 불편이 확인되면 착수.
 
-### [ ] 답변 마크다운의 이미지 렌더 차단 검토
-
-**What**: `useMarkdown.ts`가 `html:false`로 원본 HTML 태그는 막지만, `![](https://…)` 형태의 마크다운 이미지 문법은 markdown-it 기본값 그대로 렌더된다.
-
-**Why**: Q&A 에이전트가 레포 파일을 읽어 답변을 구성하므로, 레포 어딘가에 프롬프트 인젝션이 섞여 있으면 외부 이미지 URL 요청을 통해 데이터가 유출되는 채널이 될 수 있다(다만 대상 레포가 관리자 큐레이션 목록이라 실제 발생 확률은 낮다).
-
-**Context**: 스펙 2026-09-05 §2는 markdown-it 기본값을 그대로 수용하기로 했고, 이미지 렌더를 어떻게 할지는 결정이 미뤄져 있다. 후보: `md.disable('image')`로 전면 차단, 또는 same-origin/`data:` URL만 허용하는 렌더 규칙 추가.
-
-**우선순위**: 중간. 실제 악용 확률은 낮지만 결정 없이 계속 미루면 기본값이 그대로 굳어진다.
-
 ### [ ] deriveTitle 서로게이트 페어 절단·마크다운 기호 정리
 
 **What**: `QuestionService.deriveTitle`이 `substring(0, 60)`으로 제목을 자르는데, 이모지 등 서로게이트 페어 경계에서 자르면 lone surrogate가 남을 수 있다. 또한 질문 첫 줄에 있던 `#`/`>`/목록 기호/백틱 같은 마크다운 문법 기호가 제목에 그대로 섞여 들어간다.
@@ -109,16 +35,6 @@
 
 **우선순위**: 낮음. 드물게 발생하고 화면이 깨지는 정도라 급하지 않다.
 
-### [ ] 질문 셸 SSR 하이드레이션 점검
-
-**What**: `pages/questions.vue`가 `$q.screen.gt.sm` 값으로 사이드바(데스크톱)와 서랍(좁은 화면)을 구조적 `v-if`로 나눠 그리는데, SSR 시점에는 실제 화면 폭을 알 수 없어 narrow 쪽 마크업으로 렌더된다.
-
-**Why**: 데스크톱 브라우저 최초 로드 시 SSR 결과(서랍/narrow)와 하이드레이션 후 클라이언트 결과(사이드바/wide)가 달라 하이드레이션 불일치 경고나 화면 깜빡임이 생길 수 있다.
-
-**Context**: 스모크 체크리스트 항목 1·7에서 실제로 재현되는지부터 확인. 재현되면 구조적 `v-if` 대신 `gt-sm`/`lt-md` 가시성 클래스로 두 마크업을 함께 렌더하거나, 사이드바를 `<ClientOnly>`로 감싸는 방안을 검토.
-
-**우선순위**: 중간. 스모크에서 재현되지 않으면 낮음으로 낮춰도 된다.
-
 ### [ ] 모바일 사용량 스트립 라벨·신선도
 
 **What**: `ClaudeUsagePanel`의 strip 변형이 쓰는 `shortLabel`이 five_hour 항목/그 외 항목 이항 분기라, 응답에 five_hour가 없으면 라벨이 잘못 표기될 수 있다. 또한 strip에는 갱신 시각을 알려주는 툴팁이 없다.
@@ -126,26 +42,6 @@
 **Why**: 모바일에서는 strip만 보이므로 라벨 오표기가 그대로 노출된다. 패널(데스크톱)에는 이미 갱신 시각 정보가 있는데 strip에는 없어 신선도를 알 수 없다.
 
 **Context**: R8 결정("캔버스는 strip에 문구 없음")과 균형이 필요하다 — `updatedLabel`을 툴팁으로만 붙이면 캔버스가 요구한 "문구 없음"을 해치지 않으면서 신선도 정보를 줄 수 있다.
-
-**우선순위**: 낮음.
-
-### [ ] 사용량 API 계약 테스트 보강
-
-**What**: `POST /worker/usage/rate-limits`에 `"isUsingOverage": true`를 보내고 `GET /api/usage/claude`가 `usingOverage: true`를 돌려주는지 확인하는 Java 통합 테스트가 없다.
-
-**Why**: Jackson record 바인딩(`isUsingOverage` ↔ `usingOverage` 필드명 매핑)이 리팩터링 중 조용히 깨져도 지금은 잡아낼 테스트가 없다.
-
-**Context**: 기존 사용량 API 통합 테스트에 이 계약을 고정하는 단언 1건만 추가하면 된다.
-
-**우선순위**: 낮음.
-
-### [ ] SSE 재생이 system 노트 턴을 question 이벤트로 보냄
-
-**What**: `InterviewStreamService.subscribe`의 replay가 user 외 모든 턴을 (design 제외) `question` 이벤트로 보내서, system/note 턴("사용자 취소")이 클라이언트 `onQuestion`으로 들어간다. 프론트는 REST 스냅샷 hydrate(2026-09-06, system→note 매핑)가 먼저 seq를 채우고 replay는 seq dedup으로 무시되므로 실제 표시는 정상이지만, 스냅샷 요청이 실패한 경우엔 노트가 AI 말풍선으로 그려지고 `AWAITING_INPUT`으로 잘못 전환될 수 있다.
-
-**Why**: 서버가 역할을 이벤트 타입으로 구분해 보내야 클라이언트가 페이로드(`{seq, content}`)만으로 판단할 수 있다. 지금은 프론트의 hydrate-first 순서에 의존한다.
-
-**Context**: 서버에 `note` 이벤트(`{seq, content}`) 추가 + 프론트 `es.addEventListener('note')` → `pushTurn(system/note)`. Java 변경이라 API 재기동이 필요해 2026-09-06 프론트 핫픽스(모바일 폴리시 PR)에서는 제외했다.
 
 **우선순위**: 낮음.
 
@@ -158,16 +54,6 @@
 **Context**: `frontend/layouts/default.vue`의 푸터 `q-tabs`/`q-route-tab`("작업")에 붙이면 되고, 건수는 이미 있는 `composables/taskStages.ts`의 `sortForMobile`/`attentionGroup`(주의 필요 그룹 판정)을 재사용해 계산할 수 있다.
 
 **우선순위**: 낮음.
-
-### [ ] 전역 레이아웃 SSR 하이드레이션 불일치 (하단 내비/툴바 `$q.screen` 분기)
-
-**What**: 모든 페이지(로그인 페이지 포함)에서 콘솔에 `Hydration completed but contains mismatches`가 1건 난다. 2026-09-06 승인 다이얼로그 작업 중 dev 서버(1280px)에서 원인을 확인했다: `layouts/default.vue`가 `$q.screen.lt.md`로 하단 내비 `q-footer`·툴바 버튼을 구조적 `v-if`로 나눠 그리는데, SSR은 화면 폭을 몰라 좁은 화면(푸터 있음) 마크업으로 렌더하고 클라이언트는 데스크톱(푸터 없음)으로 그려 `<QFooter>`·`<QToolbar>`의 `<QBtn>`·`QPageContainer`의 `padding-bottom`·`QPage`의 `min-height`가 어긋난다.
-
-**Why**: 경고 자체는 무해하지만(프로덕션은 DOM을 고치지 않고 다음 렌더에서 정합), 실제 하이드레이션 문제(예: 질문 셸 항목)가 새로 생겨도 이 상시 경고에 묻혀 알아채기 어렵다. 데스크톱 최초 로드에서 푸터 높이만큼 레이아웃 점프도 생길 수 있다.
-
-**Context**: 기존 항목 "질문 셸 SSR 하이드레이션 점검"과 같은 계열이며 범위가 전역 레이아웃이다. 후보: ① 푸터/툴바 분기를 구조적 `v-if` 대신 `lt-md`/`gt-sm` 가시성 클래스로 두 마크업을 함께 렌더, ② 푸터를 `<ClientOnly>`로 감싸기(SSR에서는 푸터 없음 → 데스크톱 기준 마크업이 되고 모바일은 클라이언트에서 붙음), ③ Quasar SSR `Screen` 플러그인에 UA 힌트로 초기 폭을 주기. `--bottom-nav-height` CSS 변수 계산도 같은 분기에 걸려 있으니 함께 검토.
-
-**우선순위**: 낮음. 기능 영향 없음. 다음에 레이아웃을 만질 때 같이 처리.
 
 ### [ ] 모바일 목록 상세 필터 시트
 
@@ -199,16 +85,6 @@
 
 **우선순위**: 낮음.
 
-### [ ] `getHistory` Top-N 쿼리 + 동일 `at` 정렬 안정화
-
-**What**: `TaskService.getHistory`(`historyRepo.findByTaskIdOrderByAtDesc(taskId).stream().limit(limit).toList()`)가 DB에서 전체 이력을 다 가져온 뒤 애플리케이션에서 `.limit(200)`으로 자른다. 또한 정렬 키가 `at` 하나뿐이라, 같은 밀리초에 기록된 행이 여럿이면(배치성 상태 전이 등) 상대 순서가 쿼리 실행마다 달라질 수 있다.
-
-**Why**: 이력이 아주 많은 작업에서는 불필요하게 큰 결과셋을 DB에서 애플리케이션으로 옮긴 뒤 버리는 낭비가 생긴다. `at` 동률 정렬 불안정은 `TaskHistoryTimeline`이 "최신순"을 보장한다고 가정하는 프론트(및 테스트)의 전제를 이론상 깨뜨릴 수 있다.
-
-**Context**: `src/main/java/com/hamonsoft/netismaker/service/TaskService.java`의 `getHistory`, `TaskStatusHistoryRepository.findByTaskIdOrderByAtDesc`. `Pageable`/`LIMIT` 기반 쿼리로 바꾸고, 정렬을 `ORDER BY at DESC, id DESC`처럼 2차 키로 안정화하는 방향 검토.
-
-**우선순위**: 낮음.
-
 ### [ ] `InterviewHistoryDialog` 767px dead media query 제거
 
 **What**: `frontend/components/InterviewHistoryDialog.vue`에 `@media (max-width: 767px) { .history-dialog-card { ... } }` 블록이 남아 있다. 이 컴포넌트를 포함해 프로젝트 전체가 모바일 분기를 `$q.screen.lt.md`(1024px) 하나로 통일하기로 한 규칙(CLAUDE.md) 이전에 쓰던 브레이크포인트라, 지금은 1023px과 767px 사이 폭에서 두 규칙이 어긋나게 겹치는 죽은/혼동 유발 코드다.
@@ -218,3 +94,63 @@
 **Context**: `frontend/components/InterviewHistoryDialog.vue` 136번째 줄 부근. 제거하고 필요하면 `$q.screen.lt.md` 기준 클래스로 대체.
 
 **우선순위**: 낮음.
+
+### [ ] 하이드레이션 회귀 스모크를 저장소/CI에 편입
+
+**What**: 2026-09-30 SSR 정리 때 쓴 Playwright 스크립트(프로덕션 빌드 + 1280/820/390px × 로그인/비로그인 × 경로별 콘솔 `Hydration completed but contains mismatches` 0건, SSR 마커와 하이드레이션 후 DOM 비교)는 저장소 밖에만 있다.
+
+**Why**: vitest는 SSR도 Quasar CSS도 없어 하이드레이션 불일치를 못 잡는다. 인증·화면 폭 분기를 새로 넣으면 조용히 재발한다(CLAUDE.md 프론트 스타일 "SSR 하이드레이션" 항목).
+
+**Context**: API는 `page.route`로 목킹(`/api/` pathname만 — `**/api/**` 글롭은 `/_nuxt/…` 모듈까지 잡음). 로그인 상태는 localStorage 토큰 주입. CI frontend 잡의 `npm run build` 뒤에 붙이면 추가 빌드가 없다. 참고 한계: 쿠키 없이 이미 로그인된 기존 사용자의 배포 직후 첫 데스크톱 로드는 한 번 모바일→데스크톱 전환된다(그 로드에서 쿠키가 남아 이후 없음).
+
+**우선순위**: 낮음~중간.
+
+### [ ] 정리된 질문 첨부 칩 비활성 표시
+
+**What**: 첨부 정리 잡이 종료 90일 지난 질문의 파일을 지운 뒤에도 대화 화면은 첨부 칩을 그대로 보여 주고, 클릭하면 410 안내가 알림으로 뜬다. 칩을 비활성(보존 기간 만료) 표시로 바꾼다.
+
+**Context**: `InterviewResponse`(또는 첨부 DTO)에 파일 존재 플래그 추가 → 프론트 칩 분기. DB 첨부 행은 감사용으로 남아 있다(`AttachmentCleanupJob`).
+
+**우선순위**: 낮음.
+
+### [ ] `QuestionService.ask` 커밋 실패 시 첨부 파일 잔재
+
+**What**: 추가 질문에서 파일을 쓴 뒤 트랜잭션 커밋이 실패하면 `question-{sid}/{seq}/`에 행 없는 파일이 남고, 다음 ask가 같은 turn seq를 다시 받아 같은 디렉터리에 겹쳐 쓴다.
+
+**Context**: 세션 디렉터리 안이라 첨부 정리 잡은 세션 종결 후에만 함께 회수한다. 등록(`create`) 경로처럼 실패 시 해당 턴 디렉터리를 정리하거나, 커밋 후 파일을 확정(임시 경로 → rename)하는 방식 검토.
+
+**우선순위**: 낮음.
+
+### [ ] frontend `npm ci`가 npm 10에서 lock 불일치로 실패
+
+**What**: 로컬 npm 10.x(Node 22)로 `frontend`에서 `npm ci`를 하면 `EUSAGE … Missing: crossws@0.4.12 from lock file`로 거부된다. CI(Node 24 / npm 11)에서는 통과한다.
+
+**Context**: `@nuxt/test-utils/node_modules/h3-next`(h3@2 rc 별칭)가 optional peer로 `crossws ^0.4.1`을 선언하는데 호이스팅된 crossws는 0.3.5. lock을 만든 npm 11은 범위 밖 optional peer를 설치하지 않지만 npm 10 arborist는 중첩 0.4.12가 필요하다고 본다. 후보: `package.json` `engines.npm` + `.npmrc engine-strict`로 npm 11+ 명시, 또는 npm 11로 lock 재생성하는 별도 PR. 우회: `npx -y npm@11 ci`.
+
+**우선순위**: 낮음.
+
+## 완료
+
+### [x] 레포 캐시 자동 정리 정책 (2026-09-30)
+워커 `RepoCacheCleanupJob`이 매일 03:00 `unused-days`(기본 30)일 넘게 안 쓴 캐시를 지운다(`netis-maker.worker.repo-cache-cleanup.*`, env `REPO_CACHE_CLEANUP_ENABLED/CRON/UNUSED_DAYS`). 후보 정책 중 ①(N일 미사용)만 구현. ②(디스크 임계 LRU)·③(관리자 UI 트리거 — 워커에 HTTP 포트가 없어 폴링 프로토콜 확장 필요)·task_analysis 메타데이터 기록은 미포함. ⚠️ 구현 성공·배포 worktree가 붙은 캐시는 회수되지 않는다 → 위 "worktree 보존 정책". 상세는 CLAUDE.md 환경 메모.
+
+### [x] 첨부파일 정리 정책 (2026-09-30)
+api `AttachmentCleanupJob`(매일 03:30, `app.attachment.cleanup.*`): `task-{id}/`는 soft-delete 30일 경과 시에만, `question-{sid}/`는 종결(취소·만료·실패) + `last_activity_at` 90일 경과 시에만, 고아(등록 롤백 잔재)는 id ≤ MAX(id)이고 mtime 24시간 경과 시에만 삭제. DB 첨부 행은 감사용으로 남기고, 질문 첨부 다운로드는 파일이 없으면 410. soft-delete 복구 경로는 코드에 없음(수동 DB 복구 여유 = 30일). 레포 캐시 정리와 스케줄러는 분리, 인터뷰 `work_dir` 정리는 미포함.
+
+### [x] 프론트 테스트가 생성물 `.nuxt`에 의존 (2026-09-30)
+`vitest.config.ts`가 `esbuild.tsconfigRaw`(문자열, 값은 `test/esbuildTsconfig.ts`)로 tsconfig.json 조회를 건너뛰어 `.nuxt` 없이도 전체 스위트가 돈다. `test/esbuild-tsconfig.spec.ts`가 실제 설정으로 띄운 Vite의 .ts·TS SFC 트랜스폼과 `.nuxt` 체인 값 일치를 가드. CI는 원래 `npm ci`(postinstall=`nuxi prepare`)로 안전했다.
+
+### [x] 답변 마크다운의 이미지 렌더 차단 검토 (2026-09-30)
+`useMarkdown`의 image 규칙이 `<img>`를 내보내지 않는다 — 외부·상대·동일 출처 URL은 `[이미지] alt` 새 탭 링크, data:image는 링크 없는 표식, 링크 안 이미지는 표식+alt만. 참조식·엔티티 인코딩도 같은 토큰이라 함께 막힘. v-html 4곳 모두 이 렌더러 하나를 쓴다. 스펙 2026-09-05 §2 개정.
+
+### [x] 질문 셸 SSR 하이드레이션 점검 / 전역 레이아웃 SSR 하이드레이션 불일치 (2026-09-30)
+재현해 보니 `$q.screen` 분기는 불일치가 아니라(nuxt-quasar-ui가 하이드레이션까지 xs로 고정) 데스크톱 첫 로드의 모바일→데스크톱 점프였고, 실제 불일치 원인은 ① 인증 상태(SSR은 항상 비로그인) ② 첫 로드 미들웨어의 SPA 리다이렉트였다. `useHydrationSafeAuth` 게이트, 첫 로드 리다이렉트의 문서 이동화, 쿠키 `netis-maker-screen` 화면 폭 힌트로 dev·프로덕션 빌드 모두 불일치 0건(45케이스 + 리다이렉트 20케이스). 규칙은 CLAUDE.md 프론트 스타일 "SSR 하이드레이션".
+
+### [x] 사용량 API 계약 테스트 보강 (2026-09-30)
+`UsageApiIntegrationTest.isUsingOverage_report_is_returned_as_usingOverage`.
+
+### [x] SSE 재생이 system 노트 턴을 question 이벤트로 보냄 (2026-09-13 해결, 2026-09-30 테스트 고정)
+코드는 2026-09-13 질문 MCP·첨부 작업에서 이미 해결(`InterviewStreamService.replayEventName`, 프론트 `note` 리스너). 이번에 스트림 본문의 `event:note` 와이어 계약(`InterviewApiIntegrationTest`)과 스냅샷 실패 시 노트 칩 렌더·입력 대기 미전환(`InterviewPanel.spec.ts`)을 테스트로 고정.
+
+### [x] `getHistory` Top-N 쿼리 + 동일 `at` 정렬 안정화 (2026-09-30)
+`findByTaskIdOrderByAtDescIdDesc(taskId, Limit)` → `order by at desc, id desc fetch first ? rows only`. `TaskServiceHistoryTest`가 동률 순서와 DB 레벨 Top-N(Hibernate 엔티티 로드 수)을 고정.

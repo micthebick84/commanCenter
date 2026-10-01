@@ -19,6 +19,7 @@ import org.springframework.test.context.ContextConfiguration;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.request.RequestPostProcessor;
 
+import java.nio.charset.StandardCharsets;
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -87,6 +88,33 @@ class InterviewApiIntegrationTest {
         mvc.perform(get("/api/interviews/" + sid + "/stream").with(userJwt("user1")))
                 .andExpect(status().isOk())
                 .andExpect(header().string(HttpHeaders.CONTENT_TYPE, containsString("text/event-stream")));
+    }
+
+    /**
+     * 재접속 replay 와이어 계약(스펙 2026-09-13 §5.3): assistant 질문 턴은 question, system 노트 턴(사용자 취소)은
+     * note 이벤트로 나간다 — 스냅샷 GET이 실패해 replay만 받은 클라이언트도 노트를 AI 말풍선·입력대기 전환으로
+     * 오인하지 않게 하는 서버 쪽 절반. replayEventName 매핑이 subscribe에 실제로 연결돼 있는지를 고정한다.
+     */
+    @Test
+    void GET_stream_replays_question_as_question_and_system_note_as_note() throws Exception {
+        long sid = startSession("user1", "제목");
+        mvc.perform(post("/worker/interviews/claim").header("X-Worker-API-Key", apiKey).param("workerId", "iw-1"));
+        mvc.perform(post("/worker/interviews/" + sid + "/question").header("X-Worker-API-Key", apiKey)
+                        .param("workerId", "iw-1")
+                        .contentType(APPLICATION_JSON)
+                        .content("{\"content\":\"어떤 인증을 쓰나요?\",\"kind\":\"question\"}"))
+                .andExpect(status().isNoContent());                           // seq 0 — assistant/question
+        mvc.perform(post("/api/interviews/" + sid + "/cancel").with(adminJwt("admin1")))
+                .andExpect(status().isOk());                                  // seq 1 — system/note "사용자 취소"
+
+        String body = mvc.perform(get("/api/interviews/" + sid + "/stream").with(userJwt("user1")))
+                .andExpect(request().asyncStarted())
+                .andReturn().getResponse().getContentAsString(StandardCharsets.UTF_8);
+
+        assertThat(body)
+                .contains("event:question\ndata:{\"seq\":0,\"content\":\"어떤 인증을 쓰나요?\"}")
+                .contains("event:note\ndata:{\"seq\":1,\"content\":\"사용자 취소\"}")
+                .doesNotContain("event:question\ndata:{\"seq\":1,");
     }
 
     @Test

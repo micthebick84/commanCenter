@@ -5,6 +5,7 @@ import org.junit.jupiter.api.io.TempDir;
 import org.springframework.http.HttpStatus;
 import org.springframework.mock.web.MockMultipartFile;
 
+import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.nio.file.Files;
@@ -287,5 +288,71 @@ class AttachmentStorageTest {
         assertThatThrownBy(() -> storage().writeText("../escape.txt", "x"))
                 .isInstanceOf(TaskException.class)
                 .satisfies(e -> assertThat(((TaskException) e).getStatus()).isEqualTo(HttpStatus.NOT_FOUND));
+    }
+
+    // ── 보존 기간 정리 (AttachmentCleanupJob) ──────────────────────────────────
+
+    private static AttachmentCleanupPlanner.OwnerDir ownerDir(String name) {
+        return new AttachmentCleanupPlanner.OwnerDir(name, AttachmentCleanupPlanner.Owner.TASK, 1L, null);
+    }
+
+    @Test
+    void deleteOwnerDirectory는_정규형이_아닌_이름을_거부한다() throws Exception {
+        Files.createDirectories(tmp.resolve("sub/task-1"));
+        for (String bad : List.of("..", "sub/task-1", "task-1/..", "task-01", "other")) {
+            assertThatThrownBy(() -> storage().deleteOwnerDirectory(ownerDir(bad)))
+                    .isInstanceOf(IllegalArgumentException.class);
+        }
+        assertThat(tmp.resolve("sub/task-1")).isDirectory();
+    }
+
+    @Test
+    void deleteOwnerDirectory는_링크나_일반_파일이면_거부한다() throws Exception {
+        Path outside = Files.createDirectories(tmp.resolve("link-target"));   // 이름이 정규형이 아니라 스캔 대상 아님
+        Files.writeString(outside.resolve("keep.txt"), "x");
+        Files.createSymbolicLink(tmp.resolve("task-1"), outside);
+        Files.writeString(tmp.resolve("task-2"), "file");
+
+        assertThatThrownBy(() -> storage().deleteOwnerDirectory(ownerDir("task-1"))).isInstanceOf(IOException.class);
+        assertThatThrownBy(() -> storage().deleteOwnerDirectory(ownerDir("task-2"))).isInstanceOf(IOException.class);
+        assertThat(outside.resolve("keep.txt")).exists();
+        assertThat(tmp.resolve("task-2")).exists();
+    }
+
+    /**
+     * Windows는 DOS 읽기 전용 속성이 붙은 파일을 Files.delete로 못 지운다(AccessDeniedException) — 백업·동기화
+     * 도구가 붙인 속성 하나로 매일 밤 '삭제 실패'가 반복되면 안 된다. POSIX에선 dos 뷰가 없어 쓰기 권한만 뺀다
+     * (디렉터리에 쓰기 권한이 있으면 지워지므로 그대로 통과 — 양쪽 플랫폼 공통 계약).
+     */
+    @Test
+    void deleteOwnerDirectory는_읽기_전용_파일도_지운다() throws Exception {
+        Path dir = Files.createDirectories(tmp.resolve("question-7/create"));
+        Path ro = Files.writeString(dir.resolve("1-a.txt"), "내용");
+        if (Files.getFileStore(ro).supportsFileAttributeView("dos")) {
+            Files.setAttribute(ro, "dos:readonly", true);
+        } else {
+            assertThat(ro.toFile().setWritable(false)).isTrue();
+        }
+
+        long freed = storage().deleteOwnerDirectory(ownerDir("question-7"));
+
+        assertThat(tmp.resolve("question-7")).doesNotExist();
+        assertThat(freed).isEqualTo("내용".getBytes(StandardCharsets.UTF_8).length);
+    }
+
+    @Test
+    void scanOwnerDirectories는_정규형_실제_디렉터리만_돌려주고_나머지는_건너뜀으로_센다() throws Exception {
+        Files.createDirectories(tmp.resolve("task-3/sub"));
+        Files.createDirectories(tmp.resolve("question-4"));
+        Files.createDirectories(tmp.resolve("task-03"));
+        Files.writeString(tmp.resolve("task-5"), "file");
+        Files.createSymbolicLink(tmp.resolve("question-6"), tmp.resolve("question-4"));
+
+        AttachmentStorage.OwnerDirScan scan = storage().scanOwnerDirectories();
+
+        assertThat(scan.dirs()).extracting(AttachmentCleanupPlanner.OwnerDir::name)
+                .containsExactlyInAnyOrder("task-3", "question-4");
+        assertThat(scan.dirs()).allSatisfy(d -> assertThat(d.modifiedAt()).isNotNull());
+        assertThat(scan.skipped()).isEqualTo(3);
     }
 }

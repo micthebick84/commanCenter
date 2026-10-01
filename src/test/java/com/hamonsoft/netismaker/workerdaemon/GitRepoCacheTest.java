@@ -19,10 +19,16 @@ class GitRepoCacheTest {
     @TempDir Path tmp;
 
     private WorkerProperties props(Path reposDir) {
+        return props(reposDir, null);
+    }
+
+    private WorkerProperties props(Path reposDir, Path worktreeRoot) {
         var deploy = new WorkerProperties.Deploy(null, null, 0, null, null, null, 0, 0, null,
                 null, 0, 0, 0, null, 0, null);
         return new WorkerProperties("w1", null, null, null, 0, 0, 0, 0, 0, reposDir.toString(), null,
-                null, "ghp_SECRETPAT", "glpat-SECRETTOKEN", null, null, null, null, null, null, null, null, null, null, deploy);
+                null, "ghp_SECRETPAT", "glpat-SECRETTOKEN", null, null,
+                worktreeRoot == null ? null : worktreeRoot.toString(),
+                null, null, null, null, null, null, null, deploy, null);
     }
 
     private static void git(File dir, String... args) throws IOException, InterruptedException {
@@ -238,6 +244,71 @@ class GitRepoCacheTest {
                 .doesNotContain("oauth2:")
                 .doesNotContain("glpat-SECRETTOKEN")
                 .doesNotContain("ghp_SECRETPAT");
+    }
+
+    /**
+     * 캐시를 쓰는 모든 경로(ensureFresh·fetchOnly·worktree 생성)가 마지막 사용 마커를 갱신해야
+     * RepoCacheCleanupJob이 쓰이는 캐시를 미사용으로 오판하지 않는다.
+     */
+    @Test
+    void every_cache_use_refreshes_the_last_used_marker() throws Exception {
+        Path bare = bareRemoteWithDevelop("remote5");
+        Path reposDir = Files.createDirectories(tmp.resolve("repos5"));
+        RepoRef ref = new RepoRef("github", "acme/widgets", bare.toUri().toString());
+        WorkerProperties p = props(reposDir, tmp.resolve("worktrees5"));
+        GitRepoCache cache = new GitRepoCache(p);
+        Path marker = reposDir.resolve("acme/widgets" + GitRepoCache.LAST_USED_SUFFIX);
+        java.nio.file.attribute.FileTime old =
+                java.nio.file.attribute.FileTime.from(java.time.Instant.now().minus(java.time.Duration.ofDays(40)));
+
+        File dir = cache.ensureFresh(ref, "main").dir();
+        assertThat(marker).exists();
+
+        Files.setLastModifiedTime(marker, old);
+        cache.fetchOnly(ref, "develop");
+        assertThat(Files.getLastModifiedTime(marker)).isGreaterThan(old);
+
+        Files.setLastModifiedTime(marker, old);
+        cache.ensureFresh(ref, "main");
+        assertThat(Files.getLastModifiedTime(marker)).isGreaterThan(old);
+
+        Files.setLastModifiedTime(marker, old);
+        new WorktreeService(p, cache).createForDesign(dir, "acme/widgets", "main", 1);
+        assertThat(Files.getLastModifiedTime(marker)).isGreaterThan(old);
+
+        // 정리 잡의 비차단 락은 마커를 건드리지 않는다
+        Files.setLastModifiedTime(marker, old);
+        assertThat(cache.tryWithRepoLock("acme/widgets", () -> "ok")).contains("ok");
+        assertThat(Files.getLastModifiedTime(marker)).isEqualTo(old);
+    }
+
+    /**
+     * 같은 JVM의 다른 채널이 FileLock을 쥐고 있으면(대소문자 무시 파일시스템에서 표기만 다른 키 등)
+     * tryLock이 OverlappingFileLockException을 던진다 — 작업을 즉시 실패시키지 말고 풀릴 때까지 기다려야 한다.
+     */
+    @Test
+    void blocking_lock_waits_while_another_channel_in_this_jvm_holds_the_file_lock() throws Exception {
+        Path reposDir = Files.createDirectories(tmp.resolve("repos6"));
+        GitRepoCache cache = new GitRepoCache(props(reposDir));
+        Files.createDirectories(reposDir.resolve("acme"));
+        java.nio.channels.FileChannel ch = java.nio.channels.FileChannel.open(reposDir.resolve("acme/widgets.lock"),
+                java.nio.file.StandardOpenOption.CREATE, java.nio.file.StandardOpenOption.WRITE);
+        java.nio.channels.FileLock held = ch.lock();
+        Thread releaser = new Thread(() -> {
+            try {
+                Thread.sleep(700);
+                held.release();
+                ch.close();
+            } catch (Exception ignore) {
+                // 테스트 보조 스레드
+            }
+        });
+        releaser.start();
+
+        String result = cache.withRepoLock("acme/widgets", () -> "acquired");
+
+        releaser.join();
+        assertThat(result).isEqualTo("acquired");
     }
 
     @Test

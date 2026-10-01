@@ -1,5 +1,6 @@
 package com.hamonsoft.netismaker.service;
 
+import com.hamonsoft.netismaker.util.FileDeletion;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Profile;
@@ -9,10 +10,17 @@ import org.springframework.web.multipart.MultipartFile;
 
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.DirectoryStream;
+import java.nio.file.FileVisitResult;
 import java.nio.file.Files;
+import java.nio.file.LinkOption;
 import java.nio.file.Path;
+import java.nio.file.SimpleFileVisitor;
+import java.nio.file.attribute.BasicFileAttributes;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
+import java.util.Optional;
 import java.util.Set;
 
 /**
@@ -225,7 +233,11 @@ public class AttachmentStorage {
         return resolve(relativePath).toString();
     }
 
-    /** 롤백 시 best-effort 정리 — 실패는 무시하되 원인은 남긴다 (tx는 이미 롤백 경로). */
+    /**
+     * 롤백 시 best-effort 정리 — 실패는 무시하되 원인은 남긴다 (tx는 이미 롤백 경로).
+     * 파일만 지우고 상위 디렉터리는 남긴다 — 소유 행까지 롤백된 task-{id}/·question-{sid}/는
+     * AttachmentCleanupJob이 고아로 회수한다.
+     */
     public void deleteQuietly(String relativePath) {
         try {
             Files.deleteIfExists(resolve(relativePath));
@@ -234,5 +246,83 @@ public class AttachmentStorage {
             // 고아 파일을 추적할 수 있도록 원인은 로그로 남긴다.
             log.warn("첨부 파일 삭제 실패(무시): relativePath={}", relativePath, e);
         }
+    }
+
+    // ── 보존 기간 정리 (AttachmentCleanupJob) ──────────────────────────────────
+
+    /**
+     * 루트 바로 아래 스캔 결과. dirs = 정규형 이름(task-{id}/question-{id})의 실제 디렉터리,
+     * skipped = 그 밖의 항목 수(패턴 불일치·심볼릭 링크·일반 파일).
+     */
+    public record OwnerDirScan(List<AttachmentCleanupPlanner.OwnerDir> dirs, int skipped) {}
+
+    /** 루트가 없으면(첨부가 한 번도 없었음) 빈 결과. 링크는 따라가지 않는다 — 이름이 맞아도 링크면 skipped. */
+    public OwnerDirScan scanOwnerDirectories() throws IOException {
+        if (!Files.isDirectory(root)) return new OwnerDirScan(List.of(), 0);
+        List<AttachmentCleanupPlanner.OwnerDir> dirs = new ArrayList<>();
+        int skipped = 0;
+        try (DirectoryStream<Path> children = Files.newDirectoryStream(root)) {
+            for (Path child : children) {
+                String name = child.getFileName().toString();
+                BasicFileAttributes attrs;
+                try {
+                    attrs = Files.readAttributes(child, BasicFileAttributes.class, LinkOption.NOFOLLOW_LINKS);
+                } catch (IOException e) {
+                    // 스캔 도중 사라졌거나 권한 문제 — 이 항목만 건너뛴다(다음 주기에 재판정).
+                    skipped++;
+                    log.warn("첨부 정리: 속성 조회 실패 — 건너뜀: {} ({})", child, e.toString());
+                    continue;
+                }
+                Optional<AttachmentCleanupPlanner.OwnerDir> dir =
+                        AttachmentCleanupPlanner.parse(name, attrs.lastModifiedTime().toInstant());
+                if (dir.isEmpty()) {
+                    skipped++;
+                    log.debug("첨부 정리: 대상 패턴 아님 — 건너뜀: {}", name);
+                } else if (attrs.isSymbolicLink() || !attrs.isDirectory()) {
+                    skipped++;
+                    log.warn("첨부 정리: 디렉터리가 아님(심볼릭 링크 등) — 건너뜀: {}", child);
+                } else {
+                    dirs.add(dir.get());
+                }
+            }
+        }
+        return new OwnerDirScan(dirs, skipped);
+    }
+
+    /**
+     * 소유 디렉터리를 통째로 지우고 해제한 바이트(일반 파일 합계)를 돌려준다.
+     * 방어: 정규형 이름 재확인 + 루트 직속 containment + 삭제 직전 링크/디렉터리 재검사.
+     * walkFileTree는 FOLLOW_LINKS 없이 돌므로 하위의 심볼릭 링크는 링크 자체만 지워지고 대상은 건드리지 않는다.
+     * Windows 읽기 전용 속성이 붙은 항목은 FileDeletion이 속성을 풀고 지운다(RepoCacheCleanupJob과 같은 규칙).
+     */
+    public long deleteOwnerDirectory(AttachmentCleanupPlanner.OwnerDir dir) throws IOException {
+        if (AttachmentCleanupPlanner.parse(dir.name(), null).isEmpty()) {
+            throw new IllegalArgumentException("정리 대상 이름이 아닙니다: " + dir.name());
+        }
+        Path target = root.resolve(dir.name()).normalize();
+        if (!target.startsWith(root) || !root.equals(target.getParent())) {
+            throw new IllegalArgumentException("첨부 루트 직속 경로가 아닙니다: " + target);
+        }
+        BasicFileAttributes attrs = Files.readAttributes(target, BasicFileAttributes.class, LinkOption.NOFOLLOW_LINKS);
+        if (attrs.isSymbolicLink() || !attrs.isDirectory()) {
+            throw new IOException("디렉터리가 아님(심볼릭 링크 등) — 삭제 거부: " + target);
+        }
+        long[] freed = {0};
+        Files.walkFileTree(target, new SimpleFileVisitor<>() {
+            @Override
+            public FileVisitResult visitFile(Path file, BasicFileAttributes a) throws IOException {
+                if (a.isRegularFile()) freed[0] += a.size();
+                FileDeletion.deleteClearingReadOnly(file);   // Windows 읽기 전용 속성이면 풀고 지운다
+                return FileVisitResult.CONTINUE;
+            }
+
+            @Override
+            public FileVisitResult postVisitDirectory(Path d, IOException exc) throws IOException {
+                if (exc != null) throw exc;
+                FileDeletion.deleteClearingReadOnly(d);
+                return FileVisitResult.CONTINUE;
+            }
+        });
+        return freed[0];
     }
 }

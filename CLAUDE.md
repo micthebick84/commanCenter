@@ -25,6 +25,8 @@ cd frontend && npm run dev                                  # 프론트 :3001
 cd netismaker-interview-service && npm run dev              # 인터뷰 워커 (대화형 분석, .env 필요 — dotenv 자동로딩 없음)
 ./scripts/start-all.sh                                      # API+워커 N+인터뷰 서비스 일괄 기동 (공개 노출 스택은 ./scripts/start-public.sh 먼저)
 ```
+- Testcontainers 통합 테스트는 `RUN_TESTCONTAINERS=true`일 때만 돈다(CI는 켬). 로캘이 없는 리눅스 컨테이너에서는 `LANG=C.UTF-8 LC_ALL=C.UTF-8`로 gradle을 돌릴 것 — 한글 테스트 클래스명 때문에 `compileTestJava`가 `bad filename`으로 깨진다.
+- 프론트 `npm ci`는 npm 11 이상(CI의 Node 24)에서만 통과한다 — npm 10은 lock 불일치(`Missing: crossws@0.4.12`)로 거부(TODOS 참고). 로컬이 Node 22면 `npx -y npm@11 ci`.
 
 ## 프론트엔드 코드 스타일 (`frontend/`)
 
@@ -36,6 +38,9 @@ cd netismaker-interview-service && npm run dev              # 인터뷰 워커 (
 - **`q-dialog` 안 콘텐츠의 루트 요소는 `<div>`로 둘 것** — Quasar CSS가 `.q-dialog__inner { pointer-events:none }`에 `.q-dialog__inner > div { pointer-events:all }` 예외만 주므로, 루트가 `<aside>` 등이면 다이얼로그 안 모든 탭이 백드롭으로 새어 닫히기만 한다. 2026-09-06 질문 탭 모바일 서랍(`pages/questions.vue`) 사례(`questions-shell.spec.ts`가 가드). 좁은 화면 분기 테스트는 `test/mocks/screen.ts`의 `setViewportWidth()`로 Quasar Screen 폭을 바꿔서 한다.
 - **모바일 분기는 `$q.screen.lt.md` 하나로.** 다이얼로그는 `:maximized="$q.screen.lt.md"` + `width: min(Npx, 100vw)`, 긴 마크다운/pre는 `.md-scroll`로 감싼다(2026-09-06 작업 탭 재설계).
 - **`q-expansion-item`은 접힌 상태에도 슬롯 콘텐츠를 마운트한다(v-show).** 펼칠 때만 마운트해야 하면(API 조회 등) `v-model` + 내용 `v-if`로 게이트하거나 `components/tasks/TaskDetailMobile.vue`처럼 q-item + q-slide-transition + v-if 아코디언을 쓴다(2026-09-06 Task 9b/11 교훈).
+- **에이전트/사용자 생성 마크다운은 `composables/useMarkdown.ts`의 `renderMarkdown` 하나로만 렌더**(v-html 4곳 모두 이것). html:false에 더해 이미지(`![]()`)는 `<img>` 대신 클릭해야 열리는 `[이미지] alt` 링크(`a.md-image-link`), data:image는 링크 없는 표식(`span.md-image-omitted`) — 프롬프트 인젝션이 외부 이미지 URL로 데이터를 빼 가는 자동 요청 채널 차단(2026-09-30). 다른 마크다운 라이브러리·v-html 경로를 새로 들이지 말고, 렌더 규칙은 공격자 입력 기준 토큰 수에 선형이어야 한다(`useMarkdown.spec.ts` 대량 이미지 테스트가 가드).
+- **SSR 하이드레이션(2026-09-30 정리 — 불일치 0건 상태를 유지할 것)**: 토큰이 localStorage에만 있어 SSR은 항상 비로그인으로 그린다 → 템플릿의 인증·관리자 분기는 스토어 대신 `useHydrationSafeAuth()`(토큰·API·리다이렉트 판단은 스토어 그대로). 전역 미들웨어의 **첫 로드** 리다이렉트는 문서 이동(`navigateTo(path, { external: true, replace: true })`) — SPA 리다이렉트면 SSR과 다른 페이지로 하이드레이션하고, 하이드레이션 뒤로 미루면 보호 페이지가 토큰 없이 마운트돼 401→logout. `$q.screen`은 SSR·하이드레이션 동안 쿠키 `netis-maker-screen` 힌트로 고정(`wide`=md 값, 없음/`narrow`=Quasar 기본 xs)되고 실제 폭은 하이드레이션 뒤에 잰다(`plugins/ssr-screen.ts`, `composables/ssrScreen.ts`). UA로 폭을 추정하지 말 것(iPadOS Safari는 Mac UA). 하이드레이션 회귀는 vitest로 못 잡는다 → `nuxi build` 후 `node .output/server/index.mjs`를 띄워 Playwright로 1280/390px 콘솔의 `Hydration completed but contains mismatches`를 확인.
+- **vitest는 `.nuxt` 없이도 돈다**: `vitest.config.ts`가 `esbuild.tsconfigRaw`(문자열, 값은 `test/esbuildTsconfig.ts`)로 tsconfig.json → `.nuxt` 조회를 건너뛴다(새 worktree는 `node_modules` 링크만으로 `npx vitest run` 가능; `nuxi typecheck`/빌드/IDE는 여전히 `nuxi prepare` 필요). Nuxt 업그레이드로 `.nuxt/tsconfig.json`의 target/verbatimModuleSyntax/jsx가 바뀌거나 Vite가 oxc 트랜스폼으로 넘어가면 `test/esbuild-tsconfig.spec.ts`가 깨져 알려 준다. `.nuxt` 없이는 SFC 매크로 타입의 `~/` import가 안 풀리니 `defineProps<T>()`의 T를 `~/`에서 가져오지 말 것.
 
 워커 실행 환경변수:
 ```bash
@@ -152,6 +157,10 @@ PR 본문/브랜치 prefix/timeout은 `application-worker.yml`의 `netis-maker.w
 | 레포 호스트 판별 · 인증 URL · 폴더 키 · 토큰 마스킹 | `util/RepoUrlParser.java`, `git/RepoRef.java`, `git/GitRemotes.java`, 인터뷰 서비스 `src/sdk/gitRemote.ts` |
 | PR/MR 생성 (GitHub `gh` / GitLab REST) | `workerdaemon/MergeRequestCreator.java`, `GitHubPrCreator.java`, `GitLabMrCreator.java`, 위임 `GitOpsService.java` |
 | PR/MR 화면 문구 | `frontend/composables/mergeRequestLabel.ts` (`prUrl` 모양으로 판정) |
+| 레포 캐시 자동 정리 (사용 마커 · 비차단 락 · `.trash` 이동 후 삭제) | `workerdaemon/RepoCacheCleanupJob.java`, `workerdaemon/GitRepoCache.java`(`withRepoLock` 마커 · `tryWithRepoLock`), 설정 `WorkerProperties.RepoCacheCleanup` |
+| 첨부 디렉터리 보존 기간 정리 (작업 soft-delete 30일 / 종료 질문 90일 / 고아 24h+MAX(id) 가드, DB 행 보존, 정리 후 질문 첨부 다운로드 410) | `service/AttachmentCleanupJob.java`, `service/AttachmentCleanupPlanner.java`(순수 판정), `AttachmentStorage.scanOwnerDirectories`/`deleteOwnerDirectory` |
+| SSR 하이드레이션 안전 인증 게이트 · 화면 폭 힌트 · 첫 로드 리다이렉트 | `frontend/composables/useHydrationSafeAuth.ts`, `frontend/plugins/ssr-screen.ts` + `frontend/composables/ssrScreen.ts`, `frontend/middleware/auth.global.ts` |
+| 마크다운 렌더(이미지 → 링크) | `frontend/composables/useMarkdown.ts` |
 
 ## 운영자 환경 권장 셋업
 
@@ -170,6 +179,8 @@ PR 본문/브랜치 prefix/timeout은 `application-worker.yml`의 `netis-maker.w
   ```
 - **MCP 합본**: `~/netis-maker/worker-mcp.json` (워커 부팅 시 자동 생성/갱신)
 - **레포 캐시**: `~/netis-maker/repos/{owner}/{repo}` (depth=1 clone, 이후 fetch+reset)
+- **레포 캐시 자동 정리(워커)**: `RepoCacheCleanupJob`이 매일 03:00(워커 로컬 시각, `REPO_CACHE_CLEANUP_CRON` 6필드, `-`=끔) `REPO_CACHE_CLEANUP_UNUSED_DAYS`(기본 30)일 넘게 안 쓴 캐시를 지운다(`REPO_CACHE_CLEANUP_ENABLED=false`로 끔). 사용 시각 = `repos/{localKey}.last-used` mtime(withRepoLock이 갱신; 없으면 `.git` 메타 mtime, 판단 불가면 보존). 건너뜀: 살아 있는 worktree(`.git/worktrees/*/gitdir` 대상 존재·locked·판단불가, worktree-root가 안 보이거나 대상 위치가 그 밖이면 보존), 락 점유, `{localKey}.lock` 표식 없는 레포. 락 안에서 `repos/.trash/`로 원자 rename → 락 밖 삭제, 다음 사용 때 재clone. 같은 repos-dir의 다중 워커는 `repos/.repo-cache-cleanup.lock`으로 한 프로세스만 정리. ⚠️ 구현 성공·배포 worktree는 지우는 곳이 없어 그 캐시는 회수되지 않는다 — 회차 로그 `레포 캐시 보존(worktree N개가 사용 중)`에 붙잡은 worktree 경로가 나온다(TODOS 'worktree 보존 정책'). 워커 스케줄 풀 5.
+- **첨부 정리(API)**: `AttachmentCleanupJob`이 매일 03:30 `app.attachment.cleanup.*`(enabled/cron/task-deleted-retention-days 30/question-closed-retention-days 90/orphan-grace-hours 24) 기준으로 `attachments/task-{id}`·`question-{sid}` 디렉터리를 지운다(DB 행은 남김, 질문 첨부는 정리 후 다운로드 410). ⚠️ 첫 배포 직후 03:30에 기존 누적분이 한꺼번에 지워진다 — 먼저 보고 싶으면 `enabled: false`로 배포 후 켤 것(dry-run 없음). 통합 테스트는 `TestcontainersConfig`가 이 cron을 끈다(실제 첨부 루트 보호) — 새 테스트 initializer를 만들면 같은 속성을 넣을 것.
 - **`confirm`(구현 진행) 전제조건**: `task_analysis.approved_by`가 `com."user"(user_id)`에 FK로 걸려 있어(`V1__schema.sql:40`) JWT `username`이 `com."user"`에 없는 admin 계정으로 확정을 시도하면 500이 난다(작업은 `플랜승인대기`에 그대로 남고 재시도 가능). 인터뷰 승인/확정을 수행할 admin 계정은 반드시 `com."user"`에 시드돼 있어야 함.
 
 ## 공개 배포 주소 (`task-N.micthebick.dev`)

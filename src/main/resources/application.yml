@@ -109,6 +109,12 @@ app:
     max-files: 10
     max-file-size-mb: 20
     max-total-size-mb: 50
+    cleanup:                              # AttachmentCleanupJob — 디렉터리만 지우고 DB 첨부 행은 남긴다(감사용)
+      enabled: true
+      cron: "0 30 3 * * *"                # 매일 03:30 (서버 로컬 시각)
+      task-deleted-retention-days: 30     # soft-delete 후 경과 시 task-{id}/ 삭제. 삭제 안 된 작업은 나이 무관 보존
+      question-closed-retention-days: 90  # 종료(취소·만료·실패) 후 경과 시 question-{sid}/ 삭제. 진행 중·답변 완료는 보존
+      orphan-grace-hours: 24              # 소유 행 없는 디렉터리(등록 롤백 잔재)는 mtime이 이보다 오래됐을 때만 삭제 (최소 1)
 
 logging:
   level:

@@ -36,6 +36,7 @@ import java.util.Map;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.hamcrest.Matchers.containsString;
 import static org.hamcrest.Matchers.hasSize;
+import static org.hamcrest.Matchers.not;
 import static org.springframework.http.MediaType.APPLICATION_JSON;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.jwt;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.*;
@@ -452,6 +453,35 @@ class QuestionApiIntegrationTest {
                 List.of(), "claude-opus-5", "high")).getId();
         mvc.perform(get("/api/questions/" + iid + "/attachments/" + attId).with(adminJwt("admin1")))
                 .andExpect(status().isNotFound());
+    }
+
+    /** 진행 중 질문은 정리 잡 대상이 아니다 — 파일이 없으면 실제 유실이므로 410 보존 기간 안내가 아니라 404. */
+    @Test
+    void 진행_중_질문의_첨부_파일이_없으면_404이고_보존_기간_안내를_하지_않는다() throws Exception {
+        long id = createQuestionWithFile(userJwt("user1"), filePart("요구사항.txt", "내용"));
+        long attId = attachmentRepo.findBySessionIdOrderByIdAsc(id).get(0).getId();
+        FileSystemUtils.deleteRecursively(Path.of(attachmentDir, "question-" + id));
+
+        mvc.perform(get("/api/questions/" + id + "/attachments/" + attId).with(userJwt("user1")))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.message").value(not(containsString("보존 기간"))));
+    }
+
+    /** AttachmentCleanupJob이 종료된 질문의 디렉터리를 지운 뒤 — 메타 행은 남고 다운로드는 500이 아니라 410 + 한국어 메시지. */
+    @Test
+    void 정리된_첨부_다운로드는_410과_보존_기간_안내() throws Exception {
+        long id = createQuestionWithFile(userJwt("user1"), filePart("요구사항.txt", "내용"));
+        long attId = attachmentRepo.findBySessionIdOrderByIdAsc(id).get(0).getId();
+        mvc.perform(post("/api/questions/" + id + "/close").with(userJwt("user1"))).andExpect(status().isOk());
+        FileSystemUtils.deleteRecursively(Path.of(attachmentDir, "question-" + id));
+
+        mvc.perform(get("/api/questions/" + id + "/attachments/" + attId).with(userJwt("user1")))
+                .andExpect(status().isGone())
+                .andExpect(jsonPath("$.message").value(containsString("보존 기간")));
+        // 대화 조회는 그대로 — 첨부 메타도 계속 보인다
+        mvc.perform(get("/api/questions/" + id).with(userJwt("user1")))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.attachments", hasSize(1)));
     }
 
     // ── 대화 중 MCP 변경 (스펙 2026-09-13 §5.2, §5.3) ──────────────────────────

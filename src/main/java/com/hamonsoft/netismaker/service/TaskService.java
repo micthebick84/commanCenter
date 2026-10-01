@@ -20,6 +20,7 @@ import com.hamonsoft.netismaker.repository.TaskStageUsageRepository;
 import com.hamonsoft.netismaker.repository.TaskStatusHistoryRepository;
 import org.springframework.context.annotation.Profile;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.data.domain.Limit;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.http.HttpStatus;
@@ -196,10 +197,10 @@ public class TaskService {
         return t;
     }
 
-    /** 상태 변경 이력, 최신순, 상한 limit. ACL은 호출자가 getForView로 먼저 검증한다. */
+    /** 상태 변경 이력, 최신순(at 동률은 id 내림차순), 상한 limit(DB LIMIT). ACL은 호출자가 getForView로 먼저 검증한다. */
     @Transactional(readOnly = true)
     public List<TaskStatusHistory> getHistory(Long taskId, int limit) {
-        return historyRepo.findByTaskIdOrderByAtDesc(taskId).stream().limit(limit).toList();
+        return historyRepo.findByTaskIdOrderByAtDescIdDesc(taskId, Limit.of(limit));
     }
 
     @Transactional(readOnly = true)

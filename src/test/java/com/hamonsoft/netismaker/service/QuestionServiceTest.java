@@ -558,4 +558,47 @@ class QuestionServiceTest {
         verify(interviewService).requireKind(5L, InterviewKind.QUESTION);
         verify(interviewService).cancel(eq(5L), eq("user1"), eq(false));
     }
+
+    // ── 첨부 파일 부재 응답 (AttachmentCleanupJob이 지울 수 있는 경우만 410) ─────────────
+
+    private QuestionAttachment attachmentOfSession(InterviewStatus status) {
+        InterviewSession s = mock(InterviewSession.class);
+        when(s.getStatus()).thenReturn(status);
+        when(sessionRepo.findById(5L)).thenReturn(Optional.of(s));
+        return QuestionAttachment.create(5L, null, "a.txt", "question-5/create/1-a.txt",
+                "text/plain", 1, null, "user1");
+    }
+
+    @Test
+    void requireAttachmentFile_returns_the_path_when_the_file_exists() throws Exception {
+        Path existing = java.nio.file.Files.createTempFile("qatt", ".txt");
+        try {
+            when(attachmentStorage.resolve("question-5/create/1-a.txt")).thenReturn(existing);
+            assertThat(service.requireAttachmentFile(attachmentOfSession(InterviewStatus.AWAITING_INPUT)))
+                    .isEqualTo(existing);
+        } finally {
+            java.nio.file.Files.deleteIfExists(existing);
+        }
+    }
+
+    @Test
+    void requireAttachmentFile_missing_file_of_closed_question_is_410() {
+        for (InterviewStatus closed : List.of(InterviewStatus.CANCELLED, InterviewStatus.EXPIRED, InterviewStatus.FAILED)) {
+            QuestionAttachment att = attachmentOfSession(closed);
+            assertThatThrownBy(() -> service.requireAttachmentFile(att))
+                    .isInstanceOf(TaskException.class)
+                    .satisfies(e -> assertThat(((TaskException) e).getStatus()).as("%s", closed).isEqualTo(HttpStatus.GONE));
+        }
+    }
+
+    @Test
+    void requireAttachmentFile_missing_file_of_open_question_is_404_not_retention_410() {
+        // 진행 중·답변 완료 질문의 파일은 정리 잡이 절대 지우지 않는다 — 없으면 실제 유실이므로 "보존 기간" 안내(410) 금지
+        for (InterviewStatus open : List.of(InterviewStatus.QUEUED, InterviewStatus.RUNNING, InterviewStatus.AWAITING_INPUT)) {
+            QuestionAttachment att = attachmentOfSession(open);
+            assertThatThrownBy(() -> service.requireAttachmentFile(att))
+                    .isInstanceOf(TaskException.class)
+                    .satisfies(e -> assertThat(((TaskException) e).getStatus()).as("%s", open).isEqualTo(HttpStatus.NOT_FOUND));
+        }
+    }
 }

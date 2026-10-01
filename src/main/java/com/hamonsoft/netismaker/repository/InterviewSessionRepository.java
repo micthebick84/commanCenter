@@ -12,6 +12,7 @@ import org.springframework.data.jpa.repository.QueryHints;
 import org.springframework.data.repository.query.Param;
 
 import java.time.OffsetDateTime;
+import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
 
@@ -151,4 +152,27 @@ public interface InterviewSessionRepository extends JpaRepository<InterviewSessi
 
     /** 질문 목록 — 관리자 전체, 최신순. */
     List<InterviewSession> findByKindOrderByCreatedAtDesc(InterviewKind kind);
+
+    /** 첨부 정리 잡(AttachmentCleanupJob)용 경량 행 — 종류·상태·마지막 활동 시각. */
+    interface AttachmentOwnerState {
+        Long getId();
+        InterviewKind getKind();
+        InterviewStatus getStatus();
+        OffsetDateTime getLastActivityAt();
+    }
+
+    /**
+     * 첨부 정리 잡: 디스크의 question-{sid} 디렉터리들의 소유 세션 상태. last_activity_at은 종결 전이(cancel/expire/
+     * fail)가 touch한 시각이라 "종결 시각"으로 쓴다(이후 활동이 있었다면 더 늦어져 보수적). 행이 없는 id는 결과에서 빠진다(고아).
+     */
+    @Query("""
+        SELECT s.id AS id, s.kind AS kind, s.status AS status, s.lastActivityAt AS lastActivityAt
+        FROM InterviewSession s
+        WHERE s.id IN :ids
+    """)
+    List<AttachmentOwnerState> findAttachmentOwnerStates(@Param("ids") Collection<Long> ids);
+
+    /** 첨부 정리 잡의 고아 판정 가드 — 이 DB가 발급한 적 있는 id의 상한. 빈 테이블이면 null. */
+    @Query("SELECT MAX(s.id) FROM InterviewSession s")
+    Long findMaxId();
 }

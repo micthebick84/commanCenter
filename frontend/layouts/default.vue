@@ -1,7 +1,10 @@
 <script setup lang="ts">
 import { useQuasar } from 'quasar'
+import { useHydrationSafeAuth } from '~/composables/useHydrationSafeAuth'
 
 const auth = useAuthStore()
+// 인증 분기는 SSR(항상 비로그인)과 하이드레이션 결과가 같도록 게이트된 값으로 그린다 — 로그아웃 동작만 스토어를 직접 쓴다.
+const { isAuthenticated, isAdmin, me } = useHydrationSafeAuth()
 const $q = useQuasar()
 const route = useRoute()
 const isAdminRoute = computed(() => route.path.startsWith('/admin'))
@@ -28,19 +31,19 @@ function handleLogout() {
         <q-toolbar-title :class="{ 'toolbar-brand--fixed': $q.screen.lt.md }">
           <NuxtLink to="/tasks" style="color: inherit; text-decoration: none">netisMaker</NuxtLink>
         </q-toolbar-title>
-        <q-tabs v-if="auth.isAuthenticated && !$q.screen.lt.md" shrink>
+        <q-tabs v-if="isAuthenticated && !$q.screen.lt.md" shrink>
           <q-route-tab to="/tasks" label="작업" />
           <q-route-tab to="/questions" label="질문" />
-          <q-route-tab v-if="auth.isAdmin" to="/admin/workers" label="워커 헬스" />
-          <q-route-tab v-if="auth.isAdmin" to="/admin/mcp-catalog" label="MCP 카탈로그" />
-          <q-route-tab v-if="auth.isAdmin" to="/admin/repo-catalog" label="레포 카탈로그" />
+          <q-route-tab v-if="isAdmin" to="/admin/workers" label="워커 헬스" />
+          <q-route-tab v-if="isAdmin" to="/admin/mcp-catalog" label="MCP 카탈로그" />
+          <q-route-tab v-if="isAdmin" to="/admin/repo-catalog" label="레포 카탈로그" />
         </q-tabs>
         <q-space />
         <!-- xs(<600px)에서는 사용자명을 숨기고 역할 칩만 남긴다 — 사용자 블록이 두 줄로 꺾여 툴바가 깨지던 것 방지 -->
-        <div v-if="auth.me" class="row items-center no-wrap q-mr-sm" data-test="toolbar-user">
-          <span v-if="!$q.screen.xs" class="q-mr-xs">{{ auth.me.username || auth.me.email }}</span>
+        <div v-if="me" class="row items-center no-wrap q-mr-sm" data-test="toolbar-user">
+          <span v-if="!$q.screen.xs" class="q-mr-xs">{{ me.username || me.email }}</span>
           <q-chip
-            v-if="auth.isAdmin"
+            v-if="isAdmin"
             color="amber"
             text-color="black"
             size="sm"
@@ -48,14 +51,14 @@ function handleLogout() {
             dense
           />
         </div>
-        <q-btn v-if="auth.isAuthenticated" flat dense icon="logout" @click="handleLogout" />
+        <q-btn v-if="isAuthenticated" flat dense icon="logout" @click="handleLogout" />
       </q-toolbar>
     </q-header>
-    <q-footer v-if="auth.isAuthenticated && $q.screen.lt.md" bordered class="bg-white bottom-nav" data-test="bottom-nav">
+    <q-footer v-if="isAuthenticated && $q.screen.lt.md" bordered class="bg-white bottom-nav" data-test="bottom-nav">
       <q-tabs dense no-caps align="justify" active-color="primary" indicator-color="transparent" class="text-grey-7">
         <q-route-tab to="/tasks" icon="assignment" label="작업" />
         <q-route-tab to="/questions" icon="forum" label="질문" />
-        <q-route-tab v-if="auth.isAdmin" to="/admin/workers" icon="settings" label="관리" :class="{ 'q-tab--active text-primary': isAdminRoute }" />
+        <q-route-tab v-if="isAdmin" to="/admin/workers" icon="settings" label="관리" :class="{ 'q-tab--active text-primary': isAdminRoute }" />
       </q-tabs>
     </q-footer>
     <q-page-container>

@@ -11,6 +11,8 @@ import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.jpa.repository.QueryHints;
 import org.springframework.data.repository.query.Param;
 
+import java.time.OffsetDateTime;
+import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
 
@@ -138,4 +140,21 @@ public interface TaskRepository extends JpaRepository<Task, Long> {
           AND t.deletedAt IS NULL
     """)
     List<Task> findDeployReconcilable();
+
+    /** 첨부 정리 잡(AttachmentCleanupJob)용 경량 행 — id + soft-delete 시각. */
+    interface AttachmentOwnerState {
+        Long getId();
+        OffsetDateTime getDeletedAt();
+    }
+
+    /**
+     * 첨부 정리 잡: 디스크의 task-{id} 디렉터리들의 소유 task 삭제 상태.
+     * deleted_at 필터 없음 — soft-delete된 task도 포함해야 보존 기간을 판정할 수 있다. 행이 없는 id는 결과에서 빠진다(고아).
+     */
+    @Query("SELECT t.id AS id, t.deletedAt AS deletedAt FROM Task t WHERE t.id IN :ids")
+    List<AttachmentOwnerState> findAttachmentOwnerStates(@Param("ids") Collection<Long> ids);
+
+    /** 첨부 정리 잡의 고아 판정 가드 — 이 DB가 발급한 적 있는 id의 상한. 빈 테이블이면 null. */
+    @Query("SELECT MAX(t.id) FROM Task t")
+    Long findMaxId();
 }

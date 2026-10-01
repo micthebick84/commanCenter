@@ -1,5 +1,6 @@
 package com.hamonsoft.netismaker.workerdaemon;
 
+import com.hamonsoft.netismaker.dto.ActiveWorktreeTaskSummary;
 import com.hamonsoft.netismaker.dto.DeployedTaskSummary;
 import com.hamonsoft.netismaker.dto.WorkerHeartbeatRequest;
 import com.hamonsoft.netismaker.dto.WorkerResultRequest;
@@ -75,6 +76,14 @@ public class WorkerHttpClient {
     /** 배포 런타임 정합 대상(배포완료+배포중단됨) 목록. 실패 시 예외 전파 — 호출부가 스킵 판단. */
     public List<DeployedTaskSummary> deployedTasks() {
         List<DeployedTaskSummary> body = http.get().uri("/worker/deployed-tasks")
+                .retrieve()
+                .body(new ParameterizedTypeReference<>() {});
+        return body == null ? List.of() : body;
+    }
+
+    /** worktree 정리 보호 목록(구현중·디자인중·배포중·배포중지중). 실패 시 예외 전파 — 호출부가 회차를 건너뛴다. */
+    public List<ActiveWorktreeTaskSummary> activeWorktreeTasks() {
+        List<ActiveWorktreeTaskSummary> body = http.get().uri("/worker/active-worktree-tasks")
                 .retrieve()
                 .body(new ParameterizedTypeReference<>() {});
         return body == null ? List.of() : body;

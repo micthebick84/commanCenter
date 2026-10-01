@@ -153,7 +153,7 @@ PR 본문/브랜치 prefix/timeout은 `application-worker.yml`의 `netis-maker.w
 | 구독 사용량 | `service/ClaudeUsageService.java`, `controller/UsageWorkerController.java`, `controller/UsageController.java`, `frontend/components/ClaudeUsagePanel.vue`, `frontend/composables/claudeUsage.ts` |
 | 사용량/컨텍스트 수집(인터뷰 서비스) | `netismaker-interview-service/src/runner/messageRelay.ts`, `src/runner/rateLimitReport.ts` |
 | 작업 탭 모바일(리스트·카드·시트·스테퍼·다음 할 일·이력·관리 세그먼트) | `frontend/components/tasks/*.vue`, 순수 함수 `frontend/composables/taskStages.ts`(attentionGroup/sortForMobile/stageSteps/nextAction) |
-| 관리 카탈로그(레포·MCP) 모바일 — 등록/수정 다이얼로그 셸(lt.md 전체화면) · 카드 목록 · 접히는 안내 박스 | `frontend/components/AdminFormDialog.vue`, `frontend/components/AdminCatalogCard.vue`, `frontend/components/AdminInfoBanner.vue`, 사용처 `frontend/pages/admin/{repo,mcp}-catalog.vue` |
+| 관리 화면(레포·MCP 카탈로그·워커 헬스) 모바일 — 등록/수정 다이얼로그 셸(lt.md 전체화면) · 카드 목록(`enabled`·actions 생략 시 읽기 전용 카드) · 접히는 안내 박스 | `frontend/components/AdminFormDialog.vue`, `frontend/components/AdminCatalogCard.vue`, `frontend/components/AdminInfoBanner.vue`, 사용처 `frontend/pages/admin/{repo,mcp}-catalog.vue`·`workers.vue` |
 | 모바일 전역 내비(하단 바) | `frontend/layouts/default.vue`(lt.md `q-footer`), CSS 변수 `--bottom-nav-height` |
 | 레포 호스트 판별 · 인증 URL · 폴더 키 · 토큰 마스킹 | `util/RepoUrlParser.java`, `git/RepoRef.java`, `git/GitRemotes.java`, 인터뷰 서비스 `src/sdk/gitRemote.ts` |
 | PR/MR 생성 (GitHub `gh` / GitLab REST) | `workerdaemon/MergeRequestCreator.java`, `GitHubPrCreator.java`, `GitLabMrCreator.java`, 위임 `GitOpsService.java` |

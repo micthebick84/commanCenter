@@ -1,5 +1,7 @@
 <script setup lang="ts">
 import AdminSectionTabs from '~/components/tasks/AdminSectionTabs.vue'
+import AdminCatalogCard from '~/components/AdminCatalogCard.vue'
+import AdminInfoBanner from '~/components/AdminInfoBanner.vue'
 definePageMeta({ layout: 'default' })
 
 interface WorkerHealth {
@@ -49,6 +51,64 @@ function bool(b: boolean | null): string {
       등록된 워커가 없습니다. 운영자 macOS에서 worker 프로파일을 실행하세요:
       <code>java -jar netis-maker.jar --spring.profiles.active=worker</code>
     </q-banner>
+
+    <!-- 모바일: 9열 표는 가로 스크롤이 되므로 읽기 전용 카드(토글·액션 없음)로 -->
+    <div v-else-if="$q.screen.lt.md" class="catalog-cards" data-test="catalog-cards">
+      <div v-if="!data" class="catalog-empty"><q-spinner size="28px" color="primary" /></div>
+      <AdminCatalogCard v-for="w in data ?? []" :key="w.workerId" :title="w.workerId">
+        <template #badges>
+          <q-chip
+            dense
+            size="sm"
+            :color="w.alive ? 'green-2' : 'red-2'"
+            :text-color="w.alive ? 'green-9' : 'red-9'"
+            :icon="w.alive ? 'check_circle' : 'cancel'"
+            :label="w.alive ? '정상' : '응답 없음'"
+            class="q-ma-none"
+            data-test="card-alive"
+          />
+        </template>
+        <dl class="card-kv q-my-none">
+          <dt>마지막 응답</dt>
+          <dd :class="w.alive ? '' : 'text-negative text-weight-medium'">{{ lastSeenAgo(w.lastSeenAt) }}</dd>
+          <dt>호스트</dt>
+          <dd>{{ w.hostname ?? '—' }}</dd>
+          <dt>버전</dt>
+          <dd>{{ w.version ?? '—' }}</dd>
+          <dt>Claude OAuth</dt>
+          <dd>
+            <q-chip
+              v-if="w.claudeSessionOk !== null"
+              :color="w.claudeSessionOk ? 'green-2' : 'red-2'"
+              :text-color="w.claudeSessionOk ? 'green-9' : 'red-9'"
+              size="sm"
+              dense
+              :label="bool(w.claudeSessionOk)"
+              class="q-ma-none"
+            />
+            <span v-else>—</span>
+          </dd>
+          <dt>네트워크</dt>
+          <dd>{{ w.vpnStatus ?? '—' }}</dd>
+          <dt>유실 보고</dt>
+          <dd :class="w.lostReportCount > 0 ? 'text-red-9 text-weight-bold' : 'text-grey-6'" data-test="card-lost">
+            {{ w.lostReportCount ?? 0 }}
+          </dd>
+        </dl>
+        <div v-if="w.mcps && w.mcps.length" class="row q-gutter-xs" data-test="card-mcps">
+          <q-chip
+            v-for="m in w.mcps"
+            :key="m"
+            color="indigo-1"
+            text-color="indigo-9"
+            icon="bolt"
+            size="sm"
+            dense
+            :label="m"
+          />
+        </div>
+      </AdminCatalogCard>
+    </div>
 
     <q-table
       v-else
@@ -130,13 +190,12 @@ function bool(b: boolean | null): string {
       </template>
     </q-table>
 
-    <q-banner class="bg-blue-1 text-grey-9 q-mt-md">
-      <template #avatar><q-icon name="info" color="primary" /></template>
+    <AdminInfoBanner summary="alive 기준 · 유실 보고 안내" class="q-mt-md">
       <strong>alive 기준</strong>: 마지막 heartbeat가 60초 이내. 그 이상 응답 없으면
       <strong>Stale 회수 잡</strong>(매 1분)이 자동으로 분석중 작업을 작업대기로 되돌립니다.
       <br /><strong>유실 보고</strong>: 결과 보고가 끝내 백엔드에 닿지 못한 횟수입니다. 워커
       재시작 시 0으로 리셋되며, 유실된 결과 원본은 워커의
       <code>~/netis-maker/dead-letter/</code>에 보존됩니다.
-    </q-banner>
+    </AdminInfoBanner>
   </q-page>
 </template>

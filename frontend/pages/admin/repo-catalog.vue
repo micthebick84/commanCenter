@@ -1,6 +1,9 @@
 <script setup lang="ts">
 import { useQuasar } from 'quasar'
 import AdminSectionTabs from '~/components/tasks/AdminSectionTabs.vue'
+import AdminFormDialog from '~/components/AdminFormDialog.vue'
+import AdminCatalogCard from '~/components/AdminCatalogCard.vue'
+import AdminInfoBanner from '~/components/AdminInfoBanner.vue'
 
 definePageMeta({ layout: 'default' })
 
@@ -168,14 +171,64 @@ const canSubmit = computed(
       />
     </div>
 
-    <q-banner class="bg-blue-1 text-grey-9 q-mb-md">
-      <template #avatar><q-icon name="info" color="primary" /></template>
+    <AdminInfoBanner summary="작업 등록 때 고르는 레포 목록">
       관리자가 등록한 레포. 사용자가 작업 등록 시 활성(enabled)된 항목을 한글 별칭으로 선택합니다.
       등록된 작업의 레포 정보는 작성 시점 스냅샷으로 박제되어, 카탈로그 변경/삭제 후에도 이력이 보존됩니다.
       (GitHub와 사내 GitLab 레포를 등록할 수 있습니다. 그 밖의 호스트는 저장은 되지만 작업 등록은 불가)
-    </q-banner>
+    </AdminInfoBanner>
+
+    <!-- 모바일: 7열 표는 가로 스크롤이 되므로 카드 목록으로 -->
+    <div v-if="$q.screen.lt.md" class="catalog-cards" data-test="catalog-cards">
+      <div v-if="loading && !entries.length" class="catalog-empty"><q-spinner size="28px" color="primary" /></div>
+      <div v-else-if="!entries.length" class="catalog-empty">등록된 레포가 없습니다</div>
+      <AdminCatalogCard
+        v-for="e in entries"
+        :key="e.id"
+        :title="e.alias"
+        :enabled="e.enabled"
+        @toggle="toggleEnabled(e)"
+      >
+        <template #badges>
+          <q-chip v-if="e.host === 'gitlab'" size="sm" dense color="blue-grey-2" text-color="grey-9" label="gitlab" class="q-ma-none" />
+          <q-chip
+            v-else-if="e.host !== 'github'"
+            size="sm"
+            dense
+            color="orange-3"
+            text-color="grey-9"
+            :label="`${e.host} · 등록 불가`"
+            class="q-ma-none"
+          />
+        </template>
+        <div class="row no-wrap items-center q-gutter-x-xs">
+          <q-icon name="folder" size="14px" color="grey-6" />
+          <code class="text-grey-9">{{ e.ownerRepo ?? '-' }}</code>
+        </div>
+        <div class="row no-wrap items-center q-gutter-x-xs">
+          <q-icon name="call_split" size="14px" color="grey-6" />
+          <span>{{ e.defaultBranch ?? '기본 브랜치 자동 감지' }}</span>
+        </div>
+        <code class="text-grey-6 card-url">{{ e.gitUrl }}</code>
+        <div v-if="e.description" class="card-desc">{{ e.description }}</div>
+        <template #actions>
+          <q-btn
+            flat
+            no-caps
+            icon="cable"
+            label="연결 확인"
+            color="primary"
+            :loading="checkingIds.has(e.id)"
+            data-test="card-check"
+            @click="check(e)"
+          />
+          <q-btn flat no-caps icon="edit" label="수정" color="primary" data-test="card-edit" @click="openEdit(e)" />
+          <q-btn flat no-caps icon="delete" label="삭제" color="negative" data-test="card-delete" @click="remove(e)" />
+        </template>
+      </AdminCatalogCard>
+    </div>
 
     <q-table
+      v-else
       :rows="entries"
       :loading="loading"
       row-key="id"
@@ -249,59 +302,59 @@ const canSubmit = computed(
       </template>
     </q-table>
 
-    <q-dialog v-model="showForm" persistent>
-      <q-card style="min-width: 520px">
-        <q-card-section>
-          <div class="text-h6">{{ editingId ? '레포 수정' : '새 레포 등록' }}</div>
-        </q-card-section>
-        <q-card-section class="q-gutter-md">
-          <q-input
-            v-model="form.alias"
-            label="별칭 (사용자에게 보일 한글명)"
-            placeholder="Netis7.0"
-            outlined
-            dense
-            data-test="form-alias"
-          />
-          <q-input
-            v-model="form.gitUrl"
-            label="Git URL"
-            placeholder="https://github.com/owner/repo.git 또는 https://gitlab.hamon.vip/group/sub/project.git"
-            outlined
-            dense
-            hint="GitHub: 전체 URL · owner/repo · git@… / 사내 GitLab: 전체 URL 필수 (서버가 정규화)"
-            data-test="form-giturl"
-          />
-          <q-input
-            v-model="form.defaultBranch"
-            label="기본 브랜치 (선택)"
-            placeholder="비우면 자동 감지"
-            outlined
-            dense
-          />
-          <q-input
-            v-model="form.description"
-            label="설명 (선택)"
-            type="textarea"
-            outlined
-            autogrow
-            rows="2"
-          />
-          <q-toggle v-model="form.enabled" label="활성화 (사용자에게 노출)" color="positive" />
-        </q-card-section>
-        <q-card-actions align="right">
-          <q-btn flat label="취소" @click="showForm = false" />
-          <q-btn
-            unelevated
-            color="primary"
-            :label="editingId ? '수정' : '등록'"
-            :loading="submitting"
-            :disable="!canSubmit"
-            data-test="form-submit"
-            @click="submit"
-          />
-        </q-card-actions>
-      </q-card>
-    </q-dialog>
+    <AdminFormDialog
+      v-model="showForm"
+      :title="editingId ? '레포 수정' : '새 레포 등록'"
+      :submit-label="editingId ? '수정' : '등록'"
+      :submitting="submitting"
+      :can-submit="canSubmit"
+      @submit="submit"
+    >
+      <template #default="{ mobile }">
+        <q-input
+          v-model="form.alias"
+          label="별칭 (사용자에게 보일 한글명)"
+          placeholder="Netis7.0"
+          outlined
+          :dense="!mobile"
+          data-test="form-alias"
+        />
+        <!-- 모바일은 긴 placeholder가 잘리므로 GitHub 예시만 — GitLab 형식은 힌트가 안내.
+             hide-bottom-space: 기본(20px 예약 + 절대배치)이면 두 줄로 꺾인 힌트가 다음 필드를 덮는다 -->
+        <q-input
+          v-model="form.gitUrl"
+          label="Git URL"
+          :placeholder="mobile ? 'https://github.com/owner/repo.git' : 'https://github.com/owner/repo.git 또는 https://gitlab.hamon.vip/group/sub/project.git'"
+          outlined
+          :dense="!mobile"
+          :hide-bottom-space="mobile"
+          inputmode="url"
+          autocapitalize="off"
+          autocorrect="off"
+          spellcheck="false"
+          hint="GitHub: 전체 URL · owner/repo · git@… / 사내 GitLab: 전체 URL 필수 (서버가 정규화)"
+          data-test="form-giturl"
+        />
+        <q-input
+          v-model="form.defaultBranch"
+          label="기본 브랜치 (선택)"
+          placeholder="비우면 자동 감지"
+          outlined
+          :dense="!mobile"
+          autocapitalize="off"
+          autocorrect="off"
+          spellcheck="false"
+        />
+        <q-input
+          v-model="form.description"
+          label="설명 (선택)"
+          type="textarea"
+          outlined
+          autogrow
+          rows="2"
+        />
+        <q-toggle v-model="form.enabled" label="활성화 (사용자에게 노출)" color="positive" />
+      </template>
+    </AdminFormDialog>
   </q-page>
 </template>

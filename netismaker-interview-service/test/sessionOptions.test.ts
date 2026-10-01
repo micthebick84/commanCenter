@@ -8,12 +8,22 @@ const base = {
 };
 
 describe('buildOptions', () => {
-  it('loads superpowers as a local plugin (isolation: plugins-only, no settingSources)', () => {
+  it('loads superpowers as a local plugin (isolation: plugins-only)', () => {
     const o = buildOptions({ ...base, claudeSessionId: null });
     expect(o.plugins).toEqual([{ type: 'local', path: '/sp/5.1.0' }]);
-    // Phase-0 spike 04 caveat 2: settingSources:['user','project'] loads ALL user plugins;
-    // for isolation we rely on plugins:[] only and do NOT set settingSources.
-    expect(o.settingSources).toBeUndefined();
+  });
+
+  it('isolates every session kind from the operator settings and claude.ai connectors', () => {
+    // SECURITY INVARIANT (2026-10-01 질문 세션 #17 라이브 실측 + SDK 0.2.117/CLI 2.1.284 init 프로브):
+    // settingSources를 생략하면 SDK가 `--setting-sources`를 아예 안 넘겨 CLI가 user/project/local을 전부 읽는다
+    // → 운영자의 enabledPlugins(playwright·claude-mem 등)·훅·`permissions.allow`(mcp__obsidian 사전승인으로
+    // canUseTool 우회)가 세션에 붙었다. `[]`로 명시해야 파일 설정이 빠지고, claude.ai 커넥터(Gmail/Drive/Calendar)는
+    // 설정 소스와 무관하게 붙으므로 strictMcpConfig까지 켜야 주입한 mcpServers만 남는다.
+    for (const sessionKind of ['INTERVIEW', 'QUESTION'] as const) {
+      const o = buildOptions({ ...base, claudeSessionId: null, sessionKind });
+      expect(o.settingSources).toEqual([]);
+      expect(o.strictMcpConfig).toBe(true);
+    }
   });
 
   it('uses subscription auth: pathToClaudeCodeExecutable set, no env.ANTHROPIC_API_KEY', () => {

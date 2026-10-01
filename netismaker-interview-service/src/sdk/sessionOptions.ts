@@ -56,8 +56,13 @@ function toMcpServers(mcpsExtra: unknown): Record<string, { type: string; url: s
  * SDK options for one interview turn.
  * - Auth = subscription via the local claude CLI: pathToClaudeCodeExecutable points at
  *   the resolved binary; ANTHROPIC_API_KEY is NOT set (apiKeySource:"none", spike 00b).
- * - Isolation: load superpowers via plugins:[{type:'local'}] ONLY and do NOT set
- *   settingSources (settingSources:['user','project'] would load ALL user plugins, spike 04 caveat 2).
+ * - Isolation: load superpowers via plugins:[{type:'local'}] ONLY, with settingSources:[] +
+ *   strictMcpConfig:true. settingSources를 **생략하면** SDK가 `--setting-sources`를 안 넘겨 CLI가
+ *   user/project/local을 전부 읽는다(d.ts 주석과 반대 — 2026-10-01 SDK 0.2.117/CLI 2.1.284 init 프로브,
+ *   질문 세션 #17에 운영자 플러그인 16개·claude-mem 훅·`permissions.allow: mcp__obsidian`이 붙음).
+ *   `[]`이면 `--setting-sources=`로 파일 설정이 빠지지만 claude.ai 커넥터(Gmail/Drive/Calendar)는 남아서
+ *   strictMcpConfig로 options.mcpServers 외 MCP를 끊는다. 대상 레포의 CLAUDE.md·.claude/settings.json도
+ *   안 읽는다 — 'project'를 넣으면 레포가 permissions.allow/hooks로 canUseTool 게이트를 우회할 수 있다.
  *   'Skill' is whitelisted so the Skill tool appears in init.tools.
  * - cwd = workDir; resume reuses the identical cwd (the on-disk session store is cwd-hashed, spike 02).
  * - MCP: settingSources를 안 쓰는 대신 mcpsBase(~/.claude.json 합본 스냅샷)를 options.mcpServers로
@@ -83,7 +88,7 @@ function toMcpServers(mcpsExtra: unknown): Record<string, { type: string; url: s
  */
 export function buildOptions(input: SessionOptionsInput): Record<string, unknown> {
   // 베이스(글로벌+프로젝트 합본) + 작업별 extras — 충돌 시 extras 우선 (워커 패리티).
-  // settingSources 미설정이므로 여기 명시한 것 외 다른 MCP 소스는 안 붙는다 (--strict-mcp-config 등가).
+  // settingSources:[] + strictMcpConfig라 여기 명시한 것 외 다른 MCP 소스는 안 붙는다 (워커 --strict-mcp-config 패리티).
   const merged: Record<string, unknown> = { ...(input.mcpsBase ?? {}), ...(toMcpServers(input.mcpsExtra) ?? {}) };
   const mcpServers = Object.keys(merged).length > 0 ? merged : undefined;
   const question = input.sessionKind === 'QUESTION';
@@ -91,6 +96,9 @@ export function buildOptions(input: SessionOptionsInput): Record<string, unknown
     pathToClaudeCodeExecutable: input.claudeCliPath,
     // QUESTION: 플러그인 자체를 안 붙인다(스킬 없음). INTERVIEW: superpowers만 로컬 플러그인으로.
     plugins: question ? [] : [{ type: 'local', path: input.superpowersPluginPath }],
+    // 운영자 설정(플러그인·훅·permissions.allow)과 claude.ai 커넥터 차단 — 위 Isolation 주석 참고.
+    settingSources: [],
+    strictMcpConfig: true,
     // INTERVIEW: mcp__<server>는 해당 서버의 모든 도구 매칭 — 워커의 --allowedTools 와일드카드와 동일.
     //   MCP 도구는 어차피 canUseTool 기본 분기(allow)를 타므로 보안 경계 변화 없음; Write/Bash/Edit 불변식 유지.
     // QUESTION: 사전승인 없음 → Read/Grep/Glob/MCP 전부 canUseTool(default-deny + 경로 confinement) 단일 관문 경유.

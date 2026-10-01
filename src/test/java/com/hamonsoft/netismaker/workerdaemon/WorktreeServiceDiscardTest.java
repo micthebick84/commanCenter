@@ -7,12 +7,15 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 import java.io.File;
+import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatCode;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /** WorktreeService 제거 절차를 실제 git(file:// bare 원격)으로 검증. */
 class WorktreeServiceDiscardTest {
@@ -127,8 +130,24 @@ class WorktreeServiceDiscardTest {
     }
 
     @Test
-    void discard_never_throws() {
-        // 캐시도 폴더도 없는 키 — 경고만 남기고 조용히 끝나야 한다
+    void discard_of_an_unknown_key_is_a_quiet_noop() {
+        // 캐시도 폴더도 없는 키 — discardUnderLock이 ABSENT를 돌려주므로 아무 일도 일어나지 않는다
         worktrees.discard("nobody/nothing", WorktreeKind.TASK, 1);
+    }
+
+    @Test
+    void discard_swallows_a_real_failure() throws Exception {
+        // 비어 있는 .git 디렉터리 = 캐시가 있다고 판단되지만 git 명령은 전부 실패 → for-each-ref에서 예외
+        Files.createDirectories(tmp.resolve("repos").resolve("bad/repo").resolve(".git"));
+        Path dir = Files.createDirectories(worktrees.worktreeDir("bad/repo", WorktreeKind.TASK, 1));
+        Files.writeString(dir.resolve("left.txt"), "x");
+
+        // 전제: 절차 자체는 실제로 예외를 던진다
+        assertThatThrownBy(() -> cache.withRepoLock("bad/repo",
+                () -> worktrees.discardUnderLock("bad/repo", WorktreeKind.TASK, 1)))
+                .isInstanceOf(IOException.class);
+
+        // 그래도 discard는 호출자에게 예외를 내보내지 않는다 (best-effort)
+        assertThatCode(() -> worktrees.discard("bad/repo", WorktreeKind.TASK, 1)).doesNotThrowAnyException();
     }
 }

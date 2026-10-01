@@ -346,7 +346,7 @@ public class WorkerMainLoop {
                 harvest.designProjectId(), harvest.designUrl(),
                 exec.stdout(), exec.durationMs(), usageOf(exec)));
         // 수확 완료 후 design worktree는 best-effort 정리 (산출물은 DB로 감 — 보존 불필요)
-        worktrees.remove(repo.dir(), wt);
+        worktrees.discard(GitRemotes.localKey(task.repoRef()), WorktreeKind.DESIGN, task.id());
         log.info("디자인 생성 완료: task={} screens 포함, url={}", task.id(), harvest.designUrl());
     }
 

@@ -298,7 +298,7 @@ class RepoCacheCleanupJobTest {
         assertThat(realPaths(r.worktreeHolders().get("acme/deploy"))).containsExactly(deployWt.toPath().toRealPath());
 
         // 보존 worktree를 치우면(향후 보존 정책의 몫) 다음 회차에 회수된다
-        worktrees.remove(implCache, implWt);
+        worktrees.discard(GitRemotes.localKey(impl), WorktreeKind.TASK, 21);
         age(impl, 365);
         RepoCacheCleanupJob.Result next = job.runOnce();
         assertThat(next.outcomes())

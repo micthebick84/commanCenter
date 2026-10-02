@@ -1,6 +1,8 @@
 package com.hamonsoft.netismaker.service;
 
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.condition.EnabledOnOs;
+import org.junit.jupiter.api.condition.OS;
 import org.junit.jupiter.api.io.TempDir;
 import org.springframework.http.HttpStatus;
 import org.springframework.mock.web.MockMultipartFile;
@@ -9,14 +11,18 @@ import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.nio.file.Files;
+import java.nio.file.LinkOption;
 import java.nio.file.Path;
+import java.nio.file.attribute.BasicFileAttributes;
 import java.util.List;
 import java.util.Locale;
+import java.util.concurrent.TimeUnit;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.junit.jupiter.api.Assertions.assertTimeoutPreemptively;
+import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 class AttachmentStorageTest {
 
@@ -354,5 +360,66 @@ class AttachmentStorageTest {
                 .containsExactlyInAnyOrder("task-3", "question-4");
         assertThat(scan.dirs()).allSatisfy(d -> assertThat(d.modifiedAt()).isNotNull());
         assertThat(scan.skipped()).isEqualTo(3);
+    }
+
+    // ── Windows 정션(mklink /J) — NOFOLLOW_LINKS로 읽어도 isSymbolicLink=false·isDirectory=true·isOther=true ──
+
+    /** mklink /J는 관리자 권한 없이 만들 수 있다. 실패하면(정책 등) 테스트를 건너뛴다. */
+    private static void junction(Path link, Path target) throws Exception {
+        Process p = new ProcessBuilder("cmd", "/c", "mklink", "/J", link.toString(), target.toString())
+                .redirectErrorStream(true).start();
+        p.getInputStream().readAllBytes();
+        boolean done = p.waitFor(30, TimeUnit.SECONDS);
+        assumeTrue(done && p.exitValue() == 0, "mklink /J 실패 — 정션을 만들 수 없는 환경");
+        BasicFileAttributes a = Files.readAttributes(link, BasicFileAttributes.class, LinkOption.NOFOLLOW_LINKS);
+        assumeTrue(a.isOther() && !Files.isSymbolicLink(link), "정션이 isOther로 보이지 않는 환경");
+    }
+
+    @Test
+    @EnabledOnOs(OS.WINDOWS)
+    void deleteOwnerDirectory는_하위_정션을_따라가_루트_밖을_지우지_않는다() throws Exception {
+        Path dir = Files.createDirectories(tmp.resolve("task-8/create"));
+        Files.writeString(dir.resolve("1-a.txt"), "내용");
+        Path outside = Files.createDirectories(tmp.resolve("outside"));   // 이름이 정규형이 아니라 스캔 대상 아님
+        Files.writeString(outside.resolve("keep.txt"), "지우면 안 됨");
+        junction(dir.resolve("link"), outside);
+
+        long freed = storage().deleteOwnerDirectory(ownerDir("task-8"));
+
+        assertThat(tmp.resolve("task-8")).doesNotExist();
+        assertThat(outside.resolve("keep.txt")).exists();
+        assertThat(freed).isEqualTo("내용".getBytes(StandardCharsets.UTF_8).length);
+    }
+
+    @Test
+    @EnabledOnOs(OS.WINDOWS)
+    void deleteOwnerDirectory는_정션인_소유_디렉터리를_거부한다() throws Exception {
+        Path outside = Files.createDirectories(tmp.resolve("outside"));
+        Files.writeString(outside.resolve("keep.txt"), "지우면 안 됨");
+        Path link = tmp.resolve("task-9");
+        junction(link, outside);
+        try {
+            assertThatThrownBy(() -> storage().deleteOwnerDirectory(ownerDir("task-9"))).isInstanceOf(IOException.class);
+            assertThat(outside.resolve("keep.txt")).exists();
+        } finally {
+            Files.deleteIfExists(link);   // 정션이 남으면 @TempDir 정리가 실패한다 — 링크만 지운다
+        }
+    }
+
+    @Test
+    @EnabledOnOs(OS.WINDOWS)
+    void scanOwnerDirectories는_정션인_소유_디렉터리를_건너뛴다() throws Exception {
+        Files.createDirectories(tmp.resolve("task-3"));
+        Path outside = Files.createDirectories(tmp.resolve("outside"));
+        Path link = tmp.resolve("question-6");
+        junction(link, outside);
+        try {
+            AttachmentStorage.OwnerDirScan scan = storage().scanOwnerDirectories();
+
+            assertThat(scan.dirs()).extracting(AttachmentCleanupPlanner.OwnerDir::name).containsExactly("task-3");
+            assertThat(scan.skipped()).isEqualTo(2);   // outside(패턴 불일치) + question-6(정션)
+        } finally {
+            Files.deleteIfExists(link);
+        }
     }
 }

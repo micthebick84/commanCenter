@@ -102,7 +102,10 @@ public class DbConnectionService {
         repo.delete(requireEditable(id, actorId, isAdmin));
     }
 
-    @Transactional(readOnly = true)
+    /**
+     * 의도적으로 @Transactional 없음 — 외부 JDBC 접속 시도(최대 ~20초) 동안 Hikari 커넥션을 붙들면 동시 테스트 몇 건에
+     * 풀(10)이 고갈된다. 저장값 조회는 repo.findById의 자체 짧은 트랜잭션이고, 엔티티에 지연 연관이 없어 밖에서 써도 안전하다.
+     */
     public DbConnectionDto.TestResult test(DbConnectionDto.TestRequest req, String actorId, boolean isAdmin) {
         requireEnabled();
         DbConnectionTester.Target target;

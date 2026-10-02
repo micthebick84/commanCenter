@@ -503,4 +503,44 @@ describe('pages/questions/[id] — 대화 중 MCP 변경 + 채팅 첨부 (스펙
     expect(w.find('.system-note').text()).toBe('MCP 도구 변경: github')
     w.unmount()
   })
+
+  // 스펙 2026-10-02 §7 — sendText 헬퍼를 쓰려고 이 describe 안에 둔다
+  describe('DB 연결', () => {
+    const dbDetail = { ...detail, repoCatalogId: 1, dbConnectionIds: [7], dbConnections: [{ id: 7, name: '운영', dbType: 'MYSQL' }] }
+    const dbApi = (enabled: boolean) => (url: string) =>
+      url === '/api/questions/3' ? Promise.resolve({ ...dbDetail })
+        : url === '/api/db-connections?repoCatalogId=1' ? Promise.resolve({
+          enabled,
+          items: enabled
+            ? [{ id: 7, scope: 'REPO', repoCatalogId: 1, name: '운영', dbType: 'MYSQL', host: 'h', port: 3306, databaseName: 'app', username: 'u', enabled: true, mine: false }]
+            : [],
+        })
+          : url === '/api/usage/claude' ? Promise.resolve({ limits: [] })
+            : url === '/api/mcp-catalog' ? Promise.resolve([])
+              : Promise.resolve(null)
+
+    it('세션 값으로 시딩된 DB 버튼·헤더 칩을 보이고, 보낼 때 dbConnectionIds를 싣는다', async () => {
+      useApiMock.mockImplementation(dbApi(true))
+      const w = mount(QuestionDetail)
+      await flushPromises()
+      expect(w.find('[data-test="db-button"] .q-badge').text()).toBe('1')
+      expect(w.find('[data-test="session-db-chips"]').text()).toContain('운영')
+      ;(w.vm as any).pickedDb.splice(0)
+      await sendText(w, 'DB 없이 다시')
+      const call = useApiMock.mock.calls.find((c) => c[0] === '/api/questions/3/ask')
+      expect(call![1].body.dbConnectionIds).toEqual([])
+      w.unmount()
+    })
+
+    it('기능이 꺼져 있으면 DB 버튼을 숨기고 바디에 dbConnectionIds를 싣지 않는다', async () => {
+      useApiMock.mockImplementation(dbApi(false))
+      const w = mount(QuestionDetail)
+      await flushPromises()
+      expect(w.find('[data-test="db-button"]').exists()).toBe(false)
+      await sendText(w, '그냥 질문')
+      const call = useApiMock.mock.calls.find((c) => c[0] === '/api/questions/3/ask')
+      expect(call![1].body).not.toHaveProperty('dbConnectionIds')
+      w.unmount()
+    })
+  })
 })

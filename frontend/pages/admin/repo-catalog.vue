@@ -4,6 +4,7 @@ import AdminSectionTabs from '~/components/tasks/AdminSectionTabs.vue'
 import AdminFormDialog from '~/components/AdminFormDialog.vue'
 import AdminCatalogCard from '~/components/AdminCatalogCard.vue'
 import AdminInfoBanner from '~/components/AdminInfoBanner.vue'
+import DbConnectionAdminDialog from '~/components/DbConnectionAdminDialog.vue'
 
 definePageMeta({ layout: 'default' })
 
@@ -25,6 +26,14 @@ const $q = useQuasar()
 const entries = ref<RepoEntry[]>([])
 const loading = ref(false)
 const checkingIds = ref<Set<number>>(new Set())
+
+// 레포별 공용 DB 접속정보 (스펙 2026-10-02 §7)
+const dbAdminOpen = ref(false)
+const dbAdminRepo = ref<{ id: number; alias: string } | null>(null)
+function openDbAdmin(e: RepoEntry) {
+  dbAdminRepo.value = { id: e.id, alias: e.alias }
+  dbAdminOpen.value = true
+}
 
 async function load() {
   loading.value = true
@@ -221,6 +230,7 @@ const canSubmit = computed(
             data-test="card-check"
             @click="check(e)"
           />
+          <q-btn flat no-caps icon="storage" label="DB 접속" color="primary" data-test="card-db" @click="openDbAdmin(e)" />
           <q-btn flat no-caps icon="edit" label="수정" color="primary" data-test="card-edit" @click="openEdit(e)" />
           <q-btn flat no-caps icon="delete" label="삭제" color="negative" data-test="card-delete" @click="remove(e)" />
         </template>
@@ -296,6 +306,9 @@ const canSubmit = computed(
           >
             <q-tooltip>연결 확인</q-tooltip>
           </q-btn>
+          <q-btn flat dense icon="storage" color="primary" data-test="db" @click="openDbAdmin(props.row)">
+            <q-tooltip>DB 접속(공용)</q-tooltip>
+          </q-btn>
           <q-btn flat dense icon="edit" color="primary" @click="openEdit(props.row)" />
           <q-btn flat dense icon="delete" color="negative" @click="remove(props.row)" />
         </q-td>
@@ -356,5 +369,7 @@ const canSubmit = computed(
         <q-toggle v-model="form.enabled" label="활성화 (사용자에게 노출)" color="positive" />
       </template>
     </AdminFormDialog>
+
+    <DbConnectionAdminDialog v-model="dbAdminOpen" :repo="dbAdminRepo" />
   </q-page>
 </template>

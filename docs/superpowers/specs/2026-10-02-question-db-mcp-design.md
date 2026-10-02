@@ -175,7 +175,7 @@ ALTER TABLE com.interview_session
 - 도구:
   - `query({ sql })` — 설명에 "읽기 전용, SELECT 계열 단일 문장, 최대 200행, 30초"를 적는다. 핸들러가 `checkReadOnlySql(sql, dialect)`를 **다시** 검사(게이트가 우회돼도 막히게) → `session.run` → `formatResult`.
   - `list_tables({ schema? })` — 테이블·뷰 목록(스키마 생략 시 PG는 시스템 스키마 제외 전체, MySQL은 현재 DB, Oracle은 현재 사용자). 최대 1000행.
-  - `describe_table({ table, schema? })` — 컬럼(이름·타입·널·기본값·주석)·PK·인덱스. Oracle은 이름을 대문자로 비교.
+  - `describe_table({ table, schema? })` — 컬럼(이름·타입·널·기본값·주석)·PK·인덱스. Oracle은 이름을 대문자로 비교. 결과는 JSON 한 덩어리 `{"columns":<결과 JSON>,"indexes":<결과 JSON>}` — 각 부분이 `maxResultChars`의 절반씩만 쓴다(`formatResult`의 `maxChars` 파라미터).
   - `schema`·`table` zod 검증: 1~128자, 제어문자 금지. SQL에는 **바인딩 파라미터로만** 들어간다(문자열 조립 금지).
 - 오류: 접속 실패·SQL 거부·타임아웃·드라이버 로드 실패는 `{ isError: true, content: [{ type: 'text', text }] }`로 모델에 돌려준다(턴은 계속). `text`는 `safeMessage(e, ref)` — 비밀번호 문자열을 `****`로 치환하고 500자로 자른다. 오류 객체·스택을 로그에 남길 때도 같은 함수를 거친다.
 - `close()`: 열린 세션을 모두 닫는다. 실패는 경고 로그(서버 이름만)로 삼킨다.
@@ -294,13 +294,13 @@ ALTER TABLE com.interview_session
 1. SDK 0.2.117 + CLI 2.1.284에서 `type:'sdk'` 서버가 `strictMcpConfig:true`·`settingSources:[]` 아래 붙고, 그 도구 호출이 **`canUseTool`을 거치는지**(deny하면 핸들러가 안 불리는지). 스파이크 1회(`scripts/spikeSdkMcp.ts`, DB 없이 가짜 도구).
    → 2026-10-02 확인: **도달**. `scripts/spikeSdkMcp.ts` 실측 — init `mcp_servers=[{"name":"db-1","status":"connected","source":"sdk"}]`, tools=`[mcp__db-1__query]`; `canUseTool`이 `SELECT 42`·`DELETE FROM t` 두 호출 모두에 불렸고, deny한 DELETE는 핸들러에 안 닿음(handler=`[SELECT 42]`). 실행 중 claude.exe 명령줄은 `--setting-sources= --strict-mcp-config --permission-mode default` 였고 `--mcp-config` 인자는 없음(sdk 서버는 CLI 인자가 아니라 제어 프로토콜로 붙는다 — 외부 MCP가 명령줄에 안 보이는 것이 정상).
 2. 로컬 PostgreSQL에서 PG 어댑터: `DECLARE … CURSOR` + `FETCH`로 행 상한, 읽기 전용 트랜잭션이 `CREATE TEMP TABLE`을 거부하는지.
-   → Task 11에서 확인.
+   → 2026-10-02 확인(Task 11, 로컬 PostgreSQL — `scripts/spikeDbAdapter.ts`, API 자신의 `postgres` DB): `SELECT 1` 1행, `SELECT generate_series(1, 500)` → 200행 + `truncated=true`(커서 FETCH 201), `SHOW default_transaction_read_only` → `on`, `CREATE TEMP TABLE` → `cannot execute CREATE TABLE in a read-only transaction`. 카탈로그 SQL(`list_tables`·`describe_table`)도 같은 DB에서 실행 확인(`$1::text` 바인딩).
 3. MariaDB(대상 버전)에서 `START TRANSACTION READ ONLY`·`max_statement_time`, MySQL에서 `max_execution_time` — 라이브 스모크.
    → 라이브 스모크(Task 16)에서 확인.
 4. Oracle thin 모드 접속(대상 서버 12.1 이상), `SET TRANSACTION READ ONLY` — 라이브 스모크.
    → 라이브 스모크(Task 16)에서 확인.
 5. `mysql2` 스트림 중간 destroy 뒤 다음 호출 재접속 — 단위 테스트 + 라이브.
-   → Task 11에서 확인.
+   → 2026-10-02 확인(Task 11): 가짜 `mysql2` 단위 테스트로 상한 초과 시 destroy → 다음 `run` 재접속까지 확인. 실제 MariaDB·MySQL에서의 스트림 중간 destroy는 라이브 스모크(Task 16)에서 확인.
 
 ## 12. 범위 밖
 

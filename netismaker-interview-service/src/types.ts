@@ -22,6 +22,25 @@ export interface McpSpec {
   transport: string;
 }
 
+/** Java DbType (스펙 2026-10-02 §4). */
+export type DbType = 'POSTGRESQL' | 'MYSQL' | 'MARIADB' | 'ORACLE';
+
+/**
+ * Java InterviewClaimResponse.DbConnectionRef — 복호화된 DB 접속정보(질문 세션 claim 전용).
+ * ⚠️ password 평문: 로그·오류 메시지·SDK options의 stdio 서버 설정(명령줄로 나간다)에 넣지 말 것 —
+ * dbMcp.ts가 메모리에서만 드라이버에 넘긴다(type:'sdk' 서버는 CLI에 이름만 간다).
+ */
+export interface DbConnectionRef {
+  serverName: string;
+  label: string;
+  dbType: DbType;
+  host: string;
+  port: number;
+  database: string;
+  username: string;
+  password: string;
+}
+
 /** Java InterviewClaimResponse.AttachmentRef — 등록 시 업로드된 첨부 1건. */
 export interface AttachmentRef {
   id: number;
@@ -91,6 +110,13 @@ export interface InterviewClaimResponse {
    */
   gitUrl?: string | null;
   repoHost?: 'github' | 'gitlab' | null;
+  /**
+   * DB 접속정보 (스펙 2026-10-02 §5.4) — QUESTION만. 구버전 백엔드는 필드가 없다 → Array.isArray 가드.
+   * dbConnections는 평문 비밀번호를 담는다(위 DbConnectionRef 주의).
+   */
+  dbConnectionIds?: number[];
+  dbConnections?: DbConnectionRef[];
+  dbNotices?: string[];
 }
 
 /** SSE activity 와이어 계약의 활동 type (스펙 §4.1). */

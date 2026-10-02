@@ -19,7 +19,7 @@
 
 | 결정 | 내용 |
 |---|---|
-| MCP 서버 | **인터뷰 서비스 내장 SDK MCP 서버** — Agent SDK `createSdkMcpServer` + `tool()`(zod). 연결마다 서버 `db-<id>` 1개, 도구 3개(`query`·`list_tables`·`describe_table`). 드라이버: PostgreSQL `pg`(+`pg-cursor`), MySQL·MariaDB `mysql2`, Oracle `oracledb` thin 모드(Instant Client 불필요, Oracle 12.1 이상) |
+| MCP 서버 | **인터뷰 서비스 내장 SDK MCP 서버** — Agent SDK `createSdkMcpServer` + `tool()`(zod). 연결마다 서버 `db-<id>` 1개, 도구 3개(`query`·`list_tables`·`describe_table`). 드라이버: PostgreSQL `pg`(행 상한은 서버 커서 `DECLARE`/`FETCH`), MySQL·MariaDB `mysql2`, Oracle `oracledb` thin 모드(Instant Client 불필요, Oracle 12.1 이상) |
 | 비밀 전달 | claim이 복호화된 접속정보를 싣고, 러너가 **메모리에서만** 드라이버에 넘긴다. CLI에는 `{type:"sdk", name}`만 전달되므로(§2.1) 명령줄·임시 파일·자식 프로세스 env·`mcps_extra`·로그 어디에도 비밀번호가 없다 |
 | 사용자 입력분 보관 | **"내 접속정보"로 암호화 저장**(본인만 보임, 레포 단위로 묶여 같은 레포 선택 시 재사용) |
 | 읽기 전용 방식 | **3중** — (1) SQL 검사(게이트와 도구 핸들러 양쪽, 단일 조회문만), (2) 4종 모두 **READ ONLY 트랜잭션 안에서 실행하고 항상 ROLLBACK**, (3) 문장 타임아웃 30초·결과 200행·셀 2KB 상한. 폼에 "읽기 전용 계정 권장" 안내 — 최종 방어선은 여전히 DB 계정 권한 |
@@ -89,7 +89,7 @@ ALTER TABLE com.interview_session
 
 ### 4.1 암호화
 
-- `DbSecretCipher`(`@Component`): `org.springframework.security.crypto.encrypt.Encryptors.stronger(key, salt)`(AES-256-GCM, `spring-boot-starter-security`에 이미 포함).
+- `DbSecretCipher`(`@Component`): `org.springframework.security.crypto.encrypt.Encryptors.delux(key, salt)`(AES-256-GCM + PBKDF2, 결과 hex — `stronger`의 hex 인코딩판, `spring-boot-starter-security`에 이미 포함).
 - 설정: `app.db-secret.key` ← env `NETISMAKER_DB_SECRET_KEY`, `app.db-secret.salt` ← env `NETISMAKER_DB_SECRET_SALT`(hex, 짝수 길이 16자 이상 — 기존 `app.*` 설정 접두와 통일). Windows 스택은 `public.env`.
 - 키나 salt가 비어 있으면 `isEnabled()=false` — **부팅 실패 금지**. 기능만 꺼진다(§9).
 - 키 교체 도구는 범위 밖. 키를 바꾸면 기존 행은 복호화 실패 → "다시 저장 필요"(§9).
@@ -104,7 +104,7 @@ ALTER TABLE com.interview_session
 | POST | `/api/db-connections` | 로그인(`scope=REPO`는 관리자) | 생성. `USER`면 `owner_user_id`=요청자 |
 | PUT | `/api/db-connections/{id}` | 소유자(USER) / 관리자(REPO) | 수정. **password blank = 기존 유지** |
 | DELETE | `/api/db-connections/{id}` | 소유자 / 관리자 | 삭제 |
-| POST | `/api/db-connections/test` | 로그인 | `{id}` 또는 저장 전 폼 값 `{dbType,host,port,databaseName,username,password}`. `{id}`+password 생략 시 저장값 사용 |
+| POST | `/api/db-connections/test` | 로그인(`{id}`로 저장값을 쓰면 그 항목의 편집 권한 필요 — 남의 저장 비밀번호로 임의 host에 접속시키는 경로 차단, 아니면 403) | `{id}` 또는 저장 전 폼 값 `{dbType,host,port,databaseName,username,password}`. `{id}`+password 생략 시 저장값 사용 |
 
 - 기능 꺼짐(키 없음)이면 전부 **503** `"DB 접속정보 기능이 꺼져 있습니다(NETISMAKER_DB_SECRET_KEY)"`. GET은 503 대신 `{enabled:false, items:[]}`로 응답해 폼이 섹션을 숨길 수 있게 한다.
 - 다른 사람의 `USER` 행을 id로 건드리면 **404**(존재 노출 방지, `requireViewable` 선례).
@@ -230,7 +230,7 @@ ALTER TABLE com.interview_session
 
 ### 8.2 `src/sdk/sqlReadOnly.ts` (신규)
 
-`checkReadOnlySql(sql): {ok: true} | {ok: false, reason: string}`
+`checkReadOnlySql(sql, dialect: 'postgres'|'mysql'|'oracle'): {ok: true} | {ok: false, reason: string}` — 주석·인용 규칙은 방언별(`#` 주석은 mysql만, `$tag$`는 postgres만, 백틱은 mysql만, 백슬래시가 든 문자열은 전부 거부). 금지 함수·접두사(5)는 방언 구분 없이 합쳐 적용한다(과차단 쪽 — 다른 DB 함수 이름을 열 이름으로 쓰는 경우만 오탐).
 
 1. **정규화**: `--…\n`, `/* … */`, MySQL `#…\n` 주석 제거; `'…'`(`''` 이스케이프 포함), PostgreSQL `$tag$…$tag$`, `E'…'` 문자열을 빈 리터럴로 치환; `"…"`·`` `…` `` 식별자는 `x`로 치환. 닫히지 않은 리터럴/주석 → 거부.
 2. **단일 문장**: 정규화 결과에서 끝의 공백·`;` 하나를 뗀 뒤 `;`가 남아 있으면 거부. 빈 문장 거부.

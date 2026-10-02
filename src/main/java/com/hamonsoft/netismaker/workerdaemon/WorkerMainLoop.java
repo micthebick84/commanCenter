@@ -246,7 +246,7 @@ public class WorkerMainLoop {
         }
 
         // 목업 참조 파일은 커밋 대상에서 제외
-        if (designDir != null) deleteRecursively(designDir);
+        if (designDir != null) deleteDesignDir(designDir.toPath());
 
         // 4. 변경 commit + push
         String headSha;
@@ -592,16 +592,16 @@ public class WorkerMainLoop {
         }
     }
 
-    private static void deleteRecursively(File f) {
-        if (f == null) return;
-        // 심볼릭 링크는 타깃을 따라가지 않고 링크 자체만 제거 (워크트리 밖 삭제 방지)
-        boolean symlink = java.nio.file.Files.isSymbolicLink(f.toPath());
-        if (!symlink && !f.exists()) return;
-        if (!symlink && f.isDirectory()) {
-            File[] children = f.listFiles();
-            if (children != null) for (File c : children) deleteRecursively(c);
+    /**
+     * 커밋 전 목업 참조 폴더(.design) 제거. 심볼릭 링크·Windows 정션은 따라가지 않고 링크만 지운다
+     * (claude가 권한 우회로 그 안에 정션을 만들었으면 따라가는 순간 worktree 밖이 지워진다).
+     * 실패해도 예외 없이 경고만 — 기존 동작 유지.
+     */
+    static void deleteDesignDir(java.nio.file.Path dir) {
+        RepoCacheCleanupJob.DeleteResult d = RepoCacheCleanupJob.deleteTree(dir);
+        if (d.failures() > 0) {
+            log.warn("목업 참조 폴더 삭제 미완료: {} ({}개 항목 실패)", dir, d.failures());
         }
-        if (!f.delete()) log.warn("파일 삭제 실패: {}", f);
     }
 
     private String hostname() {

@@ -486,7 +486,7 @@ public class WorkerService {
                 .toList();
     }
 
-    /** worktree 정리 잡 보호 목록(구현중·디자인중·배포중·배포중지중). 워커 WorktreeCleanupJob이 회차마다 조회. */
+    /** worktree 정리 잡 보호 목록(구현중·디자인중·배포중·배포중지중, soft-delete 제외). 워커 WorktreeCleanupJob이 회차마다 조회. */
     @Transactional(readOnly = true)
     public List<ActiveWorktreeTaskSummary> listWorktreeActive() {
         return taskRepo.findWorktreeActive().stream()

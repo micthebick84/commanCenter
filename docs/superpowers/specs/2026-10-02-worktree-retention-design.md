@@ -89,8 +89,8 @@
 - 위치·인증: `WorkerController`(`/worker`, `ROLE_WORKER` = `X-Worker-API-Key`), 기존 `GET /worker/deployed-tasks`와 같은 패턴.
 - 응답: `[{ "id": 12, "status": "IMPLEMENTING" }, …]` — 새 DTO `ActiveWorktreeTaskSummary(Long id, TaskStatus status)`.
 - 포함 상태: `IMPLEMENTING`(구현중) · `DESIGNING`(디자인중) · `DEPLOYING`(배포중) · `UNDEPLOYING`(배포중지중) — 워커가 claim한 뒤 worktree를 실제로 쓰는 상태만. `APPROVED`·`DEPLOY_PENDING` 등 대기 상태는 아직 worktree를 안 쓰고, 재시도 시 어차피 재생성한다.
-- 워커 구분 없이 DB 전체 기준(같은 PC 다른 워커의 작업도 보호). soft-delete 여부와 무관(진행 중이면 보호).
-- 워커가 죽어도 `StaleTaskRecoveryJob`이 네 상태를 모두 회수하므로(2026-10-02 코드 확인) 목록에 영구히 남지 않는다.
+- 워커 구분 없이 DB 전체 기준(같은 PC 다른 워커의 작업도 보호). **soft-delete된 작업은 제외한다** — 구현중·디자인중에 삭제된 작업은 결과 보고(`findActiveByIdForUpdate`)와 `StaleTaskRecoveryJob`(`findInFlightClaimed`)이 모두 `deletedAt IS NULL`만 다뤄 상태가 영영 안 바뀌므로, 포함하면 그 worktree와 레포 캐시가 영구히 보호된다. 방금 삭제된 진행 중 작업의 worktree는 7일 나이 판정(`TOO_NEW`)이 그대로 보호하므로 제외해도 안전하다.
+- 삭제되지 않은 작업은 워커가 죽어도 `StaleTaskRecoveryJob`이 네 상태를 모두 회수하므로(2026-10-02 코드 확인) 목록에 영구히 남지 않는다.
 
 ## 5. 구성 요소
 

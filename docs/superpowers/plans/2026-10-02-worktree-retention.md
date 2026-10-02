@@ -13,7 +13,7 @@
 ## Global Constraints
 
 - 보존 기간 기본 **7일**(`WORKTREE_CLEANUP_RETENTION_DAYS`), **0 이하면 바인딩 실패**. cron 기본 **`0 30 2 * * *`**(`WORKTREE_CLEANUP_CRON`, `-`=끔, 잘못된 식은 바인딩 실패), `WORKTREE_CLEANUP_ENABLED` 기본 `true`.
-- 진행 중 상태는 정확히 **`IMPLEMENTING`·`DESIGNING`·`DEPLOYING`·`UNDEPLOYING`** 네 개. soft-delete 여부와 무관.
+- 진행 중 상태는 정확히 **`IMPLEMENTING`·`DESIGNING`·`DEPLOYING`·`UNDEPLOYING`** 네 개. soft-delete된 작업은 제외(상태가 영영 안 바뀌어 worktree가 영구 보호되는 것을 막는다 — 방금 삭제된 진행 중 작업은 7일 나이 판정이 보호).
 - worktree 경로 규칙: `worktree-root/{localKey}/{task|deploy|design}-{taskId}`, `localKey`는 항상 2단계(`owner/repo` 또는 `_gitlab/{평탄화}`).
 - 정리 실패는 작업 결과(보고·상태)를 바꾸지 않는다 — 즉시 정리는 best-effort.
 - 진행 중 조회 실패(네트워크·4xx·404 포함) → 그 회차는 **아무것도 지우지 않는다**.
@@ -911,7 +911,7 @@ public record ActiveWorktreeTaskSummary(Long id, TaskStatus status) {
 ```java
     /**
      * worktree 정리 잡 보호 목록 — 워커가 claim해 worktree를 쓰는 중인 task(구현중·디자인중·배포중·배포중지중).
-     * 대기 상태는 아직 worktree를 안 쓰고 재시도 때 새로 만든다. soft-delete 여부와 무관(진행 중이면 보호).
+     * 대기 상태는 아직 worktree를 안 쓰고 재시도 때 새로 만든다. soft-delete된 작업은 제외(상태가 안 바뀌어 영구 보호되는 것을 막음 — 방금 삭제분은 7일 나이 판정이 보호).
      * 워커가 죽어도 StaleTaskRecoveryJob이 네 상태를 회수하므로 목록에 영구히 남지 않는다.
      */
     @Query("""

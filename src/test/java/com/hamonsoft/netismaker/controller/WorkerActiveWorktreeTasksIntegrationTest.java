@@ -54,7 +54,7 @@ class WorkerActiveWorktreeTasksIntegrationTest {
     }
 
     @Test
-    void returns_only_the_four_worktree_in_use_statuses() throws Exception {
+    void returns_only_the_four_worktree_in_use_statuses_and_skips_soft_deleted() throws Exception {
         List<Integer> expected = new ArrayList<>();
         for (TaskStatus s : TaskStatus.values()) {
             Long id = save(s);
@@ -63,6 +63,11 @@ class WorkerActiveWorktreeTasksIntegrationTest {
                 expected.add(id.intValue());
             }
         }
+        // soft-delete된 진행 중 작업은 상태가 안 바뀌어 영구 보호가 되므로 목록에서 빠져야 한다
+        Long deletedId = save(TaskStatus.IMPLEMENTING);
+        Task deleted = taskRepo.findById(deletedId).orElseThrow();
+        deleted.setDeletedAt(java.time.OffsetDateTime.now());
+        taskRepo.save(deleted);
 
         mvc.perform(get("/worker/active-worktree-tasks").header("X-Worker-API-Key", apiKey))
                 .andExpect(status().isOk())

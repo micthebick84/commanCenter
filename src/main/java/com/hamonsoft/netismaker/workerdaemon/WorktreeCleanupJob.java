@@ -11,6 +11,7 @@ import java.io.IOException;
 import java.nio.channels.FileChannel;
 import java.nio.channels.FileLock;
 import java.nio.channels.OverlappingFileLockException;
+import java.nio.file.DirectoryIteratorException;
 import java.nio.file.DirectoryStream;
 import java.nio.file.Files;
 import java.nio.file.LinkOption;
@@ -153,10 +154,11 @@ public class WorktreeCleanupJob implements SchedulingConfigurer {
     private Result cleanUnder(Path root, Set<Long> active) throws IOException, InterruptedException {
         Map<Path, Outcome> outcomes = new LinkedHashMap<>();
         Instant now = Instant.now();
+        // 루트 목록 자체가 실패하면 그대로 전파(잡 전체 실패). 그 아래 디렉터리 하나가 읽히지 않으면 그 하위만 건너뛴다.
         for (Path a : plainDirs(root, true)) {
-            for (Path b : plainDirs(a, false)) {
+            for (Path b : plainDirsOrSkip(a)) {
                 String localKey = a.getFileName() + "/" + b.getFileName();
-                for (Path wt : plainDirs(b, false)) {
+                for (Path wt : plainDirsOrSkip(b)) {
                     Optional<WorktreeKind.Parsed> parsed = WorktreeKind.parse(wt.getFileName().toString());
                     if (parsed.isEmpty()) continue;
                     outcomes.put(wt, cleanOne(wt, localKey, parsed.get(), active, now));
@@ -198,6 +200,16 @@ public class WorktreeCleanupJob implements SchedulingConfigurer {
             case TOO_NEW -> Outcome.TOO_NEW;
             case UNKNOWN -> Outcome.UNKNOWN;
         };
+    }
+
+    /** plainDirs의 부분 실패 허용판 — 목록을 못 읽으면 경고 한 줄 남기고 그 하위만 건너뛴다(빈 목록). */
+    private static List<Path> plainDirsOrSkip(Path dir) {
+        try {
+            return plainDirs(dir, false);
+        } catch (IOException | DirectoryIteratorException e) {
+            log.warn("worktree 정리: 디렉터리를 읽지 못해 그 하위만 건너뜀 — {} ({})", dir, e.getMessage());
+            return List.of();
+        }
     }
 
     /**

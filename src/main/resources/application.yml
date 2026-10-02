@@ -104,6 +104,9 @@ app:
   question:
     max-active-per-user: 3          # 사용자당 활성(QUEUED/RUNNING/AWAITING_INPUT) 질문 세션 상한 → 초과 시 429
     max-qa-turns: 10                # 세션당 assistant 답변 상한 → ask 시 초과면 400. 불변식: < 러너 INTERVIEW_MAX_TURNS(20)
+  db-secret:                        # 질문 세션 DB 접속정보 암호화 (스펙 2026-10-02 §4.1). 둘 다 있어야 기능이 켜진다
+    key: ${NETISMAKER_DB_SECRET_KEY:}
+    salt: ${NETISMAKER_DB_SECRET_SALT:}   # hex, 짝수 길이 16자 이상
   attachment:
     dir: ${user.home}/netis-maker/attachments
     max-files: 10

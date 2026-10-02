@@ -1,4 +1,6 @@
 // 질문 세션 API 계약 미러 (Java QuestionSummaryResponse / InterviewResponse 부분집합) + 사이드바/헤더 순수 계산.
+import type { DbConnectionChip } from './dbConnections'
+
 export interface QuestionSummary {
   id: number
   title: string
@@ -39,6 +41,12 @@ export interface QuestionDetail {
   contextWindow: number | null
   /** 세션에 현재 적용된 관리자 카탈로그 id — McpPicker 1회 시딩용 (스펙 2026-09-13 §4). 구버전 백엔드는 미제공. */
   mcpCatalogIds?: number[]
+  /** 레포 카탈로그 id — DB 접속정보 목록 조회 키 (스펙 2026-10-02 §5.3). 구버전 세션은 null. */
+  repoCatalogId?: number | null
+  /** 선택한 DB 접속정보 id — 대화 화면 DB 선택 시딩. */
+  dbConnectionIds?: number[]
+  /** 헤더 칩용 {id,name,dbType} — 현재 행 기준. */
+  dbConnections?: DbConnectionChip[]
   /** 등록 시(킥오프) 첨부 — 첫 질문은 말풍선이 없으므로 헤더 아래 칩 줄로 (스펙 2026-09-13 §2). */
   attachments?: AttachmentView[]
   turns?: Array<{

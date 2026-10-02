@@ -1,5 +1,6 @@
 import { buildCanUseTool } from './permissions.js';
 import type { SessionKind } from '../types.js';
+import type { SqlDialect } from './sqlReadOnly.js';
 
 export interface SessionOptionsInput {
   superpowersPluginPath: string;
@@ -33,6 +34,13 @@ export interface SessionOptionsInput {
    * null/미지정 = 추가 허용 루트 없음(종전 동작). INTERVIEW에서는 무시된다.
    */
   attachmentRoot?: string | null;
+  /**
+   * 이번 턴의 내장 DB MCP 서버(스펙 2026-10-02 §6.4) — dbMcp.createDbMcp 결과({type:'sdk', name, instance}).
+   * SDK가 CLI에는 이름만 넘긴다. merge 순서 base → extras → db(마지막 우선).
+   */
+  dbMcpServers?: Record<string, unknown>;
+  /** DB 서버별 SQL 방언 — QUESTION 게이트가 query를 검사할 때 쓴다(permissions.ts dbToolGate). */
+  dbDialects?: Record<string, SqlDialect>;
 }
 
 /**
@@ -68,6 +76,7 @@ function toMcpServers(mcpsExtra: unknown): Record<string, { type: string; url: s
  * - MCP: settingSources를 안 쓰는 대신 mcpsBase(~/.claude.json 합본 스냅샷)를 options.mcpServers로
  *   명시 주입 — 디자인/구현 워커(--mcp-config + --strict-mcp-config + --allowedTools mcp__*)와 동일 목록.
  *   플러그인 격리(superpowers만 로드)는 그대로 유지된다.
+ *   질문 세션 내장 DB 서버(dbMcpServers, type:'sdk')는 마지막에 머지 — SDK가 CLI에 이름만 넘기므로 --mcp-config 명령줄에 접속정보가 실리지 않는다. stdio 서버에 접속정보를 넣지 말 것.
  * - PERMISSIONS: Write/Bash/Edit MUST NOT be in allowedTools. Tools listed in allowedTools are
  *   PRE-APPROVED by the CLI and skip the canUseTool callback entirely — so listing Write/Bash there
  *   made buildCanUseTool's confinement (Write→docs/superpowers, Bash read-only) dead code and let the
@@ -89,7 +98,11 @@ function toMcpServers(mcpsExtra: unknown): Record<string, { type: string; url: s
 export function buildOptions(input: SessionOptionsInput): Record<string, unknown> {
   // 베이스(글로벌+프로젝트 합본) + 작업별 extras — 충돌 시 extras 우선 (워커 패리티).
   // settingSources:[] + strictMcpConfig라 여기 명시한 것 외 다른 MCP 소스는 안 붙는다 (워커 --strict-mcp-config 패리티).
-  const merged: Record<string, unknown> = { ...(input.mcpsBase ?? {}), ...(toMcpServers(input.mcpsExtra) ?? {}) };
+  const merged: Record<string, unknown> = {
+    ...(input.mcpsBase ?? {}),
+    ...(toMcpServers(input.mcpsExtra) ?? {}),
+    ...(input.dbMcpServers ?? {}),
+  };
   const mcpServers = Object.keys(merged).length > 0 ? merged : undefined;
   const question = input.sessionKind === 'QUESTION';
   return {
@@ -118,6 +131,6 @@ export function buildOptions(input: SessionOptionsInput): Record<string, unknown
     ...(input.model ? { model: input.model } : {}),
     ...(input.effort ? { effort: input.effort } : {}),
     ...(input.abortController ? { abortController: input.abortController } : {}),
-    canUseTool: buildCanUseTool(input.workDir, input.sessionKind ?? 'INTERVIEW', input.attachmentRoot ?? null),
+    canUseTool: buildCanUseTool(input.workDir, input.sessionKind ?? 'INTERVIEW', input.attachmentRoot ?? null, input.dbDialects ?? {}),
   };
 }

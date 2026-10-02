@@ -4,8 +4,10 @@ import InterviewPanel from '~/components/InterviewPanel.vue'
 import QuestionComposer from '~/components/chat/QuestionComposer.vue'
 import ClaudeUsagePanel from '~/components/ClaudeUsagePanel.vue'
 import McpPicker from '~/components/McpPicker.vue'
+import DbConnectionPicker from '~/components/DbConnectionPicker.vue'
 import { interviewStatusLabel, interviewStatusChip } from '~/composables/interviewLabels'
 import { contextPercent, type QuestionDetail, type AttachmentView } from '~/composables/questions'
+import { dbTypeLabel, fetchDbConnections, type DbConnectionView } from '~/composables/dbConnections'
 import { usageColor } from '~/composables/claudeUsage'
 import { DEFAULT_MODEL, DEFAULT_EFFORT } from '~/composables/modelEffort'
 import { formatSize } from '~/composables/attachmentLimits'
@@ -44,12 +46,25 @@ const picked = reactive({ model: DEFAULT_MODEL, effort: DEFAULT_EFFORT })
 // 대화 중 MCP 변경(스펙 2026-09-13 §2·§7): 같은 원리 — 세션의 mcpCatalogIds로 1회 시드, 이후엔 "다음 질문에 쓸 초안".
 // 전송 시 항상 현재 집합을 실어 보내며 서버는 같은 집합이면 검증 없는 no-op, 다르면 갱신 + system note.
 const pickedMcp = ref<number[]>([])
+// 대화 중 DB 연결 변경(스펙 2026-10-02 §7): MCP와 같은 원리 — 세션 값으로 1회 시드, 기능이 켜져 있을 때만 전송.
+const pickedDb = ref<number[]>([])
+const dbState = reactive({ enabled: false, items: [] as DbConnectionView[] })
+async function loadDb(repoId: number) {
+  const r = await fetchDbConnections(repoId)
+  dbState.enabled = r.enabled
+  dbState.items = r.items
+}
+function reloadDb() {
+  if (detail.value?.repoCatalogId) loadDb(detail.value.repoCatalogId)
+}
 const pickedSeeded = ref(false)
 watch(detail, (d) => {
   if (pickedSeeded.value || !d?.model) return
   picked.model = d.model
   picked.effort = d.effort ?? DEFAULT_EFFORT
   pickedMcp.value = [...(d.mcpCatalogIds ?? [])]
+  pickedDb.value = [...(d.dbConnectionIds ?? [])]
+  if (d.repoCatalogId) loadDb(d.repoCatalogId)
   pickedSeeded.value = true
 })
 
@@ -59,6 +74,7 @@ type SendFn = (extra: {
   model: string
   effort: string
   mcpCatalogIds: number[]
+  dbConnectionIds?: number[]
   files: File[]
 }) => Promise<boolean>
 async function onSend(send: SendFn) {
@@ -66,6 +82,7 @@ async function onSend(send: SendFn) {
     model: picked.model,
     effort: picked.effort,
     mcpCatalogIds: pickedMcp.value,
+    ...(dbState.enabled ? { dbConnectionIds: pickedDb.value } : {}),
     files: files.value,
   })
   if (ok) files.value = []
@@ -181,6 +198,22 @@ function onPanelClose() {
         @click="requestClose"
       />
     </div>
+    <div
+      v-if="detail?.dbConnections?.length"
+      class="row items-center session-attachments"
+      data-test="session-db-chips"
+    >
+      <q-chip
+        v-for="c in detail.dbConnections"
+        :key="c.id"
+        dense
+        size="sm"
+        icon="storage"
+        color="teal-1"
+        text-color="teal-10"
+        :label="`${c.name} · ${dbTypeLabel(c.dbType)}`"
+      />
+    </div>
     <!-- 등록 시 첨부 — 첫 질문은 말풍선이 없으므로 헤더 아래 칩 줄로 (스펙 2026-09-13 §2). 비면 숨김. -->
     <div
       v-if="detail?.attachments?.length"
@@ -250,6 +283,29 @@ function onPanelClose() {
                   <div class="mcp-menu">
                     <McpPicker v-model="pickedMcp" />
                   </div>
+                </q-menu>
+              </q-btn>
+              <q-btn
+                v-if="dbState.enabled"
+                flat
+                dense
+                no-caps
+                icon="storage"
+                :label="$q.screen.xs ? undefined : 'DB'"
+                aria-label="DB 연결"
+                :disable="!awaiting"
+                data-test="db-button"
+              >
+                <q-badge v-if="pickedDb.length" color="primary" floating>{{ pickedDb.length }}</q-badge>
+                <q-tooltip>대화 중 변경 — 다음 질문부터 적용</q-tooltip>
+                <q-menu>
+                  <DbConnectionPicker
+                    v-model="pickedDb"
+                    :items="dbState.items"
+                    :known-chips="detail?.dbConnections"
+                    :repo-catalog-id="detail?.repoCatalogId ?? 0"
+                    @reload="reloadDb"
+                  />
                 </q-menu>
               </q-btn>
             </template>

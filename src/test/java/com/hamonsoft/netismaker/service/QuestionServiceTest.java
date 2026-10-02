@@ -1,6 +1,7 @@
 package com.hamonsoft.netismaker.service;
 
 import com.hamonsoft.netismaker.dto.AnswerRequest;
+import com.hamonsoft.netismaker.dto.DbConnectionDto;
 import com.hamonsoft.netismaker.dto.QuestionAskRequest;
 import com.hamonsoft.netismaker.dto.QuestionCreateRequest;
 import com.hamonsoft.netismaker.entity.InterviewKind;
@@ -53,6 +54,7 @@ class QuestionServiceTest {
     private AttachmentStorage attachmentStorage;
     private TikaExtractionService tika;
     private QuestionAttachmentRepository attachmentRepo;
+    private DbConnectionService dbConnections;
     private QuestionService service;
 
     @BeforeEach
@@ -65,8 +67,13 @@ class QuestionServiceTest {
         attachmentStorage = mock(AttachmentStorage.class);
         tika = mock(TikaExtractionService.class);
         attachmentRepo = mock(QuestionAttachmentRepository.class);
+        dbConnections = mock(DbConnectionService.class);
+        when(dbConnections.validateSelection(any(), any(), any())).thenAnswer(i -> {
+            List<Long> ids = i.getArgument(2);
+            return ids == null ? new ArrayList<Long>() : new ArrayList<>(ids);
+        });
         service = new QuestionService(interviewService, sessionRepo, turnRepo, repoCatalog, mcpCatalog,
-                attachmentStorage, tika, attachmentRepo, 3, 10);
+                attachmentStorage, tika, attachmentRepo, dbConnections, 3, 10);
         when(sessionRepo.save(any())).thenAnswer(i -> {
             InterviewSession s = i.getArgument(0);
             if (s.getId() == null) ReflectionTestUtils.setField(s, "id", 5L);   // IDENTITY 흉내 — 첨부 경로에 id 필요
@@ -600,5 +607,134 @@ class QuestionServiceTest {
                     .isInstanceOf(TaskException.class)
                     .satisfies(e -> assertThat(((TaskException) e).getStatus()).as("%s", open).isEqualTo(HttpStatus.NOT_FOUND));
         }
+    }
+
+    // ── DB 연결 (스펙 2026-10-02 §5.3) ────────────────────────────────
+
+    private static QuestionCreateRequest reqWithDb(List<Long> dbIds) {
+        return new QuestionCreateRequest(1L, "dev", "t", "q", null, null, null, dbIds);
+    }
+
+    private InterviewSession askableSession() {
+        InterviewSession s = InterviewSession.createQuestion("micthebick84/netis7.0", "main", "t", "q", "user1",
+                new ArrayList<>(), "claude-sonnet-5", "medium");
+        ReflectionTestUtils.setField(s, "id", 5L);
+        s.setRepoCatalogId(1L);
+        s.setDbConnectionIds(new ArrayList<>(List.of(7L)));
+        when(turnRepo.countBySessionIdAndRole(5L, "assistant")).thenReturn(1L);
+        when(interviewService.submitAnswer(eq(5L), anyString(), anyBoolean(), any())).thenReturn(answered(s, 4));
+        when(interviewService.appendSystemNote(eq(5L), anyString()))
+                .thenAnswer(i -> InterviewTurn.of(5L, 9, "system", "note", i.getArgument(1), null));
+        return s;
+    }
+
+    @Test
+    void create_saves_db_ids_validated_against_requester_and_repo() {
+        when(sessionRepo.countActiveQuestionsByRequester("user1")).thenReturn(0L);
+        InterviewSession s = service.create(reqWithDb(List.of(7L, 8L)), "user1");
+        verify(dbConnections).validateSelection(1L, "user1", List.of(7L, 8L));
+        assertThat(s.getDbConnectionIds()).containsExactly(7L, 8L);
+    }
+
+    @Test
+    void create_db_validation_failure_creates_no_session() {
+        when(sessionRepo.countActiveQuestionsByRequester("user1")).thenReturn(0L);
+        when(dbConnections.validateSelection(any(), any(), any()))
+                .thenThrow(new TaskException(HttpStatus.BAD_REQUEST, "선택할 수 없는 DB 연결입니다: 9"));
+        assertThatThrownBy(() -> service.create(reqWithDb(List.of(9L)), "user1")).isInstanceOf(TaskException.class);
+        verify(sessionRepo, never()).save(any());
+    }
+
+    @Test
+    void ask_same_db_set_is_noop_without_validation() {
+        InterviewSession s = askableSession();
+        QuestionService.AskResult r = service.ask(5L, "user1", false,
+                new QuestionAskRequest("추가", 3, null, null, null, List.of(7L)), null);
+        assertThat(r.dbNote()).isNull();
+        verify(dbConnections, never()).validateSelection(any(), any(), any());
+        assertThat(s.getDbConnectionIds()).containsExactly(7L);
+    }
+
+    @Test
+    void ask_changed_db_set_validates_against_session_owner_and_appends_note() {
+        InterviewSession s = askableSession();
+        when(dbConnections.chipsFor(List.of(8L))).thenReturn(List.of(new DbConnectionDto.Chip(8, "분석 DB", "ORACLE")));
+        QuestionService.AskResult r = service.ask(5L, "admin1", true,
+                new QuestionAskRequest("추가", 3, null, null, null, List.of(8L)), null);
+        verify(dbConnections).validateSelection(1L, "user1", List.of(8L));   // actor(admin1)가 아니라 소유자(user1)
+        assertThat(s.getDbConnectionIds()).containsExactly(8L);
+        assertThat(r.dbNote().getContent()).isEqualTo("DB 연결 변경: 분석 DB");
+    }
+
+    @Test
+    void ask_empty_db_list_clears_with_note_and_null_keeps() {
+        InterviewSession s = askableSession();
+        QuestionService.AskResult keep = service.ask(5L, "user1", false,
+                new QuestionAskRequest("a", 3, null, null, null, null), null);
+        assertThat(keep.dbNote()).isNull();
+        QuestionService.AskResult clear = service.ask(5L, "user1", false,
+                new QuestionAskRequest("b", 3, null, null, null, List.of()), null);
+        assertThat(s.getDbConnectionIds()).isEmpty();
+        assertThat(clear.dbNote().getContent()).isEqualTo("DB 연결 변경: 없음(전부 해제)");
+    }
+
+    @Test
+    void ask_clear_note_is_based_on_validated_ids_not_on_chips() {
+        // 선택은 유효하지만 칩이 비어 보이는 경우(행이 사이에 사라짐 등)에도 "전부 해제"라고 거짓 안내하면 안 된다.
+        askableSession();
+        when(dbConnections.chipsFor(List.of(8L))).thenReturn(List.of());
+        QuestionService.AskResult r = service.ask(5L, "user1", false,
+                new QuestionAskRequest("c", 3, null, null, null, List.of(8L)), null);
+        assertThat(r.dbNote().getContent()).doesNotContain("전부 해제");
+    }
+
+    // 세션에 이미 있던 id는 사후 비활성·삭제여도 유지·해제할 수 있어야 한다 — 새로 추가되는 id만 검증한다.
+
+    @Test
+    void ask_keeps_already_selected_stale_id_and_validates_only_added_ids() {
+        InterviewSession s = askableSession();   // 현재 [7] — 7은 이제 비활성이라 validateSelection이 거부한다고 가정
+        when(dbConnections.validateSelection(any(), any(), eq(List.of(7L))))
+                .thenThrow(new TaskException(HttpStatus.BAD_REQUEST, "선택할 수 없는 DB 연결입니다: 7"));
+        when(dbConnections.chipsFor(List.of(7L, 8L))).thenReturn(List.of(
+                new DbConnectionDto.Chip(7, "옛 DB", "MYSQL"), new DbConnectionDto.Chip(8, "분석 DB", "ORACLE")));
+        QuestionService.AskResult r = service.ask(5L, "user1", false,
+                new QuestionAskRequest("추가", 3, null, null, null, List.of(7L, 8L)), null);
+        verify(dbConnections).validateSelection(1L, "user1", List.of(8L));   // 추가분만
+        verify(dbConnections, never()).validateSelection(any(), any(), eq(List.of(7L, 8L)));
+        assertThat(s.getDbConnectionIds()).containsExactly(7L, 8L);
+        assertThat(r.dbNote().getContent()).isEqualTo("DB 연결 변경: 옛 DB, 분석 DB");
+    }
+
+    @Test
+    void ask_invalid_added_db_id_is_rejected_even_when_stale_id_is_kept() {
+        InterviewSession s = askableSession();
+        when(dbConnections.validateSelection(any(), any(), eq(List.of(9L))))
+                .thenThrow(new TaskException(HttpStatus.BAD_REQUEST, "선택할 수 없는 DB 연결입니다: 9"));
+        assertThatThrownBy(() -> service.ask(5L, "user1", false,
+                new QuestionAskRequest("추가", 3, null, null, null, List.of(7L, 9L)), null))
+                .isInstanceOfSatisfying(TaskException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.BAD_REQUEST));
+        assertThat(s.getDbConnectionIds()).containsExactly(7L);
+    }
+
+    @Test
+    void ask_removing_stale_db_id_succeeds_without_validation() {
+        InterviewSession s = askableSession();
+        s.setDbConnectionIds(new ArrayList<>(List.of(7L, 8L)));   // 7은 비활성이라 가정 — 해제는 검증 없이 통과해야 한다
+        when(dbConnections.chipsFor(List.of(8L))).thenReturn(List.of(new DbConnectionDto.Chip(8, "분석 DB", "ORACLE")));
+        QuestionService.AskResult r = service.ask(5L, "user1", false,
+                new QuestionAskRequest("추가", 3, null, null, null, List.of(8L)), null);
+        verify(dbConnections, never()).validateSelection(any(), any(), any());
+        assertThat(s.getDbConnectionIds()).containsExactly(8L);
+        assertThat(r.dbNote().getContent()).isEqualTo("DB 연결 변경: 분석 DB");
+    }
+
+    @Test
+    void ask_db_cap_applies_to_resulting_set_including_kept_ids() {
+        InterviewSession s = askableSession();
+        s.setDbConnectionIds(new ArrayList<>(List.of(7L, 8L, 9L)));
+        assertThatThrownBy(() -> service.ask(5L, "user1", false,
+                new QuestionAskRequest("추가", 3, null, null, null, List.of(7L, 8L, 9L, 10L)), null))
+                .isInstanceOfSatisfying(TaskException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.BAD_REQUEST));
+        assertThat(s.getDbConnectionIds()).containsExactly(7L, 8L, 9L);
     }
 }

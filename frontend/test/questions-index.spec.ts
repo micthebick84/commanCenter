@@ -15,6 +15,13 @@ function stubApi() {
     if (url === '/api/repo-catalog') return Promise.resolve([{ id: 1, alias: 'Netis7.0', host: 'github', ownerRepo: 'a/b', defaultBranch: 'main' }])
     if (url === '/api/mcp-catalog') return Promise.resolve([])
     if (url === '/api/usage/claude') return Promise.resolve({ limits: [] })
+    if (url === '/api/db-connections?repoCatalogId=1') return Promise.resolve({
+      enabled: true,
+      items: [
+        { id: 7, scope: 'REPO', repoCatalogId: 1, name: '운영', dbType: 'MYSQL', host: 'h', port: 3306, databaseName: 'app', username: 'u', enabled: true, mine: false },
+        { id: 8, scope: 'USER', repoCatalogId: 1, name: '내 DB', dbType: 'ORACLE', host: 'h', port: 1521, databaseName: 'svc', username: 'u', enabled: true, mine: true },
+      ],
+    })
     return Promise.resolve(null)
   })
 }
@@ -217,5 +224,44 @@ describe('pages/questions/index — 새 질문 입력창 (스펙 2026-09-05 §3�
     } finally {
       await setViewportWidth(1024)
     }
+  })
+
+  it('레포를 고르면 DB 버튼이 생기고 공용 연결이 기본 선택되어 등록 바디에 실린다 (스펙 2026-10-02 §7)', async () => {
+    const w = mount(QuestionsIndex)
+    await flushPromises()
+    expect(w.find('[data-test="db-button"]').exists()).toBe(false)
+    const vm = w.vm as any
+    vm.draft.repoCatalogId = 1
+    vm.onRepoSelected(1)
+    await flushPromises()
+    expect(w.find('[data-test="db-button"]').exists()).toBe(true)
+    expect(vm.draft.dbConnectionIds).toEqual([7])
+    Object.assign(vm.draft, { githubBranch: 'main', question: 'DB에 주문 테이블 있어?' })
+    await vm.submit()
+    await flushPromises()
+    const call = useApiMock.mock.calls.find((c) => c[0] === '/api/questions' && c[1]?.method === 'POST')
+    expect(call![1].body.dbConnectionIds).toEqual([7])
+    w.unmount()
+  })
+
+  it('DB 기능이 꺼져 있으면 버튼이 없고 바디에 dbConnectionIds를 싣지 않는다', async () => {
+    useApiMock.mockImplementation((url: string, opts?: { method?: string }) => {
+      if (url.startsWith('/api/db-connections')) return Promise.resolve({ enabled: false, items: [] })
+      if (url === '/api/questions' && opts?.method === 'POST') return Promise.resolve({ id: 12 })
+      if (url === '/api/repo-catalog') return Promise.resolve([{ id: 1, alias: 'Netis7.0', host: 'github', ownerRepo: 'a/b', defaultBranch: 'main' }])
+      return Promise.resolve(null)
+    })
+    const w = mount(QuestionsIndex)
+    await flushPromises()
+    const vm = w.vm as any
+    vm.draft.repoCatalogId = 1
+    vm.onRepoSelected(1)
+    await flushPromises()
+    expect(w.find('[data-test="db-button"]').exists()).toBe(false)
+    Object.assign(vm.draft, { githubBranch: 'main', question: 'q' })
+    await vm.submit()
+    const call = useApiMock.mock.calls.find((c) => c[0] === '/api/questions' && c[1]?.method === 'POST')
+    expect('dbConnectionIds' in call![1].body).toBe(false)
+    w.unmount()
   })
 })

@@ -93,7 +93,7 @@ public class QuestionController {
 
     /**
      * 추가 질문 — 바디 {answer, replyToSeq}는 AnswerRequest와 동일(프론트 InterviewPanel 재사용) +
-     * 선택 {model, effort, mcpCatalogIds}(대화 중 변경 → 다음 턴부터 적용). 응답의 model/effort/mcpCatalogIds는
+     * 선택 {model, effort, mcpCatalogIds, dbConnectionIds}(대화 중 변경 → 다음 턴부터 적용). 응답의 model/effort/mcpCatalogIds는
      * 갱신된 세션 값. MCP가 실제로 바뀌면 status 다음에 note 이벤트를 밀어 프론트가 즉시 표시한다.
      */
     @PostMapping("/{id}/ask")
@@ -119,6 +119,8 @@ public class QuestionController {
         interviewStream.pushStatus(id, InterviewStatus.QUEUED);
         InterviewTurn note = result.mcpNote();
         if (note != null) interviewStream.pushNote(id, note.getSeq(), note.getContent());
+        InterviewTurn dbNote = result.dbNote();
+        if (dbNote != null) interviewStream.pushNote(id, dbNote.getSeq(), dbNote.getContent());
         return questionService.get(id, userId, isAdmin);
     }
 

@@ -1,5 +1,6 @@
 package com.hamonsoft.netismaker.service;
 
+import com.hamonsoft.netismaker.dto.DbConnectionDto;
 import com.hamonsoft.netismaker.dto.InterviewResponse;
 import com.hamonsoft.netismaker.dto.QuestionAskRequest;
 import com.hamonsoft.netismaker.dto.QuestionCreateRequest;
@@ -24,6 +25,7 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
 import java.util.stream.Collectors;
@@ -50,6 +52,7 @@ public class QuestionService {
     private final AttachmentStorage attachmentStorage;
     private final TikaExtractionService tika;
     private final QuestionAttachmentRepository attachmentRepo;
+    private final DbConnectionService dbConnectionService;
     private final int maxActivePerUser;
     private final int maxQaTurns;
 
@@ -61,6 +64,7 @@ public class QuestionService {
                            AttachmentStorage attachmentStorage,
                            TikaExtractionService tika,
                            QuestionAttachmentRepository attachmentRepo,
+                           DbConnectionService dbConnectionService,
                            @Value("${app.question.max-active-per-user:3}") int maxActivePerUser,
                            @Value("${app.question.max-qa-turns:10}") int maxQaTurns) {
         this.interviewService = interviewService;
@@ -71,12 +75,20 @@ public class QuestionService {
         this.attachmentStorage = attachmentStorage;
         this.tika = tika;
         this.attachmentRepo = attachmentRepo;
+        this.dbConnectionService = dbConnectionService;
         this.maxActivePerUser = maxActivePerUser;
         this.maxQaTurns = maxQaTurns;
     }
 
-    /** ask 결과 (스펙 2026-09-13 §5.2). mcpNote = MCP가 실제로 바뀌었을 때의 system note 턴, 아니면 null. */
-    public record AskResult(InterviewSession session, InterviewTurn mcpNote) {}
+    /**
+     * ask 결과 (스펙 2026-09-13 §5.2, 2026-10-02 §5.3). mcpNote/dbNote = MCP·DB 선택이 실제로 바뀌었을 때의
+     * system note 턴, 아니면 null.
+     */
+    public record AskResult(InterviewSession session, InterviewTurn mcpNote, InterviewTurn dbNote) {
+        public AskResult(InterviewSession session, InterviewTurn mcpNote) {
+            this(session, mcpNote, null);
+        }
+    }
 
     @Transactional
     public InterviewSession create(QuestionCreateRequest req, String requesterId) {
@@ -90,6 +102,8 @@ public class QuestionService {
         String model = ModelEffortPolicy.resolveModel(req.model());
         String effort = ModelEffortPolicy.resolveEffort(req.effort());
         ModelEffortPolicy.validate(model, effort);   // 검증이 먼저 — 실패 시 세션이 생기면 안 된다
+        // DB 선택 검증도 세션 생성 전에 (스펙 2026-10-02 §5.3) — 기준은 등록자(=세션 소유자)와 선택 레포
+        List<Long> dbIds = dbConnectionService.validateSelection(repo.catalogId(), requesterId, req.dbConnectionIds());
 
         InterviewSession s = InterviewSession.createQuestion(repo.ownerRepo(), req.githubBranch(),
                 deriveTitle(req.title(), req.question()), req.question(), requesterId, extras, model, effort);
@@ -98,6 +112,7 @@ public class QuestionService {
         s.setRepoCatalogId(repo.catalogId());
         // 선택 id 스냅샷 — 프론트 픽커 시딩 + applyMcpChange 집합 비교 (스펙 2026-09-13 §4)
         s.setMcpCatalogIds(req.mcpCatalogIds() == null ? new ArrayList<>() : new ArrayList<>(req.mcpCatalogIds()));
+        s.setDbConnectionIds(dbIds);
         return sessionRepo.save(s);
     }
 
@@ -126,7 +141,8 @@ public class QuestionService {
     @Transactional(readOnly = true)
     public InterviewResponse get(Long id, String viewerId, boolean isAdmin) {
         interviewService.requireKind(id, InterviewKind.QUESTION);
-        return interviewService.getResponse(id, viewerId, isAdmin);
+        InterviewResponse r = interviewService.getResponse(id, viewerId, isAdmin);
+        return r.withDbConnections(dbConnectionService.chipsFor(r.dbConnectionIds()));
     }
 
     /** SSE 구독·첨부 다운로드 전 ACL 검증 (kind 404 → 소유자/관리자 403). */
@@ -152,7 +168,7 @@ public class QuestionService {
      * --model/--effort를 그대로 적용한다(2026-09-06 실측: sonnet 세션 resume + haiku → modelUsage=haiku).
      *
      * 순서(스펙 2026-09-13 §5.2): kind 가드 → 문답 상한 → validate(files) → submitAnswer → applyModelChange
-     * → applyMcpChange → (새 턴이 생겼을 때만) writeAttachments. 파일 쓰기가 <b>마지막</b>이라 400 경로는
+     * → applyMcpChange → applyDbChange → (새 턴이 생겼을 때만) writeAttachments. 파일 쓰기가 <b>마지막</b>이라 400 경로는
      * 고아 파일을 남기지 않고, 중복 제출(turnSeq null)이면 첨부는 텍스트와 마찬가지로 조용히 버려진다.
      */
     @Transactional
@@ -171,10 +187,11 @@ public class QuestionService {
         InterviewSession s = outcome.session();
         applyModelChange(s, req.model(), req.effort());
         InterviewTurn note = applyMcpChange(s, req.mcpCatalogIds());
+        InterviewTurn dbNote = applyDbChange(s, req.dbConnectionIds());
         if (outcome.turnSeq() != null) {
             writeAttachments(id, outcome.turnSeq(), attached, actorId);
         }
-        return new AskResult(s, note);
+        return new AskResult(s, note, dbNote);
     }
 
     /**
@@ -211,6 +228,36 @@ public class QuestionService {
         String note = extras.isEmpty()
                 ? "MCP 도구 변경: 없음(전부 해제)"
                 : "MCP 도구 변경: " + extras.stream().map(TaskMcpSpec::name).collect(Collectors.joining(", "));
+        return interviewService.appendSystemNote(s.getId(), note);
+    }
+
+    /**
+     * 대화 중 DB 연결 변경 (스펙 2026-10-02 §5.3) — applyMcpChange와 같은 규칙. ids == null → 유지, 같은 집합 → 검증 없는
+     * no-op(사후 비활성화된 항목이 무관한 질문을 막지 않게), 다르면 <b>새로 추가되는 id만</b> 세션 소유자 기준으로 검증(400)한다.
+     * 이미 세션에 있던 id는 사후 비활성·삭제·남의 것이어도 유지·해제할 수 있다 — claim이 쓸 수 없는 항목을 알아서 건너뛰고
+     * notice를 붙이므로, 검증하면 사용자가 보이지 않는 stale id 때문에 선택을 영영 고치지 못한다. 상한(3)은 결과 집합 기준.
+     * 갱신 후 system note. 다음 claim이 현재 행을 다시 조회하므로 러너는 턴마다 새 목록으로 조립한다.
+     * "전부 해제" 문구는 칩이 아니라 결과 id 목록이 비었는지로 정한다(칩은 다른 이유로도 비어 보일 수 있다).
+     */
+    private InterviewTurn applyDbChange(InterviewSession s, List<Long> ids) {
+        if (ids == null) return null;
+        Set<Long> current = idSet(s.getDbConnectionIds());
+        if (idSet(ids).equals(current)) return null;
+        List<Long> next = ids.stream().filter(Objects::nonNull).map(Number::longValue).distinct().toList();
+        if (next.size() > DbConnectionService.MAX_SELECTION) {
+            throw new TaskException(HttpStatus.BAD_REQUEST,
+                    "DB 연결은 최대 " + DbConnectionService.MAX_SELECTION + "개까지 선택할 수 있습니다");
+        }
+        List<Long> added = next.stream().filter(id -> !current.contains(id)).toList();
+        if (!added.isEmpty()) {
+            dbConnectionService.validateSelection(s.getRepoCatalogId(), s.getRequesterId(), added);
+        }
+        List<Long> validated = new ArrayList<>(next);
+        s.setDbConnectionIds(validated);
+        String note = validated.isEmpty()
+                ? "DB 연결 변경: 없음(전부 해제)"
+                : "DB 연결 변경: " + dbConnectionService.chipsFor(validated).stream()
+                        .map(DbConnectionDto.Chip::name).collect(Collectors.joining(", "));
         return interviewService.appendSystemNote(s.getId(), note);
     }
 

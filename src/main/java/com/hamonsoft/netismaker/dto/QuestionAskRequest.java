@@ -12,17 +12,25 @@ import java.util.List;
  *
  * mcpCatalogIds(스펙 2026-09-13 §5.1): 대화 중 MCP 변경. <b>null = 유지, 빈 리스트 = 전부 해제</b> —
  * 문자열의 blank=유지 규칙과 비대칭이니 주의. 현재 선택과 집합이 같으면 검증 없는 no-op.
+ * dbConnectionIds(스펙 2026-10-02 §5.3): mcpCatalogIds와 같은 null/빈 리스트 규칙.
  */
 public record QuestionAskRequest(
         @NotBlank String answer,
         Integer replyToSeq,
         String model,
         String effort,
-        List<Long> mcpCatalogIds
+        List<Long> mcpCatalogIds,
+        /** 대화 중 DB 연결 변경 (스펙 2026-10-02 §5.3) — mcpCatalogIds와 같은 규칙: null = 유지, 빈 리스트 = 전부 해제. */
+        List<Long> dbConnectionIds
 ) {
     /** MCP 변경 없이(유지) 답변만 — 기존 호출처/테스트 호환. */
     public QuestionAskRequest(String answer, Integer replyToSeq, String model, String effort) {
-        this(answer, replyToSeq, model, effort, null);
+        this(answer, replyToSeq, model, effort, null, null);
+    }
+
+    /** DB 변경 없이 — 기존 호출처/테스트 호환. */
+    public QuestionAskRequest(String answer, Integer replyToSeq, String model, String effort, List<Long> mcpCatalogIds) {
+        this(answer, replyToSeq, model, effort, mcpCatalogIds, null);
     }
 
     /** 상태 전이(InterviewService.submitAnswer)에는 답변 부분만 넘긴다. */

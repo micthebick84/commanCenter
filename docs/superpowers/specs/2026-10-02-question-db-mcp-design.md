@@ -90,7 +90,7 @@ ALTER TABLE com.interview_session
 ### 4.1 암호화
 
 - `DbSecretCipher`(`@Component`): `org.springframework.security.crypto.encrypt.Encryptors.stronger(key, salt)`(AES-256-GCM, `spring-boot-starter-security`에 이미 포함).
-- 설정: `netismaker.db-secret.key` ← env `NETISMAKER_DB_SECRET_KEY`, `netismaker.db-secret.salt` ← env `NETISMAKER_DB_SECRET_SALT`(hex 16자 이상). Windows 스택은 `public.env`.
+- 설정: `app.db-secret.key` ← env `NETISMAKER_DB_SECRET_KEY`, `app.db-secret.salt` ← env `NETISMAKER_DB_SECRET_SALT`(hex, 짝수 길이 16자 이상 — 기존 `app.*` 설정 접두와 통일). Windows 스택은 `public.env`.
 - 키나 salt가 비어 있으면 `isEnabled()=false` — **부팅 실패 금지**. 기능만 꺼진다(§9).
 - 키 교체 도구는 범위 밖. 키를 바꾸면 기존 행은 복호화 실패 → "다시 저장 필요"(§9).
 
@@ -127,14 +127,14 @@ ALTER TABLE com.interview_session
   - `create`: `resolveDbConnections(ownerId, repoCatalogId, ids)` 검증 → `setDbConnectionIds`.
   - `ask`: `applyMcpChange` 다음에 `applyDbChange(s, ids)` — 집합이 같으면 검증 없이 no-op, 다르면 검증 → 갱신 → `appendSystemNote("DB 연결 변경: 운영 DB, 분석 DB")`/`"DB 연결 변경: 없음(전부 해제)"`. `AskResult`에 `dbNote` 추가, 컨트롤러가 `pushNote`.
   - 검증 기준은 **세션 소유자**(관리자가 남의 세션에 ask해도 소유자가 볼 수 있는 항목만): 같은 `repo_catalog_id`, `REPO`이거나 `USER && owner=세션 소유자`, `enabled`, 기능 켜짐. 위반 시 400. 개수 상한 3.
-- `InterviewResponse` += `List<Long> dbConnectionIds`, `List<DbConnectionChip> dbConnections`(`{id, name, dbType}`, 현재 행 기준 — 삭제된 id는 칩에서 빠짐).
+- `InterviewResponse` += `Long repoCatalogId`(대화 화면이 DB 목록을 조회하는 키), `List<Long> dbConnectionIds`, `List<DbConnectionChip> dbConnections`(`{id, name, dbType}`, 현재 행 기준 — 삭제된 id는 칩에서 빠짐).
 
 ### 5.4 claim
 
 - `InterviewClaimResponse` += `List<DbConnectionRef> dbConnections`(non-null), `List<String> dbNotices`(non-null).
   - `DbConnectionRef(String serverName, String label, String dbType, String host, int port, String database, String username, String password)`.
   - `serverName = "db-" + id`, `label = name + " (" + 표시용 종류 + ")"`.
-- `InterviewService.claim`: `kind == QUESTION`일 때만 채운다. INTERVIEW는 항상 빈 목록.
+- claim 응답에 `dbConnectionIds`(세션 값)를 싣고, `InterviewWorkerController.claim`이 `DbConnectionService.resolveForClaim(ids)`로 `dbConnections`·`dbNotices`를 채운다(`InterviewService` 의존성 무변경). `kind == QUESTION`일 때만 채운다. INTERVIEW는 항상 빈 목록.
   - id별로 현재 행 조회 → 없음/비활성/기능 꺼짐/복호화 실패면 건너뛰고 `dbNotices`에 사유 한 줄(예: `"DB 연결 '운영 DB'를 복호화할 수 없습니다 — 접속정보를 다시 저장해야 합니다"`).
 - **claim 응답 본문은 Java·Node 양쪽 모두 로그로 남기지 않는다.** `DbConnectionRef.toString()`은 password를 `****`로 오버라이드한다(레코드 기본 toString 노출 방지). 테스트로 고정.
 - MCP 카탈로그 `UpsertRequest.name`에 `db-` 접두사 금지 검증 추가(서버 이름 충돌 방지). 운영자 `~/.claude.json` base 이름과의 충돌은 DB 쪽이 우선(뒤에 merge).
@@ -192,7 +192,7 @@ ALTER TABLE com.interview_session
 - `pages/questions/index.vue`: 레포 선택 후 MCP 버튼 옆에 "DB" `q-btn + q-badge + q-menu + DbConnectionPicker`. 레포가 바뀌면 목록 재조회, 그 레포의 `REPO` enabled 항목을 기본 체크(사용자가 해제 가능). `enabled:false` 응답이면 버튼 숨김. 생성 바디(JSON/multipart meta 모두)에 `dbConnectionIds`.
 - `pages/questions/[id].vue`: 같은 버튼(`detail.dbConnectionIds`로 1회 시딩, `:disable="!awaiting"`, 툴팁 "대화 중 변경 — 다음 질문부터 적용"), `send({..., dbConnectionIds})`. 헤더 아래 DB 칩(`detail.dbConnections`).
 - `pages/admin/repo-catalog.vue`: 레포 카드에 "DB 접속(공용)" 영역 — 목록·추가·수정·삭제·활성 토글(`scope=REPO`로 같은 다이얼로그 재사용).
-- `InterviewPanel.vue` `AskExtra` += `dbConnectionIds?: number[]`.
+- `InterviewPanel.vue` `AskExtra` += `dbConnectionIds?: number[]`. 페이지는 DB 기능이 켜져 있을 때(`GET /api/db-connections` 응답 `enabled:true`)만 `dbConnectionIds`를 바디에 싣는다 — 꺼져 있으면 바디가 기존과 동일.
 - 문자열은 한국어 하드코딩(i18n 없음). 클래스명에 Quasar 예약어(xs/sm/md/lg/xl) 금지.
 
 ## 8. 게이트 — 읽기 전용

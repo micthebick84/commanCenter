@@ -246,6 +246,7 @@ ALTER TABLE com.interview_session
    - MySQL/MariaDB: `load_file sleep benchmark get_lock release_lock`
    - Oracle: 접두 `dbms_`, `utl_`
 6. 거부 사유는 모델이 고쳐 쓸 수 있게 구체적으로: `"질문 세션 DB 도구는 읽기 전용입니다 — 금지 키워드 UPDATE. SELECT 계열 단일 문장만 실행할 수 있습니다."`
+7. **구현 리뷰로 추가된 규칙(Task 9)**: 비ASCII 문자는 식별자 문자로 본다(PG에서 `é$$`는 식별자 — 달러 인용으로 오인하면 뒤 SQL이 숨는다). Oracle `q'…'`/`nq'…'` 대체 인용 리터럴은 거부한다. 문자열로 받은 SQL을 실행하는 PG 함수(접두 `query_to_`·`cursor_to_`·`pg_logical_`, `ts_stat`·`ts_rewrite`·`pg_notify`·`pg_sleep_for`·`pg_sleep_until`)도 금지 — 문자열 리터럴은 검사 전에 비워지므로 안의 SQL을 볼 수 없다. 같은 부류의 사용자 정의 함수·`table_to_xml` 같은 읽기 함수는 막지 않는다(최종 방어선은 읽기 전용 계정).
 
 **한계(스펙에 명시)**: 이 검사는 최선의 노력이다. 2선 = **READ ONLY 트랜잭션 + 항상 ROLLBACK**(4종 모두, §6.2). 2선이 못 막는 것과 그 대비:
 - Oracle DDL은 암묵 COMMIT으로 읽기 전용 트랜잭션을 끝낸 뒤 실행된다 → 1선(첫 키워드·금지 단어 `CREATE ALTER DROP TRUNCATE …`)이 막는다. SELECT 안에서는 DDL을 쓸 수 없다.

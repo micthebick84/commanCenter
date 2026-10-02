@@ -1,6 +1,7 @@
 import { isAbsolute, relative, resolve, sep } from 'node:path';
 import { existsSync, realpathSync } from 'node:fs';
 import type { SessionKind } from '../types.js';
+import { checkReadOnlySql, type SqlDialect } from './sqlReadOnly.js';
 
 export interface PermissionResult {
   behavior: 'allow' | 'deny';
@@ -342,8 +343,24 @@ const MCP_MUTATING_VERBS = new Set([
   'modify',
 ]);
 
+/** 내장 DB 서버(`db-<id>`, dbMcp.ts) 도구 중 SQL 인자 없이 허용하는 것 (스펙 2026-10-02 §8.1). 입력은 바인딩 파라미터로만 쓰인다. */
+export const DB_READ_TOOLS: ReadonlySet<string> = new Set(['list_tables', 'describe_table']);
+
+function dbToolGate(toolName: string, tool: string, input: Record<string, unknown>, dialect: SqlDialect): PermissionResult {
+  if (tool === 'query') {
+    if (typeof input.sql !== 'string') return { behavior: 'deny', message: `질문 세션 DB 도구 입력에 SQL이 없습니다: ${toolName}` };
+    const r = checkReadOnlySql(input.sql, dialect);
+    return r.ok
+      ? { behavior: 'allow' }
+      : { behavior: 'deny', message: `질문 세션 DB 도구는 읽기 전용입니다 — ${r.reason}. SELECT 계열 단일 문장만 실행할 수 있습니다.` };
+  }
+  if (DB_READ_TOOLS.has(tool)) return { behavior: 'allow' };
+  return { behavior: 'deny', message: `질문 세션에서 허용되지 않은 DB 도구입니다: ${toolName}` };
+}
+
 /**
  * 질문 세션 전용 MCP 게이트 (사용자 결정 2026-08-30): `mcp__<server>__<tool>`을 파싱해
+ *  - 내장 DB 서버(dbServers에 등록된 db-<id>)는 dbToolGate — query의 SQL을 방언별 읽기 전용 검사(sqlReadOnly.ts), 도구 핸들러가 한 번 더 검사한다.
  *  - Obsidian 계열 서버(`obsidian`으로 시작, 대소문자 무시 — `obsidian-vault`, `obsidian` 둘 다 포함)는
  *    읽기 도구 allowlist만 통과(미지 도구는 기본 deny — vault_write/delete/move/copy/patch/append,
  *    command_execute, open_file 전부 여기서 막힌다).
@@ -351,7 +368,11 @@ const MCP_MUTATING_VERBS = new Set([
  *    이름을 모르는 읽기 도구가 과차단되지 않게 한다.
  * INTERVIEW 게이트는 건드리지 않는다 — 여전히 `mcp__*` 무조건 allow.
  */
-function questionMcpGate(toolName: string): PermissionResult {
+function questionMcpGate(
+  toolName: string,
+  input: Record<string, unknown>,
+  dbServers: Record<string, SqlDialect>,
+): PermissionResult {
   const deny: PermissionResult = {
     behavior: 'deny',
     message: `질문 세션에서는 MCP 쓰기/실행 도구를 사용할 수 없습니다: ${toolName}`,
@@ -362,6 +383,11 @@ function questionMcpGate(toolName: string): PermissionResult {
   const server = rest.slice(0, sepIdx);
   const tool = rest.slice(sepIdx + 2);
   if (server.length === 0 || tool.length === 0) return deny; // 서버 또는 도구명이 비어있음.
+
+  // 내장 DB 서버(스펙 2026-10-02 §8.1)는 Obsidian/동사 규칙보다 먼저 — 'query'는 동사 denylist에 안 걸려 SQL 검사 없이 통과하므로.
+  const dialect = dbServers[server];
+  if (dialect) return dbToolGate(toolName, tool, input, dialect);
+  if (/^db-\d+$/.test(server)) return deny; // 이번 턴에 붙이지 않은 db-N — 다른 소스가 이름을 흉내 낸 서버
 
   if (server.toLowerCase().startsWith('obsidian')) {
     return OBSIDIAN_READ_ALLOWLIST.has(tool) ? { behavior: 'allow' } : deny;
@@ -393,6 +419,7 @@ export function buildCanUseTool(
   repoDir: string,
   kind: SessionKind = 'INTERVIEW',
   attachmentRoot: string | null = null,
+  dbServers: Record<string, SqlDialect> = {},
 ): CanUseTool {
   if (kind === 'QUESTION') {
     return async (toolName, input) => {
@@ -400,7 +427,7 @@ export function buildCanUseTool(
       if (toolName === 'Read') return questionReadGate(repoDir, attachmentRoot, input);
       if (toolName === 'Grep') return questionPathScopedGate(repoDir, input, 'Grep');
       if (toolName === 'Glob') return questionGlobGate(repoDir, input);
-      if (toolName.startsWith('mcp__')) return questionMcpGate(toolName);
+      if (toolName.startsWith('mcp__')) return questionMcpGate(toolName, input, dbServers);
       return { behavior: 'deny', message: `질문 세션에서는 ${toolName} 도구를 사용할 수 없습니다 (읽기 전용 Q&A)` };
     };
   }

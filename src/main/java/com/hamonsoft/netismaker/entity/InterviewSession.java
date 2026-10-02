@@ -135,6 +135,15 @@ public class InterviewSession {
     @Setter
     private List<Long> mcpCatalogIds = new ArrayList<>();
 
+    /**
+     * 선택한 DB 접속정보 id (스펙 2026-10-02 §4). 내용을 박제하지 않는다 — claim 때 현재 행을 조회·복호화한다
+     * (비밀번호/암호문을 세션 행마다 복제하지 않기 위해). 인터뷰 세션은 항상 [].
+     */
+    @JdbcTypeCode(SqlTypes.JSON)
+    @Column(name = "db_connection_ids", nullable = false, columnDefinition = "jsonb")
+    @Setter
+    private List<Long> dbConnectionIds = new ArrayList<>();
+
     /** 작업 등록 시 선택된 Claude 모델. 워커가 claude --model에 사용.
      *  기본값은 ModelEffortPolicy.DEFAULT_MODEL과 반드시 일치해야 한다(둘 다 바꿀 것). */
     @Column(name = "model", nullable = false, length = 64)

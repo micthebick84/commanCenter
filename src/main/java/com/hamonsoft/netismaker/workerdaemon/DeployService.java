@@ -96,6 +96,8 @@ public class DeployService {
                     Map.of("netis-maker.task", String.valueOf(task.id())));
 
             DeployTarget.DeployResult r = target.deploy(spec, logSink);
+            // 컨테이너는 이미지로 돈다 — 빌드 컨텍스트(worktree)는 더 쓰지 않는다. 재배포는 createForDeploy가 새로 만든다.
+            worktrees.discard(GitRemotes.localKey(task.repoRef()), WorktreeKind.DEPLOY, task.id());
             return new DeployTarget.DeployResult(r.url(), r.containerId(), r.hostPort(),
                     r.image(), log + r.log());
         } catch (DeployException e) {

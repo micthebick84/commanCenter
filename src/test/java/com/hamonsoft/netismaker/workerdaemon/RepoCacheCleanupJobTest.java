@@ -69,7 +69,7 @@ class RepoCacheCleanupJobTest {
                 null, 0, 0, 0, null, 0, null);
         return new WorkerProperties("w1", null, null, null, 0, 0, 0, 0, 0, reposDirValue, null,
                 null, null, null, null, null, tmp.resolve("worktrees").toString(), null, null, null, null, null, null,
-                null, deploy, new WorkerProperties.RepoCacheCleanup(enabled, cron, 30));
+                null, deploy, new WorkerProperties.RepoCacheCleanup(enabled, cron, 30), null);
     }
 
     private static void git(File dir, String... args) throws IOException, InterruptedException {
@@ -272,8 +272,9 @@ class RepoCacheCleanupJobTest {
     }
 
     /**
-     * 현재 운영 흐름의 한계를 고정한다: 구현 성공(PR 생성)·배포 worktree는 지우는 곳이 없어 캐시가 계속 보존된다.
-     * 대신 회차 결과에 붙잡고 있는 worktree 경로가 남아, 그 worktree를 치우면 다음 회차에 회수된다.
+     * worktree가 붙어 있는 동안은 캐시를 보존한다는 것을 고정한다(성공한 작업의 worktree는 작업 끝에 바로,
+     * 실패분은 WorktreeCleanupJob이 7일 뒤 지우므로 운영에서는 결국 풀린다 — 여기서는 살아 있는 worktree를 직접 만든다).
+     * 회차 결과에 붙잡고 있는 worktree 경로가 남고, 그 worktree를 치우면 다음 회차에 회수된다.
      */
     @Test
     void reports_which_worktrees_hold_a_cache_and_reclaims_it_once_they_are_removed() throws Exception {
@@ -298,7 +299,7 @@ class RepoCacheCleanupJobTest {
         assertThat(realPaths(r.worktreeHolders().get("acme/deploy"))).containsExactly(deployWt.toPath().toRealPath());
 
         // 보존 worktree를 치우면(향후 보존 정책의 몫) 다음 회차에 회수된다
-        worktrees.remove(implCache, implWt);
+        worktrees.discard(GitRemotes.localKey(impl), WorktreeKind.TASK, 21);
         age(impl, 365);
         RepoCacheCleanupJob.Result next = job.runOnce();
         assertThat(next.outcomes())

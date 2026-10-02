@@ -28,7 +28,7 @@ class GitRepoCacheTest {
         return new WorkerProperties("w1", null, null, null, 0, 0, 0, 0, 0, reposDir.toString(), null,
                 null, "ghp_SECRETPAT", "glpat-SECRETTOKEN", null, null,
                 worktreeRoot == null ? null : worktreeRoot.toString(),
-                null, null, null, null, null, null, null, deploy, null);
+                null, null, null, null, null, null, null, deploy, null, null);
     }
 
     private static void git(File dir, String... args) throws IOException, InterruptedException {

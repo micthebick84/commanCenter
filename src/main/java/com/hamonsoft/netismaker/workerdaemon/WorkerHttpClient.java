@@ -1,5 +1,6 @@
 package com.hamonsoft.netismaker.workerdaemon;
 
+import com.hamonsoft.netismaker.dto.ActiveWorktreeTaskSummary;
 import com.hamonsoft.netismaker.dto.DeployedTaskSummary;
 import com.hamonsoft.netismaker.dto.WorkerHeartbeatRequest;
 import com.hamonsoft.netismaker.dto.WorkerResultRequest;
@@ -78,6 +79,26 @@ public class WorkerHttpClient {
                 .retrieve()
                 .body(new ParameterizedTypeReference<>() {});
         return body == null ? List.of() : body;
+    }
+
+    /**
+     * worktree 정리 보호 목록(구현중·디자인중·배포중·배포중지중). 실패 시 예외 전파 — 호출부가 회차를 건너뛴다.
+     * 응답 본문이 없는(null) 경우도 조회 실패로 본다: 본문 없는 2xx(프록시·게이트웨이 오동작 등)를 '진행 중 작업 없음'으로
+     * 읽으면 보호 없이 삭제가 진행되므로 fail-closed. 빈 JSON 배열 []은 정상적인 '진행 중 없음'이다.
+     */
+    public List<ActiveWorktreeTaskSummary> activeWorktreeTasks() {
+        List<ActiveWorktreeTaskSummary> body = http.get().uri("/worker/active-worktree-tasks")
+                .retrieve()
+                .body(new ParameterizedTypeReference<>() {});
+        return requireActiveBody(body);
+    }
+
+    /** 응답 본문 검증 seam(HTTP 없이 단위 테스트). null이면 조회 실패. */
+    static List<ActiveWorktreeTaskSummary> requireActiveBody(List<ActiveWorktreeTaskSummary> body) {
+        if (body == null) {
+            throw new IllegalStateException("진행 중 worktree 작업 목록 응답 본문이 없다 — 조회 실패로 간주");
+        }
+        return body;
     }
 
     /** 컨테이너 생존 관측 보고 (reconcile). 실패 시 예외 전파 — 다음 주기에 재관측되므로 재시도 불필요. */

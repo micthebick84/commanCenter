@@ -2,19 +2,6 @@
 
 ## V1.1 — 운영 안정성
 
-### [ ] worktree 보존 정책 (구현 성공·배포 worktree 정리)
-
-**What**: `~/netis-maker/worktrees/{localKey}/{task-N|deploy-N}`는 PR 생성 성공 후에도, 배포 후에도 지우는 곳이 없다(`WorktreeService` "Phase 1은 보존"; 디자인 worktree만 수확 후 remove). PR/MR 병합·종료, task 삭제, 배포 중지 후 N일 지난 worktree를 캐시 락 안에서 `git worktree remove --force`로 정리한다.
-
-**Why**: 2026-09-30 도입한 레포 캐시 정리 잡(`RepoCacheCleanupJob`)은 살아 있는 worktree가 붙은 캐시를 절대 지우지 않는다 → 구현·배포를 한 번이라도 거친 캐시(운영 캐시 대부분)는 회수되지 않아 "레포당 수GB 누적"이 실질적으로 풀리지 않는다. worktree 자체도 체크아웃 크기만큼 디스크를 쓴다.
-
-**Context**:
-- 정리 잡 회차 로그 `레포 캐시 보존(worktree N개가 사용 중): {localKey} ← {경로…}`에 캐시를 붙잡고 있는 worktree가 나온다 — 운영 중 실제 규모를 먼저 확인.
-- 배포 worktree는 재배포·`DeployReconcileJob`이 다시 쓰므로 컨테이너가 없어진 뒤에만. 구현 실패 보존분(디버그용)은 별도 보존 기한.
-- PR/MR 상태는 워커가 모른다 → API 조회(claim/heartbeat 계열 확장) 필요. 레포 캐시 정리와 같은 새벽 스케줄에 묶는 안.
-
-**우선순위**: 중간. 레포 캐시 정리의 실효가 이 항목에 달려 있다.
-
 ### [ ] Claude Code 사용량 유휴 갱신 프로브
 
 **What**: 인터뷰 서비스가 유휴일 때도 주기적으로(예: 10분) 초경량 SDK 쿼리(haiku, maxTurns 1)를 돌려 `rate_limit_event`를 받아 사용량 패널을 신선하게 유지한다. 현재는 SDK 턴이 돌 때만 갱신되고 UI가 "N분 전 갱신"으로 정직하게 표기한다.
@@ -129,10 +116,23 @@
 
 **우선순위**: 낮음.
 
+### [ ] worktree 삭제를 레포 락 밖으로
+
+**What**: `WorktreeService.discardUnderLock`이 (수GB일 수 있는) worktree 폴더를 레포 락을 잡은 채 지운다.
+
+**Why**: 같은 JVM의 다른 작업은 락을 기다리면 되지만, `repos-dir`을 공유하는 다른 워커 프로세스는 60초 뒤 `GitRepoCache.acquireWithTimeout`이 시간 초과를 내고 `ensureFresh`가 그 작업을 실패시킨다.
+
+**Context**: 락 안에서는 폴더를 `worktree-root/.trash/{uuid}`로 rename + `worktree prune` + 브랜치 삭제만 하고, 실제 삭제는 락 밖에서 한다(`RepoCacheCleanupJob`의 `.trash`와 같은 방식). rename이 실패하면 제자리 삭제로 폴백. 정리 잡은 이미 루트 직하의 점(.) 항목을 건너뛴다. 지금은 PC당 워커가 하나라 실제 위험이 없다.
+
+**우선순위**: 낮음 (멀티 워커 도입 전 필수).
+
 ## 완료
 
+### [x] worktree 보존 정책 (2026-10-02)
+성공한 작업의 worktree는 작업 끝에 바로 정리, 실패분은 `WorktreeCleanupJob`이 7일 뒤 정리(진행 중은 API로 보호, fail-closed). PR 병합 상태 추적은 하지 않는다 — 성공분은 원격 브랜치·이미지에 이미 남아 있어서. 스펙 `docs/superpowers/specs/2026-10-02-worktree-retention-design.md`.
+
 ### [x] 레포 캐시 자동 정리 정책 (2026-09-30)
-워커 `RepoCacheCleanupJob`이 매일 03:00 `unused-days`(기본 30)일 넘게 안 쓴 캐시를 지운다(`netis-maker.worker.repo-cache-cleanup.*`, env `REPO_CACHE_CLEANUP_ENABLED/CRON/UNUSED_DAYS`). 후보 정책 중 ①(N일 미사용)만 구현. ②(디스크 임계 LRU)·③(관리자 UI 트리거 — 워커에 HTTP 포트가 없어 폴링 프로토콜 확장 필요)·task_analysis 메타데이터 기록은 미포함. ⚠️ 구현 성공·배포 worktree가 붙은 캐시는 회수되지 않는다 → 위 "worktree 보존 정책". 상세는 CLAUDE.md 환경 메모.
+워커 `RepoCacheCleanupJob`이 매일 03:00 `unused-days`(기본 30)일 넘게 안 쓴 캐시를 지운다(`netis-maker.worker.repo-cache-cleanup.*`, env `REPO_CACHE_CLEANUP_ENABLED/CRON/UNUSED_DAYS`). 후보 정책 중 ①(N일 미사용)만 구현. ②(디스크 임계 LRU)·③(관리자 UI 트리거 — 워커에 HTTP 포트가 없어 폴링 프로토콜 확장 필요)·task_analysis 메타데이터 기록은 미포함. 구현 성공·배포 worktree가 붙은 캐시 미회수 문제는 위 "worktree 보존 정책"으로 해소. 상세는 CLAUDE.md 환경 메모.
 
 ### [x] 첨부파일 정리 정책 (2026-09-30)
 api `AttachmentCleanupJob`(매일 03:30, `app.attachment.cleanup.*`): `task-{id}/`는 soft-delete 30일 경과 시에만, `question-{sid}/`는 종결(취소·만료·실패) + `last_activity_at` 90일 경과 시에만, 고아(등록 롤백 잔재)는 id ≤ MAX(id)이고 mtime 24시간 경과 시에만 삭제. DB 첨부 행은 감사용으로 남기고, 질문 첨부 다운로드는 파일이 없으면 410. soft-delete 복구 경로는 코드에 없음(수동 DB 복구 여유 = 30일). 레포 캐시 정리와 스케줄러는 분리, 인터뷰 `work_dir` 정리는 미포함.

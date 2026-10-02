@@ -41,11 +41,14 @@ public record WorkerProperties(
         // 배포 단계
         Deploy deploy,
         // 레포 캐시 자동 정리 (RepoCacheCleanupJob)
-        RepoCacheCleanup repoCacheCleanup
+        RepoCacheCleanup repoCacheCleanup,
+        // worktree 보존 기간 정리 (WorktreeCleanupJob)
+        WorktreeCleanup worktreeCleanup
 ) {
     /**
      * 레포 캐시 자동 정리. unused-days 동안 쓰이지 않은 repos-dir 아래 캐시를 지운다
      * (살아 있는 worktree가 붙은 캐시·사용 중인 캐시는 제외 — RepoCacheCleanupJob 참고).
+     * worktree 자체의 수명은 WorktreeCleanup 참고.
      * cron은 RepoCacheCleanupJob이 이 값 그대로 스케줄을 등록한다(빈 값 → 기본값, '-' → 등록 안 함).
      */
     public record RepoCacheCleanup(Boolean enabled, String cron, int unusedDays) {
@@ -58,6 +61,27 @@ public record WorkerProperties(
                         "REPO_CACHE_CLEANUP_CRON은 6필드 cron(초 분 시 일 월 요일) 또는 '-'이어야 한다: '" + cron + "'");
             }
             if (unusedDays <= 0) unusedDays = 30;
+        }
+    }
+
+    /**
+     * worktree 보존 기간 정리. 성공한 작업의 worktree는 작업 끝에 바로 지우고(WorktreeService.discard),
+     * 이 잡은 실패 보존분·과거 누적분 중 만든 지 retention-days가 지난 것을 지운다(진행 중 작업은 API로 보호).
+     * retention-days는 생략·빈 값이면 7, 0 이하는 설정 실수로 보고 부팅을 막는다(조용히 기본값으로 바꾸지 않는다).
+     */
+    public record WorktreeCleanup(Boolean enabled, String cron, Integer retentionDays) {
+        public WorktreeCleanup {
+            if (enabled == null) enabled = true;
+            cron = (cron == null || cron.isBlank()) ? "0 30 2 * * *" : cron.trim();
+            if (!ScheduledTaskRegistrar.CRON_DISABLED.equals(cron) && !CronExpression.isValidExpression(cron)) {
+                throw new IllegalArgumentException(
+                        "WORKTREE_CLEANUP_CRON은 6필드 cron(초 분 시 일 월 요일) 또는 '-'이어야 한다: '" + cron + "'");
+            }
+            if (retentionDays == null) retentionDays = 7;
+            if (retentionDays <= 0) {
+                throw new IllegalArgumentException(
+                        "WORKTREE_CLEANUP_RETENTION_DAYS는 1 이상이어야 한다: " + retentionDays);
+            }
         }
     }
 
@@ -179,5 +203,6 @@ public record WorkerProperties(
         if (designTimeout == null) designTimeout = Duration.ofMinutes(30);
         if (deploy == null) deploy = new Deploy(null, null, 0, null, null, null, 0, 0, null, null, 0, 0, 0, null, 0, null);
         if (repoCacheCleanup == null) repoCacheCleanup = new RepoCacheCleanup(null, null, 0);
+        if (worktreeCleanup == null) worktreeCleanup = new WorktreeCleanup(null, null, null);
     }
 }

@@ -1,5 +1,6 @@
 package com.hamonsoft.netismaker.controller;
 
+import com.hamonsoft.netismaker.dto.ActiveWorktreeTaskSummary;
 import com.hamonsoft.netismaker.dto.DeployLogChunkRequest;
 import com.hamonsoft.netismaker.dto.DeployedTaskSummary;
 import com.hamonsoft.netismaker.dto.WorkerHeartbeatRequest;
@@ -24,6 +25,7 @@ import java.util.Optional;
  *   GET  /worker/next-task         ─► PENDING/APPROVED 작업 1건 또는 204
  *   POST /worker/tasks/{id}/result ─► 분석/구현 완료/실패 보고
  *   GET  /worker/deployed-tasks    ─► 배포 런타임 정합 대상(배포완료+배포중단됨) 목록
+ *   GET  /worker/active-worktree-tasks ─► worktree 정리 보호 목록(구현중·디자인중·배포중·배포중지중, soft-delete 제외)
  *   POST /worker/tasks/{id}/runtime-status ─► 컨테이너 생존 관측 보고 (reconcile)
  */
 @RestController
@@ -66,6 +68,11 @@ public class WorkerController {
     @GetMapping("/deployed-tasks")
     public List<DeployedTaskSummary> deployedTasks() {
         return workerService.listDeployReconcilable();
+    }
+
+    @GetMapping("/active-worktree-tasks")
+    public List<ActiveWorktreeTaskSummary> activeWorktreeTasks() {
+        return workerService.listWorktreeActive();
     }
 
     @PostMapping("/tasks/{id}/runtime-status")

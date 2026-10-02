@@ -51,9 +51,9 @@ import java.util.Optional;
  *               (캐시째 지워진다). locked 표시, 읽을 수 없는 메타, 권한·I/O 오류로 존재 여부를 판단할 수
  *               없는 경로는 살아 있다고 본다 — Files.exists는 '모름'도 false라 쓰지 않는다. 부재가 확인돼도
  *               가장 가까운 존재 조상이 worktree-root 밖이거나 worktree-root 자체가 안 보이면(외장 볼륨 분리 등) 보존한다.
- *               ⚠️ 한계: 지금은 구현 성공(PR 생성) worktree와 배포 worktree도 지우는 곳이 없어 영구 보존된다
- *               (WorktreeService 'Phase 1은 보존'). 그래서 구현·배포를 한 번이라도 거친 캐시는 이 잡이 회수하지
- *               않는다 — worktree 보존 정책이 생겨야 회수된다. 어떤 worktree가 붙잡고 있는지는 회차 로그에 남긴다.
+ *               성공한 작업의 worktree는 작업 끝에(WorktreeService.discard), 실패 보존분은 WorktreeCleanupJob이
+ *               보존 기간(기본 7일) 뒤에 지우므로, 그 뒤 캐시가 미사용 기간을 넘기면 이 잡이 회수한다.
+ *               어떤 worktree가 붙잡고 있는지는 회차 로그에 남긴다.
  *   - 사용 중: per-repo 락(GitRepoCache.tryWithRepoLock)을 즉시 못 잡으면 이번 회차는 넘긴다.
  *
  *  삭제 절차: 락 안에서 판단을 다시 한 번 확인한 뒤 캐시를 repos-dir/.trash/ 로 rename(원자적)만 하고
@@ -122,7 +122,7 @@ public class RepoCacheCleanupJob implements SchedulingConfigurer {
                     r.outcomes().size(), r.count(Outcome.DELETED), humanBytes(r.freedBytes()),
                     r.count(Outcome.RECENT), r.count(Outcome.BUSY), r.count(Outcome.WORKTREE),
                     r.count(Outcome.UNKNOWN), r.count(Outcome.FAILED), r.trashLeft());
-            // worktree 보존분은 지금 자동으로 정리되지 않는다 — 무엇을 치워야 디스크가 회수되는지 남긴다
+            // 캐시를 붙잡고 있는 worktree(진행 중·보존 기간 안·git lock) — 왜 회수되지 않았는지 남긴다
             r.worktreeHolders().forEach((localKey, holders) ->
                     log.info("레포 캐시 보존(worktree {}개가 사용 중): {} ← {}",
                             holders.size(), localKey, abbreviate(holders)));
@@ -176,7 +176,7 @@ public class RepoCacheCleanupJob implements SchedulingConfigurer {
     }
 
     /** 홈 디렉터리 실제 경로. 못 구하면 null(비교 생략). */
-    private static Path realHome() {
+    static Path realHome() {
         try {
             return Paths.get(System.getProperty("user.home")).toRealPath();
         } catch (IOException | RuntimeException e) {

@@ -141,6 +141,25 @@ public interface TaskRepository extends JpaRepository<Task, Long> {
     """)
     List<Task> findDeployReconcilable();
 
+    /**
+     * worktree 정리 잡 보호 목록 — 워커가 claim해 worktree를 쓰는 중인 task(구현중·디자인중·배포중·배포중지중).
+     * 대기 상태는 아직 worktree를 안 쓰고 재시도 때 새로 만든다.
+     * soft-delete된 작업은 제외한다: 구현중·디자인중 중에 삭제된 작업은 결과 보고(findActiveByIdForUpdate)도
+     * StaleTaskRecoveryJob(findInFlightClaimed)도 deletedAt IS NULL만 다뤄 상태가 영영 안 바뀌므로,
+     * 포함하면 그 worktree와 레포 캐시가 영구히 보호된다. 방금 삭제된 진행 중 작업의 worktree는
+     * 정리 잡의 7일 나이 판정(TOO_NEW)이 그대로 보호하므로 제외해도 안전하다.
+     * 삭제되지 않은 작업은 워커가 죽어도 StaleTaskRecoveryJob이 네 상태를 회수해 목록에 영구히 남지 않는다.
+     */
+    @Query("""
+        SELECT t FROM Task t
+        WHERE t.status IN (com.hamonsoft.netismaker.entity.TaskStatus.IMPLEMENTING,
+                           com.hamonsoft.netismaker.entity.TaskStatus.DESIGNING,
+                           com.hamonsoft.netismaker.entity.TaskStatus.DEPLOYING,
+                           com.hamonsoft.netismaker.entity.TaskStatus.UNDEPLOYING)
+          AND t.deletedAt IS NULL
+    """)
+    List<Task> findWorktreeActive();
+
     /** 첨부 정리 잡(AttachmentCleanupJob)용 경량 행 — id + soft-delete 시각. */
     interface AttachmentOwnerState {
         Long getId();

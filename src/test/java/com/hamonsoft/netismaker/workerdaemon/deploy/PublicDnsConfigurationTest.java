@@ -14,7 +14,7 @@ class PublicDnsConfigurationTest {
         var deploy = new WorkerProperties.Deploy(null, null, 0, null, null, null, 0, 0, null,
                 null, 0, 0, 0, null, 0, pa);
         return new WorkerProperties("win-worker-1", null, null, null, 0, 0, 0, 0, 0, null, null,
-                null, null, null, null, null, null, null, null, null, null, null, null, null, deploy, null);
+                null, null, null, null, null, null, null, null, null, null, null, null, null, deploy, null, null);
     }
 
     private ApplicationContextRunner runner(WorkerProperties props) {

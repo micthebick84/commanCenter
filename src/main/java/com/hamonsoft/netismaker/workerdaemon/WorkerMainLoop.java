@@ -287,6 +287,8 @@ public class WorkerMainLoop {
                 usageOf(exec)
         ));
         log.info("구현 완료 + PR 생성: task={} pr=#{} {}", task.id(), pr.number(), pr.url());
+        // 산출물은 원격 브랜치·PR에 있다 — worktree는 더 쓰지 않으므로 바로 정리(실패해도 결과 무관, 주기 정리가 재시도)
+        worktrees.discard(GitRemotes.localKey(task.repoRef()), WorktreeKind.TASK, task.id());
     }
 
     private void processDesign(WorkerTaskResponse task) throws Exception {
@@ -346,7 +348,7 @@ public class WorkerMainLoop {
                 harvest.designProjectId(), harvest.designUrl(),
                 exec.stdout(), exec.durationMs(), usageOf(exec)));
         // 수확 완료 후 design worktree는 best-effort 정리 (산출물은 DB로 감 — 보존 불필요)
-        worktrees.remove(repo.dir(), wt);
+        worktrees.discard(GitRemotes.localKey(task.repoRef()), WorktreeKind.DESIGN, task.id());
         log.info("디자인 생성 완료: task={} screens 포함, url={}", task.id(), harvest.designUrl());
     }
 

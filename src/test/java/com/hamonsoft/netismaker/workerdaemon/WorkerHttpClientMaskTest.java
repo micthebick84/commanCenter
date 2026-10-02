@@ -1,8 +1,13 @@
 package com.hamonsoft.netismaker.workerdaemon;
 
+import com.hamonsoft.netismaker.dto.ActiveWorktreeTaskSummary;
+import com.hamonsoft.netismaker.entity.TaskStatus;
 import org.junit.jupiter.api.Test;
 
+import java.util.List;
+
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
  * 스트리밍 배포 로그 청크의 마스킹 경계.
@@ -34,5 +39,19 @@ class WorkerHttpClientMaskTest {
     @Test
     void masked_chunk_is_null_safe() {
         assertThat(WorkerHttpClient.maskedChunk(1, null).content()).isNull();
+    }
+
+    /** 본문 없는 응답은 '진행 중 없음'이 아니라 조회 실패여야 정리 잡이 회차를 건너뛴다(fail-closed). */
+    @Test
+    void null_active_worktree_body_is_a_lookup_failure() {
+        assertThatThrownBy(() -> WorkerHttpClient.requireActiveBody(null))
+                .isInstanceOf(IllegalStateException.class);
+    }
+
+    @Test
+    void empty_active_worktree_array_is_a_legitimate_nothing_active() {
+        assertThat(WorkerHttpClient.requireActiveBody(List.of())).isEmpty();
+        var one = List.of(new ActiveWorktreeTaskSummary(3L, TaskStatus.IMPLEMENTING));
+        assertThat(WorkerHttpClient.requireActiveBody(one)).isSameAs(one);
     }
 }

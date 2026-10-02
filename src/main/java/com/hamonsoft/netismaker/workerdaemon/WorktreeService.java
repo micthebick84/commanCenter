@@ -7,6 +7,7 @@ import org.springframework.stereotype.Component;
 import java.io.File;
 import java.io.IOException;
 import java.nio.file.Files;
+import java.nio.file.LinkOption;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.List;
@@ -23,7 +24,8 @@ import java.util.Locale;
  *    netismaker/task-{id}-{slug-of-title}
  *
  *  멱등성: 같은 task를 다시 시도하면 기존 worktree 제거 후 새로 생성. 디스크에는 항상 단일 인스턴스.
- *  cleanup은 호출자(WorkerMainLoop)가 PR 생성 후 보존 정책에 따라 결정. Phase 1은 보존(admin 디버그).
+ *  정리: 성공한 작업은 호출자가 끝에 discard로 지운다(구현=PR 생성 뒤, 배포=빌드·실행 뒤, 디자인=수확 뒤).
+ *  실패분은 디버그용으로 남기고 WorktreeCleanupJob이 보존 기간(기본 7일) 뒤 지운다.
  */
 @Component
 @Profile("worker")
@@ -68,7 +70,7 @@ public class WorktreeService {
         String branchName = props.branchPrefix() + "task-" + taskId
                 + (slug.isEmpty() ? "" : "-" + slug);
 
-        Path worktreeDir = Paths.get(props.worktreeRoot(), repoKey, "task-" + taskId);
+        Path worktreeDir = worktreeDir(repoKey, WorktreeKind.TASK, taskId);
         Files.createDirectories(worktreeDir.getParent());
 
         // 멱등성: 같은 task를 재시도하는 경우 기존 worktree/브랜치 정리
@@ -120,7 +122,7 @@ public class WorktreeService {
     private File doCreateForDeploy(File repoCacheDir, String repoKey,
                                    String headBranch, long taskId)
             throws IOException, InterruptedException {
-        Path worktreeDir = Paths.get(props.worktreeRoot(), repoKey, "deploy-" + taskId);
+        Path worktreeDir = worktreeDir(repoKey, WorktreeKind.DEPLOY, taskId);
         Files.createDirectories(worktreeDir.getParent());
 
         if (Files.exists(worktreeDir)) {
@@ -157,7 +159,7 @@ public class WorktreeService {
     private File doCreateForDesign(File repoCacheDir, String repoKey,
                                    String baseBranch, long taskId)
             throws IOException, InterruptedException {
-        Path worktreeDir = Paths.get(props.worktreeRoot(), repoKey, "design-" + taskId);
+        Path worktreeDir = worktreeDir(repoKey, WorktreeKind.DESIGN, taskId);
         Files.createDirectories(worktreeDir.getParent());
         if (Files.exists(worktreeDir)) {
             log.warn("기존 design worktree 발견, 강제 제거: {}", worktreeDir);
@@ -177,16 +179,98 @@ public class WorktreeService {
         return worktreeDir.toFile();
     }
 
+    public Path worktreeDir(String repoKey, WorktreeKind kind, long taskId) {
+        return Paths.get(props.worktreeRoot(), repoKey, kind.dirName(taskId));
+    }
+
+    public enum DiscardResult { REMOVED, ABSENT, GIT_LOCKED }
+
     /**
-     * worktree 제거. 실패해도 예외 던지지 않음 (보존 우선, 호출자가 best-effort 정리 시 사용).
+     * 작업이 끝난 worktree 정리(best-effort) — 레포 락 안에서 discardUnderLock.
+     * 실패는 경고만 남기고 삼킨다: 정리 실패가 작업 결과를 바꾸면 안 되고, 남은 폴더는
+     * WorktreeCleanupJob이 보존 기간 뒤 다시 시도한다.
      */
-    public void remove(File repoCacheDir, File worktreeDir) {
+    public void discard(String repoKey, WorktreeKind kind, long taskId) {
         try {
-            ProcessRunner.run(repoCacheDir,
-                    List.of("git", "worktree", "remove", "--force", worktreeDir.getAbsolutePath()),
-                    GIT_TIMEOUT_SECONDS);
+            DiscardResult r = repos.withRepoLock(repoKey, () -> discardUnderLock(repoKey, kind, taskId));
+            if (r == DiscardResult.GIT_LOCKED) {
+                log.info("worktree 정리 건너뜀(git worktree lock): {}", worktreeDir(repoKey, kind, taskId));
+            }
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
         } catch (Exception e) {
-            log.warn("worktree remove 실패: {} ({})", worktreeDir, e.getMessage());
+            log.warn("worktree 정리 실패(주기 정리가 다시 시도): {} ({})",
+                    worktreeDir(repoKey, kind, taskId), e.getMessage());
+        }
+    }
+
+    /**
+     * 제거 절차. 호출자가 repoKey의 레포 락을 쥐고 있어야 한다(WorktreeCleanupJob은 tryWithRepoLock 안에서 부른다).
+     *  1) git worktree lock이 걸려 있으면 손대지 않는다(사람이 일부러 남긴 것)
+     *  2) 캐시가 있으면 git worktree remove --force
+     *  3) 폴더가 남았으면 링크를 따라가지 않는 재귀 삭제(Windows 읽기 전용 포함) — 하나라도 실패하면 IOException
+     *  4) 캐시가 있으면 git worktree prune, 구현 worktree면 그 작업의 로컬 브랜치 삭제(이미 원격에 푸시됨)
+     */
+    public DiscardResult discardUnderLock(String repoKey, WorktreeKind kind, long taskId)
+            throws IOException, InterruptedException {
+        Path dir = worktreeDir(repoKey, kind, taskId);
+        Path cache = Paths.get(props.reposDir(), repoKey);
+        boolean hasCache = Files.isDirectory(cache.resolve(".git"), LinkOption.NOFOLLOW_LINKS);
+        boolean present = Files.exists(dir, LinkOption.NOFOLLOW_LINKS);
+
+        if (present && isGitLocked(dir)) return DiscardResult.GIT_LOCKED;
+        if (present && hasCache) {
+            ProcessRunner.Result r = ProcessRunner.run(cache.toFile(),
+                    List.of("git", "worktree", "remove", "--force", dir.toString()), GIT_TIMEOUT_SECONDS);
+            if (r.exitCode() != 0) log.debug("git worktree remove 실패(폴더 직접 삭제로 진행): {}", r.stdout());
+        }
+        if (Files.exists(dir, LinkOption.NOFOLLOW_LINKS)) {
+            RepoCacheCleanupJob.DeleteResult d = RepoCacheCleanupJob.deleteTree(dir);
+            if (d.failures() > 0) {
+                throw new IOException("worktree 폴더 삭제 실패 " + d.failures() + "건: " + dir);
+            }
+        }
+        if (hasCache) {
+            ProcessRunner.run(cache.toFile(), List.of("git", "worktree", "prune"), GIT_TIMEOUT_SECONDS);
+            if (kind == WorktreeKind.TASK) deleteTaskBranches(cache.toFile(), taskId);
+        }
+        if (present) log.info("worktree 정리: {}", dir);
+        return present ? DiscardResult.REMOVED : DiscardResult.ABSENT;
+    }
+
+    /**
+     * {branch-prefix}task-{id} 와 {branch-prefix}task-{id}-{slug} 만 지운다 — task-1 정리가 task-12-…를 지우지 않게
+     * '-' 경계로 매칭한다(doCreate의 브랜치 규칙과 같다). 다른 worktree가 체크아웃 중이면 git이 거부 → 경고만.
+     */
+    private void deleteTaskBranches(File cacheDir, long taskId) throws IOException, InterruptedException {
+        String base = "refs/heads/" + props.branchPrefix() + "task-" + taskId;
+        String out = ProcessRunner.requireSuccess(cacheDir,
+                List.of("git", "for-each-ref", "--format=%(refname:short)", base, base + "-*"),
+                GIT_TIMEOUT_SECONDS);
+        String exact = props.branchPrefix() + "task-" + taskId;
+        for (String branch : out.lines().map(String::trim).filter(s -> !s.isEmpty()).toList()) {
+            if (!branch.equals(exact) && !branch.startsWith(exact + "-")) continue;
+            ProcessRunner.Result r = ProcessRunner.run(cacheDir, List.of("git", "branch", "-D", branch),
+                    GIT_TIMEOUT_SECONDS);
+            if (r.exitCode() != 0) log.warn("로컬 브랜치 삭제 실패: {} ({})", branch, r.stdout().trim());
+        }
+    }
+
+    /**
+     * worktree의 .git 파일이 가리키는 메타 디렉터리에 locked 표시가 있으면 true.
+     * .git이 없으면 false. 읽을 수 없거나 형식이 다르면 true — 모르면 안 지운다.
+     * gitdir은 절대경로 또는(git 2.48+ relative 모드) worktree 기준 상대경로.
+     */
+    static boolean isGitLocked(Path worktreeDir) {
+        Path gitFile = worktreeDir.resolve(".git");
+        if (Files.notExists(gitFile, LinkOption.NOFOLLOW_LINKS)) return false;
+        try {
+            String line = Files.readString(gitFile).trim();
+            if (!line.startsWith("gitdir:")) return true;
+            Path meta = worktreeDir.resolve(line.substring("gitdir:".length()).trim()).normalize();
+            return !Files.notExists(meta.resolve("locked"), LinkOption.NOFOLLOW_LINKS);
+        } catch (IOException | RuntimeException e) {
+            return true;
         }
     }
 

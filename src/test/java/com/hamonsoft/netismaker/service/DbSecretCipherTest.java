@@ -42,4 +42,15 @@ class DbSecretCipherTest {
         assertThat(new DbSecretCipher("k", "abcdef").isEnabled()).isFalse();     // 16자 미만
         assertThat(new DbSecretCipher("k", "0123456789abcdef0").isEnabled()).isFalse(); // 홀수 길이
     }
+
+    @Test
+    void surrounding_whitespace_in_key_and_salt_is_stripped() {
+        // public.env 등에서 섞인 공백이 파생 키를 조용히 바꾸면 안 된다 — 앞뒤 공백 유무와 상관없이 호환.
+        String enc = new DbSecretCipher("k3y-for-test", SALT).encrypt("p@ss");
+        DbSecretCipher padded = new DbSecretCipher("  k3y-for-test\r\n", " \t" + SALT + "\n");
+        assertThat(padded.isEnabled()).isTrue();
+        assertThat(padded.tryDecrypt(enc)).contains("p@ss");
+        assertThat(new DbSecretCipher("k3y-for-test", SALT).tryDecrypt(padded.encrypt("zz"))).contains("zz");
+        assertThat(new DbSecretCipher("   ", SALT).isEnabled()).isFalse();
+    }
 }

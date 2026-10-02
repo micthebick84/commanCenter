@@ -29,7 +29,10 @@ public class DbSecretCipher {
         this.encryptor = build(key, salt);
     }
 
-    private static TextEncryptor build(String key, String salt) {
+    private static TextEncryptor build(String rawKey, String rawSalt) {
+        // 키 문자열이 파생 키를 결정한다 — env 파일 등에서 섞인 앞뒤 공백·개행이 조용히 다른 키가 되지 않게 먼저 strip한다.
+        String key = rawKey == null ? null : rawKey.strip();
+        String salt = rawSalt == null ? null : rawSalt.strip();
         if (key == null || key.isBlank() || salt == null || salt.isBlank()) {
             log.info("DB 접속정보 기능 꺼짐 — NETISMAKER_DB_SECRET_KEY/NETISMAKER_DB_SECRET_SALT 미설정");
             return null;

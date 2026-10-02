@@ -125,8 +125,8 @@ ALTER TABLE com.interview_session
 - `QuestionAskRequest` += `List<Long> dbConnectionIds` — **null = 유지, 빈 리스트 = 전부 해제**(mcpCatalogIds와 동일 규칙).
 - `QuestionService`
   - `create`: `resolveDbConnections(ownerId, repoCatalogId, ids)` 검증 → `setDbConnectionIds`.
-  - `ask`: `applyMcpChange` 다음에 `applyDbChange(s, ids)` — 집합이 같으면 검증 없이 no-op, 다르면 검증 → 갱신 → `appendSystemNote("DB 연결 변경: 운영 DB, 분석 DB")`/`"DB 연결 변경: 없음(전부 해제)"`. `AskResult`에 `dbNote` 추가, 컨트롤러가 `pushNote`.
-  - 검증 기준은 **세션 소유자**(관리자가 남의 세션에 ask해도 소유자가 볼 수 있는 항목만): 같은 `repo_catalog_id`, `REPO`이거나 `USER && owner=세션 소유자`, `enabled`, 기능 켜짐. 위반 시 400. 개수 상한 3.
+  - `ask`: `applyMcpChange` 다음에 `applyDbChange(s, ids)` — 집합이 같으면 검증 없이 no-op, 다르면 추가되는 id만 검증(이미 세션에 있던 id는 비활성·삭제여도 유지·해제 가능) → 갱신 → `appendSystemNote("DB 연결 변경: 운영 DB, 분석 DB")`/`"DB 연결 변경: 없음(전부 해제)"`. `AskResult`에 `dbNote` 추가, 컨트롤러가 `pushNote`.
+  - 검증 기준은 **세션 소유자**(관리자가 남의 세션에 ask해도 소유자가 볼 수 있는 항목만): 같은 `repo_catalog_id`, `REPO`이거나 `USER && owner=세션 소유자`, `enabled`, 기능 켜짐. 위반 시 400. 개수 상한 3(결과 집합 기준). ask에서는 이 기준을 **새로 추가되는 id에만** 적용한다 — 이미 세션에 있던 id는 사후 비활성·삭제·남의 것이어도 통과(claim이 건너뛰고 notice를 붙인다)하고 해제는 항상 성공하므로, 보이지 않는 id 때문에 선택을 고치지 못하거나 질문이 400으로 막히는 일이 없다. create는 전부 검증.
 - `InterviewResponse` += `Long repoCatalogId`(대화 화면이 DB 목록을 조회하는 키), `List<Long> dbConnectionIds`, `List<DbConnectionChip> dbConnections`(`{id, name, dbType}`, 현재 행 기준 — 삭제된 id는 칩에서 빠짐).
 
 ### 5.4 claim
@@ -208,7 +208,7 @@ ALTER TABLE com.interview_session
 ## 7. 프론트엔드 계약
 
 - `composables/dbConnections.ts`: `DbConnectionView`, `list(repoCatalogId)`, `create/update/remove/test`.
-- `components/DbConnectionPicker.vue`: v-model `number[]`, prop `repoCatalogId`. 섹션 "공용"(REPO) / "내 접속정보"(USER) 체크 목록, 항목마다 종류 배지·`host:port/db`. 하단 "새 접속 추가". 상한 3 초과 시 notify 후 거부.
+- `components/DbConnectionPicker.vue`: v-model `number[]`, prop `repoCatalogId`. 섹션 "공용"(REPO) / "내 접속정보"(USER) 체크 목록, 항목마다 종류 배지·`host:port/db`. 하단 "새 접속 추가". 상한 3 초과 시 notify 후 거부. 이미 선택돼 있는데 목록에 없는(삭제·다른 사용자 것) id는 별도 "사용할 수 없는 연결" 항목(`연결 #<id> (삭제·비활성)`, 세션 상세 칩에 이름이 있으면 그 이름)으로 체크된 채 보여 해제만 허용하고 다시 고를 수는 없다(선택된 비활성 항목도 해제 가능). 새 질문 화면은 레포를 바꾸면 선택을 초기화하므로 해당 없음.
 - `components/DbConnectionDialog.vue`(`AdminFormDialog` 패턴): 종류 select(바꾸면 port 기본값 5432/3306/3306/1521 — 사용자가 고친 값은 유지), host, port, DB명(Oracle 선택 시 라벨 "서비스명"), user, password(`type=password`, 수정 모드에서는 비워 두면 유지 — placeholder로 안내, 값은 다시 채우지 않음), "접속 테스트" 버튼(결과 inline), 저장. 상단 안내 `"읽기 전용 계정 사용을 권장합니다. 쓰기 SQL은 질문 세션에서 차단되지만 완전하지 않습니다."`
 - `pages/questions/index.vue`: 레포 선택 후 MCP 버튼 옆에 "DB" `q-btn + q-badge + q-menu + DbConnectionPicker`. 레포가 바뀌면 목록 재조회, 그 레포의 `REPO` enabled 항목을 기본 체크(사용자가 해제 가능). `enabled:false` 응답이면 버튼 숨김. 생성 바디(JSON/multipart meta 모두)에 `dbConnectionIds`.
 - `pages/questions/[id].vue`: 같은 버튼(`detail.dbConnectionIds`로 1회 시딩, `:disable="!awaiting"`, 툴팁 "대화 중 변경 — 다음 질문부터 적용"), `send({..., dbConnectionIds})`. 헤더 아래 DB 칩(`detail.dbConnections`).
@@ -267,14 +267,14 @@ ALTER TABLE com.interview_session
 | 결과 과다 | 200행·셀 2000자·전체 60000자 상한, `truncated: true` — 모델이 조건·LIMIT을 좁혀 다시 조회 |
 | 커넥션 close 실패 | 경고 로그(서버 이름만), 턴 결과에는 영향 없음 |
 | 게이트 거부 | 사유 메시지로 모델이 재시도. 반복 거부는 기존 턴 상한이 자연 상한 |
-| ask 검증 실패(볼 수 없는/비활성 id) | 400, 세션 불변 |
+| ask 검증 실패(새로 추가한 id가 볼 수 없는/비활성) | 400, 세션 불변 (기존 id는 비활성·삭제여도 유지·해제 가능) |
 
 ## 10. 테스트 계획
 
 - **Java**
   - `DbSecretCipherTest`: 왕복, 다른 키로 복호화 실패, 키 없으면 disabled.
   - `DbConnectionServiceTest`: 보이는 범위(REPO 전체·USER 본인), 남의 USER id → 404, REPO 생성은 관리자만, PUT password blank 유지.
-  - `QuestionServiceTest`: create 시 저장, ask 같은 집합 no-op(검증 미호출), 다른 집합 → note, 빈 리스트 해제 note, 세션 소유자 기준 검증(관리자 actor), 다른 레포 id 400, 상한 3.
+  - `QuestionServiceTest`: create 시 저장, ask 같은 집합 no-op(검증 미호출), 다른 집합 → note, 빈 리스트 해제 note, 세션 소유자 기준 검증(관리자 actor), 다른 레포 id 400, 상한 3(결과 집합 기준), 이미 있던 비활성 id 유지+유효 id 추가 OK·추가분 무효 400·비활성 id 해제 OK.
   - `InterviewServiceTest`: claim — QUESTION만 `dbConnections`, 삭제/비활성/복호화 실패 → 제외 + notice, INTERVIEW는 빈 목록.
   - JSON 직렬화: `DbConnectionView`·`InterviewResponse`·목록 응답에 password/암호문 키가 없음. `DbConnectionRef.toString()` 마스킹.
   - 통합(Testcontainers postgres): `/api/db-connections/test` 성공·인증 실패(메시지에 비밀번호 없음), CRUD ACL.

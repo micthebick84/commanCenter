@@ -25,6 +25,7 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
 import java.util.stream.Collectors;
@@ -232,14 +233,26 @@ public class QuestionService {
 
     /**
      * 대화 중 DB 연결 변경 (스펙 2026-10-02 §5.3) — applyMcpChange와 같은 규칙. ids == null → 유지, 같은 집합 → 검증 없는
-     * no-op(사후 비활성화된 항목이 무관한 질문을 막지 않게), 다르면 세션 소유자 기준 검증(400) → 갱신 → system note.
-     * 다음 claim이 현재 행을 다시 조회하므로 러너는 턴마다 새 목록으로 조립한다.
-     * "전부 해제" 문구는 칩이 아니라 검증된 id 목록이 비었는지로 정한다(칩은 다른 이유로도 비어 보일 수 있다).
+     * no-op(사후 비활성화된 항목이 무관한 질문을 막지 않게), 다르면 <b>새로 추가되는 id만</b> 세션 소유자 기준으로 검증(400)한다.
+     * 이미 세션에 있던 id는 사후 비활성·삭제·남의 것이어도 유지·해제할 수 있다 — claim이 쓸 수 없는 항목을 알아서 건너뛰고
+     * notice를 붙이므로, 검증하면 사용자가 보이지 않는 stale id 때문에 선택을 영영 고치지 못한다. 상한(3)은 결과 집합 기준.
+     * 갱신 후 system note. 다음 claim이 현재 행을 다시 조회하므로 러너는 턴마다 새 목록으로 조립한다.
+     * "전부 해제" 문구는 칩이 아니라 결과 id 목록이 비었는지로 정한다(칩은 다른 이유로도 비어 보일 수 있다).
      */
     private InterviewTurn applyDbChange(InterviewSession s, List<Long> ids) {
         if (ids == null) return null;
-        if (idSet(ids).equals(idSet(s.getDbConnectionIds()))) return null;
-        List<Long> validated = dbConnectionService.validateSelection(s.getRepoCatalogId(), s.getRequesterId(), ids);
+        Set<Long> current = idSet(s.getDbConnectionIds());
+        if (idSet(ids).equals(current)) return null;
+        List<Long> next = ids.stream().filter(Objects::nonNull).map(Number::longValue).distinct().toList();
+        if (next.size() > DbConnectionService.MAX_SELECTION) {
+            throw new TaskException(HttpStatus.BAD_REQUEST,
+                    "DB 연결은 최대 " + DbConnectionService.MAX_SELECTION + "개까지 선택할 수 있습니다");
+        }
+        List<Long> added = next.stream().filter(id -> !current.contains(id)).toList();
+        if (!added.isEmpty()) {
+            dbConnectionService.validateSelection(s.getRepoCatalogId(), s.getRequesterId(), added);
+        }
+        List<Long> validated = new ArrayList<>(next);
         s.setDbConnectionIds(validated);
         String note = validated.isEmpty()
                 ? "DB 연결 변경: 없음(전부 해제)"

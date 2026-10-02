@@ -30,7 +30,7 @@ class WorktreeServiceTest {
                 null, 0, 0, 0, null, 0, null);
         return new WorkerProperties("w1", null, null, null, 0, 0, 0, 0, 0, tmp.resolve("repos").toString(), null,
                 null, null, null, null, null, tmp.resolve("worktrees").toString(), null, null, null, null, null, null,
-                null, deploy, new WorkerProperties.RepoCacheCleanup(false, null, 30));
+                null, deploy, new WorkerProperties.RepoCacheCleanup(false, null, 30), null);
     }
 
     private static void git(File dir, String... args) throws Exception {

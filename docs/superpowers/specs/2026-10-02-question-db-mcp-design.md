@@ -291,10 +291,15 @@ ALTER TABLE com.interview_session
 ## 11. 구현 시 먼저 확인할 것 (미검증 가정)
 
 1. SDK 0.2.117 + CLI 2.1.284에서 `type:'sdk'` 서버가 `strictMcpConfig:true`·`settingSources:[]` 아래 붙고, 그 도구 호출이 **`canUseTool`을 거치는지**(deny하면 핸들러가 안 불리는지). 스파이크 1회(`scripts/spikeSdkMcp.ts`, DB 없이 가짜 도구).
+   → 2026-10-02 확인: **도달**. `scripts/spikeSdkMcp.ts` 실측 — init `mcp_servers=[{"name":"db-1","status":"connected","source":"sdk"}]`, tools=`[mcp__db-1__query]`; `canUseTool`이 `SELECT 42`·`DELETE FROM t` 두 호출 모두에 불렸고, deny한 DELETE는 핸들러에 안 닿음(handler=`[SELECT 42]`). 실행 중 claude.exe 명령줄은 `--setting-sources= --strict-mcp-config --permission-mode default` 였고 `--mcp-config` 인자는 없음(sdk 서버는 CLI 인자가 아니라 제어 프로토콜로 붙는다 — 외부 MCP가 명령줄에 안 보이는 것이 정상).
 2. 로컬 PostgreSQL에서 PG 어댑터: `DECLARE … CURSOR` + `FETCH`로 행 상한, 읽기 전용 트랜잭션이 `CREATE TEMP TABLE`을 거부하는지.
+   → Task 11에서 확인.
 3. MariaDB(대상 버전)에서 `START TRANSACTION READ ONLY`·`max_statement_time`, MySQL에서 `max_execution_time` — 라이브 스모크.
+   → 라이브 스모크(Task 16)에서 확인.
 4. Oracle thin 모드 접속(대상 서버 12.1 이상), `SET TRANSACTION READ ONLY` — 라이브 스모크.
+   → 라이브 스모크(Task 16)에서 확인.
 5. `mysql2` 스트림 중간 destroy 뒤 다음 호출 재접속 — 단위 테스트 + 라이브.
+   → Task 11에서 확인.
 
 ## 12. 범위 밖
 

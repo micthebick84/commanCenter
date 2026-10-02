@@ -246,3 +246,26 @@ describe('buildOptions — attachmentRoot passthrough (스펙 2026-09-13 §6)', 
     expect('attachmentRoot' in o).toBe(false);
   });
 });
+
+describe('buildOptions — DB MCP (스펙 2026-10-02 §6.4)', () => {
+  const dbServer = { type: 'sdk', name: 'db-7', instance: {} };
+
+  it('db 서버를 마지막에 머지(같은 이름이면 db가 이긴다), QUESTION 사전승인은 여전히 없음', () => {
+    const o = buildOptions({
+      ...base, claudeSessionId: null, sessionKind: 'QUESTION',
+      mcpsBase: { 'db-7': { type: 'http', url: 'http://fake' }, obsidian: { type: 'http', url: 'http://o' } },
+      dbMcpServers: { 'db-7': dbServer },
+      dbDialects: { 'db-7': 'mysql' },
+    });
+    expect((o.mcpServers as Record<string, unknown>)['db-7']).toBe(dbServer); // 인스턴스를 복사하지 않고 그대로
+    expect(Object.keys(o.mcpServers as object)).toContain('obsidian');
+    expect(o.allowedTools).toEqual([]);
+  });
+
+  it('canUseTool이 dbDialects를 받아 DB 쓰기를 막는다', async () => {
+    const o = buildOptions({ ...base, claudeSessionId: null, sessionKind: 'QUESTION', dbMcpServers: { 'db-7': dbServer }, dbDialects: { 'db-7': 'mysql' } });
+    const gate = o.canUseTool as (n: string, i: Record<string, unknown>) => Promise<{ behavior: string }>;
+    expect((await gate('mcp__db-7__query', { sql: 'SELECT 1' })).behavior).toBe('allow');
+    expect((await gate('mcp__db-7__query', { sql: 'DELETE FROM t' })).behavior).toBe('deny');
+  });
+});

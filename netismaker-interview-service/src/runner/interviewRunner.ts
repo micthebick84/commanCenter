@@ -11,6 +11,7 @@ import { ensureRepo as defaultEnsureRepo, type RepoInput } from './repoPrepare.j
 import { maskSecrets, type GitTokens } from '../sdk/gitRemote.js';
 import { buildWritingPlansSplice, buildPlanReformatSplice, detectHandoff, detectPlanIntent } from './skillDispatch.js';
 import { HeartbeatTicker } from './heartbeat.js';
+import { createDbMcp, type PreparedDbMcp } from '../sdk/dbMcp.js';
 
 export interface RunnerDeps {
   superpowersPluginPath: string;
@@ -40,6 +41,8 @@ export interface RunnerDeps {
   turnTimeoutMs?: number;
   /** clone/fetch 인증 토큰(GITHUB_PAT / GITLAB_TOKEN). 미지정이면 익명. */
   gitTokens?: GitTokens;
+  /** 테스트용 주입 — 기본 dbMcp.createDbMcp (질문 세션 내장 DB 도구, 스펙 2026-10-02 §6). */
+  createDbMcp?: (claim: InterviewClaimResponse) => PreparedDbMcp;
 }
 
 /**
@@ -138,14 +141,30 @@ function lastAnswerAttachments(claim: InterviewClaimResponse): AttachmentRef[] |
 }
 
 /**
+ * DB 도구 안내 (스펙 2026-10-02 §6.4). 서버마다 도구 이름이 같으므로(query 등) 서버↔DB 매핑을 매 턴 알려 준다.
+ * 연결도 안내도 없으면 빈 문자열 — 프롬프트가 기존과 같다.
+ */
+export function dbSection(db: Pick<PreparedDbMcp, 'labels' | 'notices'>): string {
+  if (db.labels.length === 0 && db.notices.length === 0) return '';
+  const lines: string[] = [];
+  if (db.labels.length > 0) {
+    lines.push('사용 가능한 DB 도구 (읽기 전용 — SELECT 계열 단일 문장, 최대 200행):');
+    for (const l of db.labels) lines.push(`- mcp__${l.serverName}__query / list_tables / describe_table : ${l.label}`);
+  }
+  for (const n of db.notices) lines.push(`참고: ${n}`);
+  return lines.join('\n') + '\n\n';
+}
+
+/**
  * 질문 세션(Q&A) 프롬프트 — 스킬 언급 없음. fresh = Q&A 전용 계약 + 질문 본문 + (등록 시 첨부) + 읽기 전용 규칙
  * (스펙 §6-④), resume = 후속 질문(lastAnswer) + (그 메시지의 첨부) 주입. 허용 Bash 목록은 permissions.ts
  * BASH_WHITELIST와 동일하게 유지할 것.
  */
-async function* questionPromptFor(claim: InterviewClaimResponse): AsyncIterable<UserTurn> {
+async function* questionPromptFor(claim: InterviewClaimResponse, prefix = ''): AsyncIterable<UserTurn> {
   if (!claim.claudeSessionId) {
     yield userTurn(
-      `당신은 \`${claim.githubRepo}\` (브랜치 ${claim.githubBranch}) 레포에 대한 질문에 답하는 코드 분석 어시스턴트입니다. ` +
+      prefix +
+        `당신은 \`${claim.githubRepo}\` (브랜치 ${claim.githubBranch}) 레포에 대한 질문에 답하는 코드 분석 어시스턴트입니다. ` +
         '현재 작업 디렉토리에 이 레포가 체크아웃되어 있습니다.\n\n' +
         `제목: ${claim.title}\n질문: ${claim.description}\n\n` +
         questionAttachmentSection(claim.attachments, '질문에 첨부된 파일:') +
@@ -162,7 +181,8 @@ async function* questionPromptFor(claim: InterviewClaimResponse): AsyncIterable<
     );
   } else {
     const section = questionAttachmentSection(lastAnswerAttachments(claim), '이 메시지에 첨부된 파일:');
-    yield userTurn(section ? `${claim.lastAnswer ?? ''}\n\n${section}` : (claim.lastAnswer ?? ''));
+    const body = section ? `${claim.lastAnswer ?? ''}\n\n${section}` : (claim.lastAnswer ?? '');
+    yield userTurn(prefix + body);
   }
 }
 
@@ -471,39 +491,48 @@ export class InterviewRunner {
   ): Promise<void> {
     const onActivity = (e: ActivityInput) => poster.push(e);
     const onRateLimit = (info: RateLimitInfo) => this.rateLimits.report(info);
-    const stream: AsyncIterable<SdkMessage> = this.query({
-      prompt: questionPromptFor(claim),
-      options: buildOptions({
-        superpowersPluginPath: this.deps.superpowersPluginPath,
-        workDir: claim.workDir,
-        claudeCliPath: this.deps.claudeCliPath,
-        claudeSessionId: claim.claudeSessionId,
-        mcpsExtra: claim.mcpsExtra,
-        mcpsBase: this.deps.mcpsBase,
-        model: claim.model,
-        effort: claim.effort,
-        abortController: controller,
-        sessionKind: 'QUESTION',
-        // 세션 첨부 디렉토리 — Read 게이트의 두 번째 허용 루트 (스펙 2026-09-13 §6). 구버전 Java는 필드 없음 → null.
-        attachmentRoot: claim.attachmentRoot ?? null,
-      }),
-    });
-    const result = await relay(stream, { onActivity, onRateLimit, workDir: claim.workDir });
-    guard.add(result.costUsd);
-    // trailing 활동 배치가 답변보다 늦게 도착하지 않도록 확정 POST 전에 큐를 비운다 (인터뷰 경로와 동일).
-    await poster.stop();
-    await this.client.postQuestion(claim.sessionId, {
-      content: result.assistantText,
-      claudeSessionId: result.sessionId ?? claim.claudeSessionId ?? '',
-      kind: 'question',
-      costUsd: result.costUsd,
-      inputTokens: result.inputTokens,
-      outputTokens: result.outputTokens,
-      cacheCreationTokens: result.cacheCreationTokens,
-      cacheReadTokens: result.cacheReadTokens,
-      // 컨텍스트 스냅샷 (스펙 2026-09-05 §4.2) — 구버전 Java는 미지 필드를 무시한다.
-      contextTokens: result.contextTokens,
-      contextWindow: result.contextWindow,
-    });
+    // 내장 DB MCP(스펙 2026-10-02 §6.4): 서버는 턴마다 새로 만들고(DB 접속은 첫 도구 호출 때),
+    // 성공·실패와 무관하게 finally에서 열린 커넥션을 닫는다.
+    const db = (this.deps.createDbMcp ?? createDbMcp)(claim);
+    try {
+      const stream: AsyncIterable<SdkMessage> = this.query({
+        prompt: questionPromptFor(claim, dbSection(db)),
+        options: buildOptions({
+          superpowersPluginPath: this.deps.superpowersPluginPath,
+          workDir: claim.workDir,
+          claudeCliPath: this.deps.claudeCliPath,
+          claudeSessionId: claim.claudeSessionId,
+          mcpsExtra: claim.mcpsExtra,
+          mcpsBase: this.deps.mcpsBase,
+          model: claim.model,
+          effort: claim.effort,
+          abortController: controller,
+          sessionKind: 'QUESTION',
+          // 세션 첨부 디렉토리 — Read 게이트의 두 번째 허용 루트 (스펙 2026-09-13 §6). 구버전 Java는 필드 없음 → null.
+          attachmentRoot: claim.attachmentRoot ?? null,
+          dbMcpServers: db.servers,
+          dbDialects: db.dialects,
+        }),
+      });
+      const result = await relay(stream, { onActivity, onRateLimit, workDir: claim.workDir });
+      guard.add(result.costUsd);
+      // trailing 활동 배치가 답변보다 늦게 도착하지 않도록 확정 POST 전에 큐를 비운다 (인터뷰 경로와 동일).
+      await poster.stop();
+      await this.client.postQuestion(claim.sessionId, {
+        content: result.assistantText,
+        claudeSessionId: result.sessionId ?? claim.claudeSessionId ?? '',
+        kind: 'question',
+        costUsd: result.costUsd,
+        inputTokens: result.inputTokens,
+        outputTokens: result.outputTokens,
+        cacheCreationTokens: result.cacheCreationTokens,
+        cacheReadTokens: result.cacheReadTokens,
+        // 컨텍스트 스냅샷 (스펙 2026-09-05 §4.2) — 구버전 Java는 미지 필드를 무시한다.
+        contextTokens: result.contextTokens,
+        contextWindow: result.contextWindow,
+      });
+    } finally {
+      await db.close();
+    }
   }
 }

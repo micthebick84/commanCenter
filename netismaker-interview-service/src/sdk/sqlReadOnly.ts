@@ -1,5 +1,17 @@
 /**
- * Read-only SQL checker for question session DB tools
+ * Read-only SQL checker for question session DB tools (spec 2026-10-02 8.2).
+ * Best effort - final defense is read-only DB account.
+ *
+ * Principle: when our parser and DB parser could see boundaries differently,
+ * we always choose the side that sees more (reject side).
+ *  - String literals accept only double-quote escape; backslash inside causes rejection.
+ *  - Hash is mysql comment only (operator in PG); dashes need space after in mysql.
+ *  - Dollar quotes are postgres-only; backticks are mysql-only identifiers.
+ *  - MySQL execution comments and MariaDB markers are rejected.
+ *  - Block comments do not nest (PG allows nesting; we close early, seeing more).
+ *  - I-1: PG non-ASCII identifiers before $$ are rejected (code point >= 0x80).
+ *  - I-2: Oracle q-quote alternative literals are rejected.
+ *  - I-3: PG functions accepting SQL strings are rejected.
  */
 export type SqlDialect = 'postgres' | 'mysql' | 'oracle';
 export type SqlCheck = { ok: true } | { ok: false; reason: string };
@@ -15,13 +27,16 @@ const FORBIDDEN_WORDS = new Set([
 
 const FORBIDDEN_FUNCS = new Set([
   'pg_terminate_backend', 'pg_cancel_backend', 'pg_reload_conf', 'pg_rotate_logfile', 'set_config', 'pg_read_file',
-  'pg_read_binary_file', 'pg_ls_dir', 'pg_stat_file', 'pg_sleep', 'nextval', 'setval',
+  'pg_read_binary_file', 'pg_ls_dir', 'pg_stat_file', 'pg_sleep', 'pg_sleep_for', 'pg_sleep_until', 'nextval', 'setval',
   'load_file', 'sleep', 'benchmark', 'get_lock', 'release_lock',
+  'ts_stat', 'ts_rewrite', 'pg_notify',
 ]);
-const FORBIDDEN_PREFIXES = ['lo_', 'dblink', 'pg_advisory', 'dbms_', 'utl_'];
+const FORBIDDEN_PREFIXES = ['lo_', 'dblink', 'pg_advisory', 'pg_logical_', 'dbms_', 'utl_', 'query_to_', 'cursor_to_'];
 
 function isIdentChar(ch: string | undefined): boolean {
-  return ch !== undefined && /[A-Za-z0-9_$#]/.test(ch);
+  if (ch === undefined) return false;
+  const code = ch.charCodeAt(0);
+  return /[A-Za-z0-9_$#]/.test(ch) || code >= 0x80;
 }
 
 /**
@@ -61,6 +76,26 @@ export function stripSql(sql: string, dialect: SqlDialect): string | { error: st
       i = e + 2;
       out += ' ';
       continue;
+    }
+    // Check for Oracle q'...' alternative quoting before processing single quotes
+    if (dialect === 'oracle' && ch === "'" && i > 0) {
+      const prevChar = sql[i - 1];
+      if (prevChar === 'q' || prevChar === 'Q') {
+        // Could be q' or nq'/Nq'/nQ'/NQ'
+        const prevPrevChar = i > 1 ? sql[i - 2] : undefined;
+        if (prevPrevChar === 'n' || prevPrevChar === 'N') {
+          // Check nq' pattern: is the character before n an identifier char?
+          const prevPrevPrevChar = i > 2 ? sql[i - 3] : undefined;
+          if (!prevPrevPrevChar || !isIdentChar(prevPrevPrevChar)) {
+            // nq is a quote marker, not part of an identifier
+            return { error: "Oracle q'[...'] 대안 인용은 허용하지 않습니다" };
+          }
+        } else if (!prevPrevChar || !isIdentChar(prevPrevChar)) {
+          // Check q' pattern: is the character before q an identifier char?
+          // q is a quote marker, not part of an identifier
+          return { error: "Oracle q'[...'] 대안 인용은 허용하지 않습니다" };
+        }
+      }
     }
     if (ch === "'" || (ch === '"' && dialect === 'mysql')) {
       const end = scanQuoted(sql, i, ch);

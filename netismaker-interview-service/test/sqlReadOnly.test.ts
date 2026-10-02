@@ -101,4 +101,39 @@ describe('checkReadOnlySql — 거부', () => {
     no('SELECT `a` ; DELETE FROM t', 'mysql');
     no('SELECT "a" ; DELETE FROM t', 'postgres');
   });
+
+  it('I-1: PG 비ASCII 식별자 + 달러 인용', () => {
+    // Non-ASCII identifier followed by $$ should be rejected
+    no('SELECT é$$ x ; y $$', 'postgres');
+    no('SELECT 가격$$ DELETE FROM t $$', 'postgres');
+    // Plain non-ASCII identifier should be allowed
+    ok('SELECT 가격 FROM t', 'postgres');
+  });
+
+  it('I-2: Oracle q-quote 대안 인용', () => {
+    // Oracle q'[...]' should be rejected
+    no("SELECT q'[a' ; DELETE FROM t --]'", 'oracle');
+    no("SELECT Q'[x]'", 'oracle');
+    no("SELECT nq'[test]'", 'oracle');
+    no("SELECT Nq'[test]'", 'oracle');
+    no("SELECT NQ'[test]'", 'oracle');
+    // Regular strings and identifiers should be allowed
+    ok("SELECT 'q' FROM dual", 'oracle');
+    ok('SELECT seq FROM t', 'oracle');
+    ok("SELECT q_col FROM t", 'oracle');
+  });
+
+  it('I-3: PG SQL-문자열 함수', () => {
+    // Functions that execute SQL strings should be rejected
+    no("SELECT query_to_xml('SELECT 1', true, true, '')", 'postgres');
+    no("SELECT query_to_xml_and_xmlschema('SELECT 1', true, true, '')", 'postgres');
+    no("SELECT query_to_xmlschema('SELECT 1')", 'postgres');
+    no("SELECT cursor_to_xml('cur')", 'postgres');
+    no("SELECT ts_stat('SELECT 1')", 'postgres');
+    no("SELECT ts_rewrite('SELECT 1')", 'postgres');
+    no("SELECT pg_notify('chan', 'msg')", 'postgres');
+    no('SELECT pg_sleep_for(interval 1)', 'postgres');
+    no('SELECT pg_sleep_until(now())', 'postgres');
+    no('SELECT pg_logical_something()', 'postgres');
+  });
 });

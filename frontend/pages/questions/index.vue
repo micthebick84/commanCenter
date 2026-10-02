@@ -4,6 +4,8 @@ import { DEFAULT_MODEL, DEFAULT_EFFORT } from '~/composables/modelEffort'
 import McpPicker from '~/components/McpPicker.vue'
 import QuestionComposer from '~/components/chat/QuestionComposer.vue'
 import ClaudeUsagePanel from '~/components/ClaudeUsagePanel.vue'
+import DbConnectionPicker from '~/components/DbConnectionPicker.vue'
+import { MAX_DB_SELECTION, fetchDbConnections, type DbConnectionView } from '~/composables/dbConnections'
 
 definePageMeta({ layout: 'default' })
 
@@ -20,10 +22,28 @@ const draft = reactive({
   model: DEFAULT_MODEL,
   effort: DEFAULT_EFFORT,
   mcpCatalogIds: [] as number[],
+  dbConnectionIds: [] as number[],
 })
 // 첨부(스펙 2026-09-13 §7): 대기 파일은 QuestionComposer가 검증·누적하고(v-model:files) 등록 성공 시 비운다 — 실패면 유지.
 const files = ref<File[]>([])
 const submitting = ref(false)
+
+// DB 연결(스펙 2026-10-02 §7): 레포를 고를 때마다 목록을 새로 받고 공용(REPO) 활성 항목을 기본 선택한다.
+// 기능이 꺼져 있으면(enabled=false) 버튼을 숨기고 등록 바디에도 싣지 않는다.
+const db = reactive({ enabled: false, items: [] as DbConnectionView[] })
+async function loadDb(repoId: number, seedDefaults: boolean) {
+  const r = await fetchDbConnections(repoId)
+  if (draft.repoCatalogId !== repoId) return // 늦게 온 이전 레포 응답
+  db.enabled = r.enabled
+  db.items = r.items
+  const ids = new Set(r.items.map((i) => i.id))
+  draft.dbConnectionIds = seedDefaults
+    ? r.items.filter((i) => i.scope === 'REPO' && i.enabled).slice(0, MAX_DB_SELECTION).map((i) => i.id)
+    : draft.dbConnectionIds.filter((id) => ids.has(id))
+}
+function reloadDb() {
+  if (draft.repoCatalogId !== null) loadDb(draft.repoCatalogId, false)
+}
 
 interface RepoCatalogEntry {
   id: number
@@ -108,6 +128,9 @@ async function loadBranches(repo: number) {
 
 function onRepoSelected(catalogId: number | null) {
   resetBranchState()
+  db.enabled = false
+  db.items = []
+  draft.dbConnectionIds = []
   const entry = repoCatalog.value.find((r) => r.id === catalogId)
   if (!entry) return
   if (entry.host === 'other') {
@@ -115,6 +138,7 @@ function onRepoSelected(catalogId: number | null) {
     repoStatusMsg.value = '이 레포는 지원하지 않는 호스트입니다 (GitHub/사내 GitLab만 가능)'
     return
   }
+  loadDb(entry.id, true)
   loadBranches(entry.id).then(() => {
     // 늦게 도착한 이전 레포의 콜백이 현재 선택을 덮어쓰지 않게 — loadBranches 내부 가드와 동일 기준.
     if (inflightRepo !== entry.id) return
@@ -155,6 +179,7 @@ async function submit() {
       model: draft.model,
       effort: draft.effort,
       mcpCatalogIds: draft.mcpCatalogIds,
+      ...(db.enabled ? { dbConnectionIds: draft.dbConnectionIds } : {}),
     }
     let created: { id: number }
     if (files.value.length > 0) {
@@ -180,7 +205,7 @@ async function submit() {
 }
 
 // 테스트에서 q-select/입력창 조작 대신 직접 호출 (McpPicker.toggle 선례)
-defineExpose({ draft, submit, onRepoSelected })
+defineExpose({ draft, submit, onRepoSelected, db })
 </script>
 
 <template>
@@ -276,6 +301,28 @@ defineExpose({ draft, submit, onRepoSelected })
                 <div class="mcp-menu">
                   <McpPicker v-model="draft.mcpCatalogIds" />
                 </div>
+              </q-menu>
+            </q-btn>
+            <q-btn
+              v-if="db.enabled && draft.repoCatalogId !== null"
+              flat
+              dense
+              no-caps
+              icon="storage"
+              :label="$q.screen.xs ? undefined : 'DB'"
+              aria-label="DB 연결"
+              data-test="db-button"
+            >
+              <q-badge v-if="draft.dbConnectionIds.length" color="primary" floating>
+                {{ draft.dbConnectionIds.length }}
+              </q-badge>
+              <q-menu>
+                <DbConnectionPicker
+                  v-model="draft.dbConnectionIds"
+                  :items="db.items"
+                  :repo-catalog-id="draft.repoCatalogId"
+                  @reload="reloadDb"
+                />
               </q-menu>
             </q-btn>
           </template>

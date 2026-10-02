@@ -302,6 +302,7 @@ function onPanelClose() {
                   <DbConnectionPicker
                     v-model="pickedDb"
                     :items="dbState.items"
+                    :known-chips="detail?.dbConnections"
                     :repo-catalog-id="detail?.repoCatalogId ?? 0"
                     @reload="reloadDb"
                   />

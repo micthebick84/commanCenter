@@ -532,6 +532,33 @@ describe('pages/questions/[id] — 대화 중 MCP 변경 + 채팅 첨부 (스펙
       w.unmount()
     })
 
+    const staleDbApi = (url: string) =>
+      url === '/api/questions/3'
+        ? Promise.resolve({ ...dbDetail, dbConnectionIds: [7, 8], dbConnections: [{ id: 7, name: '운영', dbType: 'MYSQL' }] })
+        : dbApi(true)(url)
+
+    it('비활성·삭제돼 목록에 없는 선택 id도 시딩되고 그대로 유지해 보낸다(서버는 이미 있던 id를 검증하지 않는다)', async () => {
+      useApiMock.mockImplementation(staleDbApi)
+      const w = mount(QuestionDetail)
+      await flushPromises()
+      expect((w.vm as any).pickedDb).toEqual([7, 8]) // 8은 목록에 없다
+      await sendText(w, '질문')
+      const call = useApiMock.mock.calls.find((c) => c[0] === '/api/questions/3/ask')
+      expect(call![1].body.dbConnectionIds).toEqual([7, 8])
+      w.unmount()
+    })
+
+    it('피커에서 "사용할 수 없는 연결"을 해제하면 그 id가 빠진 채로 보낸다', async () => {
+      useApiMock.mockImplementation(staleDbApi)
+      const w = mount(QuestionDetail)
+      await flushPromises()
+      ;(w.vm as any).pickedDb.splice(1, 1) // 피커 v-model 갱신과 같은 효과(메뉴 대신 직접 갱신 — 위 선례)
+      await sendText(w, '질문')
+      const call = useApiMock.mock.calls.find((c) => c[0] === '/api/questions/3/ask')
+      expect(call![1].body.dbConnectionIds).toEqual([7])
+      w.unmount()
+    })
+
     it('기능이 꺼져 있으면 DB 버튼을 숨기고 바디에 dbConnectionIds를 싣지 않는다', async () => {
       useApiMock.mockImplementation(dbApi(false))
       const w = mount(QuestionDetail)

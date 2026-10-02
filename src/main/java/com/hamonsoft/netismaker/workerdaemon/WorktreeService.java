@@ -80,7 +80,7 @@ public class WorktreeService {
             } catch (Exception e) {
                 log.warn("worktree remove 실패 (계속): {}", e.getMessage());
             }
-            deleteRecursively(worktreeDir.toFile());
+            deleteLeftover(worktreeDir);
         }
         // 같은 이름 브랜치가 캐시에 남아있으면 제거 (워크트리 없는 dangling 브랜치)
         try {
@@ -131,7 +131,7 @@ public class WorktreeService {
             } catch (Exception e) {
                 log.warn("worktree remove 실패 (계속): {}", e.getMessage());
             }
-            deleteRecursively(worktreeDir.toFile());
+            deleteLeftover(worktreeDir);
         }
 
         ProcessRunner.requireSuccess(repoCacheDir,
@@ -167,7 +167,7 @@ public class WorktreeService {
             } catch (Exception e) {
                 log.warn("worktree remove 실패 (계속): {}", e.getMessage());
             }
-            deleteRecursively(worktreeDir.toFile());
+            deleteLeftover(worktreeDir);
         }
         ProcessRunner.requireSuccess(repoCacheDir,
                 List.of("git", "worktree", "add", "--force", "--detach",
@@ -220,17 +220,15 @@ public class WorktreeService {
         return out.toString();
     }
 
-    private static void deleteRecursively(File f) {
-        if (f == null) return;
-        // 심볼릭 링크는 타깃을 따라가지 않고 링크 자체만 제거 (워크트리 밖 삭제 방지 — WorkerMainLoop과 동일)
-        boolean symlink = java.nio.file.Files.isSymbolicLink(f.toPath());
-        if (!symlink && !f.exists()) return;
-        if (!symlink && f.isDirectory()) {
-            File[] children = f.listFiles();
-            if (children != null) for (File c : children) deleteRecursively(c);
-        }
-        if (!f.delete()) {
-            log.warn("파일 삭제 실패: {}", f);
+    /**
+     * 재생성 전 남은 worktree 폴더 제거. 심볼릭 링크·Windows 정션은 따라가지 않고 링크만 지운다
+     * (git worktree remove --force가 정션을 남겨 둠 — 따라가면 worktree 밖이 지워진다).
+     * 실패해도 예외 없이 경고만 — 남은 폴더는 이어지는 worktree add가 실패로 드러낸다.
+     */
+    private static void deleteLeftover(Path dir) {
+        RepoCacheCleanupJob.DeleteResult d = RepoCacheCleanupJob.deleteTree(dir);
+        if (d.failures() > 0) {
+            log.warn("기존 worktree 폴더 삭제 미완료: {} ({}개 항목 실패)", dir, d.failures());
         }
     }
 

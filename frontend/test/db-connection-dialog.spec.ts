@@ -1,10 +1,10 @@
 import { mount, flushPromises } from '@vue/test-utils'
 import { describe, it, expect, beforeEach } from 'vitest'
 import DbConnectionDialog from '../components/DbConnectionDialog.vue'
-import { fetchDbConnections } from '../composables/dbConnections'
+import { fetchDbConnections, type DbConnectionView } from '../composables/dbConnections'
 import { useApiMock } from './mocks/nuxt'
 
-const editing = {
+const editing: DbConnectionView = {
   id: 7, scope: 'USER', repoCatalogId: 1, name: '내 DB', dbType: 'MYSQL', host: 'h', port: 3306,
   databaseName: 'app', username: 'u', enabled: true, mine: true,
 }

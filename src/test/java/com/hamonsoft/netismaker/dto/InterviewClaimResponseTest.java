@@ -113,4 +113,35 @@ class InterviewClaimResponseTest {
         assertThat(r.repoHost()).isEqualTo("gitlab");
         assertThat(r.repoRef().path()).isEqualTo("g/sub/p");
     }
+
+    @Test
+    void db_ids_only_for_question_and_with_db_fills_refs() throws Exception {
+        InterviewSession q = InterviewSession.createQuestion("a/b", "main", "t", "q", "user1",
+                new java.util.ArrayList<>(), "claude-sonnet-5", "medium");
+        ReflectionTestUtils.setField(q, "id", 7L); // of()가 sessionId(long)로 unbox — 미영속 세션은 id set 필요
+        q.setDbConnectionIds(new java.util.ArrayList<>(java.util.List.of(7L)));
+        InterviewClaimResponse c = InterviewClaimResponse.of(q, java.util.List.of(), java.util.List.of());
+        assertThat(c.dbConnectionIds()).containsExactly(7L);
+        assertThat(c.dbConnections()).isEmpty();
+        assertThat(c.dbNotices()).isEmpty();
+
+        var ref = new InterviewClaimResponse.DbConnectionRef("db-7", "운영 (MySQL)", "MYSQL", "h", 3306, "app", "u", "Pw-9");
+        InterviewClaimResponse filled = c.withDb(java.util.List.of(ref), java.util.List.of("참고"));
+        assertThat(filled.dbConnections()).containsExactly(ref);
+        assertThat(filled.dbNotices()).containsExactly("참고");
+        assertThat(filled.sessionId()).isEqualTo(c.sessionId());
+        assertThat(filled.toString()).doesNotContain("Pw-9");
+        // 워커 계약: JSON에는 평문 password가 실려야 한다(내부 API 전용)
+        String json = new com.fasterxml.jackson.databind.ObjectMapper().findAndRegisterModules().writeValueAsString(filled);
+        assertThat(json).contains("\"password\":\"Pw-9\"").contains("\"serverName\":\"db-7\"");
+    }
+
+    @Test
+    void interview_kind_never_carries_db_ids() {
+        InterviewSession i = InterviewSession.create("a/b", "main", "t", "d", "user1",
+                new java.util.ArrayList<>(), "claude-sonnet-5", "medium");
+        ReflectionTestUtils.setField(i, "id", 8L);
+        i.setDbConnectionIds(new java.util.ArrayList<>(java.util.List.of(7L)));
+        assertThat(InterviewClaimResponse.of(i, java.util.List.of(), java.util.List.of()).dbConnectionIds()).isEmpty();
+    }
 }

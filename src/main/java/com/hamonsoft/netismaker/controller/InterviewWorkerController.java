@@ -7,15 +7,19 @@ import com.hamonsoft.netismaker.dto.WorkerQuestionRequest;
 import com.hamonsoft.netismaker.entity.InterviewPlan;
 import com.hamonsoft.netismaker.entity.InterviewStatus;
 import com.hamonsoft.netismaker.entity.InterviewTurn;
+import com.hamonsoft.netismaker.service.DbConnectionService;
 import com.hamonsoft.netismaker.service.InterviewService;
 import com.hamonsoft.netismaker.service.InterviewStreamService;
 import jakarta.validation.Valid;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.context.annotation.Profile;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.*;
 
+import java.util.List;
 import java.util.Optional;
 
 /**
@@ -35,18 +39,39 @@ import java.util.Optional;
 @Profile("api")
 public class InterviewWorkerController {
 
+    private static final Logger log = LoggerFactory.getLogger(InterviewWorkerController.class);
+
     private final InterviewService interviewService;
     private final InterviewStreamService interviewStream;
+    private final DbConnectionService dbConnectionService;
 
-    public InterviewWorkerController(InterviewService interviewService, InterviewStreamService interviewStream) {
+    public InterviewWorkerController(InterviewService interviewService, InterviewStreamService interviewStream,
+                                     DbConnectionService dbConnectionService) {
         this.interviewService = interviewService;
         this.interviewStream = interviewStream;
+        this.dbConnectionService = dbConnectionService;
     }
 
     @PostMapping("/claim")
     public ResponseEntity<InterviewClaimResponse> claim(@RequestParam String workerId) {
-        Optional<InterviewClaimResponse> claimed = interviewService.claim(workerId);
+        Optional<InterviewClaimResponse> claimed = interviewService.claim(workerId).map(this::withDb);
         return claimed.map(ResponseEntity::ok).orElseGet(() -> ResponseEntity.noContent().build());
+    }
+
+    /**
+     * 질문 세션이면 DB 접속정보를 복호화해 싣는다 (스펙 2026-10-02 §5.4). claim 트랜잭션은 이미 커밋됐으므로
+     * 여기서 실패해도 응답을 깨지 않는다 — 500이면 세션이 RUNNING에 묶여 stale 회수까지 멈춘다.
+     * ⚠️ 이 응답 본문(평문 비밀번호 포함)을 로그로 남기지 말 것.
+     */
+    private InterviewClaimResponse withDb(InterviewClaimResponse c) {
+        if (!"QUESTION".equals(c.kind()) || c.dbConnectionIds().isEmpty()) return c;
+        try {
+            DbConnectionService.ClaimDb db = dbConnectionService.resolveForClaim(c.dbConnectionIds());
+            return c.withDb(db.refs(), db.notices());
+        } catch (RuntimeException e) {
+            log.warn("claim DB 접속정보 조회 실패 session={}: {}", c.sessionId(), e.getClass().getSimpleName());
+            return c.withDb(List.of(), List.of("DB 접속정보를 불러오지 못해 DB 도구 없이 답합니다"));
+        }
     }
 
     @PostMapping("/{id}/question")

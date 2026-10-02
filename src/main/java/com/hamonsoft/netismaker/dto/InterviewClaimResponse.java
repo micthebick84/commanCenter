@@ -47,11 +47,21 @@ public record InterviewClaimResponse(
         /** 정식 Git URL 스냅샷. null이면 GitHub로 간주(구버전 세션). */
         String gitUrl,
         /** "github" | "gitlab". */
-        String repoHost
+        String repoHost,
+        /** 세션이 선택한 DB 접속정보 id (스펙 2026-10-02 §5.4). QUESTION만, INTERVIEW는 []. */
+        List<Long> dbConnectionIds,
+        /** 복호화된 접속정보 — InterviewWorkerController가 withDb로 채운다. ⚠️ 평문 비밀번호 포함, 로그 금지. */
+        List<DbConnectionRef> dbConnections,
+        /** 사용할 수 없는 연결 등 프롬프트에 붙일 안내 (비밀번호 없음). */
+        List<String> dbNotices
 ) {
     /** 어느 경로로 생성돼도 non-null 계약 유지 (스펙 §5.4). */
     public InterviewClaimResponse {
         attachments = attachments == null ? List.of() : List.copyOf(attachments);
+        dbConnectionIds = dbConnectionIds == null ? List.of() : ((List<?>) dbConnectionIds).stream()
+                .map(o -> ((Number) o).longValue()).toList();
+        dbConnections = dbConnections == null ? List.of() : List.copyOf(dbConnections);
+        dbNotices = dbNotices == null ? List.of() : List.copyOf(dbNotices);
     }
 
     public RepoRef repoRef() {
@@ -124,6 +134,14 @@ public record InterviewClaimResponse(
                 s.getMcpsExtra() == null ? List.of() : List.copyOf(s.getMcpsExtra()),
                 mapped, s.getModel(), s.getEffort(), totalCostUsd, attachments, s.getKind().name(),
                 attachmentRoot,
-                s.getGitUrl(), RepoRef.fromSnapshot(s.getGithubRepo(), s.getGitUrl()).host());
+                s.getGitUrl(), RepoRef.fromSnapshot(s.getGithubRepo(), s.getGitUrl()).host(),
+                s.isQuestion() ? s.getDbConnectionIds() : List.of(), List.of(), List.of());
+    }
+
+    /** DB 접속정보만 채운 사본 (스펙 §5.4). */
+    public InterviewClaimResponse withDb(List<DbConnectionRef> refs, List<String> notices) {
+        return new InterviewClaimResponse(sessionId, githubRepo, githubBranch, title, description, claudeSessionId,
+                currentPhase, workDir, lastAnswer, replyToSeq, mcpsExtra, turns, model, effort, totalCostUsd,
+                attachments, kind, attachmentRoot, gitUrl, repoHost, dbConnectionIds, refs, notices);
     }
 }

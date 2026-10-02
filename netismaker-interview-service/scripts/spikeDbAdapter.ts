@@ -16,7 +16,8 @@ const mask = (m: string) => (ref.password ? m.split(ref.password).join('****') :
 const s = await openSession(ref);
 const probes: Array<[string, string]> = ref.dbType === 'POSTGRESQL'
   ? [['SELECT 1 AS n', '1행'], ['SELECT generate_series(1, 500) AS n', '200행 + truncated'],
-     ['SHOW default_transaction_read_only', 'on'], ['CREATE TEMP TABLE spike_x(a int)', 'read-only 오류']]
+     ['SHOW default_transaction_read_only', 'on'], ['CREATE TEMP TABLE spike_x(a int)', 'read-only 오류'],
+     ['SELECT 1; SELECT 2', 'cannot insert multiple commands(extended 프로토콜이 다중 문장 거부)']]
   : ref.dbType === 'ORACLE'
     ? [['SELECT 1 AS n FROM dual', '1행'], ['SELECT level AS n FROM dual CONNECT BY level <= 500', '200행 + truncated'],
        ['CREATE TABLE spike_x(a int)', '오류(1선이 막는 대상 — 2선만으로는 DDL이 실행될 수 있음: 테스트 계정에서만)']]

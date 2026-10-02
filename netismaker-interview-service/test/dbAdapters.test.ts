@@ -1,7 +1,8 @@
 import { EventEmitter } from 'node:events';
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { loadDriver, openSession, withoutTrailingSemicolon, type DriverLoader } from '../src/sdk/db/adapters.js';
 import { catalogSql } from '../src/sdk/db/catalog.js';
+import type { SqlDialect } from '../src/sdk/sqlReadOnly.js';
 import type { DbConnectionRef } from '../src/types.js';
 
 const ref = (over: Partial<DbConnectionRef> = {}): DbConnectionRef => ({
@@ -14,15 +15,17 @@ type PgReply = { fields?: Array<{ name: string }>; rows?: unknown[][] } | Error;
 function fakePg(reply: (text: string) => PgReply = () => ({})) {
   const log: string[] = [];
   const configs: Array<Record<string, unknown>> = [];
+  const queries: Array<{ text: string; queryMode?: string }> = [];
   const loader = {
     pg: async () => ({
       Client: class {
         constructor(cfg: Record<string, unknown>) { configs.push(cfg); }
         on() { return this; }
         async connect() { log.push('CONNECT'); }
-        async query(q: { text: string }) {
+        async query(q: { text: string; queryMode?: string }) {
           await tick(); // 직렬화 테스트: 비동기 사이에 다른 run이 끼어들 틈을 만든다
           log.push(q.text);
+          queries.push(q);
           const r = reply(q.text);
           if (r instanceof Error) throw r;
           return r;
@@ -31,11 +34,25 @@ function fakePg(reply: (text: string) => PgReply = () => ({})) {
       },
     }),
   } as unknown as DriverLoader;
-  return { loader, log, configs };
+  return { loader, log, configs, queries };
 }
 
-type MyReply = { fields?: string[]; rows?: unknown[][]; error?: Error };
-function fakeMysql(reply: (sql: string) => MyReply = () => ({})) {
+/**
+ * mysql2 흉내. cb를 주면 콜백 형태(오류가 cb로), 안 주면 이벤트 형태(오류는 Query 'error').
+ * 실제 mysql2 3.x처럼 접속·연결 오류는 Query가 아니라 커넥션 'error'로만 간다 — silent(응답 없음)·connError·dropAfter로 흉내 낸다.
+ */
+type MyReply = {
+  fields?: string[];
+  rows?: unknown[][];
+  error?: Error;
+  /** 아무 응답도 하지 않는다(블랙홀) */
+  silent?: boolean;
+  /** Query에는 아무것도 안 보내고 커넥션이 'error'를 낸다 */
+  connError?: Error;
+  /** fields·rows를 보낸 뒤 'end' 대신 커넥션이 'error'를 낸다(쿼리 중 끊김) */
+  dropAfter?: Error;
+};
+function fakeMysql(reply: (sql: string) => MyReply = () => ({}), opts: { endHangs?: boolean } = {}) {
   const log: string[] = [];
   const configs: Array<Record<string, unknown>> = [];
   const loader = {
@@ -43,20 +60,25 @@ function fakeMysql(reply: (sql: string) => MyReply = () => ({})) {
       createConnection: (cfg: Record<string, unknown>) => {
         configs.push(cfg);
         const conn = new EventEmitter() as EventEmitter & Record<string, unknown>;
-        conn.query = (opts: { sql: string }) => {
+        conn.query = (o: { sql: string }, cb?: (err: Error | null) => void) => {
           const q = new EventEmitter();
-          log.push(opts.sql);
+          log.push(o.sql);
           setImmediate(() => {
-            const r = reply(opts.sql);
-            if (r.error) { q.emit('error', r.error); return; }
+            const r = reply(o.sql);
+            if (r.silent) return;
+            if (r.connError) { conn.emit('error', r.connError); return; }
+            if (r.error) { if (cb) cb(r.error); else q.emit('error', r.error); return; }
             if (r.fields) q.emit('fields', r.fields.map((name) => ({ name })));
             for (const row of r.rows ?? []) q.emit('result', row);
-            q.emit('end');
+            if (r.dropAfter) { conn.emit('error', r.dropAfter); return; }
+            if (cb) cb(null);
+            else q.emit('end');
           });
           return q;
         };
         conn.destroy = () => { log.push('DESTROY'); };
-        conn.end = (cb?: () => void) => { log.push('END'); cb?.(); };
+        conn.stream = { destroy: () => { log.push('STREAM_DESTROY'); } };
+        conn.end = (cb?: () => void) => { log.push('END'); if (!opts.endHangs) cb?.(); };
         return conn;
       },
     }),
@@ -87,22 +109,42 @@ function fakeOracle(rows: unknown[][]) {
   return { loader, log, configs, conn };
 }
 
-describe('withoutTrailingSemicolon', () => {
+describe('withoutTrailingSemicolon (토크나이저 기반)', () => {
   it('끝 ; 와 그 뒤 공백·주석을 지운다, ; 가 없으면 그대로', () => {
-    expect(withoutTrailingSemicolon('SELECT 1;')).toBe('SELECT 1');
-    expect(withoutTrailingSemicolon('SELECT 1; -- x')).toBe('SELECT 1');
-    expect(withoutTrailingSemicolon('SELECT 1 ;  /* c */ ')).toBe('SELECT 1');
-    expect(withoutTrailingSemicolon('SELECT 1;\n# m\n')).toBe('SELECT 1');
-    expect(withoutTrailingSemicolon('SELECT 1')).toBe('SELECT 1');
-    expect(withoutTrailingSemicolon('  SELECT 1  ')).toBe('SELECT 1');
+    expect(withoutTrailingSemicolon('SELECT 1;', 'postgres')).toBe('SELECT 1');
+    expect(withoutTrailingSemicolon('SELECT 1; -- x', 'postgres')).toBe('SELECT 1');
+    expect(withoutTrailingSemicolon('SELECT 1 ;  /* c */ ', 'oracle')).toBe('SELECT 1');
+    expect(withoutTrailingSemicolon('SELECT 1;\n# m\n', 'mysql')).toBe('SELECT 1');
+    expect(withoutTrailingSemicolon('SELECT 1', 'postgres')).toBe('SELECT 1');
+    expect(withoutTrailingSemicolon('  SELECT 1  ', 'mysql')).toBe('SELECT 1');
   });
 
-  it('문자열 리터럴 안의 "; -- -- …" 같은 입력에도 역추적 폭주가 없다', () => {
-    const evil = `SELECT '; ${'-- '.repeat(5000)}\n' AS x`;
-    const t = Date.now();
-    expect(withoutTrailingSemicolon(evil)).toBe(evil);
-    expect(withoutTrailingSemicolon(`SELECT 1;${' /**/'.repeat(5000)} x`)).toContain('SELECT 1;');
-    expect(Date.now() - t).toBeLessThan(1000);
+  it('문자열·주석 안의 ; 는 건드리지 않는다', () => {
+    expect(withoutTrailingSemicolon("SELECT 'a;-- b'", 'postgres')).toBe("SELECT 'a;-- b'");
+    expect(withoutTrailingSemicolon("SELECT * FROM t WHERE note LIKE '%;#%'", 'mysql')).toBe("SELECT * FROM t WHERE note LIKE '%;#%'");
+    expect(withoutTrailingSemicolon("SELECT 'x;' -- 끝;", 'postgres')).toBe("SELECT 'x;' -- 끝;");
+    expect(withoutTrailingSemicolon("SELECT 'x;'; -- c", 'oracle')).toBe("SELECT 'x;'");
+  });
+
+  it('; 뒤에 코드가 있거나(체커가 거부할 모양) 방언상 주석이 아니면 원문 그대로', () => {
+    expect(withoutTrailingSemicolon('SELECT 1; SELECT 2', 'postgres')).toBe('SELECT 1; SELECT 2');
+    expect(withoutTrailingSemicolon('SELECT 1;--x', 'mysql')).toBe('SELECT 1;--x'); // MySQL은 -- 뒤에 공백이 있어야 주석
+    expect(withoutTrailingSemicolon('SELECT 1; /* 닫히지 않음', 'postgres')).toBe('SELECT 1; /* 닫히지 않음');
+  });
+
+  it('병적 입력(99k자)도 선형 시간에 끝난다', () => {
+    const inputs: Array<[string, SqlDialect]> = [
+      [`SELECT '${';/*'.repeat(33000)}' AS a`, 'postgres'],
+      [`SELECT '${';--'.repeat(33000)}\nx' AS a`, 'mysql'],
+      [`SELECT 1${';/*'.repeat(33000)}`, 'oracle'],
+      [`SELECT 1;${' /**/'.repeat(20000)} x`, 'postgres'],
+      ['$$;$$'.repeat(19000), 'postgres'],
+    ];
+    for (const [sql, dialect] of inputs) {
+      const t = Date.now();
+      withoutTrailingSemicolon(sql, dialect);
+      expect(Date.now() - t).toBeLessThan(100);
+    }
   });
 });
 
@@ -130,6 +172,21 @@ describe('PostgreSQL 세션 (스펙 2026-10-02 §6.2)', () => {
     await s.run('SELECT 1 WHERE $1::text IS NULL', [null]);
     expect(pg.log.filter((l) => l.startsWith('DECLARE'))).toEqual([]);
     expect(pg.log).toContain('SHOW search_path');
+  });
+
+  it('사용자 SQL은 extended 프로토콜(queryMode)로, 제어 문장은 simple로 보낸다 — 다중 문장 방어', async () => {
+    const pg = fakePg();
+    const s = await openSession(ref(), pg.loader);
+    await s.run('SELECT 1');
+    await s.run('SHOW search_path');
+    const mode = (prefix: string) => pg.queries.find((q) => q.text.startsWith(prefix))?.queryMode;
+    expect(mode('DECLARE')).toBe('extended');
+    expect(mode('SHOW search_path')).toBe('extended');
+    expect(mode('BEGIN')).toBeUndefined();
+    expect(mode('SET LOCAL')).toBeUndefined();
+    expect(mode('FETCH')).toBeUndefined();
+    expect(mode('ROLLBACK')).toBeUndefined();
+    expect(pg.configs[0]).toMatchObject({ query_timeout: 35000 });
   });
 
   it('SQL 오류에도 ROLLBACK', async () => {
@@ -162,6 +219,7 @@ describe('MySQL·MariaDB 세션', () => {
       'SET SESSION TRANSACTION READ ONLY',
       'SET SESSION max_execution_time = 30000',
       'SET SESSION max_statement_time = 30',
+      'SET SESSION sql_select_limit = 201',
       'START TRANSACTION READ ONLY',
       'SELECT 1',
       'ROLLBACK',
@@ -189,7 +247,9 @@ describe('MySQL·MariaDB 세션', () => {
     const s = await openSession(my(), m.loader);
     const r = await s.run('SELECT n FROM t', [], 2);
     expect(r).toEqual({ columns: ['n'], rows: [[1], [2]], truncated: true });
-    expect(m.log.slice(-2)).toEqual(['SELECT n FROM t', 'DESTROY']);
+    expect(m.log).toContain('SET SESSION sql_select_limit = 3');
+    // destroy()는 쓰기 쪽만 닫으므로 소켓(stream)도 파괴해 읽기를 멈춘다
+    expect(m.log.slice(-3)).toEqual(['SELECT n FROM t', 'DESTROY', 'STREAM_DESTROY']);
     await s.run('SELECT n FROM t', [], 10);
     expect(m.configs).toHaveLength(2);
   });
@@ -199,6 +259,81 @@ describe('MySQL·MariaDB 세션', () => {
     const s = await openSession(my(), m.loader);
     await expect(s.run('SELECT bad')).rejects.toThrow('syntax');
     expect(m.log.at(-1)).toBe('ROLLBACK');
+  });
+});
+
+describe('MySQL·MariaDB 세션 — 연결 오류·멈춤 (mysql2는 콜백 없는 명령의 오류를 커넥션 error로만 알린다)', () => {
+  const my = () => ref({ dbType: 'MYSQL', port: 3306 });
+  afterEach(() => { vi.useRealTimers(); });
+
+  it('제어 문장 중 커넥션 오류(접속 거부·비밀번호 오류 등)면 run이 reject되고 다음 run은 다시 접속한다', async () => {
+    let fail = true;
+    const m = fakeMysql((sql) => (fail && sql === 'SET SESSION TRANSACTION READ ONLY' ? { connError: new Error('connect ECONNREFUSED') } : {}));
+    const s = await openSession(my(), m.loader);
+    await expect(s.run('SELECT 1')).rejects.toThrow('ECONNREFUSED');
+    expect(m.log).not.toContain('START TRANSACTION READ ONLY');
+    fail = false;
+    await expect(s.run('SELECT 1')).resolves.toMatchObject({ truncated: false });
+    expect(m.configs).toHaveLength(2);
+  });
+
+  it('START TRANSACTION 중 커넥션 오류여도 reject, 이후 close()는 즉시 끝난다', async () => {
+    const m = fakeMysql((sql) => (sql === 'START TRANSACTION READ ONLY' ? { connError: new Error('Connection lost') } : {}));
+    const s = await openSession(my(), m.loader);
+    await expect(s.run('SELECT 1')).rejects.toThrow('Connection lost');
+    await expect(s.close()).resolves.toBeUndefined();
+    expect(m.log).not.toContain('END'); // 이미 죽은 커넥션은 end 대신 파괴
+  });
+
+  it('행을 받는 도중 연결이 끊기면 run이 reject된다', async () => {
+    const m = fakeMysql((sql) => (sql === 'SELECT n FROM t' ? { fields: ['n'], rows: [[1], [2]], dropAfter: new Error('server has gone away') } : {}));
+    const s = await openSession(my(), m.loader);
+    await expect(s.run('SELECT n FROM t')).rejects.toThrow('server has gone away');
+    expect(m.log).not.toContain('ROLLBACK'); // 죽은 커넥션에 ROLLBACK을 보내지 않는다
+    await expect(s.close()).resolves.toBeUndefined();
+  });
+
+  it('응답이 영영 없으면 하드 상한(접속+문장+여유) 뒤 소켓을 파괴하고 고정 문구로 reject', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    const m = fakeMysql((sql) => (sql === 'SELECT 1' ? { silent: true } : {}));
+    const s = await openSession(my(), m.loader);
+    const p = s.run('SELECT 1');
+    const settled = p.then(() => 'ok', (e: Error) => e.message);
+    await vi.advanceTimersByTimeAsync(44_000);
+    expect(m.log).not.toContain('DESTROY');
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(await settled).toBe('DB 응답이 제한 시간 안에 오지 않아 연결을 닫았습니다');
+    expect(m.log.slice(-2)).toEqual(['DESTROY', 'STREAM_DESTROY']);
+    await expect(s.close()).resolves.toBeUndefined();
+  });
+
+  it('end()가 끝나지 않아도 close()는 짧은 시간 뒤 소켓을 파괴하고 끝난다', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    const m = fakeMysql(() => ({}), { endHangs: true });
+    const s = await openSession(my(), m.loader);
+    await s.run('SELECT 1');
+    const closed = s.close();
+    let done = false;
+    void closed.then(() => { done = true; });
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(done).toBe(false);
+    await vi.advanceTimersByTimeAsync(2_000);
+    await closed;
+    expect(m.log.slice(-3)).toEqual(['END', 'DESTROY', 'STREAM_DESTROY']);
+  });
+
+  it('멈춘 run이 있어도 close()는 기다리다 포기하고 닫는다', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    const m = fakeMysql((sql) => (sql === 'SELECT 1' ? { silent: true } : {}), { endHangs: true });
+    const s = await openSession(my(), m.loader);
+    const run = s.run('SELECT 1').catch(() => undefined);
+    await vi.advanceTimersByTimeAsync(10);
+    const closed = s.close();
+    await vi.advanceTimersByTimeAsync(10_000);
+    await closed;
+    await vi.advanceTimersByTimeAsync(60_000);
+    await run;
+    expect(m.log).toContain('STREAM_DESTROY');
   });
 });
 

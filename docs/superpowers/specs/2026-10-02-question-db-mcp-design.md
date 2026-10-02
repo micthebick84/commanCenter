@@ -162,9 +162,10 @@ ALTER TABLE com.interview_session
 
 - **PostgreSQL** (`pg.Client`): 접속 옵션 `connectionTimeoutMillis`, `application_name: 'netismaker-question'`, `options: '-c default_transaction_read_only=on'`.
   `BEGIN TRANSACTION READ ONLY` → `SET LOCAL statement_timeout = 30000` →
-  첫 키워드가 `SELECT|WITH|VALUES|TABLE`이면 `DECLARE netis_q NO SCROLL CURSOR FOR <sql>` + `FETCH FORWARD <maxRows+1> FROM netis_q`(행 수 상한을 DB 쪽에서 — 큰 테이블 `SELECT *`가 메모리로 다 오지 않는다), `SHOW|EXPLAIN`과 바인딩 파라미터가 있는 조회(카탈로그 — 자체 LIMIT, DECLARE는 파라미터를 못 받는다)는 그대로 실행 → `ROLLBACK`. `rowMode: 'array'`, 유휴 중 끊김 대비 `error` 리스너.
+  첫 키워드가 `SELECT|WITH|VALUES|TABLE`이면 `DECLARE netis_q NO SCROLL CURSOR FOR <sql>` + `FETCH FORWARD <maxRows+1> FROM netis_q`(행 수 상한을 DB 쪽에서 — 큰 테이블 `SELECT *`가 메모리로 다 오지 않는다), `SHOW|EXPLAIN`과 바인딩 파라미터가 있는 조회(카탈로그 — 자체 LIMIT, DECLARE는 파라미터를 못 받는다)는 그대로 실행 → `ROLLBACK`. `rowMode: 'array'`, 유휴 중 끊김 대비 `error` 리스너, 클라이언트 측 `query_timeout`. **사용자 SQL(DECLARE 포함)은 `queryMode: 'extended'`로 보낸다** — simple 프로토콜은 ';'로 이어진 여러 문장을 실행해(1선이 놓치면 `COMMIT; SET …; DELETE …`로 READ ONLY 트랜잭션을 벗어난다) extended 프로토콜이 서버에서 "cannot insert multiple commands into a prepared statement"로 거부하게 한다(로컬 PG 실측 확인).
 - **MySQL·MariaDB** (`mysql2` 콜백 API): 접속 옵션 `connectTimeout`, `multipleStatements: false`, `supportBigNumbers: true`, `bigNumberStrings: true`, `dateStrings: true`, `flags: ['-LOCAL_FILES']`. 접속 직후 `SET SESSION TRANSACTION READ ONLY`, 서버 측 타임아웃 `SET SESSION max_execution_time = 30000`(MySQL)·`SET SESSION max_statement_time = 30`(MariaDB) — 둘 다 시도하고 모르는 변수 오류는 무시.
-  `START TRANSACTION READ ONLY` → `query({ sql, rowsAsArray: true, timeout: 30000 })`의 `result` 이벤트로 받다가 `maxRows+1`행이 차면 **커넥션을 destroy**(남은 행 전송 중단)하고 다음 `run`에서 다시 접속 → 정상 종료면 `ROLLBACK`.
+  `START TRANSACTION READ ONLY` → (best effort) `SET SESSION sql_select_limit = maxRows+1` → `query({ sql, rowsAsArray: true, timeout: 30000 })`의 `result` 이벤트로 받다가 `maxRows+1`행이 차면 **소켓을 파괴**(`conn.destroy()`는 쓰기 쪽만 닫아 서버가 보내는 결과를 계속 받으므로 `connection.stream.destroy()`를 직접 호출 — mysql2 3.24.5 `base/connection.js`: `destroy()` → `close()` → `stream.end()`)하고 다음 `run`에서 다시 접속 → 정상 종료면 `ROLLBACK`.
+  **연결 오류**: mysql2 3.x는 콜백 없는 명령(스트리밍 `query`·핸드셰이크)의 오류를 Query가 아니라 커넥션 `'error'`로만 알린다 → 어댑터는 커넥션 `'error'`/`'end'`를 받아 대기 중인 작업을 모두 reject하고 커넥션을 버린다(제어 문장은 콜백 형태). 접속 실패·끊김 때 `run`·`close`가 영원히 끝나지 않는 일이 없도록 `run` 한 번을 접속+문장+여유 시간(45초)으로 하드 제한(초과 시 소켓 파괴 + 고정 문구)하고, `close()`는 정상 종료를 3초만 기다린 뒤 소켓을 파괴한다.
 - **Oracle** (`oracledb` thin — `initOracleClient`를 부르지 않는다): `getConnection({ user, password, connectString: 'host:port/service', connectTimeout })`, `callTimeout = 30000`.
   `ROLLBACK`(이전 트랜잭션 정리) → `SET TRANSACTION READ ONLY` → `execute(sql, params, { outFormat: OUT_FORMAT_ARRAY, maxRows: maxRows+1, fetchTypeHandler })`(NUMBER·CLOB·DATE를 문자열로) → `ROLLBACK`.
 
@@ -300,7 +301,7 @@ ALTER TABLE com.interview_session
 4. Oracle thin 모드 접속(대상 서버 12.1 이상), `SET TRANSACTION READ ONLY` — 라이브 스모크.
    → 라이브 스모크(Task 16)에서 확인.
 5. `mysql2` 스트림 중간 destroy 뒤 다음 호출 재접속 — 단위 테스트 + 라이브.
-   → 2026-10-02 확인(Task 11): 가짜 `mysql2` 단위 테스트로 상한 초과 시 destroy → 다음 `run` 재접속까지 확인. 실제 MariaDB·MySQL에서의 스트림 중간 destroy는 라이브 스모크(Task 16)에서 확인.
+   → 2026-10-02 확인(Task 11, 단위·실 드라이버 일부): 가짜 `mysql2`(커넥션 `'error'`는 내고 Query는 침묵하는 mysql2 3.x 동작 포함)로 상한 초과 시 `destroy()` + `stream.destroy()` 호출 → 다음 `run` 재접속, 접속 거부·쿼리 중 끊김·응답 없음에서 `run` reject·`close()` 종료를 확인. 실 `mysql2`로는 닫힌 포트(127.0.0.1:1 → 6ms에 `ECONNREFUSED`)와 블랙홀 주소(10.255.255.1 → 10초에 `ETIMEDOUT`) 접속 실패에서 `run` reject·`close()` 즉시 종료를 확인. **실제 MariaDB·MySQL에서 스트림 중간 소켓 파괴로 전송이 멈추는지와 `sql_select_limit` 효과는 미확인 — 라이브 스모크(Task 16)에서 확인**(틀린 비밀번호 케이스 포함).
 
 ## 12. 범위 밖
 

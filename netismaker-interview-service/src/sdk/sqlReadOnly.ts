@@ -44,8 +44,23 @@ function isIdentChar(ch: string | undefined): boolean {
  * Returns error if dangerous or ambiguous forms are detected.
  */
 export function stripSql(sql: string, dialect: SqlDialect): string | { error: string } {
+  const r = scanSql(sql, dialect);
+  return 'error' in r ? r : r.out;
+}
+
+/**
+ * Index of the last semicolon outside strings/comments/quoted identifiers (same scanning rules as stripSql),
+ * or -1 if there is none or the text is rejected by the scanner. Linear time.
+ */
+export function lastTopLevelSemicolon(sql: string, dialect: SqlDialect): number {
+  const r = scanSql(sql, dialect);
+  return 'error' in r ? -1 : r.lastSemicolon;
+}
+
+function scanSql(sql: string, dialect: SqlDialect): { out: string; lastSemicolon: number } | { error: string } {
   const backtick = String.fromCharCode(96);
   let out = '';
+  let lastSemicolon = -1;
   let i = 0;
   const n = sql.length;
   while (i < n) {
@@ -122,10 +137,11 @@ export function stripSql(sql: string, dialect: SqlDialect): string | { error: st
         continue;
       }
     }
+    if (ch === ';') lastSemicolon = i;
     out += ch;
     i++;
   }
-  return out;
+  return { out, lastSemicolon };
 }
 
 /**

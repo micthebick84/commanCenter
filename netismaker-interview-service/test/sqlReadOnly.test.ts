@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { checkReadOnlySql, type SqlDialect } from '../src/sdk/sqlReadOnly.js';
+import { checkReadOnlySql, lastTopLevelSemicolon, type SqlDialect } from '../src/sdk/sqlReadOnly.js';
 
 const ok = (sql: string, d: SqlDialect) => expect(checkReadOnlySql(sql, d), `${d}: ${sql}`).toEqual({ ok: true });
 const no = (sql: string, d: SqlDialect) => expect(checkReadOnlySql(sql, d).ok, `${d}: ${sql}`).toBe(false);
@@ -135,5 +135,21 @@ describe('checkReadOnlySql — 거부', () => {
     no('SELECT pg_sleep_for(interval 1)', 'postgres');
     no('SELECT pg_sleep_until(now())', 'postgres');
     no('SELECT pg_logical_something()', 'postgres');
+  });
+});
+
+describe('lastTopLevelSemicolon', () => {
+  it('문자열·주석·인용 식별자 밖의 마지막 ; 위치, 없으면 -1', () => {
+    expect(lastTopLevelSemicolon('SELECT 1;', 'postgres')).toBe(8);
+    expect(lastTopLevelSemicolon("SELECT 'a;b'", 'postgres')).toBe(-1);
+    expect(lastTopLevelSemicolon('SELECT 1 /* ; */ -- ;', 'oracle')).toBe(-1);
+    expect(lastTopLevelSemicolon('SELECT 1; SELECT 2;', 'mysql')).toBe(18);
+    expect(lastTopLevelSemicolon('SELECT $$;$$', 'postgres')).toBe(-1);
+    expect(lastTopLevelSemicolon('SELECT 1 -- ;\n;', 'postgres')).toBe(14);
+  });
+
+  it('스캐너가 거부하는 모양(닫히지 않은 주석·문자열)은 -1', () => {
+    expect(lastTopLevelSemicolon('SELECT 1; /* x', 'postgres')).toBe(-1);
+    expect(lastTopLevelSemicolon("SELECT 'x; ", 'postgres')).toBe(-1);
   });
 });

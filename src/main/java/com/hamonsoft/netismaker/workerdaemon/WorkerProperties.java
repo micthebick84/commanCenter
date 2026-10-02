@@ -48,6 +48,7 @@ public record WorkerProperties(
     /**
      * 레포 캐시 자동 정리. unused-days 동안 쓰이지 않은 repos-dir 아래 캐시를 지운다
      * (살아 있는 worktree가 붙은 캐시·사용 중인 캐시는 제외 — RepoCacheCleanupJob 참고).
+     * worktree 자체의 수명은 WorktreeCleanup 참고.
      * cron은 RepoCacheCleanupJob이 이 값 그대로 스케줄을 등록한다(빈 값 → 기본값, '-' → 등록 안 함).
      */
     public record RepoCacheCleanup(Boolean enabled, String cron, int unusedDays) {

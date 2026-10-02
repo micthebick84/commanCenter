@@ -252,11 +252,11 @@ public class AttachmentStorage {
 
     /**
      * 루트 바로 아래 스캔 결과. dirs = 정규형 이름(task-{id}/question-{id})의 실제 디렉터리,
-     * skipped = 그 밖의 항목 수(패턴 불일치·심볼릭 링크·일반 파일).
+     * skipped = 그 밖의 항목 수(패턴 불일치·심볼릭 링크·정션·일반 파일).
      */
     public record OwnerDirScan(List<AttachmentCleanupPlanner.OwnerDir> dirs, int skipped) {}
 
-    /** 루트가 없으면(첨부가 한 번도 없었음) 빈 결과. 링크는 따라가지 않는다 — 이름이 맞아도 링크면 skipped. */
+    /** 루트가 없으면(첨부가 한 번도 없었음) 빈 결과. 링크·정션은 따라가지 않는다 — 이름이 맞아도 링크·정션이면 skipped. */
     public OwnerDirScan scanOwnerDirectories() throws IOException {
         if (!Files.isDirectory(root)) return new OwnerDirScan(List.of(), 0);
         List<AttachmentCleanupPlanner.OwnerDir> dirs = new ArrayList<>();
@@ -278,9 +278,9 @@ public class AttachmentStorage {
                 if (dir.isEmpty()) {
                     skipped++;
                     log.debug("첨부 정리: 대상 패턴 아님 — 건너뜀: {}", name);
-                } else if (attrs.isSymbolicLink() || !attrs.isDirectory()) {
+                } else if (!isPlainDirectory(attrs)) {
                     skipped++;
-                    log.warn("첨부 정리: 디렉터리가 아님(심볼릭 링크 등) — 건너뜀: {}", child);
+                    log.warn("첨부 정리: 디렉터리가 아님(심볼릭 링크·정션 등) — 건너뜀: {}", child);
                 } else {
                     dirs.add(dir.get());
                 }
@@ -291,8 +291,10 @@ public class AttachmentStorage {
 
     /**
      * 소유 디렉터리를 통째로 지우고 해제한 바이트(일반 파일 합계)를 돌려준다.
-     * 방어: 정규형 이름 재확인 + 루트 직속 containment + 삭제 직전 링크/디렉터리 재검사.
-     * walkFileTree는 FOLLOW_LINKS 없이 돌므로 하위의 심볼릭 링크는 링크 자체만 지워지고 대상은 건드리지 않는다.
+     * 방어: 정규형 이름 재확인 + 루트 직속 containment + 삭제 직전 링크/정션/디렉터리 재검사.
+     * walkFileTree는 FOLLOW_LINKS 없이 돌므로 하위의 심볼릭 링크는 visitFile로 와서 링크 자체만 지워진다.
+     * 하위의 Windows 정션(mklink /J)은 NOFOLLOW_LINKS로도 isDirectory라 그대로 두면 안으로 내려가 대상(루트 밖)을
+     * 지우므로, preVisitDirectory에서 isOther면 링크만 지우고 SKIP_SUBTREE 한다(RepoCacheCleanupJob.deleteTree와 같은 규칙).
      * Windows 읽기 전용 속성이 붙은 항목은 FileDeletion이 속성을 풀고 지운다(RepoCacheCleanupJob과 같은 규칙).
      */
     public long deleteOwnerDirectory(AttachmentCleanupPlanner.OwnerDir dir) throws IOException {
@@ -304,11 +306,21 @@ public class AttachmentStorage {
             throw new IllegalArgumentException("첨부 루트 직속 경로가 아닙니다: " + target);
         }
         BasicFileAttributes attrs = Files.readAttributes(target, BasicFileAttributes.class, LinkOption.NOFOLLOW_LINKS);
-        if (attrs.isSymbolicLink() || !attrs.isDirectory()) {
-            throw new IOException("디렉터리가 아님(심볼릭 링크 등) — 삭제 거부: " + target);
+        if (!isPlainDirectory(attrs)) {
+            throw new IOException("디렉터리가 아님(심볼릭 링크·정션 등) — 삭제 거부: " + target);
         }
         long[] freed = {0};
         Files.walkFileTree(target, new SimpleFileVisitor<>() {
+            @Override
+            public FileVisitResult preVisitDirectory(Path d, BasicFileAttributes a) throws IOException {
+                if (a.isOther()) {
+                    // Windows 정션 등 리파스 포인트 — 대상 쪽으로 내려가지 않고 링크 자체만 지운다
+                    FileDeletion.deleteClearingReadOnly(d);
+                    return FileVisitResult.SKIP_SUBTREE;
+                }
+                return FileVisitResult.CONTINUE;
+            }
+
             @Override
             public FileVisitResult visitFile(Path file, BasicFileAttributes a) throws IOException {
                 if (a.isRegularFile()) freed[0] += a.size();
@@ -324,5 +336,13 @@ public class AttachmentStorage {
             }
         });
         return freed[0];
+    }
+
+    /**
+     * NOFOLLOW_LINKS로 읽은 속성이 링크가 아닌 실제 디렉터리인지. Windows 정션은 isSymbolicLink=false·isDirectory=true라
+     * isOther(리파스 포인트)까지 봐야 걸러진다.
+     */
+    private static boolean isPlainDirectory(BasicFileAttributes attrs) {
+        return attrs.isDirectory() && !attrs.isSymbolicLink() && !attrs.isOther();
     }
 }

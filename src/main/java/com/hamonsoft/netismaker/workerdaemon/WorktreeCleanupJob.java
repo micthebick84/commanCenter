@@ -144,8 +144,7 @@ public class WorktreeCleanupJob implements SchedulingConfigurer {
         Path configured = Paths.get(dir).toAbsolutePath().normalize();
         if (!Files.isDirectory(configured)) return null;
         Path root = configured.toRealPath();
-        Path home = Paths.get(System.getProperty("user.home")).toRealPath();
-        if (root.getParent() == null || root.equals(home)) {
+        if (root.getParent() == null || root.equals(RepoCacheCleanupJob.realHome())) {
             throw new IllegalStateException("worktree-root가 홈·파일시스템 루트라 정리를 거부한다: " + root);
         }
         return root;
@@ -154,10 +153,10 @@ public class WorktreeCleanupJob implements SchedulingConfigurer {
     private Result cleanUnder(Path root, Set<Long> active) throws IOException, InterruptedException {
         Map<Path, Outcome> outcomes = new LinkedHashMap<>();
         Instant now = Instant.now();
-        for (Path a : plainDirs(root)) {
-            for (Path b : plainDirs(a)) {
+        for (Path a : plainDirs(root, true)) {
+            for (Path b : plainDirs(a, false)) {
                 String localKey = a.getFileName() + "/" + b.getFileName();
-                for (Path wt : plainDirs(b)) {
+                for (Path wt : plainDirs(b, false)) {
                     Optional<WorktreeKind.Parsed> parsed = WorktreeKind.parse(wt.getFileName().toString());
                     if (parsed.isEmpty()) continue;
                     outcomes.put(wt, cleanOne(wt, localKey, parsed.get(), active, now));
@@ -201,12 +200,15 @@ public class WorktreeCleanupJob implements SchedulingConfigurer {
         };
     }
 
-    /** dir 바로 아래 '진짜' 디렉터리만(링크·정션·파일·'.'으로 시작하는 잡 내부 항목 제외). */
-    private static List<Path> plainDirs(Path dir) throws IOException {
+    /**
+     * dir 바로 아래 '진짜' 디렉터리만(링크·정션·파일 제외). skipDotNames는 worktree-root 직하에서만 켠다 —
+     * 거기엔 잡 내부 항목(.worktree-cleanup.lock 등)이 있고, 그 아래 레포 이름은 '.github'처럼 점으로 시작할 수 있다.
+     */
+    private static List<Path> plainDirs(Path dir, boolean skipDotNames) throws IOException {
         List<Path> out = new ArrayList<>();
         try (DirectoryStream<Path> ds = Files.newDirectoryStream(dir)) {
             for (Path p : ds) {
-                if (p.getFileName().toString().startsWith(".")) continue;
+                if (skipDotNames && p.getFileName().toString().startsWith(".")) continue;
                 BasicFileAttributes attrs;
                 try {
                     attrs = Files.readAttributes(p, BasicFileAttributes.class, LinkOption.NOFOLLOW_LINKS);

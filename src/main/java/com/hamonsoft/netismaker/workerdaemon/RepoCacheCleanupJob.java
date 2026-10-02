@@ -176,7 +176,7 @@ public class RepoCacheCleanupJob implements SchedulingConfigurer {
     }
 
     /** 홈 디렉터리 실제 경로. 못 구하면 null(비교 생략). */
-    private static Path realHome() {
+    static Path realHome() {
         try {
             return Paths.get(System.getProperty("user.home")).toRealPath();
         } catch (IOException | RuntimeException e) {

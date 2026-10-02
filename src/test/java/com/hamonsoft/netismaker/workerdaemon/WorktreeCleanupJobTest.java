@@ -184,14 +184,42 @@ class WorktreeCleanupJobTest {
     }
 
     @Test
-    void ignores_unrecognized_names_and_symlinks() throws Exception {
+    void ignores_unrecognized_names() throws Exception {
         Path odd = Files.createDirectories(worktreeRoot.resolve("acme/widgets/task-01"));
         Path notes = Files.createDirectories(worktreeRoot.resolve("acme/widgets/notes"));
         age(odd, 30);
         age(notes, 30);
+
+        WorktreeCleanupJob.Result r = job.runOnce();
+
+        assertThat(r.outcomes()).doesNotContainKeys(odd, notes);
+        assertThat(odd).exists();
+        assertThat(notes).exists();
+    }
+
+    @Test
+    void cleans_repos_whose_name_starts_with_a_dot_but_not_dot_entries_at_the_root() throws Exception {
+        // owner/.github 같은 점으로 시작하는 레포 이름도 정리 대상 — localKey는 레포 경로 그대로다
+        Path dotRepo = Files.createDirectories(worktreeRoot.resolve("acme/.github/task-5"));
+        Files.writeString(dotRepo.resolve("left.txt"), "x");
+        age(dotRepo, 30);
+        // worktree-root 직하의 점 항목은 잡 내부용(락 파일 등)이라 후보에서 뺀다
+        Path rootDot = Files.createDirectories(worktreeRoot.resolve(".internal/repo/task-6"));
+        age(rootDot, 30);
+
+        WorktreeCleanupJob.Result r = job.runOnce();
+
+        assertThat(r.outcomes()).containsEntry(dotRepo, Outcome.REMOVED).doesNotContainKey(rootDot);
+        assertThat(dotRepo).doesNotExist();
+        assertThat(rootDot).exists();
+    }
+
+    @Test
+    void ignores_symlinks() throws Exception {
         Path outside = Files.createDirectories(tmp.resolve("outside/keep"));
         Files.writeString(outside.resolve("precious.txt"), "x");
         Path link = worktreeRoot.resolve("acme/widgets/task-77");
+        Files.createDirectories(link.getParent());
         try {
             Files.createSymbolicLink(link, outside);
         } catch (Exception e) {
@@ -200,9 +228,7 @@ class WorktreeCleanupJobTest {
 
         WorktreeCleanupJob.Result r = job.runOnce();
 
-        assertThat(r.outcomes()).doesNotContainKeys(odd, notes, link);
-        assertThat(odd).exists();
-        assertThat(notes).exists();
+        assertThat(r.outcomes()).doesNotContainKey(link);
         assertThat(outside.resolve("precious.txt")).exists();
     }
 

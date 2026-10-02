@@ -78,6 +78,19 @@ public record InterviewClaimResponse(
         }
     }
 
+    /**
+     * 복호화된 DB 접속정보 (스펙 2026-10-02 §5.4) — 질문 세션 claim에서만, 내부 워커 API로만 나간다.
+     * ⚠️ password 평문 포함: 이 레코드(와 이를 담은 claim 응답)를 로그·예외 메시지에 넣지 말 것. toString은 가린다.
+     */
+    public record DbConnectionRef(String serverName, String label, String dbType, String host, int port,
+                                  String database, String username, String password) {
+        @Override
+        public String toString() {
+            return "DbConnectionRef[" + serverName + " " + dbType + " " + host + ":" + port + "/" + database
+                    + " user=" + username + " password=****]";
+        }
+    }
+
     /** 레거시 3-arg — 턴별 첨부 없음, attachmentRoot null (INTERVIEW 경로와 동일 형태). */
     public static InterviewClaimResponse of(InterviewSession s, List<InterviewTurn> turns,
                                             List<AttachmentRef> attachments) {

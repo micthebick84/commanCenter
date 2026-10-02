@@ -1,12 +1,12 @@
-# 질문 세션 DB 접속정보 → stdio MCP 자동 연동 구현 계획
+# 질문 세션 DB 접속정보 → 내장 DB MCP 자동 연동 구현 계획
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** 질문 세션에서 레포에 묶인 DB 접속정보(PostgreSQL·MySQL·MariaDB·Oracle)를 고르면, 에이전트가 MCP Toolbox를 stdio로 붙여 그 DB를 읽기 전용으로 조회한다.
+**Goal:** 질문 세션에서 레포에 묶인 DB 접속정보(PostgreSQL·MySQL·MariaDB·Oracle)를 고르면, 에이전트가 인터뷰 서비스에 내장된 DB MCP 서버로 그 DB를 읽기 전용으로 조회한다.
 
-**Architecture:** 접속정보는 `com.db_connection`에 AES-GCM 암호문으로 저장하고(레포 공용 REPO + 개인 USER), 세션에는 id만 둔다. claim 때 API가 복호화한 접속정보를 내부 API로 인터뷰 서비스에 넘기고, 러너가 턴마다 임시 env 파일을 쓴 뒤 `mcpServers`에 런처(`node dbMcpLauncher.mjs <파일>`)만 넣는다 — 명령줄·`mcps_extra`·로그에 비밀번호가 남지 않는다. 런처가 Toolbox(`--prebuilt <db> --stdio`)를 실행하고, 질문 게이트(`canUseTool`)가 `execute_sql`의 SQL을 방언별로 검사해 단일 조회문만 통과시킨다.
+**Architecture:** 접속정보는 `com.db_connection`에 AES-GCM 암호문으로 저장하고(레포 공용 REPO + 개인 USER), 세션에는 id만 둔다. claim 때 API가 복호화한 접속정보를 내부 API로 인터뷰 서비스에 넘기고, 러너가 턴마다 연결별 SDK MCP 서버(`createSdkMcpServer`, 이름 `db-<id>`, 도구 `query`·`list_tables`·`describe_table`)를 같은 프로세스 안에 만든다 — CLI에는 `{type:"sdk", name}`만 가므로 명령줄·파일·자식 env·`mcps_extra`·로그에 비밀번호가 남지 않는다. 읽기 전용은 3중: 질문 게이트(`canUseTool`)와 도구 핸들러가 SQL을 방언별로 검사하고, 드라이버(`pg`·`mysql2`·`oracledb` thin)가 READ ONLY 트랜잭션 안에서 실행한 뒤 항상 ROLLBACK하며, 30초·200행·셀 2000자 상한을 건다.
 
-**Tech Stack:** Spring Boot 3(JPA·Flyway·spring-security-crypto `Encryptors.delux`), JDBC 드라이버 4종, Node 20 + `@anthropic-ai/claude-agent-sdk` 0.2.117 + vitest, Nuxt 3 + Quasar + vitest, Google MCP Toolbox for Databases v1.13.1.
+**Tech Stack:** Spring Boot 3(JPA·Flyway·spring-security-crypto `Encryptors.delux`), JDBC 드라이버 4종, Node 20 + `@anthropic-ai/claude-agent-sdk` 0.2.117(`createSdkMcpServer`·`tool`) + `zod` 4 + `pg`·`mysql2`·`oracledb` + vitest, Nuxt 3 + Quasar + vitest.
 
 **Spec:** `docs/superpowers/specs/2026-10-02-question-db-mcp-design.md`
 
@@ -17,13 +17,14 @@
 - Docker 없음 → `RUN_TESTCONTAINERS=true` 통합 테스트는 이 PC에서 skip(CI에서 돈다). 단위 테스트를 1차 검증으로 삼는다.
 - 인터뷰 서비스 vitest는 이 PC에서 **기존 5건이 원래 실패**(claudeCli 경로 구분자 1, QUESTION 게이트 2, attachmentRoot Read 게이트 2). 그 5건 외 실패만 회귀로 본다.
 - CRLF: `core.autocrlf=true`. Git Bash `sed -i` 뒤에는 `file <경로>`로 줄끝을 확인하고 필요하면 `sed -i 's/\r$//; s/$/\r/'`로 되돌린다(Edit/Write 도구는 그대로 써도 된다).
-- Toolbox 버전 **v1.13.1 고정**. Agent SDK **0.2.117 유지**.
+- Agent SDK **0.2.117 유지**. 인터뷰 서비스 새 의존성은 `pg`·`mysql2`·`oracledb`·`zod`(^4, SDK peer)뿐 — 외부 바이너리 없음. 드라이버는 **변수 모듈명 동적 import**(`const load = (m: string) => import(m)`)로 불러 타입 패키지 없이 컴파일되고, 설치가 빠져도 그 도구 호출만 실패한다.
 - DB 종류 enum 값은 정확히 `POSTGRESQL` | `MYSQL` | `MARIADB` | `ORACLE`. 기본 포트 5432/3306/3306/1521.
 - MCP 서버 이름은 `db-<접속정보 id>`. MCP 카탈로그 이름에서 `db-` 접두사는 예약(거부).
 - 세션당 DB 연결 선택 상한 **3**. 접속 테스트 타임아웃 **5초**.
 - 설정 키: `app.db-secret.key` ← env `NETISMAKER_DB_SECRET_KEY`, `app.db-secret.salt` ← env `NETISMAKER_DB_SECRET_SALT`(hex, 짝수 길이 16자 이상). 둘 중 하나라도 없거나 salt 형식이 틀리면 **기능만 꺼진다**(부팅 실패 금지).
 - 비밀번호(평문·암호문)는 **브라우저로 가는 어떤 응답·로그·예외 메시지·claude CLI 명령줄·`mcps_extra`에도 나가면 안 된다.** claim 응답(내부 API)만 예외.
-- 임시 env 파일: `DB_MCP_TMP_DIR`(기본 `os.tmpdir()/netismaker-dbmcp`), `mode 0o600`, `flag 'wx'`, 턴 종료 `finally`에서 삭제, 서비스 기동 시 1시간 넘은 파일 정리.
+- DB 도구 상한(코드 상수 `DB_LIMITS`): 문장 30초, 접속 10초, 결과 200행(카탈로그 1000행), 셀 2000자, 전체 60000자. DB 접속은 첫 도구 호출 때(lazy), 턴 종료 `finally`에서 `close()`.
+- 비밀번호가 SDK `options`에 들어가는 형태는 `{type:'sdk', name, instance}`뿐이어야 한다 — `type:'stdio'` 서버에 접속정보를 넣지 말 것(SDK가 `--mcp-config` 명령줄에 싣는다).
 - 프론트: 작은따옴표 + 세미콜론 없음, 문자열은 한국어 하드코딩, 클래스명에 Quasar 반응형 예약어(`xs sm md lg xl`, `gt-*`, `lt-*`, `*-hide`) 금지, `q-dialog` 안 루트 요소는 `<div>`, 모바일 분기는 `$q.screen.lt.md`. `npm run lint-prettier`를 `frontend/` 전체에 돌리지 말 것.
 - DB 기능이 꺼져 있으면(`GET /api/db-connections` → `enabled:false`) 프론트는 DB 버튼을 숨기고 요청 바디에 `dbConnectionIds`를 **싣지 않는다**(기존 바디 그대로 — 기존 테스트가 정확 일치로 검증한다).
 - 커밋 메시지 끝에 `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`.
@@ -34,7 +35,8 @@
 2. **JDBC URL 파라미터 주입** — host/DB명에 `db?allowLoadLocalInfile=true`, `h/evil`, `h:1/x` 같은 값을 넣으면 드라이버 옵션이 바뀐다. 기대: 400(DTO 패턴 거부). → Task 6 `DbConnectionDtoValidationTest`.
 3. **claim 보강 실패로 세션이 RUNNING에 묶임** — claim 트랜잭션이 커밋된 뒤 접속정보 조회가 예외를 던지면 응답이 500이 되고 세션이 stale 회수 때까지 멈춘다. 기대: 200 + `dbNotices` 안내, DB 서버 없이 턴 진행. → Task 8 `claim_survives_db_resolution_failure`.
 4. **문자열·주석 경계 우회** — `SELECT 'a\'; DELETE …`(PG 표준 문자열), MySQL `/*! DELETE */` 실행 주석, PG에서 `#`(연산자) 뒤 숨기기, `$$…$$` 안 `;`, MySQL `--x`(주석 아님). 기대: 전부 거부 또는 숨긴 부분까지 검사. → Task 9 우회 사례 표.
-5. **턴 실패 시 임시 파일 잔존 / 런처 오류 메시지의 비밀번호 노출** — SDK 쿼리가 throw해도 env 파일이 지워져야 하고, 런처가 깨진 파일을 읽을 때 JSON.parse 오류(본문 일부를 담음)가 stderr로 나가면 안 된다. 기대: `finally` 정리, 고정 문구 오류. → Task 11 `readSpec_error_never_echoes_content`, Task 12 `cleans_up_env_files_when_query_throws`.
+5. **턴 실패 시 커넥션 잔존 / DB 오류 메시지의 비밀번호 노출** — SDK 쿼리가 throw해도 열린 DB 커넥션이 닫혀야 하고, 드라이버 오류 메시지(접속 문자열·비밀번호를 담을 수 있음)가 도구 결과·로그로 나가면 안 된다. 기대: `finally` close, `safeMessage` 치환. → Task 11 `error_text_never_contains_password`, Task 12 `closes_db_sessions_when_query_throws`.
+6. **게이트 우회 시 쓰기** — `canUseTool`이 어떤 이유로 allow해도(규칙 버그·SDK 변경) 쓰기가 실행되면 안 된다. 기대: 핸들러가 SQL을 다시 거부하고, 통과해도 READ ONLY 트랜잭션이 막는다. → Task 11 `handler_rejects_dml_even_if_gate_allowed`, 어댑터 문장 순서 테스트.
 
 ---
 
@@ -55,10 +57,13 @@
 
 **인터뷰 서비스 (`netismaker-interview-service/`)**
 - Create `src/sdk/sqlReadOnly.ts` — 방언별 읽기 전용 SQL 검사
-- Create `src/sdk/dbMcp.ts` — prebuilt/env 매핑, 임시 파일 준비·정리·청소
-- Create `src/launcher/dbMcpLauncher.mjs` + `src/launcher/dbMcpLauncher.d.mts` — Toolbox 실행 런처(tsx 없이 실행 가능해야 함)
-- Create `scripts/install-toolbox.ps1`, `scripts/spikeToolbox.mjs`
-- Modify `src/types.ts`, `src/config.ts`, `src/sdk/permissions.ts`, `src/sdk/sessionOptions.ts`, `src/runner/interviewRunner.ts`, `src/index.ts`, `.env.example`
+- Create `src/sdk/db/limits.ts` — 상한 상수
+- Create `src/sdk/db/result.ts` — 셀 변환·결과 직렬화·상한
+- Create `src/sdk/db/adapters.ts` — 종류별 읽기 전용 세션(PG·MySQL/MariaDB·Oracle), 드라이버 로더
+- Create `src/sdk/db/catalog.ts` — list_tables/describe_table 방언별 바인딩 SQL
+- Create `src/sdk/dbMcp.ts` — 연결별 SDK MCP 서버·도구 3개·lazy 접속·close
+- Create `scripts/spikeSdkMcp.ts`, `scripts/spikeDbAdapter.ts` — 스파이크(일회성)
+- Modify `package.json`/`package-lock.json`, `src/types.ts`, `src/sdk/permissions.ts`, `src/sdk/sessionOptions.ts`, `src/runner/interviewRunner.ts`
 
 **프론트 (`frontend/`)**
 - Create `composables/dbConnections.ts`, `components/DbConnectionDialog.vue`, `components/DbConnectionPicker.vue`, `components/DbConnectionAdminDialog.vue`
@@ -72,14 +77,16 @@
 
 **Files:** 없음(환경)
 
-- [ ] **Step 1: node_modules 정션 연결** (새 worktree에는 node_modules가 없다)
+- [ ] **Step 1: node_modules 준비** (새 worktree에는 node_modules가 없다)
+
+프론트는 본 체크아웃 것을 정션으로 빌려 쓴다. **인터뷰 서비스는 정션 금지** — Task 1에서 의존성을 추가하는데, 정션이면 라이브가 쓰는 본 체크아웃 node_modules가 바뀐다. 인터뷰 서비스는 worktree 안에 따로 설치한다(npm 레지스트리 다운로드 — 실행 전 사용자에게 알린다).
 
 ```powershell
 cd C:\Users\mic\NetisMaker\commanCenter\.claude\worktrees\question-db-mcp
 cmd /c mklink /J frontend\node_modules ..\..\..\frontend\node_modules
-cmd /c mklink /J netismaker-interview-service\node_modules ..\..\..\netismaker-interview-service\node_modules
+cd netismaker-interview-service; npm ci; cd ..
 ```
-Expected: `Junction created for …` 두 줄. ⚠️ 나중에 지울 때는 `cmd /c rmdir frontend\node_modules`(정션만 제거). `rm -rf`/`Remove-Item -Recurse`는 원본 node_modules를 지운다.
+Expected: `Junction created for …` 한 줄, `npm ci`가 `added N packages`로 끝난다. ⚠️ 나중에 프론트 정션을 지울 때는 `cmd /c rmdir frontend\node_modules`(정션만 제거). `rm -rf`/`Remove-Item -Recurse`는 원본 node_modules를 지운다.
 
 - [ ] **Step 2: 기준선 테스트**
 
@@ -91,129 +98,115 @@ Expected: 인터뷰 서비스는 실패 5건(Global Constraints의 기존 실패
 
 ---
 
-### Task 1: Toolbox 설치 + 스파이크(스펙 §11 미검증 가정 확인)
+### Task 1: 의존성 추가 + SDK MCP 스파이크(스펙 §11-1)
 
 **Files:**
-- Create: `netismaker-interview-service/scripts/install-toolbox.ps1`
-- Create: `netismaker-interview-service/scripts/spikeToolbox.mjs`
-- Modify: `.gitignore` (루트) — `netismaker-interview-service/bin/` 추가
+- Modify: `netismaker-interview-service/package.json`, `netismaker-interview-service/package-lock.json`
+- Create: `netismaker-interview-service/scripts/spikeSdkMcp.ts`
 - Modify: `docs/superpowers/specs/2026-10-02-question-db-mcp-design.md` §11 (결과 기록)
 
 **Interfaces:**
-- Produces: `netismaker-interview-service/bin/toolbox.exe`(git 제외), 확정된 도구 입력 파라미터 이름(Task 10의 `DB_SQL_PARAMS` 상수), PG read-only 파라미터 적용 여부(Task 11의 `PG_READ_ONLY_QUERY_PARAMS` 유지/삭제)
+- Produces: 의존성 `pg`·`mysql2`·`oracledb`·`zod`(Task 11이 사용). 스펙 §11-1 판정 — **미도달이면 Task 10 이후로 넘어가지 말고 사용자에게 보고**(내장 서버 도구가 `canUseTool`을 안 거치면 게이트 설계가 무너진다. 핸들러 재검사·READ ONLY가 남지만 설계 재검토 대상).
 
-- [ ] **Step 1: 배포 URL 확인** — 저장소 README의 설치 절에서 Windows 바이너리 URL을 찾는다.
-
-```bash
-gh api repos/googleapis/genai-toolbox/contents/README.md --jq .content | base64 -d | grep -n "storage.googleapis.com" | head
-curl -sI https://storage.googleapis.com/genai-toolbox/v1.13.1/windows/amd64/toolbox.exe | head -1
-```
-Expected: `HTTP/1.1 200 OK`(또는 `HTTP/2 200`). 404면 README에 나온 실제 경로(버킷 이름이 `mcp-toolbox`로 바뀌었을 수 있음)로 Step 2의 `$url`을 고친다.
-
-- [ ] **Step 2: 설치 스크립트 작성**
-
-`netismaker-interview-service/scripts/install-toolbox.ps1`:
-```powershell
-# MCP Toolbox for Databases 바이너리를 bin/toolbox.exe로 받는다 (스펙 2026-10-02 §6.1).
-# 버전 고정 — 올릴 때는 스펙 §2와 이 기본값을 같이 바꾼다. 인터뷰 서비스 env TOOLBOX_PATH가 이 파일을 가리킨다.
-param([string]$Version = '1.13.1')
-$ErrorActionPreference = 'Stop'
-$dir = Join-Path $PSScriptRoot '..\bin'
-New-Item -ItemType Directory -Force $dir | Out-Null
-$out = Join-Path $dir 'toolbox.exe'
-$url = "https://storage.googleapis.com/genai-toolbox/v$Version/windows/amd64/toolbox.exe"
-Write-Host "다운로드: $url"
-Invoke-WebRequest -Uri $url -OutFile $out
-& $out --version
-Write-Host "설치 완료: $out  (인터뷰 서비스 .env에 TOOLBOX_PATH=$out)"
-```
-루트 `.gitignore` 끝에 추가:
-```
-netismaker-interview-service/bin/
-```
-
-- [ ] **Step 3: 설치 실행** — 파일 다운로드이므로 실행 전에 사용자에게 "toolbox.exe(약 100MB대, storage.googleapis.com) 다운로드" 허락을 받는다.
-
-```powershell
-powershell -ExecutionPolicy Bypass -File netismaker-interview-service\scripts\install-toolbox.ps1
-```
-Expected: 마지막 줄 근처에 `1.13.1` 버전 출력.
-
-- [ ] **Step 4: 스파이크 스크립트 작성**
-
-`netismaker-interview-service/scripts/spikeToolbox.mjs`:
-```js
-// 스파이크(스펙 2026-10-02 §11): Toolbox를 stdio로 띄워 initialize → tools/list → (선택) execute_sql 1회.
-// 사용: node scripts/spikeToolbox.mjs <toolbox.exe> <prebuilt> ["SQL"]   — 접속 env(POSTGRES_* 등)는 셸에서 준다.
-// stdout에 JSON-RPC가 아닌 줄이 섞이면 [NON-JSON STDOUT]로 표시한다(stdio 오염 확인용). 일회성 도구.
-import { spawn } from 'node:child_process'
-
-const [, , toolbox, prebuilt, sql] = process.argv
-const child = spawn(toolbox, ['--prebuilt', prebuilt, '--stdio'], { stdio: ['pipe', 'pipe', 'inherit'], env: process.env })
-let buf = ''
-const pending = new Map()
-child.stdout.on('data', (d) => {
-  buf += d
-  let i
-  while ((i = buf.indexOf('\n')) >= 0) {
-    const line = buf.slice(0, i).trim()
-    buf = buf.slice(i + 1)
-    if (!line) continue
-    let msg
-    try { msg = JSON.parse(line) } catch { console.log('[NON-JSON STDOUT]', line.slice(0, 200)); continue }
-    const cb = pending.get(msg.id)
-    if (cb) { pending.delete(msg.id); cb(msg) }
-  }
-})
-let id = 0
-const call = (method, params) => new Promise((res) => {
-  const myId = ++id
-  pending.set(myId, res)
-  child.stdin.write(JSON.stringify({ jsonrpc: '2.0', id: myId, method, params }) + '\n')
-})
-const init = await call('initialize', { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'spike', version: '0' } })
-console.log('initialize:', JSON.stringify(init.result?.serverInfo ?? init.error))
-child.stdin.write(JSON.stringify({ jsonrpc: '2.0', method: 'notifications/initialized' }) + '\n')
-const tools = await call('tools/list', {})
-for (const t of tools.result?.tools ?? []) console.log('tool', t.name, JSON.stringify(Object.keys(t.inputSchema?.properties ?? {})))
-if (sql) {
-  const r = await call('tools/call', { name: 'execute_sql', arguments: { sql } })
-  console.log('execute_sql:', JSON.stringify(r.result ?? r.error).slice(0, 500))
-}
-child.kill()
-```
-
-- [ ] **Step 5: PostgreSQL 스파이크 실행** — 로컬 PostgreSQL에 API가 쓰는 계정으로 붙는다(값은 `public.env`의 DB 항목에서 가져오고 **출력·로그에 비밀번호를 남기지 않는다**). Git Bash:
+- [ ] **Step 1: 의존성 추가** — npm 레지스트리 다운로드이므로 실행 전 사용자에게 알린다.
 
 ```bash
 cd /c/Users/mic/NetisMaker/commanCenter/.claude/worktrees/question-db-mcp/netismaker-interview-service
-export POSTGRES_HOST=localhost POSTGRES_PORT=5432 POSTGRES_DATABASE=<DB명> POSTGRES_USER=<계정>
-read -s POSTGRES_PASSWORD; export POSTGRES_PASSWORD
-export POSTGRES_QUERY_PARAMS='options=-c%20default_transaction_read_only%3Don'
-node scripts/spikeToolbox.mjs bin/toolbox.exe postgres "SHOW default_transaction_read_only"
-node scripts/spikeToolbox.mjs bin/toolbox.exe postgres "CREATE TEMP TABLE spike_x(a int)"
+npm install pg@^8 mysql2@^3 oracledb@^6 zod@^4
+node -e "for (const m of ['pg','mysql2','oracledb','zod']) console.log(m, require(m + '/package.json').version)"
 ```
-Expected(확인할 것):
-- `[NON-JSON STDOUT]` 줄이 **없다**(있으면 Toolbox가 stdout에 로그를 섞는 것 → 스펙 §11-4 실패, 런처에서 Toolbox 로그 옵션을 찾아 stderr로 보내야 함 — 해결 전 다음 Task로 넘어가지 말고 사용자에게 보고).
-- `tool execute_sql ["sql"]`, `tool list_tables [...]` 같은 줄 — 각 도구의 입력 키를 기록.
-- 첫 SQL 결과에 `on`이 보이면 read-only 파라미터 적용(§11-1 통과). 둘째 SQL은 `read-only transaction` 오류여야 한다. `off`면 Task 11에서 `PG_READ_ONLY_QUERY_PARAMS`를 빼고 스펙 §8.2 "2선"을 삭제한다.
+Expected: 네 줄 버전 출력. `oracledb`는 6.x(thin 모드 기본). `git diff package.json`에 dependencies 4개만 추가됐는지 확인.
 
-- [ ] **Step 6: MySQL·Oracle 파라미터 이름 확인** — 로컬 DB가 없으므로 문서로 확인한다.
+- [ ] **Step 2: 스파이크 스크립트 작성**
+
+`netismaker-interview-service/scripts/spikeSdkMcp.ts`:
+```ts
+/**
+ * 스파이크(스펙 2026-10-02 §11-1) — 내장 SDK MCP 서버(type:'sdk')가 질문 세션 격리 옵션 아래 붙고,
+ * 그 도구 호출이 canUseTool을 거치는지(deny면 핸들러가 안 불리는지) 실측한다. DB 없음 — 가짜 도구.
+ * 실행: cd netismaker-interview-service && node --import tsx scripts/spikeSdkMcp.ts
+ * 판정: 마지막 줄 RESULT: 도달(exit 0) / 미도달(exit 1). 일회성 도구.
+ */
+import { createSdkMcpServer, tool } from '@anthropic-ai/claude-agent-sdk';
+import { z } from 'zod';
+import { realQuery } from '../src/sdk/sdkAdapter.js';
+import { resolveClaudeCli } from '../src/sdk/claudeCli.js';
+
+const handled: string[] = [];
+const gated: string[] = [];
+const server = createSdkMcpServer({
+  name: 'db-1',
+  tools: [
+    tool('query', '스파이크용 가짜 DB 조회', { sql: z.string() }, async ({ sql }) => {
+      handled.push(sql);
+      return { content: [{ type: 'text', text: '{"columns":["n"],"rows":[[42]],"rowCount":1,"truncated":false}' }] };
+    }),
+  ],
+});
+
+async function* prompt(): AsyncIterable<{ type: 'user'; message: { role: 'user'; content: string } }> {
+  yield {
+    type: 'user',
+    message: {
+      role: 'user',
+      content: 'mcp__db-1__query 도구를 정확히 두 번 호출하세요: 먼저 sql="SELECT 42", 다음 sql="DELETE FROM t". 거부돼도 다시 시도하지 말고 결과를 한 줄로 보고하세요.',
+    },
+  };
+}
+
+async function run(): Promise<void> {
+  const stream = realQuery({
+    prompt: prompt(),
+    options: {
+      pathToClaudeCodeExecutable: resolveClaudeCli(process.env.CLAUDE_CLI),
+      plugins: [],
+      settingSources: [],
+      strictMcpConfig: true,
+      allowedTools: [], // QUESTION 구성과 동일 — 사전승인 없음
+      cwd: process.cwd(),
+      permissionMode: 'default',
+      mcpServers: { 'db-1': server },
+      canUseTool: async (toolName: string, input: Record<string, unknown>) => {
+        gated.push(`${toolName} ${JSON.stringify(input)}`);
+        const sql = String(input.sql ?? '');
+        return sql.toUpperCase().startsWith('SELECT')
+          ? { behavior: 'allow' as const, updatedInput: input }
+          : { behavior: 'deny' as const, message: 'spike: 읽기 전용' };
+      },
+    } as never,
+  });
+  for await (const msg of stream) {
+    const m = msg as { type: string; subtype?: string; tools?: string[]; mcp_servers?: unknown };
+    if (m.type === 'system' && m.subtype === 'init') {
+      console.log('[init] mcp_servers=', JSON.stringify(m.mcp_servers), 'tools=', (m.tools ?? []).filter((t) => t.startsWith('mcp__')));
+    }
+  }
+  console.log('[gate]', gated);
+  console.log('[handler]', handled);
+  const ok = gated.some((g) => g.startsWith('mcp__db-1__query')) && handled.includes('SELECT 42') && !handled.some((s) => s.startsWith('DELETE'));
+  console.log(ok ? 'RESULT: 도달 — sdk 서버 도구가 canUseTool을 경유하고, deny는 핸들러를 막는다' : 'RESULT: 미도달 — 보고 후 중단');
+  process.exit(ok ? 0 : 1);
+}
+
+void run();
+```
+(`realQuery` 옵션 타입이 `settingSources`/`strictMcpConfig`를 이미 받으면 `as never`는 지운다 — `sessionOptions.ts`가 같은 키를 쓰고 있다.)
+
+- [ ] **Step 3: 스파이크 실행** — claude 구독 호출 1회(소량).
 
 ```bash
-for p in mysql/mysql-execute-sql oracle/oracle-execute-sql; do gh api "repos/googleapis/genai-toolbox/contents/docs/en/resources/tools/$p.md" --jq .content 2>/dev/null | base64 -d | grep -n -i -A3 "parameter\|\"sql\"\|sql:" | head -15; done
-gh api repos/googleapis/genai-toolbox/contents/internal/prebuiltconfigs/tools/mysql.yaml --jq .content | base64 -d | grep -n -A6 "name: get_query_plan"
-gh api repos/googleapis/genai-toolbox/contents/internal/prebuiltconfigs/tools/oracledb.yaml --jq .content | base64 -d | grep -n -A12 "name: get_query_plan"
+cd /c/Users/mic/NetisMaker/commanCenter/.claude/worktrees/question-db-mcp/netismaker-interview-service
+node --import tsx scripts/spikeSdkMcp.ts
 ```
-Expected: execute_sql 입력 키 = `sql`(3종 공통), get_query_plan = MySQL `sql_statement` / Oracle `query`. 문서 경로가 다르면 `gh api repos/googleapis/genai-toolbox/git/trees/main?recursive=1 --jq '.tree[].path' | grep execute-sql`로 찾는다. 다르게 나오면 Task 10의 `DB_SQL_PARAMS`를 그 값으로 쓴다.
+Expected: `[init]`의 tools에 `mcp__db-1__query`, `[gate]`에 두 호출, `[handler]`에는 `SELECT 42`만, 마지막 줄 `RESULT: 도달`. 실행 중 다른 PowerShell에서 `Get-CimInstance Win32_Process -Filter "Name='claude.exe'" | Select-Object CommandLine`로 `--mcp-config`에 `{"type":"sdk","name":"db-1"}`만 있는지도 본다(가능하면).
 
-- [ ] **Step 7: 스펙 §11에 결과 기록** — 각 항목 끝에 `→ 2026-10-02 확인: …`(통과/실패와 실제 값) 한 줄씩 덧붙인다. MariaDB(§11-2)·Oracle EZConnect(§11-5)·SDK stdio(§11-6)는 "라이브 스모크(Task 16)에서 확인"으로 적는다.
+- [ ] **Step 4: 스펙 §11-1에 결과 기록** — 항목 끝에 `→ 2026-10-02 확인: …`(도달/미도달, init 도구 목록, 명령줄 확인 여부) 한 줄. §11-3·4는 "라이브 스모크(Task 16)에서 확인", §11-2·5는 "Task 11에서 확인"으로 적는다.
 
-- [ ] **Step 8: Commit**
+- [ ] **Step 5: Commit**
 
 ```bash
-git add .gitignore netismaker-interview-service/scripts/install-toolbox.ps1 netismaker-interview-service/scripts/spikeToolbox.mjs docs/superpowers/specs/2026-10-02-question-db-mcp-design.md
-git commit -m "chore(interview): MCP Toolbox v1.13.1 설치 스크립트 + stdio 스파이크 결과
+git add netismaker-interview-service/package.json netismaker-interview-service/package-lock.json netismaker-interview-service/scripts/spikeSdkMcp.ts docs/superpowers/specs/2026-10-02-question-db-mcp-design.md
+git commit -m "chore(interview): DB 드라이버·zod 의존성 + SDK MCP 게이트 스파이크 결과
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 ```
@@ -330,7 +323,7 @@ package com.hamonsoft.netismaker.entity;
 
 /**
  * 질문 세션 DB 접속정보 종류 (스펙 2026-10-02 §2). 값 이름은 DB CHECK 제약·프론트·인터뷰 서비스와 공유 — 바꾸지 말 것.
- * MariaDB는 Toolbox에서 mysql prebuilt를 쓰지만, 접속 테스트는 MariaDB 드라이버로 한다.
+ * MariaDB는 인터뷰 서비스에서 mysql2 드라이버를 쓰지만, 접속 테스트(JDBC)는 MariaDB 드라이버로 한다.
  */
 public enum DbType {
     POSTGRESQL("PostgreSQL", 5432),
@@ -2639,12 +2632,11 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 
 **Files:**
 - Modify: `netismaker-interview-service/src/sdk/permissions.ts` (`questionMcpGate`, `buildCanUseTool`)
-- Modify: `docs/superpowers/specs/2026-10-02-question-db-mcp-design.md` §8.1 (방언 전달로 바뀐 점)
 - Test: `netismaker-interview-service/test/permissions.test.ts`
 
 **Interfaces:**
 - Consumes: `checkReadOnlySql`, `SqlDialect`(Task 9)
-- Produces: `buildCanUseTool(repoDir: string, kind?: SessionKind, attachmentRoot?: string | null, dbServers?: Record<string, SqlDialect>): CanUseTool`; 상수 `DB_SQL_PARAMS: Record<string, string[]>`
+- Produces: `buildCanUseTool(repoDir: string, kind?: SessionKind, attachmentRoot?: string | null, dbServers?: Record<string, SqlDialect>): CanUseTool`; 상수 `DB_READ_TOOLS: ReadonlySet<string>`(= `list_tables`, `describe_table`) — 도구 이름은 Task 11 `dbMcp.ts`와 같아야 한다
 
 - [ ] **Step 1: 실패하는 테스트 작성** — `test/permissions.test.ts` 끝에 추가:
 
@@ -2652,30 +2644,28 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 describe('canUseTool — kind=QUESTION DB 서버 게이트 (스펙 2026-10-02 §8)', () => {
   const q = buildCanUseTool('/tmp/repo', 'QUESTION', null, { 'db-3': 'postgres', 'db-7': 'mysql' });
 
-  it('execute_sql은 조회문만 통과', async () => {
-    expect((await q('mcp__db-3__execute_sql', { sql: 'SELECT * FROM users' })).behavior).toBe('allow');
-    const r = await q('mcp__db-3__execute_sql', { sql: 'UPDATE users SET a = 1' });
+  it('query는 조회문만 통과', async () => {
+    expect((await q('mcp__db-3__query', { sql: 'SELECT * FROM users' })).behavior).toBe('allow');
+    const r = await q('mcp__db-3__query', { sql: 'UPDATE users SET a = 1' });
     expect(r.behavior).toBe('deny');
     expect(r.message).toContain('읽기 전용');
     expect(r.message).toContain('UPDATE');
   });
 
   it('방언을 서버별로 적용한다 — # 주석은 mysql 서버에서만', async () => {
-    expect((await q('mcp__db-7__execute_sql', { sql: 'SELECT 1 # 주석' })).behavior).toBe('allow');
-    expect((await q('mcp__db-3__execute_sql', { sql: 'SELECT 1 # 1; DELETE FROM t' })).behavior).toBe('deny');
+    expect((await q('mcp__db-7__query', { sql: 'SELECT 1 # 주석' })).behavior).toBe('allow');
+    expect((await q('mcp__db-3__query', { sql: 'SELECT 1 # 1; DELETE FROM t' })).behavior).toBe('deny');
   });
 
-  it('get_query_plan은 SQL 인자를 같은 방식으로 검사, list_*는 허용, 그 외·SQL 없음은 거부', async () => {
-    expect((await q('mcp__db-7__get_query_plan', { sql_statement: 'SELECT 1' })).behavior).toBe('allow');
-    expect((await q('mcp__db-7__get_query_plan', { sql_statement: 'DELETE FROM t' })).behavior).toBe('deny');
-    expect((await q('mcp__db-3__list_tables', { table_names: '' })).behavior).toBe('allow');
-    expect((await q('mcp__db-3__list_active_queries', {})).behavior).toBe('allow');
-    expect((await q('mcp__db-3__long_running_transactions', {})).behavior).toBe('deny');
-    expect((await q('mcp__db-3__execute_sql', {})).behavior).toBe('deny');
+  it('list_tables·describe_table은 허용, 그 외 도구·SQL 없음은 거부', async () => {
+    expect((await q('mcp__db-3__list_tables', {})).behavior).toBe('allow');
+    expect((await q('mcp__db-7__describe_table', { table: 'orders' })).behavior).toBe('allow');
+    expect((await q('mcp__db-3__execute_sql', { sql: 'SELECT 1' })).behavior).toBe('deny');
+    expect((await q('mcp__db-3__query', {})).behavior).toBe('deny');
   });
 
   it('등록되지 않은 db-N 서버 이름은 거부(이름 흉내 차단), 기존 서버 규칙은 그대로', async () => {
-    expect((await q('mcp__db-99__execute_sql', { sql: 'SELECT 1' })).behavior).toBe('deny');
+    expect((await q('mcp__db-99__query', { sql: 'SELECT 1' })).behavior).toBe('deny');
     expect((await q('mcp__local-db__execute_sql', { sql: 'select 1' })).behavior).toBe('deny');
     expect((await q('mcp__local-db__query', { sql: 'select 1' })).behavior).toBe('allow');
   });
@@ -2697,26 +2687,18 @@ import { checkReadOnlySql, type SqlDialect } from './sqlReadOnly.js';
 ```
 `questionMcpGate` 위에 추가:
 ```ts
-/**
- * DB 서버(`db-<id>`, Toolbox) 도구별 SQL 인자 이름 (스펙 2026-10-02 §8.1 — Task 1 스파이크로 확인한 값).
- * 목록 순서대로 첫 문자열 인자를 검사한다.
- */
-export const DB_SQL_PARAMS: Record<string, string[]> = {
-  execute_sql: ['sql'],
-  get_query_plan: ['sql_statement', 'query', 'sql'],
-};
+/** 내장 DB 서버(`db-<id>`, dbMcp.ts) 도구 중 SQL 인자 없이 허용하는 것 (스펙 2026-10-02 §8.1). 입력은 바인딩 파라미터로만 쓰인다. */
+export const DB_READ_TOOLS: ReadonlySet<string> = new Set(['list_tables', 'describe_table']);
 
 function dbToolGate(toolName: string, tool: string, input: Record<string, unknown>, dialect: SqlDialect): PermissionResult {
-  const params = DB_SQL_PARAMS[tool];
-  if (params) {
-    const key = params.find((k) => typeof input[k] === 'string');
-    if (!key) return { behavior: 'deny', message: `질문 세션 DB 도구 입력에 SQL이 없습니다: ${toolName}` };
-    const r = checkReadOnlySql(String(input[key]), dialect);
+  if (tool === 'query') {
+    if (typeof input.sql !== 'string') return { behavior: 'deny', message: `질문 세션 DB 도구 입력에 SQL이 없습니다: ${toolName}` };
+    const r = checkReadOnlySql(input.sql, dialect);
     return r.ok
       ? { behavior: 'allow' }
       : { behavior: 'deny', message: `질문 세션 DB 도구는 읽기 전용입니다 — ${r.reason}. SELECT 계열 단일 문장만 실행할 수 있습니다.` };
   }
-  if (tool.startsWith('list_')) return { behavior: 'allow' };
+  if (DB_READ_TOOLS.has(tool)) return { behavior: 'allow' };
   return { behavior: 'deny', message: `질문 세션에서 허용되지 않은 DB 도구입니다: ${toolName}` };
 }
 ```
@@ -2730,12 +2712,12 @@ function questionMcpGate(
 ```
 그리고 `if (server.length === 0 || tool.length === 0) return deny;` 바로 아래에:
 ```ts
-  // DB 서버(스펙 2026-10-02 §8.1)는 Obsidian/동사 규칙보다 먼저 — execute_sql의 'execute'가 동사 denylist에 걸리므로.
+  // 내장 DB 서버(스펙 2026-10-02 §8.1)는 Obsidian/동사 규칙보다 먼저 — 'query'는 동사 denylist에 안 걸려 SQL 검사 없이 통과하므로.
   const dialect = dbServers[server];
   if (dialect) return dbToolGate(toolName, tool, input, dialect);
   if (/^db-\d+$/.test(server)) return deny; // 이번 턴에 붙이지 않은 db-N — 다른 소스가 이름을 흉내 낸 서버
 ```
-`questionMcpGate` Javadoc 목록 맨 앞에 한 줄: `*  - DB 서버(dbServers에 등록된 db-<id>)는 dbToolGate — SQL 인자를 방언별 읽기 전용 검사(sqlReadOnly.ts).`
+`questionMcpGate` Javadoc 목록 맨 앞에 한 줄: `*  - 내장 DB 서버(dbServers에 등록된 db-<id>)는 dbToolGate — query의 SQL을 방언별 읽기 전용 검사(sqlReadOnly.ts), 도구 핸들러가 한 번 더 검사한다.`
 
 `buildCanUseTool`:
 ```ts
@@ -2752,12 +2734,6 @@ QUESTION 분기의 `if (toolName.startsWith('mcp__')) return questionMcpGate(too
 ```
 (`input`의 타입이 `Record<string, unknown>`이 아니면 이 파일의 다른 게이트가 쓰는 타입 그대로 넘긴다.)
 
-스펙 §8.1 첫 줄을 다음으로 바꾼다:
-```
-- 시그니처에 `input`과 `dbServers: Record<serverName, 'postgres'|'mysql'|'oracle'>` 추가 — 러너가 이번 턴에 붙인 DB 서버와 방언을 넘긴다(구현 계획 Task 10: 방언에 따라 주석·인용 규칙이 달라 공통 규칙으로는 우회가 생긴다). `dbServers`에 없는 `db-N`은 거부.
-```
-그리고 §8.1 `execute_sql` 줄의 괄호 설명(“게이트는 서버명에서 DB 종류를 모르므로…”)을 삭제한다.
-
 - [ ] **Step 4: 통과 확인**
 
 ```bash
@@ -2768,44 +2744,306 @@ Expected: 새 4건 PASS, 기존 실패는 Windows 기존 2건뿐.
 - [ ] **Step 5: Commit**
 
 ```bash
-git add netismaker-interview-service/src/sdk/permissions.ts netismaker-interview-service/test/permissions.test.ts docs/superpowers/specs/2026-10-02-question-db-mcp-design.md
-git commit -m "feat(interview): 질문 게이트 DB 서버 분기 — execute_sql 방언별 읽기 전용 검사
+git add netismaker-interview-service/src/sdk/permissions.ts netismaker-interview-service/test/permissions.test.ts
+git commit -m "feat(interview): 질문 게이트 DB 서버 분기 — query 방언별 읽기 전용 검사
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 ```
 
 ---
 
-### Task 11: 타입·설정·dbMcp(임시 파일)·런처
+### Task 11: 타입 + 내장 DB MCP(결과·어댑터·카탈로그·서버)
 
 **Files:**
 - Modify: `netismaker-interview-service/src/types.ts`
-- Modify: `netismaker-interview-service/src/config.ts`
-- Modify: `netismaker-interview-service/.env.example`
+- Create: `netismaker-interview-service/src/sdk/db/limits.ts`, `src/sdk/db/result.ts`, `src/sdk/db/adapters.ts`, `src/sdk/db/catalog.ts`
 - Create: `netismaker-interview-service/src/sdk/dbMcp.ts`
-- Create: `netismaker-interview-service/src/launcher/dbMcpLauncher.mjs`
-- Create: `netismaker-interview-service/src/launcher/dbMcpLauncher.d.mts`
-- Test: `netismaker-interview-service/test/dbMcp.test.ts`, `netismaker-interview-service/test/dbMcpLauncher.test.ts`, `netismaker-interview-service/test/config.test.ts`
+- Create: `netismaker-interview-service/scripts/spikeDbAdapter.ts`
+- Test: `netismaker-interview-service/test/dbResult.test.ts`, `test/dbAdapters.test.ts`, `test/dbMcp.test.ts`
 
 **Interfaces:**
-- Consumes: `SqlDialect`(Task 9)
+- Consumes: `checkReadOnlySql`, `stripSql`, `SqlDialect`(Task 9), 의존성(Task 1)
 - Produces:
   - `types.ts`: `export type DbType = 'POSTGRESQL' | 'MYSQL' | 'MARIADB' | 'ORACLE'`; `export interface DbConnectionRef { serverName; label; dbType: DbType; host; port: number; database; username; password }`; `InterviewClaimResponse`에 `dbConnectionIds?: number[]; dbConnections?: DbConnectionRef[]; dbNotices?: string[]`
-  - `config.ts`: `Config.toolboxPath?: string`, `Config.dbMcpTmpDir: string`
-  - `dbMcp.ts`: `prebuiltFor(t)`, `dialectFor(t)`, `PG_READ_ONLY_QUERY_PARAMS`, `envFor(ref)`, `DB_MCP_LAUNCHER_PATH`, `interface StdioServer { type: 'stdio'; command: string; args: string[] }`, `interface PreparedDbMcp { servers: Record<string, StdioServer>; dialects: Record<string, SqlDialect>; files: string[]; labels: Array<{ serverName: string; label: string }>; notices: string[] }`, `prepareDbMcpServers(claim, deps: { toolboxPath?: string; tmpDir: string; launcherPath?: string; nodePath?: string }): PreparedDbMcp`, `cleanupDbMcpFiles(files: string[]): void`, `sweepStaleDbMcpFiles(dir: string, maxAgeMs?: number, now?: number): number`
-  - 런처: `PASSTHROUGH_ENV: string[]`, `childEnv(parentEnv, dbEnv)`, `readSpec(file)`, `launch(file, env, spawnFn?)`
+  - `db/limits.ts`: `DB_LIMITS`
+  - `db/result.ts`: `interface QueryResult { columns: string[]; rows: unknown[][]; truncated: boolean }`, `toCell(v)`, `formatResult(r, maxRows?)`
+  - `db/adapters.ts`: `interface DbSession { run(sql, params?, maxRows?): Promise<QueryResult>; close(): Promise<void> }`, `interface DriverLoader { pg(); mysql(); oracle() }`, `realDrivers`, `loadDriver(name)`, `withoutTrailingSemicolon(sql)`, `openSession(ref, drivers?)`
+  - `db/catalog.ts`: `catalogSql(dialect, kind: 'tables'|'columns'|'indexes', schema: string|null, table?): { sql; params }`
+  - `dbMcp.ts`: `dialectFor(t)`, `safeMessage(e, ref)`, `dbToolsFor(ref, dialect, getSession): SdkMcpToolDefinition[]`, `interface PreparedDbMcp { servers: Record<string, McpSdkServerConfigWithInstance>; tools: Record<string, SdkMcpToolDefinition[]>; dialects: Record<string, SqlDialect>; labels: Array<{ serverName: string; label: string }>; notices: string[]; close(): Promise<void> }`, `createDbMcp(claim, deps?: { openSession?: (ref) => Promise<DbSession> }): PreparedDbMcp`
 
 - [ ] **Step 1: 실패하는 테스트 작성**
 
-`netismaker-interview-service/test/dbMcp.test.ts`:
+`netismaker-interview-service/test/dbResult.test.ts`:
 ```ts
 import { describe, expect, it } from 'vitest';
-import { existsSync, mkdtempSync, readFileSync, statSync, utimesSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
-import {
-  cleanupDbMcpFiles, dialectFor, envFor, PG_READ_ONLY_QUERY_PARAMS, prebuiltFor, prepareDbMcpServers, sweepStaleDbMcpFiles,
-} from '../src/sdk/dbMcp.js';
+import { formatResult, toCell } from '../src/sdk/db/result.js';
+import { DB_LIMITS } from '../src/sdk/db/limits.js';
+
+describe('toCell (스펙 2026-10-02 §6.3)', () => {
+  it('형 변환', () => {
+    expect(toCell(null)).toBeNull();
+    expect(toCell(undefined)).toBeNull();
+    expect(toCell(12345678901234567890n)).toBe('12345678901234567890');
+    expect(toCell(3)).toBe(3);
+    expect(toCell(true)).toBe(true);
+    expect(toCell(Buffer.from([1, 2, 3]))).toBe('<binary 3 bytes>');
+    expect(toCell(new Date('2026-10-02T01:02:03Z'))).toBe('2026-10-02T01:02:03.000Z');
+    expect(toCell({ a: 1 })).toBe('{"a":1}');
+  });
+
+  it('긴 문자열은 앞 maxCellChars자 + 남은 길이', () => {
+    const s = 'x'.repeat(DB_LIMITS.maxCellChars + 5);
+    expect(toCell(s)).toBe('x'.repeat(DB_LIMITS.maxCellChars) + '…(+5자)');
+  });
+});
+
+describe('formatResult', () => {
+  it('JSON 한 덩어리 — columns/rows/rowCount/truncated', () => {
+    const t = formatResult({ columns: ['n'], rows: [[1n], [2n]], truncated: false });
+    expect(JSON.parse(t)).toEqual({ columns: ['n'], rows: [['1'], ['2']], rowCount: 2, truncated: false });
+  });
+
+  it('행 상한을 넘으면 자르고 truncated', () => {
+    const rows = Array.from({ length: 5 }, (_, i) => [i]);
+    expect(JSON.parse(formatResult({ columns: ['n'], rows, truncated: false }, 3))).toMatchObject({ rowCount: 3, truncated: true });
+    expect(JSON.parse(formatResult({ columns: ['n'], rows: [[1]], truncated: true }))).toMatchObject({ truncated: true });
+  });
+
+  it('전체 길이 상한을 넘으면 뒤 행부터 버린다', () => {
+    const big = 'y'.repeat(DB_LIMITS.maxCellChars);
+    const rows = Array.from({ length: 100 }, () => [big]);
+    const t = formatResult({ columns: ['c'], rows, truncated: false }, 100);
+    expect(t.length).toBeLessThanOrEqual(DB_LIMITS.maxResultChars);
+    const parsed = JSON.parse(t);
+    expect(parsed.truncated).toBe(true);
+    expect(parsed.rowCount).toBeGreaterThan(0);
+    expect(parsed.rowCount).toBeLessThan(100);
+  });
+});
+```
+
+`netismaker-interview-service/test/dbAdapters.test.ts`:
+```ts
+import { EventEmitter } from 'node:events';
+import { describe, expect, it } from 'vitest';
+import { loadDriver, openSession, type DriverLoader } from '../src/sdk/db/adapters.js';
+import { catalogSql } from '../src/sdk/db/catalog.js';
+import type { DbConnectionRef } from '../src/types.js';
+
+const ref = (over: Partial<DbConnectionRef> = {}): DbConnectionRef => ({
+  serverName: 'db-7', label: '운영 DB', dbType: 'POSTGRESQL', host: 'db.local', port: 5432,
+  database: 'app', username: 'reader', password: 'Pw-secret', ...over,
+});
+const tick = () => new Promise((r) => setImmediate(r));
+
+type PgReply = { fields?: Array<{ name: string }>; rows?: unknown[][] } | Error;
+function fakePg(reply: (text: string) => PgReply = () => ({})) {
+  const log: string[] = [];
+  const configs: Array<Record<string, unknown>> = [];
+  const loader = {
+    pg: async () => ({
+      Client: class {
+        constructor(cfg: Record<string, unknown>) { configs.push(cfg); }
+        on() { return this; }
+        async connect() { log.push('CONNECT'); }
+        async query(q: { text: string }) {
+          await tick(); // 직렬화 테스트: 비동기 사이에 다른 run이 끼어들 틈을 만든다
+          log.push(q.text);
+          const r = reply(q.text);
+          if (r instanceof Error) throw r;
+          return r;
+        }
+        async end() { log.push('END'); }
+      },
+    }),
+  } as unknown as DriverLoader;
+  return { loader, log, configs };
+}
+
+type MyReply = { fields?: string[]; rows?: unknown[][]; error?: Error };
+function fakeMysql(reply: (sql: string) => MyReply = () => ({})) {
+  const log: string[] = [];
+  const configs: Array<Record<string, unknown>> = [];
+  const loader = {
+    mysql: async () => ({
+      createConnection: (cfg: Record<string, unknown>) => {
+        configs.push(cfg);
+        const conn = new EventEmitter() as EventEmitter & Record<string, unknown>;
+        conn.query = (opts: { sql: string }) => {
+          const q = new EventEmitter();
+          log.push(opts.sql);
+          setImmediate(() => {
+            const r = reply(opts.sql);
+            if (r.error) { q.emit('error', r.error); return; }
+            if (r.fields) q.emit('fields', r.fields.map((name) => ({ name })));
+            for (const row of r.rows ?? []) q.emit('result', row);
+            q.emit('end');
+          });
+          return q;
+        };
+        conn.destroy = () => { log.push('DESTROY'); };
+        conn.end = (cb?: () => void) => { log.push('END'); cb?.(); };
+        return conn;
+      },
+    }),
+  } as unknown as DriverLoader;
+  return { loader, log, configs };
+}
+
+function fakeOracle(rows: unknown[][]) {
+  const log: string[] = [];
+  const configs: Array<Record<string, unknown>> = [];
+  const conn = {
+    callTimeout: 0,
+    async execute(sql: string, _binds: unknown[], opts?: { maxRows?: number }) {
+      log.push(sql);
+      if (opts) log.push(`maxRows=${opts.maxRows}`);
+      return { metaData: [{ name: 'N' }], rows };
+    },
+    async rollback() { log.push('ROLLBACK'); },
+    async close() { log.push('CLOSE'); },
+  };
+  const loader = {
+    oracle: async () => ({
+      getConnection: async (cfg: Record<string, unknown>) => { configs.push(cfg); return conn; },
+      OUT_FORMAT_ARRAY: 4001, STRING: 'STR', DB_TYPE_NUMBER: 'NUM', DB_TYPE_CLOB: 'CLOB', DB_TYPE_NCLOB: 'NCLOB',
+      DB_TYPE_DATE: 'DATE', DB_TYPE_TIMESTAMP: 'TS', DB_TYPE_TIMESTAMP_TZ: 'TSTZ', DB_TYPE_TIMESTAMP_LTZ: 'TSLTZ',
+    }),
+  } as unknown as DriverLoader;
+  return { loader, log, configs, conn };
+}
+
+describe('PostgreSQL 세션 (스펙 2026-10-02 §6.2)', () => {
+  it('SELECT는 READ ONLY 트랜잭션 + 커서 FETCH(maxRows+1) + ROLLBACK, 끝 ; 제거', async () => {
+    const pg = fakePg((t) => (t.startsWith('FETCH') ? { fields: [{ name: 'n' }], rows: [[1], [2], [3]] } : {}));
+    const s = await openSession(ref(), pg.loader);
+    const r = await s.run('SELECT * FROM t;', [], 2);
+    expect(pg.log).toEqual([
+      'CONNECT',
+      'BEGIN TRANSACTION READ ONLY',
+      'SET LOCAL statement_timeout = 30000',
+      'DECLARE netis_q NO SCROLL CURSOR FOR SELECT * FROM t',
+      'FETCH FORWARD 3 FROM netis_q',
+      'ROLLBACK',
+    ]);
+    expect(r).toEqual({ columns: ['n'], rows: [[1], [2]], truncated: true });
+    expect(pg.configs[0]).toMatchObject({ options: '-c default_transaction_read_only=on', connectionTimeoutMillis: 10000, password: 'Pw-secret' });
+  });
+
+  it('SHOW·EXPLAIN과 바인딩 파라미터가 있는 조회는 커서 없이 직접', async () => {
+    const pg = fakePg();
+    const s = await openSession(ref(), pg.loader);
+    await s.run('SHOW search_path');
+    await s.run('SELECT 1 WHERE $1::text IS NULL', [null]);
+    expect(pg.log.filter((l) => l.startsWith('DECLARE'))).toEqual([]);
+    expect(pg.log).toContain('SHOW search_path');
+  });
+
+  it('SQL 오류에도 ROLLBACK', async () => {
+    const pg = fakePg((t) => (t.startsWith('DECLARE') ? new Error('boom') : {}));
+    const s = await openSession(ref(), pg.loader);
+    await expect(s.run('SELECT x')).rejects.toThrow('boom');
+    expect(pg.log.at(-1)).toBe('ROLLBACK');
+  });
+
+  it('같은 세션의 동시 run은 트랜잭션이 겹치지 않는다', async () => {
+    const pg = fakePg();
+    const s = await openSession(ref(), pg.loader);
+    await Promise.all([s.run('SHOW a'), s.run('SHOW b')]);
+    const body = pg.log.slice(1);
+    expect(body).toEqual([
+      'BEGIN TRANSACTION READ ONLY', 'SET LOCAL statement_timeout = 30000', 'SHOW a', 'ROLLBACK',
+      'BEGIN TRANSACTION READ ONLY', 'SET LOCAL statement_timeout = 30000', 'SHOW b', 'ROLLBACK',
+    ]);
+  });
+});
+
+describe('MySQL·MariaDB 세션', () => {
+  const my = (over: Partial<DbConnectionRef> = {}) => ref({ dbType: 'MARIADB', port: 3306, ...over });
+
+  it('접속 직후 세션 READ ONLY + 타임아웃 2종, run은 START TRANSACTION READ ONLY … ROLLBACK', async () => {
+    const m = fakeMysql((sql) => (sql === 'SELECT 1' ? { fields: ['1'], rows: [[1]] } : {}));
+    const s = await openSession(my(), m.loader);
+    const r = await s.run('SELECT 1;');
+    expect(m.log).toEqual([
+      'SET SESSION TRANSACTION READ ONLY',
+      'SET SESSION max_execution_time = 30000',
+      'SET SESSION max_statement_time = 30',
+      'START TRANSACTION READ ONLY',
+      'SELECT 1',
+      'ROLLBACK',
+    ]);
+    expect(r).toEqual({ columns: ['1'], rows: [[1]], truncated: false });
+    expect(m.configs[0]).toMatchObject({ multipleStatements: false, flags: ['-LOCAL_FILES'], bigNumberStrings: true, connectTimeout: 10000 });
+  });
+
+  it('모르는 타임아웃 변수 오류는 무시한다', async () => {
+    const m = fakeMysql((sql) => (sql.includes('max_execution_time') ? { error: new Error('Unknown system variable') } : {}));
+    const s = await openSession(my(), m.loader);
+    await expect(s.run('SELECT 1')).resolves.toMatchObject({ truncated: false });
+  });
+
+  it('READ ONLY 설정이 실패하면 쿼리를 실행하지 않는다', async () => {
+    const m = fakeMysql((sql) => (sql === 'SET SESSION TRANSACTION READ ONLY' ? { error: new Error('denied') } : {}));
+    const s = await openSession(my(), m.loader);
+    await expect(s.run('SELECT 1')).rejects.toThrow('denied');
+    expect(m.log).not.toContain('SELECT 1');
+    expect(m.log).toContain('DESTROY');
+  });
+
+  it('행 상한을 넘으면 커넥션을 버리고(ROLLBACK 없이) 다음 run에서 다시 접속', async () => {
+    const m = fakeMysql((sql) => (sql === 'SELECT n FROM t' ? { fields: ['n'], rows: [[1], [2], [3], [4], [5]] } : {}));
+    const s = await openSession(my(), m.loader);
+    const r = await s.run('SELECT n FROM t', [], 2);
+    expect(r).toEqual({ columns: ['n'], rows: [[1], [2]], truncated: true });
+    expect(m.log.slice(-2)).toEqual(['SELECT n FROM t', 'DESTROY']);
+    await s.run('SELECT n FROM t', [], 10);
+    expect(m.configs).toHaveLength(2);
+  });
+
+  it('SQL 오류면 ROLLBACK 후 오류', async () => {
+    const m = fakeMysql((sql) => (sql === 'SELECT bad' ? { error: new Error('syntax') } : {}));
+    const s = await openSession(my(), m.loader);
+    await expect(s.run('SELECT bad')).rejects.toThrow('syntax');
+    expect(m.log.at(-1)).toBe('ROLLBACK');
+  });
+});
+
+describe('Oracle 세션', () => {
+  it('ROLLBACK → SET TRANSACTION READ ONLY → execute(maxRows+1) → ROLLBACK, EZConnect·callTimeout', async () => {
+    const o = fakeOracle([[1], [2], [3]]);
+    const s = await openSession(ref({ dbType: 'ORACLE', port: 1521, database: 'ORCLPDB1' }), o.loader);
+    const r = await s.run('SELECT n FROM dual;', [], 2);
+    expect(o.log).toEqual(['ROLLBACK', 'SET TRANSACTION READ ONLY', 'SELECT n FROM dual', 'maxRows=3', 'ROLLBACK']);
+    expect(r).toEqual({ columns: ['N'], rows: [[1], [2]], truncated: true });
+    expect(o.configs[0]).toMatchObject({ connectString: 'db.local:1521/ORCLPDB1', user: 'reader' });
+    expect(o.conn.callTimeout).toBe(30000);
+    await s.close();
+    expect(o.log.at(-1)).toBe('CLOSE');
+  });
+});
+
+describe('드라이버 로더·카탈로그', () => {
+  it('없는 드라이버는 고정 문구 오류', async () => {
+    await expect(loadDriver('netismaker-no-such-driver')).rejects.toThrow('DB 드라이버를 불러올 수 없습니다(netismaker-no-such-driver)');
+  });
+
+  it('카탈로그 SQL은 값을 바인딩 파라미터로만 넘긴다', () => {
+    expect(catalogSql('postgres', 'tables', null)).toMatchObject({ params: [null] });
+    const c = catalogSql('oracle', 'columns', null, "x' OR '1'='1");
+    expect(c.params).toEqual([null, "x' OR '1'='1"]);
+    expect(c.sql).not.toContain("x' OR");
+    expect(c.sql).toContain('UPPER(:2)');
+    expect(catalogSql('mysql', 'indexes', 'app', 'orders').params).toEqual(['app', 'orders']);
+  });
+});
+```
+
+`netismaker-interview-service/test/dbMcp.test.ts`:
+```ts
+import { describe, expect, it, vi } from 'vitest';
+import { createDbMcp, dbToolsFor, safeMessage } from '../src/sdk/dbMcp.js';
+import type { DbSession } from '../src/sdk/db/adapters.js';
 import type { DbConnectionRef, InterviewClaimResponse } from '../src/types.js';
 import { questionClaim } from './fixtures/claims.js';
 
@@ -2815,148 +3053,111 @@ const ref = (over: Partial<DbConnectionRef> = {}): DbConnectionRef => ({
 });
 const claimWith = (refs: DbConnectionRef[], notices: string[] = []): InterviewClaimResponse =>
   ({ ...questionClaim, dbConnections: refs, dbNotices: notices });
-const fakeToolbox = () => { const d = mkdtempSync(join(tmpdir(), 'tbx-')); const p = join(d, 'toolbox.exe'); writeFileSync(p, ''); return p; };
-
-describe('dbMcp 매핑', () => {
-  it('prebuilt·방언', () => {
-    expect(['POSTGRESQL', 'MYSQL', 'MARIADB', 'ORACLE'].map((t) => prebuiltFor(t as never))).toEqual(['postgres', 'mysql', 'mysql', 'oracledb']);
-    expect(dialectFor('MARIADB')).toBe('mysql');
-    expect(dialectFor('ORACLE')).toBe('oracle');
-  });
-
-  it('env — DB별 Toolbox 변수 이름', () => {
-    expect(envFor(ref())).toEqual({
-      POSTGRES_HOST: 'db.local', POSTGRES_PORT: '5432', POSTGRES_DATABASE: 'app', POSTGRES_USER: 'reader',
-      POSTGRES_PASSWORD: 'Pw-secret', POSTGRES_QUERY_PARAMS: PG_READ_ONLY_QUERY_PARAMS,
-    });
-    expect(envFor(ref({ dbType: 'MARIADB', port: 3307 }))).toEqual({
-      MYSQL_HOST: 'db.local', MYSQL_PORT: '3307', MYSQL_DATABASE: 'app', MYSQL_USER: 'reader', MYSQL_PASSWORD: 'Pw-secret',
-    });
-    expect(envFor(ref({ dbType: 'ORACLE', port: 1521, database: 'ORCLPDB1' }))).toEqual({
-      ORACLE_CONNECTION_STRING: 'db.local:1521/ORCLPDB1', ORACLE_USERNAME: 'reader', ORACLE_PASSWORD: 'Pw-secret', ORACLE_USE_OCI: 'false',
-    });
-  });
+const fakeSession = (): DbSession & { run: ReturnType<typeof vi.fn>; close: ReturnType<typeof vi.fn> } => ({
+  run: vi.fn(async () => ({ columns: ['n'], rows: [[1]], truncated: false })),
+  close: vi.fn(async () => undefined),
 });
+const call = async (tools: ReturnType<typeof dbToolsFor>, name: string, args: Record<string, unknown>) => {
+  const t = tools.find((x) => x.name === name);
+  if (!t) throw new Error(`도구 없음: ${name}`);
+  return (await t.handler(args as never, {})) as { content: Array<{ text: string }>; isError?: boolean };
+};
 
-describe('prepareDbMcpServers', () => {
-  it('연결마다 0600 파일을 쓰고 명령줄에는 런처+파일 경로만 둔다', () => {
-    const tmp = mkdtempSync(join(tmpdir(), 'dbmcp-'));
-    const p = prepareDbMcpServers(claimWith([ref()], ['참고 1']), { toolboxPath: fakeToolbox(), tmpDir: tmp, launcherPath: '/l.mjs', nodePath: '/node' });
+describe('createDbMcp (스펙 2026-10-02 §6.2)', () => {
+  it('연결마다 type:sdk 서버 — 인스턴스를 뺀 설정(CLI로 가는 부분)에 비밀번호 없음', () => {
+    const p = createDbMcp(claimWith([ref()], ['참고 1']));
     const s = p.servers['db-7']!;
-    expect(s.type).toBe('stdio');
-    expect(s.command).toBe('/node');
-    expect(s.args[0]).toBe('/l.mjs');
-    expect(JSON.stringify(p.servers)).not.toContain('Pw-secret');
+    expect(s.type).toBe('sdk');
+    expect(s.name).toBe('db-7');
+    expect(s.instance).toBeDefined();
+    const { instance: _instance, ...wire } = s;
+    expect(JSON.stringify(wire)).not.toContain('Pw-secret');
+    expect(p.tools['db-7']!.map((t) => t.name)).toEqual(['query', 'list_tables', 'describe_table']);
     expect(p.dialects).toEqual({ 'db-7': 'postgres' });
     expect(p.labels).toEqual([{ serverName: 'db-7', label: '운영 DB (PostgreSQL)' }]);
     expect(p.notices).toEqual(['참고 1']);
-    expect(p.files).toHaveLength(1);
-    const spec = JSON.parse(readFileSync(p.files[0]!, 'utf8'));
-    expect(spec.prebuilt).toBe('postgres');
-    expect(spec.env.POSTGRES_PASSWORD).toBe('Pw-secret');
-    if (process.platform !== 'win32') expect(statSync(p.files[0]!).mode & 0o777).toBe(0o600);
-    cleanupDbMcpFiles(p.files);
-    expect(existsSync(p.files[0]!)).toBe(false);
   });
 
-  it('Toolbox가 없으면 서버 없이 안내만', () => {
-    const p = prepareDbMcpServers(claimWith([ref()]), { toolboxPath: undefined, tmpDir: mkdtempSync(join(tmpdir(), 'dbmcp-')) });
+  it('연결이 없거나 필드가 없으면 빈 결과, 잘못된 serverName은 건너뛰고 안내', () => {
+    expect(createDbMcp(claimWith([])).servers).toEqual({});
+    expect(createDbMcp({ ...questionClaim }).servers).toEqual({});
+    const p = createDbMcp(claimWith([ref({ serverName: '../evil' })]));
     expect(p.servers).toEqual({});
-    expect(p.notices).toEqual(['DB 도구를 사용할 수 없습니다(서버에 Toolbox 미설치)']);
-  });
-
-  it('연결이 없으면 아무 파일도 만들지 않는다', () => {
-    const tmp = mkdtempSync(join(tmpdir(), 'dbmcp-'));
-    expect(prepareDbMcpServers(claimWith([]), { toolboxPath: fakeToolbox(), tmpDir: tmp }).files).toEqual([]);
-    expect(prepareDbMcpServers({ ...questionClaim }, { toolboxPath: fakeToolbox(), tmpDir: tmp }).files).toEqual([]);
-  });
-
-  it('serverName이 db-<숫자>가 아니면 건너뛴다(파일 이름 경로 탈출 방지)', () => {
-    const p = prepareDbMcpServers(claimWith([ref({ serverName: '../evil' })]), { toolboxPath: fakeToolbox(), tmpDir: mkdtempSync(join(tmpdir(), 'dbmcp-')) });
-    expect(p.files).toEqual([]);
     expect(p.notices[0]).toContain('잘못된 DB 서버 이름');
   });
 
-  it('cleanup은 없는 파일에도 조용하다', () => {
-    expect(() => cleanupDbMcpFiles([join(tmpdir(), 'nope-' + Date.now() + '.json')])).not.toThrow();
+  it('DB 접속은 첫 도구 호출 때 한 번, close는 열린 세션만 닫는다', async () => {
+    const session = fakeSession();
+    const openSession = vi.fn(async () => session);
+    const p = createDbMcp(claimWith([ref(), ref({ serverName: 'db-8', dbType: 'MYSQL' })]), { openSession });
+    expect(openSession).not.toHaveBeenCalled();
+    await call(p.tools['db-7']!, 'query', { sql: 'SELECT 1' });
+    await call(p.tools['db-7']!, 'list_tables', {});
+    expect(openSession).toHaveBeenCalledTimes(1);
+    await p.close();
+    expect(session.close).toHaveBeenCalledTimes(1);
   });
 
-  it('sweep은 1시간 넘은 json만 지운다', () => {
-    const tmp = mkdtempSync(join(tmpdir(), 'dbmcp-'));
-    const old = join(tmp, '1-a-db-1.json'); const fresh = join(tmp, '1-b-db-1.json'); const other = join(tmp, 'keep.txt');
-    for (const f of [old, fresh, other]) writeFileSync(f, '{}');
-    const now = Date.now();
-    utimesSync(old, (now - 2 * 3600_000) / 1000, (now - 2 * 3600_000) / 1000);
-    utimesSync(other, (now - 2 * 3600_000) / 1000, (now - 2 * 3600_000) / 1000);
-    expect(sweepStaleDbMcpFiles(tmp, 3600_000, now)).toBe(1);
-    expect(existsSync(old)).toBe(false);
-    expect(existsSync(fresh)).toBe(true);
-    expect(existsSync(other)).toBe(true);
-    expect(sweepStaleDbMcpFiles(join(tmp, 'missing'))).toBe(0);
-  });
-});
-```
-
-`netismaker-interview-service/test/dbMcpLauncher.test.ts`:
-```ts
-import { describe, expect, it, vi } from 'vitest';
-import { mkdtempSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
-import { spawnSync } from 'node:child_process';
-import { fileURLToPath } from 'node:url';
-import { childEnv, launch, readSpec } from '../src/launcher/dbMcpLauncher.mjs';
-
-const LAUNCHER = fileURLToPath(new URL('../src/launcher/dbMcpLauncher.mjs', import.meta.url));
-const tmpFile = (content: string) => { const f = join(mkdtempSync(join(tmpdir(), 'ln-')), 'spec.json'); writeFileSync(f, content); return f; };
-
-describe('dbMcpLauncher', () => {
-  it('childEnv는 OS 필수 변수와 DB env만 남긴다', () => {
-    const env = childEnv({ PATH: '/bin', SYSTEMROOT: 'C:\\Windows', GITHUB_PAT: 'ghp_x', WORKER_API_KEY: 'k' }, { MYSQL_HOST: 'h' });
-    expect(env).toEqual({ PATH: '/bin', SYSTEMROOT: 'C:\\Windows', MYSQL_HOST: 'h' });
-  });
-
-  it('readSpec_error_never_echoes_content', () => {
-    // Review Focus 5: JSON.parse 오류 메시지는 본문 일부를 담는다
-    const f = tmpFile('{"env":{"POSTGRES_PASSWORD":"Pw-secret"');
-    expect(() => readSpec(f)).toThrowError('런처 파일을 읽을 수 없습니다');
-    try { readSpec(f); } catch (e) { expect(String(e)).not.toContain('Pw-secret'); }
-    expect(() => readSpec(tmpFile('{"toolboxPath":1}'))).toThrowError('런처 파일 형식이 올바르지 않습니다');
-  });
-
-  it('launch는 Toolbox를 --prebuilt <p> --stdio, stdio inherit로 띄운다', () => {
-    const f = tmpFile(JSON.stringify({ toolboxPath: '/t/toolbox', prebuilt: 'mysql', env: { MYSQL_HOST: 'h' } }));
-    const spawnFn = vi.fn().mockReturnValue({ on: vi.fn() });
-    launch(f, { PATH: '/bin', GITHUB_PAT: 'x' }, spawnFn as never);
-    expect(spawnFn).toHaveBeenCalledWith('/t/toolbox', ['--prebuilt', 'mysql', '--stdio'],
-      { stdio: 'inherit', env: { PATH: '/bin', MYSQL_HOST: 'h' }, windowsHide: true });
-  });
-
-  it('직접 실행 — 자식 종료 코드를 그대로 돌려준다, 깨진 파일은 1 + 고정 문구', () => {
-    // 가짜 Toolbox = node 자신: '--prebuilt'를 모르는 옵션으로 보고 0이 아닌 코드로 끝난다.
-    const f = tmpFile(JSON.stringify({ toolboxPath: process.execPath, prebuilt: 'x', env: {} }));
-    const r = spawnSync(process.execPath, [LAUNCHER, f], { encoding: 'utf8' });
-    expect(r.status).not.toBe(0);
-    const bad = spawnSync(process.execPath, [LAUNCHER, tmpFile('{"x":"Pw-secret"')], { encoding: 'utf8' });
-    expect(bad.status).toBe(1);
-    expect(bad.stderr).toContain('[dbMcpLauncher]');
-    expect(bad.stderr).not.toContain('Pw-secret');
+  it('접속 실패 뒤에는 다음 호출이 다시 접속을 시도한다, close 실패는 삼킨다', async () => {
+    const session = fakeSession();
+    session.close.mockRejectedValue(new Error('close boom'));
+    const openSession = vi.fn().mockRejectedValueOnce(new Error('refused')).mockResolvedValue(session);
+    const p = createDbMcp(claimWith([ref()]), { openSession });
+    expect((await call(p.tools['db-7']!, 'query', { sql: 'SELECT 1' })).isError).toBe(true);
+    expect((await call(p.tools['db-7']!, 'query', { sql: 'SELECT 1' })).isError).toBeUndefined();
+    expect(openSession).toHaveBeenCalledTimes(2);
+    await expect(p.close()).resolves.toBeUndefined();
   });
 });
-```
 
-`test/config.test.ts` 끝에 추가(파일의 기존 `loadConfig` 호출 방식에 맞춰 필수 env 객체를 재사용한다):
-```ts
-describe('loadConfig — DB MCP (스펙 2026-10-02 §6.1)', () => {
-  const base = { API_BASE_URL: 'http://x', WORKER_API_KEY: 'k', WORKER_ID: 'w', SUPERPOWERS_PLUGIN_PATH: '/sp' };
-  it('TOOLBOX_PATH는 선택, DB_MCP_TMP_DIR 기본값은 tmpdir 아래', async () => {
-    const { loadConfig } = await import('../src/config.js');
-    const c = loadConfig(base);
-    expect(c.toolboxPath).toBeUndefined();
-    expect(c.dbMcpTmpDir).toMatch(/netismaker-dbmcp$/);
-    const c2 = loadConfig({ ...base, TOOLBOX_PATH: 'C:/t/toolbox.exe', DB_MCP_TMP_DIR: 'C:/tmp/x' });
-    expect(c2.toolboxPath).toBe('C:/t/toolbox.exe');
-    expect(c2.dbMcpTmpDir).toBe('C:/tmp/x');
+describe('dbToolsFor — 도구 핸들러', () => {
+  it('query: 결과 JSON, 상한 200행으로 실행', async () => {
+    const session = fakeSession();
+    const tools = dbToolsFor(ref(), 'postgres', async () => session);
+    const r = await call(tools, 'query', { sql: 'SELECT 1' });
+    expect(session.run).toHaveBeenCalledWith('SELECT 1', [], 200);
+    expect(JSON.parse(r.content[0]!.text)).toMatchObject({ rowCount: 1, truncated: false });
+  });
+
+  it('handler_rejects_dml_even_if_gate_allowed', async () => {
+    // Review Focus 6: 게이트가 allow해도 핸들러가 다시 막는다 — 세션을 열지도 않는다
+    const getSession = vi.fn();
+    const tools = dbToolsFor(ref(), 'mysql', getSession);
+    for (const sql of ['DELETE FROM t', 'SELECT 1; DROP TABLE t', 'SELECT 1 /*! ; DELETE FROM t */']) {
+      const r = await call(tools, 'query', { sql });
+      expect(r.isError).toBe(true);
+      expect(r.content[0]!.text).toContain('읽기 전용');
+    }
+    expect(getSession).not.toHaveBeenCalled();
+  });
+
+  it('error_text_never_contains_password', async () => {
+    // Review Focus 5
+    const tools = dbToolsFor(ref(), 'postgres', async () => { throw new Error('auth failed for reader using Pw-secret'); });
+    const r = await call(tools, 'query', { sql: 'SELECT 1' });
+    expect(r.isError).toBe(true);
+    expect(r.content[0]!.text).not.toContain('Pw-secret');
+    expect(r.content[0]!.text).toContain('****');
+  });
+
+  it('list_tables·describe_table은 카탈로그 SQL을 바인딩으로 실행(카탈로그 상한 1000행)', async () => {
+    const session = fakeSession();
+    const tools = dbToolsFor(ref({ dbType: 'MYSQL' }), 'mysql', async () => session);
+    await call(tools, 'list_tables', { schema: 'app' });
+    expect(session.run.mock.calls[0]![1]).toEqual(['app']);
+    expect(session.run.mock.calls[0]![2]).toBe(1000);
+    const d = await call(tools, 'describe_table', { table: 'orders' });
+    expect(session.run.mock.calls[1]![1]).toEqual([null, 'orders']);
+    expect(session.run.mock.calls[2]![1]).toEqual([null, 'orders']);
+    expect(d.content[0]!.text).toContain('컬럼:');
+    expect(d.content[0]!.text).toContain('인덱스:');
+  });
+});
+
+describe('safeMessage', () => {
+  it('비밀번호 치환 + 500자 제한', () => {
+    expect(safeMessage(new Error('x Pw-secret y Pw-secret'), { password: 'Pw-secret' })).toBe('x **** y ****');
+    expect(safeMessage('z'.repeat(600), { password: 'p' }).length).toBeLessThanOrEqual(501);
   });
 });
 ```
@@ -2964,11 +3165,11 @@ describe('loadConfig — DB MCP (스펙 2026-10-02 §6.1)', () => {
 - [ ] **Step 2: 실패 확인**
 
 ```bash
-cd netismaker-interview-service && npx vitest run test/dbMcp.test.ts test/dbMcpLauncher.test.ts test/config.test.ts
+cd netismaker-interview-service && npx vitest run test/dbResult.test.ts test/dbAdapters.test.ts test/dbMcp.test.ts
 ```
 Expected: FAIL(모듈 없음).
 
-- [ ] **Step 3: 타입·설정**
+- [ ] **Step 3: 타입**
 
 `src/types.ts` — `McpSpec` 인터페이스 아래에:
 ```ts
@@ -2977,7 +3178,8 @@ export type DbType = 'POSTGRESQL' | 'MYSQL' | 'MARIADB' | 'ORACLE';
 
 /**
  * Java InterviewClaimResponse.DbConnectionRef — 복호화된 DB 접속정보(질문 세션 claim 전용).
- * ⚠️ password 평문: 로그·오류 메시지·SDK options(명령줄)에 넣지 말 것 — dbMcp.ts가 임시 파일로만 넘긴다.
+ * ⚠️ password 평문: 로그·오류 메시지·SDK options의 stdio 서버 설정(명령줄로 나간다)에 넣지 말 것 —
+ * dbMcp.ts가 메모리에서만 드라이버에 넘긴다(type:'sdk' 서버는 CLI에 이름만 간다).
  */
 export interface DbConnectionRef {
   serverName: string;
@@ -3001,306 +3203,698 @@ export interface DbConnectionRef {
   dbNotices?: string[];
 ```
 
-`src/config.ts`:
-- 상단에 `import { tmpdir } from 'node:os';`, `import { join } from 'node:path';`
-- `Config`에:
+- [ ] **Step 4: limits.ts · result.ts**
+
+`src/sdk/db/limits.ts`:
 ```ts
-  /** MCP Toolbox 바이너리 경로(선택, 스펙 2026-10-02 §6.1). 없으면 질문 세션 DB 도구를 붙이지 않는다. */
-  toolboxPath?: string;
-  /** 턴별 DB 접속정보 임시 파일 디렉터리. 기본 os.tmpdir()/netismaker-dbmcp. */
-  dbMcpTmpDir: string;
-```
-- `loadConfig` 반환 객체 끝에:
-```ts
-    toolboxPath: env.TOOLBOX_PATH || undefined,
-    dbMcpTmpDir: env.DB_MCP_TMP_DIR || join(tmpdir(), 'netismaker-dbmcp'),
+/** 질문 세션 DB 도구 상한 (스펙 2026-10-02 §6.2·§6.3). 설정화는 범위 밖(§12) — 바꿀 때는 스펙과 같이 바꾼다. */
+export const DB_LIMITS = {
+  statementTimeoutMs: 30_000,
+  connectTimeoutMs: 10_000,
+  maxRows: 200,
+  maxCatalogRows: 1000,
+  maxCellChars: 2000,
+  maxResultChars: 60_000,
+} as const;
 ```
 
-`.env.example` 끝에:
-```
-# 질문 세션 DB 도구(스펙 2026-10-02): MCP Toolbox 바이너리. scripts/install-toolbox.ps1이 bin/toolbox.exe로 받는다.
-# 비우면 DB 연결을 골라도 DB 도구 없이 답한다(프롬프트에 안내).
-# TOOLBOX_PATH=C:\Users\mic\NetisMaker\commanCenter\netismaker-interview-service\bin\toolbox.exe
-# 턴별 DB 접속정보 임시 파일 위치(기본 OS 임시 폴더\netismaker-dbmcp). 턴이 끝나면 지워진다.
-# DB_MCP_TMP_DIR=
+`src/sdk/db/result.ts`:
+```ts
+import { DB_LIMITS } from './limits.js';
+
+/** 어댑터 한 번 실행 결과. rows는 상한까지만, 넘쳤으면 truncated. */
+export interface QueryResult {
+  columns: string[];
+  rows: unknown[][];
+  truncated: boolean;
+}
+
+function clip(s: string): string {
+  const max = DB_LIMITS.maxCellChars;
+  return s.length > max ? `${s.slice(0, max)}…(+${s.length - max}자)` : s;
+}
+
+/**
+ * 셀 값을 JSON에 안전한 값으로 (스펙 §6.3). bigint를 숫자로 바꾸지 않는다(정밀도) — 문자열.
+ * 기존 MariaDB MCP의 BigInt 직렬화 오류가 이 경로에서 생기지 않게 하는 곳.
+ */
+export function toCell(v: unknown): unknown {
+  if (v === null || v === undefined) return null;
+  if (typeof v === 'bigint') return v.toString();
+  if (typeof v === 'string') return clip(v);
+  if (typeof v === 'number' || typeof v === 'boolean') return v;
+  if (v instanceof Date) return Number.isNaN(v.getTime()) ? String(v) : v.toISOString();
+  if (v instanceof Uint8Array) return `<binary ${v.byteLength} bytes>`; // Buffer 포함
+  try {
+    return clip(JSON.stringify(v) ?? String(v));
+  } catch {
+    return clip(String(v));
+  }
+}
+
+/** 도구 결과 텍스트 — 행 상한·전체 길이 상한을 넘으면 잘라 truncated 표시. */
+export function formatResult(r: QueryResult, maxRows: number = DB_LIMITS.maxRows): string {
+  let truncated = r.truncated || r.rows.length > maxRows;
+  let rows = r.rows.slice(0, maxRows).map((row) => row.map(toCell));
+  const render = () => JSON.stringify({ columns: r.columns, rows, rowCount: rows.length, truncated });
+  let text = render();
+  while (text.length > DB_LIMITS.maxResultChars && rows.length > 0) {
+    const keep = Math.floor(rows.length * (DB_LIMITS.maxResultChars / text.length));
+    rows = rows.slice(0, Math.min(rows.length - 1, Math.max(0, keep)));
+    truncated = true;
+    text = render();
+  }
+  return text;
+}
 ```
 
-- [ ] **Step 4: dbMcp.ts**
+- [ ] **Step 5: adapters.ts**
+
+`src/sdk/db/adapters.ts`:
+```ts
+import type { DbConnectionRef } from '../../types.js';
+import { stripSql } from '../sqlReadOnly.js';
+import { DB_LIMITS } from './limits.js';
+import type { QueryResult } from './result.js';
+
+/**
+ * 질문 세션 DB 도구의 종류별 읽기 전용 세션 (스펙 2026-10-02 §6.2).
+ * 모든 run: 읽기 전용 트랜잭션 시작 → 사용자 SQL(끝 ';' 제거) → 성공·실패와 무관하게 ROLLBACK.
+ * 한 세션의 run은 직렬화한다 — CLI가 같은 서버 도구를 병렬 호출해도 한 커넥션에 트랜잭션이 겹치지 않게.
+ * ⚠️ ref.password는 드라이버 설정 객체에만 넣는다. 오류 메시지는 dbMcp.safeMessage를 거쳐 나간다.
+ */
+export interface DbSession {
+  /** params는 바인딩 파라미터(카탈로그 조회 전용). maxRows를 넘는 행은 버리고 truncated. */
+  run(sql: string, params?: unknown[], maxRows?: number): Promise<QueryResult>;
+  close(): Promise<void>;
+}
+
+/* 드라이버 최소 구조 타입 — 타입 패키지 없이 컴파일하고, 테스트가 가짜를 주입한다. */
+export interface PgClient {
+  on(event: 'error', cb: (e: Error) => void): unknown;
+  connect(): Promise<unknown>;
+  query(q: { text: string; values?: unknown[]; rowMode: 'array' }): Promise<{ fields?: Array<{ name: string }>; rows?: unknown[][] }>;
+  end(): Promise<void>;
+}
+export interface PgModule {
+  Client: new (cfg: Record<string, unknown>) => PgClient;
+}
+export interface MysqlQuery {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  on(event: string, cb: (...args: any[]) => void): MysqlQuery;
+}
+export interface MysqlConnection {
+  query(opts: { sql: string; values?: unknown[]; rowsAsArray?: boolean; timeout?: number }): MysqlQuery;
+  on(event: 'error', cb: (e: Error) => void): unknown;
+  end(cb?: (e?: Error) => void): void;
+  destroy(): void;
+}
+export interface MysqlModule {
+  createConnection(cfg: Record<string, unknown>): MysqlConnection;
+}
+export interface OracleConnection {
+  callTimeout: number;
+  execute(sql: string, binds: unknown[], opts?: Record<string, unknown>): Promise<{ metaData?: Array<{ name: string }>; rows?: unknown[][] }>;
+  rollback(): Promise<void>;
+  close(): Promise<void>;
+}
+export interface OracleModule {
+  getConnection(cfg: Record<string, unknown>): Promise<OracleConnection>;
+  OUT_FORMAT_ARRAY: unknown;
+  STRING: unknown;
+  DB_TYPE_NUMBER: unknown;
+  DB_TYPE_CLOB: unknown;
+  DB_TYPE_NCLOB: unknown;
+  DB_TYPE_DATE: unknown;
+  DB_TYPE_TIMESTAMP: unknown;
+  DB_TYPE_TIMESTAMP_TZ: unknown;
+  DB_TYPE_TIMESTAMP_LTZ: unknown;
+}
+
+export interface DriverLoader {
+  pg(): Promise<PgModule>;
+  mysql(): Promise<MysqlModule>;
+  oracle(): Promise<OracleModule>;
+}
+
+/** 변수 모듈명 동적 import — 타입 패키지 없이 컴파일되고, 설치가 빠지면 그 도구 호출만 실패한다. */
+export async function loadDriver<T>(name: string): Promise<T> {
+  try {
+    const mod = (await import(name)) as { default?: T };
+    return (mod.default ?? mod) as T;
+  } catch {
+    throw new Error(`DB 드라이버를 불러올 수 없습니다(${name}) — 인터뷰 서비스에서 npm ci를 확인하세요`);
+  }
+}
+
+export const realDrivers: DriverLoader = {
+  pg: () => loadDriver<PgModule>('pg'),
+  mysql: () => loadDriver<MysqlModule>('mysql2'),
+  oracle: () => loadDriver<OracleModule>('oracledb'),
+};
+
+/** sqlReadOnly가 끝 ';' 하나를 허용한다 — Oracle은 ';'가 있으면 ORA-00933, 커서 DECLARE 안에서도 문법 오류. */
+export function withoutTrailingSemicolon(sql: string): string {
+  return sql.trim().replace(/;\s*$/, '').trimEnd();
+}
+
+function limited(columns: string[], rows: unknown[][], maxRows: number): QueryResult {
+  return { columns, rows: rows.slice(0, maxRows), truncated: rows.length > maxRows };
+}
+
+function serialized(s: DbSession): DbSession {
+  let chain: Promise<unknown> = Promise.resolve();
+  return {
+    run(sql, params, maxRows) {
+      const p = chain.then(() => s.run(sql, params, maxRows));
+      chain = p.catch(() => undefined);
+      return p;
+    },
+    close: () => chain.then(() => s.close()),
+  };
+}
+
+export async function openSession(ref: DbConnectionRef, drivers: DriverLoader = realDrivers): Promise<DbSession> {
+  switch (ref.dbType) {
+    case 'POSTGRESQL':
+      return openPostgres(ref, drivers);
+    case 'ORACLE':
+      return openOracle(ref, drivers);
+    default:
+      return openMysql(ref, drivers); // MYSQL, MARIADB
+  }
+}
+
+// ── PostgreSQL ────────────────────────────────────────────────────────────
+
+const PG_CURSOR_LEADING = new Set(['SELECT', 'WITH', 'VALUES', 'TABLE']);
+
+function firstWord(sql: string): string {
+  const stripped = stripSql(sql, 'postgres');
+  const body = typeof stripped === 'string' ? stripped : sql;
+  return (/[A-Za-z_]+/.exec(body)?.[0] ?? '').toUpperCase();
+}
+
+async function openPostgres(ref: DbConnectionRef, drivers: DriverLoader): Promise<DbSession> {
+  const pg = await drivers.pg();
+  const client = new pg.Client({
+    host: ref.host,
+    port: ref.port,
+    database: ref.database,
+    user: ref.username,
+    password: ref.password,
+    connectionTimeoutMillis: DB_LIMITS.connectTimeoutMs,
+    application_name: 'netismaker-question',
+    options: '-c default_transaction_read_only=on',
+  });
+  client.on('error', () => undefined); // 유휴 중 끊김 — 리스너가 없으면 프로세스가 죽는다. 다음 run이 오류로 드러낸다.
+  await client.connect();
+  const q = (text: string, values?: unknown[]) => client.query({ text, values, rowMode: 'array' });
+  return serialized({
+    async run(sql, params = [], maxRows = DB_LIMITS.maxRows) {
+      const body = withoutTrailingSemicolon(sql);
+      await q('BEGIN TRANSACTION READ ONLY');
+      try {
+        await q(`SET LOCAL statement_timeout = ${DB_LIMITS.statementTimeoutMs}`);
+        // 행 수 상한을 DB 쪽에서 — 큰 테이블 SELECT *가 메모리로 다 오지 않게. DECLARE는 바인딩 파라미터를
+        // 받지 못하므로 params가 있는 조회(카탈로그 — 자체 LIMIT)와 SHOW/EXPLAIN은 직접 실행한다.
+        let r: { fields?: Array<{ name: string }>; rows?: unknown[][] };
+        if (params.length === 0 && PG_CURSOR_LEADING.has(firstWord(body))) {
+          await q(`DECLARE netis_q NO SCROLL CURSOR FOR ${body}`);
+          r = await q(`FETCH FORWARD ${maxRows + 1} FROM netis_q`);
+        } else {
+          r = await q(body, params);
+        }
+        return limited((r.fields ?? []).map((f) => f.name), r.rows ?? [], maxRows);
+      } finally {
+        await q('ROLLBACK').catch(() => undefined);
+      }
+    },
+    close: () => client.end(),
+  });
+}
+
+// ── MySQL · MariaDB ───────────────────────────────────────────────────────
+
+function mysqlControl(c: MysqlConnection, sql: string): Promise<void> {
+  return new Promise((resolve, reject) => {
+    c.query({ sql }).on('error', reject).on('end', () => resolve());
+  });
+}
+
+function mysqlRows(
+  c: MysqlConnection,
+  sql: string,
+  values: unknown[],
+  maxRows: number,
+): Promise<{ columns: string[]; rows: unknown[][]; overflow: boolean }> {
+  return new Promise((resolve, reject) => {
+    const columns: string[] = [];
+    const rows: unknown[][] = [];
+    let done = false;
+    c.query({ sql, values, rowsAsArray: true, timeout: DB_LIMITS.statementTimeoutMs })
+      .on('fields', (fields: Array<{ name: string }> | undefined) => {
+        if (columns.length === 0 && Array.isArray(fields)) columns.push(...fields.map((f) => f.name));
+      })
+      .on('result', (row: unknown) => {
+        if (done || !Array.isArray(row)) return; // OK 패킷(비행 결과)은 무시
+        if (rows.length >= maxRows) {
+          done = true;
+          resolve({ columns, rows, overflow: true });
+          return;
+        }
+        rows.push(row);
+      })
+      .on('error', (e: Error) => {
+        if (done) return;
+        done = true;
+        reject(e);
+      })
+      .on('end', () => {
+        if (done) return;
+        done = true;
+        resolve({ columns, rows, overflow: false });
+      });
+  });
+}
+
+async function openMysql(ref: DbConnectionRef, drivers: DriverLoader): Promise<DbSession> {
+  const mysql = await drivers.mysql();
+  let conn: MysqlConnection | null = null;
+  const drop = (c: MysqlConnection) => {
+    c.destroy();
+    if (conn === c) conn = null;
+  };
+  const connect = async (): Promise<MysqlConnection> => {
+    const c = mysql.createConnection({
+      host: ref.host,
+      port: ref.port,
+      database: ref.database,
+      user: ref.username,
+      password: ref.password,
+      connectTimeout: DB_LIMITS.connectTimeoutMs,
+      multipleStatements: false,
+      supportBigNumbers: true,
+      bigNumberStrings: true,
+      dateStrings: true,
+      flags: ['-LOCAL_FILES'], // LOAD DATA LOCAL INFILE 차단
+    });
+    c.on('error', () => undefined); // 유휴 중 끊김 — 리스너가 없으면 프로세스가 죽는다.
+    try {
+      await mysqlControl(c, 'SET SESSION TRANSACTION READ ONLY');
+    } catch (e) {
+      c.destroy();
+      throw e;
+    }
+    // 서버 측 문장 타임아웃 — MySQL(5.7.8+, SELECT만)과 MariaDB(10.1+)의 변수 이름이 달라 둘 다 시도, 모르는 변수 오류는 무시.
+    await mysqlControl(c, `SET SESSION max_execution_time = ${DB_LIMITS.statementTimeoutMs}`).catch(() => undefined);
+    await mysqlControl(c, `SET SESSION max_statement_time = ${DB_LIMITS.statementTimeoutMs / 1000}`).catch(() => undefined);
+    return c;
+  };
+  return serialized({
+    async run(sql, params = [], maxRows = DB_LIMITS.maxRows) {
+      const c = conn ?? (conn = await connect());
+      try {
+        await mysqlControl(c, 'START TRANSACTION READ ONLY');
+      } catch (e) {
+        drop(c);
+        throw e;
+      }
+      let r: { columns: string[]; rows: unknown[][]; overflow: boolean };
+      try {
+        r = await mysqlRows(c, withoutTrailingSemicolon(sql), params, maxRows);
+      } catch (e) {
+        await mysqlControl(c, 'ROLLBACK').catch(() => drop(c));
+        throw e;
+      }
+      // 상한 초과: 남은 행 전송을 끊으려고 커넥션째 버린다(트랜잭션도 함께 사라짐). 다음 run이 다시 접속한다.
+      if (r.overflow) drop(c);
+      else await mysqlControl(c, 'ROLLBACK').catch(() => drop(c));
+      return { columns: r.columns, rows: r.rows, truncated: r.overflow };
+    },
+    async close() {
+      const c = conn;
+      conn = null;
+      if (c) await new Promise<void>((resolve) => c.end(() => resolve()));
+    },
+  });
+}
+
+// ── Oracle (thin — initOracleClient를 부르지 않는다) ──────────────────────
+
+async function openOracle(ref: DbConnectionRef, drivers: DriverLoader): Promise<DbSession> {
+  const ora = await drivers.oracle();
+  const conn = await ora.getConnection({
+    user: ref.username,
+    password: ref.password,
+    connectString: `${ref.host}:${ref.port}/${ref.database}`,
+    connectTimeout: Math.ceil(DB_LIMITS.connectTimeoutMs / 1000), // 초 단위
+  });
+  conn.callTimeout = DB_LIMITS.statementTimeoutMs;
+  const asString = new Set([
+    ora.DB_TYPE_NUMBER, ora.DB_TYPE_CLOB, ora.DB_TYPE_NCLOB, ora.DB_TYPE_DATE,
+    ora.DB_TYPE_TIMESTAMP, ora.DB_TYPE_TIMESTAMP_TZ, ora.DB_TYPE_TIMESTAMP_LTZ,
+  ]);
+  const fetchTypeHandler = (m: { dbType?: unknown }) => (asString.has(m.dbType) ? { type: ora.STRING } : undefined);
+  return serialized({
+    async run(sql, params = [], maxRows = DB_LIMITS.maxRows) {
+      await conn.rollback(); // SET TRANSACTION은 트랜잭션의 첫 문장이어야 한다
+      await conn.execute('SET TRANSACTION READ ONLY', []);
+      try {
+        const r = await conn.execute(withoutTrailingSemicolon(sql), params, {
+          outFormat: ora.OUT_FORMAT_ARRAY,
+          maxRows: maxRows + 1,
+          fetchTypeHandler,
+        });
+        return limited((r.metaData ?? []).map((m) => m.name), r.rows ?? [], maxRows);
+      } finally {
+        await conn.rollback().catch(() => undefined);
+      }
+    },
+    close: () => conn.close(),
+  });
+}
+```
+
+- [ ] **Step 6: catalog.ts**
+
+`src/sdk/db/catalog.ts`:
+```ts
+import type { SqlDialect } from '../sqlReadOnly.js';
+import { DB_LIMITS } from './limits.js';
+
+/**
+ * list_tables·describe_table용 방언별 SQL (스펙 2026-10-02 §6.2).
+ * 사용자 값(schema·table)은 바인딩 파라미터로만 — 문자열 조립 금지. schema가 null이면 기본 스키마.
+ * 파라미터 순서: tables = [schema], columns·indexes = [schema, table].
+ */
+export type CatalogKind = 'tables' | 'columns' | 'indexes';
+
+const LIMIT = DB_LIMITS.maxCatalogRows + 1;
+
+const SQL: Record<SqlDialect, Record<CatalogKind, string>> = {
+  postgres: {
+    tables:
+      `SELECT table_schema, table_name, table_type FROM information_schema.tables ` +
+      `WHERE ($1::text IS NULL AND table_schema NOT IN ('pg_catalog', 'information_schema') AND table_schema NOT LIKE 'pg_toast%') ` +
+      `OR table_schema = $1 ORDER BY table_schema, table_name LIMIT ${LIMIT}`,
+    columns:
+      `SELECT c.column_name, c.data_type, c.is_nullable, c.column_default, ` +
+      `col_description((quote_ident(c.table_schema) || '.' || quote_ident(c.table_name))::regclass, c.ordinal_position) AS comment ` +
+      `FROM information_schema.columns c WHERE c.table_schema = COALESCE($1::text, current_schema()) AND c.table_name = $2 ` +
+      `ORDER BY c.ordinal_position LIMIT ${LIMIT}`,
+    indexes:
+      `SELECT indexname, indexdef FROM pg_indexes ` +
+      `WHERE schemaname = COALESCE($1::text, current_schema()) AND tablename = $2 ORDER BY indexname LIMIT ${LIMIT}`,
+  },
+  mysql: {
+    tables:
+      `SELECT TABLE_SCHEMA, TABLE_NAME, TABLE_TYPE, TABLE_COMMENT FROM information_schema.TABLES ` +
+      `WHERE TABLE_SCHEMA = COALESCE(?, DATABASE()) ORDER BY TABLE_NAME LIMIT ${LIMIT}`,
+    columns:
+      `SELECT COLUMN_NAME, COLUMN_TYPE, IS_NULLABLE, COLUMN_KEY, COLUMN_DEFAULT, COLUMN_COMMENT FROM information_schema.COLUMNS ` +
+      `WHERE TABLE_SCHEMA = COALESCE(?, DATABASE()) AND TABLE_NAME = ? ORDER BY ORDINAL_POSITION LIMIT ${LIMIT}`,
+    indexes:
+      `SELECT INDEX_NAME, NON_UNIQUE, SEQ_IN_INDEX, COLUMN_NAME FROM information_schema.STATISTICS ` +
+      `WHERE TABLE_SCHEMA = COALESCE(?, DATABASE()) AND TABLE_NAME = ? ORDER BY INDEX_NAME, SEQ_IN_INDEX LIMIT ${LIMIT}`,
+  },
+  // Oracle은 비인용 식별자가 대문자로 저장된다 — 이름을 UPPER로 비교(따옴표로 만든 소문자 이름은 못 찾는다, 스펙 §6.2).
+  // 행 상한은 execute maxRows가 건다.
+  oracle: {
+    tables:
+      `SELECT owner, object_name, object_type FROM all_objects ` +
+      `WHERE owner = NVL(UPPER(:1), USER) AND object_type IN ('TABLE', 'VIEW') ORDER BY object_name`,
+    columns:
+      `SELECT c.column_name, c.data_type, c.data_length, c.nullable, c.data_default, m.comments FROM all_tab_columns c ` +
+      `LEFT JOIN all_col_comments m ON m.owner = c.owner AND m.table_name = c.table_name AND m.column_name = c.column_name ` +
+      `WHERE c.owner = NVL(UPPER(:1), USER) AND c.table_name = UPPER(:2) ORDER BY c.column_id`,
+    indexes:
+      `SELECT i.index_name, i.uniqueness, ic.column_position, ic.column_name FROM all_indexes i ` +
+      `JOIN all_ind_columns ic ON ic.index_owner = i.owner AND ic.index_name = i.index_name ` +
+      `WHERE i.table_owner = NVL(UPPER(:1), USER) AND i.table_name = UPPER(:2) ORDER BY i.index_name, ic.column_position`,
+  },
+};
+
+export function catalogSql(
+  dialect: SqlDialect,
+  kind: CatalogKind,
+  schema: string | null,
+  table?: string,
+): { sql: string; params: unknown[] } {
+  return { sql: SQL[dialect][kind], params: kind === 'tables' ? [schema] : [schema, table ?? ''] };
+}
+```
+
+- [ ] **Step 7: dbMcp.ts**
 
 `src/sdk/dbMcp.ts`:
 ```ts
-import { existsSync, mkdirSync, readdirSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
-import { randomUUID } from 'node:crypto';
-import { fileURLToPath } from 'node:url';
+import {
+  createSdkMcpServer,
+  tool,
+  type McpSdkServerConfigWithInstance,
+  type SdkMcpToolDefinition,
+} from '@anthropic-ai/claude-agent-sdk';
+import { z } from 'zod';
 import type { DbConnectionRef, DbType, InterviewClaimResponse } from '../types.js';
-import type { SqlDialect } from './sqlReadOnly.js';
+import { catalogSql } from './db/catalog.js';
+import { DB_LIMITS } from './db/limits.js';
+import { formatResult } from './db/result.js';
+import { openSession as realOpenSession, type DbSession } from './db/adapters.js';
+import { checkReadOnlySql, type SqlDialect } from './sqlReadOnly.js';
 
 /**
- * 질문 세션 DB MCP 준비 (스펙 2026-10-02 §6.2). SDK가 options.mcpServers를 통째로 claude CLI 명령줄(--mcp-config)에
- * 싣기 때문에 비밀번호를 env로 넣지 않는다 — 접속정보는 턴마다 임시 파일(0600)에 쓰고, mcpServers에는
- * `node dbMcpLauncher.mjs <파일>`만 둔다. 러너가 턴 종료 finally에서 cleanupDbMcpFiles로 지운다.
+ * 질문 세션 내장 DB MCP (스펙 2026-10-02 §6.2). 연결마다 SDK MCP 서버 `db-<id>`를 이 프로세스 안에 만든다.
+ * SDK는 type:'sdk' 서버를 CLI에 {type:'sdk', name}으로만 넘기므로(스펙 §2.1) 접속정보가 명령줄·파일·자식 env로 나가지 않는다.
+ * DB 접속은 첫 도구 호출 때(lazy), 러너가 턴 종료 finally에서 close()한다.
  */
 
-/** 런처는 tsx 없이 돌아야 한다(claude CLI가 cwd=레포 체크아웃에서 실행) — 그래서 .mjs. */
-export const DB_MCP_LAUNCHER_PATH = fileURLToPath(new URL('../launcher/dbMcpLauncher.mjs', import.meta.url));
-
-/** PG 세션 기본 read-only (스펙 §8.2 2선). Task 1 스파이크에서 적용이 확인되지 않으면 이 상수와 사용처를 지운다. */
-export const PG_READ_ONLY_QUERY_PARAMS = 'options=' + encodeURIComponent('-c default_transaction_read_only=on');
-
 const SERVER_NAME = /^db-\d+$/;
+// eslint-disable-next-line no-control-regex
+const IDENT = z.string().min(1).max(128).regex(/^[^\u0000-\u001f\u007f]+$/, '제어문자는 쓸 수 없습니다');
 
-export interface StdioServer {
-  type: 'stdio';
-  command: string;
-  args: string[];
-}
+type ToolResult = { content: Array<{ type: 'text'; text: string }>; isError?: boolean };
+const textResult = (text: string, isError = false): ToolResult => ({
+  content: [{ type: 'text', text }],
+  ...(isError ? { isError: true } : {}),
+});
 
 export interface PreparedDbMcp {
-  servers: Record<string, StdioServer>;
+  servers: Record<string, McpSdkServerConfigWithInstance>;
+  /** 서버별 도구 정의 — 테스트·진단용(핸들러 직접 호출). */
+  tools: Record<string, SdkMcpToolDefinition[]>;
   dialects: Record<string, SqlDialect>;
-  files: string[];
   labels: Array<{ serverName: string; label: string }>;
   notices: string[];
+  close(): Promise<void>;
 }
 
 export interface DbMcpDeps {
-  toolboxPath?: string;
-  tmpDir: string;
-  /** 테스트용 주입 — 기본 DB_MCP_LAUNCHER_PATH / process.execPath. */
-  launcherPath?: string;
-  nodePath?: string;
-}
-
-export function prebuiltFor(t: DbType): string {
-  if (t === 'POSTGRESQL') return 'postgres';
-  if (t === 'ORACLE') return 'oracledb';
-  return 'mysql'; // MYSQL, MARIADB
+  /** 테스트용 주입 — 기본 adapters.openSession. */
+  openSession?: (ref: DbConnectionRef) => Promise<DbSession>;
 }
 
 export function dialectFor(t: DbType): SqlDialect {
   if (t === 'POSTGRESQL') return 'postgres';
   if (t === 'ORACLE') return 'oracle';
-  return 'mysql';
+  return 'mysql'; // MYSQL, MARIADB
 }
 
-/** Toolbox prebuilt 설정의 env 이름 (internal/prebuiltconfigs/tools/*.yaml, v1.13.1). */
-export function envFor(ref: DbConnectionRef): Record<string, string> {
-  const port = String(ref.port);
-  switch (ref.dbType) {
-    case 'POSTGRESQL':
-      return {
-        POSTGRES_HOST: ref.host, POSTGRES_PORT: port, POSTGRES_DATABASE: ref.database, POSTGRES_USER: ref.username,
-        POSTGRES_PASSWORD: ref.password, POSTGRES_QUERY_PARAMS: PG_READ_ONLY_QUERY_PARAMS,
-      };
-    case 'ORACLE':
-      return {
-        ORACLE_CONNECTION_STRING: `${ref.host}:${port}/${ref.database}`, ORACLE_USERNAME: ref.username,
-        ORACLE_PASSWORD: ref.password, ORACLE_USE_OCI: 'false',
-      };
-    default:
-      return {
-        MYSQL_HOST: ref.host, MYSQL_PORT: port, MYSQL_DATABASE: ref.database, MYSQL_USER: ref.username,
-        MYSQL_PASSWORD: ref.password,
-      };
-  }
+/** 드라이버 오류 메시지에서 비밀번호를 지우고 500자로 자른다. 도구 결과·로그로 나가는 모든 오류 문구가 거친다. */
+export function safeMessage(e: unknown, ref: Pick<DbConnectionRef, 'password'>): string {
+  let msg = e instanceof Error ? e.message : String(e);
+  if (ref.password) msg = msg.split(ref.password).join('****');
+  return msg.length > 500 ? `${msg.slice(0, 500)}…` : msg;
 }
 
-export function prepareDbMcpServers(claim: InterviewClaimResponse, deps: DbMcpDeps): PreparedDbMcp {
+/** 한 연결의 도구 3개. getSession은 lazy 접속(첫 호출 때 연다). */
+export function dbToolsFor(
+  ref: DbConnectionRef,
+  dialect: SqlDialect,
+  getSession: () => Promise<DbSession>,
+): SdkMcpToolDefinition[] {
+  const guarded = async (fn: (s: DbSession) => Promise<string>): Promise<ToolResult> => {
+    try {
+      return textResult(await fn(await getSession()));
+    } catch (e) {
+      return textResult(`DB 오류: ${safeMessage(e, ref)}`, true);
+    }
+  };
+  return [
+    tool(
+      'query',
+      `${ref.label} 읽기 전용 조회. SELECT 계열 단일 문장만 실행되고, 결과는 최대 ${DB_LIMITS.maxRows}행, ` +
+        `${DB_LIMITS.statementTimeoutMs / 1000}초 제한이다. 큰 테이블은 WHERE·LIMIT으로 좁혀서 조회할 것.`,
+      { sql: z.string().min(1).max(100_000) },
+      async ({ sql }) => {
+        // 게이트(permissions.ts)가 1차, 여기는 우회 방지(Review Focus 6). 통과해도 어댑터가 READ ONLY 트랜잭션으로 실행한다.
+        const check = checkReadOnlySql(sql, dialect);
+        if (!check.ok) {
+          return textResult(`읽기 전용 도구입니다 — ${check.reason}. SELECT 계열 단일 문장만 실행할 수 있습니다.`, true);
+        }
+        return guarded(async (s) => formatResult(await s.run(sql, [], DB_LIMITS.maxRows)));
+      },
+    ),
+    tool(
+      'list_tables',
+      `${ref.label}의 테이블·뷰 목록. schema를 생략하면 기본 스키마(PostgreSQL은 시스템 스키마 제외 전체).`,
+      { schema: IDENT.optional() },
+      async ({ schema }) =>
+        guarded(async (s) => {
+          const c = catalogSql(dialect, 'tables', schema ?? null);
+          return formatResult(await s.run(c.sql, c.params, DB_LIMITS.maxCatalogRows), DB_LIMITS.maxCatalogRows);
+        }),
+    ),
+    tool(
+      'describe_table',
+      `${ref.label}의 테이블 컬럼(이름·타입·널·기본값·주석)과 인덱스.`,
+      { table: IDENT, schema: IDENT.optional() },
+      async ({ table, schema }) =>
+        guarded(async (s) => {
+          const c = catalogSql(dialect, 'columns', schema ?? null, table);
+          const i = catalogSql(dialect, 'indexes', schema ?? null, table);
+          const cols = await s.run(c.sql, c.params, DB_LIMITS.maxCatalogRows);
+          const idx = await s.run(i.sql, i.params, DB_LIMITS.maxCatalogRows);
+          return `컬럼:\n${formatResult(cols, DB_LIMITS.maxCatalogRows)}\n인덱스:\n${formatResult(idx, DB_LIMITS.maxCatalogRows)}`;
+        }),
+    ),
+  ] as SdkMcpToolDefinition[];
+}
+
+export function createDbMcp(claim: InterviewClaimResponse, deps: DbMcpDeps = {}): PreparedDbMcp {
   const refs = Array.isArray(claim.dbConnections) ? claim.dbConnections : [];
   const notices = Array.isArray(claim.dbNotices) ? [...claim.dbNotices] : [];
-  const prepared: PreparedDbMcp = { servers: {}, dialects: {}, files: [], labels: [], notices };
-  if (refs.length === 0) return prepared;
-  if (!deps.toolboxPath || !existsSync(deps.toolboxPath)) {
-    notices.push('DB 도구를 사용할 수 없습니다(서버에 Toolbox 미설치)');
-    return prepared;
-  }
-  mkdirSync(deps.tmpDir, { recursive: true });
-  try {
-    for (const ref of refs) {
-      if (!SERVER_NAME.test(ref.serverName)) {
-        notices.push(`잘못된 DB 서버 이름이라 건너뜁니다: ${ref.label}`);
-        continue;
+  const open = deps.openSession ?? ((ref: DbConnectionRef) => realOpenSession(ref));
+  const opened: Array<{ serverName: string; session: Promise<DbSession> }> = [];
+  const prepared: PreparedDbMcp = {
+    servers: {},
+    tools: {},
+    dialects: {},
+    labels: [],
+    notices,
+    async close() {
+      for (const o of opened) {
+        try {
+          await (await o.session).close();
+        } catch (e) {
+          // 접속 자체가 실패했거나 닫기 실패 — 턴 결과에는 영향 없음. 서버 이름만 남긴다(메시지에 접속정보가 섞일 수 있다).
+          // eslint-disable-next-line no-console
+          console.warn(`[dbMcp] 커넥션 종료 건너뜀: ${o.serverName} (${(e as { code?: string }).code ?? 'error'})`);
+        }
       }
-      const file = join(deps.tmpDir, `${claim.sessionId}-${randomUUID()}-${ref.serverName}.json`);
-      prepared.files.push(file); // write 전에 — 부분 쓰기도 정리 대상
-      writeFileSync(
-        file,
-        JSON.stringify({ toolboxPath: deps.toolboxPath, prebuilt: prebuiltFor(ref.dbType), env: envFor(ref) }),
-        { mode: 0o600, flag: 'wx' },
-      );
-      prepared.servers[ref.serverName] = {
-        type: 'stdio',
-        command: deps.nodePath ?? process.execPath,
-        args: [deps.launcherPath ?? DB_MCP_LAUNCHER_PATH, file],
-      };
-      prepared.dialects[ref.serverName] = dialectFor(ref.dbType);
-      prepared.labels.push({ serverName: ref.serverName, label: ref.label });
+    },
+  };
+  for (const ref of refs) {
+    if (!SERVER_NAME.test(ref.serverName)) {
+      notices.push(`잘못된 DB 서버 이름이라 건너뜁니다: ${ref.label}`);
+      continue;
     }
-  } catch (e) {
-    cleanupDbMcpFiles(prepared.files);
-    throw e;
+    const dialect = dialectFor(ref.dbType);
+    let current: Promise<DbSession> | null = null;
+    const getSession = (): Promise<DbSession> => {
+      if (!current) {
+        const p = open(ref);
+        current = p;
+        opened.push({ serverName: ref.serverName, session: p });
+        p.catch(() => {
+          if (current === p) current = null; // 접속 실패 — 다음 호출이 다시 시도
+        });
+      }
+      return current;
+    };
+    const tools = dbToolsFor(ref, dialect, getSession);
+    prepared.servers[ref.serverName] = createSdkMcpServer({ name: ref.serverName, version: '1.0.0', tools });
+    prepared.tools[ref.serverName] = tools;
+    prepared.dialects[ref.serverName] = dialect;
+    prepared.labels.push({ serverName: ref.serverName, label: ref.label });
   }
   return prepared;
 }
-
-export function cleanupDbMcpFiles(files: string[]): void {
-  for (const f of files) {
-    try {
-      unlinkSync(f);
-    } catch (e) {
-      if ((e as NodeJS.ErrnoException).code !== 'ENOENT') {
-        // eslint-disable-next-line no-console
-        console.warn(`[dbMcp] 임시 파일 삭제 실패: ${f} (${(e as NodeJS.ErrnoException).code ?? 'unknown'})`);
-      }
-    }
-  }
-}
-
-/** 크래시 잔여물 정리 — 서비스 기동 시 1회. 지운 개수. 디렉터리가 없으면 0. */
-export function sweepStaleDbMcpFiles(dir: string, maxAgeMs = 3_600_000, now = Date.now()): number {
-  let names: string[];
-  try {
-    names = readdirSync(dir);
-  } catch {
-    return 0;
-  }
-  let removed = 0;
-  for (const name of names) {
-    if (!name.endsWith('.json')) continue;
-    const f = join(dir, name);
-    try {
-      if (now - statSync(f).mtimeMs > maxAgeMs) {
-        unlinkSync(f);
-        removed++;
-      }
-    } catch {
-      // 다른 프로세스가 먼저 지웠거나 잠김 — 다음 기동 때 다시 본다
-    }
-  }
-  return removed;
-}
 ```
+주의: 접속 실패한 프라미스도 `opened`에 남는다 — `close()`가 `await`에서 실패를 잡아 경고만 남긴다(테스트 "close 실패는 삼킨다"). `tool()`의 zod 검증은 SDK MCP 계층에서 일어나므로 핸들러를 직접 부르는 테스트는 검증을 거치지 않는다(의도 — 검증은 SDK 책임).
 
-- [ ] **Step 5: 런처**
+- [ ] **Step 8: 통과 확인 + 타입 검사**
 
-`src/launcher/dbMcpLauncher.mjs`:
-```js
-// 질문 세션 DB MCP 런처 (스펙 2026-10-02 §6.3). claude CLI가 stdio MCP 서버로 실행한다:
-//   node dbMcpLauncher.mjs <접속정보 파일>
-// 파일({toolboxPath, prebuilt, env})을 읽어 Toolbox를 `--prebuilt <p> --stdio`로 띄우고 stdio를 그대로 물려준다.
-// 자식 env는 OS 필수 변수 + DB env만 — 인터뷰 서비스의 GITHUB_PAT·WORKER_API_KEY 등은 넘기지 않는다.
-// 파일은 지우지 않는다(CLI가 턴 도중 MCP를 재기동해도 다시 읽게) — 삭제는 러너 책임.
-// 오류 메시지는 고정 문구만: JSON.parse 오류는 본문 일부(=비밀번호)를 담을 수 있다.
-// tsx 없이 실행돼야 하므로 순수 JS(.mjs). 타입은 dbMcpLauncher.d.mts.
-import { readFileSync } from 'node:fs'
-import { spawn } from 'node:child_process'
-import { pathToFileURL } from 'node:url'
-
-export const PASSTHROUGH_ENV = ['PATH', 'Path', 'SYSTEMROOT', 'SystemRoot', 'WINDIR', 'windir', 'TEMP', 'TMP', 'HOME', 'USERPROFILE']
-
-export function childEnv(parentEnv, dbEnv) {
-  const out = {}
-  for (const k of PASSTHROUGH_ENV) if (parentEnv[k] !== undefined) out[k] = parentEnv[k]
-  return { ...out, ...dbEnv }
-}
-
-export function readSpec(file) {
-  let spec
-  try {
-    spec = JSON.parse(readFileSync(file, 'utf8'))
-  } catch {
-    throw new Error('런처 파일을 읽을 수 없습니다')
-  }
-  if (!spec || typeof spec.toolboxPath !== 'string' || typeof spec.prebuilt !== 'string'
-      || typeof spec.env !== 'object' || spec.env === null) {
-    throw new Error('런처 파일 형식이 올바르지 않습니다')
-  }
-  return spec
-}
-
-export function launch(file, env, spawnFn = spawn) {
-  const spec = readSpec(file)
-  return spawnFn(spec.toolboxPath, ['--prebuilt', spec.prebuilt, '--stdio'], {
-    stdio: 'inherit',
-    env: childEnv(env, spec.env),
-    windowsHide: true,
-  })
-}
-
-const isMain = process.argv[1] !== undefined && import.meta.url === pathToFileURL(process.argv[1]).href
-if (isMain) {
-  let child
-  try {
-    if (!process.argv[2]) throw new Error('접속정보 파일 경로 인자가 없습니다')
-    child = launch(process.argv[2], process.env)
-  } catch (e) {
-    process.stderr.write(`[dbMcpLauncher] 시작 실패: ${e instanceof Error ? e.message : 'unknown'}\n`)
-    process.exit(1)
-  }
-  for (const sig of ['SIGINT', 'SIGTERM']) process.on(sig, () => child.kill(sig))
-  child.on('error', (e) => {
-    process.stderr.write(`[dbMcpLauncher] Toolbox 실행 실패: ${e.code ?? 'unknown'}\n`)
-    process.exit(1)
-  })
-  child.on('exit', (code, signal) => process.exit(code ?? (signal ? 1 : 0)))
-}
+```bash
+cd netismaker-interview-service && npx vitest run test/dbResult.test.ts test/dbAdapters.test.ts test/dbMcp.test.ts && npx tsc -p tsconfig.json --noEmit
 ```
+Expected: 전부 PASS, tsc 오류 0. `tool()` 반환 타입이 `SdkMcpToolDefinition<…>`라 배열 캐스트가 필요 없으면 `as SdkMcpToolDefinition[]`를 지운다.
 
-`src/launcher/dbMcpLauncher.d.mts`:
+- [ ] **Step 9: 로컬 PostgreSQL 실측(스펙 §11-2)** — 어댑터를 실제 DB에 붙여 본다. 접속값은 `public.env`의 DB 항목에서 가져오되 **출력·로그에 비밀번호를 남기지 않는다**.
+
+`netismaker-interview-service/scripts/spikeDbAdapter.ts`:
 ```ts
-import type { ChildProcess, spawn } from 'node:child_process';
+/**
+ * 스파이크(스펙 2026-10-02 §11-2·5) — openSession을 실제 DB에 붙여 읽기 전용·행 상한을 확인한다. 일회성 도구.
+ * 실행(Git Bash): SPIKE_DB_TYPE=POSTGRESQL SPIKE_DB_HOST=localhost SPIKE_DB_PORT=5432 SPIKE_DB_NAME=<DB> SPIKE_DB_USER=<계정> \
+ *   bash -c 'read -s SPIKE_DB_PASSWORD; export SPIKE_DB_PASSWORD; node --import tsx scripts/spikeDbAdapter.ts'
+ */
+import { openSession } from '../src/sdk/db/adapters.js';
+import type { DbType } from '../src/types.js';
 
-export declare const PASSTHROUGH_ENV: string[];
-export declare function childEnv(
-  parentEnv: Record<string, string | undefined>,
-  dbEnv: Record<string, string>,
-): Record<string, string>;
-export declare function readSpec(file: string): { toolboxPath: string; prebuilt: string; env: Record<string, string> };
-export declare function launch(
-  file: string,
-  env: Record<string, string | undefined>,
-  spawnFn?: typeof spawn,
-): ChildProcess;
+const e = process.env;
+const ref = {
+  serverName: 'db-0', label: 'spike', dbType: (e.SPIKE_DB_TYPE ?? 'POSTGRESQL') as DbType, host: e.SPIKE_DB_HOST ?? 'localhost',
+  port: Number(e.SPIKE_DB_PORT ?? 5432), database: e.SPIKE_DB_NAME ?? '', username: e.SPIKE_DB_USER ?? '', password: e.SPIKE_DB_PASSWORD ?? '',
+};
+const mask = (m: string) => (ref.password ? m.split(ref.password).join('****') : m);
+const s = await openSession(ref);
+const probes: Array<[string, string]> = ref.dbType === 'POSTGRESQL'
+  ? [['SELECT 1 AS n', '1행'], ['SELECT generate_series(1, 500) AS n', '200행 + truncated'],
+     ['SHOW default_transaction_read_only', 'on'], ['CREATE TEMP TABLE spike_x(a int)', 'read-only 오류']]
+  : ref.dbType === 'ORACLE'
+    ? [['SELECT 1 AS n FROM dual', '1행'], ['SELECT level AS n FROM dual CONNECT BY level <= 500', '200행 + truncated'],
+       ['CREATE TABLE spike_x(a int)', '오류(1선이 막는 대상 — 2선만으로는 DDL이 실행될 수 있음: 테스트 계정에서만)']]
+    : [['SELECT 1 AS n', '1행'], ['SELECT @@session.transaction_read_only AS ro', '1'],
+       ['SELECT 1 FROM information_schema.COLUMNS a, information_schema.COLUMNS b LIMIT 500', '200행 + truncated → 재접속'],
+       ['SELECT 2 AS n', '1행(재접속 확인)']];
+for (const [sql, expect] of probes) {
+  try {
+    const r = await s.run(sql);
+    console.log(`[ok] ${sql} → rows=${r.rows.length} truncated=${r.truncated} first=${JSON.stringify(r.rows[0])}  (기대: ${expect})`);
+  } catch (err) {
+    console.log(`[err] ${sql} → ${mask(err instanceof Error ? err.message : String(err))}  (기대: ${expect})`);
+  }
+}
+await s.close();
 ```
-`tsconfig.json`의 `include`는 `src/**/*.ts`라 `.d.mts`는 import 시 자동 해석된다. `npm run build`가 TS7016(선언 없음)을 내면 `include`에 `"src/**/*.d.mts"`를 추가한다.
-
-- [ ] **Step 6: 통과 확인 + 타입 검사**
+⚠️ Oracle의 `CREATE TABLE` 프로브는 **읽기 전용이 아닌 계정으로는 돌리지 말 것**(스펙 §8.2 한계 — 2선은 DDL을 못 막는다). 이 스크립트는 어댑터를 직접 부르므로 1선(SQL 검사)을 거치지 않는다.
 
 ```bash
-cd netismaker-interview-service && npx vitest run test/dbMcp.test.ts test/dbMcpLauncher.test.ts test/config.test.ts && npx tsc -p tsconfig.json --noEmit
+cd /c/Users/mic/NetisMaker/commanCenter/.claude/worktrees/question-db-mcp/netismaker-interview-service
+SPIKE_DB_TYPE=POSTGRESQL SPIKE_DB_HOST=localhost SPIKE_DB_PORT=5432 SPIKE_DB_NAME=<DB명> SPIKE_DB_USER=<계정> \
+  bash -c 'read -s SPIKE_DB_PASSWORD; export SPIKE_DB_PASSWORD; node --import tsx scripts/spikeDbAdapter.ts'
 ```
-Expected: 전부 PASS, tsc 오류 0.
+Expected: 4줄이 각 기대와 일치 — 특히 `CREATE TEMP TABLE`이 `[err] … read-only transaction`. 어긋나면 다음 Task로 넘어가지 말고 보고한다. 결과를 스펙 §11-2 끝에 `→ 2026-10-02 확인: …`으로 적는다.
 
-- [ ] **Step 7: Commit**
+- [ ] **Step 10: Commit**
 
 ```bash
-git add netismaker-interview-service/src/types.ts netismaker-interview-service/src/config.ts netismaker-interview-service/.env.example netismaker-interview-service/src/sdk/dbMcp.ts netismaker-interview-service/src/launcher netismaker-interview-service/test/dbMcp.test.ts netismaker-interview-service/test/dbMcpLauncher.test.ts netismaker-interview-service/test/config.test.ts netismaker-interview-service/tsconfig.json
-git commit -m "feat(interview): DB MCP 임시 파일 준비·정리 + Toolbox 런처
+git add netismaker-interview-service/src/types.ts netismaker-interview-service/src/sdk/db netismaker-interview-service/src/sdk/dbMcp.ts netismaker-interview-service/scripts/spikeDbAdapter.ts netismaker-interview-service/test/dbResult.test.ts netismaker-interview-service/test/dbAdapters.test.ts netismaker-interview-service/test/dbMcp.test.ts docs/superpowers/specs/2026-10-02-question-db-mcp-design.md
+git commit -m "feat(interview): 내장 DB MCP — 읽기 전용 어댑터(PG·MySQL/MariaDB·Oracle)·카탈로그·결과 상한
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 ```
 
 ---
 
-### Task 12: 세션 옵션·러너·부팅에 연결
+### Task 12: 세션 옵션·러너에 연결
 
 **Files:**
 - Modify: `netismaker-interview-service/src/sdk/sessionOptions.ts`
 - Modify: `netismaker-interview-service/src/runner/interviewRunner.ts` (`RunnerDeps`, `questionPromptFor`, `runQuestionTurn`, 새 `dbSection`)
-- Modify: `netismaker-interview-service/src/index.ts`
 - Test: `netismaker-interview-service/test/sessionOptions.test.ts`, `netismaker-interview-service/test/interviewRunner.test.ts`
 
 **Interfaces:**
-- Consumes: `prepareDbMcpServers`, `cleanupDbMcpFiles`, `sweepStaleDbMcpFiles`, `PreparedDbMcp`(Task 11), `buildCanUseTool(..., dbServers)`(Task 10)
-- Produces: `SessionOptionsInput.dbMcpServers?: Record<string, unknown>`, `SessionOptionsInput.dbDialects?: Record<string, SqlDialect>`; `RunnerDeps.toolboxPath?`, `RunnerDeps.dbMcpTmpDir?`, `RunnerDeps.prepareDbMcp?`, `RunnerDeps.cleanupDbMcp?`; `export function dbSection(db: Pick<PreparedDbMcp, 'labels' | 'notices'>): string`
+- Consumes: `createDbMcp`, `PreparedDbMcp`(Task 11), `buildCanUseTool(..., dbServers)`(Task 10)
+- Produces: `SessionOptionsInput.dbMcpServers?: Record<string, unknown>`, `SessionOptionsInput.dbDialects?: Record<string, SqlDialect>`; `RunnerDeps.createDbMcp?: typeof createDbMcp`; `export function dbSection(db: Pick<PreparedDbMcp, 'labels' | 'notices'>): string`
 
 - [ ] **Step 1: 실패하는 테스트 작성**
 
 `test/sessionOptions.test.ts` 끝에:
 ```ts
 describe('buildOptions — DB MCP (스펙 2026-10-02 §6.4)', () => {
-  const dbServer = { type: 'stdio', command: '/node', args: ['/l.mjs', '/tmp/f.json'] };
+  const dbServer = { type: 'sdk', name: 'db-7', instance: {} };
 
   it('db 서버를 마지막에 머지(같은 이름이면 db가 이긴다), QUESTION 사전승인은 여전히 없음', () => {
     const o = buildOptions({
@@ -3309,7 +3903,7 @@ describe('buildOptions — DB MCP (스펙 2026-10-02 §6.4)', () => {
       dbMcpServers: { 'db-7': dbServer },
       dbDialects: { 'db-7': 'mysql' },
     });
-    expect((o.mcpServers as Record<string, unknown>)['db-7']).toEqual(dbServer);
+    expect((o.mcpServers as Record<string, unknown>)['db-7']).toBe(dbServer); // 인스턴스를 복사하지 않고 그대로
     expect(Object.keys(o.mcpServers as object)).toContain('obsidian');
     expect(o.allowedTools).toEqual([]);
   });
@@ -3317,13 +3911,8 @@ describe('buildOptions — DB MCP (스펙 2026-10-02 §6.4)', () => {
   it('canUseTool이 dbDialects를 받아 DB 쓰기를 막는다', async () => {
     const o = buildOptions({ ...base, claudeSessionId: null, sessionKind: 'QUESTION', dbMcpServers: { 'db-7': dbServer }, dbDialects: { 'db-7': 'mysql' } });
     const gate = o.canUseTool as (n: string, i: Record<string, unknown>) => Promise<{ behavior: string }>;
-    expect((await gate('mcp__db-7__execute_sql', { sql: 'SELECT 1' })).behavior).toBe('allow');
-    expect((await gate('mcp__db-7__execute_sql', { sql: 'DELETE FROM t' })).behavior).toBe('deny');
-  });
-
-  it('명령줄로 가는 options 어디에도 비밀번호가 없다(파일 경로만)', () => {
-    const o = buildOptions({ ...base, claudeSessionId: null, sessionKind: 'QUESTION', dbMcpServers: { 'db-7': dbServer } });
-    expect(JSON.stringify(o.mcpServers)).not.toMatch(/PASSWORD/i);
+    expect((await gate('mcp__db-7__query', { sql: 'SELECT 1' })).behavior).toBe('allow');
+    expect((await gate('mcp__db-7__query', { sql: 'DELETE FROM t' })).behavior).toBe('deny');
   });
 });
 ```
@@ -3337,42 +3926,42 @@ describe('buildOptions — DB MCP (스펙 2026-10-02 §6.4)', () => {
       dbConnections: [{ serverName: 'db-7', label: '운영 DB (MySQL)', dbType: 'MYSQL', host: 'h', port: 3306, database: 'app', username: 'u', password: 'Pw-secret' }],
       dbNotices: ['DB 연결 #9를 사용할 수 없습니다 — 삭제되었거나 비활성화됨'],
     } as never;
-    const prepared = {
-      servers: { 'db-7': { type: 'stdio' as const, command: '/node', args: ['/l.mjs', '/tmp/77-x-db-7.json'] } },
+    const preparedFor = () => ({
+      servers: { 'db-7': { type: 'sdk' as const, name: 'db-7', instance: {} } },
+      tools: {},
       dialects: { 'db-7': 'mysql' as const },
-      files: ['/tmp/77-x-db-7.json'],
       labels: [{ serverName: 'db-7', label: '운영 DB (MySQL)' }],
       notices: ['DB 연결 #9를 사용할 수 없습니다 — 삭제되었거나 비활성화됨'],
-    };
+      close: vi.fn().mockResolvedValue(undefined),
+    });
 
-    it('DB 서버를 붙이고 프롬프트 앞에 서버↔DB 매핑·안내를 넣고, 끝나면 파일을 지운다', async () => {
+    it('DB 서버를 붙이고 프롬프트 앞에 서버↔DB 매핑·안내를 넣고, 끝나면 close한다', async () => {
       const client = makeClient();
       const { fakeQuery, captured } = capturing(() => questionStream());
-      const prepareDbMcp = vi.fn().mockReturnValue(prepared);
-      const cleanupDbMcp = vi.fn();
-      const runner = new InterviewRunner(client as never, fakeQuery as never,
-        { ...deps, toolboxPath: '/t/toolbox.exe', dbMcpTmpDir: '/tmp', prepareDbMcp, cleanupDbMcp } as never);
+      const prepared = preparedFor();
+      const createDbMcp = vi.fn().mockReturnValue(prepared);
+      const runner = new InterviewRunner(client as never, fakeQuery as never, { ...deps, createDbMcp } as never);
       await runner.run(dbClaim);
 
-      expect(prepareDbMcp).toHaveBeenCalledWith(dbClaim, { toolboxPath: '/t/toolbox.exe', tmpDir: '/tmp' });
-      expect((captured.options.mcpServers as Record<string, unknown>)['db-7']).toEqual(prepared.servers['db-7']);
+      expect(createDbMcp).toHaveBeenCalledWith(dbClaim);
+      expect((captured.options.mcpServers as Record<string, unknown>)['db-7']).toBe(prepared.servers['db-7']);
       expect(captured.prompt.startsWith('사용 가능한 DB 도구')).toBe(true);
-      expect(captured.prompt).toContain('mcp__db-7__* : 운영 DB (MySQL)');
+      expect(captured.prompt).toContain('mcp__db-7__query / list_tables / describe_table : 운영 DB (MySQL)');
       expect(captured.prompt).toContain('참고: DB 연결 #9를 사용할 수 없습니다');
       expect(captured.prompt).toContain('로그인은 어디서 처리되나요?');
       expect(captured.prompt).not.toContain('Pw-secret');
-      expect(cleanupDbMcp).toHaveBeenCalledWith(prepared.files);
+      expect(prepared.close).toHaveBeenCalledTimes(1);
     });
 
-    it('cleans_up_env_files_when_query_throws', async () => {
+    it('closes_db_sessions_when_query_throws', async () => {
       // Review Focus 5
       const client = makeClient();
       const fakeQuery = vi.fn(() => { throw new Error('boom'); });
-      const cleanupDbMcp = vi.fn();
+      const prepared = preparedFor();
       const runner = new InterviewRunner(client as never, fakeQuery as never,
-        { ...deps, prepareDbMcp: vi.fn().mockReturnValue(prepared), cleanupDbMcp } as never);
+        { ...deps, createDbMcp: vi.fn().mockReturnValue(prepared) } as never);
       await runner.run(dbClaim);
-      expect(cleanupDbMcp).toHaveBeenCalledWith(prepared.files);
+      expect(prepared.close).toHaveBeenCalledTimes(1);
       expect(client.fail).toHaveBeenCalled();
     });
 
@@ -3400,11 +3989,11 @@ Expected: 새 테스트 FAIL.
 - `SessionOptionsInput`에:
 ```ts
   /**
-   * 이번 턴의 DB MCP 서버(스펙 2026-10-02 §6.4) — dbMcp.prepareDbMcpServers 결과. stdio {command,args}만(비밀번호 없음).
-   * merge 순서 base → extras → db(마지막 우선).
+   * 이번 턴의 내장 DB MCP 서버(스펙 2026-10-02 §6.4) — dbMcp.createDbMcp 결과({type:'sdk', name, instance}).
+   * SDK가 CLI에는 이름만 넘긴다. merge 순서 base → extras → db(마지막 우선).
    */
   dbMcpServers?: Record<string, unknown>;
-  /** DB 서버별 SQL 방언 — QUESTION 게이트가 execute_sql을 검사할 때 쓴다(permissions.ts dbToolGate). */
+  /** DB 서버별 SQL 방언 — QUESTION 게이트가 query를 검사할 때 쓴다(permissions.ts dbToolGate). */
   dbDialects?: Record<string, SqlDialect>;
 ```
 - `buildOptions` 첫 줄 merged를:
@@ -3419,36 +4008,31 @@ Expected: 새 테스트 FAIL.
 ```ts
     canUseTool: buildCanUseTool(input.workDir, input.sessionKind ?? 'INTERVIEW', input.attachmentRoot ?? null, input.dbDialects ?? {}),
 ```
-- `buildOptions` Javadoc의 `- MCP:` 항목 끝에 한 문장: `질문 세션 DB 서버(dbMcpServers)는 마지막에 머지 — 런처 경로만 담기므로 --mcp-config 명령줄에 비밀번호가 실리지 않는다.`
+- `buildOptions` Javadoc의 `- MCP:` 항목 끝에 한 문장: `질문 세션 내장 DB 서버(dbMcpServers, type:'sdk')는 마지막에 머지 — SDK가 CLI에 이름만 넘기므로 --mcp-config 명령줄에 접속정보가 실리지 않는다. stdio 서버에 접속정보를 넣지 말 것.`
 
 - [ ] **Step 4: interviewRunner.ts**
 
 - import 추가:
 ```ts
-import { cleanupDbMcpFiles, prepareDbMcpServers, type PreparedDbMcp } from '../sdk/dbMcp.js';
+import { createDbMcp, type PreparedDbMcp } from '../sdk/dbMcp.js';
 ```
 - `RunnerDeps`에:
 ```ts
-  /** MCP Toolbox 경로(선택) — 질문 세션 DB 도구 (스펙 2026-10-02 §6). */
-  toolboxPath?: string;
-  /** DB 접속정보 임시 파일 디렉터리 (config.dbMcpTmpDir). */
-  dbMcpTmpDir?: string;
-  /** 테스트용 주입 — 기본 dbMcp.prepareDbMcpServers / cleanupDbMcpFiles. */
-  prepareDbMcp?: typeof prepareDbMcpServers;
-  cleanupDbMcp?: typeof cleanupDbMcpFiles;
+  /** 테스트용 주입 — 기본 dbMcp.createDbMcp (질문 세션 내장 DB 도구, 스펙 2026-10-02 §6). */
+  createDbMcp?: (claim: InterviewClaimResponse) => PreparedDbMcp;
 ```
 - `questionPromptFor` 위에 추가:
 ```ts
 /**
- * DB 도구 안내 (스펙 2026-10-02 §6.4). 서버마다 도구 이름이 같으므로(execute_sql) 서버↔DB 매핑을 매 턴 알려 준다.
+ * DB 도구 안내 (스펙 2026-10-02 §6.4). 서버마다 도구 이름이 같으므로(query 등) 서버↔DB 매핑을 매 턴 알려 준다.
  * 연결도 안내도 없으면 빈 문자열 — 프롬프트가 기존과 같다.
  */
 export function dbSection(db: Pick<PreparedDbMcp, 'labels' | 'notices'>): string {
   if (db.labels.length === 0 && db.notices.length === 0) return '';
   const lines: string[] = [];
   if (db.labels.length > 0) {
-    lines.push('사용 가능한 DB 도구 (읽기 전용 — SELECT 계열 단일 문장만 실행됩니다):');
-    for (const l of db.labels) lines.push(`- mcp__${l.serverName}__* : ${l.label}`);
+    lines.push('사용 가능한 DB 도구 (읽기 전용 — SELECT 계열 단일 문장, 최대 200행):');
+    for (const l of db.labels) lines.push(`- mcp__${l.serverName}__query / list_tables / describe_table : ${l.label}`);
   }
   for (const n of db.notices) lines.push(`참고: ${n}`);
   return lines.join('\n') + '\n\n';
@@ -3464,11 +4048,9 @@ export function dbSection(db: Pick<PreparedDbMcp, 'labels' | 'notices'>): string
 ```ts
     const onActivity = (e: ActivityInput) => poster.push(e);
     const onRateLimit = (info: RateLimitInfo) => this.rateLimits.report(info);
-    // DB MCP(스펙 2026-10-02 §6.4): 턴마다 임시 파일을 쓰고, 성공·실패와 무관하게 finally에서 지운다.
-    const db = (this.deps.prepareDbMcp ?? prepareDbMcpServers)(claim, {
-      toolboxPath: this.deps.toolboxPath,
-      tmpDir: this.deps.dbMcpTmpDir ?? '',
-    });
+    // 내장 DB MCP(스펙 2026-10-02 §6.4): 서버는 턴마다 새로 만들고(DB 접속은 첫 도구 호출 때),
+    // 성공·실패와 무관하게 finally에서 열린 커넥션을 닫는다.
+    const db = (this.deps.createDbMcp ?? createDbMcp)(claim);
     try {
       const stream: AsyncIterable<SdkMessage> = this.query({
         prompt: questionPromptFor(claim, dbSection(db)),
@@ -3507,34 +4089,23 @@ export function dbSection(db: Pick<PreparedDbMcp, 'labels' | 'notices'>): string
         contextWindow: result.contextWindow,
       });
     } finally {
-      (this.deps.cleanupDbMcp ?? cleanupDbMcpFiles)(db.files);
+      await db.close();
     }
 ```
-`tmpDir`가 빈 문자열인데 연결이 있으면 `prepareDbMcpServers`가 cwd에 파일을 만들 수 있다 → `index.ts`가 항상 `cfg.dbMcpTmpDir`를 넘기므로 운영 경로에서는 비지 않는다. 테스트 외 경로에서 비지 않도록 Step 5에서 반드시 넘긴다.
+`runQuestionTurn`의 기존 본문이 위와 다르면(필드 추가 등) 기존 줄을 그대로 두고 `db` 생성·`prompt` 인자·`dbMcpServers`/`dbDialects` 두 줄·`try/finally`만 얹는다. `db.close()`는 실패를 삼키므로(Task 11) finally에서 원래 예외를 가리지 않는다.
 
-- [ ] **Step 5: index.ts**
-
-- import에 `import { sweepStaleDbMcpFiles } from './sdk/dbMcp.js';`
-- `const mcpsBase = loadBaseMcpServers();` 아래에:
-```ts
-  // 지난 실행이 크래시로 남긴 DB 접속정보 임시 파일 정리 (스펙 2026-10-02 §6.2).
-  const swept = sweepStaleDbMcpFiles(cfg.dbMcpTmpDir);
-```
-- `new InterviewRunner(client, realQuery, { … })` 객체에 `toolboxPath: cfg.toolboxPath,`와 `dbMcpTmpDir: cfg.dbMcpTmpDir,` 추가.
-- 기동 로그 문자열 끝 `]` 뒤에 ` toolbox=${cfg.toolboxPath ? 'on' : 'off'}${swept ? ` dbmcp-swept=${swept}` : ''}` 추가.
-
-- [ ] **Step 6: 통과 확인 + 전체**
+- [ ] **Step 5: 통과 확인 + 전체**
 
 ```bash
 cd netismaker-interview-service && npx vitest run 2>&1 | tail -8 && npx tsc -p tsconfig.json --noEmit
 ```
 Expected: 실패는 Task 0 기준선의 기존 5건뿐, tsc 오류 0.
 
-- [ ] **Step 7: Commit**
+- [ ] **Step 6: Commit**
 
 ```bash
-git add netismaker-interview-service/src/sdk/sessionOptions.ts netismaker-interview-service/src/runner/interviewRunner.ts netismaker-interview-service/src/index.ts netismaker-interview-service/test/sessionOptions.test.ts netismaker-interview-service/test/interviewRunner.test.ts
-git commit -m "feat(interview): 질문 턴에 DB MCP 서버 부착 + 프롬프트 안내 + finally 정리
+git add netismaker-interview-service/src/sdk/sessionOptions.ts netismaker-interview-service/src/runner/interviewRunner.ts netismaker-interview-service/test/sessionOptions.test.ts netismaker-interview-service/test/interviewRunner.test.ts
+git commit -m "feat(interview): 질문 턴에 내장 DB MCP 부착 + 프롬프트 안내 + finally close
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 ```
@@ -4573,12 +5144,12 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 - [ ] **Step 1: CLAUDE.md** — "핵심 설계 제약"의 질문 세션 항목 끝에 문장 추가:
 
 ```
-**질문 세션 DB 연결(2026-10-02, 스펙 `docs/superpowers/specs/2026-10-02-question-db-mcp-design.md`)**: 레포별 DB 접속정보(`com.db_connection`, REPO=관리자 공용·USER=개인, 비밀번호는 `DbSecretCipher` AES-GCM 암호문 — 키 `NETISMAKER_DB_SECRET_KEY`+`NETISMAKER_DB_SECRET_SALT`, 없으면 기능만 꺼짐)를 질문 등록·`ask` 바디 `dbConnectionIds`(MCP와 같은 null/[] 규칙, 상한 3)로 고르면, claim 때 `InterviewWorkerController`가 복호화해 `dbConnections`로 싣고 러너가 턴마다 임시 파일(`DB_MCP_TMP_DIR`, 0600, finally 삭제) + `node dbMcpLauncher.mjs <파일>` stdio 서버(`db-<id>`)로 MCP Toolbox(`TOOLBOX_PATH`, v1.13.1)를 붙인다. SDK가 `mcpServers`를 `--mcp-config` 명령줄에 싣기 때문에 **env에 비밀번호를 넣지 말 것**. 질문 게이트는 `db-<id>` 서버의 `execute_sql`/`get_query_plan`을 `sqlReadOnly.ts`로 방언별 검사(단일 조회문만). MCP 카탈로그 이름 `db-*`는 예약. 배포 순서: API → 인터뷰 서비스(+`install-toolbox.ps1`) → 프론트.
+**질문 세션 DB 연결(2026-10-02, 스펙 `docs/superpowers/specs/2026-10-02-question-db-mcp-design.md`)**: 레포별 DB 접속정보(`com.db_connection`, REPO=관리자 공용·USER=개인, 비밀번호는 `DbSecretCipher` AES-GCM 암호문 — 키 `NETISMAKER_DB_SECRET_KEY`+`NETISMAKER_DB_SECRET_SALT`, 없으면 기능만 꺼짐)를 질문 등록·`ask` 바디 `dbConnectionIds`(MCP와 같은 null/[] 규칙, 상한 3)로 고르면, claim 때 `InterviewWorkerController`가 복호화해 `dbConnections`로 싣고 러너가 턴마다 연결별 **내장 SDK MCP 서버**(`createSdkMcpServer`, `db-<id>`, 도구 `query`·`list_tables`·`describe_table`)를 만든다(`src/sdk/dbMcp.ts`, 드라이버 `pg`·`mysql2`·`oracledb` thin — 접속은 첫 도구 호출 때, 턴 종료 finally에서 close). SDK는 `type:'sdk'` 서버를 CLI에 이름만 넘기지만 stdio 서버는 `--mcp-config` 명령줄에 통째로 싣는다 — **접속정보를 stdio 서버 env에 넣지 말 것**. 읽기 전용은 3중: 질문 게이트(`dbToolGate`)와 도구 핸들러가 `sqlReadOnly.ts`로 방언별 검사(단일 조회문만) + 어댑터가 READ ONLY 트랜잭션 안에서 실행 후 항상 ROLLBACK + 30초·200행·셀 2000자 상한(`db/limits.ts`). MCP 카탈로그 이름 `db-*`는 예약. 배포 순서: API → 인터뷰 서비스(`npm ci`) → 프론트.
 ```
 "자주 보는 코드" 표에 행 추가:
 ```
 | 질문 세션 DB 접속정보 (CRUD·권한·선택 검증·claim 복호화 · JDBC 접속 테스트 · 암호화) | `service/DbConnectionService.java`, `controller/DbConnectionController.java`, `service/JdbcDbConnectionTester.java`, `service/DbSecretCipher.java`, `entity/DbConnection.java`, 마이그레이션 `V24__db_connection.sql` |
-| 질문 세션 DB MCP (임시 파일·런처·읽기 전용 SQL 게이트) | `netismaker-interview-service/src/sdk/dbMcp.ts`, `src/launcher/dbMcpLauncher.mjs`, `src/sdk/sqlReadOnly.ts`, `src/sdk/permissions.ts`(`dbToolGate`), 설치 `scripts/install-toolbox.ps1` |
+| 질문 세션 내장 DB MCP (서버·도구 · 읽기 전용 어댑터 · 카탈로그 · 결과 상한 · SQL 게이트) | `netismaker-interview-service/src/sdk/dbMcp.ts`, `src/sdk/db/{adapters,catalog,result,limits}.ts`, `src/sdk/sqlReadOnly.ts`, `src/sdk/permissions.ts`(`dbToolGate`) |
 | DB 연결 선택·접속정보 다이얼로그·관리자 공용 관리 | `frontend/components/DbConnectionPicker.vue`, `DbConnectionDialog.vue`, `DbConnectionAdminDialog.vue`, `frontend/composables/dbConnections.ts` |
 ```
 
@@ -4609,9 +5180,9 @@ PR 생성은 사용자 확인 후(`gh pr create`, 본문 끝에 `🤖 Generated 
      $k = node -e "process.stdout.write(require('crypto').randomBytes(32).toString('hex'))"; $s = node -e "process.stdout.write(require('crypto').randomBytes(16).toString('hex'))"
      ```
      `public.env`에 `NETISMAKER_DB_SECRET_KEY=$k`, `NETISMAKER_DB_SECRET_SALT=$s` 추가(먼저 `public.env.bak-<시각>` 백업). **키를 잃으면 저장된 접속정보를 전부 다시 입력해야 한다** — 백업 위치를 운영 노트에 남긴다.
-  2. 인터뷰 서비스 `.env`에 `TOOLBOX_PATH=<본 체크아웃>\netismaker-interview-service\bin\toolbox.exe`(본 체크아웃에서 `install-toolbox.ps1` 실행).
+  2. 본 체크아웃 인터뷰 서비스에서 `npm ci`(새 의존성 `pg`·`mysql2`·`oracledb`·`zod` — 레지스트리 다운로드, 실행 전 사용자에게 알린다). 인터뷰 서비스 env 추가 없음.
   3. API → 인터뷰 서비스 재기동(작업 스케줄러 `netisMaker-public` 경유), 프론트는 `NUXT_IGNORE_LOCK=1 npm run build` 후 재기동.
-  4. API 로그에 `DB 접속정보 기능 꺼짐`이 **없는지**, 인터뷰 서비스 로그에 `toolbox=on`이 있는지 확인.
+  4. API 로그에 `DB 접속정보 기능 꺼짐`이 **없는지** 확인.
 
 - [ ] **Step 5: 라이브 스모크 (공개 주소 `app-win`에서 시작)** — DB 종류마다:
   1. 새 질문에서 레포 선택 → DB 버튼 → 새 접속 추가 → 접속 테스트 `접속 성공` → 저장.
@@ -4620,10 +5191,10 @@ PR 생성은 사용자 확인 후(`gh pr create`, 본문 끝에 `🤖 Generated 
   4. 대화 중 DB 해제 → `DB 연결 변경: 없음(전부 해제)` 노트 즉시 표시 → 다음 답변에서 DB 도구 미사용.
   5. 턴 진행 중 PowerShell로 명령줄 점검:
      ```powershell
-     Get-CimInstance Win32_Process | Where-Object { $_.Name -in 'claude.exe','node.exe','toolbox.exe' } | Select-Object Name, CommandLine | Format-List
+     Get-CimInstance Win32_Process | Where-Object { $_.Name -in 'claude.exe','node.exe' } | Select-Object Name, CommandLine | Format-List
      ```
-     어떤 명령줄에도 비밀번호가 없어야 한다(런처는 파일 경로만).
-  6. 턴이 끝난 뒤 `DB_MCP_TMP_DIR`(기본 `$env:TEMP\netismaker-dbmcp`)이 비었는지.
-  결과를 스펙 §11-2·5·6에 `→ 라이브 확인: …`으로 적고 커밋한다.
+     어떤 명령줄에도 비밀번호·호스트 계정이 없어야 한다(claude.exe의 `--mcp-config`에는 `{"type":"sdk","name":"db-N"}`만).
+  6. "큰 테이블 전체 보여줘"(행 200 초과) → 답변이 잘림을 언급하고 조건을 좁혀 다시 조회하는지, 인터뷰 서비스 메모리가 튀지 않는지.
+  결과를 스펙 §11-3·4·5에 `→ 라이브 확인: …`으로 적고 커밋한다.
 
-- [ ] **Step 6: 정리** — worktree 정션 제거(`cmd /c rmdir frontend\node_modules`, `cmd /c rmdir netismaker-interview-service\node_modules`). worktree 자체 삭제는 PR 머지 후 사용자 확인을 받아서.
+- [ ] **Step 6: 정리** — 프론트 정션 제거(`cmd /c rmdir frontend\node_modules`). 인터뷰 서비스 node_modules는 worktree 안의 실제 폴더라 worktree와 함께 지워진다. worktree 자체 삭제는 PR 머지 후 사용자 확인을 받아서.

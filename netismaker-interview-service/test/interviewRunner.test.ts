@@ -624,6 +624,61 @@ describe('InterviewRunner kind=QUESTION (스펙 §6 — plan 경로 미진입, Q
       }
     });
   });
+
+  describe('DB MCP (스펙 2026-10-02 §6.4)', () => {
+    const dbClaim = {
+      ...questionClaim,
+      dbConnections: [{ serverName: 'db-7', label: '운영 DB (MySQL)', dbType: 'MYSQL', host: 'h', port: 3306, database: 'app', username: 'u', password: 'Pw-secret' }],
+      dbNotices: ['DB 연결 #9를 사용할 수 없습니다 — 삭제되었거나 비활성화됨'],
+    } as never;
+    const preparedFor = () => ({
+      servers: { 'db-7': { type: 'sdk' as const, name: 'db-7', instance: {} } },
+      tools: {},
+      dialects: { 'db-7': 'mysql' as const },
+      labels: [{ serverName: 'db-7', label: '운영 DB (MySQL)' }],
+      notices: ['DB 연결 #9를 사용할 수 없습니다 — 삭제되었거나 비활성화됨'],
+      close: vi.fn().mockResolvedValue(undefined),
+    });
+
+    it('DB 서버를 붙이고 프롬프트 앞에 서버↔DB 매핑·안내를 넣고, 끝나면 close한다', async () => {
+      const client = makeClient();
+      const { fakeQuery, captured } = capturing(() => questionStream());
+      const prepared = preparedFor();
+      const createDbMcp = vi.fn().mockReturnValue(prepared);
+      const runner = new InterviewRunner(client as never, fakeQuery as never, { ...deps, createDbMcp } as never);
+      await runner.run(dbClaim);
+
+      expect(createDbMcp).toHaveBeenCalledWith(dbClaim);
+      expect((captured.options.mcpServers as Record<string, unknown>)['db-7']).toBe(prepared.servers['db-7']);
+      expect(captured.prompt.startsWith('사용 가능한 DB 도구')).toBe(true);
+      expect(captured.prompt).toContain('mcp__db-7__query / list_tables / describe_table : 운영 DB (MySQL)');
+      expect(captured.prompt).toContain('참고: DB 연결 #9를 사용할 수 없습니다');
+      expect(captured.prompt).toContain('로그인은 어디서 처리되나요?');
+      expect(captured.prompt).not.toContain('Pw-secret');
+      expect(prepared.close).toHaveBeenCalledTimes(1);
+    });
+
+    it('closes_db_sessions_when_query_throws', async () => {
+      // Review Focus 5
+      const client = makeClient();
+      const fakeQuery = vi.fn(() => { throw new Error('boom'); });
+      const prepared = preparedFor();
+      const runner = new InterviewRunner(client as never, fakeQuery as never,
+        { ...deps, createDbMcp: vi.fn().mockReturnValue(prepared) } as never);
+      await runner.run(dbClaim);
+      expect(prepared.close).toHaveBeenCalledTimes(1);
+      expect(client.fail).toHaveBeenCalled();
+    });
+
+    it('DB 연결이 없으면 프롬프트·옵션이 기존과 같다', async () => {
+      const client = makeClient();
+      const { fakeQuery, captured } = capturing(() => questionStream());
+      const runner = new InterviewRunner(client as never, fakeQuery as never, deps as never);
+      await runner.run(questionClaim);
+      expect(captured.prompt.startsWith('당신은')).toBe(true);
+      expect(Object.keys((captured.options.mcpServers ?? {}) as object)).not.toContain('db-7');
+    });
+  });
 });
 
 describe('InterviewRunner turn cap + force-finish', () => {

@@ -38,6 +38,7 @@ public class McpCatalogDto {
             @NotBlank
             @Pattern(regexp = "^[a-z0-9_-]+$",
                      message = "name은 소문자/숫자/하이픈/언더스코어만 (mcp__<name> 노출)")
+            @Pattern(regexp = "^(?!db-).*$", message = "'db-'로 시작하는 이름은 DB 연결 서버용으로 예약되어 있습니다")
             @Size(max = 50)
             String name,
 

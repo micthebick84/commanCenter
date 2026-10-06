@@ -45,6 +45,10 @@ dependencies {
 
     // PostgreSQL JDBC + Flyway
     runtimeOnly 'org.postgresql:postgresql'
+    // 질문 세션 DB 접속 테스트용 JDBC 드라이버 (스펙 2026-10-02 §5.2). 버전은 Spring Boot BOM 관리.
+    runtimeOnly 'com.mysql:mysql-connector-j'
+    runtimeOnly 'org.mariadb.jdbc:mariadb-java-client'
+    runtimeOnly 'com.oracle.database.jdbc:ojdbc11'
     implementation 'org.flywaydb:flyway-core'
     implementation 'org.flywaydb:flyway-database-postgresql'
 

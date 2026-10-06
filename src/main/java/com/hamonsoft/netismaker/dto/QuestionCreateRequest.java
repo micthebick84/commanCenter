@@ -28,5 +28,13 @@ public record QuestionCreateRequest(
 
         String model,
         String effort,
-        List<Long> mcpCatalogIds
-) {}
+        List<Long> mcpCatalogIds,
+        /** 선택한 DB 접속정보 id (스펙 2026-10-02 §5.3). null/빈 = 없음. 세션 소유자 기준 검증. */
+        List<Long> dbConnectionIds
+) {
+    /** DB 선택 없는 등록 — 기존 호출처/테스트 호환. */
+    public QuestionCreateRequest(Long repoCatalogId, String githubBranch, String title, String question,
+                                 String model, String effort, List<Long> mcpCatalogIds) {
+        this(repoCatalogId, githubBranch, title, question, model, effort, mcpCatalogIds, null);
+    }
+}

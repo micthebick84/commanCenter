@@ -37,11 +37,28 @@ public record InterviewResponse(
         /** 선택한 MCP 카탈로그 id — 대화 페이지 McpPicker 시딩 (스펙 2026-09-13 §5.1). 항상 non-null. */
         List<Long> mcpCatalogIds,
         /** 등록 시(킥오프) 첨부 — turn_seq null. 항상 non-null. 절대경로·추출경로는 내보내지 않는다. */
-        List<AttachmentView> attachments
+        List<AttachmentView> attachments,
+        /** 세션의 레포 카탈로그 id — 대화 화면이 DB 접속정보 목록을 조회하는 키 (스펙 2026-10-02 §5.3). 구버전 세션은 null. */
+        Long repoCatalogId,
+        /** 선택한 DB 접속정보 id. 항상 non-null. */
+        List<Long> dbConnectionIds,
+        /** 칩 표시용 {id,name,dbType} — 현재 행 기준. QuestionService.get이 withDbConnections로 채운다. 항상 non-null. */
+        List<DbConnectionDto.Chip> dbConnections
 ) {
     public InterviewResponse {
         mcpCatalogIds = mcpCatalogIds == null ? List.of() : List.copyOf(mcpCatalogIds);
         attachments = attachments == null ? List.of() : List.copyOf(attachments);
+        // jsonb 역직렬화가 List<Long> 안에 Integer를 담아 오므로 Number로 정규화 (List<?>로 받아야 Long 캐스트가 안 터진다)
+        dbConnectionIds = dbConnectionIds == null ? List.of() : ((List<?>) dbConnectionIds).stream()
+                .map(o -> ((Number) o).longValue()).toList();
+        dbConnections = dbConnections == null ? List.of() : List.copyOf(dbConnections);
+    }
+
+    /** 칩만 바꾼 사본 (QuestionService.get이 DbConnectionService.chipsFor 결과로 채운다). */
+    public InterviewResponse withDbConnections(List<DbConnectionDto.Chip> chips) {
+        return new InterviewResponse(id, githubRepo, githubBranch, title, description, status, statusName, currentPhase,
+                workDir, taskId, model, effort, turns, plan, createdAt, updatedAt, kind, totalCostUsd, contextTokens,
+                contextWindow, mcpCatalogIds, attachments, repoCatalogId, dbConnectionIds, chips);
     }
 
     /** attachments = 이 턴(user answer)에 첨부된 파일. 항상 non-null. */
@@ -85,6 +102,7 @@ public record InterviewResponse(
                 s.getStatus().dbValue(), s.getStatus().name(), s.getCurrentPhase(), s.getWorkDir(), s.getTaskId(),
                 s.getModel(), s.getEffort(), tvs, pv, s.getCreatedAt(), s.getUpdatedAt(),
                 s.getKind().name(), s.getTotalCostUsd(), s.getContextTokens(), s.getContextWindow(),
-                s.getMcpCatalogIds(), attachments);
+                s.getMcpCatalogIds(), attachments,
+                s.getRepoCatalogId(), s.getDbConnectionIds(), List.of());
     }
 }

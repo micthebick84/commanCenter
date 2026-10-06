@@ -533,3 +533,33 @@ describe('canUseTool — QUESTION Glob pattern rejects Windows absolute forms (d
     }
   });
 });
+
+describe('canUseTool — kind=QUESTION DB 서버 게이트 (스펙 2026-10-02 §8)', () => {
+  const q = buildCanUseTool('/tmp/repo', 'QUESTION', null, { 'db-3': 'postgres', 'db-7': 'mysql' });
+
+  it('query는 조회문만 통과', async () => {
+    expect((await q('mcp__db-3__query', { sql: 'SELECT * FROM users' })).behavior).toBe('allow');
+    const r = await q('mcp__db-3__query', { sql: 'UPDATE users SET a = 1' });
+    expect(r.behavior).toBe('deny');
+    expect(r.message).toContain('읽기 전용');
+    expect(r.message).toContain('UPDATE');
+  });
+
+  it('방언을 서버별로 적용한다 — # 주석은 mysql 서버에서만', async () => {
+    expect((await q('mcp__db-7__query', { sql: 'SELECT 1 # 주석' })).behavior).toBe('allow');
+    expect((await q('mcp__db-3__query', { sql: 'SELECT 1 # 1; DELETE FROM t' })).behavior).toBe('deny');
+  });
+
+  it('list_tables·describe_table은 허용, 그 외 도구·SQL 없음은 거부', async () => {
+    expect((await q('mcp__db-3__list_tables', {})).behavior).toBe('allow');
+    expect((await q('mcp__db-7__describe_table', { table: 'orders' })).behavior).toBe('allow');
+    expect((await q('mcp__db-3__execute_sql', { sql: 'SELECT 1' })).behavior).toBe('deny');
+    expect((await q('mcp__db-3__query', {})).behavior).toBe('deny');
+  });
+
+  it('등록되지 않은 db-N 서버 이름은 거부(이름 흉내 차단), 기존 서버 규칙은 그대로', async () => {
+    expect((await q('mcp__db-99__query', { sql: 'SELECT 1' })).behavior).toBe('deny');
+    expect((await q('mcp__local-db__execute_sql', { sql: 'select 1' })).behavior).toBe('deny');
+    expect((await q('mcp__local-db__query', { sql: 'select 1' })).behavior).toBe('allow');
+  });
+});

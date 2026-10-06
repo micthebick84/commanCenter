@@ -107,4 +107,19 @@ class InterviewResponseTest {
         assertThat(r.contextTokens()).isNull();
         assertThat(r.contextWindow()).isNull();
     }
+
+    @Test
+    void carries_repo_catalog_id_and_db_ids_and_chips_are_filled_by_with() {
+        InterviewSession s = InterviewSession.createQuestion("a/b", "main", "t", "q", "user1",
+                new java.util.ArrayList<>(), "claude-sonnet-5", "medium");
+        s.setRepoCatalogId(1L);
+        s.setDbConnectionIds(new java.util.ArrayList<>(java.util.List.of(7L)));
+        InterviewResponse r = InterviewResponse.of(s, java.util.List.of(), null);
+        assertThat(r.repoCatalogId()).isEqualTo(1L);
+        assertThat(r.dbConnectionIds()).containsExactly(7L);
+        assertThat(r.dbConnections()).isEmpty();
+        InterviewResponse filled = r.withDbConnections(java.util.List.of(new DbConnectionDto.Chip(7, "운영", "MYSQL")));
+        assertThat(filled.dbConnections()).extracting(DbConnectionDto.Chip::name).containsExactly("운영");
+        assertThat(filled.id()).isEqualTo(r.id());
+    }
 }

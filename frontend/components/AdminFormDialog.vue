@@ -10,6 +10,7 @@ const props = defineProps<{
   submitLabel: string
   submitting?: boolean
   canSubmit?: boolean
+  submitColor?: string
 }>()
 const emit = defineEmits<{
   'update:modelValue': [value: boolean]
@@ -59,7 +60,7 @@ const show = computed({
         <q-btn flat label="취소" :disable="submitting" @click="show = false" />
         <q-btn
           unelevated
-          color="primary"
+          :color="submitColor ?? 'primary'"
           :label="submitLabel"
           :loading="submitting"
           :disable="!canSubmit"

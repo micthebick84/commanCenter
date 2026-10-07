@@ -1,6 +1,7 @@
 package com.hamonsoft.netismaker.controller;
 
 import com.hamonsoft.netismaker.dto.ApproveRequest;
+import com.hamonsoft.netismaker.dto.DeployEnvSuggestionResponse;
 import com.hamonsoft.netismaker.dto.DeployRequest;
 import com.hamonsoft.netismaker.dto.InterviewSummaryResponse;
 import com.hamonsoft.netismaker.dto.RejectDesignRequest;
@@ -63,12 +64,17 @@ public class TaskController {
         this.interviewService = interviewService;
     }
 
+    /** 관리자가 아니면 비밀 env 값을 비운다 (스펙 2026-10-07 §7). 관리자 전용 엔드포인트에는 쓰지 않는다. */
+    private static TaskResponse forViewer(TaskResponse r, boolean isAdmin) {
+        return isAdmin ? r : r.redactSecretValues();
+    }
+
     @PostMapping
     public ResponseEntity<TaskResponse> create(@RequestBody @Valid TaskCreateRequest req,
                                                JwtAuthenticationToken auth) {
         String userId = AuthContext.requireUserId(auth);
         Task t = taskService.create(req, userId);
-        TaskResponse body = TaskResponse.of(t, null);
+        TaskResponse body = forViewer(TaskResponse.of(t, null), AuthContext.isAdmin(auth));
         return ResponseEntity.created(URI.create("/api/tasks/" + t.getId())).body(body);
     }
 
@@ -83,7 +89,7 @@ public class TaskController {
             JwtAuthenticationToken auth) {
         String userId = AuthContext.requireUserId(auth);
         Task t = taskService.create(req, files, userId);
-        TaskResponse body = TaskResponse.of(t, null);
+        TaskResponse body = forViewer(TaskResponse.of(t, null), AuthContext.isAdmin(auth));
         return ResponseEntity.created(URI.create("/api/tasks/" + t.getId())).body(body);
     }
 
@@ -100,7 +106,7 @@ public class TaskController {
         return page.map(t -> {
             TaskResponse base = TaskResponse.of(t, null);
             BigDecimal total = totals.get(t.getId());
-            return total == null ? base : TaskResponse.withTotalCost(base, total);
+            return forViewer(total == null ? base : TaskResponse.withTotalCost(base, total), isAdmin);
         });
     }
 
@@ -109,11 +115,11 @@ public class TaskController {
         String userId = AuthContext.requireUserId(auth);
         boolean isAdmin = AuthContext.isAdmin(auth);
         Task t = taskService.getForView(id, userId, isAdmin);
-        return TaskResponse.ofWithUsage(t, taskService.getAnalysis(id).orElse(null),
+        return forViewer(TaskResponse.ofWithUsage(t, taskService.getAnalysis(id).orElse(null),
                 taskService.getDesign(id).orElse(null),
                 interviewService.latestSessionIdForTask(id).orElse(null),
                 taskService.getAttachments(id),
-                taskService.getStageUsage(id));
+                taskService.getStageUsage(id)), isAdmin);
     }
 
     /**
@@ -142,7 +148,7 @@ public class TaskController {
         String userId = AuthContext.requireUserId(auth);
         boolean isAdmin = AuthContext.isAdmin(auth);
         Task t = taskService.cancel(id, userId, isAdmin);
-        return TaskResponse.of(t, null);
+        return forViewer(TaskResponse.of(t, null), isAdmin);
     }
 
     @DeleteMapping("/{id}")
@@ -191,7 +197,7 @@ public class TaskController {
         String userId = AuthContext.requireUserId(auth);
         boolean isAdmin = AuthContext.isAdmin(auth);
         Task t = taskService.retry(id, userId, isAdmin);
-        return TaskResponse.of(t, null);
+        return forViewer(TaskResponse.of(t, null), isAdmin);
     }
 
     @PostMapping("/{id}/deploy")
@@ -223,6 +229,13 @@ public class TaskController {
         taskService.undeploy(id, adminId);
         Task t = taskService.getForView(id, adminId, true);
         return TaskResponse.of(t, taskService.getAnalysis(id).orElse(null));
+    }
+
+    /** 배포 다이얼로그 미리 채움 — 구현 시 추출한 이름 + 직전 배포 값(비밀 포함, 평문)이라 관리자 한정 (스펙 2026-10-07 §6). */
+    @GetMapping("/{id}/deploy-env")
+    @PreAuthorize("hasAuthority('ROLE_ADMIN')")
+    public DeployEnvSuggestionResponse deployEnv(@PathVariable Long id) {
+        return taskService.deployEnvSuggestion(id);
     }
 
     @GetMapping(value = "/{id}/logs/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)

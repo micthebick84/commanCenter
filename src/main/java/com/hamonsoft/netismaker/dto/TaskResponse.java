@@ -179,6 +179,20 @@ public record TaskResponse(
         );
     }
 
+    /**
+     * 비밀 env 값을 비운 복사본 — 관리자가 아닌 사용자 응답용 (스펙 2026-10-07 §7). 배포 다이얼로그가 같은 레포의
+     * 직전 배포 값(비밀 포함)을 옮겨 오므로, 작업 등록자에게 다른 작업의 비밀이 보이지 않게 한다.
+     */
+    public TaskResponse redactSecretValues() {
+        List<EnvVar> redacted = envVars == null ? List.of() : envVars.stream()
+                .map(e -> e.secret() ? new EnvVar(e.key(), "", true) : e)
+                .toList();
+        return new TaskResponse(id, githubRepo, repoAlias, githubBranch, title, description, status, statusLabel,
+                requesterId, retryCount, maxRetry, failureReason, mcpsExtra, redacted, createdAt, updatedAt,
+                model, effort, designRequested, analysis, design, implementation, deployment, interviewSessionId,
+                attachments, stageUsage, totalCostUsd, totalTokens);
+    }
+
     private static TaskResponse build(Task t, TaskAnalysis a, TaskDesign d, Long interviewSessionId,
                                       List<TaskAttachment> attachments,
                                       List<StageUsageView> stageUsage, BigDecimal totalCostUsd,

@@ -1,7 +1,10 @@
 package com.hamonsoft.netismaker.dto;
 
+import com.hamonsoft.netismaker.entity.EnvTemplateItem;
 import com.hamonsoft.netismaker.entity.TaskStatus;
 import org.junit.jupiter.api.Test;
+
+import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -129,5 +132,25 @@ class WorkerResultRequestMaskTest {
                 null, null, null, null, null);
 
         assertThat(clean.masked()).isEqualTo(clean);
+    }
+
+    @Test
+    void env_template_descriptions_are_masked_but_keys_and_flags_kept() {
+        var masked = new WorkerResultRequest("w1", TaskStatus.PR_CREATED,
+                null, null, null, 10L, null,
+                "https://github.com/acme/widgets/pull/7", 7, "netismaker/task-1", "abc123", null,
+                null, null, null, null, null,
+                null, null, null, null, null,
+                List.of(new EnvTemplateItem("GIT_URL", DIRTY, true, true))).masked();
+
+        assertThat(masked.envTemplate()).containsExactly(new EnvTemplateItem("GIT_URL", CLEAN, true, true));
+    }
+
+    @Test
+    void other_reports_carry_no_env_template() {
+        var failed = WorkerResultRequest.deployFailed("w1", "x", "log");
+
+        assertThat(failed.envTemplate()).isNull();
+        assertThat(failed.masked().envTemplate()).isNull();
     }
 }

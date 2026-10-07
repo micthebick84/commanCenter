@@ -81,6 +81,26 @@ public interface TaskRepository extends JpaRepository<Task, Long> {
     Optional<Task> findActiveByIdForUpdate(@Param("id") Long id);
 
     /**
+     * 같은 레포에서 env를 넣어 배포 요청한 다른 작업 — '배포대기' 진입이 최근인 순, 최대 20건 (스펙 2026-10-07 §6.2).
+     * 배포 중지가 deployed_at을 지우므로 상태 이력으로 정렬한다. env_vars는 배포·재배포 요청 때만 저장되므로
+     * "비어 있지 않음" = "배포 요청된 적 있음". 호스트(GitHub/GitLab) 비교는 호출부(TaskService)에서 한다.
+     */
+    @Query(value = """
+        SELECT t.* FROM com.task t
+        WHERE t.github_repo = :githubRepo
+          AND t.id <> :excludeId
+          AND t.deleted_at IS NULL
+          AND t.env_vars <> CAST('[]' AS jsonb)
+        ORDER BY (SELECT MAX(h.at) FROM com.task_status_history h
+                  WHERE h.task_id = t.id AND h.to_status = :deployPending) DESC NULLS LAST,
+                 t.id DESC
+        LIMIT 20
+        """, nativeQuery = true)
+    List<Task> findRecentlyDeployedWithEnv(@Param("githubRepo") String githubRepo,
+                                           @Param("excludeId") Long excludeId,
+                                           @Param("deployPending") String deployPending);
+
+    /**
      * 워커가 다음에 처리할 작업 1건을 atomic claim.
      * SELECT FOR UPDATE SKIP LOCKED. 동시 워커가 있어도 1개만 잡음.
      *

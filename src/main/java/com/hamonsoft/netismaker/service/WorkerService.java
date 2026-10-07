@@ -200,6 +200,7 @@ public class WorkerService {
             t.setHeadBranch(req.headBranch());
             t.setHeadSha(req.headSha());
             t.setImplementationLog(req.implementationLog());
+            applyEnvTemplate(t, req);
             t.setFailureReason(null);
             t.setUpdatedAt(OffsetDateTime.now());
             historyRepo.save(TaskStatusHistory.log(t.getId(),
@@ -345,6 +346,7 @@ public class WorkerService {
                 t.setHeadBranch(req.headBranch());
                 t.setHeadSha(req.headSha());
                 t.setImplementationLog(req.implementationLog());
+                applyEnvTemplate(t, req);
                 accumulateUsage(t.getId(), TaskStageUsage.STAGE_IMPLEMENTATION, req);
             }
             case IMPLEMENTATION_FAILED -> {
@@ -369,6 +371,11 @@ public class WorkerService {
         };
         historyRepo.save(TaskStatusHistory.log(t.getId(), from, t.getStatus(),
                 "worker", req.workerId(), reason));
+    }
+
+    /** 구현 성공 보고의 배포 env 템플릿 저장 — null(구버전 워커)이면 기존 값 유지 (스펙 2026-10-07 §5). */
+    private static void applyEnvTemplate(Task t, WorkerResultRequest req) {
+        if (req.envTemplate() != null) t.setEnvTemplate(EnvTemplateItem.sanitize(req.envTemplate()));
     }
 
     private void recordDeployResult(Task t, WorkerResultRequest req) {

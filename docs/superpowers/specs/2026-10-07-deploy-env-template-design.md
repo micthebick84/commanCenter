@@ -179,6 +179,9 @@ KEY가 빈 항목은 모든 입력에서 무시한다.
 2. `previous`에만 있는 KEY를 뒤에 덧붙임 — 값·비밀은 직전 배포, 설명 `""`, 필수 `false`, `source=PREVIOUS`, `valueFromPrevious=true`.
 3. 2에서 하나라도 가져왔거나 1에서 값을 하나라도 가져왔으면 `previousTaskId`를 채운다.
 
+직전 배포의 값이 빈 문자열(공백뿐 포함)이면 값을 가져온 것으로 보지 않는다 — 템플릿 행은 빈 값·`valueFromPrevious=false`,
+직전 배포에만 있던 KEY는 이름만 덧붙인다(이때도 KEY를 가져왔으므로 `previousTaskId`는 채운다).
+
 템플릿도 직전 배포도 없으면 `rows=[]` — 다이얼로그는 지금처럼 빈 상태에서 "변수 추가"로 시작한다.
 
 ## 7. 비관리자 응답의 비밀 값 비우기

@@ -93,6 +93,15 @@ public class Task {
     @Setter
     private List<EnvVar> envVars = new ArrayList<>();
 
+    /**
+     * 구현 시 추출한 배포 환경변수 템플릿 (이름·설명·비밀·필수, 값 없음). 구현 성공(PR_CREATED) 보고에서 set —
+     * 배포 다이얼로그 미리 채움에 쓴다 (스펙 2026-10-07).
+     */
+    @JdbcTypeCode(SqlTypes.JSON)
+    @Column(name = "env_template", nullable = false, columnDefinition = "jsonb")
+    @Setter
+    private List<EnvTemplateItem> envTemplate = new ArrayList<>();
+
     /** 디자인 단계 포함 여부 (등록 시 토글). true면 분석 승인 시 구현대기 대신 디자인대기로. */
     @Column(name = "design_requested", nullable = false)
     @Setter

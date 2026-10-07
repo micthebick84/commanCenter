@@ -1,8 +1,12 @@
 package com.hamonsoft.netismaker.workerdaemon;
 
+import ch.qos.logback.classic.Logger;
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.read.ListAppender;
 import com.hamonsoft.netismaker.entity.EnvTemplateItem;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
 import java.nio.file.Files;
@@ -68,6 +72,24 @@ class DeployEnvManifestTest {
 
         assertThat(DeployEnvManifest.harvest(wt)).isEmpty();
         assertThat(f).doesNotExist();
+    }
+
+    @Test
+    void a_broken_file_never_writes_its_content_to_the_log() throws Exception {
+        // 지시를 어기고 값을 적은 데다 JSON까지 깨진 경우 — 파서 예외 메시지에 토큰 원문(값)이 들어간다
+        Logger logger = (Logger) LoggerFactory.getLogger(DeployEnvManifest.class);
+        ListAppender<ILoggingEvent> appender = new ListAppender<>();
+        appender.start();
+        logger.addAppender(appender);
+        try {
+            manifest("{\"vars\":[{\"key\":\"DB_PASSWORD\",\"value\":s3cret}]}");
+
+            assertThat(DeployEnvManifest.harvest(wt)).isEmpty();
+            assertThat(appender.list).isNotEmpty();
+            assertThat(appender.list).allSatisfy(e -> assertThat(e.getFormattedMessage()).doesNotContain("s3cret"));
+        } finally {
+            logger.detachAppender(appender);
+        }
     }
 
     @Test

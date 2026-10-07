@@ -1,5 +1,6 @@
 package com.hamonsoft.netismaker.workerdaemon;
 
+import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.hamonsoft.netismaker.entity.EnvTemplateItem;
@@ -45,7 +46,8 @@ final class DeployEnvManifest {
             }
             return parse(Files.readString(file));
         } catch (IOException | RuntimeException e) {
-            log.warn("배포 env 목록 읽기 실패 — 템플릿 없이 진행: {} ({})", file, e.toString());
+            // 파서 예외 메시지에는 깨진 JSON의 토큰 원문(잘못 적힌 값일 수 있음)이 들어가므로 종류·위치만 남긴다
+            log.warn("배포 env 목록 읽기 실패 — 템플릿 없이 진행: {} ({}{})", file, e.getClass().getSimpleName(), location(e));
             return List.of();
         } finally {
             delete(file);
@@ -66,6 +68,13 @@ final class DeployEnvManifest {
                     n.path("secret").asBoolean(false), n.path("required").asBoolean(false)));
         }
         return EnvTemplateItem.sanitize(raw);
+    }
+
+    private static String location(Exception e) {
+        if (e instanceof JsonProcessingException j && j.getLocation() != null) {
+            return ", line " + j.getLocation().getLineNr() + " column " + j.getLocation().getColumnNr();
+        }
+        return "";
     }
 
     private static void delete(Path file) {

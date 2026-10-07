@@ -7,6 +7,7 @@ import TaskProgressStepper from '~/components/tasks/TaskProgressStepper.vue'
 import TaskNextAction from '~/components/tasks/TaskNextAction.vue'
 import TaskDetailMobile from '~/components/tasks/TaskDetailMobile.vue'
 import TaskHistoryTimeline from '~/components/tasks/TaskHistoryTimeline.vue'
+import DeployEnvDialog from '~/components/tasks/DeployEnvDialog.vue'
 import { stageSteps, nextAction, ageOf, type NextActionKind } from '~/composables/taskStages'
 import { renderMarkdown } from '~/composables/useMarkdown'
 import { mrNoun, mrRef } from '~/composables/mergeRequestLabel'
@@ -207,67 +208,13 @@ const isInterviewPhase = computed(() =>
   ['INTERVIEWING', 'INTERVIEW_INPUT', 'INTERVIEW_REVIEW'].includes(task.value?.status ?? ''),
 )
 
-// 편집용 행: 와이어 포맷(EnvVar)에 UI 전용 상태(reveal) + 안정적 key(id)를 더한다.
-// id는 v-for의 stable key로 써서 행 삭제 시 입력/마스킹 상태가 어긋나지 않게 한다.
-interface EnvRow extends EnvVar {
-  id: number
-  reveal: boolean
-}
-
+// 배포/재배포 환경변수 다이얼로그 (스펙 2026-10-07) — 추천 불러오기·전송은 DeployEnvDialog가 맡는다.
 const envDialog = ref(false)
 const envMode = ref<'deploy' | 'redeploy'>('deploy')
-const envRows = ref<EnvRow[]>([])
-let envRowSeq = 0
 
 function openDeployDialog(mode: 'deploy' | 'redeploy') {
   envMode.value = mode
-  envRows.value = (task.value?.envVars ?? []).map((e) => ({
-    ...e,
-    id: envRowSeq++,
-    reveal: false,
-  }))
   envDialog.value = true
-}
-
-function addEnvRow() {
-  envRows.value.push({
-    key: '',
-    value: '',
-    secret: false,
-    id: envRowSeq++,
-    reveal: false,
-  })
-}
-
-function removeEnvRow(id: number) {
-  envRows.value = envRows.value.filter((r) => r.id !== id)
-}
-
-async function submitDeploy() {
-  const endpoint = envMode.value === 'deploy' ? 'deploy' : 'redeploy'
-  // UI 전용 필드(id/reveal)는 제외하고 와이어 포맷만 전송.
-  const envVars = envRows.value
-    .map((r) => ({ key: r.key.trim(), value: r.value, secret: r.secret }))
-    .filter((r) => r.key !== '')
-  try {
-    await useApi(`/api/tasks/${taskId.value}/${endpoint}`, {
-      method: 'POST',
-      body: { envVars },
-    })
-    $q.notify({
-      type: 'positive',
-      message: envMode.value === 'deploy' ? '배포 큐 등록' : '재배포 큐 등록',
-    })
-    envDialog.value = false
-    refresh()
-  } catch (e: any) {
-    $q.notify({
-      type: 'negative',
-      message:
-        e?.data?.message ??
-        (envMode.value === 'deploy' ? '배포 실패' : '재배포 실패'),
-    })
-  }
 }
 
 function undeploy() {
@@ -988,75 +935,13 @@ function onAction(kind: NextActionKind) {
 
       <ApproveDialog v-model="showApprove" :task="task" @approved="onApproved" />
 
-      <q-dialog v-model="envDialog" :maximized="$q.screen.lt.md">
-        <q-card style="width: min(480px, 100vw)">
-          <div class="dialog-body">
-            <q-card-section class="row items-center">
-              <div class="text-h6">
-                {{ envMode === 'deploy' ? '배포' : '재배포' }} — 환경변수
-              </div>
-              <q-space />
-              <q-btn v-close-popup flat round dense icon="close" />
-            </q-card-section>
-            <q-card-section class="text-caption text-grey-7">
-              컨테이너에 <code>-e KEY=VALUE</code>로 주입됩니다. DB 접속
-              정보·시크릿을 여기에 입력하세요. (예:
-              <code>SPRING_DATASOURCE_URL</code>, <code>JWT_SECRET</code>) 비밀
-              값은 마스킹 표시되지만 평문 저장됩니다.
-            </q-card-section>
-            <q-card-section class="q-gutter-sm">
-              <div
-                v-for="row in envRows"
-                :key="row.id"
-                :class="$q.screen.lt.md ? 'column q-gutter-y-xs' : 'row items-center q-gutter-xs no-wrap'"
-              >
-                <q-input
-                  v-model="row.key"
-                  dense
-                  outlined
-                  placeholder="KEY"
-                  style="flex: 1"
-                />
-                <q-input
-                  v-model="row.value"
-                  dense
-                  outlined
-                  placeholder="value"
-                  style="flex: 2"
-                  :type="row.secret && !row.reveal ? 'password' : 'text'"
-                >
-                  <template v-if="row.secret" #append>
-                    <q-icon
-                      :name="row.reveal ? 'visibility_off' : 'visibility'"
-                      class="cursor-pointer"
-                      @click="row.reveal = !row.reveal"
-                    />
-                  </template>
-                </q-input>
-                <q-toggle v-model="row.secret" label="비밀" dense />
-                <q-btn
-                  flat
-                  round
-                  dense
-                  icon="delete"
-                  color="grey"
-                  @click="removeEnvRow(row.id)"
-                />
-              </div>
-              <q-btn flat dense icon="add" label="변수 추가" @click="addEnvRow" />
-            </q-card-section>
-          </div>
-          <q-card-actions align="right">
-            <q-btn v-close-popup flat label="취소" />
-            <q-btn
-              unelevated
-              color="primary"
-              :label="envMode === 'deploy' ? '배포' : '재배포'"
-              @click="submitDeploy"
-            />
-          </q-card-actions>
-        </q-card>
-      </q-dialog>
+      <DeployEnvDialog
+        v-model="envDialog"
+        :task-id="taskId"
+        :mode="envMode"
+        :saved-env-vars="task.envVars ?? []"
+        @submitted="refresh"
+      />
 
     </template>
   </q-page>

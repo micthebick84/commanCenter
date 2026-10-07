@@ -1,14 +1,17 @@
 package com.hamonsoft.netismaker.dto;
 
+import com.hamonsoft.netismaker.entity.EnvTemplateItem;
 import com.hamonsoft.netismaker.entity.TaskStatus;
 import jakarta.validation.constraints.NotNull;
+
+import java.util.List;
 
 /**
  * 워커가 분석/구현/배포 후 백엔드에 업로드하는 결과 페이로드.
  *
  *   status=COMPLETED             → markdownResult, subtasksJson 필수 (분석)
  *   status=FAILED                → failureReason 필수 (분석)
- *   status=PR_CREATED            → prUrl, headBranch 필수 (구현) / 또는 UNDEPLOY 성공 복귀
+ *   status=PR_CREATED            → prUrl, headBranch 필수 (구현, envTemplate 선택) / 또는 UNDEPLOY 성공 복귀
  *   status=IMPLEMENTATION_FAILED → failureReason 필수 (구현)
  *   status=DEPLOYED              → deployUrl, deployContainerId, deployHostPort 필수 (배포)
  *   status=DEPLOY_FAILED         → failureReason 필수 (배포)
@@ -42,12 +45,34 @@ public record WorkerResultRequest(
         String designProjectId,
         String designUrl,
         // 사용량 (전 phase 공용, 스펙 §4.1 — null이면 미수집/구버전 워커)
-        UsageReport usage
+        UsageReport usage,
+        // 구현 성공 시 추출한 배포 env 템플릿 (스펙 2026-10-07 §5 — null이면 미보고/구버전 워커)
+        List<EnvTemplateItem> envTemplate
 ) {
+    /**
+     * envTemplate 도입 전 22개 인자 생성자 — 구현 성공 보고 외에는 템플릿이 없다.
+     * Jackson은 레코드의 정규 생성자(23개)를 쓰므로 역직렬화와 무관하다(WorkerResultRequestJsonTest).
+     */
+    public WorkerResultRequest(String workerId, TaskStatus status,
+                               String markdownResult, String subtasksJson, String claudeLog,
+                               Long durationMs, String failureReason,
+                               String prUrl, Integer prNumber, String headBranch, String headSha,
+                               String implementationLog,
+                               String deployUrl, String deployContainerId, Integer deployHostPort,
+                               String deployImage, String deployLog,
+                               String designMarkdown, String mockupFilesJson, String designProjectId,
+                               String designUrl,
+                               UsageReport usage) {
+        this(workerId, status, markdownResult, subtasksJson, claudeLog, durationMs, failureReason,
+                prUrl, prNumber, headBranch, headSha, implementationLog,
+                deployUrl, deployContainerId, deployHostPort, deployImage, deployLog,
+                designMarkdown, mockupFilesJson, designProjectId, designUrl, usage, null);
+    }
+
     /**
      * 자유 텍스트 필드를 전부 마스킹한 복사본.
      *
-     * 워커가 API로 올리는 텍스트(claude 로그·배포 로그·분석/디자인 마크다운·실패 사유)는
+     * 워커가 API로 올리는 텍스트(claude 로그·배포 로그·분석/디자인 마크다운·실패 사유·env 템플릿 설명)는
      * 작업 상세 화면에 그대로 렌더되므로, 그 안에 섞여 들어온 인증 URL을 여기서 한 번에 가린다.
      * 식별자·열거형·숫자·결과 URL(prUrl/deployUrl/designUrl 등)은 자유 텍스트가 아니라 그대로 둔다.
      * 적용 지점은 {@code ResultReporter.reportTerminal} 한 곳(전송 + dead-letter 기록 공통).
@@ -59,7 +84,16 @@ public record WorkerResultRequest(
                 prUrl, prNumber, headBranch, headSha, m(implementationLog),
                 deployUrl, deployContainerId, deployHostPort, deployImage, m(deployLog),
                 m(designMarkdown), m(mockupFilesJson), designProjectId, designUrl,
-                usage);
+                usage, maskTemplate(envTemplate));
+    }
+
+    /** 템플릿 설명은 Claude가 쓴 자유 텍스트 — 다른 자유 텍스트와 같이 가린다. KEY·플래그는 그대로. */
+    private static List<EnvTemplateItem> maskTemplate(List<EnvTemplateItem> items) {
+        if (items == null) return null;
+        return items.stream()
+                .map(i -> i == null ? null
+                        : new EnvTemplateItem(i.key(), m(i.description()), i.secret(), i.required()))
+                .toList();
     }
 
     private static String m(String text) {

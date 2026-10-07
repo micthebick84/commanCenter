@@ -3,6 +3,7 @@ package com.hamonsoft.netismaker.workerdaemon;
 import com.hamonsoft.netismaker.dto.WorkerHeartbeatRequest;
 import com.hamonsoft.netismaker.dto.WorkerResultRequest;
 import com.hamonsoft.netismaker.dto.WorkerTaskResponse;
+import com.hamonsoft.netismaker.entity.EnvTemplateItem;
 import com.hamonsoft.netismaker.entity.TaskStatus;
 import com.hamonsoft.netismaker.git.GitRemotes;
 import lombok.extern.slf4j.Slf4j;
@@ -12,6 +13,7 @@ import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
 import java.io.File;
+import java.util.List;
 import java.util.Optional;
 
 /**
@@ -29,6 +31,7 @@ import java.util.Optional;
  *     1) git fetch/clone (베이스 브랜치 최신화)
  *     2) WorktreeService.create → 새 브랜치 worktree
  *     3) 구현 prompt 치환 (분석 markdown/subtasks 포함) + claude -p exec (worktree에서)
+ *        → 커밋 전 배포 env 목록(.netis-deploy-env.json) 회수·삭제 (DeployEnvManifest)
  *     4) GitOpsService.commitAndPush → headSha
  *     5) GitOpsService.createDraftPr → prUrl/prNumber
  *     6) POST result (status=PR_CREATED 또는 IMPLEMENTATION_FAILED)
@@ -248,6 +251,9 @@ public class WorkerMainLoop {
         // 목업 참조 파일은 커밋 대상에서 제외
         if (designDir != null) deleteDesignDir(designDir.toPath());
 
+        // 배포 env 목록(.netis-deploy-env.json)도 커밋 전에 회수·삭제 — 없거나 틀려도 구현은 계속 (스펙 2026-10-07 §4.3)
+        List<EnvTemplateItem> envTemplate = DeployEnvManifest.harvest(wt.dir().toPath());
+
         // 4. 변경 commit + push
         String headSha;
         try {
@@ -284,9 +290,11 @@ public class WorkerMainLoop {
                 pr.url(), pr.number(), wt.branchName(), headSha, exec.stdout(),
                 null, null, null, null, null,
                 null, null, null, null,
-                usageOf(exec)
+                usageOf(exec),
+                envTemplate
         ));
-        log.info("구현 완료 + PR 생성: task={} pr=#{} {}", task.id(), pr.number(), pr.url());
+        log.info("구현 완료 + PR 생성: task={} pr=#{} {} (배포 env 템플릿 {}개)",
+                task.id(), pr.number(), pr.url(), envTemplate.size());
         // 산출물은 원격 브랜치·PR에 있다 — worktree는 더 쓰지 않으므로 바로 정리(실패해도 결과 무관, 주기 정리가 재시도)
         worktrees.discard(GitRemotes.localKey(task.repoRef()), WorktreeKind.TASK, task.id());
     }
@@ -423,7 +431,29 @@ public class WorkerMainLoop {
         return fillImplementationPrompt(tpl, task, baseSha, branchName);
     }
 
-    /** 구현 프롬프트 템플릿의 placeholder를 채운다(yml 템플릿·기본 템플릿 공용). */
+    /**
+     * 구현 프롬프트 끝에 항상 붙는 배포 env 목록 지시 (스펙 2026-10-07 §4.1). yml·기본 템플릿 공통이고 운영자가
+     * 템플릿을 바꿔도 빠지지 않는다. 파일 형식은 DeployEnvManifest가 읽는 계약과 같아야 한다.
+     */
+    static final String DEPLOY_ENV_INSTRUCTION = """
+
+            ## 배포 환경변수 목록 (마지막 단계 — 필수)
+            구현을 마친 뒤, 이 프로젝트를 컨테이너로 실행할 때 외부에서 넣어 줘야 하는 환경변수의 **이름**을
+            현재 디렉터리(레포 루트)의 `.netis-deploy-env.json`에 아래 형식으로 쓰세요.
+            이 파일은 워커가 읽은 뒤 지우며 커밋되지 않습니다.
+
+            {"vars":[{"key":"SPRING_DATASOURCE_URL","description":"DB 접속 JDBC URL","secret":false,"required":true}]}
+
+            - 값은 절대 쓰지 마세요(이름·설명만). 레포에 있는 실제 비밀번호·토큰을 옮겨 적지 마세요.
+            - 대상: DB 접속(URL·계정·암호), 시크릿(JWT 키 등), 외부 API 주소·키처럼 배포 환경마다 달라지는 값.
+            - 코드에 안전한 기본값이 있어 비워 둬도 실행되면 required=false.
+            - Spring Boot는 설정 키를 relaxed binding 환경변수 이름으로 쓰세요(spring.datasource.url → SPRING_DATASOURCE_URL).
+            - 암호·토큰·키는 secret=true.
+            - description은 한국어 한 줄.
+            - 필요한 환경변수가 없으면 {"vars":[]}를 쓰세요.
+            """;
+
+    /** 구현 프롬프트 템플릿의 placeholder를 채운다(yml 템플릿·기본 템플릿 공용). 끝에 배포 env 목록 지시를 붙인다. */
     static String fillImplementationPrompt(String tpl, WorkerTaskResponse task, String baseSha, String branchName) {
         return tpl
                 .replace("{github_repo}", task.githubRepo())
@@ -435,7 +465,8 @@ public class WorkerMainLoop {
                 .replace("{analysis_markdown}", task.analysisMarkdown() == null ? "" : task.analysisMarkdown())
                 .replace("{subtasks_json}", task.subtasksJson() == null ? "[]" : task.subtasksJson())
                 .replace("{design_section}", renderDesignSection(task))
-                .replace("{plan_section}", renderPlanSection(task));
+                .replace("{plan_section}", renderPlanSection(task))
+                + DEPLOY_ENV_INSTRUCTION;
     }
 
     /** 승인된 디자인이 있으면 구현 프롬프트에 삽입할 블록, 없으면 빈 문자열 (기존 작업 불변). */

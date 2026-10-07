@@ -2,6 +2,7 @@ package com.hamonsoft.netismaker.service;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.hamonsoft.netismaker.dto.ApproveRequest;
+import com.hamonsoft.netismaker.dto.DeployEnvSuggestionResponse;
 import com.hamonsoft.netismaker.dto.TaskCreateRequest;
 import com.hamonsoft.netismaker.entity.EnvVar;
 import com.hamonsoft.netismaker.entity.Task;
@@ -12,6 +13,7 @@ import com.hamonsoft.netismaker.entity.TaskMcpSpec;
 import com.hamonsoft.netismaker.entity.TaskStatus;
 import com.hamonsoft.netismaker.entity.TaskStatusHistory;
 import com.hamonsoft.netismaker.entity.TaskStageUsage;
+import com.hamonsoft.netismaker.git.RepoRef;
 import com.hamonsoft.netismaker.repository.TaskAnalysisRepository;
 import com.hamonsoft.netismaker.repository.TaskAttachmentRepository;
 import com.hamonsoft.netismaker.repository.TaskDesignRepository;
@@ -462,6 +464,30 @@ public class TaskService {
         }
         if (envVars != null) t.setEnvVars(new ArrayList<>(envVars));
         return toDeployPending(t, adminId, "관리자 재배포 요청 → 배포 큐 진입");
+    }
+
+    /**
+     * 배포 다이얼로그 미리 채움 (스펙 2026-10-07 §6). 저장된 env가 없을 때만 같은 레포(같은 호스트)의
+     * 직전 배포를 찾아 값을 가져온다. 삭제된 작업은 404.
+     */
+    @Transactional(readOnly = true)
+    public DeployEnvSuggestionResponse deployEnvSuggestion(Long taskId) {
+        Task t = taskRepo.findActiveById(taskId).orElseThrow(TaskException::notFound);
+        List<EnvVar> saved = t.getEnvVars() == null ? List.of() : t.getEnvVars();
+        boolean hasSaved = saved.stream().anyMatch(v -> v != null && !v.key().isBlank());
+        Task previous = hasSaved ? null : findPreviousDeploy(t);
+        return DeployEnvSuggester.suggest(saved, t.getEnvTemplate(),
+                previous == null ? List.of() : previous.getEnvVars(),
+                previous == null ? null : previous.getId());
+    }
+
+    private Task findPreviousDeploy(Task t) {
+        String host = RepoRef.fromSnapshot(t.getGithubRepo(), t.getGitUrl()).host();
+        return taskRepo.findRecentlyDeployedWithEnv(t.getGithubRepo(), t.getId(),
+                        TaskStatus.DEPLOY_PENDING.dbValue()).stream()
+                .filter(c -> host.equals(RepoRef.fromSnapshot(c.getGithubRepo(), c.getGitUrl()).host()))
+                .findFirst()
+                .orElse(null);
     }
 
     /** 배포완료/배포실패/배포중단됨 → 배포중지대기. 워커가 claim해 컨테이너 stop 후 PR생성 복귀. */

@@ -108,6 +108,31 @@ class WorkerServiceDeployTest {
     }
 
     @Test
+    void record_deployed_clears_stale_failure_reason() {
+        Task t = taskWithStatus(TaskStatus.DEPLOYING);
+        t.setWorkerId("mac-worker-1");
+        t.setFailureReason("컨테이너가 기동 직후 종료됨 (exit=1)");
+        when(taskRepo.findActiveByIdForUpdate(7L)).thenReturn(Optional.of(t));
+        service.recordResult(7L, WorkerResultRequest.deployed(
+                "mac-worker-1", "http://localhost:19000", "cid123", 19000,
+                "netis-task-7:abcdef1", 5000L, "build ok"));
+        assertThat(t.getStatus()).isEqualTo(TaskStatus.DEPLOYED);
+        assertThat(t.getFailureReason()).isNull();
+    }
+
+    @Test
+    void record_undeployed_clears_stale_failure_reason() {
+        // 배포실패 → 배포중지 → PR생성 복귀: 지난 배포 실패 사유가 PR생성 상태에 남으면 안 된다.
+        Task t = taskWithStatus(TaskStatus.UNDEPLOYING);
+        t.setWorkerId("mac-worker-1");
+        t.setFailureReason("컨테이너가 기동 직후 종료됨 (exit=1)");
+        when(taskRepo.findActiveByIdForUpdate(7L)).thenReturn(Optional.of(t));
+        service.recordResult(7L, WorkerResultRequest.undeployed("mac-worker-1", "stopped"));
+        assertThat(t.getStatus()).isEqualTo(TaskStatus.PR_CREATED);
+        assertThat(t.getFailureReason()).isNull();
+    }
+
+    @Test
     void record_undeployed_returns_to_pr_created_and_clears_deploy_meta() {
         Task t = taskWithStatus(TaskStatus.DEPLOYING);
         t.setWorkerId("mac-worker-1");

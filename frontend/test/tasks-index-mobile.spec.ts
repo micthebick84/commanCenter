@@ -26,6 +26,11 @@ const tasks = [
   t(9, 'CANCELLED', '취소됨', '2026-06-01T00:00:00Z'),
 ]
 
+async function confirmOk() {
+  ;(document.body.querySelector('[data-test="confirm-dialog-ok"]') as HTMLElement).click()
+  await flushPromises()
+}
+
 function stubApi() {
   useApiMock.mockImplementation((url: string) =>
     url.startsWith('/api/tasks')
@@ -68,7 +73,7 @@ describe('pages/tasks — 모바일 리스트 (스펙 2026-09-06 §4.1)', () => 
 
   it('⋮ → 시트의 배포 전이는 확인 후 POST /api/tasks/{id}/deploy', async () => {
     await setViewportWidth(390)
-    vi.spyOn(window, 'confirm').mockReturnValue(true)
+    vi.spyOn(window, 'confirm').mockReturnValue(false) // Claude 앱 브라우저 창처럼 네이티브 confirm이 안 뜨는 환경
     const w = mount(PageWrapper, { attachTo: document.body })
     await flushPromises()
     const menus = w.findAll('[data-test="card-menu"]')
@@ -76,6 +81,7 @@ describe('pages/tasks — 모바일 리스트 (스펙 2026-09-06 §4.1)', () => 
     await flushPromises()
     ;(document.body.querySelector('[data-test="sheet-move"]') as HTMLElement).click()
     await flushPromises()
+    await confirmOk()
     expect(useApiMock).toHaveBeenCalledWith('/api/tasks/18/deploy', { method: 'POST' })
     w.unmount()
   })
@@ -113,7 +119,7 @@ describe('pages/tasks — 모바일 리스트 (스펙 2026-09-06 §4.1)', () => 
 
   it('⋮ → 시트의 취소는 확인 후 POST /api/tasks/{id}/cancel', async () => {
     await setViewportWidth(390)
-    vi.spyOn(window, 'confirm').mockReturnValue(true)
+    vi.spyOn(window, 'confirm').mockReturnValue(false) // Claude 앱 브라우저 창처럼 네이티브 confirm이 안 뜨는 환경
     const w = mount(PageWrapper, { attachTo: document.body })
     await flushPromises()
     const menus = w.findAll('[data-test="card-menu"]')
@@ -121,13 +127,14 @@ describe('pages/tasks — 모바일 리스트 (스펙 2026-09-06 §4.1)', () => 
     await flushPromises()
     ;(document.body.querySelector('[data-test="sheet-cancel"]') as HTMLElement).click()
     await flushPromises()
+    await confirmOk()
     expect(useApiMock).toHaveBeenCalledWith('/api/tasks/21/cancel', { method: 'POST' })
     w.unmount()
   })
 
   it('⋮ → 시트의 삭제는 확인 후 DELETE /api/tasks/{id}', async () => {
     await setViewportWidth(390)
-    vi.spyOn(window, 'confirm').mockReturnValue(true)
+    vi.spyOn(window, 'confirm').mockReturnValue(false) // Claude 앱 브라우저 창처럼 네이티브 confirm이 안 뜨는 환경
     const w = mount(PageWrapper, { attachTo: document.body })
     await flushPromises()
     const menus = w.findAll('[data-test="card-menu"]')
@@ -135,6 +142,7 @@ describe('pages/tasks — 모바일 리스트 (스펙 2026-09-06 §4.1)', () => 
     await flushPromises()
     ;(document.body.querySelector('[data-test="sheet-remove"]') as HTMLElement).click()
     await flushPromises()
+    await confirmOk()
     expect(useApiMock).toHaveBeenCalledWith('/api/tasks/18', { method: 'DELETE' })
     w.unmount()
   })

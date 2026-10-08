@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { useQuasar } from 'quasar'
+import { confirmDialog } from '~/composables/confirmDialog'
 
 interface MockupFile {
   path: string
@@ -56,7 +57,7 @@ const submitting = ref(false)
 const rejectLimitReached = computed(() => props.design.rejectCount >= MAX_REJECTS)
 
 async function approveDesign() {
-  if (!confirm('이 디자인을 승인하시겠습니까?\n승인 즉시 이 디자인 기준으로 구현이 시작됩니다.')) return
+  if (!(await confirmDialog($q, '승인 즉시 이 디자인 기준으로 구현이 시작됩니다.', { title: '이 디자인을 승인하시겠습니까?', ok: '승인' }))) return
   submitting.value = true
   try {
     await useApi(`/api/tasks/${props.taskId}/design/approve`, { method: 'POST' })

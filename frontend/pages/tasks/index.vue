@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { useQuasar } from 'quasar'
+import { confirmDialog } from '~/composables/confirmDialog'
 import TaskListMobile from '~/components/tasks/TaskListMobile.vue'
 import type { CardTask } from '~/components/tasks/TaskCardCompact.vue'
 import { buildStages, stageAccepts, cancelable, DEPLOY_ACTIVE_STATUSES, type MoveDef, type StageCard } from '~/composables/taskStages'
@@ -135,7 +136,7 @@ async function onDrop(stageKey: string, e: DragEvent) {
  * 목업과 달리 확인을 한 번 받는다 — 승인 계열은 목업대로 바로 실행.
  */
 async function applyMove(id: number, move: MoveDef) {
-  if (move.confirm && !confirm(`작업 #${id} — ${move.label}을(를) 실행할까요?`)) return
+  if (move.confirm && !(await confirmDialog($q, `작업 #${id} — ${move.label}을(를) 실행할까요?`, { ok: move.label }))) return
   moving.value = true
   try {
     await useApi(`/api/tasks/${id}/${move.path}`, { method: 'POST' })
@@ -159,7 +160,7 @@ function initialOf(t: TaskResponse) {
 // CardTask(모바일 시트/카드 공용 타입)로 받는다 — TaskResponse는 구조적으로 CardTask를 만족하므로
 // 데스크톱 보드(TaskResponse)·모바일 리스트(CardTask emit) 양쪽에서 그대로 호출할 수 있다.
 async function cancel(t: CardTask) {
-  if (!confirm(`작업 #${t.id} '${t.title}'을 취소하시겠습니까?`)) return
+  if (!(await confirmDialog($q, `작업 #${t.id} '${t.title}'을 취소하시겠습니까?`, { title: '작업 취소' }))) return
   try {
     await useApi(`/api/tasks/${t.id}/cancel`, { method: 'POST' })
     refresh()
@@ -176,7 +177,7 @@ async function remove(t: CardTask) {
     })
     return
   }
-  if (!confirm(`작업 #${t.id}을 삭제하시겠습니까? (복구 불가)`)) return
+  if (!(await confirmDialog($q, `작업 #${t.id}을 삭제하시겠습니까? (복구 불가)`, { title: '작업 삭제', ok: '삭제' }))) return
   try {
     await useApi(`/api/tasks/${t.id}`, { method: 'DELETE' })
     refresh()

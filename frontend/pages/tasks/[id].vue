@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { useQuasar } from 'quasar'
+import { confirmDialog } from '~/composables/confirmDialog'
 import ApproveDialog from '~/components/ApproveDialog.vue'
 import InterviewPanel from '~/components/InterviewPanel.vue'
 import InterviewHistoryCard from '~/components/InterviewHistoryCard.vue'
@@ -149,9 +150,11 @@ function fmtCost(c: number): string {
 
 async function approve() {
   if (
-    !confirm(
-      '이 분석 결과를 승인하시겠습니까?\n승인 즉시 워커가 worktree에서 구현 + Draft PR/MR을 생성합니다.',
-    )
+    !(await confirmDialog(
+      $q,
+      '승인 즉시 워커가 worktree에서 구현 + Draft PR/MR을 생성합니다.',
+      { title: '이 분석 결과를 승인하시겠습니까?', ok: '승인' },
+    ))
   )
     return
   try {
@@ -181,7 +184,7 @@ const historyCount = ref<number | null>(null)
 // 승인대기 취소: 요청자 본인 또는 admin — getForView가 이미 조회 시점에 두 경우만
 // 통과시키므로(그 외 403) 별도 소유권 가드 없이 재시도 버튼과 동일한 패턴을 따른다.
 async function cancelTask() {
-  if (!confirm('이 작업을 취소하시겠습니까?')) return
+  if (!(await confirmDialog($q, '이 작업을 취소하시겠습니까?', { title: '작업 취소' }))) return
   try {
     await useApi(`/api/tasks/${taskId.value}/cancel`, { method: 'POST' })
     $q.notify({ type: 'positive', message: '작업이 취소되었습니다' })

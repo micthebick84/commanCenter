@@ -120,7 +120,7 @@
 
 ### [x] 하이드레이션 회귀 스모크를 저장소/CI에 편입 (2026-10-08)
 
-`frontend/scripts/hydration-smoke.mjs`(`npm run test:hydration`) + CI frontend 잡 "Hydration smoke" 스텝. 원래 스크립트는 남아 있지 않아 새로 썼다 — 1280/820/390px × 로그인/비로그인 × 폭 힌트 쿠키 없음/일치 × 경로(비로그인 3, 로그인 9) = 78조합, 콘솔 하이드레이션 경고·잡히지 않은 예외 0건. 브라우저는 설치된 Chrome(`playwright-core`, 다운로드 없음). 일부러 넣은 불일치(`/tasks/1`)를 6조합 모두 잡아 실패(exit 1)하는 것을 확인. 당초 안의 "SSR 마커와 하이드레이션 후 DOM 비교"는 넣지 않았다 — 프로덕션 Vue가 내는 불일치 경고로 충분하고, 하이드레이션 뒤 정상적인 폭 전환과 구분하기 어렵다. 한계(쿠키 없는 기존 로그인 사용자의 배포 직후 첫 데스크톱 로드 1회 전환)는 그대로.
+`frontend/scripts/hydration-smoke.mjs`(`npm run test:hydration`) + CI frontend 잡 "Hydration smoke" 스텝. 원래 스크립트는 남아 있지 않아 새로 썼다 — 1280/820/390px × 로그인/비로그인 × 폭 힌트 쿠키 없음/일치 × 경로(비로그인 3, 로그인 9) = 72조합, 콘솔 하이드레이션 경고·잡히지 않은 예외 0건. 브라우저는 설치된 Chrome(`playwright-core`, 다운로드 없음). 일부러 넣은 불일치(`/tasks/1`)를 6조합 모두 잡아 실패(exit 1)하는 것을 확인. 당초 안의 "SSR 마커와 하이드레이션 후 DOM 비교"는 넣지 않았다 — 프로덕션 Vue가 내는 불일치 경고로 충분하고, 하이드레이션 뒤 정상적인 폭 전환과 구분하기 어렵다. 한계(쿠키 없는 기존 로그인 사용자의 배포 직후 첫 데스크톱 로드 1회 전환)는 그대로.
 
 ### [x] worktree 보존 정책 (2026-10-02)
 성공한 작업의 worktree는 작업 끝에 바로 정리, 실패분은 `WorktreeCleanupJob`이 7일 뒤 정리(진행 중은 API로 보호, fail-closed). PR 병합 상태 추적은 하지 않는다 — 성공분은 원격 브랜치·이미지에 이미 남아 있어서. 스펙 `docs/superpowers/specs/2026-10-02-worktree-retention-design.md`.

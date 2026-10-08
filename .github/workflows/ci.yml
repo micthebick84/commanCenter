@@ -59,6 +59,11 @@ jobs:
         run: npm run typecheck
       - name: Production build
         run: npm run build
+      # 방금 만든 .output을 띄워 러너에 설치된 Chrome(playwright-core, 브라우저 다운로드 없음)으로
+      # 화면 폭 × 로그인 여부 × 폭 힌트 쿠키 × 경로별 하이드레이션 불일치 경고 0건을 확인한다 — vitest로는 못 잡는다.
+      # 잡 이름은 main 브랜치 보호의 필수 체크 이름이라 바꾸지 않는다(스텝만 추가).
+      - name: Hydration smoke
+        run: npm run test:hydration
 
   interview-service:
     name: Interview service (vitest + tsc)

@@ -12,6 +12,7 @@
     "lint-prettier": "prettier --write \"**/*.{ts,vue,json}\"",
     "test": "vitest run",
     "test:watch": "vitest",
+    "test:hydration": "node scripts/hydration-smoke.mjs",
     "typecheck": "nuxi typecheck"
   },
   "devDependencies": {
@@ -24,6 +25,7 @@
     "happy-dom": "^15.11.7",
     "nuxt": "^3.14.0",
     "nuxt-quasar-ui": "^2.1.12",
+    "playwright-core": "^1.64.0",
     "prettier": "^3.5.2",
     "typescript": "^5.6.0",
     "vitest": "^3.2.0",

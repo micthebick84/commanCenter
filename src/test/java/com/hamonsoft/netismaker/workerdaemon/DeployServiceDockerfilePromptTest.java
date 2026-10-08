@@ -42,6 +42,16 @@ class DeployServiceDockerfilePromptTest {
     }
 
     @Test
+    void the_rule_forbids_buildkit_only_syntax_for_the_legacy_builder() {
+        // 2026-10-08 작업 9 3차 재배포: 검증 빌드를 막자 claude가 빌드 환경을 모른 채 `RUN --mount=type=cache`를 써,
+        // buildx 없는 워커의 구형 빌더가 "the --mount option requires BuildKit"으로 실패했다.
+        String rule = DeployService.DOCKERFILE_NO_BUILD_RULE;
+
+        assertThat(rule).contains("BuildKit");
+        assertThat(rule).contains("RUN --mount").contains("COPY --link").contains("--chmod").contains("heredoc");
+    }
+
+    @Test
     void placeholders_are_filled() {
         String prompt = DeployService.buildDockerfilePrompt(workerYmlTemplate(), "acme/widgets", "netismaker/task-9");
         assertThat(prompt).contains("acme/widgets").contains("netismaker/task-9");

@@ -131,6 +131,9 @@ public class DeployService {
             ## 금지 (필수)
             - docker build, docker run, docker compose 등 docker 명령과 gradle·mvn·npm 빌드를 실행하지 마세요.
               빌드와 실행은 워커가 빌드 로그를 남기며 직접 합니다. 파일을 읽고 Dockerfile을 쓰는 것으로 끝내세요.
+            - 워커는 BuildKit이 없는 구형 빌더(docker build, buildx 없음)로 빌드합니다. BuildKit 전용 문법은 쓰지 마세요:
+              RUN --mount(캐시·시크릿 마운트), COPY --link, COPY/ADD --chmod, heredoc(RUN <<EOF), ADD --checksum,
+              TARGETARCH·BUILDPLATFORM 같은 자동 빌드 인자. 파일 권한은 RUN chmod로, 소유자는 COPY --chown으로 지정하세요.
             """;
 
     private static final String DEFAULT_DOCKERFILE_PROMPT = """

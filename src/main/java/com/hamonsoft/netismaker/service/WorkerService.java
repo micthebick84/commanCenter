@@ -387,6 +387,7 @@ public class WorkerService {
                     throw new TaskException(HttpStatus.BAD_REQUEST, "배포완료 시 deployUrl 필수");
                 }
                 t.setStatus(TaskStatus.DEPLOYED);
+                t.setFailureReason(null);
                 t.setDeployUrl(req.deployUrl());
                 t.setDeployContainerId(req.deployContainerId());
                 t.setDeployHostPort(req.deployHostPort());
@@ -403,6 +404,7 @@ public class WorkerService {
             }
             case PR_CREATED -> {
                 t.setStatus(TaskStatus.PR_CREATED);
+                t.setFailureReason(null);
                 t.setDeployUrl(null);
                 t.setDeployContainerId(null);
                 t.setDeployHostPort(null);

@@ -513,6 +513,7 @@ public class TaskService {
     private Task toDeployPending(Task t, String adminId, String reason) {
         TaskStatus from = t.getStatus();
         t.setStatus(TaskStatus.DEPLOY_PENDING);
+        t.setFailureReason(null);   // 새 배포 시도 — 지난 배포 실패 사유를 넘기지 않는다(재시도 경로와 동일)
         t.setClaimedAt(null);
         t.setWorkerId(null);
         t.setUpdatedAt(OffsetDateTime.now());

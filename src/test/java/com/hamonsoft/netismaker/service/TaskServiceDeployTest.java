@@ -101,6 +101,15 @@ class TaskServiceDeployTest {
     }
 
     @Test
+    void redeploy_clears_previous_failure_reason() {
+        // 2026-10-08 작업 9: 1차 배포 실패 사유가 재배포 성공 뒤에도 task.failure_reason에 남았다.
+        Task t = taskWithStatus(TaskStatus.DEPLOY_FAILED);
+        t.setFailureReason("컨테이너가 기동 직후 종료됨 (exit=1)");
+        when(taskRepo.findActiveByIdForUpdate(42L)).thenReturn(Optional.of(t));
+        assertThat(service.redeploy(42L, "admin", null).getFailureReason()).isNull();
+    }
+
+    @Test
     void redeploy_from_deploy_lost_is_allowed() {
         Task t = taskWithStatus(TaskStatus.DEPLOY_LOST);
         when(taskRepo.findActiveByIdForUpdate(42L)).thenReturn(Optional.of(t));

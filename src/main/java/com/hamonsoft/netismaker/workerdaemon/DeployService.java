@@ -121,19 +121,37 @@ public class DeployService {
         }
     }
 
+    /**
+     * Dockerfile 생성 프롬프트 끝에 코드에서 붙이는 규칙 — 운영자가 yml 템플릿을 바꿔도 빠지지 않는다.
+     * 생성 claude는 --dangerously-skip-permissions라 Bash로 검증 빌드를 돌릴 수 있고, 워커의 DOCKER_HOST를
+     * 물려받아 원격에서 빌드가 돌다 timeout에 걸렸다(2026-10-08 작업 9).
+     */
+    static final String DOCKERFILE_NO_BUILD_RULE = """
+
+            ## 금지 (필수)
+            - docker build, docker run, docker compose 등 docker 명령과 gradle·mvn·npm 빌드를 실행하지 마세요.
+              빌드와 실행은 워커가 빌드 로그를 남기며 직접 합니다. 파일을 읽고 Dockerfile을 쓰는 것으로 끝내세요.
+            """;
+
+    private static final String DEFAULT_DOCKERFILE_PROMPT = """
+            현재 디렉토리 프로젝트를 컨테이너로 실행할 production용 Dockerfile을
+            현재 디렉토리 루트에 생성하세요. 멀티스테이지 빌드, EXPOSE 포트 명시,
+            Dockerfile 외 파일 생성 금지. 완료 후 내용을 출력하세요.
+            """;
+
+    /** 템플릿(비면 기본값)의 placeholder를 채우고 끝에 빌드 금지 규칙을 붙인다. */
+    static String buildDockerfilePrompt(String tpl, String githubRepo, String branch) {
+        String base = (tpl == null || tpl.isBlank()) ? DEFAULT_DOCKERFILE_PROMPT : tpl;
+        return base
+                .replace("{github_repo}", githubRepo)
+                .replace("{branch}", branch)
+                + DOCKERFILE_NO_BUILD_RULE;
+    }
+
     private void generateDockerfile(WorkerTaskResponse task, File worktree, StringBuilder log)
             throws Exception {
-        String tpl = props.deploy().dockerfilePromptTemplate();
-        if (tpl == null || tpl.isBlank()) {
-            tpl = """
-                  현재 디렉토리 프로젝트를 컨테이너로 실행할 production용 Dockerfile을
-                  현재 디렉토리 루트에 생성하세요. 멀티스테이지 빌드, EXPOSE 포트 명시,
-                  Dockerfile 외 파일 생성 금지. 완료 후 내용을 출력하세요.
-                  """;
-        }
-        String prompt = tpl
-                .replace("{github_repo}", task.githubRepo())
-                .replace("{branch}", task.headBranch());
+        String prompt = buildDockerfilePrompt(props.deploy().dockerfilePromptTemplate(),
+                task.githubRepo(), task.headBranch());
         ClaudeExecAdapter.ExecResult exec = claude.exec(
                 prompt, worktree, props.deploy().buildTimeout(), java.util.List.of(), true);
         log.append(tail(exec.stdout(), 2000)).append('\n');

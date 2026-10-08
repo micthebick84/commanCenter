@@ -179,7 +179,7 @@ public class ClaudeExecAdapter {
             boolean finished = p.waitFor(timeout.toMillis(), TimeUnit.MILLISECONDS);
             long durationMs = System.currentTimeMillis() - start;
             if (!finished) {
-                p.destroyForcibly();
+                destroyTree(p);
                 throw new IOException("claude timeout after " + timeout);
             }
             reader.join(2000);
@@ -203,6 +203,16 @@ public class ClaudeExecAdapter {
                 catch (Exception e) { log.warn("임시 MCP config 삭제 실패: {} ({})", tmp, e.getMessage()); }
             }
         }
+    }
+
+    /**
+     * claude와 그 자식(Bash 도구가 띄운 docker build 등)을 함께 끝낸다. 자손 목록은 부모를 죽이기 **전에** 떠 둔다 —
+     * 부모가 먼저 죽으면 자식이 고아가 돼 트리에서 떨어져 나간다(2026-10-08 작업 9: timeout 뒤 원격 빌드가 계속됨).
+     */
+    static void destroyTree(Process p) {
+        List<ProcessHandle> descendants = p.descendants().toList();
+        p.destroyForcibly();
+        descendants.forEach(ProcessHandle::destroyForcibly);
     }
 
     private static Thread drain(java.io.InputStream in, StringBuilder sink) {

@@ -5,7 +5,8 @@ import { ActivityPoster } from './activityPoster.js';
 import { RateLimitReporter } from './rateLimitReport.js';
 import { buildOptions } from '../sdk/sessionOptions.js';
 import { QuotaGuardExceeded, CostGuard } from './costGuard.js';
-import { tryHarvest } from './planHarvest.js';
+import { tryHarvest, type HarvestResult } from './planHarvest.js';
+import { harvestSessionPlanFiles } from './planFiles.js';
 import { relay } from './messageRelay.js';
 import { ensureRepo as defaultEnsureRepo, type RepoInput } from './repoPrepare.js';
 import { maskSecrets, type GitTokens } from '../sdk/gitRemote.js';
@@ -43,6 +44,8 @@ export interface RunnerDeps {
   gitTokens?: GitTokens;
   /** 테스트용 주입 — 기본 dbMcp.createDbMcp (질문 세션 내장 DB 도구, 스펙 2026-10-02 §6). */
   createDbMcp?: (claim: InterviewClaimResponse) => PreparedDbMcp;
+  /** 테스트용 주입 — 기본 planFiles.harvestSessionPlanFiles (채팅 추출 실패 시 세션 plan 파일로 대체 판정). */
+  harvestPlanFiles?: (workDir: string) => Promise<HarvestResult>;
 }
 
 /**
@@ -194,6 +197,7 @@ async function* questionPromptFor(claim: InterviewClaimResponse, prefix = ''): A
  */
 export class InterviewRunner {
   private readonly ensureRepo: (input: RepoInput) => Promise<void>;
+  private readonly harvestPlanFiles: (workDir: string) => Promise<HarvestResult>;
   /** 구독 한도 보고기 — 서비스 수명 동안 1개(404 비활성 상태가 세션을 넘어 유지된다). */
   private readonly rateLimits: RateLimitReporter;
   constructor(
@@ -202,6 +206,7 @@ export class InterviewRunner {
     private readonly deps: RunnerDeps,
   ) {
     this.ensureRepo = deps.ensureRepo ?? defaultEnsureRepo;
+    this.harvestPlanFiles = deps.harvestPlanFiles ?? harvestSessionPlanFiles;
     this.rateLimits = new RateLimitReporter(client);
   }
 
@@ -408,7 +413,13 @@ export class InterviewRunner {
         contextWindow = second.contextWindow ?? contextWindow;
       }
 
-      let harvested = tryHarvest(assistantText);
+      // 채팅 본문 추출이 실패하면 이번 세션이 저장한 plan 파일로 한 번 더 판정한다 — writing-plans가
+      // plan을 파일에만 쓰고 채팅엔 요약만 남기면 완료를 영영 못 알아본다(2026-10-08 세션 21).
+      const harvestTurn = async (text: string): Promise<HarvestResult> => {
+        const fromText = tryHarvest(text);
+        return fromText.ok ? fromText : this.harvestPlanFiles(claim.workDir);
+      };
+      let harvested = await harvestTurn(assistantText);
       // near-miss 보정: 추출 실패 + plan 의도 신호 시, 같은 세션에 정규 형식 재요청 1회.
       // force-finish는 이미 reformat 프롬프트이므로 이중 splice 방지.
       if (!harvested.ok && !forceFinish && detectPlanIntent(assistantText) && sessionId) {
@@ -443,7 +454,7 @@ export class InterviewRunner {
         durationMs = retry.durationMs;
         contextTokens = retry.contextTokens ?? contextTokens;
         contextWindow = retry.contextWindow ?? contextWindow;
-        harvested = tryHarvest(assistantText);
+        harvested = await harvestTurn(assistantText);
       }
       // trailing 배치가 question/plan보다 늦게 도착하지 않도록, 확정 POST 전에 활동 큐를 비운다.
       // (stop은 멱등 — finally의 stop은 에러 경로 안전망으로 유지)

@@ -13,7 +13,7 @@ function makeClient() {
     postRateLimit: vi.fn().mockResolvedValue(undefined),
   };
 }
-// ensureRepo is injected so unit tests never touch git.
+// ensureRepo / harvestPlanFiles are injected so unit tests never touch git.
 const ensureRepo = vi.fn().mockResolvedValue(undefined);
 const deps = {
   superpowersPluginPath: '/sp/5.1.0',
@@ -22,6 +22,7 @@ const deps = {
   maxTurns: 20,
   forceFinishTurns: 19,
   ensureRepo,
+  harvestPlanFiles: vi.fn().mockResolvedValue({ ok: false }),
 };
 
 describe('InterviewRunner', () => {
@@ -254,6 +255,73 @@ describe('InterviewRunner', () => {
     }));
     expect(client.postQuestion).not.toHaveBeenCalled();
     expect(client.fail).not.toHaveBeenCalled();
+  });
+});
+
+describe('InterviewRunner plan 파일 대체 판정 (2026-10-08 세션 21)', () => {
+  // writing-plans가 plan을 파일에만 쓰고 채팅엔 요약+질문만 남긴 턴 — 헤딩이 줄 머리가 아니라 백틱 속에 있다.
+  async function* summaryOnly() {
+    yield { type: 'system', subtype: 'init', session_id: 'sess-f' };
+    yield { type: 'assistant', message: { content: [{ type: 'text',
+      text: '계획을 `docs/superpowers/plans/p.md`에 저장했습니다.\n\n**계획 요약 (`# 배포 테스트 구현 계획`)**\n\n원하시는 내용이 맞나요?' }] } };
+    yield {
+      type: 'result', subtype: 'success', duration_ms: 100,
+      total_cost_usd: 0.1, usage: { input_tokens: 100, output_tokens: 20, cache_creation_input_tokens: 5, cache_read_input_tokens: 200 },
+    };
+  }
+  const fileHarvest = {
+    ok: true as const,
+    harvest: {
+      designMarkdown: '# 설계\n\n목적',
+      planMarkdown: '# 배포 테스트 구현 계획\n\n### 작업 1: README 수정',
+      planJson: [{ task: 1, title: 'README 수정' }],
+    },
+  };
+
+  it('채팅 본문 추출이 실패해도 세션 plan 파일이 있으면 그 내용으로 postPlan한다 (재질의 없음)', async () => {
+    const client = makeClient();
+    const fakeQuery = vi.fn(() => summaryOnly());
+    const harvestPlanFiles = vi.fn().mockResolvedValue(fileHarvest);
+    const runner = new InterviewRunner(client as never, fakeQuery as never, { ...deps, harvestPlanFiles } as never);
+
+    await runner.run({ ...resumeClaim, currentPhase: 'writing-plans' });
+
+    expect(harvestPlanFiles).toHaveBeenCalledWith(resumeClaim.workDir);
+    expect(fakeQuery).toHaveBeenCalledTimes(1);
+    expect(client.postPlan).toHaveBeenCalledWith(42, expect.objectContaining({
+      designMarkdown: '# 설계\n\n목적',
+      planMarkdown: '# 배포 테스트 구현 계획\n\n### 작업 1: README 수정',
+      planJson: JSON.stringify([{ task: 1, title: 'README 수정' }]),
+      costUsd: 0.1,
+    }));
+    expect(client.postQuestion).not.toHaveBeenCalled();
+  });
+
+  it('채팅 본문에 plan이 있으면 파일은 보지 않는다 (기존 경로 우선)', async () => {
+    const client = makeClient();
+    const fakeQuery = vi.fn(() => planCompleteStream());
+    const harvestPlanFiles = vi.fn().mockResolvedValue(fileHarvest);
+    const runner = new InterviewRunner(client as never, fakeQuery as never, { ...deps, harvestPlanFiles } as never);
+
+    await runner.run({ ...resumeClaim, currentPhase: 'writing-plans' });
+
+    expect(harvestPlanFiles).not.toHaveBeenCalled();
+    expect(client.postPlan).toHaveBeenCalledWith(42, expect.objectContaining({
+      planMarkdown: expect.stringContaining('## File Structure'),
+    }));
+  });
+
+  it('plan 파일도 없으면 기존대로 질문으로 보낸다', async () => {
+    const client = makeClient();
+    const fakeQuery = vi.fn(() => summaryOnly());
+    const runner = new InterviewRunner(client as never, fakeQuery as never, deps as never);
+
+    await runner.run({ ...resumeClaim, currentPhase: 'writing-plans' });
+
+    expect(client.postPlan).not.toHaveBeenCalled();
+    expect(client.postQuestion).toHaveBeenCalledWith(42, expect.objectContaining({
+      content: expect.stringContaining('원하시는 내용이 맞나요?'),
+    }));
   });
 });
 

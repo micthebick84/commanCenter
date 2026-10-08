@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { useQuasar } from 'quasar'
+import { confirmDialog } from '~/composables/confirmDialog'
 import AdminSectionTabs from '~/components/tasks/AdminSectionTabs.vue'
 import AdminFormDialog from '~/components/AdminFormDialog.vue'
 import AdminCatalogCard from '~/components/AdminCatalogCard.vue'
@@ -165,7 +166,7 @@ async function toggleEnabled(e: CatalogEntry) {
 }
 
 async function remove(e: CatalogEntry) {
-  if (!confirm(`'${e.displayName}' 카탈로그 항목을 삭제하시겠습니까? (이미 등록된 task의 스냅샷은 보존됨)`)) return
+  if (!(await confirmDialog($q, `'${e.displayName}' 카탈로그 항목을 삭제하시겠습니까? (이미 등록된 task의 스냅샷은 보존됨)`, { title: '카탈로그 항목 삭제', ok: '삭제' }))) return
   try {
     await useApi(`/api/admin/mcp-catalog/${e.id}`, { method: 'DELETE' })
     $q.notify({ type: 'positive', message: '삭제 완료' })

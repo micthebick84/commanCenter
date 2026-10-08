@@ -162,9 +162,12 @@ describe('pages/tasks/[id] — 모바일 (스펙 2026-09-06 §4.2)', () => {
     await flushPromises()
     const cancelItem = document.body.querySelector('[data-test="bar-more-cancel"]') as HTMLElement | null
     expect(cancelItem).not.toBeNull()
-    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true)
+    // Claude 앱 브라우저 창처럼 네이티브 confirm이 안 뜨는 환경에서도 앱 다이얼로그로 확인받는다
+    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(false)
     useApiMock.mockClear()
     cancelItem!.click()
+    await flushPromises()
+    ;(document.body.querySelector('[data-test="confirm-dialog-ok"]') as HTMLElement).click()
     await flushPromises()
     expect(useApiMock).toHaveBeenCalledWith('/api/tasks/42/cancel', { method: 'POST' })
     confirmSpy.mockRestore()

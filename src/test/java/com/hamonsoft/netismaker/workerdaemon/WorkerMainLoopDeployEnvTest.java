@@ -62,6 +62,19 @@ class WorkerMainLoopDeployEnvTest {
         }
     }
 
+    @Test
+    void the_instruction_frames_env_for_the_production_container_and_leaves_the_profile_to_the_dockerfile() {
+        // 2026-10-08 작업 9: 목록이 SPRING_PROFILES_ACTIVE를 "기본값 dev"로 안내 → 배포 env가 Dockerfile의 prod를
+        // 덮었고, netis-v7.0은 jar에서 application-dev.yml을 빼므로 컨테이너가 기동 직후 죽었다.
+        String instruction = WorkerMainLoop.DEPLOY_ENV_INSTRUCTION;
+
+        assertThat(instruction).contains("production용 Dockerfile");
+        assertThat(instruction).contains("운영 실행 기준");
+        assertThat(instruction).contains("SPRING_PROFILES_ACTIVE");
+        assertThat(instruction).contains("목록에 넣지 마세요");
+        assertThat(instruction).contains("빌드 산출물");
+    }
+
     // ---- 회수·보고 (pollAndProcess) ----
 
     private static WorkerProperties props() {

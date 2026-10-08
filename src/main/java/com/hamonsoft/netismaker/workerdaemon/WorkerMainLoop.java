@@ -445,6 +445,11 @@ public class WorkerMainLoop {
             {"vars":[{"key":"SPRING_DATASOURCE_URL","description":"DB 접속 JDBC URL","secret":false,"required":true}]}
 
             - 값은 절대 쓰지 마세요(이름·설명만). 레포에 있는 실제 비밀번호·토큰을 옮겨 적지 마세요.
+            - 컨테이너는 production용 Dockerfile(레포에 없으면 배포 때 생성)로 빌드·실행됩니다. description과 required는
+              운영 실행 기준으로 쓰고, 로컬 개발 기본값(예: "기본값 dev")은 안내하지 마세요.
+            - 실행 프로파일을 고르는 변수(SPRING_PROFILES_ACTIVE 등)는 Dockerfile이 정하므로 목록에 넣지 마세요.
+              꼭 필요하면 그 프로파일의 설정 파일이 빌드 산출물(jar·war)에 실제로 들어가는지(build.gradle의 exclude 등)
+              확인하고, 들어가는 프로파일만 안내하세요.
             - 대상: DB 접속(URL·계정·암호), 시크릿(JWT 키 등), 외부 API 주소·키처럼 배포 환경마다 달라지는 값.
             - 코드에 안전한 기본값이 있어 비워 둬도 실행되면 required=false.
             - Spring Boot는 설정 키를 relaxed binding 환경변수 이름으로 쓰세요(spring.datasource.url → SPRING_DATASOURCE_URL).

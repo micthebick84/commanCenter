@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none">
+  <!-- Symphony 브랜드 마크(A4) — components/BrandMark.vue와 같은 패스를 primary 색으로 박은 사본. 둘을 함께 바꿀 것. -->
+  <g stroke="#1976D2" stroke-width="1.25" stroke-linecap="round" opacity="0.4">
+    <path d="M3.5 7h17" />
+    <path d="M3.5 12h17" />
+    <path d="M3.5 17h17" />
+  </g>
+  <g stroke="#1976D2" stroke-width="1.5" stroke-linecap="round">
+    <path d="M13.9 4.6V1" />
+    <path d="M18.5 6.8V3.2" />
+    <path d="M10.1 19.4V23" />
+    <path d="M5.6 17.3v3.6" />
+  </g>
+  <g fill="#1976D2">
+    <ellipse cx="16.6" cy="7.1" rx="2.3" ry="1.8" transform="rotate(-20 16.6 7.1)" />
+    <ellipse cx="12" cy="4.9" rx="2.3" ry="1.8" transform="rotate(-20 12 4.9)" />
+    <ellipse cx="7.6" cy="8" rx="2.3" ry="1.8" transform="rotate(-20 7.6 8)" />
+    <ellipse cx="12" cy="12" rx="2.3" ry="1.8" transform="rotate(-20 12 12)" />
+    <ellipse cx="16.6" cy="15.7" rx="2.3" ry="1.8" transform="rotate(-20 16.6 15.7)" />
+    <ellipse cx="12" cy="19.1" rx="2.3" ry="1.8" transform="rotate(-20 12 19.1)" />
+    <ellipse cx="7.5" cy="17" rx="2.3" ry="1.8" transform="rotate(-20 7.5 17)" />
+  </g>
+</svg>

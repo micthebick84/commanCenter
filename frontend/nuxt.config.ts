@@ -5,6 +5,14 @@ export default defineNuxtConfig({
 
   ssr: true,
 
+  // 브라우저 탭 제목·파비콘 (2026-10-11 Symphony 브랜드). 파비콘은 BrandMark와 같은 패스의 SVG(public/favicon.svg).
+  app: {
+    head: {
+      title: 'Symphony',
+      link: [{ rel: 'icon', type: 'image/svg+xml', href: '/favicon.svg' }],
+    },
+  },
+
   devServer: {
     port: 3001,
     // 모든 인터페이스 바인딩 → 같은 LAN의 다른 머신에서 http://<this-host-ip>:3001로 접근 가능.

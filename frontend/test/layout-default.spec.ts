@@ -67,6 +67,38 @@ describe('layouts/default — 상단 툴바 반응형 (2026-09-06 모바일 QA)'
   })
 })
 
+describe('layouts/default — 브랜드 (2026-10-11 디자인 승인: 마크 A4 · "Symphony")', () => {
+  beforeEach(() => {
+    Object.assign(authStub, { isAuthenticated: true, isAdmin: true, me: { username: 'admin', email: null } })
+  })
+
+  it('툴바 브랜드는 24px 마크 + "Symphony" 워드마크 순서이고 /tasks로 간다', async () => {
+    const w = mountLayout()
+    await flushPromises()
+    const link = w.find('[data-test="brand-link"]')
+    expect(link.attributes('to')).toBe('/tasks')
+    expect(link.text()).toBe('Symphony')
+    const mark = link.find('[data-test="brand-mark"]')
+    expect(mark.exists()).toBe(true)
+    expect(mark.attributes('width')).toBe('24')
+    expect(link.element.firstElementChild).toBe(mark.element) // 마크가 글자 앞
+    w.unmount()
+  })
+
+  it('좁은 화면에서도 브랜드 영역은 고정폭(toolbar-brand--fixed)이라 마크·워드마크가 잘리지 않는다', async () => {
+    await setViewportWidth(390)
+    try {
+      const w = mountLayout()
+      await flushPromises()
+      expect(w.find('.q-toolbar__title').classes()).toContain('toolbar-brand--fixed')
+      expect(w.find('[data-test="brand-link"]').text()).toBe('Symphony')
+      w.unmount()
+    } finally {
+      await setViewportWidth(1024)
+    }
+  })
+})
+
 describe('layouts/default — 하단 내비 (스펙 2026-09-06 §4.4, 결정 4)', () => {
   beforeEach(() => {
     Object.assign(authStub, { isAuthenticated: true, isAdmin: true, me: { username: 'admin', email: null } })

@@ -15,6 +15,8 @@
 # 로그:   .run/{auth,api,front}.log     PID: .run/{auth,api,front}.pid
 #
 # 도메인 변경 시: AUTH_ORIGIN / APP_ORIGIN 환경변수로 override 가능.
+# 비밀·운영 설정(DB 접속정보 암호화 키 NETISMAKER_DB_SECRET_KEY/SALT 등)은 ~/netis-maker/public.env 에 둔다
+# (scripts/load-public-env.sh 참고 — 환경변수 > 파일 > 기본값).
 # 환경값을 다시 강제 적용하려면 먼저 ./scripts/stop-all.sh 후 재실행(이미 떠 있으면 skip 함).
 #
 set -uo pipefail
@@ -25,6 +27,9 @@ AUTH_DIR="$WORKSPACE/netis-auth"
 FRONT_DIR="$ROOT/frontend"
 RUN_DIR="$ROOT/.run"
 mkdir -p "$RUN_DIR"
+
+# 운영 설정/비밀(~/netis-maker/public.env) — 아래 기본값보다 먼저 읽어 파일 값이 적용되게 한다.
+. "$ROOT/scripts/load-public-env.sh"
 
 # ── 공개 설정 (도메인 바뀌면 여기만) ────────────────────────────
 AUTH_ORIGIN="${AUTH_ORIGIN:-https://auth.micthebick.dev}"

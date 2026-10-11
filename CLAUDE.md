@@ -183,6 +183,7 @@ PR 본문/브랜치 prefix/timeout은 `application-worker.yml`의 `netis-maker.w
   ```sql
   UPDATE public.users SET account_non_locked=true, failed_attempt=0, lock_time=NULL WHERE username='admin';
   ```
+- **운영 비밀/설정 파일(macOS 스택)**: `~/netis-maker/public.env` — `start-public.sh`·`start-all.sh`가 `scripts/load-public-env.sh`로 읽는다(KEY=VALUE, 환경변수 > 파일 > 기본값, Windows `start-public.ps1`의 `%USERPROFILE%\netis-maker\public.env`와 같은 규칙). 질문 세션 DB 접속정보 암호화 키 `NETISMAKER_DB_SECRET_KEY`/`NETISMAKER_DB_SECRET_SALT`가 여기 있다(2026-10-11 생성) — 분실하면 저장된 DB 비밀번호 전부 재입력이니 백업할 것. 키 바꾸면 API 재기동 필요(`@Profile("api")`만 사용).
 - **MCP 합본**: `~/netis-maker/worker-mcp.json` (워커 부팅 시 자동 생성/갱신)
 - **레포 캐시**: `~/netis-maker/repos/{owner}/{repo}` (depth=1 clone, 이후 fetch+reset)
 - **레포 캐시 자동 정리(워커)**: `RepoCacheCleanupJob`이 매일 03:00(워커 로컬 시각, `REPO_CACHE_CLEANUP_CRON` 6필드, `-`=끔) `REPO_CACHE_CLEANUP_UNUSED_DAYS`(기본 30)일 넘게 안 쓴 캐시를 지운다(`REPO_CACHE_CLEANUP_ENABLED=false`로 끔). 사용 시각 = `repos/{localKey}.last-used` mtime(withRepoLock이 갱신; 없으면 `.git` 메타 mtime, 판단 불가면 보존). 건너뜀: 살아 있는 worktree(`.git/worktrees/*/gitdir` 대상 존재·locked·판단불가, worktree-root가 안 보이거나 대상 위치가 그 밖이면 보존), 락 점유, `{localKey}.lock` 표식 없는 레포. 락 안에서 `repos/.trash/`로 원자 rename → 락 밖 삭제, 다음 사용 때 재clone. 같은 repos-dir의 다중 워커는 `repos/.repo-cache-cleanup.lock`으로 한 프로세스만 정리. 캐시를 붙잡은 worktree는 회차 로그 `레포 캐시 보존(worktree N개가 사용 중)`에 경로가 나온다.

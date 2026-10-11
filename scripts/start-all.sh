@@ -21,6 +21,9 @@ cd "$ROOT"
 RUN_DIR="$ROOT/.run"
 mkdir -p "$RUN_DIR"
 
+# 운영 설정/비밀(~/netis-maker/public.env) — 아래 기본값보다 먼저 읽어 파일 값이 적용되게 한다.
+. "$ROOT/scripts/load-public-env.sh"
+
 # ── 설정 (환경변수로 override 가능) ─────────────────────────────
 WORKERS="${WORKERS:-${1:-2}}"
 API_PORT="${API_PORT:-8090}"

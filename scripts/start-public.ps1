@@ -29,6 +29,8 @@
 #   SPRING_DATASOURCE_PASSWORD  DB password (both Spring apps; falls back to application.yml)
 #   WORKER_API_KEY              shared secret for API <-> worker/interview (dev default if unset)
 #   GITHUB_PAT                  optional, private repos / push
+#   NETISMAKER_DB_SECRET_KEY    question-session DB connections: password encryption key (API; feature off if unset)
+#   NETISMAKER_DB_SECRET_SALT   hex, even length, 16+ chars; both values required - back them up
 #
 # A service whose port is already listening is skipped. To re-apply settings run stop-public.ps1 first.
 # ASCII only on purpose: Windows PowerShell 5.1 misreads BOM-less UTF-8 scripts.

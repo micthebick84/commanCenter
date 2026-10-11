@@ -58,6 +58,12 @@ if (-not (Test-Path $EnvFile)) {
         '#SPRING_DATASOURCE_PASSWORD='
         '#WORKER_API_KEY='
         '#GITHUB_PAT='
+        ''
+        '# Question-session DB connections (API): password encryption key. Both values required, else the feature stays off.'
+        '# KEY = any long random string, SALT = hex with even length and 16+ chars (e.g. openssl rand -hex 32 / -hex 16 in Git Bash).'
+        '# Generate once and BACK UP this file: losing the key means re-entering every stored DB password.'
+        '#NETISMAKER_DB_SECRET_KEY='
+        '#NETISMAKER_DB_SECRET_SALT='
     ) | Set-Content -Path $EnvFile -Encoding ascii
     Write-Host "Created settings template: $EnvFile  <-- edit this before the first run"
 }

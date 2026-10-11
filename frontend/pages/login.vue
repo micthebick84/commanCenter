@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { useQuasar } from 'quasar'
+import BrandMark from '~/components/BrandMark.vue'
 
 definePageMeta({ layout: 'default' })
 
@@ -26,7 +27,11 @@ function startLogin() {
   <q-page class="flex flex-center column">
     <q-card style="max-width: 400px; width: 90%" flat bordered>
       <q-card-section class="text-center">
-        <div class="text-h5 q-mb-md">netisMaker</div>
+        <!-- 세로 락업: 마크(44px, primary) 위 + "Symphony" 아래 — 2026-10-11 디자인 승인 -->
+        <div class="column items-center q-mb-md login-brand" data-test="login-brand">
+          <BrandMark :size="44" class="text-primary" />
+          <h1 class="text-h5 q-ma-none">Symphony</h1>
+        </div>
         <p>Netis 플랫폼 작업 분석 자동화 도구</p>
       </q-card-section>
       <q-card-section>
@@ -42,3 +47,9 @@ function startLogin() {
     </q-card>
   </q-page>
 </template>
+
+<style scoped>
+.login-brand {
+  gap: 10px;
+}
+</style>

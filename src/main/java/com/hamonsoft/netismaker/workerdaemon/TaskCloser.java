@@ -96,6 +96,8 @@ public class TaskCloser {
         WorkerResultRequest.UsageReport usage = null;
         String mergeSha = task.closeContext() == null ? null : task.closeContext().mergeCommitSha();
         try {
+            // 노트(③)가 남았으면 볼트를 먼저 확인한다 — 병합(되돌릴 수 없음) 뒤에 설정 누락으로 멈추지 않게
+            if (!done.contains(CloseStep.NOTE_WRITTEN)) requireVault();
             if (!done.contains(CloseStep.MERGED)) {
                 if (task.prNumber() == null) throw new StepFailed("PR 번호가 없어 병합할 수 없습니다");
                 String merged = step("병합", () -> closerFor(ref).merge(ref, task.prNumber(), task.headSha(),
@@ -133,11 +135,18 @@ public class TaskCloser {
 
     private record NoteOutcome(String relativePath, WorkerResultRequest.UsageReport usage) {}
 
-    private NoteOutcome writeNote(WorkerTaskResponse task, String mergeSha) throws StepFailed {
+    /** 볼트 경로가 설정돼 있고 실제 폴더인지 — 아니면 노트 단계 실패 메시지로 멈춘다. */
+    private Path requireVault() throws StepFailed {
         Path vault = closeProps.vaultDir();
         if (vault == null) {
             throw new StepFailed("노트: CLOSE_OBSIDIAN_VAULT_DIR 미설정 — 워커 public.env에 볼트 경로를 넣고 재시도하세요");
         }
+        if (!Files.isDirectory(vault)) throw new StepFailed("노트: 볼트 폴더가 없습니다: " + vault);
+        return vault;
+    }
+
+    private NoteOutcome writeNote(WorkerTaskResponse task, String mergeSha) throws StepFailed {
+        Path vault = requireVault();
         Path work = Paths.get(props.reposDir()).resolveSibling("close").resolve("task-" + task.id());
         ClaudeExecAdapter.ExecResult r = step("노트 생성", () -> {
             Files.createDirectories(work);

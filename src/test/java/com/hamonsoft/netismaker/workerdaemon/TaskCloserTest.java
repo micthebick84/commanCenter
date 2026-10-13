@@ -61,6 +61,7 @@ class TaskCloserTest {
         WorkerProperties props = mock(WorkerProperties.class);
         when(props.id()).thenReturn("w1");
         when(props.reposDir()).thenReturn(tmp.resolve("repos").toString());
+        Files.createDirectories(tmp.resolve("vault"));
         CloseProperties cp = new CloseProperties(tmp.resolve("vault").toString(), "HamonSoft/netisMaker", "merge",
                 "sonnet", Duration.ofMinutes(1), null);
         Clock clock = Clock.fixed(Instant.parse("2026-10-13T03:00:00Z"), ZoneId.of("Asia/Seoul"));
@@ -147,6 +148,42 @@ class TaskCloserTest {
         noVault.process(task("MERGED,UNDEPLOYED"));
         assertThat(terminal().failureReason()).contains("CLOSE_OBSIDIAN_VAULT_DIR");
         verify(claude, never()).execWithoutTools(any(), any(), any(), any());
+    }
+
+    private TaskCloser closerWithVault(String vaultDir) {
+        WorkerProperties props = mock(WorkerProperties.class);
+        when(props.id()).thenReturn("w1");
+        when(props.reposDir()).thenReturn(tmp.resolve("repos").toString());
+        return new TaskCloser(props, new CloseProperties(vaultDir, null, null, null, null, null),
+                http, deploy, worktrees, claude, reporter, List.of(mr), new CloseNoteWriter(), Clock.systemUTC());
+    }
+
+    @Test
+    void 볼트_미설정이면_병합_전에_종료실패() throws Exception {
+        closerWithVault(null).process(task(null));
+        verify(mr, never()).merge(any(), anyInt(), any(), any());
+        verify(deploy, never()).undeploy(anyLong());
+        assertThat(reportedSteps()).isEmpty();
+        WorkerResultRequest r = terminal();
+        assertThat(r.status()).isEqualTo(TaskStatus.CLOSE_FAILED);
+        assertThat(r.failureReason()).startsWith("노트: CLOSE_OBSIDIAN_VAULT_DIR");
+    }
+
+    @Test
+    void 볼트_폴더가_없으면_병합_전에_종료실패() throws Exception {
+        Path missing = tmp.resolve("no-such-vault");
+        closerWithVault(missing.toString()).process(task(null));
+        verify(mr, never()).merge(any(), anyInt(), any(), any());
+        verify(deploy, never()).undeploy(anyLong());
+        assertThat(reportedSteps()).isEmpty();
+        assertThat(terminal().failureReason()).isEqualTo("노트: 볼트 폴더가 없습니다: " + missing);
+    }
+
+    @Test
+    void 노트가_이미_끝났으면_볼트_없이도_나머지를_마친다() throws Exception {
+        closerWithVault(null).process(task("MERGED,UNDEPLOYED,NOTE_WRITTEN"));
+        verify(mr).deleteBranch(any(RepoRef.class), eq("netismaker/task-7"));
+        assertThat(terminal().status()).isEqualTo(TaskStatus.CLOSED);
     }
 
     private static ClaudeExecAdapter.Usage usage() {

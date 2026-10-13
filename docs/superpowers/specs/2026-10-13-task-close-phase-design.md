@@ -90,7 +90,7 @@
 - 같은 폴더의 `netisMaker-진행상황-YYYY-MM-DD.md`에 `- [[노트 이름]] — 작업 {id} 종료(병합 {sha7})` 한 줄을 덧붙인다(없으면 만든다, 같은 줄이 있으면 생략 — 멱등).
 - 비밀 마스킹: 프롬프트에 규칙을 넣고, 워커가 파일에 쓰기 전 `GitRemotes.mask`/`maskSecrets`를 한 번 더 통과시킨다.
 - 노트 경로(볼트 상대)를 진행 보고에 실어 `task.close_note_path`에 저장.
-- `CLOSE_OBSIDIAN_VAULT_DIR` 미설정·쓰기 실패·claude 실패는 `종료실패`(병합·배포 중지는 이미 끝났으므로 재시도는 ③부터).
+- `CLOSE_OBSIDIAN_VAULT_DIR` 미설정이거나 폴더가 없으면 ③이 남은 경우 ① **전에** 바로 `종료실패`(되돌릴 수 없는 병합 전에 설정 누락을 잡는다). 쓰기 실패·claude 실패는 `종료실패`(병합·배포 중지는 이미 끝났으므로 재시도는 ③부터).
 
 ### ④ 브랜치·worktree 정리 — `BRANCH_DELETED`
 

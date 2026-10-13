@@ -116,7 +116,8 @@ public interface TaskRepository extends JpaRepository<Task, Long> {
                            com.hamonsoft.netismaker.entity.TaskStatus.APPROVED,
                            com.hamonsoft.netismaker.entity.TaskStatus.DESIGN_PENDING,
                            com.hamonsoft.netismaker.entity.TaskStatus.DEPLOY_PENDING,
-                           com.hamonsoft.netismaker.entity.TaskStatus.UNDEPLOY_PENDING)
+                           com.hamonsoft.netismaker.entity.TaskStatus.UNDEPLOY_PENDING,
+                           com.hamonsoft.netismaker.entity.TaskStatus.CLOSE_PENDING)
           AND t.deletedAt IS NULL
         ORDER BY t.createdAt ASC
     """)
@@ -137,7 +138,8 @@ public interface TaskRepository extends JpaRepository<Task, Long> {
                            com.hamonsoft.netismaker.entity.TaskStatus.IMPLEMENTING,
                            com.hamonsoft.netismaker.entity.TaskStatus.DESIGNING,
                            com.hamonsoft.netismaker.entity.TaskStatus.DEPLOYING,
-                           com.hamonsoft.netismaker.entity.TaskStatus.UNDEPLOYING)
+                           com.hamonsoft.netismaker.entity.TaskStatus.UNDEPLOYING,
+                           com.hamonsoft.netismaker.entity.TaskStatus.CLOSING)
           AND t.workerId IS NOT NULL
           AND t.deletedAt IS NULL
     """)
@@ -148,6 +150,9 @@ public interface TaskRepository extends JpaRepository<Task, Long> {
      * DeployReconcileJob은 이 중 DEPLOYED/DEPLOY_LOST만 대사하고 나머지는 무시한다.
      * in-flight 상태(배포대기~중지중)를 포함하는 이유: GC 보호 목록이 DEPLOYED만 담으면
      * 재배포 클릭 직후(DEPLOY_PENDING) 보호가 풀려 GC가 새 컨테이너를 죽이는 race가 생긴다.
+     * 종료 4상태(종료승인대기·종료대기·종료중·종료실패)도 포함한다: 컨테이너는 종료 ②단계에서야 내려가므로
+     * 그 전(반려·철회 후 배포완료로 복귀 포함)에 GC가 지우면 "반려했더니 배포가 죽었다"가 된다.
+     * 작업종료는 ②에서 이미 중지했으므로 제외. 대사는 여전히 DEPLOYED/DEPLOY_LOST만 한다.
      */
     @Query("""
         SELECT t FROM Task t
@@ -156,7 +161,11 @@ public interface TaskRepository extends JpaRepository<Task, Long> {
                            com.hamonsoft.netismaker.entity.TaskStatus.DEPLOY_PENDING,
                            com.hamonsoft.netismaker.entity.TaskStatus.DEPLOYING,
                            com.hamonsoft.netismaker.entity.TaskStatus.UNDEPLOY_PENDING,
-                           com.hamonsoft.netismaker.entity.TaskStatus.UNDEPLOYING)
+                           com.hamonsoft.netismaker.entity.TaskStatus.UNDEPLOYING,
+                           com.hamonsoft.netismaker.entity.TaskStatus.CLOSE_REVIEW,
+                           com.hamonsoft.netismaker.entity.TaskStatus.CLOSE_PENDING,
+                           com.hamonsoft.netismaker.entity.TaskStatus.CLOSING,
+                           com.hamonsoft.netismaker.entity.TaskStatus.CLOSE_FAILED)
           AND t.deletedAt IS NULL
     """)
     List<Task> findDeployReconcilable();

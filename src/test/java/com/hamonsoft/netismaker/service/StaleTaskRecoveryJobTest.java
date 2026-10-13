@@ -44,6 +44,7 @@ class StaleTaskRecoveryJobTest {
         ReflectionTestUtils.setField(job, "deployWorkerDeadThresholdSeconds", 180);
         ReflectionTestUtils.setField(job, "designStaleThresholdMinutes", 30);
         ReflectionTestUtils.setField(job, "designWorkerDeadThresholdSeconds", 300);
+        ReflectionTestUtils.setField(job, "closeStaleThresholdMinutes", 30);
         when(historyRepo.save(any())).thenAnswer(i -> i.getArgument(0));
     }
 
@@ -207,5 +208,40 @@ class StaleTaskRecoveryJobTest {
         // then
         assertThat(t.getStatus()).isEqualTo(TaskStatus.DESIGN_PENDING);
         assertThat(t.getWorkerId()).isNull();
+    }
+
+    @Test
+    void 종료중_작업은_백스톱_초과시_진행_보존한_채_종료대기로_재큐잉된다() {
+        // CLOSING, 31분 전 claim(> 30분 천장), 워커는 살아있음
+        Task t = task(14L, TaskStatus.CLOSING, "w1", 31, 0);
+        t.setCloseProgress("MERGED,UNDEPLOYED");
+        when(taskRepo.findInFlightClaimed()).thenReturn(List.of(t));
+        when(heartbeatRepo.findAllById(any())).thenReturn(List.of(hb("w1", 5)));
+        job.recoverStale();
+        assertThat(t.getStatus()).isEqualTo(TaskStatus.CLOSE_PENDING);
+        assertThat(t.getWorkerId()).isNull();
+        assertThat(t.getClaimedAt()).isNull();
+        assertThat(t.getCloseProgress()).isEqualTo("MERGED,UNDEPLOYED"); // 재claim이 남은 단계부터
+        assertThat(t.getFailureReason()).isNull();                          // 실패가 아니라 재큐잉
+        verify(historyRepo).save(any());
+    }
+
+    @Test
+    void 종료중_작업은_천장_이내이고_워커가_살아있으면_회수하지_않는다() {
+        Task t = task(15L, TaskStatus.CLOSING, "w1", 29, 0);
+        when(taskRepo.findInFlightClaimed()).thenReturn(List.of(t));
+        when(heartbeatRepo.findAllById(any())).thenReturn(List.of(hb("w1", 5)));
+        job.recoverStale();
+        assertThat(t.getStatus()).isEqualTo(TaskStatus.CLOSING);
+        verifyNoInteractions(historyRepo);
+    }
+
+    @Test
+    void 종료중_작업은_워커_사망시_종료대기로_재큐잉된다() {
+        Task t = task(16L, TaskStatus.CLOSING, "w1", 5, 0); // 5분 전 claim, heartbeat 끊김(> 180초)
+        when(taskRepo.findInFlightClaimed()).thenReturn(List.of(t));
+        when(heartbeatRepo.findAllById(any())).thenReturn(List.of(hb("w1", 300)));
+        job.recoverStale();
+        assertThat(t.getStatus()).isEqualTo(TaskStatus.CLOSE_PENDING);
     }
 }

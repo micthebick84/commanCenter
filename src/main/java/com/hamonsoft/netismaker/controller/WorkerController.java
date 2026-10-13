@@ -2,6 +2,7 @@ package com.hamonsoft.netismaker.controller;
 
 import com.hamonsoft.netismaker.dto.ActiveWorktreeTaskSummary;
 import com.hamonsoft.netismaker.dto.DeployLogChunkRequest;
+import com.hamonsoft.netismaker.dto.CloseProgressRequest;
 import com.hamonsoft.netismaker.dto.DeployedTaskSummary;
 import com.hamonsoft.netismaker.dto.WorkerHeartbeatRequest;
 import com.hamonsoft.netismaker.dto.WorkerResultRequest;
@@ -24,6 +25,7 @@ import java.util.Optional;
  *   POST /worker/heartbeat        ─► worker_heartbeat upsert
  *   GET  /worker/next-task         ─► PENDING/APPROVED 작업 1건 또는 204
  *   POST /worker/tasks/{id}/result ─► 분석/구현 완료/실패 보고
+ *   POST /worker/tasks/{id}/close-progress ─► 종료 단계(병합·배포 중지·노트·브랜치 정리) 완료 보고
  *   GET  /worker/deployed-tasks    ─► 배포 런타임 정합 대상(배포완료+배포중단됨) 목록
  *   GET  /worker/active-worktree-tasks ─► worktree 정리 보호 목록(구현중·디자인중·배포중·배포중지중, soft-delete 제외)
  *   POST /worker/tasks/{id}/runtime-status ─► 컨테이너 생존 관측 보고 (reconcile)
@@ -57,6 +59,12 @@ public class WorkerController {
     @ResponseStatus(HttpStatus.NO_CONTENT)
     public void result(@PathVariable Long id, @RequestBody @Valid WorkerResultRequest req) {
         workerService.recordResult(id, req);
+    }
+
+    @PostMapping("/tasks/{id}/close-progress")
+    @ResponseStatus(HttpStatus.NO_CONTENT)
+    public void closeProgress(@PathVariable Long id, @RequestBody @Valid CloseProgressRequest req) {
+        workerService.recordCloseProgress(id, req);
     }
 
     @PostMapping("/tasks/{id}/deploy-log")

@@ -41,4 +41,45 @@ class WorkerTaskResponseRepoTest {
                 null, null, null, null, null, null, null, null, null);
         assertThat(r.repoRef().host()).isEqualTo("github");
     }
+
+    @Test
+    void close_claim_round_trips_through_json_via_the_canonical_constructor() throws Exception {
+        Task t = Task.create("acme/widgets", "main", "t", "d", "admin", 3, List.of(), "claude-opus-5", "high");
+        t.setPrNumber(5);
+        t.setPrUrl("https://github.com/acme/widgets/pull/5");
+        t.setHeadBranch("netismaker/task-7");
+        t.setHeadSha("abcdef1234567890abcdef1234567890abcdef12");
+        t.setCloseProgress("MERGED");
+        CloseContext ctx = new CloseContext("plan", "analysis", "tail", "feedface", "http://h:19001",
+                java.time.OffsetDateTime.parse("2026-10-13T09:00:00+09:00"),
+                List.of(new CloseContext.HistoryLine(java.time.OffsetDateTime.parse("2026-10-13T10:00:00+09:00"),
+                        "배포완료", "종료승인대기", "alice", "요청")),
+                List.of(new CloseContext.UsageLine("IMPLEMENTATION", new java.math.BigDecimal("1.23"), 1000L, 200L)));
+        WorkerTaskResponse r = WorkerTaskResponse.forClose(t, ctx);
+
+        assertThat(r.kind()).isEqualTo(WorkerTaskResponse.Kind.CLOSE);
+        assertThat(r.prNumber()).isEqualTo(5);
+        assertThat(r.prUrl()).isEqualTo("https://github.com/acme/widgets/pull/5");
+        assertThat(r.headBranch()).isEqualTo("netismaker/task-7");
+        assertThat(r.closeProgress()).isEqualTo("MERGED");
+
+        com.fasterxml.jackson.databind.ObjectMapper json =
+                new com.fasterxml.jackson.databind.ObjectMapper().findAndRegisterModules();
+        WorkerTaskResponse back = json.readValue(json.writeValueAsString(r), WorkerTaskResponse.class);
+        assertThat(back.kind()).isEqualTo(WorkerTaskResponse.Kind.CLOSE);
+        assertThat(back.closeContext().mergeCommitSha()).isEqualTo("feedface");
+        assertThat(back.closeContext().history()).hasSize(1);
+        assertThat(back.closeContext().usage().get(0).stage()).isEqualTo("IMPLEMENTATION");
+    }
+
+    @Test
+    void a_payload_without_close_fields_reads_with_nulls() throws Exception {
+        // 구버전 API가 보낸 claim — CLOSE 필드가 없어도 읽힌다
+        com.fasterxml.jackson.databind.ObjectMapper json = new com.fasterxml.jackson.databind.ObjectMapper();
+        WorkerTaskResponse back = json.readValue(
+                "{\"id\":1,\"githubRepo\":\"a/b\",\"kind\":\"DEPLOY\"}", WorkerTaskResponse.class);
+        assertThat(back.kind()).isEqualTo(WorkerTaskResponse.Kind.DEPLOY);
+        assertThat(back.closeContext()).isNull();
+        assertThat(back.closeProgress()).isNull();
+    }
 }

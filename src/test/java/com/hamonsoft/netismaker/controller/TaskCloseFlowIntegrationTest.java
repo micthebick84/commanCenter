@@ -39,6 +39,7 @@ class TaskCloseFlowIntegrationTest {
     @Autowired private TaskAnalysisRepository analysisRepo;
     @Autowired private TaskDesignRepository designRepo;
     @Autowired private InterviewSessionRepository sessionRepo;
+    @org.springframework.beans.factory.annotation.Value("${app.worker.api-key}") private String apiKey;
 
     @BeforeEach
     void cleanTasks() {
@@ -92,5 +93,24 @@ class TaskCloseFlowIntegrationTest {
                 .andExpect(status().isConflict());
         mvc.perform(delete("/api/tasks/" + id).with(adminJwt("root")))
                 .andExpect(status().isConflict());
+    }
+
+    @Test
+    void 종료_진행_작업은_컨테이너_GC_보호_목록에_남고_작업종료는_빠진다() throws Exception {
+        // 종료 4상태는 아직 컨테이너가 살아 있을 수 있어 GC가 지우면 안 된다(반려 후 "배포가 죽었다" 방지).
+        // 작업종료(CLOSED)는 ②에서 배포를 이미 중지했으므로 보호 대상이 아니다.
+        java.util.Map<TaskStatus, Integer> ids = new java.util.EnumMap<>(TaskStatus.class);
+        for (TaskStatus s : List.of(TaskStatus.CLOSE_REVIEW, TaskStatus.CLOSE_PENDING, TaskStatus.CLOSING,
+                TaskStatus.CLOSE_FAILED, TaskStatus.CLOSED)) {
+            Task t = Task.create("owner/repo", "main", s.name(), "d", "alice", 3, List.of(), "claude-opus-5-5", "high");
+            t.setStatus(s);
+            ids.put(s, taskRepo.save(t).getId().intValue());
+        }
+
+        mvc.perform(get("/worker/deployed-tasks").header("X-Worker-API-Key", apiKey))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$[*].id", org.hamcrest.Matchers.containsInAnyOrder(
+                        ids.get(TaskStatus.CLOSE_REVIEW), ids.get(TaskStatus.CLOSE_PENDING),
+                        ids.get(TaskStatus.CLOSING), ids.get(TaskStatus.CLOSE_FAILED))));
     }
 }

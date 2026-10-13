@@ -1,6 +1,8 @@
 package com.hamonsoft.netismaker.service;
 
 import com.hamonsoft.netismaker.dto.ActiveWorktreeTaskSummary;
+import com.hamonsoft.netismaker.dto.CloseContext;
+import com.hamonsoft.netismaker.dto.CloseProgressRequest;
 import com.hamonsoft.netismaker.dto.DeployedTaskSummary;
 import com.hamonsoft.netismaker.dto.WorkerHeartbeatRequest;
 import com.hamonsoft.netismaker.dto.WorkerResultRequest;
@@ -17,12 +19,15 @@ import com.hamonsoft.netismaker.repository.TaskStageUsageRepository;
 import com.hamonsoft.netismaker.repository.TaskStatusHistoryRepository;
 import com.hamonsoft.netismaker.repository.WorkerHeartbeatRepository;
 import org.springframework.context.annotation.Profile;
+import org.springframework.data.domain.Limit;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.OffsetDateTime;
+import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 import java.util.Optional;
 
@@ -36,6 +41,7 @@ import java.util.Optional;
  *                       DESIGN_PENDING  → DESIGNING     (kind=DESIGN, 이전 디자인/피드백 동봉)
  *                       DEPLOY_PENDING  → DEPLOYING     (kind=DEPLOY)
  *                       UNDEPLOY_PENDING → UNDEPLOYING  (kind=UNDEPLOY)
+ *                       CLOSE_PENDING   → CLOSING       (kind=CLOSE, 종료 노트 재료·진행 단계 동봉)
  *   recordResult    ─► 워커가 분석/구현/배포/디자인 완료/실패 보고. worker_id 일치 필수.
  *                       COMPLETED           : task_analysis upsert + status=COMPLETED
  *                       FAILED              : failure_reason + status=FAILED
@@ -43,12 +49,23 @@ import java.util.Optional;
  *                       IMPLEMENTATION_FAILED: failure_reason + (있으면)log + status=IMPLEMENTATION_FAILED
  *                       DESIGN_REVIEW       : task_design upsert(반려 이력 보존) + status=DESIGN_REVIEW
  *                       DESIGN_FAILED       : failure_reason + status=DESIGN_FAILED
+ *                       CLOSED              : 종료 4단계가 모두 보고된 뒤에만 (status=CLOSED)
+ *                       CLOSE_FAILED        : failure_reason + status=CLOSE_FAILED
+ *   recordCloseProgress ─► 종료 단계 완료 보고를 task.close_progress에 누적 (멱등)
  */
 @Service
 @Profile("api")
 public class WorkerService {
 
     private final TaskRepository taskRepo;
+    /** 종료 노트 재료로 싣는 상태 이력 상한(최신 N건). */
+    private static final int CLOSE_HISTORY_LIMIT = 100;
+    /** 종료 노트 재료로 싣는 구현 로그 꼬리 길이(문자). */
+    private static final int IMPLEMENTATION_TAIL_CHARS = 4000;
+    /** task.merge_commit_sha / close_note_path 컬럼 길이 — 넘으면 500 대신 400으로 거절. */
+    private static final int MAX_COMMIT_SHA_LENGTH = 40;
+    private static final int MAX_NOTE_PATH_LENGTH = 500;
+
     private final TaskAnalysisRepository analysisRepo;
     private final TaskDesignRepository designRepo;
     private final RepoCatalogRepository repoCatalogRepo;
@@ -123,6 +140,8 @@ public class WorkerService {
             t.setStatus(TaskStatus.DEPLOYING);
         } else if (from == TaskStatus.UNDEPLOY_PENDING) {
             t.setStatus(TaskStatus.UNDEPLOYING);
+        } else if (from == TaskStatus.CLOSE_PENDING) {
+            t.setStatus(TaskStatus.CLOSING);
         } else {
             throw new TaskException(HttpStatus.INTERNAL_SERVER_ERROR,
                     "claim 후보가 처리 가능한 상태가 아님: " + from);
@@ -159,7 +178,36 @@ public class WorkerService {
         if (from == TaskStatus.UNDEPLOY_PENDING) {
             return Optional.of(WorkerTaskResponse.forUndeploy(t));
         }
+        if (from == TaskStatus.CLOSE_PENDING) {
+            return Optional.of(WorkerTaskResponse.forClose(t, closeContext(t)));
+        }
         return Optional.of(WorkerTaskResponse.forAnalysis(t));
+    }
+
+    /** 종료 노트 재료(스펙 2026-10-13 §4 ③). 구현 로그는 결과 요약이 끝에 있어 꼬리만 싣는다. */
+    private CloseContext closeContext(Task t) {
+        TaskAnalysis analysis = analysisRepo.findById(t.getId()).orElse(null);
+        List<TaskStatusHistory> newestFirst = new ArrayList<>(
+                historyRepo.findByTaskIdOrderByAtDescIdDesc(t.getId(), Limit.of(CLOSE_HISTORY_LIMIT)));
+        Collections.reverse(newestFirst); // 시간순(오래된 것 먼저)
+        List<CloseContext.HistoryLine> history = newestFirst.stream()
+                .map(h -> new CloseContext.HistoryLine(h.getAt(), h.getFromStatus(), h.getToStatus(),
+                        h.getActorId() == null ? h.getActorType() : h.getActorId(), h.getReason()))
+                .toList();
+        List<CloseContext.UsageLine> usage = stageUsageRepo.findByTaskIdOrderByStageAsc(t.getId()).stream()
+                .map(u -> new CloseContext.UsageLine(u.getStage(), u.getCostUsd(), u.getInputTokens(), u.getOutputTokens()))
+                .toList();
+        return new CloseContext(registeredPlanMarkdown(t.getId()),
+                analysis == null ? null : analysis.getMarkdownResult(),
+                tail(t.getImplementationLog(), IMPLEMENTATION_TAIL_CHARS),
+                t.getMergeCommitSha(), t.getDeployUrl(), t.getDeployedAt(), history, usage);
+    }
+
+    private static String tail(String text, int max) {
+        if (text == null || text.length() <= max) return text;
+        int from = text.length() - max;
+        if (Character.isLowSurrogate(text.charAt(from))) from++; // 서로게이트 쌍 한가운데서 자르지 않는다
+        return text.substring(from);
     }
 
     /**
@@ -276,13 +324,20 @@ public class WorkerService {
                 && current != TaskStatus.IMPLEMENTING
                 && current != TaskStatus.DESIGNING
                 && current != TaskStatus.DEPLOYING
-                && current != TaskStatus.UNDEPLOYING) {
+                && current != TaskStatus.UNDEPLOYING
+                && current != TaskStatus.CLOSING) {
             throw new TaskException(HttpStatus.CONFLICT,
                     "현재 처리중 상태가 아닙니다 (현재: " + current.dbValue() + ")");
         }
         if (t.getWorkerId() != null && !t.getWorkerId().equals(req.workerId())) {
             throw new TaskException(HttpStatus.CONFLICT,
                     "다른 워커가 잡은 작업입니다 (소유: " + t.getWorkerId() + ")");
+        }
+
+        // 종료 단계는 별도 처리 (4단계 완료 검증).
+        if (current == TaskStatus.CLOSING) {
+            recordCloseResult(t, req);
+            return;
         }
 
         // 배포/중지 단계는 별도 처리 (분석/구현 검증 로직과 분리).
@@ -476,6 +531,80 @@ public class WorkerService {
             default -> throw new TaskException(HttpStatus.BAD_REQUEST,
                     "디자인 단계에서 허용되지 않는 status: " + req.status());
         }
+        t.setUpdatedAt(OffsetDateTime.now());
+        historyRepo.save(TaskStatusHistory.log(t.getId(), from, t.getStatus(),
+                "worker", req.workerId(), reason));
+    }
+
+    /**
+     * 종료 단계 진행 보고 — 끝난 CloseStep을 task.close_progress에 누적하고 단계별 값을 저장한다.
+     * 같은 단계를 다시 보고하거나 값이 null이어도 무해(멱등). 재claim한 워커는 이 목록의 단계를 건너뛴다.
+     */
+    @Transactional
+    public void recordCloseProgress(Long taskId, CloseProgressRequest req) {
+        Task t = taskRepo.findActiveByIdForUpdate(taskId).orElseThrow(TaskException::notFound);
+        if (t.getStatus() != TaskStatus.CLOSING) {
+            throw new TaskException(HttpStatus.CONFLICT,
+                    "종료중 상태가 아닙니다 (현재: " + t.getStatus().dbValue() + ")");
+        }
+        if (!req.workerId().equals(t.getWorkerId())) {
+            throw new TaskException(HttpStatus.CONFLICT,
+                    "다른 워커가 잡은 작업입니다 (소유: " + t.getWorkerId() + ")");
+        }
+        switch (req.step()) {
+            case MERGED -> {
+                if (req.mergeCommitSha() != null && !req.mergeCommitSha().isBlank()) {
+                    if (req.mergeCommitSha().length() > MAX_COMMIT_SHA_LENGTH) {
+                        throw new TaskException(HttpStatus.BAD_REQUEST, "mergeCommitSha가 너무 깁니다");
+                    }
+                    t.setMergeCommitSha(req.mergeCommitSha());
+                }
+            }
+            case UNDEPLOYED -> {
+                // 컨테이너를 내렸으니 배포 런타임 정보를 비운다 (undeploy 복귀와 같은 정리; 배포 이력·로그는 남김)
+                t.setDeployUrl(null);
+                t.setDeployContainerId(null);
+                t.setDeployHostPort(null);
+                t.setDeployImage(null);
+            }
+            case NOTE_WRITTEN -> {
+                if (req.notePath() != null && !req.notePath().isBlank()) {
+                    if (req.notePath().length() > MAX_NOTE_PATH_LENGTH) {
+                        throw new TaskException(HttpStatus.BAD_REQUEST, "notePath가 너무 깁니다");
+                    }
+                    t.setCloseNotePath(req.notePath());
+                }
+            }
+            case BRANCH_DELETED -> { /* 기록만 */ }
+        }
+        t.setCloseProgress(CloseStep.append(t.getCloseProgress(), req.step()));
+        t.setUpdatedAt(OffsetDateTime.now());
+    }
+
+    /** 종료 결과 보고. CLOSED는 4단계가 모두 보고된 뒤에만 받는다 — 단계가 빠진 채 끝났다고 믿지 않는다. */
+    private void recordCloseResult(Task t, WorkerResultRequest req) {
+        TaskStatus from = t.getStatus();
+        String reason;
+        switch (req.status()) {
+            case CLOSED -> {
+                if (!CloseStep.allDone(t.getCloseProgress())) {
+                    throw new TaskException(HttpStatus.BAD_REQUEST,
+                            "종료 단계가 모두 끝나지 않았습니다 (끝난 단계: "
+                                    + (t.getCloseProgress() == null ? "없음" : t.getCloseProgress()) + ")");
+                }
+                t.setStatus(TaskStatus.CLOSED);
+                t.setFailureReason(null);
+                reason = "작업 종료";
+            }
+            case CLOSE_FAILED -> {
+                t.setStatus(TaskStatus.CLOSE_FAILED);
+                t.setFailureReason(req.failureReason() == null ? "원인 미상" : req.failureReason());
+                reason = t.getFailureReason();
+            }
+            default -> throw new TaskException(HttpStatus.BAD_REQUEST,
+                    "종료 단계에서 허용되지 않는 status: " + req.status());
+        }
+        accumulateUsage(t.getId(), TaskStageUsage.STAGE_CLOSE, req);
         t.setUpdatedAt(OffsetDateTime.now());
         historyRepo.save(TaskStatusHistory.log(t.getId(), from, t.getStatus(),
                 "worker", req.workerId(), reason));

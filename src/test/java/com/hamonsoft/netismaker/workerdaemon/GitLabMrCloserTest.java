@@ -10,6 +10,7 @@ import java.io.IOException;
 import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
 import java.util.*;
+import java.util.concurrent.CopyOnWriteArrayList;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -21,7 +22,7 @@ class GitLabMrCloserTest {
     private static final String BRANCH = "/api/v4/projects/g%2Fp/repository/branches/netismaker%2Ftask-9";
 
     private HttpServer server;
-    private final List<String> seen = new ArrayList<>();                 // "METHOD path | body"
+    private final List<String> seen = new CopyOnWriteArrayList<>();                // "METHOD path | body"
     private final Map<String, Deque<String[]>> routes = new HashMap<>(); // "METHOD path" → [status, body]…
 
     /** status -1 이면 응답 없이 연결을 끊는다(IOException 유발). */
@@ -93,6 +94,30 @@ class GitLabMrCloserTest {
         route("GET " + MR, 200, mr("opened", false, "ffff", "mergeable", null));
         assertThatThrownBy(() -> new GitLabMrCloser("t").merge(ref(), 9, SHA, "merge"))
                 .isInstanceOf(MergeRequestCloser.CloseRefusedException.class).hasMessageContaining("head 불일치");
+        assertRefusedBeforeAnyChange();
+    }
+
+    @Test
+    void 병합_없이_닫힌_MR은_아무것도_바꾸지_않고_거부() {
+        route("GET " + MR, 200, mr("closed", false, SHA, "not_open", null));
+        assertThatThrownBy(() -> new GitLabMrCloser("t").merge(ref(), 9, SHA, "merge"))
+                .isInstanceOf(MergeRequestCloser.CloseRefusedException.class).hasMessageContaining("닫혀");
+        assertRefusedBeforeAnyChange();
+    }
+
+    @Test
+    void 충돌_MR은_아무것도_바꾸지_않고_거부() {
+        route("GET " + MR, 200, mr("opened", true, SHA, "conflict", null)
+                .replace("\"has_conflicts\":false", "\"has_conflicts\":true"));
+        assertThatThrownBy(() -> new GitLabMrCloser("t").merge(ref(), 9, SHA, "merge"))
+                .isInstanceOf(MergeRequestCloser.CloseRefusedException.class).hasMessageContaining("충돌");
+        assertRefusedBeforeAnyChange();
+    }
+
+    private void assertRefusedBeforeAnyChange() {
+        assertThat(seen).hasSize(1);
+        assertThat(seen.get(0)).startsWith("GET " + MR);
+        assertThat(seen).noneMatch(s -> s.startsWith("PUT "));
     }
 
     @Test
@@ -148,6 +173,66 @@ class GitLabMrCloserTest {
         assertThatThrownBy(() -> new GitLabMrCloser("t").merge(ref(), 9, SHA, "merge"))
                 .isInstanceOf(IOException.class);
         assertThat(titleRestoreSeen()).isTrue();
+    }
+
+    @Test
+    void draft_해제_PUT이_IOException이면_제목_원복을_시도하고_전파한다() {
+        route("GET " + MR, 200, mr("opened", true, SHA, "draft_status", null));
+        route("PUT " + MR, -1, "");
+
+        assertThatThrownBy(() -> new GitLabMrCloser("t").merge(ref(), 9, SHA, "merge"))
+                .isInstanceOf(IOException.class);
+        assertThat(titleRestoreSeen()).isTrue();
+        assertThat(seen).noneMatch(s -> s.startsWith("PUT " + MR + "/merge"));
+    }
+
+    @Test
+    void draft_해제_응답에서도_draft면_원복_없이_거부() {
+        route("GET " + MR, 200, mr("opened", true, SHA, "draft_status", null));
+        route("PUT " + MR, 200, mr("opened", true, SHA, "draft_status", null));
+
+        assertThatThrownBy(() -> new GitLabMrCloser("t").merge(ref(), 9, SHA, "merge"))
+                .isInstanceOf(MergeRequestCloser.CloseRefusedException.class).hasMessageContaining("draft 해제 실패");
+        assertThat(seen).hasSize(2);
+    }
+
+    @Test
+    void 병합_PUT_409는_head_불일치로_거부하고_제목을_되돌린다() {
+        route("GET " + MR, 200, mr("opened", true, SHA, "draft_status", null));
+        route("PUT " + MR, 200, mr("opened", false, SHA, "mergeable", null));
+        route("PUT " + MR + "/merge", 409, "{\"message\":\"SHA does not match HEAD of source branch\"}");
+
+        assertThatThrownBy(() -> new GitLabMrCloser("t").merge(ref(), 9, SHA, "merge"))
+                .isInstanceOf(MergeRequestCloser.CloseRefusedException.class).hasMessageContaining("head 불일치");
+        assertThat(titleRestoreSeen()).isTrue();
+    }
+
+    @Test
+    void 병합_PUT이_200이어도_아직_진행_중이면_폴링해_병합_커밋을_돌려준다() throws Exception {
+        route("GET " + MR, 200, mr("opened", true, SHA, "draft_status", null));
+        route("GET " + MR, 200, mr("opened", false, SHA, "mergeable", null));   // 폴링 1회째: 아직
+        route("GET " + MR, 200, mr("merged", false, SHA, "not_open", "late1")); // 폴링 2회째: 완료
+        route("PUT " + MR, 200, mr("opened", false, SHA, "mergeable", null));
+        route("PUT " + MR + "/merge", 200, mr("opened", false, SHA, "mergeable", null));
+        List<Long> sleeps = new ArrayList<>();
+
+        assertThat(new GitLabMrCloser("t", sleeps::add).merge(ref(), 9, SHA, "merge")).isEqualTo("late1");
+        assertThat(sleeps).containsExactly(2000L, 2000L);
+        assertThat(titleRestoreSeen()).isFalse();
+    }
+
+    @Test
+    void 병합_PUT이_200인데_끝내_merged가_아니면_제목은_두고_재시도를_안내한다() {
+        route("GET " + MR, 200, mr("opened", true, SHA, "draft_status", null));
+        route("GET " + MR, 200, mr("opened", false, SHA, "mergeable", null));   // 이후 계속 opened
+        route("PUT " + MR, 200, mr("opened", false, SHA, "mergeable", null));
+        route("PUT " + MR + "/merge", 200, mr("opened", false, SHA, "mergeable", null));
+        List<Long> sleeps = new ArrayList<>();
+
+        assertThatThrownBy(() -> new GitLabMrCloser("t", sleeps::add).merge(ref(), 9, SHA, "merge"))
+                .isInstanceOf(MergeRequestCloser.CloseRefusedException.class).hasMessageContaining("병합 진행 중");
+        assertThat(sleeps).hasSize(5);
+        assertThat(titleRestoreSeen()).isFalse();
     }
 
     @Test

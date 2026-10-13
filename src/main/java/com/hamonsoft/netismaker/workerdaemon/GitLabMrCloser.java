@@ -33,11 +33,25 @@ public class GitLabMrCloser implements MergeRequestCloser {
             Pattern.CASE_INSENSITIVE);
     private static final String UNDO_FAILED = " (draft 원복 실패 — 수동으로 draft 전환 필요)";
 
+    /** 비동기 병합 완료 대기용 sleep — 테스트 seam. */
+    interface Sleeper {
+        void sleep(long millis) throws InterruptedException;
+    }
+
+    private static final int MERGE_POLL_ATTEMPTS = 5;
+    private static final long MERGE_POLL_MILLIS = 2000;
+
     private final String token;
+    private final Sleeper sleeper;
     private final HttpClient http = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(10)).build();
 
     public GitLabMrCloser(String token) {
+        this(token, Thread::sleep);
+    }
+
+    GitLabMrCloser(String token, Sleeper sleeper) {
         this.token = token;
+        this.sleeper = sleeper;
     }
 
     @Override
@@ -73,8 +87,19 @@ public class GitLabMrCloser implements MergeRequestCloser {
         String title = mr.path("title").asText("");
         boolean wasDraft = mr.path("draft").asBoolean(false) || mr.path("work_in_progress").asBoolean(false);
         if (wasDraft) {
-            HttpResponse<String> u = put(base, Map.of("title", DRAFT_PREFIX.matcher(title).replaceFirst("")));
+            HttpResponse<String> u;
+            try {
+                u = put(base, Map.of("title", DRAFT_PREFIX.matcher(title).replaceFirst("")));
+            } catch (IOException | InterruptedException e) {
+                // 요청이 반영됐을 수 있다 — 원복은 멱등이라 항상 시도한 뒤 전파한다.
+                restoreTitle(base, title);
+                if (e instanceof InterruptedException) Thread.currentThread().interrupt();
+                throw e;
+            }
             if (u.statusCode() != 200) throw new IOException("draft 해제 실패(" + u.statusCode() + "): " + snippet(u.body()));
+            if (JSON.readTree(u.body()).path("draft").asBoolean(false)) {
+                throw new CloseRefusedException("draft 해제 실패 — 제목의 Draft 접두어를 확인하세요");
+            }
         }
         Map<String, Object> payload = new LinkedHashMap<>();
         payload.put("sha", headSha);
@@ -89,24 +114,45 @@ public class GitLabMrCloser implements MergeRequestCloser {
             if (wasDraft) restoreTitle(base, title);
             throw e;
         }
-        if (res.statusCode() == 200) return commitOf(JSON.readTree(res.body()));
+        if (res.statusCode() == 200) {
+            JsonNode body = JSON.readTree(res.body());
+            if ("merged".equals(body.path("state").asText(""))) return commitOf(body);
+            return awaitMerged(base, iid); // 병합이 수락됐지만 아직 진행 중 — 제목은 되돌리지 않는다
+        }
 
         // 거부 사유는 draft가 풀린 상태에서 조회해야 draft_status로 덮이지 않는다(원복보다 먼저).
-        String detailed = "";
+        String reason;
         InterruptedException interrupted = null;
-        try {
-            detailed = getJson(base).path("detailed_merge_status").asText("");
-        } catch (InterruptedException e) {
-            interrupted = e;
-        } catch (Exception e) {
-            log.warn("병합 거부 사유 조회 실패: {}", GitRemotes.mask(String.valueOf(e.getMessage())));
+        if (res.statusCode() == 409) {
+            reason = "head 불일치: 병합 요청 직전 브랜치가 바뀌었습니다 (HTTP 409)";
+        } else {
+            String detailed = "";
+            try {
+                detailed = getJson(base).path("detailed_merge_status").asText("");
+            } catch (InterruptedException e) {
+                interrupted = e;
+            } catch (Exception e) {
+                log.warn("병합 거부 사유 조회 실패: {}", GitRemotes.mask(String.valueOf(e.getMessage())));
+            }
+            reason = classify(detailed) + " (HTTP " + res.statusCode() + ")";
         }
         String undoMsg = wasDraft ? restoreTitle(base, title) : "";
         if (interrupted != null) {
             Thread.currentThread().interrupt();
             throw interrupted;
         }
-        throw new CloseRefusedException(classify(detailed) + " (HTTP " + res.statusCode() + ")" + undoMsg);
+        throw new CloseRefusedException(reason + undoMsg);
+    }
+
+    /** 병합 PUT이 200이어도 GitLab은 비동기로 마저 병합할 수 있다 — merged가 될 때까지 짧게 폴링. */
+    private String awaitMerged(String base, int iid) throws CloseRefusedException, IOException, InterruptedException {
+        for (int i = 0; i < MERGE_POLL_ATTEMPTS; i++) {
+            sleeper.sleep(MERGE_POLL_MILLIS);
+            JsonNode mr = getJson(base);
+            if ("merged".equals(mr.path("state").asText(""))) return commitOf(mr);
+        }
+        log.warn("MR !{} 병합 수락 후 {}회 확인에도 merged가 아님", iid, MERGE_POLL_ATTEMPTS);
+        throw new CloseRefusedException("병합 진행 중 — 잠시 뒤 재시도하세요");
     }
 
     @Override

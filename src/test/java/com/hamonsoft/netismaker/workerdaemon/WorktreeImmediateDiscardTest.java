@@ -62,7 +62,7 @@ class WorktreeImmediateDiscardTest {
 
         WorkerMainLoop loop = new WorkerMainLoop(props(), http, repos, claude, mock(PromptResultParser.class),
                 mock(WorkerMcpSupport.class), worktrees, gitOps, mock(DeployService.class), reporter,
-                mock(SilentLossTracker.class), mock(DesignResultHarvester.class));
+                mock(SilentLossTracker.class), mock(DesignResultHarvester.class), mock(TaskCloser.class));
         return new Loop(loop, worktrees, reporter, gitOps, claude);
     }
 

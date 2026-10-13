@@ -93,6 +93,11 @@ class TaskCloseFlowIntegrationTest {
                 .andExpect(status().isConflict());
         mvc.perform(delete("/api/tasks/" + id).with(adminJwt("root")))
                 .andExpect(status().isConflict());
+        // 종료 취소는 관리자 전용이고 종료실패에서만 된다
+        mvc.perform(post("/api/tasks/" + id + "/close/cancel").with(userJwt("alice")))
+                .andExpect(status().isForbidden());
+        mvc.perform(post("/api/tasks/" + id + "/close/cancel").with(adminJwt("root")))
+                .andExpect(status().isConflict());
     }
 
     @Test

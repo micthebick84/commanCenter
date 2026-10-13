@@ -7,6 +7,7 @@ import com.hamonsoft.netismaker.repository.TaskRepository;
 import com.hamonsoft.netismaker.repository.TaskStatusHistoryRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.springframework.http.HttpStatus;
 import org.springframework.test.util.ReflectionTestUtils;
 
 import java.util.List;
@@ -133,5 +134,50 @@ class TaskCloseServiceTest {
     void 재시도는_다른_상태에서_409() {
         task(TaskStatus.DEPLOYED);
         assertThatThrownBy(() -> service.retry(42L, "admin")).isInstanceOf(TaskException.class);
+    }
+
+    @Test
+    void 병합_전_종료실패는_취소해_직전_배포_상태로_되돌린다() {
+        Task t = task(TaskStatus.CLOSE_FAILED);
+        t.setFailureReason("head 불일치");
+        t.setCloseProgress("");
+        t.setWorkerId("w");
+        when(historyRepo.findByTaskIdOrderByAtDescIdDesc(eq(42L), any())).thenReturn(List.of(
+                TaskStatusHistory.log(42L, TaskStatus.CLOSING, TaskStatus.CLOSE_FAILED, "system", "w", "head 불일치"),
+                TaskStatusHistory.log(42L, TaskStatus.CLOSE_PENDING, TaskStatus.CLOSING, "system", "w", "claim"),
+                TaskStatusHistory.log(42L, TaskStatus.CLOSE_REVIEW, TaskStatus.CLOSE_PENDING, "user", "admin", "승인"),
+                TaskStatusHistory.log(42L, TaskStatus.DEPLOYED, TaskStatus.CLOSE_REVIEW, "user", "user1", "종료 요청")));
+
+        Task r = service.cancel(42L, "admin");
+
+        assertThat(r.getStatus()).isEqualTo(TaskStatus.DEPLOYED);
+        assertThat(r.getFailureReason()).isNull();
+        assertThat(r.getCloseProgress()).isNull();
+        assertThat(r.getWorkerId()).isNull();
+        org.mockito.ArgumentCaptor<TaskStatusHistory> h = org.mockito.ArgumentCaptor.forClass(TaskStatusHistory.class);
+        verify(historyRepo).save(h.capture());
+        assertThat(h.getValue().getReason()).isEqualTo("종료 취소(병합 전)");
+        assertThat(h.getValue().getToStatus()).isEqualTo(TaskStatus.DEPLOYED.dbValue());
+    }
+
+    @Test
+    void 이미_병합됐으면_종료를_취소할_수_없다() {
+        Task t = task(TaskStatus.CLOSE_FAILED);
+        t.setCloseProgress("MERGED,UNDEPLOYED");
+        assertThatThrownBy(() -> service.cancel(42L, "admin"))
+                .isInstanceOf(TaskException.class)
+                .hasMessageContaining("이미 병합되어 종료를 취소할 수 없습니다 — 재시도로 마무리하세요")
+                .satisfies(e -> assertThat(((TaskException) e).getStatus()).isEqualTo(HttpStatus.CONFLICT));
+        assertThat(t.getStatus()).isEqualTo(TaskStatus.CLOSE_FAILED);
+        verify(historyRepo, never()).save(any());
+    }
+
+    @Test
+    void 종료실패가_아니면_취소는_409() {
+        task(TaskStatus.CLOSING);
+        assertThatThrownBy(() -> service.cancel(42L, "admin"))
+                .isInstanceOf(TaskException.class)
+                .satisfies(e -> assertThat(((TaskException) e).getStatus()).isEqualTo(HttpStatus.CONFLICT));
+        verify(historyRepo, never()).save(any());
     }
 }

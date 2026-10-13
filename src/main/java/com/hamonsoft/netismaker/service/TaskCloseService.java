@@ -1,5 +1,6 @@
 package com.hamonsoft.netismaker.service;
 
+import com.hamonsoft.netismaker.entity.CloseStep;
 import com.hamonsoft.netismaker.entity.Task;
 import com.hamonsoft.netismaker.entity.TaskStatus;
 import com.hamonsoft.netismaker.entity.TaskStatusHistory;
@@ -23,6 +24,7 @@ import java.util.Set;
  *   approve      ─► 종료승인대기 → 종료대기              (관리자 — 컨트롤러가 강제)
  *   reject       ─► 종료승인대기 → 직전 상태 + 사유      (관리자)
  *   retry        ─► 종료실패 → 종료대기 (close_progress 유지 → 남은 단계부터)  (관리자)
+ *   cancel       ─► 종료실패(MERGED 전) → 직전 상태, close_progress·사유 비움  (관리자)
  *
  * 락 정책은 TaskService와 같다 — findActiveByIdForUpdate 후 재판정.
  */
@@ -85,6 +87,24 @@ public class TaskCloseService {
         t.setFailureReason(null);
         return move(t, TaskStatus.CLOSE_PENDING, "user", adminId,
                 "종료 재시도 (완료 단계: " + (t.getCloseProgress() == null ? "없음" : t.getCloseProgress()) + ")");
+    }
+
+    /**
+     * 병합 전 단계에서 실패한 종료를 취소한다. 병합이 첫 단계라 MERGED가 없으면 되돌릴 수 없는 일은 아직 없다 —
+     * 진행·실패 사유를 비우고 종료 요청 직전 상태(배포완료|배포중단됨)로 돌린다. 병합된 뒤에는 재시도만 허용.
+     */
+    @Transactional
+    public Task cancel(Long taskId, String adminId) {
+        Task t = taskRepo.findActiveByIdForUpdate(taskId).orElseThrow(TaskException::notFound);
+        if (t.getStatus() != TaskStatus.CLOSE_FAILED) {
+            throw TaskException.conflict("종료실패 상태에서만 종료를 취소할 수 있습니다 (현재: " + t.getStatus().dbValue() + ")");
+        }
+        if (CloseStep.parse(t.getCloseProgress()).contains(CloseStep.MERGED)) {
+            throw TaskException.conflict("이미 병합되어 종료를 취소할 수 없습니다 — 재시도로 마무리하세요");
+        }
+        t.setFailureReason(null);
+        t.setCloseProgress(null);
+        return move(t, statusBeforeReview(t.getId()), "user", adminId, "종료 취소(병합 전)");
     }
 
     /**

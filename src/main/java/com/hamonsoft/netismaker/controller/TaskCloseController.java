@@ -18,6 +18,7 @@ import org.springframework.web.bind.annotation.*;
  *   POST /{id}/close/approve           ROLE_ADMIN
  *   POST /{id}/close/reject            ROLE_ADMIN (바디 reason)
  *   POST /{id}/close/retry             ROLE_ADMIN
+ *   POST /{id}/close/cancel            ROLE_ADMIN (병합 전 종료실패만)
  */
 @RestController
 @RequestMapping("/api/tasks")
@@ -61,6 +62,12 @@ public class TaskCloseController {
     @PreAuthorize("hasAuthority('ROLE_ADMIN')")
     public TaskResponse retry(@PathVariable Long id, JwtAuthenticationToken auth) {
         return view(closeService.retry(id, AuthContext.requireUserId(auth)), true);
+    }
+
+    @PostMapping("/{id}/close/cancel")
+    @PreAuthorize("hasAuthority('ROLE_ADMIN')")
+    public TaskResponse cancel(@PathVariable Long id, JwtAuthenticationToken auth) {
+        return view(closeService.cancel(id, AuthContext.requireUserId(auth)), true);
     }
 
     /** 관리자가 아니면 비밀 env 값을 비운다 — TaskController.forViewer와 같은 규칙. */

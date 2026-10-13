@@ -58,6 +58,30 @@ class CloseNoteWriterTest {
     }
 
     @Test
+    void 본문의_맨_토큰_패턴도_가린다() {
+        String ghp = "ghp_" + "A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6Q7r8";
+        String fine = "github_pat_" + "11ABCDEFG0_abcdefghijklmnopqrstuvwxyz0123";
+        String glpat = "glpat-" + "xY_z-1234567890abcd";
+        String ant = "sk-ant-" + "api03-AbCdEf_GhIj-KlMnOp";
+        String out = CloseNoteWriter.clean("토큰 " + ghp + "\nPAT=" + fine + " gl:" + glpat + " (" + ant + ")");
+        assertThat(out).doesNotContain(ghp).doesNotContain(fine).doesNotContain(glpat).doesNotContain(ant)
+                .contains("토큰 ***").contains("PAT=***").contains("gl:***").contains("(***)");
+    }
+
+    @Test
+    void 짧은_접두어_문자열은_토큰으로_보지_않는다() {
+        assertThat(CloseNoteWriter.clean("ghp_short sk-ant-x glpat-abc")).isEqualTo("ghp_short sk-ant-x glpat-abc");
+    }
+
+    @Test
+    void 프론트매터의_PR_URL도_자격증명을_가린다() throws Exception {
+        CloseNoteWriter.NoteMeta m = new CloseNoteWriter.NoteMeta(12, "제목",
+                "https://oauth2:glpat-SECRETSECRETSECRET@gitlab.hamon.vip/a/b/-/merge_requests/3", "abcdef1234");
+        String text = Files.readString(writer.write(vault, "N", m, "본문", day).file());
+        assertThat(text).doesNotContain("SECRETSECRET").contains("pr: https://***@gitlab.hamon.vip/a/b/-/merge_requests/3");
+    }
+
+    @Test
     void 볼트_밖으로_나가는_폴더는_거부한다() {
         assertThatThrownBy(() -> writer.write(vault, "../outside", meta, "본문", day))
                 .isInstanceOf(IOException.class);

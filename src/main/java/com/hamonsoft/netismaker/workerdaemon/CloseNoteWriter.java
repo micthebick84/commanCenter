@@ -8,6 +8,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
 import java.time.LocalDate;
+import java.util.regex.Pattern;
 
 /**
  * 종료 노트를 볼트에 쓴다 (스펙 2026-10-13 §4 ③). 파일 이름·진행상황 추기는 여기서 결정론으로 — claude는 본문만 만든다.
@@ -21,6 +22,10 @@ public class CloseNoteWriter {
     public record Written(String relativePath, Path file) {}
 
     private static final int SLUG_MAX = 60;
+
+    /** URL 밖에 맨몸으로 나온 토큰(GitHub classic/fine-grained PAT, GitLab PAT, Anthropic 키). */
+    private static final Pattern BARE_TOKENS = Pattern.compile(
+            "ghp_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|glpat-[A-Za-z0-9_-]{16,}|sk-ant-[A-Za-z0-9_-]{16,}");
 
     public Written write(Path vault, String folder, NoteMeta meta, String body, LocalDate date) throws IOException {
         Path dir = vault.resolve(folder).normalize();
@@ -51,7 +56,7 @@ public class CloseNoteWriter {
     private static String frontmatter(NoteMeta m, LocalDate date) {
         return "---\n"
                 + "task_id: " + m.taskId() + "\n"
-                + "pr: " + (m.prUrl() == null ? "" : m.prUrl()) + "\n"
+                + "pr: " + (m.prUrl() == null ? "" : maskSecrets(m.prUrl())) + "\n"
                 + "merge_commit: " + (m.mergeCommitSha() == null ? "" : m.mergeCommitSha()) + "\n"
                 + "closed: " + date + "\n"
                 + "tags:\n  - netismaker/작업종료\n"
@@ -67,7 +72,12 @@ public class CloseNoteWriter {
             if (b.endsWith("```")) b = b.substring(0, b.length() - 3);
             b = b.strip();
         }
-        return GitRemotes.mask(b);
+        return maskSecrets(b);
+    }
+
+    /** URL 안 자격증명(GitRemotes.mask) + 맨 토큰 패턴을 가린다. */
+    static String maskSecrets(String text) {
+        return BARE_TOKENS.matcher(GitRemotes.mask(text)).replaceAll("***");
     }
 
     private static void appendProgress(Path progress, String noteName, NoteMeta m, LocalDate date) throws IOException {

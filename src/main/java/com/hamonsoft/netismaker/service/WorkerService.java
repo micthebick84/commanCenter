@@ -57,15 +57,13 @@ import java.util.Optional;
 @Profile("api")
 public class WorkerService {
 
-    private final TaskRepository taskRepo;
-    /** 종료 노트 재료로 싣는 상태 이력 상한(최신 N건). */
-    private static final int CLOSE_HISTORY_LIMIT = 100;
-    /** 종료 노트 재료로 싣는 구현 로그 꼬리 길이(문자). */
-    private static final int IMPLEMENTATION_TAIL_CHARS = 4000;
+    /** 종료 노트 재료로 싣는 상태 이력 상한(최신 N건). 본문 길이 상한은 CloseContext가 가진다. */
+    private static final int CLOSE_HISTORY_LIMIT = 200;
     /** task.merge_commit_sha / close_note_path 컬럼 길이 — 넘으면 500 대신 400으로 거절. */
     private static final int MAX_COMMIT_SHA_LENGTH = 40;
     private static final int MAX_NOTE_PATH_LENGTH = 500;
 
+    private final TaskRepository taskRepo;
     private final TaskAnalysisRepository analysisRepo;
     private final TaskDesignRepository designRepo;
     private final RepoCatalogRepository repoCatalogRepo;
@@ -184,30 +182,14 @@ public class WorkerService {
         return Optional.of(WorkerTaskResponse.forAnalysis(t));
     }
 
-    /** 종료 노트 재료(스펙 2026-10-13 §4 ③). 구현 로그는 결과 요약이 끝에 있어 꼬리만 싣는다. */
+    /** 종료 노트 재료 — 확정 플랜·분석·구현 로그 끝·이력(시간순)·단계별 비용. 본문 상한은 CloseContext.of. */
     private CloseContext closeContext(Task t) {
-        TaskAnalysis analysis = analysisRepo.findById(t.getId()).orElse(null);
-        List<TaskStatusHistory> newestFirst = new ArrayList<>(
+        TaskAnalysis a = analysisRepo.findById(t.getId()).orElse(null);
+        List<TaskStatusHistory> history = new ArrayList<>(
                 historyRepo.findByTaskIdOrderByAtDescIdDesc(t.getId(), Limit.of(CLOSE_HISTORY_LIMIT)));
-        Collections.reverse(newestFirst); // 시간순(오래된 것 먼저)
-        List<CloseContext.HistoryLine> history = newestFirst.stream()
-                .map(h -> new CloseContext.HistoryLine(h.getAt(), h.getFromStatus(), h.getToStatus(),
-                        h.getActorId() == null ? h.getActorType() : h.getActorId(), h.getReason()))
-                .toList();
-        List<CloseContext.UsageLine> usage = stageUsageRepo.findByTaskIdOrderByStageAsc(t.getId()).stream()
-                .map(u -> new CloseContext.UsageLine(u.getStage(), u.getCostUsd(), u.getInputTokens(), u.getOutputTokens()))
-                .toList();
-        return new CloseContext(registeredPlanMarkdown(t.getId()),
-                analysis == null ? null : analysis.getMarkdownResult(),
-                tail(t.getImplementationLog(), IMPLEMENTATION_TAIL_CHARS),
-                t.getMergeCommitSha(), t.getDeployUrl(), t.getDeployedAt(), history, usage);
-    }
-
-    private static String tail(String text, int max) {
-        if (text == null || text.length() <= max) return text;
-        int from = text.length() - max;
-        if (Character.isLowSurrogate(text.charAt(from))) from++; // 서로게이트 쌍 한가운데서 자르지 않는다
-        return text.substring(from);
+        Collections.reverse(history); // 시간순(오래된 것 먼저)
+        return CloseContext.of(t, registeredPlanMarkdown(t.getId()), a, history,
+                stageUsageRepo.findByTaskIdOrderByStageAsc(t.getId()));
     }
 
     /**
@@ -561,11 +543,12 @@ public class WorkerService {
                 }
             }
             case UNDEPLOYED -> {
-                // 컨테이너를 내렸으니 배포 런타임 정보를 비운다 (undeploy 복귀와 같은 정리; 배포 이력·로그는 남김)
+                // 컨테이너를 내렸으니 배포 런타임 정보를 비운다 (undeploy→PR_CREATED 복귀와 같은 규칙; 배포 로그는 보존)
                 t.setDeployUrl(null);
                 t.setDeployContainerId(null);
                 t.setDeployHostPort(null);
                 t.setDeployImage(null);
+                t.setDeployedAt(null);
             }
             case NOTE_WRITTEN -> {
                 if (req.notePath() != null && !req.notePath().isBlank()) {
@@ -594,7 +577,9 @@ public class WorkerService {
                 }
                 t.setStatus(TaskStatus.CLOSED);
                 t.setFailureReason(null);
-                reason = "작업 종료";
+                String sha = t.getMergeCommitSha();
+                reason = "작업 종료" + (sha == null || sha.isBlank() ? ""
+                        : ": 병합 " + sha.substring(0, Math.min(7, sha.length())));
             }
             case CLOSE_FAILED -> {
                 t.setStatus(TaskStatus.CLOSE_FAILED);

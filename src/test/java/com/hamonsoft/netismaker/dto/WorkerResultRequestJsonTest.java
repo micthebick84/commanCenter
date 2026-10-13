@@ -64,5 +64,8 @@ class WorkerResultRequestJsonTest {
         assertThat(failed.failureReason()).isEqualTo("충돌");
         // 마스킹 경로(reportTerminal)를 지나도 사유가 유지된다
         assertThat(failed.masked().failureReason()).isEqualTo("충돌");
+        // 사유에 인증 URL이 섞여 있으면 마스킹 경로에서 토큰이 사라진다
+        assertThat(WorkerResultRequest.closeFailed("w", "사유 https://oauth2:tok@github.com/x", null)
+                .masked().failureReason()).doesNotContain("tok");
     }
 }

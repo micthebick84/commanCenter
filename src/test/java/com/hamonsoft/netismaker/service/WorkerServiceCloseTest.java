@@ -38,6 +38,7 @@ class WorkerServiceCloseTest {
         t.setHeadBranch("netismaker/task-7");
         t.setHeadSha("abcdef1234567890abcdef1234567890abcdef12");
         t.setDeployUrl("http://10.1.1.75:19001");
+        t.setDeployedAt(java.time.OffsetDateTime.now().minusDays(1));
         return t;
     }
 
@@ -91,6 +92,7 @@ class WorkerServiceCloseTest {
         assertThat(t.getCloseProgress()).isEqualTo("MERGED,UNDEPLOYED,NOTE_WRITTEN");
         assertThat(t.getMergeCommitSha()).isEqualTo("cafe1234");
         assertThat(t.getDeployUrl()).isNull();
+        assertThat(t.getDeployedAt()).isNull(); // 배포 중지 복귀(PR_CREATED)와 같은 규칙
         assertThat(t.getCloseNotePath()).isEqualTo("HamonSoft/netisMaker/a.md");
     }
 
@@ -117,8 +119,12 @@ class WorkerServiceCloseTest {
 
         t.setCloseProgress("MERGED,UNDEPLOYED,NOTE_WRITTEN,BRANCH_DELETED");
         var usage = new WorkerResultRequest.UsageReport(new BigDecimal("0.12"), 100L, 50L, 0L, 0L);
+        t.setMergeCommitSha("cafe1234567890");
         service.recordResult(7L, WorkerResultRequest.closed("w1", usage));
         assertThat(t.getStatus()).isEqualTo(TaskStatus.CLOSED);
+        var captor = org.mockito.ArgumentCaptor.forClass(TaskStatusHistory.class);
+        verify(historyRepo).save(captor.capture());
+        assertThat(captor.getValue().getReason()).isEqualTo("작업 종료: 병합 cafe123");
         verify(stageUsageRepo).accumulate(eq(7L), eq("CLOSE"), any(), eq(100L), eq(50L), eq(0L), eq(0L));
     }
 

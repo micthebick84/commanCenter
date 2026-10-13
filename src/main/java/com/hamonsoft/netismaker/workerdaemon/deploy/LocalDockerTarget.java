@@ -149,11 +149,13 @@ public class LocalDockerTarget implements DeployTarget {
 
         // 5. 헬스체크: (a) 컨테이너 생존(크래시 감지) + (b) HTTP readiness(실제 서빙 확인).
         //    매초 컨테이너 생존을 확인하다 기동 직후 종료되면 배포실패로 간주하고 로그를 첨부한다.
-        //    동시에 readinessPath로 HTTP 요청을 보내, 응답이 오면(어떤 상태코드든) 즉시 배포완료.
+        //    동시에 readinessPath로 HTTP 요청을 보내, 응답이 오면 즉시 배포완료 — 단 404면 컨테이너 로그에
+        //    앱 기동 실패 흔적이 없을 때만(judgeReadiness). 서블릿 컨테이너는 웹앱 기동이 실패해도 살아서
+        //    모든 경로를 404로 답한다(2026-10-13 작업 10, Tomcat 리스너 기동 실패가 배포완료로 처리됨).
         //    NOTE: bare TCP 연결 체크가 아니라 실제 HTTP 라운드트립을 쓴다 — docker-proxy가 컨테이너
         //    앱 LISTEN 전에 호스트 포트를 바인딩해도, 업스트림 포트가 닫혀 있으면 HTTP는 reset되어
         //    false-positive가 아니다. 끝까지 HTTP 응답이 없어도 컨테이너가 살아있으면(비-HTTP 앱
-        //    가능성) liveness 기준으로 배포완료 처리한다(false-negative 회피).
+        //    가능성) liveness 기준으로 배포완료 처리한다(false-negative 회피) — 이때도 기동 실패 흔적은 본다.
         int graceSec = cfg.healthCheckSeconds();
         int readySec = cfg.readinessSeconds();
         String readyPath = cfg.readinessPath();
@@ -179,16 +181,24 @@ public class LocalDockerTarget implements DeployTarget {
                                     + "). 앱 부팅 실패 가능 — 컨테이너 로그 확인.",
                             tail(logBuf.toString(), 8000));
                 }
-                if (httpProbe(hostPort, readyPath)) {
+                int code = httpStatus(hostPort, readyPath);
+                Readiness verdict = judgeReadiness(code, () -> dockerLogsForScan(spec.containerName()));
+                if (verdict == Readiness.APP_FAILED) {
+                    failAppStartup(spec.containerName(), "HTTP " + code + ", " + (i + 1) + "초", logBuf, sink);
+                }
+                if (verdict == Readiness.READY) {
                     httpReady = true;
                     String passMsg = "[헬스체크 통과: " + (i + 1)
-                            + "초 — HTTP readiness 확인(" + readyPath + ")]\n";
+                            + "초 — HTTP readiness 확인(" + readyPath + " → " + code + ")]\n";
                     logBuf.append(passMsg);
                     sink.accept(passMsg);
                     break;
                 }
             }
             if (!httpReady) {
+                if (startupFailureMarker(dockerLogsForScan(spec.containerName())) != null) {
+                    failAppStartup(spec.containerName(), "HTTP 응답 없음, " + limitSec + "초", logBuf, sink);
+                }
                 String liveMsg = "[헬스체크: " + limitSec
                         + "초간 생존했으나 HTTP 응답 미확인 — liveness 기준으로 배포완료 처리(비-HTTP 앱 가능)]\n";
                 logBuf.append(liveMsg);
@@ -376,12 +386,65 @@ public class LocalDockerTarget implements DeployTarget {
         return ports;
     }
 
+    /** 헬스체크 HTTP readiness 판정 결과. */
+    enum Readiness { NOT_YET, READY, APP_FAILED }
+
     /**
-     * 호스트 포트에서 실제 HTTP 응답이 오는지(=서빙 준비됨) 확인.
-     * 어떤 상태코드든(200/302/401/404/500…) 응답을 받으면 서버가 떠서 서빙 중이라는 뜻.
-     * 연결 거부/리셋/타임아웃은 아직 준비 안 됨으로 본다(예외 → false).
+     * 컨테이너 로그에서 "서버는 떴지만 앱 기동이 실패했다"를 뜻하는 문구. 서블릿 컨테이너(Tomcat)는 웹앱
+     * 기동이 실패해도 프로세스가 살아 404로 응답하므로 생존·HTTP 응답만으로는 못 가린다.
      */
-    private boolean httpProbe(int hostPort, String path) {
+    static final List<String> STARTUP_FAILURE_MARKERS = List.of(
+            "One or more listeners failed to start",        // Tomcat 8.5+ — 리스너(Spring ContextLoaderListener 등) 기동 실패
+            "One or more Filters failed to start",          // Tomcat 8.5+
+            "startup failed due to previous errors",        // Tomcat "Context [..] startup failed due to previous errors"
+            "Error deploying web application archive",      // Tomcat WAR 배포 실패
+            "Context initialization failed",                // Spring ContextLoader
+            "APPLICATION FAILED TO START");                 // Spring Boot
+
+    /** 로그에서 처음 찾은 앱 기동 실패 문구, 없으면 null. */
+    static String startupFailureMarker(String logs) {
+        if (logs == null || logs.isEmpty()) return null;
+        for (String marker : STARTUP_FAILURE_MARKERS) {
+            if (logs.contains(marker)) return marker;
+        }
+        return null;
+    }
+
+    /**
+     * HTTP 응답 코드로 readiness를 판정한다. 응답 없음(≤0)은 아직 준비 안 됨, 404 외의 응답(200/302/401/500…)은
+     * 서빙 중. 404는 루트 경로를 매핑하지 않은 앱일 수도, 웹앱 기동이 실패한 서블릿 컨테이너일 수도 있어서
+     * 그때만 컨테이너 로그(logs — 404일 때만 호출)를 보고 기동 실패 문구가 있으면 APP_FAILED.
+     */
+    static Readiness judgeReadiness(int httpStatus, java.util.function.Supplier<String> logs) {
+        if (httpStatus <= 0) return Readiness.NOT_YET;
+        if (httpStatus != 404) return Readiness.READY;
+        return startupFailureMarker(logs.get()) != null ? Readiness.APP_FAILED : Readiness.READY;
+    }
+
+    /** 앱 기동 실패 — 컨테이너를 멈추고(실행 중이면 GC가 지우지 않는다) 로그를 붙여 배포실패로 보고한다. */
+    private void failAppStartup(String containerName, String when, StringBuilder logBuf,
+                                java.util.function.Consumer<String> sink) throws DeployFailedException {
+        String logs = dockerLogsForScan(containerName);
+        String marker = startupFailureMarker(logs);
+        String failMsg = "[헬스체크 실패: 앱 기동 실패 (" + when + ", 로그: \"" + marker + "\")]\n"
+                + "--- container logs ---\n" + tail(logs, 4000) + '\n';
+        logBuf.append(failMsg);
+        sink.accept(failMsg);
+        try {
+            ProcessRunner.run(new File("."), List.of(DOCKER, "stop", "-t", "10", containerName), 60);
+        } catch (Exception e) {
+            log.warn("앱 기동 실패 컨테이너 중지 실패 {}: {}", containerName, e.getMessage());
+        }
+        throw new DeployFailedException(
+                "앱 기동 실패 — 컨테이너는 떴지만 앱이 올라오지 않음(\"" + marker + "\"). 컨테이너 로그 확인.",
+                tail(logBuf.toString(), 8000));
+    }
+
+    /**
+     * 호스트 포트에 HTTP 요청을 보내 응답 코드를 돌려준다(리다이렉트는 따라가지 않음).
+     * 연결 거부/리셋/타임아웃은 아직 준비 안 됨 → -1.
+     */
+    private int httpStatus(int hostPort, String path) {
         String p = path.startsWith("/") ? path : "/" + path;
         java.net.HttpURLConnection c = null;
         try {
@@ -391,9 +454,9 @@ public class LocalDockerTarget implements DeployTarget {
             c.setReadTimeout(2000);
             c.setRequestMethod("GET");
             c.setInstanceFollowRedirects(false);
-            return c.getResponseCode() > 0;
+            return c.getResponseCode();
         } catch (Exception e) {
-            return false;
+            return -1;
         } finally {
             if (c != null) c.disconnect();
         }
@@ -421,6 +484,20 @@ public class LocalDockerTarget implements DeployTarget {
             return tail(r.stdout(), max);
         } catch (Exception e) {
             return "(docker logs 조회 실패: " + e.getMessage() + ")";
+        }
+    }
+
+    /**
+     * 기동 실패 문구 검사용 로그. dockerLogsTail(100줄)보다 넉넉히 본다 — DEBUG 로그가 많은 앱은 실패 문구 뒤로도
+     * 수십 줄이 이어진다(작업 10). 조회 실패 시 빈 문자열(= 실패 흔적 없음, 기존 판정 유지).
+     */
+    private String dockerLogsForScan(String name) {
+        try {
+            ProcessRunner.Result r = ProcessRunner.run(new File("."),
+                    List.of(DOCKER, "logs", "--tail", "2000", name), 30);
+            return r.exitCode() == 0 ? r.stdout() : "";
+        } catch (Exception e) {
+            return "";
         }
     }
 

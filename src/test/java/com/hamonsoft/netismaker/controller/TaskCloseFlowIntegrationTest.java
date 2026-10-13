@@ -63,7 +63,7 @@ class TaskCloseFlowIntegrationTest {
 
     @Test
     void 등록자_요청_관리자_승인_반려_흐름() throws Exception {
-        Task t = Task.create("owner/repo", "main", "종료 흐름", "d", "alice", 3, List.of(), "claude-opus-5-5", "high");
+        Task t = Task.create("owner/repo", "main", "종료 흐름", "d", "user1", 3, List.of(), "claude-opus-5-5", "high");
         t.setStatus(TaskStatus.DEPLOYED);
         t.setPrNumber(3);
         t.setPrUrl("https://github.com/owner/repo/pull/3");
@@ -71,32 +71,32 @@ class TaskCloseFlowIntegrationTest {
         t.setHeadSha("0123456789abcdef0123456789abcdef01234567");
         Long id = taskRepo.save(t).getId();
 
-        mvc.perform(post("/api/tasks/" + id + "/close-request").with(userJwt("bob")))
+        mvc.perform(post("/api/tasks/" + id + "/close-request").with(userJwt("user2")))
                 .andExpect(status().isForbidden());
-        mvc.perform(post("/api/tasks/" + id + "/close-request").with(userJwt("alice")))
+        mvc.perform(post("/api/tasks/" + id + "/close-request").with(userJwt("user1")))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.status").value("CLOSE_REVIEW"))
                 .andExpect(jsonPath("$.close.progress").isEmpty());
-        mvc.perform(post("/api/tasks/" + id + "/close/approve").with(userJwt("alice")))
+        mvc.perform(post("/api/tasks/" + id + "/close/approve").with(userJwt("user1")))
                 .andExpect(status().isForbidden());
-        mvc.perform(post("/api/tasks/" + id + "/close/reject").with(adminJwt("root"))
+        mvc.perform(post("/api/tasks/" + id + "/close/reject").with(adminJwt("admin"))
                         .contentType(MediaType.APPLICATION_JSON).content("{\"reason\":\"다시 확인\"}"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.status").value("DEPLOYED"));
-        mvc.perform(post("/api/tasks/" + id + "/close-request").with(userJwt("alice")))
+        mvc.perform(post("/api/tasks/" + id + "/close-request").with(userJwt("user1")))
                 .andExpect(status().isOk());
-        mvc.perform(post("/api/tasks/" + id + "/close/approve").with(adminJwt("root")))
+        mvc.perform(post("/api/tasks/" + id + "/close/approve").with(adminJwt("admin")))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.status").value("CLOSE_PENDING"));
         // 종료 진행 중에는 재배포·중지·삭제가 막힌다
-        mvc.perform(post("/api/tasks/" + id + "/redeploy").with(adminJwt("root")))
+        mvc.perform(post("/api/tasks/" + id + "/redeploy").with(adminJwt("admin")))
                 .andExpect(status().isConflict());
-        mvc.perform(delete("/api/tasks/" + id).with(adminJwt("root")))
+        mvc.perform(delete("/api/tasks/" + id).with(adminJwt("admin")))
                 .andExpect(status().isConflict());
         // 종료 취소는 관리자 전용이고 종료실패에서만 된다
-        mvc.perform(post("/api/tasks/" + id + "/close/cancel").with(userJwt("alice")))
+        mvc.perform(post("/api/tasks/" + id + "/close/cancel").with(userJwt("user1")))
                 .andExpect(status().isForbidden());
-        mvc.perform(post("/api/tasks/" + id + "/close/cancel").with(adminJwt("root")))
+        mvc.perform(post("/api/tasks/" + id + "/close/cancel").with(adminJwt("admin")))
                 .andExpect(status().isConflict());
     }
 
@@ -107,7 +107,7 @@ class TaskCloseFlowIntegrationTest {
         java.util.Map<TaskStatus, Integer> ids = new java.util.EnumMap<>(TaskStatus.class);
         for (TaskStatus s : List.of(TaskStatus.CLOSE_REVIEW, TaskStatus.CLOSE_PENDING, TaskStatus.CLOSING,
                 TaskStatus.CLOSE_FAILED, TaskStatus.CLOSED)) {
-            Task t = Task.create("owner/repo", "main", s.name(), "d", "alice", 3, List.of(), "claude-opus-5-5", "high");
+            Task t = Task.create("owner/repo", "main", s.name(), "d", "user1", 3, List.of(), "claude-opus-5-5", "high");
             t.setStatus(s);
             ids.put(s, taskRepo.save(t).getId().intValue());
         }

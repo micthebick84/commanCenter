@@ -3,6 +3,7 @@ package com.hamonsoft.netismaker.workerdaemon;
 import com.hamonsoft.netismaker.git.RepoRef;
 import org.junit.jupiter.api.Test;
 
+import java.io.IOException;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Deque;
@@ -99,5 +100,70 @@ class GitHubPrCloserTest {
     void 브랜치_삭제의_다른_실패는_예외() {
         replies.add(new ProcessRunner.Result(1, "HTTP 403: Resource not accessible"));
         assertThatThrownBy(() -> closer().deleteBranch(ref(), "b")).isInstanceOf(java.io.IOException.class);
+    }
+
+    @Test
+    void 병합_예외_시에도_draft를_되돌린다() throws Exception {
+        GitHubPrCloser closerWithException = new GitHubPrCloser(args -> {
+            calls.add(args);
+            if (args.contains("merge")) {
+                throw new IOException("Network timeout");
+            }
+            if (calls.size() == 1) return view("OPEN", true, SHA, "BLOCKED", null);  // pr view
+            if (args.contains("ready")) return new ProcessRunner.Result(0, "");       // pr ready or ready --undo
+            return new ProcessRunner.Result(0, "");
+        });
+
+        assertThatThrownBy(() -> closerWithException.merge(ref(), 5, SHA, "merge"))
+                .isInstanceOf(java.io.IOException.class).hasMessageContaining("Network timeout");
+        // Should have called: view, ready, merge (throws), ready --undo
+        assertThat(calls.size()).isGreaterThanOrEqualTo(3);
+        boolean hasUndo = calls.stream().anyMatch(c -> c.contains("--undo"));
+        assertThat(hasUndo).isTrue();
+    }
+
+    @Test
+    void 병합_거부_후_undo도_실패하면_메시지에_표시() {
+        replies.add(view("OPEN", true, SHA, "BLOCKED", null));
+        replies.add(new ProcessRunner.Result(0, ""));                                         // ready
+        replies.add(new ProcessRunner.Result(1, "X Pull request is not mergeable: required status check \"ci\" is expected."));
+        replies.add(new ProcessRunner.Result(1, "gh: NOT FOUND"));                            // ready --undo fails
+
+        assertThatThrownBy(() -> closer().merge(ref(), 5, SHA, "merge"))
+                .isInstanceOf(MergeRequestCloser.CloseRefusedException.class)
+                .hasMessageContaining("draft 원복 실패 — 수동으로 draft 전환 필요");
+    }
+
+    @Test
+    void 브랜치_삭제는_HTTP_404_만_있으면_예외() {
+        replies.add(new ProcessRunner.Result(1, "gh: Not Found (HTTP 404)"));
+        assertThatThrownBy(() -> closer().deleteBranch(ref(), "b")).isInstanceOf(java.io.IOException.class);
+    }
+
+    @Test
+    void draft_아닌_병합_거부는_undo_호출_안_함() {
+        replies.add(view("OPEN", false, SHA, "BLOCKED", null));
+        replies.add(new ProcessRunner.Result(1, "X Pull request is not mergeable: required status check \"ci\" is expected."));
+
+        assertThatThrownBy(() -> closer().merge(ref(), 5, SHA, "merge"))
+                .isInstanceOf(MergeRequestCloser.CloseRefusedException.class).hasMessageContaining("CI");
+        // calls는 view와 merge만 있어야 함
+        assertThat(calls).hasSize(2);
+        assertThat(calls.get(0)).containsExactly("pr", "view", "5", "--repo", "acme/widgets", "--json",
+                "state,isDraft,headRefOid,mergeStateStatus,mergeCommit");
+        assertThat(calls.get(1)).containsExactly("pr", "merge", "5", "--repo", "acme/widgets", "--merge",
+                "--match-head-commit", SHA);
+    }
+
+    @Test
+    void classify_BEHIND_상태() {
+        String result = GitHubPrCloser.classify("BEHIND", "error: not up to date");
+        assertThat(result).contains("base보다 뒤처짐");
+    }
+
+    @Test
+    void classify_head_branch_modified_출력() {
+        String result = GitHubPrCloser.classify("UNKNOWN", "error: head branch was modified");
+        assertThat(result).contains("head 불일치");
     }
 }

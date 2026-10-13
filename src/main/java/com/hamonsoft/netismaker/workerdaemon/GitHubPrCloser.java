@@ -48,6 +48,10 @@ public class GitHubPrCloser implements MergeRequestCloser {
     @Override
     public String merge(RepoRef ref, int number, String headSha, String method)
             throws CloseRefusedException, IOException, InterruptedException {
+        // Validate method
+        if (!("merge".equals(method) || "squash".equals(method) || "rebase".equals(method))) {
+            throw new IllegalArgumentException("method must be one of: merge, squash, rebase");
+        }
         String n = String.valueOf(number);
         JsonNode pr = view(ref, n);
         String state = pr.path("state").asText("");
@@ -72,11 +76,17 @@ public class GitHubPrCloser implements MergeRequestCloser {
             ProcessRunner.Result ready = gh.run(List.of("pr", "ready", n, "--repo", ref.path()));
             if (ready.exitCode() != 0) throw new IOException("draft 해제 실패: " + snippet(ready.stdout()));
         }
-        ProcessRunner.Result r = gh.run(List.of("pr", "merge", n, "--repo", ref.path(), "--" + method,
-                "--match-head-commit", headSha));
-        if (r.exitCode() != 0) {
-            if (wasDraft) undoReady(ref, n);
-            throw new CloseRefusedException(classify(mss, r.stdout()));
+        String undoMsg = "";
+        try {
+            ProcessRunner.Result r = gh.run(List.of("pr", "merge", n, "--repo", ref.path(), "--" + method,
+                    "--match-head-commit", headSha));
+            if (r.exitCode() != 0) {
+                if (wasDraft) undoMsg = undoReady(ref, n);
+                throw new CloseRefusedException(classify(mss, r.stdout()) + undoMsg);
+            }
+        } catch (IOException | InterruptedException e) {
+            if (wasDraft) undoMsg = undoReady(ref, n);
+            throw e;
         }
         return mergeOid(view(ref, n));
     }
@@ -87,7 +97,7 @@ public class GitHubPrCloser implements MergeRequestCloser {
                 "repos/" + ref.path() + "/git/refs/heads/" + branch));
         if (r.exitCode() == 0) return;
         String out = r.stdout() == null ? "" : r.stdout();
-        if (out.contains("Reference does not exist") || out.contains("HTTP 404") || out.contains("HTTP 422")) {
+        if (out.contains("Reference does not exist")) {
             log.info("브랜치 이미 없음: {}", branch);
             return;
         }
@@ -101,11 +111,23 @@ public class GitHubPrCloser implements MergeRequestCloser {
         return JSON.readTree(r.stdout());
     }
 
-    private void undoReady(RepoRef ref, String n) {
+    private String undoReady(RepoRef ref, String n) throws CloseRefusedException {
         try {
-            gh.run(List.of("pr", "ready", n, "--repo", ref.path(), "--undo"));
-        } catch (Exception e) {
-            log.warn("draft 원복 실패(무시): PR #{} {}", n, GitRemotes.mask(e.getMessage()));
+            ProcessRunner.Result r = gh.run(List.of("pr", "ready", n, "--repo", ref.path(), "--undo"));
+            if (r.exitCode() != 0) {
+                String msg = r.stdout() == null ? "" : r.stdout();
+                log.warn("draft 원복 실패: PR #{} {}", n, GitRemotes.mask(msg));
+                return " (draft 원복 실패 — 수동으로 draft 전환 필요)";
+            }
+            return "";
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            log.warn("draft 원복 중단: PR #{}", n);
+            return " (draft 원복 실패 — 수동으로 draft 전환 필요)";
+        } catch (IOException e) {
+            String msg = e.getMessage();
+            log.warn("draft 원복 실패: PR #{} {}", n, GitRemotes.mask(msg == null ? "" : msg));
+            return " (draft 원복 실패 — 수동으로 draft 전환 필요)";
         }
     }
 

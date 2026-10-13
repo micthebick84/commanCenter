@@ -253,13 +253,18 @@ async function retry() {
 }
 
 // 작업 종료 (스펙 2026-10-13) — 응답에 사용량이 없으므로 액션 뒤에는 항상 refresh()로 다시 읽는다.
+let closeInFlight = false
 async function closeAction(path: string, okMessage: string, body?: Record<string, string>) {
+  if (closeInFlight) return // 요청이 끝나기 전의 중복 클릭은 무시한다
+  closeInFlight = true
   try {
     await useApi(`/api/tasks/${taskId.value}/${path}`, { method: 'POST', body })
     $q.notify({ type: 'positive', message: okMessage })
     refresh()
   } catch (e: any) {
     $q.notify({ type: 'negative', message: e?.data?.message ?? '요청 실패' })
+  } finally {
+    closeInFlight = false
   }
 }
 
@@ -280,7 +285,7 @@ function rejectClose() {
     prompt: { model: '', type: 'text', isValid: (v: string) => v.trim().length > 0 },
     cancel: true,
     persistent: true,
-  }).onOk((reason: string) => closeAction('close/reject', '종료 반려', { reason }))
+  }).onOk((reason: string) => closeAction('close/reject', '종료 반려', { reason: reason.trim() }))
 }
 
 const liveLog = ref('')

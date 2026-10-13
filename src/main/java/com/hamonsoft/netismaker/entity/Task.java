@@ -130,6 +130,21 @@ public class Task {
     @Setter
     private String implementationLog;
 
+    /** 종료 단계 진행(끝난 CloseStep 콤마 목록). 종료 전에는 null. */
+    @Column(name = "close_progress", length = 100)
+    @Setter
+    private String closeProgress;
+
+    /** 종료 노트의 볼트 상대 경로(예: HamonSoft/netisMaker/제목-작업12-2026-10-13.md). */
+    @Column(name = "close_note_path", length = 500)
+    @Setter
+    private String closeNotePath;
+
+    /** 종료 시 병합 커밋 SHA. */
+    @Column(name = "merge_commit_sha", length = 40)
+    @Setter
+    private String mergeCommitSha;
+
     /** 작업 등록 시 선택된 레포 카탈로그의 전체 Git URL 스냅샷. */
     @Column(name = "git_url", columnDefinition = "TEXT")
     @Setter

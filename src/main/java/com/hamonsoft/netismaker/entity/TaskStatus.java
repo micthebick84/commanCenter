@@ -38,6 +38,13 @@ package com.hamonsoft.netismaker.entity;
  *   [디자인승인대기] ──(승인)──→ [구현대기]
  *   [디자인승인대기] ──(반려, 최대 3회)──→ [디자인대기]
  *
+ *  종료 단계 (배포 결과 확인 → 관리자 승인 → 워커가 병합·배포 중지·노트·브랜치 정리):
+ *   [배포완료|배포중단됨] ──(등록자 확인 완료)──→ [종료승인대기] ──(관리자 승인)──→ [종료대기]
+ *   [종료대기] ──(워커 claim, kind=CLOSE)──→ [종료중] ──┬→ [작업종료]
+ *                                                       └→ [종료실패] ──(관리자 재시도)──→ [종료대기]
+ *   [종료승인대기] ──(반려/철회)──→ 직전 상태(배포완료|배포중단됨)
+ *   [종료중] ──(stale 회수)──→ [종료대기]  (단계 진행은 task.close_progress에 남아 재claim은 남은 단계부터)
+ *
  *  취소:
  *   [작업대기|승인대기] ──→ [취소됨] (본인 또는 admin, 두 상태 한정)
  *
@@ -68,6 +75,11 @@ public enum TaskStatus {
     INTERVIEWING("인터뷰중"),
     INTERVIEW_INPUT("입력대기"),
     INTERVIEW_REVIEW("플랜승인대기"),
+    CLOSE_REVIEW("종료승인대기"),
+    CLOSE_PENDING("종료대기"),
+    CLOSING("종료중"),
+    CLOSED("작업종료"),
+    CLOSE_FAILED("종료실패"),
     CANCELLED("취소됨");
 
     private final String dbValue;

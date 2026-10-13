@@ -18,7 +18,7 @@ const base = {
 }
 
 describe('TaskCardCompact (스펙 2026-09-06 §4.1 카드)', () => {
-  it('제목·상태 칩·4세그먼트(분석 done·디자인 done·구현 current·배포 future)·메타·PR 링크를 그린다', () => {
+  it('제목·상태 칩·5세그먼트(분석 done·디자인 done·구현 current·배포 future·종료 future)·메타·PR 링크를 그린다', () => {
     const w = mount(TaskCardCompact, { props: { task: base, isAdmin: false } })
     expect(w.text()).toContain('#18')
     expect(w.text()).toContain('장비 현황 화면 개발')
@@ -28,6 +28,7 @@ describe('TaskCardCompact (스펙 2026-09-06 §4.1 카드)', () => {
       'done',
       'done',
       'current',
+      'future',
       'future',
     ])
     expect(w.text()).toContain('Netis7.0')
@@ -93,6 +94,7 @@ describe('TaskCardCompact (스펙 2026-09-06 §4.1 카드)', () => {
       'skipped',
       'done',
       'current',
+      'future',
     ])
     const link = w.find('a[href="https://task-13.micthebick.dev"]')
     expect(link.exists()).toBe(true)

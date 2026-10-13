@@ -113,7 +113,7 @@ WORKER_ID=mac-worker-2 ./gradlew bootRun --args='--spring.profiles.active=worker
 - **확정**: `/interviews/{sid}/confirm`이 `TaskAnalysis`를 프리필하고(approved=true) 구현/디자인 큐로 보냄.
 - **구현**: 같은 워커가 APPROVED를 claim → `WorktreeService.create` → `claude -p` (worktree에서) → `git commit/push` → `gh pr create --draft` → `task.status=PR_CREATED` (+ pr_url/pr_number/head_branch/head_sha 저장).
 - **실패 시**: `IMPLEMENTATION_FAILED` + 사유. 부분 진행분(브랜치까지 push 등)은 보존, worktree도 디버그용 보존.
-- **종료**(`TaskCloseService`/`TaskCloseController`, 워커 `TaskCloser`): ① PR/MR 병합(`head_sha` 고정, `CLOSE_MERGE_METHOD`) → ② 배포 중지 → ③ `claude -p --tools "" --strict-mcp-config`로 노트 본문만 만들고 워커가 `CLOSE_OBSIDIAN_VAULT_DIR`/`HamonSoft/netisMaker/`에 직접 씀 + 진행상황 노트 추기 → ④ 원격 브랜치 삭제·로컬 worktree 정리. 단계는 `task.close_progress`에 쌓이고 재시도(관리자)·stale 재큐는 남은 단계부터. 종료 4상태는 소프트 삭제 금지 + GC 보호 목록 포함. wiki ingest·compile은 제품 밖 예약 작업(평일 18:30). 배포 순서: 워커 → API(V26) → 프론트.
+- **종료**(`TaskCloseService`/`TaskCloseController`, 워커 `TaskCloser`): ① PR/MR 병합(`head_sha` 고정, `CLOSE_MERGE_METHOD`) → ② 배포 중지 → ③ `claude -p --tools "" --strict-mcp-config`로 노트 본문만 만들고 워커가 `CLOSE_OBSIDIAN_VAULT_DIR`/`HamonSoft/netisMaker/`에 직접 씀 + 진행상황 노트 추기 → ④ 원격 브랜치 삭제·로컬 worktree 정리. 단계는 `task.close_progress`에 쌓이고 재시도(관리자)·stale 재큐는 남은 단계부터. 종료 4상태는 소프트 삭제 금지 + GC 보호 목록 포함. 노트 폴더는 `CLOSE_NOTE_FOLDER`로 바꿀 수 있고, 프론트는 노트 링크용 볼트 이름 `NUXT_PUBLIC_OBSIDIAN_VAULT`가 빌드/실행 시 필요. wiki ingest·compile은 제품 밖 예약 작업(평일 18:30). 배포 순서: 워커 → API(V26) → 프론트.
 
 ## 구현 단계 워커 사전 조건
 

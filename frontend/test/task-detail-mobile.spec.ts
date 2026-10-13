@@ -234,6 +234,24 @@ describe('pages/tasks/[id] — 모바일 (스펙 2026-09-06 §4.2)', () => {
     w.unmount()
   })
 
+  it('하단 바 ⋮ 메뉴에 병합 전 종료실패의 "종료 취소"가 있다(관리자) — 카드 버튼은 숨는다', async () => {
+    authStub.isAdmin = true
+    useApiMock.mockResolvedValue({
+      ...baseTask, status: 'CLOSE_FAILED', statusLabel: '종료실패', failureReason: 'head 불일치',
+      close: { progress: [], mergeCommitSha: null, notePath: null },
+    })
+    await setViewportWidth(390)
+    const w = mount(PageWrapper, mountOpts)
+    await flushPromises()
+    expect(w.find('[data-test="close-cancel"]').exists()).toBe(false)
+    await w.find('[data-test="bar-more"]').trigger('click')
+    await flushPromises()
+    ;(document.body.querySelector('[data-test="bar-more-close-cancel"]') as HTMLElement).click()
+    await flushPromises()
+    expect(document.body.textContent).toContain('병합 전 단계에서 실패한 종료를 취소하고 배포 상태로 되돌립니다.')
+    w.unmount()
+  })
+
   it('진행 이력 아코디언 헤더에 건수를 표시한다 — 리뷰 파인딩 7', async () => {
     authStub.isAdmin = true
     useApiMock.mockImplementation((url: string) => {

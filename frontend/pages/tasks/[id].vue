@@ -278,6 +278,21 @@ async function approveClose() {
   await closeAction('close/approve', '종료 큐 등록')
 }
 
+async function retryClose() {
+  if (!(await confirmDialog($q, '남은 종료 단계(병합 포함 가능)를 다시 실행합니다. 병합은 되돌릴 수 없습니다.', { title: '종료 재시도' }))) return
+  await closeAction('close/retry', '종료 재시도 큐 등록')
+}
+
+// 병합 전(MERGED 없음) 종료실패만 취소할 수 있다 — 서버도 같은 규칙으로 409를 낸다
+const canCancelClose = computed(
+  () => auth.isAdmin && task.value?.status === 'CLOSE_FAILED' && !(task.value.close?.progress ?? []).includes('MERGED'),
+)
+
+async function cancelClose() {
+  if (!(await confirmDialog($q, '병합 전 단계에서 실패한 종료를 취소하고 배포 상태로 되돌립니다.', { title: '종료 취소' }))) return
+  await closeAction('close/cancel', '종료 취소')
+}
+
 function rejectClose() {
   $q.dialog({
     title: '종료 반려',
@@ -411,7 +426,7 @@ function onAction(kind: NextActionKind) {
     case 'request-close': return requestClose()
     case 'withdraw-close': return closeAction('close-request/withdraw', '종료 요청 철회')
     case 'approve-close': return approveClose()
-    case 'retry-close': return closeAction('close/retry', '종료 재시도 큐 등록')
+    case 'retry-close': return retryClose()
   }
 }
 </script>
@@ -469,7 +484,7 @@ function onAction(kind: NextActionKind) {
         </div>
       </q-card>
 
-      <!-- 작업 종료 카드 — 데스크톱·모바일 공용(진행 카드 바로 아래). 반려 버튼은 모바일 하단 더 보기 메뉴에도 있다. -->
+      <!-- 작업 종료 카드 — 데스크톱·모바일 공용(진행 카드 바로 아래). 반려·종료 취소 버튼은 모바일에서는 하단 더 보기 메뉴로 간다. -->
       <q-card v-if="task.close" flat bordered class="q-mb-md" data-test="close-card">
         <q-card-section class="row items-center" style="gap: 8px">
           <q-icon name="task_alt" color="primary" size="sm" />
@@ -483,6 +498,15 @@ function onAction(kind: NextActionKind) {
             label="반려"
             data-test="close-reject"
             @click="rejectClose"
+          />
+          <q-btn
+            v-if="!$q.screen.lt.md && canCancelClose"
+            outline
+            color="warning"
+            icon="undo"
+            label="종료 취소"
+            data-test="close-cancel"
+            @click="cancelClose"
           />
         </q-card-section>
         <q-separator />
@@ -574,6 +598,10 @@ function onAction(kind: NextActionKind) {
                   <q-item v-if="auth.isAdmin && task.status === 'CLOSE_REVIEW'" v-close-popup clickable class="text-negative" data-test="bar-more-close-reject" @click="rejectClose">
                     <q-item-section avatar><q-icon name="block" color="negative" /></q-item-section>
                     <q-item-section>종료 반려</q-item-section>
+                  </q-item>
+                  <q-item v-if="canCancelClose" v-close-popup clickable class="text-warning" data-test="bar-more-close-cancel" @click="cancelClose">
+                    <q-item-section avatar><q-icon name="undo" color="warning" /></q-item-section>
+                    <q-item-section>종료 취소</q-item-section>
                   </q-item>
                   <q-item v-if="isInterviewPhase && task.interviewSessionId" v-close-popup clickable data-test="bar-more-interview" @click="onAction('open-interview')">
                     <q-item-section avatar><q-icon name="forum" /></q-item-section>

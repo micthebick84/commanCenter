@@ -49,6 +49,7 @@
                                                                                      └→ [종료실패]
 [종료승인대기] ──(관리자 반려 / 등록자 철회)──→ 직전 상태(배포완료|배포중단됨)
 [종료실패] ──(관리자 재시도)──→ [종료대기]
+[종료실패] ──(관리자 종료 취소, MERGED 전만)──→ 직전 상태(배포완료|배포중단됨)
 [종료중] ──(stale 복구)──→ [종료대기]
 ```
 
@@ -109,6 +110,7 @@
 | `POST /api/tasks/{id}/close/approve` | ADMIN | 종료승인대기 → 종료대기 |
 | `POST /api/tasks/{id}/close/reject` (바디 `reason`) | ADMIN | 종료승인대기 → 직전 상태 (반려 사유를 이력에 기록) |
 | `POST /api/tasks/{id}/close/retry` | ADMIN | 종료실패 → 종료대기 (`close_failure_reason` 비움, `close_progress` 유지) |
+| `POST /api/tasks/{id}/close/cancel` | ADMIN | 종료실패 → 직전 상태 (`close_progress`에 `MERGED`가 없을 때만 — 실패 사유·진행 비움, 이력 "종료 취소(병합 전)"; 병합 뒤면 409, 재시도로 마무리) |
 
 워커 측: claim 응답 `kind=CLOSE` + `closeProgress` + `closeContext`, `POST /worker/tasks/{id}/close-progress`(X-Worker-API-Key), 결과 보고에 `작업종료`/`종료실패` 분기.
 

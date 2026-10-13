@@ -79,6 +79,47 @@ describe('pages/tasks/[id] — 작업 종료 (스펙 2026-10-13 §6)', () => {
     w.unmount()
   })
 
+  it('병합 전 CLOSE_FAILED: 관리자에게 "종료 취소"가 보이고, 확인 뒤 close/cancel을 POST한다 — 병합 뒤에는 안 보인다', async () => {
+    authStub.isAdmin = true
+    let w = await mountWith({
+      ...baseTask, status: 'CLOSE_FAILED', statusLabel: '종료실패', failureReason: 'head 불일치', deployment, close: emptyClose,
+    })
+    const btn = w.find('[data-test="close-cancel"]')
+    expect(btn.exists()).toBe(true)
+    useApiMock.mockClear()
+    await btn.trigger('click')
+    await flushPromises()
+    expect(document.body.textContent).toContain('병합 전 단계에서 실패한 종료를 취소하고 배포 상태로 되돌립니다.')
+    ;(document.body.querySelector('[data-test="confirm-dialog-ok"]') as HTMLElement).click()
+    await flushPromises()
+    expect(useApiMock).toHaveBeenCalledWith('/api/tasks/42/close/cancel', { method: 'POST', body: undefined })
+    w.unmount()
+    document.body.innerHTML = ''
+
+    w = await mountWith({
+      ...baseTask, status: 'CLOSE_FAILED', statusLabel: '종료실패', failureReason: '노트 실패', deployment,
+      close: { progress: ['MERGED'], mergeCommitSha: 'abcdef1234', notePath: null },
+    })
+    expect(w.find('[data-test="close-cancel"]').exists()).toBe(false)
+    w.unmount()
+  })
+
+  it('관리자 종료 재시도: 병합이 되돌릴 수 없다는 확인 뒤 close/retry를 POST한다', async () => {
+    authStub.isAdmin = true
+    const w = await mountWith({
+      ...baseTask, status: 'CLOSE_FAILED', statusLabel: '종료실패', failureReason: 'CI 대기', deployment, close: emptyClose,
+    })
+    useApiMock.mockClear()
+    await w.find('[data-test="next-action-primary"]').trigger('click')
+    await flushPromises()
+    expect(useApiMock).not.toHaveBeenCalledWith('/api/tasks/42/close/retry', expect.anything())
+    expect(document.body.textContent).toContain('남은 종료 단계(병합 포함 가능)를 다시 실행합니다. 병합은 되돌릴 수 없습니다.')
+    ;(document.body.querySelector('[data-test="confirm-dialog-ok"]') as HTMLElement).click()
+    await flushPromises()
+    expect(useApiMock).toHaveBeenCalledWith('/api/tasks/42/close/retry', { method: 'POST', body: undefined })
+    w.unmount()
+  })
+
   it('CLOSED: 노트 경로가 obsidian:// 링크로 나온다(볼트 이름 설정 시)', async () => {
     useRuntimeConfigMock.mockImplementation(() => ({
       public: { apiBaseUrl: '/api', pollIntervalMs: 5000, obsidianVault: 'Obsidian Vault' },

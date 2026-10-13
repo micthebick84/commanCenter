@@ -81,8 +81,29 @@ describe('pages/tasks — 모바일 리스트 (스펙 2026-09-06 §4.1)', () => 
     await flushPromises()
     ;(document.body.querySelector('[data-test="sheet-move"]') as HTMLElement).click()
     await flushPromises()
+    expect(document.body.textContent).not.toContain('되돌릴 수 없습니다')
     await confirmOk()
     expect(useApiMock).toHaveBeenCalledWith('/api/tasks/18/deploy', { method: 'POST' })
+    w.unmount()
+  })
+
+  it('⋮ → 시트의 종료 전이 확인창은 되돌릴 수 없다는 문구를 덧붙인다 — 다른 전이는 그대로', async () => {
+    await setViewportWidth(390)
+    const closeTasks = [t(30, 'CLOSE_REVIEW', '종료승인대기', '2026-08-24T03:00:00Z'), tasks[1]]
+    useApiMock.mockImplementation((url: string) =>
+      url.startsWith('/api/tasks')
+        ? Promise.resolve({ content: closeTasks, totalElements: 2, totalPages: 1 })
+        : Promise.resolve(null),
+    )
+    const w = mount(PageWrapper, { attachTo: document.body })
+    await flushPromises()
+    await w.findAll('[data-test="card-menu"]')[0]!.trigger('click') // #30 종료승인대기(확인 필요 그룹 첫 카드)
+    await flushPromises()
+    ;(document.body.querySelector('[data-test="sheet-move"]') as HTMLElement).click()
+    await flushPromises()
+    expect(document.body.textContent).toContain('작업 #30 — 종료 승인 — 병합·배포 중지·정리을(를) 실행할까요? PR 병합·배포 중지·브랜치 삭제는 되돌릴 수 없습니다.')
+    await confirmOk()
+    expect(useApiMock).toHaveBeenCalledWith('/api/tasks/30/close/approve', { method: 'POST' })
     w.unmount()
   })
 

@@ -136,7 +136,9 @@ async function onDrop(stageKey: string, e: DragEvent) {
  * 목업과 달리 확인을 한 번 받는다 — 승인 계열은 목업대로 바로 실행.
  */
 async function applyMove(id: number, move: MoveDef) {
-  if (move.confirm && !(await confirmDialog($q, `작업 #${id} — ${move.label}을(를) 실행할까요?`, { ok: move.label }))) return
+  // 종료 전이(close/approve·close/retry)는 병합이 끼어 있어 되돌릴 수 없음을 확인창에 밝힌다
+  const warn = move.path.startsWith('close/') ? ' PR 병합·배포 중지·브랜치 삭제는 되돌릴 수 없습니다.' : ''
+  if (move.confirm && !(await confirmDialog($q, `작업 #${id} — ${move.label}을(를) 실행할까요?${warn}`, { ok: move.label }))) return
   moving.value = true
   try {
     await useApi(`/api/tasks/${id}/${move.path}`, { method: 'POST' })

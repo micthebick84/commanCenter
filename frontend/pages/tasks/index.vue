@@ -419,6 +419,11 @@ function closeDialog() {
           { label: '구현중', value: 'IMPLEMENTING' },
           { label: 'PR생성', value: 'PR_CREATED' },
           { label: '구현실패', value: 'IMPLEMENTATION_FAILED' },
+          { label: '종료승인대기', value: 'CLOSE_REVIEW' },
+          { label: '종료대기', value: 'CLOSE_PENDING' },
+          { label: '종료중', value: 'CLOSING' },
+          { label: '종료실패', value: 'CLOSE_FAILED' },
+          { label: '작업종료', value: 'CLOSED' },
           { label: '취소됨', value: 'CANCELLED' },
         ]"
         emit-value

@@ -36,7 +36,9 @@ const moveIcon = computed(() =>
     ? 'rocket_launch'
     : move.value?.path === 'undeploy'
       ? 'stop'
-      : 'check_circle',
+      : move.value?.path.startsWith('close/')
+        ? 'task_alt'
+        : 'check_circle',
 )
 </script>
 

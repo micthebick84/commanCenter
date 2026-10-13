@@ -13,6 +13,7 @@ import { stageSteps, nextAction, ageOf, type NextActionKind } from '~/composable
 import { renderMarkdown } from '~/composables/useMarkdown'
 import { mrNoun, mrRef } from '~/composables/mergeRequestLabel'
 import { downloadAttachment as downloadBlob } from '~/composables/attachmentDownload'
+import { closeSteps, obsidianLink, type CloseView } from '~/composables/taskClose'
 
 definePageMeta({ layout: 'default' })
 
@@ -109,6 +110,7 @@ interface TaskResponse {
   design: DesignView | null
   implementation: ImplementationView | null
   deployment: DeploymentView | null
+  close: CloseView | null
   attachments: AttachmentMeta[]
   stageUsage: StageUsageView[]
   totalCostUsd: number | null
@@ -250,6 +252,37 @@ async function retry() {
   }
 }
 
+// 작업 종료 (스펙 2026-10-13) — 응답에 사용량이 없으므로 액션 뒤에는 항상 refresh()로 다시 읽는다.
+async function closeAction(path: string, okMessage: string, body?: Record<string, string>) {
+  try {
+    await useApi(`/api/tasks/${taskId.value}/${path}`, { method: 'POST', body })
+    $q.notify({ type: 'positive', message: okMessage })
+    refresh()
+  } catch (e: any) {
+    $q.notify({ type: 'negative', message: e?.data?.message ?? '요청 실패' })
+  }
+}
+
+async function requestClose() {
+  if (!(await confirmDialog($q, '배포 결과를 확인했나요? 관리자가 승인하면 PR을 main에 병합하고, 배포를 중지하고, 브랜치를 삭제합니다. 병합은 되돌릴 수 없습니다.', { title: '종료 요청' }))) return
+  await closeAction('close-request', '종료 요청 등록')
+}
+
+async function approveClose() {
+  if (!(await confirmDialog($q, 'PR을 main에 병합하고, 배포를 중지하고, 옵시디언 노트를 쓴 뒤 브랜치를 삭제합니다. 되돌릴 수 없습니다.', { title: '종료 승인' }))) return
+  await closeAction('close/approve', '종료 큐 등록')
+}
+
+function rejectClose() {
+  $q.dialog({
+    title: '종료 반려',
+    message: '반려 사유를 입력하세요 (등록자에게 보입니다)',
+    prompt: { model: '', type: 'text', isValid: (v: string) => v.trim().length > 0 },
+    cancel: true,
+    persistent: true,
+  }).onOk((reason: string) => closeAction('close/reject', '종료 반려', { reason }))
+}
+
 const liveLog = ref('')
 let logSource: EventSource | null = null
 
@@ -336,7 +369,14 @@ async function downloadAttachment(att: Pick<AttachmentMeta, 'id' | 'fileName'>) 
 
 // 진행 스테퍼 + 다음 할 일 배너 (스펙 2026-09-06 §4.2, 결정 6: 데스크톱도 노출) — 데스크톱/모바일 공용.
 const steps = computed(() => (task.value ? stageSteps(task.value) : []))
-const action = computed(() => (task.value ? nextAction(task.value, auth.isAdmin) : null))
+// requesterId는 서버 AuthContext.requireUserId와 같은 값(JWT username → sub → user_id)이다.
+// 숫자 user_id(auth.userId)와 비교하면 'admin' 같은 username 계정에서 항상 어긋난다.
+const myRequesterId = computed(() => auth.me?.username ?? (auth.me?.user_id != null ? String(auth.me.user_id) : null))
+const isOwner = computed(() => !!task.value && myRequesterId.value != null && task.value.requesterId === myRequesterId.value)
+const action = computed(() => (task.value ? nextAction(task.value, auth.isAdmin, isOwner.value) : null))
+const closeStepList = computed(() => (task.value?.close ? closeSteps(task.value.close, task.value.status) : []))
+const obsidianVault = useRuntimeConfig().public.obsidianVault as string
+const noteHref = computed(() => obsidianLink(obsidianVault, task.value?.close?.notePath ?? null))
 const stepCaption = computed(() => {
   const t = task.value
   if (!t) return ''
@@ -363,6 +403,10 @@ function onAction(kind: NextActionKind) {
     case 'open-url': return void window.open(t.deployment?.deployUrl ?? '', '_blank', 'noopener')
     case 'open-interview': return scrollTo('interview-card')
     case 'review-design': return scrollTo('design-card')
+    case 'request-close': return requestClose()
+    case 'withdraw-close': return closeAction('close-request/withdraw', '종료 요청 철회')
+    case 'approve-close': return approveClose()
+    case 'retry-close': return closeAction('close/retry', '종료 재시도 큐 등록')
   }
 }
 </script>
@@ -418,6 +462,47 @@ function onAction(kind: NextActionKind) {
             </TaskNextAction>
           </div>
         </div>
+      </q-card>
+
+      <!-- 작업 종료 카드 — 데스크톱·모바일 공용(진행 카드 바로 아래). 반려 버튼은 모바일 하단 더 보기 메뉴에도 있다. -->
+      <q-card v-if="task.close" flat bordered class="q-mb-md" data-test="close-card">
+        <q-card-section class="row items-center" style="gap: 8px">
+          <q-icon name="task_alt" color="primary" size="sm" />
+          <div class="text-h6">작업 종료</div>
+          <q-space />
+          <q-btn
+            v-if="!$q.screen.lt.md && auth.isAdmin && task.status === 'CLOSE_REVIEW'"
+            outline
+            color="negative"
+            icon="block"
+            label="반려"
+            data-test="close-reject"
+            @click="rejectClose"
+          />
+        </q-card-section>
+        <q-separator />
+        <q-card-section>
+          <div class="row" style="gap: 12px">
+            <div v-for="s in closeStepList" :key="s.key" class="row items-center" style="gap: 4px" :data-test="`close-step-${s.key}`">
+              <q-icon
+                :name="s.state === 'done' ? 'check_circle' : s.state === 'failed' ? 'error' : s.state === 'current' ? 'autorenew' : 'radio_button_unchecked'"
+                :color="s.state === 'done' ? 'positive' : s.state === 'failed' ? 'negative' : s.state === 'current' ? 'orange' : 'grey-5'"
+              />
+              <span>{{ s.label }}</span>
+            </div>
+          </div>
+          <div v-if="task.close.mergeCommitSha" class="q-mt-sm text-caption text-grey-8">
+            병합 커밋 <code>{{ task.close.mergeCommitSha.slice(0, 7) }}</code>
+          </div>
+          <div v-if="task.close.notePath" class="q-mt-xs text-caption text-grey-8" data-test="close-note">
+            옵시디언 노트
+            <a v-if="noteHref" :href="noteHref">{{ task.close.notePath }}</a>
+            <span v-else>{{ task.close.notePath }}</span>
+          </div>
+          <div v-if="usageByStage['CLOSE']" class="q-mt-xs text-caption text-grey-7">
+            노트 생성 비용 {{ fmtCost(usageByStage['CLOSE'].costUsd) }}
+          </div>
+        </q-card-section>
       </q-card>
 
       <template v-if="$q.screen.lt.md">
@@ -480,6 +565,10 @@ function onAction(kind: NextActionKind) {
                   <q-item v-if="auth.isAdmin && ['DEPLOYED','DEPLOY_LOST'].includes(task.status)" v-close-popup clickable class="text-negative" data-test="bar-more-undeploy" @click="undeploy">
                     <q-item-section avatar><q-icon name="stop" color="negative" /></q-item-section>
                     <q-item-section>중지</q-item-section>
+                  </q-item>
+                  <q-item v-if="auth.isAdmin && task.status === 'CLOSE_REVIEW'" v-close-popup clickable class="text-negative" data-test="bar-more-close-reject" @click="rejectClose">
+                    <q-item-section avatar><q-icon name="block" color="negative" /></q-item-section>
+                    <q-item-section>종료 반려</q-item-section>
                   </q-item>
                   <q-item v-if="isInterviewPhase && task.interviewSessionId" v-close-popup clickable data-test="bar-more-interview" @click="onAction('open-interview')">
                     <q-item-section avatar><q-icon name="forum" /></q-item-section>

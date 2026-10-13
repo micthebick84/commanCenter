@@ -68,8 +68,20 @@ public class TaskCloser {
 
     /** 단계 실패 — 메시지는 그대로 failure_reason이 된다. */
     static final class StepFailed extends Exception {
+        private final WorkerResultRequest.UsageReport usage;
+
         StepFailed(String message) {
+            this(message, null);
+        }
+
+        /** claude가 이미 돈 뒤의 실패 - 쓴 사용량을 종료실패 보고에 실어 보낸다. */
+        StepFailed(String message, WorkerResultRequest.UsageReport usage) {
             super(message);
+            this.usage = usage;
+        }
+
+        WorkerResultRequest.UsageReport usage() {
+            return usage;
         }
     }
 
@@ -110,7 +122,7 @@ public class TaskCloser {
         } catch (StepFailed e) {
             log.warn("작업 종료 실패: task={} {}", task.id(), GitRemotes.mask(e.getMessage()));
             reporter.reportTerminal(task.id(), WorkerResultRequest.closeFailed(props.id(),
-                    GitRemotes.mask(e.getMessage()), usage));
+                    GitRemotes.mask(e.getMessage()), e.usage() != null ? e.usage() : usage));
         }
     }
 
@@ -133,7 +145,8 @@ public class TaskCloser {
                 return claude.execWithoutTools(CloseNotePrompt.render(closeProps.notePromptTemplate(), task, mergeSha),
                         work.toFile(), closeProps.noteTimeout(), closeProps.noteModel());
             } finally {
-                RepoCacheCleanupJob.deleteTree(work);
+                RepoCacheCleanupJob.DeleteResult d = RepoCacheCleanupJob.deleteTree(work);
+                if (d.failures() > 0) log.warn("노트 작업 폴더 정리 실패 {}건: {}", d.failures(), work);
             }
         });
         WorkerResultRequest.UsageReport usage = usageOf(r.usage());
@@ -141,11 +154,16 @@ public class TaskCloser {
         if (r.exitCode() != 0 || CloseNoteWriter.clean(r.stdout()).isBlank()) {
             String out = r.stdout() == null ? "" : r.stdout();
             throw new StepFailed("노트 생성 실패(exit=" + r.exitCode() + "): "
-                    + GitRemotes.mask(out.substring(0, Math.min(300, out.length()))));
+                    + GitRemotes.mask(out.substring(0, Math.min(300, out.length()))), usage);
         }
-        CloseNoteWriter.Written w = step("노트 저장", () -> noteWriter.write(vault, closeProps.noteFolder(),
-                new CloseNoteWriter.NoteMeta(task.id(), task.title(), task.prUrl(), mergeSha),
-                r.stdout(), LocalDate.now(clock)));
+        CloseNoteWriter.Written w;
+        try {
+            w = step("노트 저장", () -> noteWriter.write(vault, closeProps.noteFolder(),
+                    new CloseNoteWriter.NoteMeta(task.id(), task.title(), task.prUrl(), mergeSha),
+                    r.stdout(), LocalDate.now(clock)));
+        } catch (StepFailed e) {
+            throw new StepFailed(e.getMessage(), usage);
+        }
         return new NoteOutcome(w.relativePath(), usage);
     }
 

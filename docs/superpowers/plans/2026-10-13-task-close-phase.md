@@ -1015,6 +1015,699 @@ class WorkerServiceCloseTest {
 }
 ```
 
+`StaleTaskRecoveryJobTest.java`에 추가 — 기존 테스트의 "배포중지중 stale → 재큐" 케이스를 찾아 같은 틀로:
+```java
+    @Test
+    void 종료중_stale은_종료대기로_재큐한다() {
+        // 기존 UNDEPLOYING 재큐 테스트를 복사해 상태만 CLOSING으로, 기대값을 CLOSE_PENDING으로 바꾼다.
+        // claimedAt = now - 31분 (close-stale-threshold-minutes 기본 30 초과), heartbeat는 살아 있음.
+    }
+```
+> 이 테스트의 본문은 `grep -n "UNDEPLOY" src/test/java/com/hamonsoft/netismaker/service/StaleTaskRecoveryJobTest.java`로 찾은 기존 케이스를 그대로 복사해 `UNDEPLOYING→CLOSING`, `UNDEPLOY_PENDING→CLOSE_PENDING`, 시간 임계만 바꿔 채운다(필드 주입은 `ReflectionTestUtils.setField(job, "closeStaleThresholdMinutes", 30)`).
+
+`WorkerResultRequestJsonTest.java`에 추가:
+```java
+    @Test
+    void closed와_closeFailed_팩토리() {
+        assertThat(WorkerResultRequest.closed("w", null).status()).isEqualTo(TaskStatus.CLOSED);
+        WorkerResultRequest f = WorkerResultRequest.closeFailed("w", "사유 https://oauth2:tok@github.com/x", null);
+        assertThat(f.status()).isEqualTo(TaskStatus.CLOSE_FAILED);
+        assertThat(f.masked().failureReason()).doesNotContain("tok");
+    }
+```
+
+`TaskCloseFlowIntegrationTest.java`에 추가(GC 보호 — 워커 API-key 헬퍼는 `InterviewWorkerApiIntegrationTest`의 관용구):
+```java
+    @Test
+    void 종료_진행중_작업도_배포_보호_목록에_있다() throws Exception {
+        for (TaskStatus s : List.of(TaskStatus.CLOSE_REVIEW, TaskStatus.CLOSE_PENDING, TaskStatus.CLOSING, TaskStatus.CLOSE_FAILED)) {
+            Task t = Task.create("owner/repo", "main", s.name(), "d", "alice", 3, List.of(), "claude-opus-5-5", "high");
+            t.setStatus(s);
+            taskRepo.save(t);
+        }
+        mvc.perform(get("/worker/deployed-tasks").header("X-Worker-API-Key", apiKey))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.length()").value(4));
+    }
+```
+
+- [ ] **Step 2: 실패 확인**
+
+Run: `JAVA_HOME=C:/Users/mic/.jdks/jdk-21.0.12.1+1 ./gradlew test --tests "WorkerServiceCloseTest" --tests "WorkerResultRequestJsonTest"`
+Expected: 컴파일 실패
+
+- [ ] **Step 3: 구현**
+
+`CloseContext.java`:
+```java
+package com.hamonsoft.netismaker.dto;
+
+import com.hamonsoft.netismaker.entity.Task;
+import com.hamonsoft.netismaker.entity.TaskAnalysis;
+import com.hamonsoft.netismaker.entity.TaskStageUsage;
+import com.hamonsoft.netismaker.entity.TaskStatusHistory;
+
+import java.math.BigDecimal;
+import java.time.OffsetDateTime;
+import java.util.List;
+
+/**
+ * 종료 노트 재료 (스펙 2026-10-13 §4 ③). 워커는 이것만으로 노트 프롬프트를 만든다 — DB를 직접 읽지 않는다.
+ * 긴 본문은 여기서 자른다(프롬프트 크기 상한 겸 claim 응답 크기 상한).
+ */
+public record CloseContext(
+        String planMarkdown,
+        String analysisMarkdown,
+        String implementationTail,
+        String mergeCommitSha,
+        String deployUrl,
+        OffsetDateTime deployedAt,
+        List<HistoryLine> history,
+        List<UsageLine> usage
+) {
+    static final int PLAN_MAX = 12_000;
+    static final int ANALYSIS_MAX = 8_000;
+    static final int IMPL_TAIL_MAX = 8_000;
+
+    public record HistoryLine(OffsetDateTime at, String from, String to, String actor, String reason) {}
+
+    public record UsageLine(String stage, BigDecimal costUsd, long inputTokens, long outputTokens) {}
+
+    /** @param historyOldestFirst 시간순(오래된 것 먼저) */
+    public static CloseContext of(Task t, String planMarkdown, TaskAnalysis a,
+                                  List<TaskStatusHistory> historyOldestFirst, List<TaskStageUsage> usage) {
+        return new CloseContext(
+                head(planMarkdown, PLAN_MAX),
+                a == null ? null : head(a.getMarkdownResult(), ANALYSIS_MAX),
+                tail(t.getImplementationLog(), IMPL_TAIL_MAX),
+                t.getMergeCommitSha(),
+                t.getDeployUrl(),
+                t.getDeployedAt(),
+                historyOldestFirst.stream().map(h -> new HistoryLine(h.getAt(), h.getFromStatus(), h.getToStatus(),
+                        h.getActorId(), h.getReason())).toList(),
+                usage.stream().map(u -> new UsageLine(u.getStage(), u.getCostUsd(),
+                        u.getInputTokens(), u.getOutputTokens())).toList());
+    }
+
+    static String head(String s, int max) {
+        if (s == null) return null;
+        return s.length() <= max ? s : s.substring(0, max) + "\n…(이하 생략)";
+    }
+
+    static String tail(String s, int max) {
+        if (s == null) return null;
+        return s.length() <= max ? s : "(앞부분 생략)…\n" + s.substring(s.length() - max);
+    }
+}
+```
+> `TaskStatusHistory`에 `getAt()`/`getActorId()`/`getReason()` getter가 있는지(`@Getter` — 있음) 확인.
+
+`CloseProgressRequest.java`:
+```java
+package com.hamonsoft.netismaker.dto;
+
+import com.hamonsoft.netismaker.entity.CloseStep;
+import jakarta.validation.constraints.NotNull;
+
+/** 워커 종료 작업의 단계 완료 보고 (스펙 2026-10-13 §4). 단계별 값은 해당 단계에서만 의미가 있다. */
+public record CloseProgressRequest(
+        @NotNull String workerId,
+        @NotNull CloseStep step,
+        /** MERGED: 병합 커밋 SHA(호스트가 알려주지 않으면 null) */
+        String mergeCommitSha,
+        /** NOTE_WRITTEN: 볼트 상대 경로 */
+        String notePath
+) {}
+```
+
+`WorkerTaskResponse.java`:
+1. `String planMarkdown` 뒤에 컴포넌트 추가:
+```java
+        String planMarkdown,
+        /** CLOSE 전용: 병합할 PR/MR 번호(GitLab은 iid)와 URL. */
+        Integer prNumber,
+        String prUrl,
+        /** CLOSE 전용: 이미 끝난 종료 단계(CloseStep 콤마 목록). 재claim이면 non-null. */
+        String closeProgress,
+        /** CLOSE 전용: 노트 재료. */
+        CloseContext closeContext
+```
+2. `Kind`에 `CLOSE` 추가: `public enum Kind { ANALYSIS, IMPLEMENTATION, DEPLOY, UNDEPLOY, DESIGN, CLOSE }`.
+3. 23인자 호환 생성자 추가(기존 팩토리·테스트의 `new WorkerTaskResponse(…23개…)`가 그대로 컴파일되도록):
+```java
+    /** CLOSE 도입 전 23개 인자 생성자 — 종료 전용 필드는 null. Jackson은 정규 생성자를 쓴다. */
+    public WorkerTaskResponse(Long id, String githubRepo, String githubBranch, String title, String description,
+                              Kind kind, List<TaskMcpSpec> mcpsExtra, String analysisMarkdown, String subtasksJson,
+                              String headBranch, String headSha, List<EnvVar> envVars, String model, String effort,
+                              String designMarkdown, String mockupFilesJson, String feedbackHistoryJson,
+                              String designUrl, String designSystemProjectId, String designOutputProjectId,
+                              String gitUrl, String repoHost, String planMarkdown) {
+        this(id, githubRepo, githubBranch, title, description, kind, mcpsExtra, analysisMarkdown, subtasksJson,
+                headBranch, headSha, envVars, model, effort, designMarkdown, mockupFilesJson, feedbackHistoryJson,
+                designUrl, designSystemProjectId, designOutputProjectId, gitUrl, repoHost, planMarkdown,
+                null, null, null, null);
+    }
+```
+4. 팩토리 추가:
+```java
+    /** 종료 claim 페이로드 (스펙 2026-10-13 §4). */
+    public static WorkerTaskResponse forClose(Task t, CloseContext ctx) {
+        return new WorkerTaskResponse(t.getId(), t.getGithubRepo(), t.getGithubBranch(),
+                t.getTitle(), t.getDescription(), Kind.CLOSE, List.of(), null, null,
+                t.getHeadBranch(), t.getHeadSha(), List.of(), null, null,
+                null, null, null, null, null, null, t.getGitUrl(), hostOf(t), null,
+                t.getPrNumber(), t.getPrUrl(), t.getCloseProgress(), ctx);
+    }
+```
+5. 클래스 주석 kind 목록에 ` *  kind=CLOSE          → PR 병합·배포 중지·옵시디언 노트·브랜치 정리 (closeProgress에 있는 단계는 건너뜀)` 추가.
+
+`WorkerResultRequest.java` — 클래스 주석 표에 두 줄(`status=CLOSED → 4단계 완료 후`, `status=CLOSE_FAILED → failureReason 필수`) 추가하고 팩토리 추가:
+```java
+    /** 종료 성공 보고 — API는 close_progress가 4단계를 모두 담았을 때만 받는다. usage는 노트 claude 1회분. */
+    public static WorkerResultRequest closed(String workerId, UsageReport usage) {
+        return new WorkerResultRequest(workerId, TaskStatus.CLOSED,
+                null, null, null, null, null,
+                null, null, null, null, null,
+                null, null, null, null, null,
+                null, null, null, null, usage);
+    }
+
+    /** 종료 실패 보고. */
+    public static WorkerResultRequest closeFailed(String workerId, String reason, UsageReport usage) {
+        return new WorkerResultRequest(workerId, TaskStatus.CLOSE_FAILED,
+                null, null, null, null, reason,
+                null, null, null, null, null,
+                null, null, null, null, null,
+                null, null, null, null, usage);
+    }
+```
+
+`TaskRepository.java`:
+- `findClaimableForUpdateSkipLocked`의 IN 목록 끝에 `, com.hamonsoft.netismaker.entity.TaskStatus.CLOSE_PENDING` 추가.
+- `findInFlightClaimed`의 IN 목록 끝에 `, com.hamonsoft.netismaker.entity.TaskStatus.CLOSING` 추가.
+- `findDeployReconcilable`의 IN 목록 끝에 `CLOSE_REVIEW, CLOSE_PENDING, CLOSING, CLOSE_FAILED`(각각 FQN) 추가하고 주석에 한 줄: `종료 단계(종료승인대기~종료실패)도 배포 중지(②) 전까지 컨테이너가 살아 있으므로 GC 보호에 넣는다 — 반려되면 배포완료로 돌아온다.`
+
+`WorkerService.java`:
+1. 생성자 주입은 그대로(필요한 repo는 이미 있음). import에 `com.hamonsoft.netismaker.dto.CloseContext`, `com.hamonsoft.netismaker.dto.CloseProgressRequest`, `org.springframework.data.domain.Limit`, `java.util.ArrayList`, `java.util.Collections` 추가.
+2. `claimNextTask`의 분기에 `else if (from == TaskStatus.UNDEPLOY_PENDING) {...}` 뒤:
+```java
+        } else if (from == TaskStatus.CLOSE_PENDING) {
+            t.setStatus(TaskStatus.CLOSING);
+```
+그리고 반환부의 `if (from == TaskStatus.UNDEPLOY_PENDING) {...}` 뒤에:
+```java
+        if (from == TaskStatus.CLOSE_PENDING) {
+            return Optional.of(WorkerTaskResponse.forClose(t, closeContext(t)));
+        }
+```
+3. 메서드 추가:
+```java
+    /** 종료 노트 재료 — 확정 플랜·분석·구현 로그 끝·이력(시간순)·단계별 비용. */
+    private CloseContext closeContext(Task t) {
+        TaskAnalysis a = analysisRepo.findById(t.getId()).orElse(null);
+        List<TaskStatusHistory> history = new ArrayList<>(
+                historyRepo.findByTaskIdOrderByAtDescIdDesc(t.getId(), Limit.of(200)));
+        Collections.reverse(history);
+        return CloseContext.of(t, registeredPlanMarkdown(t.getId()), a, history,
+                stageUsageRepo.findByTaskIdOrderByStageAsc(t.getId()));
+    }
+
+    /**
+     * 종료 단계 완료 보고 (스펙 2026-10-13 §4). 종료중 + 소유 워커일 때만. 같은 단계 재보고는 무해(멱등).
+     *  MERGED      → merge_commit_sha (null이면 기존 값 유지)
+     *  UNDEPLOYED  → 배포 메타 비움(컨테이너가 없어졌다 — 배포 중지 복귀와 같은 규칙, 로그는 보존)
+     *  NOTE_WRITTEN→ close_note_path
+     */
+    @Transactional
+    public void recordCloseProgress(Long taskId, CloseProgressRequest req) {
+        Task t = taskRepo.findActiveByIdForUpdate(taskId).orElseThrow(TaskException::notFound);
+        if (t.getStatus() != TaskStatus.CLOSING) {
+            throw new TaskException(HttpStatus.CONFLICT, "종료중 상태가 아닙니다 (현재: " + t.getStatus().dbValue() + ")");
+        }
+        if (t.getWorkerId() != null && !t.getWorkerId().equals(req.workerId())) {
+            throw new TaskException(HttpStatus.CONFLICT, "다른 워커가 잡은 작업입니다 (소유: " + t.getWorkerId() + ")");
+        }
+        t.setCloseProgress(CloseStep.append(t.getCloseProgress(), req.step()));
+        switch (req.step()) {
+            case MERGED -> { if (req.mergeCommitSha() != null) t.setMergeCommitSha(req.mergeCommitSha()); }
+            case UNDEPLOYED -> {
+                t.setDeployUrl(null);
+                t.setDeployContainerId(null);
+                t.setDeployHostPort(null);
+                t.setDeployImage(null);
+                t.setDeployedAt(null);
+            }
+            case NOTE_WRITTEN -> { if (req.notePath() != null) t.setCloseNotePath(req.notePath()); }
+            default -> { }
+        }
+        t.setUpdatedAt(OffsetDateTime.now());
+    }
+
+    private void recordCloseResult(Task t, WorkerResultRequest req) {
+        TaskStatus from = t.getStatus();
+        String reason;
+        switch (req.status()) {
+            case CLOSED -> {
+                if (!CloseStep.allDone(t.getCloseProgress())) {
+                    throw new TaskException(HttpStatus.BAD_REQUEST,
+                            "종료 단계가 모두 끝나지 않았습니다 (완료: " + t.getCloseProgress() + ")");
+                }
+                t.setStatus(TaskStatus.CLOSED);
+                t.setFailureReason(null);
+                String sha = t.getMergeCommitSha();
+                reason = "작업 종료" + (sha == null ? "" : ": 병합 " + sha.substring(0, Math.min(7, sha.length())));
+            }
+            case CLOSE_FAILED -> {
+                t.setStatus(TaskStatus.CLOSE_FAILED);
+                t.setFailureReason(req.failureReason() == null ? "원인 미상" : req.failureReason());
+                reason = t.getFailureReason();
+            }
+            default -> throw new TaskException(HttpStatus.BAD_REQUEST,
+                    "종료 단계에서 허용되지 않는 status: " + req.status());
+        }
+        accumulateUsage(t.getId(), TaskStageUsage.STAGE_CLOSE, req);
+        t.setUpdatedAt(OffsetDateTime.now());
+        historyRepo.save(TaskStatusHistory.log(t.getId(), from, t.getStatus(), "worker", req.workerId(), reason));
+    }
+```
+4. `recordResult`의 in-flight 가드 조건에 `&& current != TaskStatus.CLOSING` 추가, 그리고 "배포/중지 단계는 별도 처리" 블록 앞에:
+```java
+        if (current == TaskStatus.CLOSING) {
+            recordCloseResult(t, req);
+            return;
+        }
+```
+5. 클래스 주석의 claim 표에 ` *                       CLOSE_PENDING   → CLOSING       (kind=CLOSE, 노트 재료 동봉)` 추가.
+
+`WorkerController.java` — 메서드 추가 + 주석 표에 한 줄:
+```java
+    @PostMapping("/tasks/{id}/close-progress")
+    @ResponseStatus(HttpStatus.NO_CONTENT)
+    public void closeProgress(@PathVariable Long id, @RequestBody @Valid CloseProgressRequest req) {
+        workerService.recordCloseProgress(id, req);
+    }
+```
+
+`StaleTaskRecoveryJob.java`:
+- 필드 추가:
+```java
+    @Value("${app.task.close-stale-threshold-minutes:30}")
+    private int closeStaleThresholdMinutes;
+```
+- `deadSec` switch: `case DEPLOYING, UNDEPLOYING, CLOSING -> deployWorkerDeadThresholdSeconds;`
+- `ceilingMin` switch: `case CLOSING -> closeStaleThresholdMinutes;` 추가.
+- 회수 switch에 추가:
+```java
+                case CLOSING -> {
+                    // 단계 진행(close_progress)이 남아 있어 재claim은 남은 단계부터 — 끝난 단계는 멱등이라 재실행도 무해.
+                    t.setStatus(TaskStatus.CLOSE_PENDING);
+                    logTransition(t, from, TaskStatus.CLOSE_PENDING, "종료중 stale → 재큐잉(남은 단계부터)");
+                    log.warn("Stale 회수: task={} {} → CLOSE_PENDING(재큐잉)", t.getId(), why);
+                }
+```
+- 클래스 주석의 회수 전이 목록에 `종료중→CLOSE_PENDING(재큐잉)` 추가.
+
+- [ ] **Step 4: 통과 확인**
+
+Run: `JAVA_HOME=C:/Users/mic/.jdks/jdk-21.0.12.1+1 ./gradlew test --tests "WorkerServiceCloseTest" --tests "WorkerServiceDeployTest" --tests "WorkerServiceDesignClaimTest" --tests "StaleTaskRecoveryJobTest" --tests "WorkerResultRequestJsonTest" --tests "WorkerTaskResponseRepoTest" --tests "WorkerTaskResponseDesignTest" --tests "WorkerTaskResponseEnvTest"`
+Expected: PASS
+
+- [ ] **Step 5: 커밋**
+
+```bash
+git add src/main/java/com/hamonsoft/netismaker/dto src/main/java/com/hamonsoft/netismaker/service/WorkerService.java src/main/java/com/hamonsoft/netismaker/controller/WorkerController.java src/main/java/com/hamonsoft/netismaker/repository/TaskRepository.java src/main/java/com/hamonsoft/netismaker/service/StaleTaskRecoveryJob.java src/test/java/com/hamonsoft/netismaker
+git -c user.name=khlee84 -c user.email=khlee84@hamonsoft.co.kr commit -m "feat(worker-api): 종료 claim·단계 진행 보고·결과·stale 재큐·GC 보호
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+```
+
+---
+
+### Task 5: CloseProperties + 도구 없는 claude 실행
+
+**Files:**
+- Create: `src/main/java/com/hamonsoft/netismaker/workerdaemon/CloseProperties.java`
+- Modify: `src/main/java/com/hamonsoft/netismaker/NetisMakerApplication.java`, `src/main/resources/application-worker.yml`
+- Modify: `src/main/java/com/hamonsoft/netismaker/workerdaemon/ClaudeExecAdapter.java`
+- Test: `src/test/java/com/hamonsoft/netismaker/workerdaemon/ClosePropertiesTest.java`, `src/test/java/com/hamonsoft/netismaker/workerdaemon/ClaudeExecAdapterTest.java`(케이스 추가)
+
+**Interfaces:**
+- Produces: `record CloseProperties(String obsidianVaultDir, String noteFolder, String mergeMethod, String noteModel, Duration noteTimeout, String notePromptTemplate)` (prefix `netis-maker.worker.close`) with `Path vaultDir()`(미설정이면 null); `ClaudeExecAdapter.execWithoutTools(String prompt, File workingDir, Duration timeout, String model) → ExecResult`; `static final List<String> ClaudeExecAdapter.NO_TOOLS_ARGS`.
+
+- [ ] **Step 1: 실패 테스트 작성**
+
+`ClosePropertiesTest.java`:
+```java
+package com.hamonsoft.netismaker.workerdaemon;
+
+import org.junit.jupiter.api.Test;
+
+import java.nio.file.Path;
+import java.time.Duration;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+
+class ClosePropertiesTest {
+
+    @Test
+    void 빈_값은_기본값으로() {
+        CloseProperties p = new CloseProperties(" ", null, "", null, null, null);
+        assertThat(p.vaultDir()).isNull();
+        assertThat(p.noteFolder()).isEqualTo("HamonSoft/netisMaker");
+        assertThat(p.mergeMethod()).isEqualTo("merge");
+        assertThat(p.noteModel()).isEqualTo("sonnet");
+        assertThat(p.noteTimeout()).isEqualTo(Duration.ofMinutes(10));
+    }
+
+    @Test
+    void 볼트_경로와_병합방식을_읽는다() {
+        CloseProperties p = new CloseProperties("C:/Users/mic/Documents/Obsidian Vault", "X/Y", "Squash", "haiku",
+                Duration.ofMinutes(3), null);
+        assertThat(p.vaultDir()).isEqualTo(Path.of("C:/Users/mic/Documents/Obsidian Vault"));
+        assertThat(p.mergeMethod()).isEqualTo("squash");
+    }
+
+    @Test
+    void 모르는_병합방식은_부팅을_막는다() {
+        assertThatThrownBy(() -> new CloseProperties(null, null, "fast-forward", null, null, null))
+                .isInstanceOf(IllegalArgumentException.class).hasMessageContaining("CLOSE_MERGE_METHOD");
+    }
+}
+```
+
+`ClaudeExecAdapterTest.java`에 추가(같은 파일에 `buildCommand` 테스트가 이미 있다):
+```java
+    @Test
+    void 도구없는_실행은_내장도구와_MCP를_모두_끈다() {
+        List<String> cmd = ClaudeExecAdapter.buildCommand("claude", false, "sonnet", null,
+                ClaudeExecAdapter.NO_TOOLS_ARGS);
+        assertThat(cmd).containsSubsequence("--setting-sources", "project");
+        assertThat(cmd).containsSubsequence("--strict-mcp-config", "--tools", "");
+        assertThat(cmd).doesNotContain("--dangerously-skip-permissions", "--mcp-config");
+    }
+```
+
+- [ ] **Step 2: 실패 확인**
+
+Run: `JAVA_HOME=C:/Users/mic/.jdks/jdk-21.0.12.1+1 ./gradlew test --tests "ClosePropertiesTest" --tests "ClaudeExecAdapterTest"`
+Expected: 컴파일 실패
+
+- [ ] **Step 3: 구현**
+
+`CloseProperties.java`:
+```java
+package com.hamonsoft.netismaker.workerdaemon;
+
+import org.springframework.boot.context.properties.ConfigurationProperties;
+
+import java.nio.file.Path;
+import java.time.Duration;
+import java.util.Locale;
+import java.util.Set;
+
+/**
+ * 작업 종료(kind=CLOSE) 설정 (스펙 2026-10-13 §4). WorkerProperties와 분리 — 기존 생성자 호출부를 건드리지 않는다.
+ *  obsidian-vault-dir  볼트 루트. 비면 노트 단계가 '미설정'으로 실패한다(종료실패 → 설정 후 재시도).
+ *  note-folder         볼트 안 노트 폴더(작업정리 관례: HamonSoft/netisMaker)
+ *  merge-method        merge | squash | rebase (GitLab은 rebase를 merge로 취급)
+ */
+@ConfigurationProperties(prefix = "netis-maker.worker.close")
+public record CloseProperties(
+        String obsidianVaultDir,
+        String noteFolder,
+        String mergeMethod,
+        String noteModel,
+        Duration noteTimeout,
+        String notePromptTemplate
+) {
+    private static final Set<String> METHODS = Set.of("merge", "squash", "rebase");
+
+    public CloseProperties {
+        obsidianVaultDir = (obsidianVaultDir == null || obsidianVaultDir.isBlank()) ? null : obsidianVaultDir.trim();
+        noteFolder = (noteFolder == null || noteFolder.isBlank()) ? "HamonSoft/netisMaker" : noteFolder.trim();
+        mergeMethod = (mergeMethod == null || mergeMethod.isBlank()) ? "merge" : mergeMethod.trim().toLowerCase(Locale.ROOT);
+        if (!METHODS.contains(mergeMethod)) {
+            throw new IllegalArgumentException("CLOSE_MERGE_METHOD는 merge|squash|rebase 중 하나여야 한다: '" + mergeMethod + "'");
+        }
+        noteModel = (noteModel == null || noteModel.isBlank()) ? "sonnet" : noteModel.trim();
+        if (noteTimeout == null) noteTimeout = Duration.ofMinutes(10);
+    }
+
+    public Path vaultDir() {
+        return obsidianVaultDir == null ? null : Path.of(obsidianVaultDir);
+    }
+}
+```
+
+`NetisMakerApplication.java`: `@EnableConfigurationProperties(WorkerProperties.class)` → `@EnableConfigurationProperties({WorkerProperties.class, CloseProperties.class})` (import `com.hamonsoft.netismaker.workerdaemon.CloseProperties`).
+
+`application-worker.yml` — `worktree-cleanup:` 블록(3줄) 바로 뒤, 같은 4칸 들여쓰기로:
+```yaml
+    # 작업 종료(kind=CLOSE) — PR 병합 → 배포 중지 → 옵시디언 노트 → 브랜치 정리 (스펙 2026-10-13).
+    # obsidian-vault-dir가 비면 노트 단계에서 종료실패가 된다(볼트가 이 워커 PC에 있어야 한다).
+    close:
+      obsidian-vault-dir: ${CLOSE_OBSIDIAN_VAULT_DIR:}
+      note-folder: ${CLOSE_NOTE_FOLDER:HamonSoft/netisMaker}
+      merge-method: ${CLOSE_MERGE_METHOD:merge}
+      note-model: ${CLOSE_NOTE_MODEL:sonnet}
+      note-timeout: ${CLOSE_NOTE_TIMEOUT:10m}
+```
+
+`ClaudeExecAdapter.java`:
+1. 상수 추가:
+```java
+    /**
+     * 노트 작성처럼 도구가 필요 없는 실행 — 내장 도구 전부 끔(--tools "") + MCP 없음(--strict-mcp-config에 --mcp-config 없음).
+     * 입력에 사용자 텍스트가 섞여도 파일·네트워크에 손댈 수단이 없다(스펙 2026-10-13 §4 ③).
+     */
+    static final List<String> NO_TOOLS_ARGS = List.of("--strict-mcp-config", "--tools", "");
+```
+2. 기존 7인자 `exec`의 `try` 블록 본문(프로세스 시작~`return new ExecResult(...)`)을 private 메서드로 추출:
+```java
+    private ExecResult run(List<String> cmd, String prompt, File workingDir, Duration timeout, long start)
+            throws InterruptedException, IOException {
+        ProcessBuilder pb = new ProcessBuilder(cmd).directory(workingDir);
+        // … 기존 본문 그대로(stdin 기록, drain, waitFor, destroyTree, parseEnvelope, stderr tail) …
+        return new ExecResult(p.exitValue(), resultText, durationMs, parsed.usage());
+    }
+```
+그리고 7인자 `exec`는:
+```java
+        long start = System.currentTimeMillis();
+        WorkerMcpSupport.TaskClaudeArgs mcpArgs = mcp.buildClaudeArgsForTask(extras);
+        try {
+            // (기존 stdin 이유 주석 유지)
+            return run(buildCommand(resolvedClaudePath, dangerouslySkipPermissions, model, effort, mcpArgs.args()),
+                    prompt, workingDir, timeout, start);
+        } finally {
+            // 기존 임시 MCP config 삭제 그대로
+        }
+```
+3. 새 메서드:
+```java
+    /** 도구·MCP 없이 텍스트만 생성 (종료 노트). 권한 우회 플래그를 쓰지 않는다. */
+    public ExecResult execWithoutTools(String prompt, File workingDir, Duration timeout, String model)
+            throws InterruptedException, IOException {
+        return run(buildCommand(resolvedClaudePath, false, model, null, NO_TOOLS_ARGS),
+                prompt, workingDir, timeout, System.currentTimeMillis());
+    }
+```
+
+- [ ] **Step 4: 통과 확인 + CLI 실측**
+
+Run: `JAVA_HOME=C:/Users/mic/.jdks/jdk-21.0.12.1+1 ./gradlew test --tests "ClosePropertiesTest" --tests "ClaudeExecAdapterTest" --tests "ClaudeExecAdapterKillTreeTest" --tests "WorkerPropertiesYamlBindingTest"`
+Expected: PASS
+
+실측(빈 인자 전달과 도구 차단 확인 — scratchpad 빈 폴더에서):
+```bash
+mkdir -p "$TMPDIR/close-probe" && cd "$TMPDIR/close-probe" && echo "현재 폴더의 파일 목록을 Bash로 확인하고, 할 수 없으면 '도구 없음'이라고만 답하세요." | claude -p --output-format json --setting-sources project --model haiku --strict-mcp-config --tools "" | head -c 600
+```
+Expected: `result`에 "도구 없음"(도구 호출 없음), `num_turns` 1. 결과를 커밋 메시지 본문에 한 줄로 남긴다.
+
+- [ ] **Step 5: 커밋**
+
+```bash
+git add src/main/java/com/hamonsoft/netismaker/workerdaemon/CloseProperties.java src/main/java/com/hamonsoft/netismaker/NetisMakerApplication.java src/main/resources/application-worker.yml src/main/java/com/hamonsoft/netismaker/workerdaemon/ClaudeExecAdapter.java src/test/java/com/hamonsoft/netismaker/workerdaemon/ClosePropertiesTest.java src/test/java/com/hamonsoft/netismaker/workerdaemon/ClaudeExecAdapterTest.java
+git -c user.name=khlee84 -c user.email=khlee84@hamonsoft.co.kr commit -m "feat(worker): 종료 설정(CloseProperties)과 도구 없는 claude 실행
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+```
+
+---
+
+### Task 6: MergeRequestCloser + GitHub 구현
+
+**Files:**
+- Create: `src/main/java/com/hamonsoft/netismaker/workerdaemon/MergeRequestCloser.java`
+- Create: `src/main/java/com/hamonsoft/netismaker/workerdaemon/GitHubPrCloser.java`
+- Test: `src/test/java/com/hamonsoft/netismaker/workerdaemon/GitHubPrCloserTest.java`
+
+**Interfaces:**
+- Produces:
+```java
+public interface MergeRequestCloser {
+    boolean supports(RepoRef ref);
+    /** @return 병합 커밋 SHA(모르면 null). 병합 불가는 CloseRefusedException(사람이 읽는 분류 사유). */
+    String merge(RepoRef ref, int number, String headSha, String method)
+            throws CloseRefusedException, IOException, InterruptedException;
+    /** 없으면(이미 삭제) 정상 종료. */
+    void deleteBranch(RepoRef ref, String branch) throws IOException, InterruptedException;
+    class CloseRefusedException extends Exception { public CloseRefusedException(String m) { super(m); } }
+}
+```
+`GitHubPrCloser(String githubPat)` + 패키지 생성자 `GitHubPrCloser(Gh gh)`, `interface Gh { ProcessRunner.Result run(List<String> args) throws IOException, InterruptedException; }`.
+
+- [ ] **Step 1: 실패 테스트 작성**
+
+`GitHubPrCloserTest.java`:
+```java
+package com.hamonsoft.netismaker.workerdaemon;
+
+import com.hamonsoft.netismaker.git.RepoRef;
+import org.junit.jupiter.api.Test;
+
+import java.util.ArrayDeque;
+import java.util.ArrayList;
+import java.util.Deque;
+import java.util.List;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+
+class GitHubPrCloserTest {
+
+    private static final String SHA = "abcdef1234567890abcdef1234567890abcdef12";
+    private final List<List<String>> calls = new ArrayList<>();
+    private final Deque<ProcessRunner.Result> replies = new ArrayDeque<>();
+
+    private GitHubPrCloser closer() {
+        return new GitHubPrCloser(args -> {
+            calls.add(args);
+            return replies.isEmpty() ? new ProcessRunner.Result(0, "") : replies.poll();
+        });
+    }
+
+    private static ProcessRunner.Result view(String state, boolean draft, String head, String mss, String mergeOid) {
+        String mc = mergeOid == null ? "null" : "{\"oid\":\"" + mergeOid + "\"}";
+        return new ProcessRunner.Result(0, "{\"state\":\"" + state + "\",\"isDraft\":" + draft
+                + ",\"headRefOid\":\"" + head + "\",\"mergeStateStatus\":\"" + mss + "\",\"mergeCommit\":" + mc + "}");
+    }
+
+    private static RepoRef ref() {
+        return RepoRef.fromSnapshot("acme/widgets", null);
+    }
+
+    @Test
+    void draft를_해제하고_head에_고정해_병합한다() throws Exception {
+        replies.add(view("OPEN", true, SHA, "CLEAN", null));
+        replies.add(new ProcessRunner.Result(0, ""));                          // pr ready
+        replies.add(new ProcessRunner.Result(0, "merged"));                    // pr merge
+        replies.add(view("MERGED", false, SHA, "UNKNOWN", "m3rg3"));           // 재조회
+
+        assertThat(closer().merge(ref(), 5, SHA, "squash")).isEqualTo("m3rg3");
+        assertThat(calls.get(1)).containsExactly("pr", "ready", "5", "--repo", "acme/widgets");
+        assertThat(calls.get(2)).containsExactly("pr", "merge", "5", "--repo", "acme/widgets", "--squash",
+                "--match-head-commit", SHA);
+    }
+
+    @Test
+    void 이미_병합된_PR은_그_커밋을_돌려준다() throws Exception {
+        replies.add(view("MERGED", false, SHA, "UNKNOWN", "already"));
+        assertThat(closer().merge(ref(), 5, SHA, "merge")).isEqualTo("already");
+        assertThat(calls).hasSize(1);
+    }
+
+    @Test
+    void head가_바뀌었으면_아무것도_안_하고_거부() {
+        replies.add(view("OPEN", true, "ffff", "CLEAN", null));
+        assertThatThrownBy(() -> closer().merge(ref(), 5, SHA, "merge"))
+                .isInstanceOf(MergeRequestCloser.CloseRefusedException.class).hasMessageContaining("head 불일치");
+        assertThat(calls).hasSize(1);
+    }
+
+    @Test
+    void 충돌이면_아무것도_안_하고_거부() {
+        replies.add(view("OPEN", false, SHA, "DIRTY", null));
+        assertThatThrownBy(() -> closer().merge(ref(), 5, SHA, "merge")).hasMessageContaining("충돌");
+        assertThat(calls).hasSize(1);
+    }
+
+    @Test
+    void 닫힌_PR은_거부() {
+        replies.add(view("CLOSED", false, SHA, "UNKNOWN", null));
+        assertThatThrownBy(() -> closer().merge(ref(), 5, SHA, "merge")).hasMessageContaining("닫혀");
+    }
+
+    @Test
+    void 병합이_거부되면_draft를_되돌리고_CI_사유로_분류한다() {
+        replies.add(view("OPEN", true, SHA, "BLOCKED", null));
+        replies.add(new ProcessRunner.Result(0, ""));                                         // ready
+        replies.add(new ProcessRunner.Result(1, "X Pull request is not mergeable: required status check \"ci\" is expected."));
+        replies.add(new ProcessRunner.Result(0, ""));                                         // ready --undo
+
+        assertThatThrownBy(() -> closer().merge(ref(), 5, SHA, "merge"))
+                .isInstanceOf(MergeRequestCloser.CloseRefusedException.class).hasMessageContaining("CI");
+        assertThat(calls.get(3)).containsExactly("pr", "ready", "5", "--repo", "acme/widgets", "--undo");
+    }
+
+    @Test
+    void 브랜치_삭제는_없는_ref를_성공으로_본다() throws Exception {
+        replies.add(new ProcessRunner.Result(1, "gh: Reference does not exist (HTTP 422)"));
+        closer().deleteBranch(ref(), "netismaker/task-5-x");
+        assertThat(calls.get(0)).containsExactly("api", "-X", "DELETE",
+                "repos/acme/widgets/git/refs/heads/netismaker/task-5-x");
+    }
+
+    @Test
+    void 브랜치_삭제의_다른_실패는_예외() {
+        replies.add(new ProcessRunner.Result(1, "HTTP 403: Resource not accessible"));
+        assertThatThrownBy(() -> closer().deleteBranch(ref(), "b")).isInstanceOf(java.io.IOException.class);
+    }
+}
+```
+
+- [ ] **Step 2: 실패 확인**
+
+Run: `JAVA_HOME=C:/Users/mic/.jdks/jdk-21.0.12.1+1 ./gradlew test --tests "GitHubPrCloserTest"`
+Expected: 컴파일 실패
+
+- [ ] **Step 3: 구현**
+
+`MergeRequestCloser.java`:
+```java
+package com.hamonsoft.netismaker.workerdaemon;
+
+import com.hamonsoft.netismaker.git.RepoRef;
+
+import java.io.IOException;
+
+/**
+ * 종료 단계의 PR/MR 병합과 head 브랜치 삭제 (스펙 2026-10-13 §4 ①·④). MergeRequestCreator와 같은 supports 분기.
+ * 병합은 확인된 head SHA에 고정한다 — 그 뒤 브랜치에 커밋이 올라왔으면 거부.
+ * 병합 불가(CI·충돌·head 불일치·권한)는 아무것도 바꾸지 않은 상태로 CloseRefusedException을 던진다
+ * (draft를 해제했으면 되돌린 뒤).
+ */
+public interface MergeRequestCloser {
+
+    boolean supports(RepoRef ref);
+
+    /** @return 병합 커밋 SHA(호스트가 알려주지 않으면 null). 이미 병합된 PR이면 그 커밋. */
+    String merge(RepoRef ref, int number, String headSha, String method)
+            throws CloseRefusedException, IOException, InterruptedException;
+
+    /** 원격 head 브랜치 삭제. 이미 없으면 정상 종료. */
+    void deleteBranch(RepoRef ref, String branch) throws IOException, InterruptedException;
+
+    /** 병합 거부 — 메시지는 failure_reason에 그대로 들어가는 한국어 분류 사유. */
+    class CloseRefusedException extends Exception {
+        public CloseRefusedException(String message) {
+            super(message);
+        }
+    }
+}
+```
+
 `GitHubPrCloser.java`:
 ```java
 package com.hamonsoft.netismaker.workerdaemon;

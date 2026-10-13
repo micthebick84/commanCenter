@@ -17,12 +17,13 @@ class GitHubPrCloserTest {
     private static final String SHA = "abcdef1234567890abcdef1234567890abcdef12";
     private final List<List<String>> calls = new ArrayList<>();
     private final Deque<ProcessRunner.Result> replies = new ArrayDeque<>();
+    private final List<Long> sleeps = new ArrayList<>();
 
     private GitHubPrCloser closer() {
         return new GitHubPrCloser(args -> {
             calls.add(args);
             return replies.isEmpty() ? new ProcessRunner.Result(0, "") : replies.poll();
-        });
+        }, sleeps::add);
     }
 
     private static ProcessRunner.Result view(String state, boolean draft, String head, String mss, String mergeOid) {
@@ -165,5 +166,32 @@ class GitHubPrCloserTest {
     void classify_head_branch_modified_출력() {
         String result = GitHubPrCloser.classify("UNKNOWN", "error: head branch was modified");
         assertThat(result).contains("head 불일치");
+    }
+
+    @Test
+    void 병합_대기열에_들어갔다가_병합되면_그_커밋을_돌려준다() throws Exception {
+        replies.add(view("OPEN", false, SHA, "CLEAN", null));
+        replies.add(new ProcessRunner.Result(0, "queued"));                    // pr merge (대기열)
+        replies.add(view("OPEN", false, SHA, "CLEAN", null));                  // 재조회: 아직
+        replies.add(view("OPEN", false, SHA, "CLEAN", null));                  // 폴링 1
+        replies.add(view("MERGED", false, SHA, "UNKNOWN", "q1"));              // 폴링 2
+
+        assertThat(closer().merge(ref(), 5, SHA, "merge")).isEqualTo("q1");
+        assertThat(sleeps).containsExactly(2000L, 2000L);
+    }
+
+    @Test
+    void 끝내_병합되지_않으면_draft를_되돌리지_않고_거부한다() {
+        replies.add(view("OPEN", true, SHA, "CLEAN", null));
+        replies.add(new ProcessRunner.Result(0, ""));                          // pr ready
+        replies.add(new ProcessRunner.Result(0, "queued"));                    // pr merge (대기열)
+        for (int i = 0; i < 6; i++) replies.add(view("OPEN", false, SHA, "CLEAN", null));
+
+        assertThatThrownBy(() -> closer().merge(ref(), 5, SHA, "merge"))
+                .isInstanceOf(MergeRequestCloser.CloseRefusedException.class)
+                .hasMessageContaining("병합 대기열/진행 중 — 병합이 끝난 뒤 재시도하세요");
+        assertThat(sleeps).hasSize(5);
+        assertThat(calls).noneMatch(c -> c.contains("--undo"));
+        assertThat(calls).hasSize(3 + 6);
     }
 }

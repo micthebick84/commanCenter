@@ -21,10 +21,18 @@ public class GitHubPrCloser implements MergeRequestCloser {
         ProcessRunner.Result run(List<String> args) throws IOException, InterruptedException;
     }
 
+    /** 병합 대기열·자동 병합 완료 대기용 sleep — 테스트 seam. */
+    interface Sleeper {
+        void sleep(long millis) throws InterruptedException;
+    }
+
     private static final long GH_TIMEOUT_SECONDS = 120;
+    private static final int MERGE_POLL_ATTEMPTS = 5;
+    private static final long MERGE_POLL_MILLIS = 2000;
     private static final ObjectMapper JSON = new ObjectMapper();
 
     private final Gh gh;
+    private final Sleeper sleeper;
 
     public GitHubPrCloser(String githubPat) {
         this(args -> {
@@ -37,7 +45,12 @@ public class GitHubPrCloser implements MergeRequestCloser {
     }
 
     GitHubPrCloser(Gh gh) {
+        this(gh, Thread::sleep);
+    }
+
+    GitHubPrCloser(Gh gh, Sleeper sleeper) {
         this.gh = gh;
+        this.sleeper = sleeper;
     }
 
     @Override
@@ -88,7 +101,25 @@ public class GitHubPrCloser implements MergeRequestCloser {
             if (wasDraft) undoMsg = undoReady(ref, n);
             throw e;
         }
-        return mergeOid(view(ref, n));
+        return awaitMerged(ref, n);
+    }
+
+    /**
+     * gh는 병합 대기열·자동 병합 예약만 해도 0으로 끝난다 — MERGED가 될 때까지 짧게 폴링.
+     * 끝내 아니면 거부하되 draft는 되돌리지 않는다(병합 요청은 이미 수락됨).
+     */
+    private String awaitMerged(RepoRef ref, String n) throws CloseRefusedException, IOException, InterruptedException {
+        JsonNode pr = view(ref, n);
+        for (int i = 0; !"MERGED".equals(pr.path("state").asText("")); i++) {
+            if (i >= MERGE_POLL_ATTEMPTS) {
+                log.warn("PR #{} 병합 수락 후 {}회 확인에도 MERGED가 아님(state={})", n, MERGE_POLL_ATTEMPTS,
+                        pr.path("state").asText(""));
+                throw new CloseRefusedException("병합 대기열/진행 중 — 병합이 끝난 뒤 재시도하세요");
+            }
+            sleeper.sleep(MERGE_POLL_MILLIS);
+            pr = view(ref, n);
+        }
+        return mergeOid(pr);
     }
 
     @Override

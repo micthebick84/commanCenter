@@ -1,5 +1,6 @@
 package com.hamonsoft.netismaker;
 
+import com.hamonsoft.netismaker.workerdaemon.CloseProperties;
 import com.hamonsoft.netismaker.workerdaemon.WorkerProperties;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
@@ -8,7 +9,7 @@ import org.springframework.scheduling.annotation.EnableScheduling;
 
 @SpringBootApplication
 @EnableScheduling
-@EnableConfigurationProperties(WorkerProperties.class)
+@EnableConfigurationProperties({WorkerProperties.class, CloseProperties.class})
 public class NetisMakerApplication {
 
     public static void main(String[] args) {

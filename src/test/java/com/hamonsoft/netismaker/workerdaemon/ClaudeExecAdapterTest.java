@@ -105,4 +105,13 @@ class ClaudeExecAdapterTest {
         assertThat(p.usage().inputTokens()).isEqualTo(10);
         assertThat(p.usage().outputTokens()).isZero();
     }
+
+    @Test
+    void 도구없는_실행은_내장도구와_MCP를_모두_끈다() {
+        List<String> cmd = ClaudeExecAdapter.buildCommand("claude", false, "sonnet", null,
+                ClaudeExecAdapter.NO_TOOLS_ARGS);
+        assertThat(cmd).containsSubsequence("--setting-sources", "project");
+        assertThat(cmd).containsSubsequence("--strict-mcp-config", "--tools", "");
+        assertThat(cmd).doesNotContain("--dangerously-skip-permissions", "--mcp-config");
+    }
 }

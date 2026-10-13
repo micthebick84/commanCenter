@@ -56,6 +56,14 @@ netis-maker:
       enabled: ${WORKTREE_CLEANUP_ENABLED:true}
       cron: ${WORKTREE_CLEANUP_CRON:0 30 2 * * *}
       retention-days: ${WORKTREE_CLEANUP_RETENTION_DAYS:7}
+    # 작업 종료(kind=CLOSE) — PR 병합 → 배포 중지 → 옵시디언 노트 → 브랜치 정리 (스펙 2026-10-13).
+    # obsidian-vault-dir가 비면 노트 단계에서 종료실패가 된다(볼트가 이 워커 PC에 있어야 한다).
+    close:
+      obsidian-vault-dir: ${CLOSE_OBSIDIAN_VAULT_DIR:}
+      note-folder: ${CLOSE_NOTE_FOLDER:HamonSoft/netisMaker}
+      merge-method: ${CLOSE_MERGE_METHOD:merge}
+      note-model: ${CLOSE_NOTE_MODEL:sonnet}
+      note-timeout: ${CLOSE_NOTE_TIMEOUT:10m}
     dead-letter-dir: ${DEAD_LETTER_DIR:${user.home}/netis-maker/dead-letter}
     claude-cli-path: ${CLAUDE_CLI:/opt/homebrew/bin/claude}
     github-pat: ${GITHUB_PAT:}

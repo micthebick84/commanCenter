@@ -234,11 +234,12 @@ public class WorkerMainLoop {
         // 3. 구현 prompt + claude exec (worktree 디렉토리에서)
         //    비대화식 모드에서 Write/Edit/Bash 차단 회피 위해 권한 우회 활성.
         //    worktree는 격리 환경이라 워커 머신 다른 곳에 영향 없음.
-        String prompt = renderImplementationPrompt(task, repo.commitSha(), wt.branchName());
+        String prompt = renderImplementationPrompt(task, repo.commitSha(), wt.branchName())
+                + DbMcpWorkerSupport.promptSection(task.dbMcp());
         ClaudeExecAdapter.ExecResult exec;
         try {
             exec = claude.exec(prompt, wt.dir(), props.implementationTimeout(),
-                    task.mcpsExtra() == null ? java.util.List.of() : task.mcpsExtra(),
+                    DbMcpWorkerSupport.withDbServers(task.mcpsExtra(), task.dbMcp(), props.apiBaseUrl()),
                     true, task.model(), task.effort());
         } catch (Exception e) {
             safePostImplementationFailure(task.id(),
@@ -332,11 +333,11 @@ public class WorkerMainLoop {
             return;
         }
 
-        String prompt = renderDesignPrompt(task);
+        String prompt = renderDesignPrompt(task) + DbMcpWorkerSupport.promptSection(task.dbMcp());
         ClaudeExecAdapter.ExecResult exec;
         try {
             exec = claude.exec(prompt, wt, props.designTimeout(),
-                    task.mcpsExtra() == null ? java.util.List.of() : task.mcpsExtra(),
+                    DbMcpWorkerSupport.withDbServers(task.mcpsExtra(), task.dbMcp(), props.apiBaseUrl()),
                     true, task.model(), task.effort());
         } catch (Exception e) {
             safePostDesignFailure(task.id(), "claude exec 실패: " + e.getMessage(), null);

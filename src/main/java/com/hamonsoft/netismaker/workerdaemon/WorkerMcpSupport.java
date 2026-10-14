@@ -141,11 +141,14 @@ public class WorkerMcpSupport {
                     }
                 }
             }
-            // extras 주입 — name 충돌 시 extras 우선
+            // extras 주입 — name 충돌 시 extras 우선. headers는 DB MCP 작업 토큰(스펙 2026-10-14 §6.4)
             for (TaskMcpSpec spec : extras) {
                 ObjectNode server = json.createObjectNode();
                 server.put("type", spec.transport());
                 server.put("url", spec.url());
+                if (spec.headers() != null && !spec.headers().isEmpty()) {
+                    server.set("headers", json.valueToTree(spec.headers()));
+                }
                 merged.set(spec.name(), server);
             }
 

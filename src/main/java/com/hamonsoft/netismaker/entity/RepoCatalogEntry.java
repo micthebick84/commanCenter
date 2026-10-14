@@ -55,6 +55,14 @@ public class RepoCatalogEntry {
     @Column(name = "design_output_project_id", length = 100)
     private String designOutputProjectId;
 
+    /** 종료 때 배포 이미지에서 산출물을 꺼내 보관할지 (스펙 2026-10-14 §3). */
+    @Column(name = "artifact_enabled", nullable = false)
+    private boolean artifactEnabled;
+
+    /** 이미지 안 산출물 경로. null이면 워커가 후보 폴더에서 하나일 때만 자동 선택. */
+    @Column(name = "artifact_path", length = 500)
+    private String artifactPath;
+
     @Column(name = "created_by", length = 20)
     private String createdBy;
 

@@ -137,4 +137,43 @@ class WorkerServiceCloseTest {
         assertThat(t.getStatus()).isEqualTo(TaskStatus.CLOSE_FAILED);
         assertThat(t.getFailureReason()).startsWith("CI 대기 중");
     }
+
+    @Test
+    void 산출물_모드가_없으면_4단계로_작업종료() {
+        Task t = task(TaskStatus.CLOSING);
+        t.setWorkerId("w1");
+        t.setCloseProgress("MERGED,UNDEPLOYED,NOTE_WRITTEN,BRANCH_DELETED");
+        when(taskRepo.findActiveByIdForUpdate(7L)).thenReturn(Optional.of(t));
+        service.recordResult(7L, WorkerResultRequest.closed("w1", null));
+        assertThat(t.getStatus()).isEqualTo(TaskStatus.CLOSED);
+    }
+
+    @Test
+    void 산출물_모드_REQUIRED면_산출물_단계_없이는_작업종료를_받지_않는다() {
+        Task t = task(TaskStatus.CLOSING);
+        t.setWorkerId("w1");
+        t.setCloseArtifactMode("REQUIRED");
+        t.setCloseProgress("MERGED,UNDEPLOYED,NOTE_WRITTEN,BRANCH_DELETED");
+        when(taskRepo.findActiveByIdForUpdate(7L)).thenReturn(Optional.of(t));
+        assertThatThrownBy(() -> service.recordResult(7L, WorkerResultRequest.closed("w1", null)))
+                .isInstanceOf(TaskException.class).hasMessageContaining("종료 단계");
+
+        t.setCloseProgress("MERGED,UNDEPLOYED,ARTIFACT_UPLOADED,NOTE_WRITTEN,BRANCH_DELETED");
+        service.recordResult(7L, WorkerResultRequest.closed("w1", null));
+        assertThat(t.getStatus()).isEqualTo(TaskStatus.CLOSED);
+    }
+
+    @Test
+    void 산출물_진행_보고는_파일이_저장된_뒤에만_받는다() {
+        Task t = task(TaskStatus.CLOSING);
+        t.setWorkerId("w1");
+        when(taskRepo.findActiveByIdForUpdate(7L)).thenReturn(Optional.of(t));
+        assertThatThrownBy(() -> service.recordCloseProgress(7L,
+                new CloseProgressRequest("w1", CloseStep.ARTIFACT_UPLOADED, null, null)))
+                .isInstanceOf(TaskException.class).hasMessageContaining("산출물");
+
+        t.setArtifactName("repo-task-7-abcdef1.war");
+        service.recordCloseProgress(7L, new CloseProgressRequest("w1", CloseStep.ARTIFACT_UPLOADED, null, null));
+        assertThat(t.getCloseProgress()).isEqualTo("ARTIFACT_UPLOADED");
+    }
 }

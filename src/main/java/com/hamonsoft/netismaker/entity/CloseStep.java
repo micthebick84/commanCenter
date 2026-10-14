@@ -4,11 +4,15 @@ import java.util.EnumSet;
 import java.util.stream.Collectors;
 
 /**
- * 작업 종료(kind=CLOSE)의 4단계. 끝난 단계는 task.close_progress에 콤마 목록으로 쌓이고,
- * 재claim한 워커는 이 목록에 있는 단계를 건너뛴다(스펙 2026-10-13 §4).
+ * 작업 종료(kind=CLOSE) 단계. 선언 순서 = 실행 순서 = task.close_progress 기록 순서
+ * (스펙 2026-10-13 §4, 2026-10-14 §3). 산출물 단계는 close_artifact_mode가 REQUIRED인 작업에만 필요하다.
  */
 public enum CloseStep {
-    MERGED, UNDEPLOYED, NOTE_WRITTEN, BRANCH_DELETED;
+    MERGED, UNDEPLOYED, ARTIFACT_UPLOADED, NOTE_WRITTEN, BRANCH_DELETED;
+
+    /** task.close_artifact_mode 값. null = 해당 없음(기능 꺼짐·레포 꺼짐·이 기능 전 승인). */
+    public static final String ARTIFACT_REQUIRED = "REQUIRED";
+    public static final String ARTIFACT_SKIPPED = "SKIPPED";
 
     /** null·빈 값은 빈 집합, 모르는 이름은 무시(구버전·수동 편집 방어). */
     public static EnumSet<CloseStep> parse(String csv) {
@@ -30,7 +34,14 @@ public enum CloseStep {
         return set.stream().map(Enum::name).collect(Collectors.joining(","));
     }
 
-    public static boolean allDone(String csv) {
-        return parse(csv).containsAll(EnumSet.allOf(CloseStep.class));
+    /** 이 작업이 작업종료가 되려면 끝나야 하는 단계. 산출물 단계는 모드가 REQUIRED일 때만. */
+    public static EnumSet<CloseStep> required(String artifactMode) {
+        EnumSet<CloseStep> s = EnumSet.allOf(CloseStep.class);
+        if (!ARTIFACT_REQUIRED.equals(artifactMode)) s.remove(ARTIFACT_UPLOADED);
+        return s;
+    }
+
+    public static boolean allDone(String csv, String artifactMode) {
+        return parse(csv).containsAll(required(artifactMode));
     }
 }

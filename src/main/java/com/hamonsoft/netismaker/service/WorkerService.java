@@ -550,6 +550,12 @@ public class WorkerService {
                 t.setDeployImage(null);
                 t.setDeployedAt(null);
             }
+            case ARTIFACT_UPLOADED -> {
+                // 파일이 먼저 저장돼 있어야 한다 — PUT /worker/tasks/{id}/artifact (스펙 2026-10-14 §5)
+                if (t.getArtifactName() == null) {
+                    throw new TaskException(HttpStatus.BAD_REQUEST, "산출물이 아직 저장되지 않았습니다");
+                }
+            }
             case NOTE_WRITTEN -> {
                 if (req.notePath() != null && !req.notePath().isBlank()) {
                     if (req.notePath().length() > MAX_NOTE_PATH_LENGTH) {
@@ -564,13 +570,13 @@ public class WorkerService {
         t.setUpdatedAt(OffsetDateTime.now());
     }
 
-    /** 종료 결과 보고. CLOSED는 4단계가 모두 보고된 뒤에만 받는다 — 단계가 빠진 채 끝났다고 믿지 않는다. */
+    /** 종료 결과 보고. CLOSED는 이 작업에 필요한 단계(CloseStep.required)가 모두 보고된 뒤에만 받는다 — 단계가 빠진 채 끝났다고 믿지 않는다. */
     private void recordCloseResult(Task t, WorkerResultRequest req) {
         TaskStatus from = t.getStatus();
         String reason;
         switch (req.status()) {
             case CLOSED -> {
-                if (!CloseStep.allDone(t.getCloseProgress())) {
+                if (!CloseStep.allDone(t.getCloseProgress(), t.getCloseArtifactMode())) {
                     throw new TaskException(HttpStatus.BAD_REQUEST,
                             "종료 단계가 모두 끝나지 않았습니다 (끝난 단계: "
                                     + (t.getCloseProgress() == null ? "없음" : t.getCloseProgress()) + ")");

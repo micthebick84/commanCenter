@@ -145,6 +145,47 @@ public class Task {
     @Setter
     private String mergeCommitSha;
 
+    /** 종료 메일 수신 주소 — 등록 때 JWT email, 등록자의 종료 요청 때 갱신 (스펙 2026-10-14 §7). */
+    @Column(name = "requester_email", length = 320)
+    @Setter
+    private String requesterEmail;
+
+    /** 종료 산출물 모드 null | REQUIRED | SKIPPED — 종료 승인 때 정한다 (CloseStep.ARTIFACT_*). */
+    @Column(name = "close_artifact_mode", length = 10)
+    @Setter
+    private String closeArtifactMode;
+
+    /** 보관한 산출물 파일 이름. 파일은 ArtifactStore가 attachments/task-{id}/artifact/ 아래에 둔다. */
+    @Column(name = "artifact_name", length = 255)
+    @Setter
+    private String artifactName;
+
+    @Column(name = "artifact_size")
+    @Setter
+    private Long artifactSize;
+
+    @Column(name = "artifact_sha256", length = 64)
+    @Setter
+    private String artifactSha256;
+
+    /** 꺼낸 곳 — {이미지}:{이미지 안 경로}. */
+    @Column(name = "artifact_source", length = 500)
+    @Setter
+    private String artifactSource;
+
+    @Column(name = "artifact_uploaded_at")
+    @Setter
+    private OffsetDateTime artifactUploadedAt;
+
+    /** 종료 메일 결과 SENT | FAILED | NO_ADDRESS | DISABLED. 메일 대상이 아니면 null. */
+    @Column(name = "close_mail_status", length = 20)
+    @Setter
+    private String closeMailStatus;
+
+    @Column(name = "close_mail_at")
+    @Setter
+    private OffsetDateTime closeMailAt;
+
     /** 작업 등록 시 선택된 레포 카탈로그의 전체 Git URL 스냅샷. */
     @Column(name = "git_url", columnDefinition = "TEXT")
     @Setter

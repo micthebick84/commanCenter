@@ -64,6 +64,10 @@ netis-maker:
       merge-method: ${CLOSE_MERGE_METHOD:merge}
       note-model: ${CLOSE_NOTE_MODEL:sonnet}
       note-timeout: ${CLOSE_NOTE_TIMEOUT:10m}
+      artifact:                      # 종료 산출물 꺼내기 (스펙 2026-10-14 §4)
+        search-dirs: ${CLOSE_ARTIFACT_SEARCH_DIRS:/usr/local/tomcat/webapps,/app}
+        copy-timeout: ${CLOSE_ARTIFACT_COPY_TIMEOUT:10m}
+        upload-timeout: ${CLOSE_ARTIFACT_UPLOAD_TIMEOUT:10m}
     dead-letter-dir: ${DEAD_LETTER_DIR:${user.home}/netis-maker/dead-letter}
     claude-cli-path: ${CLAUDE_CLI:/opt/homebrew/bin/claude}
     github-pat: ${GITHUB_PAT:}

@@ -22,8 +22,18 @@ class CloseStepTest {
     }
 
     @Test
-    void allDone은_4단계가_모두_있을때만_true() {
-        assertThat(CloseStep.allDone("MERGED,UNDEPLOYED,NOTE_WRITTEN")).isFalse();
-        assertThat(CloseStep.allDone("BRANCH_DELETED,NOTE_WRITTEN,UNDEPLOYED,MERGED")).isTrue();
+    void allDone은_모드에_따라_필요한_단계가_다르다() {
+        String four = "BRANCH_DELETED,NOTE_WRITTEN,UNDEPLOYED,MERGED";
+        assertThat(CloseStep.allDone("MERGED,UNDEPLOYED,NOTE_WRITTEN", null)).isFalse();
+        assertThat(CloseStep.allDone(four, null)).isTrue();
+        assertThat(CloseStep.allDone(four, "SKIPPED")).isTrue();
+        assertThat(CloseStep.allDone(four, "REQUIRED")).isFalse();
+        assertThat(CloseStep.allDone(four + ",ARTIFACT_UPLOADED", "REQUIRED")).isTrue();
+    }
+
+    @Test
+    void append는_산출물_단계를_배포_중지와_노트_사이에_둔다() {
+        assertThat(CloseStep.append("MERGED,UNDEPLOYED,NOTE_WRITTEN", CloseStep.ARTIFACT_UPLOADED))
+                .isEqualTo("MERGED,UNDEPLOYED,ARTIFACT_UPLOADED,NOTE_WRITTEN");
     }
 }

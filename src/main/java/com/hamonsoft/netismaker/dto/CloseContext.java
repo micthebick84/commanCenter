@@ -1,5 +1,6 @@
 package com.hamonsoft.netismaker.dto;
 
+import com.hamonsoft.netismaker.entity.CloseStep;
 import com.hamonsoft.netismaker.entity.Task;
 import com.hamonsoft.netismaker.entity.TaskAnalysis;
 import com.hamonsoft.netismaker.entity.TaskStageUsage;
@@ -22,8 +23,22 @@ public record CloseContext(
         String deployUrl,
         OffsetDateTime deployedAt,
         List<HistoryLine> history,
-        List<UsageLine> usage
+        List<UsageLine> usage,
+        /** 보관한 산출물 이름·크기(재시도에서 이미 올렸을 때 노트에 쓴다). 없으면 null. */
+        String artifactName,
+        Long artifactSizeBytes,
+        /** 관리자가 '산출물 없이 마무리'를 눌렀다 — 노트에 '없음'을 쓴다. */
+        boolean artifactSkipped,
+        /** 작업 화면 주소({APP_PUBLIC_BASE_URL}/tasks/{id}). 설정이 비면 null. */
+        String taskUrl
 ) {
+    /** 산출물 필드 도입 전 8개 인자 생성자 — 기존 테스트 호환. */
+    public CloseContext(String planMarkdown, String analysisMarkdown, String implementationTail, String mergeCommitSha,
+                        String deployUrl, OffsetDateTime deployedAt, List<HistoryLine> history, List<UsageLine> usage) {
+        this(planMarkdown, analysisMarkdown, implementationTail, mergeCommitSha, deployUrl, deployedAt, history, usage,
+                null, null, false, null);
+    }
+
     static final int PLAN_MAX = 12_000;
     static final int ANALYSIS_MAX = 8_000;
     static final int IMPL_TAIL_MAX = 8_000;
@@ -37,6 +52,13 @@ public record CloseContext(
     /** @param historyOldestFirst 시간순(오래된 것 먼저) */
     public static CloseContext of(Task t, String planMarkdown, TaskAnalysis a,
                                   List<TaskStatusHistory> historyOldestFirst, List<TaskStageUsage> usage) {
+        return of(t, planMarkdown, a, historyOldestFirst, usage, null);
+    }
+
+    /** @param taskUrl 노트의 내려받기 안내에 쓰는 작업 화면 주소(설정이 비면 null) */
+    public static CloseContext of(Task t, String planMarkdown, TaskAnalysis a,
+                                  List<TaskStatusHistory> historyOldestFirst, List<TaskStageUsage> usage,
+                                  String taskUrl) {
         return new CloseContext(
                 head(planMarkdown, PLAN_MAX),
                 a == null ? null : head(a.getMarkdownResult(), ANALYSIS_MAX),
@@ -47,7 +69,11 @@ public record CloseContext(
                 historyOldestFirst.stream().map(h -> new HistoryLine(h.getAt(), h.getFromStatus(), h.getToStatus(),
                         h.getActorId() == null ? h.getActorType() : h.getActorId(), h.getReason())).toList(),
                 usage.stream().map(u -> new UsageLine(u.getStage(), u.getCostUsd(),
-                        u.getInputTokens(), u.getOutputTokens())).toList());
+                        u.getInputTokens(), u.getOutputTokens())).toList(),
+                t.getArtifactName(),
+                t.getArtifactSize(),
+                CloseStep.ARTIFACT_SKIPPED.equals(t.getCloseArtifactMode()),
+                taskUrl);
     }
 
     static String head(String s, int max) {

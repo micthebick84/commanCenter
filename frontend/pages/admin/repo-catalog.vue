@@ -21,6 +21,8 @@ interface RepoEntry {
   createdBy: string | null
   createdAt: string
   updatedAt: string
+  artifactEnabled: boolean
+  artifactPath: string | null
 }
 
 const $q = useQuasar()
@@ -82,6 +84,8 @@ const form = reactive({
   defaultBranch: '',
   description: '',
   enabled: true,
+  artifactEnabled: false,
+  artifactPath: '',
 })
 const submitting = ref(false)
 
@@ -92,6 +96,8 @@ function openCreate() {
   form.defaultBranch = ''
   form.description = ''
   form.enabled = true
+  form.artifactEnabled = false
+  form.artifactPath = ''
   showForm.value = true
 }
 
@@ -102,6 +108,8 @@ function openEdit(e: RepoEntry) {
   form.defaultBranch = e.defaultBranch ?? ''
   form.description = e.description ?? ''
   form.enabled = e.enabled
+  form.artifactEnabled = e.artifactEnabled ?? false
+  form.artifactPath = e.artifactPath ?? ''
   showForm.value = true
 }
 
@@ -114,6 +122,8 @@ async function submit() {
       defaultBranch: form.defaultBranch || null,
       description: form.description || null,
       enabled: form.enabled,
+      artifactEnabled: form.artifactEnabled,
+      artifactPath: form.artifactPath || null,
     }
     if (editingId.value) {
       await useApi(`/api/admin/repo-catalog/${editingId.value}`, { method: 'PUT', body })
@@ -368,6 +378,24 @@ const canSubmit = computed(
           rows="2"
         />
         <q-toggle v-model="form.enabled" label="활성화 (사용자에게 노출)" color="positive" />
+        <q-toggle
+          v-model="form.artifactEnabled"
+          label="종료 때 산출물 보관 (WAR·JAR, 등록자 메일)"
+          color="primary"
+          data-test="form-artifact-enabled"
+        />
+        <q-input
+          v-if="form.artifactEnabled"
+          v-model="form.artifactPath"
+          label="이미지 안 산출물 경로 (선택)"
+          placeholder="비우면 자동: /usr/local/tomcat/webapps·/app에서 하나일 때"
+          outlined
+          :dense="!mobile"
+          autocapitalize="off"
+          autocorrect="off"
+          spellcheck="false"
+          data-test="form-artifact-path"
+        />
       </template>
     </AdminFormDialog>
 

@@ -1,6 +1,7 @@
 package com.hamonsoft.netismaker.service;
 
 import com.hamonsoft.netismaker.dto.ActiveWorktreeTaskSummary;
+import com.hamonsoft.netismaker.dto.CloseArtifactSpec;
 import com.hamonsoft.netismaker.dto.CloseContext;
 import com.hamonsoft.netismaker.dto.CloseProgressRequest;
 import com.hamonsoft.netismaker.dto.DeployedTaskSummary;
@@ -18,6 +19,9 @@ import com.hamonsoft.netismaker.repository.TaskRepository;
 import com.hamonsoft.netismaker.repository.TaskStageUsageRepository;
 import com.hamonsoft.netismaker.repository.TaskStatusHistoryRepository;
 import com.hamonsoft.netismaker.repository.WorkerHeartbeatRepository;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.context.annotation.Profile;
 import org.springframework.data.domain.Limit;
 import org.springframework.data.domain.PageRequest;
@@ -49,7 +53,7 @@ import java.util.Optional;
  *                       IMPLEMENTATION_FAILED: failure_reason + (있으면)log + status=IMPLEMENTATION_FAILED
  *                       DESIGN_REVIEW       : task_design upsert(반려 이력 보존) + status=DESIGN_REVIEW
  *                       DESIGN_FAILED       : failure_reason + status=DESIGN_FAILED
- *                       CLOSED              : 종료 4단계가 모두 보고된 뒤에만 (status=CLOSED)
+ *                       CLOSED              : 이 작업에 필요한 종료 단계(CloseStep.required)가 모두 보고된 뒤에만 (status=CLOSED)
  *                       CLOSE_FAILED        : failure_reason + status=CLOSE_FAILED
  *   recordCloseProgress ─► 종료 단계 완료 보고를 task.close_progress에 누적 (멱등)
  */
@@ -63,6 +67,10 @@ public class WorkerService {
     private static final int MAX_COMMIT_SHA_LENGTH = 40;
     private static final int MAX_NOTE_PATH_LENGTH = 500;
 
+    /** 메일·노트 링크 기준 주소 (스펙 2026-10-14 §4). 단위 테스트에서는 null. */
+    @Value("${app.public-base-url:}")
+    private String publicBaseUrl;
+
     private final TaskRepository taskRepo;
     private final TaskAnalysisRepository analysisRepo;
     private final TaskDesignRepository designRepo;
@@ -73,6 +81,14 @@ public class WorkerService {
     private final DeployLogStreamService deployLogStream;
     private final InterviewSessionRepository sessionRepo;
     private final InterviewPlanRepository planRepo;
+
+    /** 작업종료 → 커밋 뒤 메일(CloseMailListener). 생성자를 바꾸지 않으려고 setter 주입 — 단위 테스트에서는 null. */
+    private ApplicationEventPublisher events;
+
+    @Autowired
+    void setEvents(ApplicationEventPublisher events) {
+        this.events = events;
+    }
 
     public WorkerService(TaskRepository taskRepo,
                          TaskAnalysisRepository analysisRepo,
@@ -177,7 +193,7 @@ public class WorkerService {
             return Optional.of(WorkerTaskResponse.forUndeploy(t));
         }
         if (from == TaskStatus.CLOSE_PENDING) {
-            return Optional.of(WorkerTaskResponse.forClose(t, closeContext(t)));
+            return Optional.of(WorkerTaskResponse.forClose(t, closeContext(t), closeArtifactSpec(t)));
         }
         return Optional.of(WorkerTaskResponse.forAnalysis(t));
     }
@@ -189,7 +205,16 @@ public class WorkerService {
                 historyRepo.findByTaskIdOrderByAtDescIdDesc(t.getId(), Limit.of(CLOSE_HISTORY_LIMIT)));
         Collections.reverse(history); // 시간순(오래된 것 먼저)
         return CloseContext.of(t, registeredPlanMarkdown(t.getId()), a, history,
-                stageUsageRepo.findByTaskIdOrderByStageAsc(t.getId()));
+                stageUsageRepo.findByTaskIdOrderByStageAsc(t.getId()), CloseLinks.taskUrl(publicBaseUrl, t.getId()));
+    }
+
+    /** 산출물 모드가 REQUIRED이고 아직 안 올렸을 때만 지시를 싣는다 — 워커는 null이면 단계를 건너뛴다. */
+    private CloseArtifactSpec closeArtifactSpec(Task t) {
+        if (!CloseStep.ARTIFACT_REQUIRED.equals(t.getCloseArtifactMode())) return null;
+        if (CloseStep.parse(t.getCloseProgress()).contains(CloseStep.ARTIFACT_UPLOADED)) return null;
+        String path = RepoCatalogRepository.findForTask(repoCatalogRepo, t.getRepoCatalogId(), t.getGitUrl())
+                .map(RepoCatalogEntry::getArtifactPath).map(String::trim).filter(s -> !s.isEmpty()).orElse(null);
+        return new CloseArtifactSpec(path);
     }
 
     /**
@@ -316,7 +341,7 @@ public class WorkerService {
                     "다른 워커가 잡은 작업입니다 (소유: " + t.getWorkerId() + ")");
         }
 
-        // 종료 단계는 별도 처리 (4단계 완료 검증).
+        // 종료 단계는 별도 처리 (이 작업에 필요한 단계(CloseStep.required) 완료 검증).
         if (current == TaskStatus.CLOSING) {
             recordCloseResult(t, req);
             return;
@@ -550,6 +575,12 @@ public class WorkerService {
                 t.setDeployImage(null);
                 t.setDeployedAt(null);
             }
+            case ARTIFACT_UPLOADED -> {
+                // 파일이 먼저 저장돼 있어야 한다 — PUT /worker/tasks/{id}/artifact (스펙 2026-10-14 §5)
+                if (t.getArtifactName() == null) {
+                    throw new TaskException(HttpStatus.BAD_REQUEST, "산출물이 아직 저장되지 않았습니다");
+                }
+            }
             case NOTE_WRITTEN -> {
                 if (req.notePath() != null && !req.notePath().isBlank()) {
                     if (req.notePath().length() > MAX_NOTE_PATH_LENGTH) {
@@ -564,13 +595,13 @@ public class WorkerService {
         t.setUpdatedAt(OffsetDateTime.now());
     }
 
-    /** 종료 결과 보고. CLOSED는 4단계가 모두 보고된 뒤에만 받는다 — 단계가 빠진 채 끝났다고 믿지 않는다. */
+    /** 종료 결과 보고. CLOSED는 이 작업에 필요한 단계(CloseStep.required)가 모두 보고된 뒤에만 받는다 — 단계가 빠진 채 끝났다고 믿지 않는다. */
     private void recordCloseResult(Task t, WorkerResultRequest req) {
         TaskStatus from = t.getStatus();
         String reason;
         switch (req.status()) {
             case CLOSED -> {
-                if (!CloseStep.allDone(t.getCloseProgress())) {
+                if (!CloseStep.allDone(t.getCloseProgress(), t.getCloseArtifactMode())) {
                     throw new TaskException(HttpStatus.BAD_REQUEST,
                             "종료 단계가 모두 끝나지 않았습니다 (끝난 단계: "
                                     + (t.getCloseProgress() == null ? "없음" : t.getCloseProgress()) + ")");
@@ -580,6 +611,7 @@ public class WorkerService {
                 String sha = t.getMergeCommitSha();
                 reason = "작업 종료" + (sha == null || sha.isBlank() ? ""
                         : ": 병합 " + sha.substring(0, Math.min(7, sha.length())));
+                if (events != null) events.publishEvent(new CloseCompletedEvent(t.getId()));
             }
             case CLOSE_FAILED -> {
                 t.setStatus(TaskStatus.CLOSE_FAILED);

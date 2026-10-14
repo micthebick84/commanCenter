@@ -4,12 +4,14 @@ import com.hamonsoft.netismaker.dto.CloseProgressRequest;
 import com.hamonsoft.netismaker.dto.WorkerResultRequest;
 import com.hamonsoft.netismaker.dto.WorkerTaskResponse;
 import com.hamonsoft.netismaker.entity.CloseStep;
+import com.hamonsoft.netismaker.entity.RepoCatalogEntry;
 import com.hamonsoft.netismaker.entity.Task;
 import com.hamonsoft.netismaker.entity.TaskStatus;
 import com.hamonsoft.netismaker.entity.TaskStatusHistory;
 import com.hamonsoft.netismaker.repository.*;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.data.domain.Limit;
 import org.springframework.test.util.ReflectionTestUtils;
 
@@ -27,6 +29,7 @@ class WorkerServiceCloseTest {
     private TaskRepository taskRepo;
     private TaskStatusHistoryRepository historyRepo;
     private TaskStageUsageRepository stageUsageRepo;
+    private RepoCatalogRepository catalogRepo;
     private WorkerService service;
 
     private Task task(TaskStatus status) {
@@ -47,8 +50,9 @@ class WorkerServiceCloseTest {
         taskRepo = mock(TaskRepository.class);
         historyRepo = mock(TaskStatusHistoryRepository.class);
         stageUsageRepo = mock(TaskStageUsageRepository.class);
+        catalogRepo = mock(RepoCatalogRepository.class);
         service = new WorkerService(taskRepo, mock(TaskAnalysisRepository.class), mock(TaskDesignRepository.class),
-                mock(RepoCatalogRepository.class), historyRepo, stageUsageRepo, mock(WorkerHeartbeatRepository.class),
+                catalogRepo, historyRepo, stageUsageRepo, mock(WorkerHeartbeatRepository.class),
                 mock(DeployLogStreamService.class), mock(InterviewSessionRepository.class),
                 mock(InterviewPlanRepository.class));
         when(historyRepo.save(any())).thenAnswer(i -> i.getArgument(0));
@@ -136,5 +140,113 @@ class WorkerServiceCloseTest {
         service.recordResult(7L, WorkerResultRequest.closeFailed("w1", "CI 대기 중: checks pending", null));
         assertThat(t.getStatus()).isEqualTo(TaskStatus.CLOSE_FAILED);
         assertThat(t.getFailureReason()).startsWith("CI 대기 중");
+    }
+
+    @Test
+    void 산출물_모드가_없으면_4단계로_작업종료() {
+        Task t = task(TaskStatus.CLOSING);
+        t.setWorkerId("w1");
+        t.setCloseProgress("MERGED,UNDEPLOYED,NOTE_WRITTEN,BRANCH_DELETED");
+        when(taskRepo.findActiveByIdForUpdate(7L)).thenReturn(Optional.of(t));
+        service.recordResult(7L, WorkerResultRequest.closed("w1", null));
+        assertThat(t.getStatus()).isEqualTo(TaskStatus.CLOSED);
+    }
+
+    @Test
+    void 산출물_모드_REQUIRED면_산출물_단계_없이는_작업종료를_받지_않는다() {
+        Task t = task(TaskStatus.CLOSING);
+        t.setWorkerId("w1");
+        t.setCloseArtifactMode("REQUIRED");
+        t.setCloseProgress("MERGED,UNDEPLOYED,NOTE_WRITTEN,BRANCH_DELETED");
+        when(taskRepo.findActiveByIdForUpdate(7L)).thenReturn(Optional.of(t));
+        assertThatThrownBy(() -> service.recordResult(7L, WorkerResultRequest.closed("w1", null)))
+                .isInstanceOf(TaskException.class).hasMessageContaining("종료 단계");
+
+        t.setCloseProgress("MERGED,UNDEPLOYED,ARTIFACT_UPLOADED,NOTE_WRITTEN,BRANCH_DELETED");
+        service.recordResult(7L, WorkerResultRequest.closed("w1", null));
+        assertThat(t.getStatus()).isEqualTo(TaskStatus.CLOSED);
+    }
+
+    @Test
+    void 산출물_진행_보고는_파일이_저장된_뒤에만_받는다() {
+        Task t = task(TaskStatus.CLOSING);
+        t.setWorkerId("w1");
+        when(taskRepo.findActiveByIdForUpdate(7L)).thenReturn(Optional.of(t));
+        assertThatThrownBy(() -> service.recordCloseProgress(7L,
+                new CloseProgressRequest("w1", CloseStep.ARTIFACT_UPLOADED, null, null)))
+                .isInstanceOf(TaskException.class).hasMessageContaining("산출물");
+
+        t.setArtifactName("repo-task-7-abcdef1.war");
+        service.recordCloseProgress(7L, new CloseProgressRequest("w1", CloseStep.ARTIFACT_UPLOADED, null, null));
+        assertThat(t.getCloseProgress()).isEqualTo("ARTIFACT_UPLOADED");
+    }
+
+    @Test
+    void 산출물_모드면_claim에_산출물_지시와_작업_주소를_싣는다() {
+        Task t = task(TaskStatus.CLOSE_PENDING);
+        t.setCloseProgress("MERGED,UNDEPLOYED");
+        t.setCloseArtifactMode("REQUIRED");
+        t.setRepoCatalogId(3L);
+        RepoCatalogEntry e = RepoCatalogEntry.create("W", "https://github.com/owner/repo.git", "github",
+                "owner/repo", null, null, "admin");
+        e.setArtifactPath(" /usr/local/tomcat/webapps/ROOT.war ");
+        when(catalogRepo.findById(3L)).thenReturn(Optional.of(e));
+        ReflectionTestUtils.setField(service, "publicBaseUrl", "https://app-win.micthebick.dev/");
+        when(taskRepo.findClaimableForUpdateSkipLocked(any())).thenReturn(List.of(t));
+
+        WorkerTaskResponse r = service.claimNextTask("w1").orElseThrow();
+
+        assertThat(r.closeArtifact().path()).isEqualTo("/usr/local/tomcat/webapps/ROOT.war");
+        assertThat(r.closeContext().taskUrl()).isEqualTo("https://app-win.micthebick.dev/tasks/7");
+        assertThat(r.closeContext().artifactSkipped()).isFalse();
+    }
+
+    @Test
+    void 산출물_단계가_끝났거나_모드가_아니면_지시가_없고_건너뛴_작업은_표시한다() {
+        Task t = task(TaskStatus.CLOSE_PENDING);
+        t.setCloseArtifactMode("REQUIRED");
+        t.setCloseProgress("MERGED,UNDEPLOYED,ARTIFACT_UPLOADED");
+        t.setArtifactName("repo-task-7-abcdef1.war");
+        t.setArtifactSize(1024L);
+        when(taskRepo.findClaimableForUpdateSkipLocked(any())).thenReturn(List.of(t));
+        WorkerTaskResponse r = service.claimNextTask("w1").orElseThrow();
+        assertThat(r.closeArtifact()).isNull();
+        assertThat(r.closeContext().artifactName()).isEqualTo("repo-task-7-abcdef1.war");
+        assertThat(r.closeContext().artifactSizeBytes()).isEqualTo(1024L);
+
+        Task u = task(TaskStatus.CLOSE_PENDING);
+        u.setCloseArtifactMode("SKIPPED");
+        when(taskRepo.findClaimableForUpdateSkipLocked(any())).thenReturn(List.of(u));
+        WorkerTaskResponse s = service.claimNextTask("w1").orElseThrow();
+        assertThat(s.closeArtifact()).isNull();
+        assertThat(s.closeContext().artifactSkipped()).isTrue();
+        assertThat(s.closeContext().taskUrl()).isNull();   // 기준 주소 미설정
+    }
+
+    @Test
+    void 작업종료가_기록되면_메일_이벤트를_발행한다() {
+        ApplicationEventPublisher events = mock(ApplicationEventPublisher.class);
+        service.setEvents(events);
+        Task t = task(TaskStatus.CLOSING);
+        t.setWorkerId("w1");
+        t.setCloseProgress("MERGED,UNDEPLOYED,NOTE_WRITTEN,BRANCH_DELETED");
+        when(taskRepo.findActiveByIdForUpdate(7L)).thenReturn(Optional.of(t));
+
+        service.recordResult(7L, WorkerResultRequest.closed("w1", null));
+
+        verify(events).publishEvent(new CloseCompletedEvent(7L));
+    }
+
+    @Test
+    void 종료실패면_메일_이벤트를_발행하지_않는다() {
+        ApplicationEventPublisher events = mock(ApplicationEventPublisher.class);
+        service.setEvents(events);
+        Task t = task(TaskStatus.CLOSING);
+        t.setWorkerId("w1");
+        when(taskRepo.findActiveByIdForUpdate(7L)).thenReturn(Optional.of(t));
+
+        service.recordResult(7L, WorkerResultRequest.closeFailed("w1", "CI 대기 중: checks pending", null));
+
+        verifyNoInteractions(events);
     }
 }

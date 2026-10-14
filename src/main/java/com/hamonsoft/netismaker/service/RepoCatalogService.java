@@ -55,6 +55,7 @@ public class RepoCatalogService {
         RepoCatalogEntry e = RepoCatalogEntry.create(req.alias(), p.canonicalUrl(), p.host(),
                 p.ownerRepo(), blankToNull(req.defaultBranch()), req.description(), adminId);
         if (req.enabled() != null) e.setEnabled(req.enabled());
+        applyArtifact(e, req);
         return repo.save(e);
     }
 
@@ -80,6 +81,7 @@ public class RepoCatalogService {
         e.setDefaultBranch(blankToNull(req.defaultBranch()));
         e.setDescription(req.description());
         if (req.enabled() != null) e.setEnabled(req.enabled());
+        applyArtifact(e, req);
         e.setUpdatedAt(OffsetDateTime.now());
         return e;
     }
@@ -163,6 +165,13 @@ public class RepoCatalogService {
         } catch (IllegalArgumentException ex) {
             return RepoCatalogDto.View.of(e);
         }
+    }
+
+    /** artifactEnabled가 null이면(활성화 토글 등) 산출물 설정을 그대로 둔다. */
+    private static void applyArtifact(RepoCatalogEntry e, RepoCatalogDto.UpsertRequest req) {
+        if (req.artifactEnabled() == null) return;
+        e.setArtifactEnabled(req.artifactEnabled());
+        e.setArtifactPath(blankToNull(req.artifactPath()));
     }
 
     private static String blankToNull(String s) {

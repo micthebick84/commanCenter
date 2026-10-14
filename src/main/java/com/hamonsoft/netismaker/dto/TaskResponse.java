@@ -113,19 +113,33 @@ public record TaskResponse(
             long cacheReadTokens
     ) {}
 
-    /** progress는 끝난 CloseStep 이름(MERGED, UNDEPLOYED, NOTE_WRITTEN, BRANCH_DELETED) — enum 순서. */
-    public record CloseView(List<String> progress, String mergeCommitSha, String notePath) {}
+    /**
+     * progress는 끝난 CloseStep 이름 — enum 순서. artifactMode는 null | REQUIRED | SKIPPED,
+     * artifact·mail은 없으면 null (스펙 2026-10-14 §8). 수신 주소는 싣지 않는다.
+     */
+    public record CloseView(List<String> progress, String mergeCommitSha, String notePath,
+                            String artifactMode, ArtifactView artifact, MailView mail) {}
+
+    public record ArtifactView(String name, long sizeBytes, String sha256, OffsetDateTime uploadedAt) {}
+
+    public record MailView(String status, OffsetDateTime at) {}
 
     private static final java.util.Set<TaskStatus> CLOSE_PHASE = java.util.EnumSet.of(
             TaskStatus.CLOSE_REVIEW, TaskStatus.CLOSE_PENDING, TaskStatus.CLOSING,
             TaskStatus.CLOSED, TaskStatus.CLOSE_FAILED);
 
     private static CloseView closeViewOf(Task t) {
-        boolean recorded = t.getCloseProgress() != null || t.getMergeCommitSha() != null || t.getCloseNotePath() != null;
+        boolean recorded = t.getCloseProgress() != null || t.getMergeCommitSha() != null || t.getCloseNotePath() != null
+                || t.getArtifactName() != null;
         if (!recorded && !CLOSE_PHASE.contains(t.getStatus())) return null;
         return new CloseView(
                 com.hamonsoft.netismaker.entity.CloseStep.parse(t.getCloseProgress()).stream().map(Enum::name).toList(),
-                t.getMergeCommitSha(), t.getCloseNotePath());
+                t.getMergeCommitSha(), t.getCloseNotePath(),
+                t.getCloseArtifactMode(),
+                t.getArtifactName() == null ? null : new ArtifactView(t.getArtifactName(),
+                        t.getArtifactSize() == null ? 0 : t.getArtifactSize(), t.getArtifactSha256(),
+                        t.getArtifactUploadedAt()),
+                t.getCloseMailStatus() == null ? null : new MailView(t.getCloseMailStatus(), t.getCloseMailAt()));
     }
 
     public static TaskResponse of(Task t, TaskAnalysis a) {

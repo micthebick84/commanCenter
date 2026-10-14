@@ -104,6 +104,12 @@ public class TaskService {
 
     @Transactional
     public Task create(TaskCreateRequest req, String requesterId) {
+        return create(req, requesterId, null);
+    }
+
+    /** requesterEmail: JWT email — 종료 메일 수신 주소 (스펙 2026-10-14 §7). null이면 저장하지 않는다. */
+    @Transactional
+    public Task create(TaskCreateRequest req, String requesterId, String requesterEmail) {
         long active = taskRepo.countActiveByRequester(requesterId);
         if (active >= userConcurrentLimit) {
             throw TaskException.tooManyRequests(
@@ -118,6 +124,7 @@ public class TaskService {
         t.setGitUrl(repo.gitUrl());
         t.setRepoAlias(repo.alias());
         t.setRepoCatalogId(repo.catalogId());
+        t.setRequesterEmail(requesterEmail);
         Task saved = taskRepo.save(t);
         historyRepo.save(TaskStatusHistory.log(saved.getId(), null, TaskStatus.AWAITING_APPROVAL,
                 "user", requesterId, "작업 등록"));
@@ -131,9 +138,14 @@ public class TaskService {
      */
     @Transactional
     public Task create(TaskCreateRequest req, List<MultipartFile> files, String requesterId) {
+        return create(req, files, requesterId, null);
+    }
+
+    @Transactional
+    public Task create(TaskCreateRequest req, List<MultipartFile> files, String requesterId, String requesterEmail) {
         List<MultipartFile> attached = files == null ? List.of() : files;
         attachmentStorage.validate(attached);
-        Task saved = create(req, requesterId);   // 내부 호출 — 이미 @Transactional 안이라 같은 tx
+        Task saved = create(req, requesterId, requesterEmail);   // 내부 호출 — 이미 @Transactional 안이라 같은 tx
         List<String> written = new ArrayList<>();
         try {
             int ordinal = 1;

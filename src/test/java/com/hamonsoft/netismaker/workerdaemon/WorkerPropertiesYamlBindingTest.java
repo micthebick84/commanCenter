@@ -151,4 +151,23 @@ class WorkerPropertiesYamlBindingTest {
         assertThat(p.mergeMethod()).isEqualTo("squash");
         assertThat(p.noteTimeout()).isEqualTo(java.time.Duration.ofMinutes(3));
     }
+
+    @Test
+    void close_산출물_설정은_기본값과_환경변수_재정의로_바인딩된다() throws Exception {
+        ArtifactProperties defaults = Binder.get(loadYaml())
+                .bind("netis-maker.worker.close.artifact", ArtifactProperties.class).get();
+        assertThat(defaults.searchDirs()).containsExactly("/usr/local/tomcat/webapps", "/app");
+        assertThat(defaults.copyTimeout()).isEqualTo(java.time.Duration.ofMinutes(10));
+        assertThat(defaults.uploadTimeout()).isEqualTo(java.time.Duration.ofMinutes(10));
+
+        StandardEnvironment env = loadYaml();
+        env.getPropertySources().addFirst(new MapPropertySource("test-env-overrides", Map.of(
+                "CLOSE_ARTIFACT_SEARCH_DIRS", "/opt/app, /srv/web",
+                "CLOSE_ARTIFACT_COPY_TIMEOUT", "3m",
+                "CLOSE_ARTIFACT_UPLOAD_TIMEOUT", "90s")));
+        ArtifactProperties p = Binder.get(env).bind("netis-maker.worker.close.artifact", ArtifactProperties.class).get();
+        assertThat(p.searchDirs()).containsExactly("/opt/app", "/srv/web");
+        assertThat(p.copyTimeout()).isEqualTo(java.time.Duration.ofMinutes(3));
+        assertThat(p.uploadTimeout()).isEqualTo(java.time.Duration.ofSeconds(90));
+    }
 }

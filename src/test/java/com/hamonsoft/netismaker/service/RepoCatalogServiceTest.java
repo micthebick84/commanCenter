@@ -276,4 +276,23 @@ class RepoCatalogServiceTest {
         assertThatThrownBy(() -> service.refOf(10L))
                 .isInstanceOf(TaskException.class).hasMessageContaining("지원하지 않는 호스트");
     }
+
+    @Test
+    void 산출물_설정을_저장하고_null이면_유지한다() {
+        when(repo.findByAlias(any())).thenReturn(Optional.empty());
+        when(repo.findByGitUrl(any())).thenReturn(Optional.empty());
+        RepoCatalogEntry saved = service.create(new RepoCatalogDto.UpsertRequest(
+                "동부병원", "owner/netisdash", null, null, true, true, " /usr/local/tomcat/webapps/ROOT.war "), "admin");
+        assertThat(saved.isArtifactEnabled()).isTrue();
+        assertThat(saved.getArtifactPath()).isEqualTo("/usr/local/tomcat/webapps/ROOT.war");
+
+        ReflectionTestUtils.setField(saved, "id", 9L);
+        when(repo.findById(9L)).thenReturn(Optional.of(saved));
+        service.update(9L, new RepoCatalogDto.UpsertRequest("동부병원", "owner/netisdash", null, null, false));
+        assertThat(saved.isArtifactEnabled()).isTrue();          // 활성화 토글은 산출물 설정을 건드리지 않는다
+        service.update(9L, new RepoCatalogDto.UpsertRequest("동부병원", "owner/netisdash", null, null, true, false, ""));
+        assertThat(saved.isArtifactEnabled()).isFalse();
+        assertThat(saved.getArtifactPath()).isNull();
+        assertThat(RepoCatalogDto.View.of(saved).artifactEnabled()).isFalse();
+    }
 }

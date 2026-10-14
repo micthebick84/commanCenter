@@ -17,7 +17,7 @@ import java.util.List;
  *  kind=DEPLOY         → head 브랜치(headBranch@headSha)를 빌드해 docker 배포 (envVars 주입)
  *  kind=UNDEPLOY       → 컨테이너 netis-task-{id} 중지 (id만 사용)
  *  kind=DESIGN         → 목업 생성 + Claude Design 업로드 (디자인 시스템/출력 프로젝트 ID 동봉)
- *  kind=CLOSE          → 작업 종료: PR 병합 → 배포 중지 → 노트 → 브랜치 정리 (prNumber/headSha/closeProgress/closeContext 동봉)
+ *  kind=CLOSE          → 작업 종료: PR 병합 → 배포 중지 → 노트 → 브랜치 정리 (prNumber/headSha/closeProgress/closeContext/closeArtifact 동봉)
  */
 public record WorkerTaskResponse(
         Long id,
@@ -55,11 +55,13 @@ public record WorkerTaskResponse(
         /** CLOSE 전용: 이미 끝난 단계(CloseStep 콤마 목록) — 재claim한 워커가 건너뛴다. */
         String closeProgress,
         /** CLOSE 전용: 노트 재료. */
-        CloseContext closeContext
+        CloseContext closeContext,
+        /** CLOSE 전용: 산출물 지시. null이면 워커가 산출물 단계를 건너뛴다 (스펙 2026-10-14 §3). */
+        CloseArtifactSpec closeArtifact
 ) {
     /**
      * CLOSE 필드 도입 전 23개 인자 생성자 — 종료 외 kind·기존 팩토리·테스트가 그대로 쓴다.
-     * Jackson은 레코드의 정규 생성자(27개)를 쓰므로 역직렬화와 무관하다(WorkerResultRequest와 같은 방식).
+     * Jackson은 레코드의 정규 생성자(28개)를 쓰므로 역직렬화와 무관하다(WorkerResultRequest와 같은 방식).
      */
     public WorkerTaskResponse(Long id, String githubRepo, String githubBranch, String title, String description,
                               Kind kind, List<TaskMcpSpec> mcpsExtra, String analysisMarkdown, String subtasksJson,
@@ -70,7 +72,21 @@ public record WorkerTaskResponse(
         this(id, githubRepo, githubBranch, title, description, kind, mcpsExtra, analysisMarkdown, subtasksJson,
                 headBranch, headSha, envVars, model, effort, designMarkdown, mockupFilesJson, feedbackHistoryJson,
                 designUrl, designSystemProjectId, designOutputProjectId, gitUrl, repoHost, planMarkdown,
-                null, null, null, null);
+                null, null, null, null, null);
+    }
+
+    /** 산출물 지시(closeArtifact) 도입 전 27개 인자 생성자 — 기존 테스트·호출부 호환. */
+    public WorkerTaskResponse(Long id, String githubRepo, String githubBranch, String title, String description,
+                              Kind kind, List<TaskMcpSpec> mcpsExtra, String analysisMarkdown, String subtasksJson,
+                              String headBranch, String headSha, List<EnvVar> envVars, String model, String effort,
+                              String designMarkdown, String mockupFilesJson, String feedbackHistoryJson,
+                              String designUrl, String designSystemProjectId, String designOutputProjectId,
+                              String gitUrl, String repoHost, String planMarkdown,
+                              Integer prNumber, String prUrl, String closeProgress, CloseContext closeContext) {
+        this(id, githubRepo, githubBranch, title, description, kind, mcpsExtra, analysisMarkdown, subtasksJson,
+                headBranch, headSha, envVars, model, effort, designMarkdown, mockupFilesJson, feedbackHistoryJson,
+                designUrl, designSystemProjectId, designOutputProjectId, gitUrl, repoHost, planMarkdown,
+                prNumber, prUrl, closeProgress, closeContext, null);
     }
 
     /** 워커가 clone/폴더/MR에 쓰는 저장소 참조. 새 필드가 없는 페이로드는 GitHub로 복원된다. */
@@ -142,10 +158,14 @@ public record WorkerTaskResponse(
 
     /** 종료 claim 페이로드. headSha는 병합을 고정할 구현 시점 커밋(확인한 코드만 병합). */
     public static WorkerTaskResponse forClose(Task t, CloseContext ctx) {
+        return forClose(t, ctx, null);
+    }
+
+    public static WorkerTaskResponse forClose(Task t, CloseContext ctx, CloseArtifactSpec artifact) {
         return new WorkerTaskResponse(t.getId(), t.getGithubRepo(), t.getGithubBranch(),
                 t.getTitle(), t.getDescription(), Kind.CLOSE, List.of(), null, null,
                 t.getHeadBranch(), t.getHeadSha(), List.of(), null, null,
                 null, null, null, null, null, null, t.getGitUrl(), hostOf(t), null,
-                t.getPrNumber(), t.getPrUrl(), t.getCloseProgress(), ctx);
+                t.getPrNumber(), t.getPrUrl(), t.getCloseProgress(), ctx, artifact);
     }
 }

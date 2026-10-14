@@ -74,9 +74,6 @@ public class DeployService {
                     .orElse(props.deploy().defaultContainerPort());
             log.append("[containerPort=").append(containerPort).append("]\n");
 
-            String shortSha = task.headSha() == null ? "latest"
-                    : task.headSha().substring(0, Math.min(7, task.headSha().length()));
-
             // env_vars → docker -e 주입용 Map. 빈 key는 제외. LocalDockerTarget이 spec.env()를 -e로 푼다.
             Map<String, String> env = new LinkedHashMap<>();
             if (task.envVars() != null) {
@@ -89,7 +86,7 @@ public class DeployService {
             DeployTarget.DeploySpec spec = new DeployTarget.DeploySpec(
                     task.id(),
                     wt.toPath(),
-                    "netis-task-" + task.id() + ":" + shortSha,
+                    imageName(task.id(), task.headSha()),
                     "netis-task-" + task.id(),
                     containerPort,
                     env,
@@ -110,6 +107,16 @@ public class DeployService {
             throw new DeployException(e.getClass().getSimpleName() + ": " + e.getMessage(),
                     log.toString());
         }
+    }
+
+    /** 이미지 태그·산출물 파일 이름 공용 — head_sha 앞 7자, 없으면 latest. */
+    public static String shortSha(String headSha) {
+        return headSha == null ? "latest" : headSha.substring(0, Math.min(7, headSha.length()));
+    }
+
+    /** 배포 이미지 이름 netis-task-{id}:{head_sha 7자|latest} — 종료 산출물 단계(ArtifactPublisher)가 같은 이름을 쓴다. */
+    public static String imageName(long taskId, String headSha) {
+        return "netis-task-" + taskId + ":" + shortSha(headSha);
     }
 
     /** 컨테이너 중지. */

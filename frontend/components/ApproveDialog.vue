@@ -51,6 +51,17 @@ const mcpCatalogIds = ref<number[]>([])
 // 기능이 꺼져 있으면(enabled=false) 피커를 숨기고 승인 바디에도 싣지 않는다.
 const db = reactive({ enabled: false, items: [] as DbConnectionView[] })
 const dbConnectionIds = ref<number[]>([])
+// 승인은 관리자만 하지만 서버는 선택을 작업 등록자 기준으로 검증한다(스펙 §7). 목록은 보는 사람 기준이라
+// 승인자 ≠ 등록자면 승인자 본인의 USER 연결은 쓸 수 없고 등록자의 USER 연결은 안 보인다 →
+// 공용(REPO)만 보이고 "새 접속 추가"를 숨기며, 지난 인터뷰의 안 보이는 id(등록자 개인 연결)는 버리지 않고 유지한다.
+// requesterId는 서버 AuthContext.requireUserId와 같은 값(JWT username → sub → user_id) — pages/tasks/[id].vue isOwner와 같은 비교.
+const auth = useAuthStore()
+const isRegistrant = computed(() => {
+  const me = auth.me?.username ?? (auth.me?.user_id != null ? String(auth.me.user_id) : null)
+  return me != null && props.task.requesterId === me
+})
+/** 목록에 안 보이지만 유지하는 등록자 개인 연결 id(승인자 ≠ 등록자일 때만) */
+const registrantDbIds = ref<number[]>([])
 
 /** 로드 순번 — init/reload마다 증가. 늦게 도착한 이전 응답이 선택·목록을 덮어쓰지 않게 한다. */
 let loadSeq = 0
@@ -67,12 +78,17 @@ async function loadDb(seq: number, mode: 'seed' | 'keep', preferred: number[] = 
   const r = await fetchDbConnections(repoId)
   if (seq !== loadSeq || !show.value) return
   db.enabled = r.enabled
-  db.items = r.items
-  const usable = new Set(r.items.filter((i) => i.enabled).map((i) => i.id))
+  const registrant = isRegistrant.value
+  db.items = registrant ? r.items : r.items.filter((i) => i.scope === 'REPO')
+  if (mode === 'seed') {
+    registrantDbIds.value = registrant ? [] : preferred.filter((id) => !r.items.some((i) => i.id === id))
+  }
+  const usable = new Set(db.items.filter((i) => i.enabled).map((i) => i.id))
+  const keepable = (id: number) => usable.has(id) || registrantDbIds.value.includes(id)
   if (mode === 'keep') {
-    dbConnectionIds.value = dbConnectionIds.value.filter((id) => usable.has(id))
+    dbConnectionIds.value = dbConnectionIds.value.filter(keepable)
   } else if (preferred.length) {
-    dbConnectionIds.value = preferred.filter((id) => usable.has(id)).slice(0, MAX_DB_SELECTION)
+    dbConnectionIds.value = preferred.filter(keepable).slice(0, MAX_DB_SELECTION)
   } else {
     dbConnectionIds.value = r.items
       .filter((i) => i.scope === 'REPO' && i.enabled)
@@ -116,6 +132,7 @@ async function init() {
   effort.value = DEFAULT_EFFORT
   mcpCatalogIds.value = []
   dbConnectionIds.value = []
+  registrantDbIds.value = []
   let lastDbIds: number[] = []
   previous.value = []
   prefilled.value = false
@@ -252,6 +269,8 @@ defineExpose({ approve })
               v-model="dbConnectionIds"
               :items="db.items"
               :repo-catalog-id="task.repoCatalogId"
+              :allow-add="isRegistrant"
+              :registrant-ids="registrantDbIds"
               @reload="reloadDb"
             />
           </div>

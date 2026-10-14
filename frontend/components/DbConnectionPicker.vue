@@ -3,11 +3,22 @@
 // 상한 MAX_DB_SELECTION. 비활성 항목(관리자에게만 보임)은 새로 고를 수 없다. 새로 저장하면 reload를 올리고 바로 선택한다.
 // 이미 선택돼 있는데 목록에 없거나(삭제·다른 사용자 것) 비활성이 된 id는 "사용할 수 없는 연결"로 보여 주고 해제만 허용한다
 // (해제할 길이 없으면 대화가 그 id에 갇히고, 서버도 이미 있던 id는 검증하지 않는다 — 스펙 §5.3).
+// 승인 다이얼로그(스펙 2026-10-14 §7)에서 승인자 ≠ 등록자면 allowAdd=false(관리자 소유 연결은 등록자 기준 검증에서 거절)이고,
+// registrantIds(보는 사람에게 안 보이는 등록자 개인 연결)는 "등록자 개인 연결 #id"로 따로 보여 해제만 허용한다.
 import { useQuasar } from 'quasar'
 import DbConnectionDialog from '~/components/DbConnectionDialog.vue'
 import { MAX_DB_SELECTION, dbTypeLabel, type DbConnectionChip, type DbConnectionView } from '~/composables/dbConnections'
 
-const props = defineProps<{ items: DbConnectionView[]; repoCatalogId: number; knownChips?: DbConnectionChip[] }>()
+const props = withDefaults(
+  defineProps<{
+    items: DbConnectionView[]
+    repoCatalogId: number
+    knownChips?: DbConnectionChip[]
+    allowAdd?: boolean
+    registrantIds?: number[]
+  }>(),
+  { knownChips: undefined, allowAdd: true, registrantIds: () => [] },
+)
 const model = defineModel<number[]>({ default: () => [] })
 const emit = defineEmits<{ reload: [] }>()
 
@@ -15,9 +26,12 @@ const $q = useQuasar()
 const dialogOpen = ref(false)
 const repoItems = computed(() => props.items.filter((i) => i.scope === 'REPO'))
 const userItems = computed(() => props.items.filter((i) => i.scope === 'USER'))
+const showUserSection = computed(() => props.allowAdd || userItems.value.length > 0)
 
-// 목록에 없는 선택 id — 해제 전용 행
-const unavailableIds = computed(() => model.value.filter((id) => !props.items.some((i) => i.id === id)))
+// 목록에 없는 선택 id — 해제 전용 행 (등록자 개인 연결은 따로)
+const hiddenIds = computed(() => model.value.filter((id) => !props.items.some((i) => i.id === id)))
+const registrantSelected = computed(() => hiddenIds.value.filter((id) => props.registrantIds.includes(id)))
+const unavailableIds = computed(() => hiddenIds.value.filter((id) => !props.registrantIds.includes(id)))
 function unavailableLabel(id: number) {
   const chip = props.knownChips?.find((c) => c.id === id)
   return `${chip ? chip.name : `연결 #${id}`} (삭제·비활성)`
@@ -62,8 +76,8 @@ defineExpose({ toggle })
         </q-item-section>
       </q-item>
     </div>
-    <div class="picker-label q-mt-sm">내 접속정보</div>
-    <div data-test="db-section-user">
+    <div v-if="showUserSection" class="picker-label q-mt-sm">내 접속정보</div>
+    <div v-if="showUserSection" data-test="db-section-user">
       <div v-if="userItems.length === 0" class="text-caption text-grey-6 q-px-sm">아직 없습니다</div>
       <q-item v-for="i in userItems" :key="i.id" dense tag="label">
         <q-item-section side>
@@ -72,6 +86,18 @@ defineExpose({ toggle })
         <q-item-section>
           <q-item-label>{{ i.name }} <q-badge outline color="grey-7" :label="dbTypeLabel(i.dbType)" /></q-item-label>
           <q-item-label caption>{{ i.host }}:{{ i.port }}/{{ i.databaseName }}</q-item-label>
+        </q-item-section>
+      </q-item>
+    </div>
+    <div v-if="registrantSelected.length" data-test="db-section-registrant">
+      <div class="picker-label q-mt-sm">등록자 개인 연결</div>
+      <q-item v-for="id in registrantSelected" :key="id" dense tag="label">
+        <q-item-section side>
+          <q-checkbox :model-value="true" dense :data-test="`db-registrant-${id}`" @update:model-value="toggle(id)" />
+        </q-item-section>
+        <q-item-section>
+          <q-item-label>등록자 개인 연결 #{{ id }}</q-item-label>
+          <q-item-label caption>지난 인터뷰에서 등록자가 고른 연결 — 승인 시 서버가 확인합니다</q-item-label>
         </q-item-section>
       </q-item>
     </div>
@@ -87,8 +113,8 @@ defineExpose({ toggle })
         </q-item-section>
       </q-item>
     </div>
-    <q-btn flat dense no-caps icon="add" label="새 접속 추가" color="primary" class="q-mt-sm" data-test="db-add" @click="dialogOpen = true" />
-    <DbConnectionDialog v-model="dialogOpen" scope="USER" :repo-catalog-id="repoCatalogId" :editing="null" @saved="onSaved" />
+    <q-btn v-if="allowAdd" flat dense no-caps icon="add" label="새 접속 추가" color="primary" class="q-mt-sm" data-test="db-add" @click="dialogOpen = true" />
+    <DbConnectionDialog v-if="allowAdd" v-model="dialogOpen" scope="USER" :repo-catalog-id="repoCatalogId" :editing="null" @saved="onSaved" />
   </div>
 </template>
 

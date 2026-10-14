@@ -36,7 +36,7 @@ public class TaskCloseController {
     @PostMapping("/{id}/close-request")
     public TaskResponse request(@PathVariable Long id, JwtAuthenticationToken auth) {
         boolean isAdmin = AuthContext.isAdmin(auth);
-        Task t = closeService.requestClose(id, AuthContext.requireUserId(auth), isAdmin);
+        Task t = closeService.requestClose(id, AuthContext.requireUserId(auth), isAdmin, AuthContext.email(auth));
         return view(t, isAdmin);
     }
 

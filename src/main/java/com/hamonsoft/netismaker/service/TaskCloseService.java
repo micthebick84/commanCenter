@@ -52,6 +52,12 @@ public class TaskCloseService {
 
     @Transactional
     public Task requestClose(Long taskId, String actorId, boolean isAdmin) {
+        return requestClose(taskId, actorId, isAdmin, null);
+    }
+
+    /** actorEmail: 요청자의 JWT email. 등록자 본인의 요청이면 수신 주소를 갱신한다 (스펙 2026-10-14 §7). */
+    @Transactional
+    public Task requestClose(Long taskId, String actorId, boolean isAdmin, String actorEmail) {
         Task t = lockOwned(taskId, actorId, isAdmin);
         if (!REQUESTABLE.contains(t.getStatus())) {
             throw TaskException.conflict("배포완료 또는 배포중단됨 상태에서만 종료를 요청할 수 있습니다 (현재: "
@@ -60,6 +66,7 @@ public class TaskCloseService {
         if (t.getPrNumber() == null || isBlank(t.getHeadBranch()) || isBlank(t.getHeadSha())) {
             throw TaskException.conflict("PR 정보(번호·브랜치·커밋)가 없어 종료할 수 없습니다");
         }
+        if (actorEmail != null && t.isOwnedBy(actorId)) t.setRequesterEmail(actorEmail);
         return move(t, TaskStatus.CLOSE_REVIEW, "user", actorId, "결과 확인 완료 → 종료 요청");
     }
 

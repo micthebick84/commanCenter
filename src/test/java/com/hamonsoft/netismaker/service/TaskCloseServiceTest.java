@@ -262,4 +262,16 @@ class TaskCloseServiceTest {
         assertThatThrownBy(() -> service.skipArtifact(42L, "admin", null))
                 .isInstanceOf(TaskException.class).hasMessageContaining("종료실패");
     }
+
+    @Test
+    void 등록자_본인의_종료_요청은_메일_주소를_갱신하고_관리자의_대리_요청은_건드리지_않는다() {
+        Task t = task(TaskStatus.DEPLOYED);
+        service.requestClose(42L, "user1", false, "new@hamonsoft.co.kr");
+        assertThat(t.getRequesterEmail()).isEqualTo("new@hamonsoft.co.kr");
+
+        Task u = task(TaskStatus.DEPLOYED);
+        u.setRequesterEmail("keep@hamonsoft.co.kr");
+        service.requestClose(42L, "admin", true, "admin@hamonsoft.co.kr");
+        assertThat(u.getRequesterEmail()).isEqualTo("keep@hamonsoft.co.kr");
+    }
 }

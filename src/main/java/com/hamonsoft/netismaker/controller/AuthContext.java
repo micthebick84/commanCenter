@@ -29,6 +29,14 @@ public final class AuthContext {
         return raw.toString();
     }
 
+    /** JWT email 클레임(netis-auth가 넣는다) — 종료 메일 수신 주소. 없거나 비었거나 320자 초과면 null. */
+    public static String email(JwtAuthenticationToken auth) {
+        Object raw = auth.getToken().getClaim("email");
+        if (raw == null) return null;
+        String s = raw.toString().trim();
+        return s.isEmpty() || s.length() > 320 ? null : s;
+    }
+
     public static boolean isAdmin(JwtAuthenticationToken auth) {
         for (GrantedAuthority a : auth.getAuthorities()) {
             if (ROLE_ADMIN.equals(a.getAuthority())) return true;

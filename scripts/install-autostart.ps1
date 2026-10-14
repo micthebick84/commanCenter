@@ -64,6 +64,11 @@ if (-not (Test-Path $EnvFile)) {
         '# Generate once and BACK UP this file: losing the key means re-entering every stored DB password.'
         '#NETISMAKER_DB_SECRET_KEY='
         '#NETISMAKER_DB_SECRET_SALT='
+        ''
+        '# Task close: Obsidian vault dir on THIS worker PC where close notes are written. Uncomment and replace <user>; if unset, the close fails at the note step.'
+        '#CLOSE_OBSIDIAN_VAULT_DIR=C:/Users/<user>/Documents/Obsidian Vault'
+        '# Merge method for the close step: merge | squash | rebase (no inline comments on the key line - the loader does not strip them)'
+        '#CLOSE_MERGE_METHOD=merge'
     ) | Set-Content -Path $EnvFile -Encoding ascii
     Write-Host "Created settings template: $EnvFile  <-- edit this before the first run"
 }

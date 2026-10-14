@@ -41,4 +41,31 @@ class WorkerResultRequestJsonTest {
         assertThat(back.envTemplate()).isNull();
         assertThat(back.prUrl()).isEqualTo("u");
     }
+
+    @Test
+    void close_reports_survive_a_json_round_trip() throws Exception {
+        var usage = new WorkerResultRequest.UsageReport(new java.math.BigDecimal("0.12"), 100L, 50L, 0L, 0L);
+        // UsageReport.isEmpty()가 "empty" 속성으로 직렬화된다 — 스프링 부트 매퍼처럼 모르는 속성은 무시
+        var lenient = json.copy().configure(
+                com.fasterxml.jackson.databind.DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false);
+        for (WorkerResultRequest req : List.of(
+                WorkerResultRequest.closed("w1", usage),
+                WorkerResultRequest.closeFailed("w1", "CI 대기 중: checks pending", null))) {
+            WorkerResultRequest back = lenient.readValue(json.writeValueAsString(req), WorkerResultRequest.class);
+            assertThat(back).isEqualTo(req);
+        }
+    }
+
+    @Test
+    void close_factories_set_status_and_reason() {
+        assertThat(WorkerResultRequest.closed("w1", null).status()).isEqualTo(TaskStatus.CLOSED);
+        WorkerResultRequest failed = WorkerResultRequest.closeFailed("w1", "충돌", null);
+        assertThat(failed.status()).isEqualTo(TaskStatus.CLOSE_FAILED);
+        assertThat(failed.failureReason()).isEqualTo("충돌");
+        // 마스킹 경로(reportTerminal)를 지나도 사유가 유지된다
+        assertThat(failed.masked().failureReason()).isEqualTo("충돌");
+        // 사유에 인증 URL이 섞여 있으면 마스킹 경로에서 토큰이 사라진다
+        assertThat(WorkerResultRequest.closeFailed("w", "사유 https://oauth2:tok@github.com/x", null)
+                .masked().failureReason()).doesNotContain("tok");
+    }
 }

@@ -53,6 +53,7 @@ public class WorkerMainLoop {
     private final ResultReporter reporter;
     private final SilentLossTracker silentLossTracker;
     private final DesignResultHarvester designHarvester;
+    private final TaskCloser closer;
 
     public WorkerMainLoop(WorkerProperties props,
                           WorkerHttpClient http,
@@ -65,7 +66,8 @@ public class WorkerMainLoop {
                           DeployService deployService,
                           ResultReporter reporter,
                           SilentLossTracker silentLossTracker,
-                          DesignResultHarvester designHarvester) {
+                          DesignResultHarvester designHarvester,
+                          TaskCloser closer) {
         this.props = props;
         this.http = http;
         this.repos = repos;
@@ -78,6 +80,7 @@ public class WorkerMainLoop {
         this.reporter = reporter;
         this.silentLossTracker = silentLossTracker;
         this.designHarvester = designHarvester;
+        this.closer = closer;
     }
 
     @Scheduled(fixedRateString = "#{${netis-maker.worker.heartbeat-interval-seconds:10} * 1000}")
@@ -111,6 +114,7 @@ public class WorkerMainLoop {
                 case DEPLOY -> processDeploy(task);
                 case UNDEPLOY -> processUndeploy(task);
                 case DESIGN -> processDesign(task);
+                case CLOSE -> closer.process(task);
                 default -> processAnalysis(task);
             }
         } catch (Throwable t) {
@@ -126,6 +130,8 @@ public class WorkerMainLoop {
                         "처리 중 예외: " + t.getClass().getSimpleName() + ": " + t.getMessage(), null);
                 case DESIGN -> safePostDesignFailure(task.id(),
                         "처리 중 예외: " + t.getClass().getSimpleName() + ": " + t.getMessage(), null);
+                case CLOSE -> closer.reportFailure(task.id(),
+                        "처리 중 예외: " + t.getClass().getSimpleName() + ": " + t.getMessage());
                 default -> safePostAnalysisFailure(task.id(),
                         "처리 중 예외: " + t.getClass().getSimpleName() + ": " + t.getMessage());
             }

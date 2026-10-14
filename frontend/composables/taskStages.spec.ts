@@ -13,6 +13,7 @@ const ALL_STATUSES = [
   'UNDEPLOY_PENDING', 'UNDEPLOYING',
   'DESIGN_PENDING', 'DESIGNING', 'DESIGN_REVIEW', 'DESIGN_FAILED',
   'INTERVIEWING', 'INTERVIEW_INPUT', 'INTERVIEW_REVIEW',
+  'CLOSE_REVIEW', 'CLOSE_PENDING', 'CLOSING', 'CLOSED', 'CLOSE_FAILED',
   'CANCELLED',
 ]
 
@@ -110,7 +111,7 @@ describe('taskStages — buildStages', () => {
 describe('taskStages — 전이', () => {
   it('허용 전이만 존재하고 배포 계열만 확인을 받는다', () => {
     expect(Object.keys(MOVES).sort()).toEqual(
-      ['COMPLETED', 'DEPLOYED', 'DEPLOY_FAILED', 'DEPLOY_LOST', 'DESIGN_REVIEW', 'PR_CREATED'].sort(),
+      ['CLOSE_FAILED', 'CLOSE_REVIEW', 'COMPLETED', 'DEPLOYED', 'DEPLOY_FAILED', 'DEPLOY_LOST', 'DESIGN_REVIEW', 'PR_CREATED'].sort(),
     )
     expect(MOVES.COMPLETED.confirm).toBe(false)
     expect(MOVES.PR_CREATED.confirm).toBe(true)
@@ -180,16 +181,16 @@ describe('attentionGroup / sortForMobile (스펙 2026-09-06 §4.1)', () => {
 describe('stageSteps', () => {
   it('PR생성(디자인 미요청): 분석 done · 디자인 skipped · 구현 current · 배포 future', () => {
     expect(stageSteps({ status: 'PR_CREATED', designRequested: false }).map((s) => s.state))
-      .toEqual(['done', 'skipped', 'current', 'future'])
+      .toEqual(['done', 'skipped', 'current', 'future', 'future'])
   })
   it('디자인승인대기(디자인 요청): 분석 done · 디자인 current', () => {
     expect(stageSteps({ status: 'DESIGN_REVIEW', designRequested: true }).map((s) => s.state))
-      .toEqual(['done', 'current', 'future', 'future'])
+      .toEqual(['done', 'current', 'future', 'future', 'future'])
   })
   it('배포실패: 배포 단계가 failed', () => {
     const steps = stageSteps({ status: 'DEPLOY_FAILED', designRequested: true })
     expect(steps[3]!.state).toBe('failed')
-    expect(steps.map((s) => s.label)).toEqual(['분석', '디자인', '구현', '배포'])
+    expect(steps.map((s) => s.label)).toEqual(['분석', '디자인', '구현', '배포', '종료'])
   })
   it('승인대기: 분석 current, 나머지 future(디자인 요청 시)/skipped(미요청)', () => {
     expect(stageSteps({ status: 'AWAITING_APPROVAL', designRequested: true })[0]!.state).toBe('current')
@@ -235,6 +236,60 @@ describe('nextAction (스펙 2026-09-06 §4.2 표)', () => {
   it('cancelable/DEPLOY_ACTIVE_STATUSES는 index.vue와 같은 집합', () => {
     expect(cancelable({ status: 'PENDING' })).toBe(true)
     expect(cancelable({ status: 'PR_CREATED' })).toBe(false)
-    expect(DEPLOY_ACTIVE_STATUSES).toEqual(['DEPLOYED', 'DEPLOY_LOST', 'DEPLOY_PENDING', 'DEPLOYING', 'UNDEPLOY_PENDING', 'UNDEPLOYING'])
+    expect(DEPLOY_ACTIVE_STATUSES).toEqual([
+      'DEPLOYED', 'DEPLOY_LOST', 'DEPLOY_PENDING', 'DEPLOYING', 'UNDEPLOY_PENDING', 'UNDEPLOYING',
+      'CLOSE_REVIEW', 'CLOSE_PENDING', 'CLOSING', 'CLOSE_FAILED',
+    ])
+  })
+})
+
+describe('종료 단계 (스펙 2026-10-13)', () => {
+  it('종료 4상태는 종료 단계, 작업종료는 terminal 단계', () => {
+    const close = STAGES.find((s) => s.key === 'close')!
+    expect(close.statuses).toEqual(['CLOSE_REVIEW', 'CLOSE_PENDING', 'CLOSING', 'CLOSE_FAILED'])
+    const done = STAGES.find((s) => s.key === 'done')!
+    expect(done.terminal).toBe(true)
+    expect(done.statuses).toEqual(['CLOSED'])
+  })
+  it('관리자 드래그: 종료승인대기 → 종료대기, 종료실패 → 종료대기 (둘 다 확인창)', () => {
+    expect(moveFor({ status: 'CLOSE_REVIEW' })).toMatchObject({ to: 'CLOSE_PENDING', path: 'close/approve', confirm: true })
+    expect(moveFor({ status: 'CLOSE_FAILED' })).toMatchObject({ to: 'CLOSE_PENDING', path: 'close/retry', confirm: true })
+    expect(stageAccepts('close', moveFor({ status: 'CLOSE_REVIEW' }))).toBe(true)
+  })
+  it('배포완료: 등록자·관리자는 종료 요청, 남은 문구만', () => {
+    const t = { status: 'DEPLOYED', deployment: { deployUrl: 'https://t' } }
+    expect(nextAction(t, false, true)?.primary?.kind).toBe('request-close')
+    expect(nextAction(t, true, false)?.primary?.kind).toBe('request-close')
+    expect(nextAction(t, false, false)?.primary?.kind).toBe('open-url')
+  })
+  it('배포중단됨: 등록자는 종료 요청, 관리자는 재배포가 주 행동', () => {
+    expect(nextAction({ status: 'DEPLOY_LOST' }, false, true)?.primary?.kind).toBe('request-close')
+    expect(nextAction({ status: 'DEPLOY_LOST' }, true, true)?.primary?.kind).toBe('redeploy')
+  })
+  it('종료승인대기: 관리자 승인, 등록자 철회, 그 외 문구', () => {
+    expect(nextAction({ status: 'CLOSE_REVIEW' }, true, false)?.primary?.kind).toBe('approve-close')
+    expect(nextAction({ status: 'CLOSE_REVIEW' }, false, true)?.primary?.kind).toBe('withdraw-close')
+    expect(nextAction({ status: 'CLOSE_REVIEW' }, false, false)?.primary).toBeUndefined()
+  })
+  it('종료실패: 관리자 재시도 · 작업종료: 주 행동 없음', () => {
+    expect(nextAction({ status: 'CLOSE_FAILED' }, true)?.primary?.kind).toBe('retry-close')
+    expect(nextAction({ status: 'CLOSE_FAILED' }, false)?.primary).toBeUndefined()
+    expect(nextAction({ status: 'CLOSED' }, true)?.primary).toBeUndefined()
+  })
+  it('주의 그룹: 종료실패는 확인 필요, 종료승인대기는 관리자에게만, 작업종료는 완료', () => {
+    expect(attentionGroup({ status: 'CLOSE_FAILED' }, false)).toBe('attention')
+    expect(attentionGroup({ status: 'CLOSE_REVIEW' }, true)).toBe('attention')
+    expect(attentionGroup({ status: 'CLOSE_REVIEW' }, false)).toBe('active')
+    expect(attentionGroup({ status: 'CLOSED' }, false)).toBe('done')
+  })
+  it('스테퍼: 종료실패는 종료 단계 failed, 작업종료는 전부 future가 아니라 전부 done', () => {
+    const failed = stageSteps({ status: 'CLOSE_FAILED', designRequested: false })
+    expect(failed[4]!.state).toBe('failed')
+    expect(stageSteps({ status: 'CLOSED', designRequested: true }).every((s) => s.state === 'done')).toBe(true)
+  })
+  it('삭제 가드 집합에 종료 진행 상태가 있다', () => {
+    for (const s of ['CLOSE_REVIEW', 'CLOSE_PENDING', 'CLOSING', 'CLOSE_FAILED']) {
+      expect(DEPLOY_ACTIVE_STATUSES).toContain(s)
+    }
   })
 })

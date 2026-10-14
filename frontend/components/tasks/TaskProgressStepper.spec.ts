@@ -24,14 +24,14 @@ describe('TaskProgressStepper (스펙 2026-09-06 §4.2)', () => {
     expect(w.text()).toContain('분석')
     w.unmount()
   })
-  it('compact는 세그먼트 4개 + 현재 단계명만 그린다', () => {
+  it('compact는 세그먼트 5개 + 현재 단계명만 그린다', () => {
     const w = mount(TaskProgressStepper, {
       props: {
         steps: stageSteps({ status: 'DEPLOYED', designRequested: false }),
         compact: true,
       },
     })
-    expect(w.findAll('.seg')).toHaveLength(4)
+    expect(w.findAll('.seg')).toHaveLength(5)
     expect(w.find('[data-test="step-design"]').attributes('data-state')).toBe(
       'skipped',
     )

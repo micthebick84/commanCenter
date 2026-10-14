@@ -17,6 +17,8 @@ import java.util.List;
  *   status=DEPLOY_FAILED         → failureReason 필수 (배포)
  *   status=DESIGN_REVIEW         → designMarkdown, mockupFilesJson 필수 (디자인 → 승인 대기)
  *   status=DESIGN_FAILED         → failureReason 필수 (디자인)
+ *   status=CLOSED                → 종료 4단계가 모두 보고된 뒤에만 (종료)
+ *   status=CLOSE_FAILED          → failureReason (종료)
  */
 public record WorkerResultRequest(
         @NotNull String workerId,
@@ -158,6 +160,24 @@ public record WorkerResultRequest(
                                                    UsageReport usage) {
         return new WorkerResultRequest(workerId, TaskStatus.DESIGN_FAILED,
                 null, null, claudeLog, null, reason,
+                null, null, null, null, null,
+                null, null, null, null, null,
+                null, null, null, null, usage);
+    }
+
+    /** 작업 종료 성공 보고 — 4단계를 모두 마친 뒤. usage는 노트 생성 claude 호출분(없으면 null). */
+    public static WorkerResultRequest closed(String workerId, UsageReport usage) {
+        return new WorkerResultRequest(workerId, TaskStatus.CLOSED,
+                null, null, null, null, null,
+                null, null, null, null, null,
+                null, null, null, null, null,
+                null, null, null, null, usage);
+    }
+
+    /** 작업 종료 실패 보고 — 어느 단계에서 왜 멈췄는지를 사유에 담는다. */
+    public static WorkerResultRequest closeFailed(String workerId, String reason, UsageReport usage) {
+        return new WorkerResultRequest(workerId, TaskStatus.CLOSE_FAILED,
+                null, null, null, null, reason,
                 null, null, null, null, null,
                 null, null, null, null, null,
                 null, null, null, null, usage);

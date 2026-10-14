@@ -116,4 +116,24 @@ class WorkerPropertiesYamlBindingTest {
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("REPO_CACHE_CLEANUP_CRON");
     }
+
+    @Test
+    void close_설정은_기본값과_환경변수_재정의로_바인딩된다() throws Exception {
+        CloseProperties defaults = Binder.get(loadYaml()).bind("netis-maker.worker.close", CloseProperties.class).get();
+        assertThat(defaults.vaultDir()).isNull();
+        assertThat(defaults.noteFolder()).isEqualTo("HamonSoft/netisMaker");
+        assertThat(defaults.mergeMethod()).isEqualTo("merge");
+        assertThat(defaults.noteModel()).isEqualTo("sonnet");
+        assertThat(defaults.noteTimeout()).isEqualTo(java.time.Duration.ofMinutes(10));
+
+        StandardEnvironment env = loadYaml();
+        env.getPropertySources().addFirst(new MapPropertySource("test-env-overrides", Map.of(
+                "CLOSE_OBSIDIAN_VAULT_DIR", "D:/vault",
+                "CLOSE_MERGE_METHOD", "Squash",
+                "CLOSE_NOTE_TIMEOUT", "3m")));
+        CloseProperties p = Binder.get(env).bind("netis-maker.worker.close", CloseProperties.class).get();
+        assertThat(p.vaultDir()).isEqualTo(java.nio.file.Path.of("D:/vault"));
+        assertThat(p.mergeMethod()).isEqualTo("squash");
+        assertThat(p.noteTimeout()).isEqualTo(java.time.Duration.ofMinutes(3));
+    }
 }

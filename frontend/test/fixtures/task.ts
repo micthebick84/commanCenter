@@ -37,6 +37,7 @@ export const baseTask = {
     implementationLog: null,
   },
   deployment: null,
+  close: null,
   attachments: [],
   stageUsage: [],
   totalCostUsd: 0.42,

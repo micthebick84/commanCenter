@@ -37,6 +37,8 @@ export default defineNuxtConfig({
       redirectUri:
         process.env.NUXT_PUBLIC_REDIRECT_URI || 'http://localhost:3001/oauth/callback',
       pollIntervalMs: 5000,
+      // 작업 종료 노트를 obsidian:// 링크로 여는 볼트 이름 (NUXT_PUBLIC_OBSIDIAN_VAULT). 비면 링크 없이 경로만 보인다.
+      obsidianVault: '',
     },
   },
 

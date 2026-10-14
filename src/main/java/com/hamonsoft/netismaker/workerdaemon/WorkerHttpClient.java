@@ -106,4 +106,9 @@ public class WorkerHttpClient {
         http.post().uri("/worker/tasks/{id}/runtime-status", taskId)
                 .body(req).retrieve().toBodilessEntity();
     }
+
+    /** 종료 단계 완료 보고. 실패는 호출자(TaskCloser)가 종료실패로 처리한다 - 재시도 때 그 단계가 다시 돈다(멱등). */
+    public void postCloseProgress(Long taskId, com.hamonsoft.netismaker.dto.CloseProgressRequest req) {
+        http.post().uri("/worker/tasks/{id}/close-progress", taskId).body(req).retrieve().toBodilessEntity();
+    }
 }

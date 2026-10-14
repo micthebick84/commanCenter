@@ -25,6 +25,7 @@ public class TaskStageUsage {
     public static final String STAGE_ANALYSIS = "ANALYSIS";
     public static final String STAGE_DESIGN = "DESIGN";
     public static final String STAGE_IMPLEMENTATION = "IMPLEMENTATION";
+    public static final String STAGE_CLOSE = "CLOSE";
 
     @Id
     @Column(name = "task_id")

@@ -66,10 +66,25 @@ export const STAGES: StageDef[] = [
     emptyHint: 'PR생성 작업을 배포하면 진입합니다',
   },
   {
+    key: 'close',
+    name: '종료',
+    color: '#37474f',
+    statuses: ['CLOSE_REVIEW', 'CLOSE_PENDING', 'CLOSING', 'CLOSE_FAILED'],
+    emptyHint: '배포 결과를 확인하고 종료를 요청하면 진입합니다',
+  },
+  {
     key: 'closed',
     name: '취소',
     color: '#757575',
     statuses: ['CANCELLED'],
+    emptyHint: '',
+    terminal: true,
+  },
+  {
+    key: 'done',
+    name: '작업종료',
+    color: '#2e7d32',
+    statuses: ['CLOSED'],
     emptyHint: '',
     terminal: true,
   },
@@ -101,6 +116,11 @@ export const CHIP: Record<string, [string, string]> = {
   DEPLOY_LOST: ['#fbe9e7', '#bf360c'],
   UNDEPLOY_PENDING: ['#fbe9e7', '#bf360c'],
   UNDEPLOYING: ['#fff3e0', '#e65100'],
+  CLOSE_REVIEW: ['#e8f5e9', '#2e7d32'],
+  CLOSE_PENDING: ['#eceff1', '#37474f'],
+  CLOSING: ['#fff3e0', '#e65100'],
+  CLOSED: ['#e8f5e9', '#1b5e20'],
+  CLOSE_FAILED: ['#fce4ec', '#ad1457'],
   CANCELLED: ['#f5f5f5', '#616161'],
 }
 
@@ -128,6 +148,8 @@ export const MOVES: Record<string, MoveDef> = {
   DEPLOYED: { to: 'UNDEPLOY_PENDING', path: 'undeploy', label: '배포 중지', confirm: true },
   DEPLOY_FAILED: { to: 'DEPLOY_PENDING', path: 'redeploy', label: '재배포', confirm: true },
   DEPLOY_LOST: { to: 'DEPLOY_PENDING', path: 'redeploy', label: '재배포', confirm: true },
+  CLOSE_REVIEW: { to: 'CLOSE_PENDING', path: 'close/approve', label: '종료 승인 — 병합·배포 중지·정리', confirm: true },
+  CLOSE_FAILED: { to: 'CLOSE_PENDING', path: 'close/retry', label: '종료 재시도', confirm: true },
 }
 
 /** 디자인 구간을 요청한 작업의 분석완료 승인은 구현대기가 아니라 디자인대기로 간다. */
@@ -178,7 +200,7 @@ export interface StageCard<T extends StageCardTask> {
   age: string
   agePct: number
   ageColor: string
-  /** 카드 안의 4단계 미니 진행바 (취소 단계는 제외) */
+  /** 카드 안의 파이프라인 단계 미니 진행바 (취소 단계는 제외) */
   steps: { label: string; bg: string; fg: string; weight: string }[]
   move: MoveDef | null
 }
@@ -311,21 +333,22 @@ export const ATTENTION_GROUPS: { key: AttentionGroup; label: string; color: stri
   { key: 'closed', label: '취소됨', color: '#757575' },
 ]
 
-/** 서버 softDelete 가드와 동일 집합 — 배포 이력이 활성이면 먼저 중지 후 삭제 */
+/** 서버 softDelete 가드와 동일 집합 — 배포 이력이 활성이거나 종료가 진행 중이면 먼저 정리 후 삭제 */
 export const DEPLOY_ACTIVE_STATUSES = [
   'DEPLOYED', 'DEPLOY_LOST', 'DEPLOY_PENDING', 'DEPLOYING', 'UNDEPLOY_PENDING', 'UNDEPLOYING',
+  'CLOSE_REVIEW', 'CLOSE_PENDING', 'CLOSING', 'CLOSE_FAILED',
 ]
 
 export function cancelable(task: { status: string }): boolean {
   return ['PENDING', 'AWAITING_APPROVAL'].includes(task.status)
 }
 
-const FAILED_STATUSES = ['FAILED', 'IMPLEMENTATION_FAILED', 'DESIGN_FAILED', 'DEPLOY_FAILED', 'DEPLOY_LOST']
+const FAILED_STATUSES = ['FAILED', 'IMPLEMENTATION_FAILED', 'DESIGN_FAILED', 'DEPLOY_FAILED', 'DEPLOY_LOST', 'CLOSE_FAILED']
 /** 사람 입력을 기다리는 상태 — 요청자에게도 "확인 필요"로 보인다 */
 const HUMAN_INPUT_STATUSES = ['INTERVIEW_INPUT', 'INTERVIEW_REVIEW']
 /** 관리자 판단을 기다리는 상태 — 관리자에게만 "확인 필요" */
-const ADMIN_GATE_STATUSES = ['AWAITING_APPROVAL', 'COMPLETED', 'DESIGN_REVIEW']
-const DONE_STATUSES = ['PR_CREATED', 'DEPLOYED']
+const ADMIN_GATE_STATUSES = ['AWAITING_APPROVAL', 'COMPLETED', 'DESIGN_REVIEW', 'CLOSE_REVIEW']
+const DONE_STATUSES = ['PR_CREATED', 'DEPLOYED', 'CLOSED']
 
 export function attentionGroup(task: { status: string }, isAdmin: boolean): AttentionGroup {
   const s = task.status
@@ -369,21 +392,24 @@ export interface StageStep {
 const DESIGN_STATUSES = STAGES.find((s) => s.key === 'design')!.statuses
 
 /**
- * 파이프라인 4단계의 표시 상태. 디자인 미요청 작업은 디자인 단계를 skipped로 표시한다.
+ * 파이프라인 단계의 표시 상태. 디자인 미요청 작업은 디자인 단계를 skipped로 표시한다.
  *
- * ⚠️ 두 skipped 오버라이드는 `idx >= 0`(작업이 4단계 파이프라인 안에 있을 때)에만 적용한다.
+ * ⚠️ 두 skipped 오버라이드는 `idx >= 0`(작업이 파이프라인 안에 있을 때)에만 적용한다.
  *    취소됨처럼 파이프라인 밖(terminal) 상태는 idx=-1이 되는데, 여기서도 오버라이드가 돌면
  *    승인/디자인 요청 여부와 무관하게 디자인 세그먼트가 무조건 skipped로 보인다(스펙 위반 —
- *    취소됨은 4단계 전부 future). idx>=0 가드로 파이프라인 밖 상태는 그대로 future 유지.
+ *    취소됨은 전 단계 future). idx>=0 가드로 파이프라인 밖 상태는 그대로 future 유지.
+ *    작업종료(CLOSED)는 예외 — 전 단계를 done으로 채운다(디자인 skipped 규칙도 적용하지 않는다).
  */
 export function stageSteps(task: { status: string; designRequested?: boolean }): StageStep[] {
   const pipeline = STAGES.filter((s) => !s.terminal)
-  const idx = pipeline.findIndex((s) => s.statuses.includes(task.status))
+  const closed = task.status === 'CLOSED'
+  const idx = closed ? pipeline.length : pipeline.findIndex((s) => s.statuses.includes(task.status))
   const failed = FAILED_STATUSES.includes(task.status)
   const inDesign = DESIGN_STATUSES.includes(task.status)
   return pipeline.map((s, i) => {
     let state: StepState = 'future'
-    if (idx >= 0) {
+    if (closed) state = 'done'
+    else if (idx >= 0) {
       if (i < idx) state = 'done'
       else if (i === idx) state = failed ? 'failed' : 'current'
       if (s.key === 'design' && !task.designRequested && !inDesign && state !== 'done') state = 'skipped'
@@ -398,6 +424,7 @@ export function stageSteps(task: { status: string; designRequested?: boolean }):
 export type NextActionKind =
   | 'approve-interview' | 'open-interview' | 'approve-impl' | 'review-design'
   | 'deploy' | 'redeploy' | 'open-pr' | 'open-url' | 'retry'
+  | 'request-close' | 'withdraw-close' | 'approve-close' | 'retry-close'
 
 export interface NextAction {
   text: string
@@ -413,6 +440,7 @@ export function nextAction(
     deployment?: { deployUrl: string | null } | null
   },
   isAdmin: boolean,
+  isOwner = false,
 ): NextAction | null {
   const s = task.status
   switch (s) {
@@ -448,16 +476,33 @@ export function nextAction(
         : { text: `${noun} 생성됨` }
     }
     case 'DEPLOYED':
+      if (isAdmin || isOwner) {
+        return { text: '배포 완료 — 결과를 확인했으면 종료를 요청하세요', primary: { label: '확인 완료 — 종료 요청', icon: 'task_alt', kind: 'request-close' } }
+      }
       return task.deployment?.deployUrl
         ? { text: '배포 완료', primary: { label: '접속 URL 열기', icon: 'open_in_new', kind: 'open-url' } }
         : { text: '배포 완료' }
+    case 'CLOSE_REVIEW':
+      if (isAdmin) return { text: '종료 요청됨 — 승인하면 PR 병합·배포 중지·노트 작성·브랜치 삭제를 진행합니다', primary: { label: '종료 승인', icon: 'task_alt', kind: 'approve-close' } }
+      if (isOwner) return { text: '종료 요청됨 — 관리자 승인을 기다리는 중입니다', primary: { label: '요청 철회', icon: 'undo', kind: 'withdraw-close' } }
+      return { text: '종료 승인을 기다리는 중입니다' }
+    case 'CLOSE_FAILED':
+      return isAdmin
+        ? { text: '종료 실패 — 사유를 확인하고 재시도하세요(끝난 단계는 건너뜁니다)', primary: { label: '종료 재시도', icon: 'refresh', kind: 'retry-close' } }
+        : { text: '종료 실패 — 관리자 확인이 필요합니다' }
+    case 'CLOSED':
+      return { text: '작업 종료 — PR이 병합되고 정리가 끝났습니다' }
     case 'FAILED':
     case 'DESIGN_FAILED':
       return { text: '실패 — 사유 확인 후 재시도', primary: { label: '재시도', icon: 'refresh', kind: 'retry' } }
     case 'IMPLEMENTATION_FAILED':
       return { text: '구현 실패 — 사유를 확인하세요' }
-    case 'DEPLOY_FAILED':
     case 'DEPLOY_LOST':
+      if (!isAdmin && isOwner) {
+        return { text: '배포 컨테이너 중단 — 결과 확인이 끝났다면 종료를 요청할 수 있습니다', primary: { label: '확인 완료 — 종료 요청', icon: 'task_alt', kind: 'request-close' } }
+      }
+    // falls through
+    case 'DEPLOY_FAILED':
       return isAdmin
         ? { text: s === 'DEPLOY_LOST' ? '배포 컨테이너 중단 — 재배포 필요' : '배포 실패 — 사유 확인 후 재배포', primary: { label: '재배포', icon: 'refresh', kind: 'redeploy' } }
         : { text: '배포 실패 — 관리자 확인이 필요합니다' }

@@ -257,6 +257,10 @@ public class TaskService {
             case DEPLOYED, DEPLOY_LOST, DEPLOY_PENDING, DEPLOYING, UNDEPLOY_PENDING, UNDEPLOYING ->
                     throw TaskException.conflict("배포 이력이 활성인 작업은 먼저 중지 후 삭제할 수 있습니다 (현재: "
                             + t.getStatus().dbValue() + ")");
+            // 종료 단계는 배포 중지(②) 전까지 컨테이너가 살아 있고, 병합까지 진행됐을 수 있다 — 종료를 끝내거나 반려 후 삭제.
+            case CLOSE_REVIEW, CLOSE_PENDING, CLOSING, CLOSE_FAILED ->
+                    throw TaskException.conflict("종료 처리 중인 작업은 삭제할 수 없습니다 — 종료를 마치거나 반려한 뒤 삭제하세요 (현재: "
+                            + t.getStatus().dbValue() + ")");
             default -> { }
         }
         interviewService.closeOpenSessionsForTask(t.getId(), actorId);

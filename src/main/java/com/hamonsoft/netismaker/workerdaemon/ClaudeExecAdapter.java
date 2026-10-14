@@ -39,6 +39,12 @@ import java.util.concurrent.TimeUnit;
 @Slf4j
 public class ClaudeExecAdapter {
 
+    /**
+     * 노트 작성처럼 도구가 필요 없는 실행 — 내장 도구 전부 끔(--tools "") + MCP 없음(--strict-mcp-config에 --mcp-config 없음).
+     * 입력에 사용자 텍스트가 섞여도 파일·네트워크에 손댈 수단이 없다(스펙 2026-10-13 §4 ③).
+     */
+    static final List<String> NO_TOOLS_ARGS = List.of("--strict-mcp-config", "--tools", "");
+
     private final WorkerProperties props;
     private final WorkerMcpSupport mcp;
     private String resolvedClaudePath;
@@ -162,40 +168,8 @@ public class ClaudeExecAdapter {
             // 1) --allowedTools <tools...>가 variadic이라 뒤에 위치한 prompt arg를 삼킴
             // 2) ARG_MAX(~256KB)를 넘는 큰 프롬프트도 안전
             // 3) ps에 프롬프트 본문이 노출되지 않음 (PAT가 들어있을 경우 보호)
-            List<String> cmd = buildCommand(resolvedClaudePath, dangerouslySkipPermissions,
-                    model, effort, mcpArgs.args());
-            ProcessBuilder pb = new ProcessBuilder(cmd)
-                    .directory(workingDir);            // redirectErrorStream(true) 제거!
-            Process p = pb.start();
-            try (OutputStream stdin = p.getOutputStream()) {
-                stdin.write(prompt.getBytes(StandardCharsets.UTF_8));
-            }
-
-            StringBuilder out = new StringBuilder();
-            StringBuilder err = new StringBuilder();
-            Thread reader = drain(p.getInputStream(), out);
-            Thread errReader = drain(p.getErrorStream(), err);
-
-            boolean finished = p.waitFor(timeout.toMillis(), TimeUnit.MILLISECONDS);
-            long durationMs = System.currentTimeMillis() - start;
-            if (!finished) {
-                destroyTree(p);
-                throw new IOException("claude timeout after " + timeout);
-            }
-            reader.join(2000);
-            errReader.join(2000);
-
-            Parsed parsed = parseEnvelope(out.toString());
-            if (parsed.usage() == null) {
-                log.warn("claude envelope 파싱 실패 — usage 미수집 (stdout {} bytes)", out.length());
-            }
-            String resultText = parsed.resultText();
-            // 실패 진단: exit != 0이면 stderr tail을 결과 텍스트에 덧붙인다 (기존 stdout 병합 대체)
-            if (p.exitValue() != 0 && !err.isEmpty()) {
-                String tail = err.length() > 2000 ? "…" + err.substring(err.length() - 2000) : err.toString();
-                resultText = resultText + "\n[stderr]\n" + tail;
-            }
-            return new ExecResult(p.exitValue(), resultText, durationMs, parsed.usage());
+            return run(buildCommand(resolvedClaudePath, dangerouslySkipPermissions, model, effort, mcpArgs.args()),
+                    prompt, workingDir, timeout, start);
         } finally {
             Path tmp = mcpArgs.tempConfigPath();
             if (tmp != null) {
@@ -203,6 +177,50 @@ public class ClaudeExecAdapter {
                 catch (Exception e) { log.warn("임시 MCP config 삭제 실패: {} ({})", tmp, e.getMessage()); }
             }
         }
+    }
+
+    /** claude 프로세스 실행·출력 수집 공통부 (stdin 프롬프트, timeout 시 destroyTree, envelope 해제, 실패 시 stderr tail). */
+    private ExecResult run(List<String> cmd, String prompt, File workingDir, Duration timeout, long start)
+            throws InterruptedException, IOException {
+        ProcessBuilder pb = new ProcessBuilder(cmd)
+                .directory(workingDir);            // redirectErrorStream(true) 제거!
+        Process p = pb.start();
+        try (OutputStream stdin = p.getOutputStream()) {
+            stdin.write(prompt.getBytes(StandardCharsets.UTF_8));
+        }
+
+        StringBuilder out = new StringBuilder();
+        StringBuilder err = new StringBuilder();
+        Thread reader = drain(p.getInputStream(), out);
+        Thread errReader = drain(p.getErrorStream(), err);
+
+        boolean finished = p.waitFor(timeout.toMillis(), TimeUnit.MILLISECONDS);
+        long durationMs = System.currentTimeMillis() - start;
+        if (!finished) {
+            destroyTree(p);
+            throw new IOException("claude timeout after " + timeout);
+        }
+        reader.join(2000);
+        errReader.join(2000);
+
+        Parsed parsed = parseEnvelope(out.toString());
+        if (parsed.usage() == null) {
+            log.warn("claude envelope 파싱 실패 — usage 미수집 (stdout {} bytes)", out.length());
+        }
+        String resultText = parsed.resultText();
+        // 실패 진단: exit != 0이면 stderr tail을 결과 텍스트에 덧붙인다 (기존 stdout 병합 대체)
+        if (p.exitValue() != 0 && !err.isEmpty()) {
+            String tail = err.length() > 2000 ? "…" + err.substring(err.length() - 2000) : err.toString();
+            resultText = resultText + "\n[stderr]\n" + tail;
+        }
+        return new ExecResult(p.exitValue(), resultText, durationMs, parsed.usage());
+    }
+
+    /** 도구·MCP 없이 텍스트만 생성 (종료 노트). 권한 우회 플래그를 쓰지 않는다. */
+    public ExecResult execWithoutTools(String prompt, File workingDir, Duration timeout, String model)
+            throws InterruptedException, IOException {
+        return run(buildCommand(resolvedClaudePath, false, model, null, NO_TOOLS_ARGS),
+                prompt, workingDir, timeout, System.currentTimeMillis());
     }
 
     /**

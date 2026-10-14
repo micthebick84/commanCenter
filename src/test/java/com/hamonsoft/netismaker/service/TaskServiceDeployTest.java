@@ -189,4 +189,23 @@ class TaskServiceDeployTest {
         assertThat(result.getEnvVars()).hasSize(1);
         assertThat(result.getEnvVars().get(0).key()).isEqualTo("A");
     }
+
+    @Test
+    void 종료_진행중_상태는_삭제할_수_없다() {
+        for (TaskStatus s : List.of(TaskStatus.CLOSE_REVIEW, TaskStatus.CLOSE_PENDING,
+                TaskStatus.CLOSING, TaskStatus.CLOSE_FAILED)) {
+            Task t = taskWithStatus(s);
+            when(taskRepo.findActiveByIdForUpdate(42L)).thenReturn(Optional.of(t));
+            assertThatThrownBy(() -> service.softDelete(42L, "admin", true))
+                    .as(s.name()).isInstanceOf(TaskException.class);
+        }
+    }
+
+    @Test
+    void 작업종료는_삭제할_수_있다() {
+        Task t = taskWithStatus(TaskStatus.CLOSED);
+        when(taskRepo.findActiveByIdForUpdate(42L)).thenReturn(Optional.of(t));
+        service.softDelete(42L, "admin", true);
+        assertThat(t.getDeletedAt()).isNotNull();
+    }
 }

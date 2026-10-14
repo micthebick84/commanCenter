@@ -48,7 +48,7 @@ const task = (id, status, statusLabel, extra = {}) => ({
   id, githubRepo: 'acme/widgets', repoAlias: 'Widgets', githubBranch: 'main', title: `스모크 작업 ${id}`,
   description: '하이드레이션 스모크용 작업', status, statusLabel, requesterId: 'admin', retryCount: 0, maxRetry: 3,
   failureReason: null, mcpsExtra: [], envVars: [], createdAt: NOW, updatedAt: NOW, model: 'claude-opus-5-5',
-  effort: 'medium', designRequested: false, analysis: null, design: null, implementation: null, deployment: null,
+  effort: 'medium', designRequested: false, analysis: null, design: null, implementation: null, deployment: null, close: null,
   interviewSessionId: null, attachments: [], stageUsage: [], totalCostUsd: null, totalTokens: null, ...extra,
 })
 const TASKS = [

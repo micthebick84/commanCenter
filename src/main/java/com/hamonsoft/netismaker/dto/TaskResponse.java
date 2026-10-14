@@ -44,7 +44,9 @@ public record TaskResponse(
         /** 단계별 usage 총합(USD). usage 행이 하나도 없으면 null(미수집) — 0이 아니다. */
         BigDecimal totalCostUsd,
         /** input+output 토큰 합(캐시 제외). usage 행이 하나도 없으면 null(미수집). */
-        Long totalTokens
+        Long totalTokens,
+        /** 종료 단계 표시. 종료 상태이거나 종료 기록이 있을 때만 non-null (스펙 2026-10-13 §5). */
+        CloseView close
 ) {
     public record AnalysisView(
             String markdownResult,
@@ -111,6 +113,21 @@ public record TaskResponse(
             long cacheReadTokens
     ) {}
 
+    /** progress는 끝난 CloseStep 이름(MERGED, UNDEPLOYED, NOTE_WRITTEN, BRANCH_DELETED) — enum 순서. */
+    public record CloseView(List<String> progress, String mergeCommitSha, String notePath) {}
+
+    private static final java.util.Set<TaskStatus> CLOSE_PHASE = java.util.EnumSet.of(
+            TaskStatus.CLOSE_REVIEW, TaskStatus.CLOSE_PENDING, TaskStatus.CLOSING,
+            TaskStatus.CLOSED, TaskStatus.CLOSE_FAILED);
+
+    private static CloseView closeViewOf(Task t) {
+        boolean recorded = t.getCloseProgress() != null || t.getMergeCommitSha() != null || t.getCloseNotePath() != null;
+        if (!recorded && !CLOSE_PHASE.contains(t.getStatus())) return null;
+        return new CloseView(
+                com.hamonsoft.netismaker.entity.CloseStep.parse(t.getCloseProgress()).stream().map(Enum::name).toList(),
+                t.getMergeCommitSha(), t.getCloseNotePath());
+    }
+
     public static TaskResponse of(Task t, TaskAnalysis a) {
         return of(t, a, null);
     }
@@ -175,7 +192,8 @@ public record TaskResponse(
                 r.attachments(),
                 r.stageUsage(),
                 totalCostUsd,
-                r.totalTokens()
+                r.totalTokens(),
+                r.close()
         );
     }
 
@@ -190,7 +208,7 @@ public record TaskResponse(
         return new TaskResponse(id, githubRepo, repoAlias, githubBranch, title, description, status, statusLabel,
                 requesterId, retryCount, maxRetry, failureReason, mcpsExtra, redacted, createdAt, updatedAt,
                 model, effort, designRequested, analysis, design, implementation, deployment, interviewSessionId,
-                attachments, stageUsage, totalCostUsd, totalTokens);
+                attachments, stageUsage, totalCostUsd, totalTokens, close);
     }
 
     private static TaskResponse build(Task t, TaskAnalysis a, TaskDesign d, Long interviewSessionId,
@@ -260,7 +278,8 @@ public record TaskResponse(
                         : attachments.stream().map(AttachmentView::from).toList(),
                 stageUsage == null ? List.of() : stageUsage,
                 totalCostUsd,
-                totalTokens
+                totalTokens,
+                closeViewOf(t)
         );
     }
 }

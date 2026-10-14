@@ -24,14 +24,15 @@ import java.util.stream.Collectors;
 /**
  *  Stale 작업 회수 잡 (api 프로파일).
  *
- *  매 stale-check-interval-ms마다 in-flight(분석중/디자인중/구현중/배포중/배포중지중) 작업을 검사한다.
+ *  매 stale-check-interval-ms마다 in-flight(분석중/디자인중/구현중/배포중/배포중지중/종료중) 작업을 검사한다.
  *  회수 조건(둘 중 하나):
  *    1. 워커 사망: claimed_at이 worker-dead-threshold-seconds보다 오래됐고(=워커가 등록할 시간 충분),
  *       소유 워커의 heartbeat.last_seen_at이 임계 이전이거나 heartbeat가 아예 없음.
- *    2. 행업 백스톱: claimed_at이 단계별 절대 임계(분석/구현/배포)를 넘김 — 워커가 살아있어도 회수.
+ *    2. 행업 백스톱: claimed_at이 단계별 절대 임계(분석/구현/디자인/배포/종료)를 넘김 — 워커가 살아있어도 회수.
  *
  *  회수 전이: 분석중→PENDING(재시도)/FAILED, 디자인중→DESIGN_PENDING(idempotent 재큐잉), 구현중→IMPLEMENTATION_FAILED,
- *            배포중→DEPLOY_FAILED, 배포중지중→UNDEPLOY_PENDING(idempotent 재큐잉).
+ *            배포중→DEPLOY_FAILED, 배포중지중→UNDEPLOY_PENDING(idempotent 재큐잉),
+ *            종료중→CLOSE_PENDING(재큐잉 — close_progress가 남아 있어 재claim이 남은 단계부터 이어간다).
  */
 @Component
 @Profile("api")
@@ -67,6 +68,9 @@ public class StaleTaskRecoveryJob {
     @Value("${app.task.design-worker-dead-threshold-seconds:300}")
     private int designWorkerDeadThresholdSeconds;
 
+    @Value("${app.task.close-stale-threshold-minutes:30}")
+    private int closeStaleThresholdMinutes;
+
     public StaleTaskRecoveryJob(TaskRepository taskRepo,
                                 TaskStatusHistoryRepository historyRepo,
                                 WorkerHeartbeatRepository heartbeatRepo,
@@ -99,7 +103,7 @@ public class StaleTaskRecoveryJob {
             int deadSec = switch (from) {
                 case IMPLEMENTING -> implementationWorkerDeadThresholdSeconds;
                 case DESIGNING -> designWorkerDeadThresholdSeconds;
-                case DEPLOYING, UNDEPLOYING -> deployWorkerDeadThresholdSeconds;
+                case DEPLOYING, UNDEPLOYING, CLOSING -> deployWorkerDeadThresholdSeconds;
                 default -> workerDeadThresholdSeconds; // IN_PROGRESS (분석)
             };
             OffsetDateTime workerDeadBefore = now.minusSeconds(deadSec);
@@ -111,6 +115,7 @@ public class StaleTaskRecoveryJob {
             int ceilingMin = switch (from) {
                 case IMPLEMENTING -> implementationStaleThresholdMinutes;
                 case DESIGNING -> designStaleThresholdMinutes;
+                case CLOSING -> closeStaleThresholdMinutes;
                 case DEPLOYING, UNDEPLOYING -> deployStaleThresholdMinutes;
                 default -> analysisStaleThresholdMinutes; // IN_PROGRESS
             };
@@ -142,6 +147,12 @@ public class StaleTaskRecoveryJob {
                     deployLogStream.finish(t.getId()); // 진행중 청크 정리(재큐잉되면 새로 스트리밍)
                     logTransition(t, from, TaskStatus.UNDEPLOY_PENDING, "배포중지중 stale → 재큐잉(idempotent)");
                     log.warn("Stale 회수: task={} {} → UNDEPLOY_PENDING(재큐잉)", t.getId(), why);
+                }
+                case CLOSING -> {
+                    // 단계가 멱등이고 진행(close_progress)이 남아 있어 실패로 돌리지 않고 재큐잉한다.
+                    t.setStatus(TaskStatus.CLOSE_PENDING);
+                    logTransition(t, from, TaskStatus.CLOSE_PENDING, "종료중 stale → 재큐잉(idempotent, 남은 단계부터)");
+                    log.warn("Stale 회수: task={} {} → CLOSE_PENDING(재큐잉)", t.getId(), why);
                 }
                 case DESIGNING -> {
                     t.setStatus(TaskStatus.DESIGN_PENDING);

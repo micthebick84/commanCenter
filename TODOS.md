@@ -116,6 +116,66 @@
 
 **우선순위**: 낮음 (멀티 워커 도입 전 필수).
 
+## 작업 종료 단계 후속 (PR #86 리뷰에서 보류, 2026-10-14)
+
+스펙 `docs/superpowers/specs/2026-10-13-task-close-phase-design.md`. 아래는 구현·리뷰 중 보류한 항목이다. 병합을 막는 문제는 PR #86에서 이미 고쳤다.
+
+### [ ] 재시도로 쓴 종료 노트에 배포 주소·시각이 빠짐
+
+**What**: `WorkerService.recordCloseProgress`의 UNDEPLOYED 단계가 `deployUrl`·`deployedAt`을 비운다. 그래서 그 뒤에 노트 단계가 실패해 재시도하면, 재claim한 `CloseContext`에 배포 정보가 없어 노트의 "배포 주소"가 비게 된다.
+
+**Why**: 가장 흔한 재시도 경로(볼트 경로 문제 → 재시도)가 정확히 이 경우다. 노트가 작업 기록의 원문이 되므로 배포 정보가 빠지면 아쉽다.
+
+**Context**: 배포 메타를 비우는 시점을 CLOSED 보고로 미루거나, `close_*` 쪽에 배포 주소·시각을 따로 남겨 `CloseContext.of`가 그 값을 쓰게 한다. 종료실패 동안 상세 화면에 죽은 접속 URL이 보이지 않도록 화면 쪽 처리도 같이 본다.
+
+**우선순위**: 중간.
+
+### [ ] 관리자가 등록한 배포중단됨 작업의 종료 요청 버튼
+
+**What**: `taskStages.ts`의 `nextAction`은 DEPLOY_LOST에서 `!isAdmin && isOwner`일 때만 "확인 완료 — 종료 요청"을 준다. 관리자가 직접 등록한 작업은 재배포만 보여서 종료를 요청할 길이 화면에 없다. API는 관리자의 요청을 허용한다.
+
+**Context**: 상세 종료 카드나 하단 ⋮ 메뉴에 보조 버튼을 두는 방식이 무난하다.
+
+**우선순위**: 낮음.
+
+### [ ] GitHub 머지 큐: 종료 취소 뒤 늦게 병합되는 PR
+
+**What**: 머지 큐가 있는 레포에서 병합이 대기열에 들어간 채 폴링(5×2초)이 끝나면 MERGED 없이 종료실패가 된다. 이때 관리자가 "종료 취소"를 하면 작업은 배포완료로 돌아가는데, 큐가 나중에 PR을 병합할 수 있다.
+
+**Why**: 작업 상태(배포완료)와 PR 상태(병합됨)가 어긋난다. 다시 종료를 요청하면 이미 병합된 PR을 성공으로 처리하므로 수렴은 한다.
+
+**Context**: 병합 요청을 보낸 사실을 `close_progress`에 `MERGE_REQUESTED`처럼 남기고, 그 표식이 있으면 종료 취소를 막거나 확인창에 경고를 넣는다. 함께: 폴링 중 PR이 CLOSED로 바뀌어도 "병합 대기열/진행 중"이라고 보고하는 문구(`GitHubPrCloser.awaitMerged`)를 상태별로 나눈다.
+
+**우선순위**: 낮음 (머지 큐 레포가 생기면).
+
+### [ ] 종료 워커 견고성 잔손질
+
+**What**: 리뷰에서 나온 작은 항목들.
+- `GitHubPrCloser`: draft PR은 `mergeStateStatus`가 DRAFT라 DIRTY(충돌) 사전 검사가 걸리지 않는다(병합 시도 → 원복 → 원문 사유로 처리되어 해는 없음). 분류에 쓰는 `mergeStateStatus`가 draft 해제 전 값이라 낡았다. 미사용 지역변수 `undoMsg`, 쓰지 않는 `throws`. `gh` 실행 람다가 `GitHubPrCreator`와 중복. API 경로에 브랜치 이름을 인코딩하지 않음(현재 `netismaker/task-N-…` ASCII라 무해).
+- `GitLabMrCloser`: `draft `/`draft - ` 형태의 제목 접두어를 못 벗김(지금은 "draft 해제 실패"로 명확히 거부). draft 해제 PUT의 200 응답 본문을 못 읽으면 원복하지 않음. 브랜치 삭제 403을 보호 브랜치일 때도 "토큰 scope"로 안내. `CLOSE_MERGE_METHOD=rebase`를 GitLab에서 merge로 조용히 처리(기동 경고 로그 권장).
+- `TaskCloser`: NOTE_WRITTEN 진행 보고가 실패해 재시도하면 claude를 한 번 더 돌린다(이중 과금, 드묾). `close-stale-threshold-minutes`(30)가 노트 타임아웃+gh 타임아웃 합보다 커야 하는데 검증이 없다 — `CLOSE_NOTE_TIMEOUT`을 늘리면 실행 중 재큐될 수 있다.
+- `CloseNoteWriter`: `relativePath`를 원래 폴더 문자열로 조립(`vault.relativize` 권장), 비원자적 쓰기(임시 파일 + `ATOMIC_MOVE`), 제목의 제어문자가 `InvalidPathException`으로 샘. `CloseNotePrompt`: 사용자 입력 절을 구분자로 감싸지 않음, 비용이 null이면 `$null` 표기.
+
+**우선순위**: 낮음.
+
+### [ ] 종료 단계 화면·코드 잔손질
+
+**What**:
+- 데스크톱 보드 카드의 미니 진행바(`buildStages`의 `toCard`)가 작업종료를 전부 회색으로 그린다(모바일 `stageSteps`는 전부 완료로 그림).
+- `RejectCloseRequest`의 `@Size`에 한국어 메시지가 없다. `TaskCloseController.view`가 `TaskController.forViewer` 2줄을 복제했다. `TaskResponse`에 FQN 인라인 사용.
+- `taskStages.spec.ts`의 깨진 `it` 제목("배포완료: 등록자·관리자는 종료 요청, 남은 문구만"), `nextAction`의 fall-through는 `noFallthroughCasesInSwitch`를 켜면 깨진다.
+
+**우선순위**: 낮음.
+
+### [ ] 종료 단계 테스트 보강
+
+**What**: 동작은 맞지만 테스트로 고정되지 않은 경우들.
+- API: `TaskCloseServiceTest` — withdraw의 비소유자 403, approve/reject/withdraw의 상태 409, notFound, `statusBeforeReview`의 예외 경로(요청 불가 상태·파싱 불가·null), reject 사유가 이력에 남는지, prNumber null·headBranch 공백. `TaskServiceDeployTest` 삭제 가드가 예외 타입만 단언. `TaskCloseController` 비관리자 응답의 비밀 env 마스킹. 통합 테스트에 withdraw·retry·빈 사유 400·배포중단됨 진입. `closeViewOf`의 "기록 있음" 분기. `WorkerServiceCloseTest`의 길이 가드 400·CLOSING 중 허용되지 않는 결과 상태.
+- 워커: `containsSubsequence` 대신 `containsSequence("--tools", "")`, `run()`/`execWithoutTools` 프로세스 수준 테스트, Binder 수준 잘못된 병합 방식, `GitHubPrCloser` 잘못된 method, `GitLabMrCloser` 인터럽트 경로, `CloseNoteWriter` 펜스 제거·형제 접두 폴더·절대 폴더.
+- 프론트: 배포중단됨·작업종료·관리자 겸 등록자 조합의 `nextAction`, 좁은 화면 반려(`bar-more-close-reject`)와 반려 다이얼로그 흐름, 종료 요청 중복 클릭 가드.
+
+**우선순위**: 낮음.
+
 ## 완료
 
 ### [x] 하이드레이션 회귀 스모크를 저장소/CI에 편입 (2026-10-08)

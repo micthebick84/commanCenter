@@ -23,7 +23,7 @@ class GitRepoCacheTest {
     }
 
     private WorkerProperties props(Path reposDir, Path worktreeRoot) {
-        var deploy = new WorkerProperties.Deploy(null, null, 0, null, null, null, 0, 0, null,
+        var deploy = new WorkerProperties.Deploy(null, null, 0, null, null, null, null, 0, 0, null,
                 null, 0, 0, 0, null, 0, null);
         return new WorkerProperties("w1", null, null, null, 0, 0, 0, 0, 0, reposDir.toString(), null,
                 null, "ghp_SECRETPAT", "glpat-SECRETTOKEN", null, null,

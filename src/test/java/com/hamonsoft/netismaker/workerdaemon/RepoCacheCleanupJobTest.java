@@ -65,7 +65,7 @@ class RepoCacheCleanupJobTest {
     }
 
     private WorkerProperties props(String reposDirValue, Boolean enabled, String cron) {
-        var deploy = new WorkerProperties.Deploy(null, null, 0, null, null, null, 0, 0, null,
+        var deploy = new WorkerProperties.Deploy(null, null, 0, null, null, null, null, 0, 0, null,
                 null, 0, 0, 0, null, 0, null);
         return new WorkerProperties("w1", null, null, null, 0, 0, 0, 0, 0, reposDirValue, null,
                 null, null, null, null, null, tmp.resolve("worktrees").toString(), null, null, null, null, null, null,

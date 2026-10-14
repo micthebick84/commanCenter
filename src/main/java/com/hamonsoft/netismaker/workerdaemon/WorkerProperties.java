@@ -91,8 +91,12 @@ public record WorkerProperties(
             String portRange,           // 예: "19000-19099"
             int defaultContainerPort,
             String publicHost,
+            // docker build 시간 상한. 구형 빌더(BuildKit 없음)가 컨테이너 안에서 mvn package·apt-get을 돌리고
+            // 원격 데몬(ssh)으로 컨텍스트를 보낸다 — 실측 웜 빌드 약 3분(작업 10), 새 프로젝트 콜드 빌드는 10분을 넘볼 수 있다.
             Duration buildTimeout,
             String dockerfilePromptTemplate,
+            // Dockerfile 생성 claude 시간 상한 — build 상한과 따로 둔다(직렬 워커라 그동안 다른 작업이 모두 멈춘다).
+            Duration dockerfileTimeout,
             int healthCheckSeconds,
             // HTTP readiness: 기동 후 이 시간(초) 안에 readinessPath가 HTTP 응답하면 즉시 배포완료로 본다.
             // 끝까지 응답이 없어도 컨테이너가 살아있으면 (비-HTTP 앱 가능성) liveness 기준으로 완료 처리.
@@ -113,7 +117,8 @@ public record WorkerProperties(
             if (portRange == null || portRange.isBlank()) portRange = "19000-19099";
             if (defaultContainerPort <= 0) defaultContainerPort = 8080;
             if (publicHost == null || publicHost.isBlank()) publicHost = "localhost";
-            if (buildTimeout == null) buildTimeout = Duration.ofMinutes(10);
+            if (buildTimeout == null) buildTimeout = Duration.ofMinutes(30);
+            if (dockerfileTimeout == null) dockerfileTimeout = Duration.ofMinutes(10);
             if (healthCheckSeconds <= 0) healthCheckSeconds = 15;
             if (readinessSeconds <= 0) readinessSeconds = 40;
             if (readinessPath == null || readinessPath.isBlank()) readinessPath = "/";
@@ -201,7 +206,7 @@ public record WorkerProperties(
         if (gitUserEmail == null || gitUserEmail.isBlank()) gitUserEmail = "netismaker@hamonsoft.local";
         if (implementationTimeout == null) implementationTimeout = Duration.ofMinutes(45);
         if (designTimeout == null) designTimeout = Duration.ofMinutes(30);
-        if (deploy == null) deploy = new Deploy(null, null, 0, null, null, null, 0, 0, null, null, 0, 0, 0, null, 0, null);
+        if (deploy == null) deploy = new Deploy(null, null, 0, null, null, null, null, 0, 0, null, null, 0, 0, 0, null, 0, null);
         if (repoCacheCleanup == null) repoCacheCleanup = new RepoCacheCleanup(null, null, 0);
         if (worktreeCleanup == null) worktreeCleanup = new WorktreeCleanup(null, null, null);
     }

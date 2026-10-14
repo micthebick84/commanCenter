@@ -9,7 +9,7 @@ class WorkerPropertiesDeployTest {
 
     private static WorkerProperties.Deploy deployWith(WorkerProperties.Deploy.PublicAccess pa) {
         return new WorkerProperties.Deploy(
-                null, null, 0, null, null, null, 0, 0, null, null, 0, 0, 0, null, 0, pa);
+                null, null, 0, null, null, null, null, 0, 0, null, null, 0, 0, 0, null, 0, pa);
     }
 
     @Test
@@ -22,6 +22,13 @@ class WorkerPropertiesDeployTest {
         assertThat(d.publicAccess().slugSuffix()).isEmpty();
         assertThat(d.publicAccess().dns().provider()).isEqualTo("none");
         assertThat(d.publicAccess().dns().cloudflare()).isFalse();
+    }
+
+    @Test
+    void timeouts_default_to_30min_docker_build_and_10min_dockerfile_generation() {
+        WorkerProperties.Deploy d = deployWith(null);
+        assertThat(d.buildTimeout()).isEqualTo(java.time.Duration.ofMinutes(30));
+        assertThat(d.dockerfileTimeout()).isEqualTo(java.time.Duration.ofMinutes(10));
     }
 
     @Test

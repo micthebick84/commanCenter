@@ -73,7 +73,7 @@ class WorktreeCleanupPropertiesTest {
 
     @Test
     void absent_block_gets_defaults_in_the_record_itself() {
-        var deploy = new WorkerProperties.Deploy(null, null, 0, null, null, null, 0, 0, null,
+        var deploy = new WorkerProperties.Deploy(null, null, 0, null, null, null, null, 0, 0, null,
                 null, 0, 0, 0, null, 0, null);
         WorkerProperties p = new WorkerProperties("w1", null, null, null, 0, 0, 0, 0, 0, null, null,
                 null, null, null, null, null, null, null, null, null, null, null, null,

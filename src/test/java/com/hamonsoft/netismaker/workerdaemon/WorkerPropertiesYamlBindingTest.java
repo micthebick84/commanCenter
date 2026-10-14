@@ -118,6 +118,21 @@ class WorkerPropertiesYamlBindingTest {
     }
 
     @Test
+    void 배포_시간_상한은_기본값과_환경변수_재정의로_바인딩된다() throws Exception {
+        WorkerProperties defaults = Binder.get(loadYaml()).bind("netis-maker.worker", WorkerProperties.class).get();
+        assertThat(defaults.deploy().buildTimeout()).isEqualTo(java.time.Duration.ofMinutes(30));
+        assertThat(defaults.deploy().dockerfileTimeout()).isEqualTo(java.time.Duration.ofMinutes(10));
+
+        StandardEnvironment env = loadYaml();
+        env.getPropertySources().addFirst(new MapPropertySource("test-env-overrides", Map.of(
+                "DEPLOY_BUILD_TIMEOUT", "45m",
+                "DEPLOY_DOCKERFILE_TIMEOUT", "5m")));
+        WorkerProperties p = Binder.get(env).bind("netis-maker.worker", WorkerProperties.class).get();
+        assertThat(p.deploy().buildTimeout()).isEqualTo(java.time.Duration.ofMinutes(45));
+        assertThat(p.deploy().dockerfileTimeout()).isEqualTo(java.time.Duration.ofMinutes(5));
+    }
+
+    @Test
     void close_설정은_기본값과_환경변수_재정의로_바인딩된다() throws Exception {
         CloseProperties defaults = Binder.get(loadYaml()).bind("netis-maker.worker.close", CloseProperties.class).get();
         assertThat(defaults.vaultDir()).isNull();

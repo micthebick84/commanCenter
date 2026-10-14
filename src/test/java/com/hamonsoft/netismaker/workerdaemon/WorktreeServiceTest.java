@@ -26,7 +26,7 @@ class WorktreeServiceTest {
     @TempDir Path tmp;
 
     private WorkerProperties props() {
-        var deploy = new WorkerProperties.Deploy(null, null, 0, null, null, null, 0, 0, null,
+        var deploy = new WorkerProperties.Deploy(null, null, 0, null, null, null, null, 0, 0, null,
                 null, 0, 0, 0, null, 0, null);
         return new WorkerProperties("w1", null, null, null, 0, 0, 0, 0, 0, tmp.resolve("repos").toString(), null,
                 null, null, null, null, null, tmp.resolve("worktrees").toString(), null, null, null, null, null, null,

@@ -295,23 +295,11 @@ public class GitRepoCache {
         run(dir, java.util.List.of(command));
     }
 
+    /** 시간 상한·출력 수집은 ProcessRunner(응답 없는 clone/fetch도 상한에서 끊긴다), 실패 메시지는 마스킹한 출력. */
     private void run(File dir, java.util.List<String> command) throws IOException, InterruptedException {
-        log.debug("git exec ({}): {}", dir, GitRemotes.mask(String.join(" ", command)));
-        ProcessBuilder pb = new ProcessBuilder(command).directory(dir).redirectErrorStream(true);
-        Process p = pb.start();
-        StringBuilder out = new StringBuilder();
-        try (BufferedReader br = new BufferedReader(
-                new InputStreamReader(p.getInputStream(), StandardCharsets.UTF_8))) {
-            String line;
-            while ((line = br.readLine()) != null) out.append(line).append('\n');
-        }
-        boolean finished = p.waitFor(GIT_TIMEOUT_SECONDS, TimeUnit.SECONDS);
-        if (!finished) {
-            p.destroyForcibly();
-            throw new IOException("git timeout: " + GitRemotes.mask(String.join(" ", command)));
-        }
-        if (p.exitValue() != 0) {
-            throw new IOException("git failed (" + p.exitValue() + "): " + GitRemotes.mask(out.toString()));
+        ProcessRunner.Result r = ProcessRunner.run(dir, command, GIT_TIMEOUT_SECONDS);
+        if (r.exitCode() != 0) {
+            throw new IOException("git failed (" + r.exitCode() + "): " + GitRemotes.mask(r.stdout()));
         }
     }
 

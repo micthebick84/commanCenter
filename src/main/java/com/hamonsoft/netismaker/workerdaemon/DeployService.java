@@ -163,7 +163,7 @@ public class DeployService {
         String prompt = buildDockerfilePrompt(props.deploy().dockerfilePromptTemplate(),
                 task.githubRepo(), task.headBranch());
         ClaudeExecAdapter.ExecResult exec = claude.exec(
-                prompt, worktree, props.deploy().buildTimeout(), java.util.List.of(), true);
+                prompt, worktree, props.deploy().dockerfileTimeout(), java.util.List.of(), true);
         log.append(tail(exec.stdout(), 2000)).append('\n');
         if (exec.exitCode() != 0) {
             throw new DeployException("Dockerfile 생성 claude exit=" + exec.exitCode(),

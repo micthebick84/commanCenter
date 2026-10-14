@@ -111,13 +111,19 @@ public class DbMcpController {
             r = tools.call(ref, name, args);
         }
         Object sql = args.get("sql");
-        log.info("db-mcp task={} conn={} tool={} sql={} error={} chars={} ms={}", task.getId(), connectionId, name,
-                sql instanceof String s ? (s.length() > 200 ? s.substring(0, 200) + "…" : s) : "-",
+        log.info("db-mcp task={} conn={} tool={} sql={} error={} chars={} ms={}", task.getId(), connectionId,
+                logSafe(name, 100), sql instanceof String s ? logSafe(s, 200) : "-",
                 r.isError(), r.text().length(), System.currentTimeMillis() - start);
         Map<String, Object> out = new LinkedHashMap<>();
         out.put("content", List.of(Map.of("type", "text", "text", r.text())));
         out.put("isError", r.isError());
         return out;
+    }
+
+    /** 감사 로그용 — 앞 max자만, CR/LF 등 제어문자(C0·C1)와 유니코드 줄 구분자는 공백으로(로그 줄 위조 방지). */
+    static String logSafe(String s, int max) {
+        String head = s.length() > max ? s.substring(0, max) + "…" : s;
+        return head.replaceAll("[\\p{Cc}\\u2028\\u2029]", " ");
     }
 
     private static Map<String, Object> error(JsonNode id, int code, String message) {

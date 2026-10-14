@@ -114,4 +114,14 @@ class DbMcpControllerTest {
         mvc.perform(get("/mcp/db/12").header("Authorization", "Bearer good"))
                 .andExpect(status().isMethodNotAllowed());
     }
+
+    /** 감사 로그 위조 방지 — 도구 이름·SQL 앞부분의 CR/LF·제어문자는 공백으로. */
+    @Test
+    void log_safe_replaces_control_chars_and_clips() {
+        org.assertj.core.api.Assertions.assertThat(
+                DbMcpController.logSafe("query\r\n2026-10-14 INFO forged\tx\u0000\u0085 y", 200))
+                .isEqualTo("query  2026-10-14 INFO forged x   y");
+        org.assertj.core.api.Assertions.assertThat(DbMcpController.logSafe("a".repeat(205), 200))
+                .isEqualTo("a".repeat(200) + "…");
+    }
 }

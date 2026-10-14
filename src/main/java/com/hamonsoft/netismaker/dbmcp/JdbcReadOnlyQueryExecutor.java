@@ -2,6 +2,8 @@ package com.hamonsoft.netismaker.dbmcp;
 
 import com.hamonsoft.netismaker.dto.InterviewClaimResponse.DbConnectionRef;
 import com.hamonsoft.netismaker.entity.DbType;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.context.annotation.Profile;
 import org.springframework.stereotype.Component;
 
@@ -13,11 +15,14 @@ import java.util.Properties;
 /**
  * JDBC 읽기 전용 실행 (스펙 2026-10-14 §6.3). 호출당 1연결(풀 없음 — 호출 빈도가 낮다).
  * autocommit 끔 + setReadOnly + SET TRANSACTION READ ONLY(PG·MySQL·Oracle 공통 문장) → 실행 → 성공·실패와 무관하게 ROLLBACK.
+ * 파라미터 없는 사용자 SQL은 Statement로(PG jsonb ?·?|·?& 연산자 보존), 파라미터 있는 카탈로그 조회는 PreparedStatement로 실행한다.
  * 비밀번호는 URL이 아니라 Properties로만 넘긴다.
  */
 @Component
 @Profile("api")
 public class JdbcReadOnlyQueryExecutor implements ReadOnlyQueryExecutor {
+
+    private static final Logger log = LoggerFactory.getLogger(JdbcReadOnlyQueryExecutor.class);
 
     @FunctionalInterface
     interface ConnectionOpener {
@@ -48,6 +53,18 @@ public class JdbcReadOnlyQueryExecutor implements ReadOnlyQueryExecutor {
                         st.execute("SET TRANSACTION READ ONLY");
                     }
                 }
+                if (params.isEmpty()) {
+                    // 사용자 SQL(query) — prepareStatement는 PostgreSQL jsonb 연산자 ?·?|·?&를 바인드 표식으로 해석한다.
+                    try (Statement st = c.createStatement()) {
+                        st.setQueryTimeout(DbMcpLimits.STATEMENT_TIMEOUT_SECONDS);
+                        st.setMaxRows(maxRows + 1);
+                        if (!st.execute(sql)) return new QueryResult(List.of(), List.of(), false);
+                        try (ResultSet rs = st.getResultSet()) {
+                            return read(rs, maxRows);
+                        }
+                    }
+                }
+                // 카탈로그 조회(파라미터 있음) — PreparedStatement로 바인드
                 try (PreparedStatement ps = c.prepareStatement(sql)) {
                     ps.setQueryTimeout(DbMcpLimits.STATEMENT_TIMEOUT_SECONDS);
                     ps.setMaxRows(maxRows + 1);
@@ -60,8 +77,11 @@ public class JdbcReadOnlyQueryExecutor implements ReadOnlyQueryExecutor {
             } finally {
                 try {
                     c.rollback();
-                } catch (SQLException ignored) {
-                    // close가 어차피 트랜잭션을 버린다
+                } catch (SQLException e) {
+                    // close가 트랜잭션을 버린다고 가정할 수 없다 — Oracle JDBC는 autocommit 꺼진 연결을 close할 때 커밋한다.
+                    // 읽기 전용 트랜잭션(setReadOnly + SET TRANSACTION READ ONLY)이라 바뀐 것은 없어야 하지만 흔적은 남긴다.
+                    // SQL·접속정보(호스트·계정·비밀번호)는 남기지 않는다.
+                    log.warn("DB MCP 롤백 실패 server={} sqlState={} code={}", ref.serverName(), e.getSQLState(), e.getErrorCode());
                 }
             }
         }

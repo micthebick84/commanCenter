@@ -53,6 +53,7 @@ class JdbcReadOnlyQueryExecutorTest {
         assertThat(r.rows()).containsExactly(List.of(2));
     }
 
+    /** 바인드 파라미터가 있는 경로(카탈로그 조회) — PreparedStatement. */
     @Test
     void always_rolls_back_and_sets_read_only_even_on_failure() throws SQLException {
         Connection c = mock(Connection.class);
@@ -63,7 +64,8 @@ class JdbcReadOnlyQueryExecutorTest {
         when(ps.execute()).thenThrow(new SQLException("boom"));
         JdbcReadOnlyQueryExecutor ex = new JdbcReadOnlyQueryExecutor(ref -> c, true);
 
-        assertThatThrownBy(() -> ex.run(REF, "SELECT 1", List.of(), 10)).isInstanceOf(SQLException.class);
+        assertThatThrownBy(() -> ex.run(REF, "SELECT 1 FROM t WHERE a = ?", List.of("x"), 10))
+                .isInstanceOf(SQLException.class);
 
         InOrder o = inOrder(c, st, ps);
         o.verify(c).setAutoCommit(false);
@@ -71,7 +73,54 @@ class JdbcReadOnlyQueryExecutorTest {
         o.verify(st).execute("SET TRANSACTION READ ONLY");
         o.verify(ps).setQueryTimeout(DbMcpLimits.STATEMENT_TIMEOUT_SECONDS);
         o.verify(ps).setMaxRows(11);
+        o.verify(ps).setString(1, "x");
         o.verify(c).rollback();
+        verify(c).close();
+    }
+
+    /**
+     * 파라미터 없는 경로(사용자 query) — PostgreSQL jsonb 연산자 ?·?|·?&가 바인드 표식으로 해석되지 않게
+     * prepareStatement를 쓰지 않고 Statement로 실행한다. 읽기 전용·타임아웃·상한·ROLLBACK은 같다.
+     */
+    @Test
+    void paramless_sql_runs_via_plain_statement_with_same_guards() throws SQLException {
+        Connection c = mock(Connection.class);
+        Statement txSt = mock(Statement.class);
+        Statement qSt = mock(Statement.class);
+        when(c.createStatement()).thenReturn(txSt, qSt);
+        String sql = "SELECT * FROM t WHERE doc ? 'k' AND doc ?| array['a']";
+        when(qSt.execute(sql)).thenThrow(new SQLException("boom"));
+        JdbcReadOnlyQueryExecutor ex = new JdbcReadOnlyQueryExecutor(ref -> c, true);
+
+        assertThatThrownBy(() -> ex.run(REF, sql, List.of(), 10)).isInstanceOf(SQLException.class);
+
+        verify(c, never()).prepareStatement(anyString());
+        InOrder o = inOrder(c, txSt, qSt);
+        o.verify(c).setAutoCommit(false);
+        o.verify(c).setReadOnly(true);
+        o.verify(txSt).execute("SET TRANSACTION READ ONLY");
+        o.verify(qSt).setQueryTimeout(DbMcpLimits.STATEMENT_TIMEOUT_SECONDS);
+        o.verify(qSt).setMaxRows(11);
+        o.verify(qSt).execute(sql);
+        o.verify(c).rollback();
+        verify(c).close();
+    }
+
+    @Test
+    void paramless_select_reads_rows_on_h2() throws SQLException {
+        QueryResult r = h2().run(REF, "SELECT id FROM t WHERE id < 2 ORDER BY id", List.of(), 10);
+        assertThat(r.rows()).containsExactly(List.of(0), List.of(1));
+        assertThat(r.truncated()).isFalse();
+    }
+
+    @Test
+    void rollback_failure_does_not_mask_result() throws SQLException {
+        Connection c = spy(DriverManager.getConnection(url));
+        doThrow(new SQLException("rollback failed")).when(c).rollback();
+        JdbcReadOnlyQueryExecutor ex = new JdbcReadOnlyQueryExecutor(ref -> c, false);
+
+        QueryResult r = ex.run(REF, "SELECT id FROM t WHERE id = 3", List.of(), 10);
+        assertThat(r.rows()).containsExactly(List.of(3));
         verify(c).close();
     }
 }

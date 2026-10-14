@@ -93,4 +93,28 @@ class CloseNoteWriterTest {
         assertThat(CloseNoteWriter.slug(" / : ")).isEqualTo("작업");
         assertThat(CloseNoteWriter.slug("a".repeat(100))).hasSize(60);
     }
+
+    @Test
+    void 산출물이_있으면_프런트매터와_본문_끝에_남긴다() throws Exception {
+        CloseNoteWriter.NoteMeta m = new CloseNoteWriter.NoteMeta(12, "제목", null, "abcdef1234",
+                "w-task-12-abcdef1.war", "산출물: w-task-12-abcdef1.war (253.7 MB, 배포 커밋 abcdef1) — Symphony 작업 화면에서 로그인 후 내려받기: https://a.test/tasks/12");
+        CloseNoteWriter.Written w = writer.write(vault, "N", m, "# 본문", day);
+        String text = Files.readString(w.file());
+        assertThat(text).contains("merge_commit: abcdef1234\nartifact: w-task-12-abcdef1.war\n")
+                .endsWith("# 본문\n\n산출물: w-task-12-abcdef1.war (253.7 MB, 배포 커밋 abcdef1) — Symphony 작업 화면에서 로그인 후 내려받기: https://a.test/tasks/12\n");
+    }
+
+    @Test
+    void 산출물_표시가_없으면_프런트매터와_본문_끝에_아무것도_더하지_않는다() throws Exception {
+        String text = Files.readString(writer.write(vault, "N", meta, "# 본문", day).file());
+        assertThat(text).doesNotContain("artifact:").doesNotContain("산출물").endsWith("# 본문\n");
+    }
+
+    @Test
+    void 산출물_줄의_URL_자격증명도_가린다() throws Exception {
+        CloseNoteWriter.NoteMeta m = new CloseNoteWriter.NoteMeta(12, "제목", null, "abcdef1234", "a.war",
+                "산출물: a.war — 내려받기: https://oauth2:glpat-SECRETSECRETSECRET@a.test/tasks/12");
+        String text = Files.readString(writer.write(vault, "N", m, "본문", day).file());
+        assertThat(text).doesNotContain("SECRETSECRET").contains("https://***@a.test/tasks/12");
+    }
 }

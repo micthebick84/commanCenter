@@ -57,11 +57,13 @@ public record WorkerTaskResponse(
         /** CLOSE 전용: 노트 재료. */
         CloseContext closeContext,
         /** CLOSE 전용: 산출물 지시. null이면 워커가 산출물 단계를 건너뛴다 (스펙 2026-10-14 §3). */
-        CloseArtifactSpec closeArtifact
+        CloseArtifactSpec closeArtifact,
+        /** IMPLEMENTATION·DESIGN 전용: DB MCP 지시 (스펙 2026-10-14 §6.4). WorkerController가 claim 커밋 뒤 채운다. */
+        DbMcpGrant dbMcp
 ) {
     /**
      * CLOSE 필드 도입 전 23개 인자 생성자 — 종료 외 kind·기존 팩토리·테스트가 그대로 쓴다.
-     * Jackson은 레코드의 정규 생성자(28개)를 쓰므로 역직렬화와 무관하다(WorkerResultRequest와 같은 방식).
+     * Jackson은 레코드의 정규 생성자(29개)를 쓰므로 역직렬화와 무관하다(WorkerResultRequest와 같은 방식).
      */
     public WorkerTaskResponse(Long id, String githubRepo, String githubBranch, String title, String description,
                               Kind kind, List<TaskMcpSpec> mcpsExtra, String analysisMarkdown, String subtasksJson,
@@ -87,6 +89,29 @@ public record WorkerTaskResponse(
                 headBranch, headSha, envVars, model, effort, designMarkdown, mockupFilesJson, feedbackHistoryJson,
                 designUrl, designSystemProjectId, designOutputProjectId, gitUrl, repoHost, planMarkdown,
                 prNumber, prUrl, closeProgress, closeContext, null);
+    }
+
+    /** DB MCP(dbMcp) 도입 전 28개 인자 생성자 — 기존 팩토리·테스트 호환. */
+    public WorkerTaskResponse(Long id, String githubRepo, String githubBranch, String title, String description,
+                              Kind kind, List<TaskMcpSpec> mcpsExtra, String analysisMarkdown, String subtasksJson,
+                              String headBranch, String headSha, List<EnvVar> envVars, String model, String effort,
+                              String designMarkdown, String mockupFilesJson, String feedbackHistoryJson,
+                              String designUrl, String designSystemProjectId, String designOutputProjectId,
+                              String gitUrl, String repoHost, String planMarkdown,
+                              Integer prNumber, String prUrl, String closeProgress, CloseContext closeContext,
+                              CloseArtifactSpec closeArtifact) {
+        this(id, githubRepo, githubBranch, title, description, kind, mcpsExtra, analysisMarkdown, subtasksJson,
+                headBranch, headSha, envVars, model, effort, designMarkdown, mockupFilesJson, feedbackHistoryJson,
+                designUrl, designSystemProjectId, designOutputProjectId, gitUrl, repoHost, planMarkdown,
+                prNumber, prUrl, closeProgress, closeContext, closeArtifact, null);
+    }
+
+    /** DB MCP 지시만 채운 사본. */
+    public WorkerTaskResponse withDbMcp(DbMcpGrant grant) {
+        return new WorkerTaskResponse(id, githubRepo, githubBranch, title, description, kind, mcpsExtra,
+                analysisMarkdown, subtasksJson, headBranch, headSha, envVars, model, effort, designMarkdown,
+                mockupFilesJson, feedbackHistoryJson, designUrl, designSystemProjectId, designOutputProjectId,
+                gitUrl, repoHost, planMarkdown, prNumber, prUrl, closeProgress, closeContext, closeArtifact, grant);
     }
 
     /** 워커가 clone/폴더/MR에 쓰는 저장소 참조. 새 필드가 없는 페이로드는 GitHub로 복원된다. */

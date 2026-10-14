@@ -1,6 +1,8 @@
 package com.hamonsoft.netismaker.controller;
 
+import com.hamonsoft.netismaker.dbmcp.DbMcpGrantService;
 import com.hamonsoft.netismaker.dto.ActiveWorktreeTaskSummary;
+import com.hamonsoft.netismaker.dto.DbMcpGrant;
 import com.hamonsoft.netismaker.dto.DeployLogChunkRequest;
 import com.hamonsoft.netismaker.dto.CloseProgressRequest;
 import com.hamonsoft.netismaker.dto.DeployedTaskSummary;
@@ -36,10 +38,14 @@ import java.util.Optional;
 @Profile("api")
 public class WorkerController {
 
-    private final WorkerService workerService;
+    private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(WorkerController.class);
 
-    public WorkerController(WorkerService workerService) {
+    private final WorkerService workerService;
+    private final DbMcpGrantService dbMcpGrantService;
+
+    public WorkerController(WorkerService workerService, DbMcpGrantService dbMcpGrantService) {
         this.workerService = workerService;
+        this.dbMcpGrantService = dbMcpGrantService;
     }
 
     @PostMapping("/heartbeat")
@@ -50,9 +56,24 @@ public class WorkerController {
 
     @GetMapping("/next-task")
     public ResponseEntity<WorkerTaskResponse> nextTask(@RequestParam String workerId) {
-        Optional<WorkerTaskResponse> claimed = workerService.claimNextTask(workerId);
+        Optional<WorkerTaskResponse> claimed = workerService.claimNextTask(workerId).map(this::withDbMcp);
         return claimed.map(ResponseEntity::ok)
                       .orElseGet(() -> ResponseEntity.noContent().build());
+    }
+
+    /**
+     * 구현·디자인 claim에 DB MCP 지시를 붙인다 (스펙 2026-10-14 §6.4). claim 트랜잭션은 이미 커밋됐으므로
+     * 여기서 실패해도 claim 응답을 깨지 않는다 — DB 없이 진행.
+     */
+    private WorkerTaskResponse withDbMcp(WorkerTaskResponse r) {
+        if (r.kind() != WorkerTaskResponse.Kind.IMPLEMENTATION && r.kind() != WorkerTaskResponse.Kind.DESIGN) return r;
+        try {
+            DbMcpGrant g = dbMcpGrantService.grantFor(r.id());
+            return g == null ? r : r.withDbMcp(g);
+        } catch (RuntimeException e) {
+            log.warn("claim DB MCP 준비 실패 task={}: {}", r.id(), e.getClass().getSimpleName());
+            return r.withDbMcp(new DbMcpGrant(null, List.of(), List.of("DB 연결을 준비하지 못해 DB 도구 없이 진행합니다")));
+        }
     }
 
     @PostMapping("/tasks/{id}/result")

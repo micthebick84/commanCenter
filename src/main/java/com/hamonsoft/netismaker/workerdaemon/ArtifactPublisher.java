@@ -60,7 +60,9 @@ public class ArtifactPublisher {
             List<String> cmd = new ArrayList<>();
             cmd.add("docker");
             cmd.addAll(args);
-            return ProcessRunner.run(null, cmd, timeout);
+            // run이 아니라 runBounded — run의 시간 상한은 출력 EOF 뒤에만 걸려, 원격 데몬에서 docker cp가 멈추면
+            // 직렬 워커 스레드가 무기한 막히고 임시 컨테이너 정리(finally)에도 닿지 못한다.
+            return ProcessRunner.runBounded(null, cmd, timeout);
         });
     }
 

@@ -414,13 +414,14 @@ const noteHref = computed(() => obsidianLink(obsidianVault, task.value?.close?.n
 
 // 종료 산출물 (스펙 2026-10-14 §9) — 내려받기는 등록자 본인·관리자, 다시 보내기·산출물 없이 마무리는 관리자
 const canDownloadArtifact = computed(() => !!task.value?.close?.artifact && (auth.isAdmin || isOwner.value))
-const canResendMail = computed(
-  () =>
-    auth.isAdmin &&
-    task.value?.status === 'CLOSED' &&
-    !!task.value.close?.artifact &&
-    ['FAILED', 'NO_ADDRESS', 'DISABLED'].includes(task.value.close?.mail?.status ?? ''),
-)
+// 메일 상태가 없을 때(close.mail null)도 다시 보낼 수 있다 — 작업종료 직후 비동기 발송이 기록 전에 끊기면(DB 오류, API 종료 중)
+// 상태가 영영 안 남지만 API는 작업종료 + 산출물 보관이면 받는다. 이미 보낸 SENT만 막는다.
+const canResendMail = computed(() => {
+  const t = task.value
+  if (!auth.isAdmin || t?.status !== 'CLOSED' || !t.close?.artifact) return false
+  const mail = t.close.mail
+  return mail ? ['FAILED', 'NO_ADDRESS', 'DISABLED'].includes(mail.status) : t.close.artifactMode === 'REQUIRED'
+})
 const canSkipArtifactClose = computed(
   () => auth.isAdmin && !!task.value && canSkipArtifact(task.value.close, task.value.status),
 )
@@ -622,11 +623,14 @@ function onAction(kind: NextActionKind) {
               @click="downloadArtifact"
             />
           </div>
-          <div v-if="task.close.mail" class="q-mt-xs row items-center" style="gap: 8px" data-test="close-mail">
-            <q-chip dense square :color="task.close.mail.status === 'SENT' ? 'positive' : 'warning'" text-color="white">
-              {{ MAIL_STATUS_LABEL[task.close.mail.status] ?? task.close.mail.status }}
-            </q-chip>
-            <span v-if="task.close.mail.at" class="text-caption text-grey-7">{{ new Date(task.close.mail.at).toLocaleString() }}</span>
+          <div v-if="task.close.mail || canResendMail" class="q-mt-xs row items-center" style="gap: 8px" data-test="close-mail">
+            <template v-if="task.close.mail">
+              <q-chip dense square :color="task.close.mail.status === 'SENT' ? 'positive' : 'warning'" text-color="white">
+                {{ MAIL_STATUS_LABEL[task.close.mail.status] ?? task.close.mail.status }}
+              </q-chip>
+              <span v-if="task.close.mail.at" class="text-caption text-grey-7">{{ new Date(task.close.mail.at).toLocaleString() }}</span>
+            </template>
+            <span v-else class="text-caption text-grey-7" data-test="close-mail-unrecorded">메일 발송 기록 없음</span>
             <q-btn
               v-if="canResendMail"
               dense

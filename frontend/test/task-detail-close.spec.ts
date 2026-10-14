@@ -188,6 +188,54 @@ describe('pages/tasks/[id] — 작업 종료 (스펙 2026-10-13 §6)', () => {
     w.unmount()
   })
 
+  // 비동기 발송 리스너가 상태를 못 남긴 경우(DB 오류·API 종료 중 큐에 남은 메일) close.mail이 null — 그래도 관리자는 다시 보낼 수 있다
+  it('메일 상태가 없어도(close.mail null) 관리자에게 다시 보내기가 보이고 POST한다 — 비관리자·산출물 없는 종료·SENT에는 없다', async () => {
+    const closed = { ...baseTask, status: 'CLOSED', statusLabel: '작업종료', deployment }
+    authStub.isAdmin = true
+    let w = await mountWith({ ...closed, close: { ...emptyClose, artifactMode: 'REQUIRED', artifact, mail: null } })
+    expect(w.find('[data-test="close-mail-unrecorded"]').text()).toBe('메일 발송 기록 없음')
+    expect(w.find('[data-test="close-mail"] .q-chip').exists()).toBe(false)
+    useApiMock.mockClear()
+    await w.find('[data-test="close-mail-resend"]').trigger('click')
+    await flushPromises()
+    expect(useApiMock).toHaveBeenCalledWith('/api/tasks/42/close/mail/resend', { method: 'POST', body: undefined })
+    w.unmount()
+    document.body.innerHTML = ''
+
+    // mail 필드 자체가 없어도 같다(null 또는 미포함)
+    w = await mountWith({ ...closed, close: { ...emptyClose, artifactMode: 'REQUIRED', artifact } })
+    expect(w.find('[data-test="close-mail-resend"]').exists()).toBe(true)
+    w.unmount()
+    document.body.innerHTML = ''
+
+    // 산출물을 건너뛴 종료(메일 대상 아님)에는 없다
+    w = await mountWith({ ...closed, close: { ...emptyClose, artifactMode: 'SKIPPED', artifact: null, mail: null } })
+    expect(w.find('[data-test="close-mail"]').exists()).toBe(false)
+    w.unmount()
+    document.body.innerHTML = ''
+
+    // 이미 보낸 SENT에는 다시 보내기가 없다
+    w = await mountWith({ ...closed, close: { ...emptyClose, artifactMode: 'REQUIRED', artifact, mail: { status: 'SENT', at: null } } })
+    expect(w.find('[data-test="close-mail-resend"]').exists()).toBe(false)
+    w.unmount()
+    document.body.innerHTML = ''
+
+    // 작업종료가 아니면(종료실패 등) 없다
+    w = await mountWith({ ...baseTask, status: 'CLOSE_FAILED', statusLabel: '종료실패', deployment, close: { ...emptyClose, artifactMode: 'REQUIRED', artifact, mail: null } })
+    expect(w.find('[data-test="close-mail"]').exists()).toBe(false)
+    w.unmount()
+    document.body.innerHTML = ''
+
+    // 비관리자(등록자 본인)에게는 줄 자체가 없다
+    authStub.isAdmin = false
+    setMe('alice')
+    w = await mountWith({ ...closed, requesterId: 'alice', close: { ...emptyClose, artifactMode: 'REQUIRED', artifact, mail: null } })
+    expect(w.find('[data-test="close-artifact-download"]').exists()).toBe(true)
+    expect(w.find('[data-test="close-mail"]').exists()).toBe(false)
+    expect(w.find('[data-test="close-mail-resend"]').exists()).toBe(false)
+    w.unmount()
+  })
+
   it('산출물 단계에서 멈춘 종료실패: 관리자에게 산출물 없이 마무리가 보이고 확인 뒤 POST한다', async () => {
     authStub.isAdmin = true
     let w = await mountWith({

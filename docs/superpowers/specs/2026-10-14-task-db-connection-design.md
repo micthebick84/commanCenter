@@ -47,7 +47,7 @@ CREATE TABLE com.task_db_mcp_token (
     id          BIGSERIAL PRIMARY KEY,
     task_id     BIGINT      NOT NULL REFERENCES com.task(id) ON DELETE CASCADE,
     token_hash  VARCHAR(64) NOT NULL UNIQUE,   -- SHA-256 hex
-    stage       VARCHAR(32) NOT NULL,          -- 발급 당시 Task 상태 dbValue (구현중/디자인중)
+    stage       VARCHAR(32) NOT NULL,          -- 발급 당시 TaskStatus.name() (IMPLEMENTING/DESIGNING)
     issued_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
     expires_at  TIMESTAMPTZ NOT NULL
 );
@@ -55,7 +55,7 @@ CREATE INDEX idx_task_db_mcp_token_task ON com.task_db_mcp_token(task_id, issued
 ```
 
 - `Task.dbConnectionIds` — `@JdbcTypeCode(SqlTypes.JSON) List<Long>` (InterviewSession과 같은 매핑).
-- 토큰 평문은 저장하지 않는다(해시만). 정리: 만료되었거나 대체된(최신이 아닌) 행을 하루 1회 삭제 — 기존 정리 잡(`StaleTaskRecoveryJob` 등 스케줄 잡 중 적합한 곳)에 붙이고 새 스케줄러는 만들지 않는다.
+- 토큰 평문은 저장하지 않는다(해시만). 정리: 만료되었거나 대체된(최신이 아닌) 행을 `DbMcpTokenService.cleanup()`이 삭제한다(`netismaker.db-mcp.token-cleanup-cron`, 기본 매일 03:40).
 
 ## 4. API·서비스 (선택·저장)
 
@@ -63,14 +63,14 @@ CREATE INDEX idx_task_db_mcp_token_task ON com.task_db_mcp_token(task_id, issued
 - `TaskService.approve`(`AWAITING_APPROVAL` → `startInterview`):
   - `dbConnectionService.validateSelection(task.repoCatalogId, task.ownerId, ids)` — 기준은 **작업 등록자**. 기능 꺼짐·3개 초과·다른 레포·비활성·남의 USER 행이면 400.
   - 통과하면 `task.dbConnectionIds`에 저장하고 `InterviewService.createForTask`가 세션 `dbConnectionIds`에 복사.
-- `TaskResponse`에 `repoCatalogId`, `dbConnectionIds`, `dbConnections`(칩: `dbConnectionService.chipsFor`) 추가.
+- `TaskResponse`에는 `repoCatalogId`·`dbConnectionIds`만 추가한다. 칩 라벨은 프론트가 `/api/db-connections` 목록으로 만든다(보이지 않는 연결은 `DB #id`).
 - 인터뷰 설정 프리필(마지막 인터뷰 설정 불러오기) 응답에 `dbConnectionIds` 포함.
 
 ## 5. 분석 인터뷰 (인터뷰 서비스)
 
 - `InterviewWorkerController.withDb`: `kind == QUESTION` 조건을 `QUESTION || INTERVIEW`로 넓힌다. `InterviewClaimResponse.of()`도 INTERVIEW일 때 세션의 `dbConnectionIds`를 싣는다.
 - 러너 `interviewRunner.ts` INTERVIEW 분기(`runTurn`): 질문 분기와 같이 `createDbMcp(claim)` → `buildOptions({..., dbMcpServers, dbDialects})` → 프롬프트에 `dbSection(db)` → `finally db.close()`.
-- 권한 `permissions.ts` INTERVIEW 게이트: 현재 `mcp__*` 전부 allow → `mcp__db-N__*`는 질문과 같은 `dbToolGate`로 보내고 등록되지 않은 `db-N`은 deny. 그 밖의 `mcp__*`는 기존대로 allow.
+- 권한 `permissions.ts` INTERVIEW 게이트: 현재 `mcp__*` 전부 allow → `mcp__db-N__*`는 질문과 같은 `dbToolGate`로 보내고 등록되지 않은 `db-N`은 deny. 그 밖의 `mcp__*`는 기존대로 allow. 이 게이트를 거치도록 INTERVIEW의 `allowedTools`(사전 승인)에는 붙인 DB 서버를 넣지 않는다 — 넣으면 `canUseTool`/`dbToolGate`를 건너뛴다.
 
 ## 6. 디자인·구현 — API 호스팅 DB MCP
 
@@ -102,22 +102,25 @@ CREATE INDEX idx_task_db_mcp_token_task ON com.task_db_mcp_token(task_id, issued
 - `SqlReadOnlyChecker` — 인터뷰 서비스 `src/sdk/sqlReadOnly.ts`를 Java로 이식. 주석·문자열 리터럴 제거 후 단일 문장·조회문(SELECT/WITH/EXPLAIN 등 TS와 같은 허용 목록)만 허용, 다중 문장·쓰기 키워드 거부. **TS 테스트 케이스를 그대로 옮겨** 두 구현의 판정을 맞춘다.
 - `ReadOnlyQueryExecutor` — JDBC:
   - `DriverManager`로 연결(풀 없음, 호출당 1연결 — 호출 빈도가 낮다), 접속 타임아웃 10초
-  - `setAutoCommit(false)` + `setReadOnly(true)` + 방언별 READ ONLY 트랜잭션(인터뷰 서비스 `db/adapters.ts`와 같은 문장)
+  - `setAutoCommit(false)` + `setReadOnly(true)` + 3종 공통 `SET TRANSACTION READ ONLY`(인터뷰 서비스 `db/adapters.ts`와 같은 문장)
   - `Statement.setQueryTimeout(30)`, `setMaxRows(201)`(200 초과 여부 판정), 셀 2000자·결과 60000자에서 자르고 잘림 표시
   - `finally`에서 항상 `rollback()` 후 close
   - `list_tables`·`describe_table`은 방언별 메타 조회(인터뷰 서비스와 같은 쿼리 또는 `DatabaseMetaData`)
 - 결과 텍스트 형식은 인터뷰 서비스 도구 출력과 맞춘다(에이전트가 단계마다 다른 형식을 보지 않도록).
-- 감사 로그: 호출마다 `taskId`·`connectionId`·도구·SQL 앞 200자·행 수·소요 ms를 INFO로. 결과값·접속정보는 남기지 않는다.
+- 오류 구분: 인자 검증 오류(SQL 거부·필수 인자 누락 등)는 private `InvalidToolInput` 타입으로 던져 그 메시지를 그대로 `isError`로 돌려준다. 그 밖의 모든 예외(드라이버가 던지는 `IllegalArgumentException` 포함)는 비밀번호를 마스킹하는 "DB 오류" 경로로 보낸다.
+- 감사 로그: 호출마다 `taskId`·`connectionId`·도구·SQL 앞 200자(로그 줄에 SQL 머리 포함)·결과 길이(`chars`, 행 수 대신)·소요 ms를 INFO로(`db-mcp task=… conn=…`). 결과값·접속정보는 남기지 않는다.
 
 ### 6.4 워커 데몬
 
 - `WorkerTaskResponse`(forImplementation·forDesign)에 `dbMcp` 추가: `{token, servers:[{name:"db-12", path:"/mcp/db/12", label, dbType}], notices:[...]}`. DB 미선택이면 `null`.
-- `WorkerMcpSupport.buildClaudeArgsForTask`: 기존 임시 mcp-config에 서버마다 `{"type":"http","url": apiBaseUrl + path, "headers":{"Authorization":"Bearer <token>"}}`를 합치고 `--allowedTools`에 `mcp__db-12` 추가. 임시 파일은 기존대로 `finally`에서 삭제. 파일에는 토큰만 있으며, 새더라도 그 작업 실행 중·선택된 DB·읽기 전용으로만 쓸 수 있다.
+- `WorkerMcpSupport.buildClaudeArgsForTask`: 기존 임시 mcp-config에 서버마다 `{"type":"http","url": apiBaseUrl + path, "headers":{"Authorization":"Bearer <token>"}}`를 합치고 `--allowedTools`에 `mcp__db-12` 추가. 토큰 헤더는 `TaskMcpSpec.headers`(DB에는 저장하지 않음, `@JsonInclude(NON_NULL)`)로 실어 mcp-config에 쓴다. 임시 파일은 기존대로 `finally`에서 삭제. 파일에는 토큰만 있으며, 새더라도 그 작업 실행 중·선택된 DB·읽기 전용으로만 쓸 수 있다.
 - 구현·디자인 프롬프트에 DB 안내 섹션: 연결 이름·종류·도구 사용법·읽기 전용이라는 점, `notices`(사용할 수 없는 연결과 사유).
 
 ### 6.5 공개 노출
 
 cloudflared 터널이 API를 통째로 공개하면 `/mcp/db/**`도 외부에서 닿는다. 토큰이 256비트·작업 실행 중에만 유효해 실질 위험은 낮지만, 터널 설정에서 `/mcp/**`를 막을 수 있으면 막는다(워커는 내부 `apiBaseUrl`로 접근). 구현 시 터널 설정을 확인해 결정하고 결과를 PR에 적는다.
+
+**확인 결과 (2026-10-14)**: 이 PC의 터널(`C:\Users\mic\.cloudflared\config.yml`)은 호스트별 ingress로 `auth-win`→`localhost:9000`, `app-win`→`localhost:3001`(Nuxt), `*.micthebick.dev`→`10.1.1.75:18080`(배포 Traefik), 그 외 404뿐이고 **API(8090)를 직접 노출하는 규칙은 없다**. 공개 경로는 Nuxt `routeRules`(`frontend/nuxt.config.ts`)가 `/api/**`·`/oauth2/**`만 8090·9000으로 프록시하는 것뿐이라 `/mcp/**`는 공개 호스트에서 API로 전달되지 않는다. 따라서 터널·프론트 설정 변경은 필요 없다. 단 8090은 `0.0.0.0`에 바인딩돼 사내망에서는 직접 닿을 수 있다(토큰 인증이 막는다). 이후 `/api/**` 밖의 경로를 프록시하는 규칙을 추가할 때 `/mcp/**`가 포함되지 않게 주의한다.
 
 ## 7. 프론트엔드
 
@@ -127,7 +130,8 @@ cloudflared 터널이 API를 통째로 공개하면 `/mcp/db/**`도 외부에서
   - "새 접속 추가"(USER) → 저장 후 목록 재조회·자동 선택(질문 화면과 같음).
   - 요청 바디 `{model, effort, mcpCatalogIds, dbConnectionIds}` — 기능 꺼짐이면 `dbConnectionIds` 생략.
   - 400 응답 메시지는 다이얼로그에 표시.
-- 작업 상세(`pages/tasks/[id].vue`·모바일 상세): `dbConnections` 칩(`이름 · 종류`) 표시.
+  - DB 목록을 불러오는 동안은 승인 버튼을 비활성화하고, 늦게 도착한 응답은 로드 시퀀스로 무시한다(레포·작업이 바뀐 뒤의 응답이 선택을 덮어쓰지 않게).
+- 작업 상세(`pages/tasks/[id].vue`·모바일 상세): DB 칩(`이름 · 종류`) 표시. 라벨은 `/api/db-connections` 목록에서 만들고, 폴링 때마다가 아니라 레포 또는 `dbConnectionIds`가 바뀔 때만 다시 조회한다.
 
 ## 8. 오류 처리
 

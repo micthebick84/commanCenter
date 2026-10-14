@@ -61,6 +61,17 @@ class DbMcpGrantServiceTest {
         assertThat(g.token()).isNull();
         assertThat(g.servers()).isEmpty();
         verify(tokens, never()).issue(any());
+        // 재claim 때 이전 토큰(같은 단계·만료 전·최신)이 다시 유효해지지 않도록 이 작업의 토큰을 모두 무효화한다
+        verify(tokens).revokeAll(5L);
+    }
+
+    @Test
+    void usable_connection_does_not_revoke_before_issue() {
+        var ref = new DbConnectionRef("db-12", "운영 (MySQL)", "MYSQL", "h", 3306, "app", "u", "pw");
+        when(db.resolveForClaim(any())).thenReturn(new DbConnectionService.ClaimDb(List.of(ref), List.of()));
+        svc.grantFor(5L);
+        verify(tokens).issue(task);
+        verify(tokens, never()).revokeAll(any());
     }
 
     @Test

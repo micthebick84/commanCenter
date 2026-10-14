@@ -46,7 +46,14 @@ public class DbMcpGrantService {
                         "/mcp/db/" + r.serverName().substring(DbConnectionService.SERVER_PREFIX.length()),
                         r.label(), r.dbType()))
                 .toList();
-        String token = servers.isEmpty() ? null : tokenService.issue(t);
+        String token;
+        if (servers.isEmpty()) {
+            // 새 토큰을 안 주면 같은 단계의 이전 토큰(최신·만료 전)이 그대로 유효하다 — 재claim에서 되살아나지 않게 지운다.
+            tokenService.revokeAll(t.getId());
+            token = null;
+        } else {
+            token = tokenService.issue(t);
+        }
         if (!db.notices().isEmpty()) {
             String reason = "DB 연결 일부 사용 불가: " + String.join(" / ", db.notices());
             historyRepo.save(TaskStatusHistory.log(t.getId(), t.getStatus(), t.getStatus(), "system", null,

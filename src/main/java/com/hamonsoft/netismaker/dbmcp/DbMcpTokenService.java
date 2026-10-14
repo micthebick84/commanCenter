@@ -64,6 +64,12 @@ public class DbMcpTokenService {
         return token;
     }
 
+    /** 작업의 토큰 전부 무효화 — 새 토큰 없이 claim될 때(쓸 수 있는 연결 0개) 이전 토큰이 다시 유효해지지 않게. */
+    @Transactional
+    public void revokeAll(Long taskId) {
+        repo.deleteByTaskId(taskId);
+    }
+
     @Transactional(readOnly = true)
     public Optional<Task> authenticate(String token) {
         if (token == null || token.isBlank()) return Optional.empty();

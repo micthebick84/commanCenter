@@ -102,4 +102,15 @@ class DbMcpTokenServiceTest {
         task.setDeletedAt(OffsetDateTime.now(clock));
         assertThat(svc.authenticate(token)).isEmpty();
     }
+
+    @Test
+    void revoke_all_deletes_every_token_of_the_task() {
+        String token = svc.issue(task);
+        issued(token);
+        svc.revokeAll(42L);
+        verify(repo).deleteByTaskId(42L);
+        // 삭제 뒤에는 행이 없으므로 인증되지 않는다
+        when(repo.findByTokenHash(DbMcpTokenService.sha256Hex(token))).thenReturn(Optional.empty());
+        assertThat(svc.authenticate(token)).isEmpty();
+    }
 }

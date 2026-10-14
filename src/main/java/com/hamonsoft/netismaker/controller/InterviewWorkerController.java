@@ -59,18 +59,21 @@ public class InterviewWorkerController {
     }
 
     /**
-     * 질문 세션이면 DB 접속정보를 복호화해 싣는다 (스펙 2026-10-02 §5.4). claim 트랜잭션은 이미 커밋됐으므로
+     * 질문·인터뷰 세션이면 DB 접속정보를 복호화해 싣는다 (스펙 2026-10-02 §5.4, 2026-10-14 §5). claim 트랜잭션은 이미 커밋됐으므로
      * 여기서 실패해도 응답을 깨지 않는다 — 500이면 세션이 RUNNING에 묶여 stale 회수까지 멈춘다.
      * ⚠️ 이 응답 본문(평문 비밀번호 포함)을 로그로 남기지 말 것.
      */
     private InterviewClaimResponse withDb(InterviewClaimResponse c) {
-        if (!"QUESTION".equals(c.kind()) || c.dbConnectionIds().isEmpty()) return c;
+        if (c.dbConnectionIds().isEmpty()) return c;
         try {
             DbConnectionService.ClaimDb db = dbConnectionService.resolveForClaim(c.dbConnectionIds());
             return c.withDb(db.refs(), db.notices());
         } catch (RuntimeException e) {
             log.warn("claim DB 접속정보 조회 실패 session={}: {}", c.sessionId(), e.getClass().getSimpleName());
-            return c.withDb(List.of(), List.of("DB 접속정보를 불러오지 못해 DB 도구 없이 답합니다"));
+            String notice = "QUESTION".equals(c.kind())
+                    ? "DB 접속정보를 불러오지 못해 DB 도구 없이 답합니다"
+                    : "DB 접속정보를 불러오지 못해 DB 도구 없이 진행합니다";
+            return c.withDb(List.of(), List.of(notice));
         }
     }
 

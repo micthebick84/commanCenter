@@ -77,8 +77,39 @@ describe('admin/repo-catalog', () => {
         defaultBranch: null,
         description: null,
         enabled: true,
+        artifactEnabled: false,
+        artifactPath: null,
       },
     })
+    w.unmount()
+  })
+
+  it('산출물 보관을 켜면 경로 입력이 보이고 함께 보낸다', async () => {
+    const w = await mountPage([])
+    await w.find('[data-test="open-create"]').trigger('click')
+    await flushPromises()
+    const aliasInput = document.querySelector('[data-test="form-alias"]') as HTMLInputElement
+    const urlInput = document.querySelector('[data-test="form-giturl"]') as HTMLInputElement
+    aliasInput.value = '동부병원'
+    aliasInput.dispatchEvent(new Event('input'))
+    urlInput.value = 'owner/netisdash'
+    urlInput.dispatchEvent(new Event('input'))
+    expect(document.querySelector('[data-test="form-artifact-path"]')).toBeNull()
+    ;(document.querySelector('[data-test="form-artifact-enabled"]') as HTMLElement).click()
+    await flushPromises()
+    const pathInput = document.querySelector('[data-test="form-artifact-path"]') as HTMLInputElement
+    pathInput.value = '/usr/local/tomcat/webapps/ROOT.war'
+    pathInput.dispatchEvent(new Event('input'))
+    await flushPromises()
+
+    useApiMock.mockResolvedValueOnce({})
+    useApiMock.mockResolvedValueOnce([])
+    ;(document.querySelector('[data-test="form-submit"]') as HTMLElement).click()
+    await flushPromises()
+    expect(useApiMock).toHaveBeenCalledWith('/api/admin/repo-catalog', expect.objectContaining({
+      method: 'POST',
+      body: expect.objectContaining({ artifactEnabled: true, artifactPath: '/usr/local/tomcat/webapps/ROOT.war' }),
+    }))
     w.unmount()
   })
 })

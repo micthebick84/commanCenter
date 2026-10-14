@@ -19,6 +19,7 @@ import org.springframework.test.context.ContextConfiguration;
 import org.springframework.test.context.TestPropertySource;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.util.FileSystemUtils;
+import org.springframework.web.multipart.MultipartFile;
 
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
@@ -80,7 +81,7 @@ class TaskServiceAttachmentTest {
 
     @Test
     void 파일_없이_null_또는_빈리스트면_기존_등록과_동일하다() {
-        Task t1 = taskService.create(req(), null, "user1");
+        Task t1 = taskService.create(req(), (List<MultipartFile>) null, "user1");
         Task t2 = taskService.create(req(), List.of(), "user1");
         assertThat(attachmentRepo.findByTaskIdOrderByIdAsc(t1.getId())).isEmpty();
         assertThat(attachmentRepo.findByTaskIdOrderByIdAsc(t2.getId())).isEmpty();

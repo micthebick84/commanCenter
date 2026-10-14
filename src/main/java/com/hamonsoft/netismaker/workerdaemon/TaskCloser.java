@@ -1,5 +1,7 @@
 package com.hamonsoft.netismaker.workerdaemon;
 
+import com.hamonsoft.netismaker.dto.ArtifactInfo;
+import com.hamonsoft.netismaker.dto.CloseContext;
 import com.hamonsoft.netismaker.dto.CloseProgressRequest;
 import com.hamonsoft.netismaker.dto.WorkerResultRequest;
 import com.hamonsoft.netismaker.dto.WorkerTaskResponse;
@@ -19,10 +21,12 @@ import java.time.LocalDate;
 import java.time.ZoneId;
 import java.util.EnumSet;
 import java.util.List;
+import java.util.Locale;
 
 /**
- * 작업 종료(kind=CLOSE) 오케스트레이션 (스펙 2026-10-13 §4).
- *   ① 병합 → ② 배포 중지 → ③ 옵시디언 노트 → ④ 원격 브랜치 삭제 (+ 로컬 worktree 정리, 실패는 경고만)
+ * 작업 종료(kind=CLOSE) 오케스트레이션 (스펙 2026-10-13 §4, 2026-10-14 §4).
+ *   ① 병합 → ② 배포 중지 → [③ 산출물 업로드 — claim에 closeArtifact가 있을 때만] → ④ 옵시디언 노트
+ *   → ⑤ 원격 브랜치 삭제 (+ 로컬 worktree 정리, 실패는 경고만)
  * 단계마다 close-progress를 보고하고, claim의 closeProgress에 있는 단계는 건너뛴다. 어느 단계든 실패하면
  * 그 뒤 단계는 하지 않고 종료실패를 보고한다(관리자 재시도 → 남은 단계부터).
  */
@@ -40,20 +44,29 @@ public class TaskCloser {
     private final ResultReporter reporter;
     private final List<MergeRequestCloser> closers;
     private final CloseNoteWriter noteWriter;
+    private final ArtifactPublisher artifacts;
     private final Clock clock;
 
     @Autowired
     public TaskCloser(WorkerProperties props, CloseProperties closeProps, WorkerHttpClient http,
                       DeployService deployService, WorktreeService worktrees, ClaudeExecAdapter claude,
-                      ResultReporter reporter) {
+                      ResultReporter reporter, ArtifactPublisher artifacts) {
         this(props, closeProps, http, deployService, worktrees, claude, reporter,
                 List.of(new GitHubPrCloser(props.githubPat()), new GitLabMrCloser(props.gitlabToken())),
-                new CloseNoteWriter(), Clock.system(ZoneId.of("Asia/Seoul")));
+                new CloseNoteWriter(), artifacts, Clock.system(ZoneId.of("Asia/Seoul")));
+    }
+
+    /** 산출물 업로더 없는 테스트용 — closeArtifact가 있는 claim은 산출물 단계에서 종료실패한다. */
+    TaskCloser(WorkerProperties props, CloseProperties closeProps, WorkerHttpClient http,
+               DeployService deployService, WorktreeService worktrees, ClaudeExecAdapter claude,
+               ResultReporter reporter, List<MergeRequestCloser> closers, CloseNoteWriter noteWriter, Clock clock) {
+        this(props, closeProps, http, deployService, worktrees, claude, reporter, closers, noteWriter, null, clock);
     }
 
     TaskCloser(WorkerProperties props, CloseProperties closeProps, WorkerHttpClient http,
                DeployService deployService, WorktreeService worktrees, ClaudeExecAdapter claude,
-               ResultReporter reporter, List<MergeRequestCloser> closers, CloseNoteWriter noteWriter, Clock clock) {
+               ResultReporter reporter, List<MergeRequestCloser> closers, CloseNoteWriter noteWriter,
+               ArtifactPublisher artifacts, Clock clock) {
         this.props = props;
         this.closeProps = closeProps;
         this.http = http;
@@ -63,6 +76,7 @@ public class TaskCloser {
         this.reporter = reporter;
         this.closers = closers;
         this.noteWriter = noteWriter;
+        this.artifacts = artifacts;
         this.clock = clock;
     }
 
@@ -109,8 +123,13 @@ public class TaskCloser {
                 step("배포 중지", () -> { deployService.undeploy(task.id()); return null; });
                 progress(task, CloseStep.UNDEPLOYED, null, null);
             }
+            ArtifactInfo uploaded = null;
+            if (task.closeArtifact() != null && !done.contains(CloseStep.ARTIFACT_UPLOADED)) {
+                uploaded = publishArtifact(task);
+                progress(task, CloseStep.ARTIFACT_UPLOADED, null, null);
+            }
             if (!done.contains(CloseStep.NOTE_WRITTEN)) {
-                NoteOutcome n = writeNote(task, mergeSha);
+                NoteOutcome n = writeNote(task, mergeSha, uploaded);
                 usage = n.usage();
                 progress(task, CloseStep.NOTE_WRITTEN, null, n.relativePath());
             }
@@ -145,7 +164,7 @@ public class TaskCloser {
         return vault;
     }
 
-    private NoteOutcome writeNote(WorkerTaskResponse task, String mergeSha) throws StepFailed {
+    private NoteOutcome writeNote(WorkerTaskResponse task, String mergeSha, ArtifactInfo uploaded) throws StepFailed {
         Path vault = requireVault();
         Path work = Paths.get(props.reposDir()).resolveSibling("close").resolve("task-" + task.id());
         ClaudeExecAdapter.ExecResult r = step("노트 생성", () -> {
@@ -168,12 +187,53 @@ public class TaskCloser {
         CloseNoteWriter.Written w;
         try {
             w = step("노트 저장", () -> noteWriter.write(vault, closeProps.noteFolder(),
-                    new CloseNoteWriter.NoteMeta(task.id(), task.title(), task.prUrl(), mergeSha),
+                    noteMeta(task, mergeSha, uploaded),
                     r.stdout(), LocalDate.now(clock)));
         } catch (StepFailed e) {
             throw new StepFailed(e.getMessage(), usage);
         }
         return new NoteOutcome(w.relativePath(), usage);
+    }
+
+    /**
+     * 노트 메타 — 산출물은 이번에 올렸으면 그 값, 아니면 claim의 기록, 건너뛴 작업이면 '없음'.
+     * 이미지는 PR head 빌드라 병합 커밋과 다를 수 있어 산출물 줄에 배포 커밋(head_sha 7자)을 함께 적는다(스펙 §2-1).
+     */
+    static CloseNoteWriter.NoteMeta noteMeta(WorkerTaskResponse task, String mergeSha, ArtifactInfo uploaded) {
+        CloseContext ctx = task.closeContext();
+        String artifact = null;
+        String line = null;
+        if (ctx != null && ctx.artifactSkipped()) {
+            artifact = "없음(관리자 건너뜀)";
+            line = "산출물: 없음(관리자가 산출물 없이 마무리)";
+        } else {
+            String name = uploaded != null ? uploaded.name() : ctx == null ? null : ctx.artifactName();
+            if (name != null) {
+                Long size = uploaded != null ? Long.valueOf(uploaded.sizeBytes()) : ctx.artifactSizeBytes();
+                String url = ctx == null ? null : ctx.taskUrl();
+                artifact = name;
+                line = "산출물: " + name
+                        + " (" + (size == null ? "" : String.format(Locale.ROOT, "%.1f MB, ", size / 1024.0 / 1024.0))
+                        + "배포 커밋 " + DeployService.shortSha(task.headSha()) + ")"
+                        + (url == null ? "" : " — Symphony 작업 화면에서 로그인 후 내려받기: " + url);
+            }
+        }
+        return new CloseNoteWriter.NoteMeta(task.id(), task.title(), task.prUrl(), mergeSha, artifact, line);
+    }
+
+    private ArtifactInfo publishArtifact(WorkerTaskResponse task) throws StepFailed {
+        if (artifacts == null) throw new StepFailed("산출물: 워커에 산출물 업로더가 없습니다");
+        try {
+            ArtifactPublisher.Published p = artifacts.publish(task);
+            log.info("산출물 {}: task={} {} {}B", p.reused() ? "이미 보관됨" : "보관", task.id(),
+                    p.info().name(), p.info().sizeBytes());
+            return p.info();
+        } catch (ArtifactPublisher.ArtifactException e) {
+            throw new StepFailed(e.getMessage());
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new StepFailed("산출물 중단됨");
+        }
     }
 
     private void progress(WorkerTaskResponse task, CloseStep s, String mergeSha, String notePath) throws StepFailed {

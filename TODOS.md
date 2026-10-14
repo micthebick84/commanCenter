@@ -153,7 +153,7 @@
 **What**: 리뷰에서 나온 작은 항목들.
 - `GitHubPrCloser`: draft PR은 `mergeStateStatus`가 DRAFT라 DIRTY(충돌) 사전 검사가 걸리지 않는다(병합 시도 → 원복 → 원문 사유로 처리되어 해는 없음). 분류에 쓰는 `mergeStateStatus`가 draft 해제 전 값이라 낡았다. 미사용 지역변수 `undoMsg`, 쓰지 않는 `throws`. `gh` 실행 람다가 `GitHubPrCreator`와 중복. API 경로에 브랜치 이름을 인코딩하지 않음(현재 `netismaker/task-N-…` ASCII라 무해).
 - `GitLabMrCloser`: `draft `/`draft - ` 형태의 제목 접두어를 못 벗김(지금은 "draft 해제 실패"로 명확히 거부). draft 해제 PUT의 200 응답 본문을 못 읽으면 원복하지 않음. 브랜치 삭제 403을 보호 브랜치일 때도 "토큰 scope"로 안내. `CLOSE_MERGE_METHOD=rebase`를 GitLab에서 merge로 조용히 처리(기동 경고 로그 권장).
-- `TaskCloser`: NOTE_WRITTEN 진행 보고가 실패해 재시도하면 claude를 한 번 더 돌린다(이중 과금, 드묾). `close-stale-threshold-minutes`(30)가 노트 타임아웃+gh 타임아웃 합보다 커야 하는데 검증이 없다 — `CLOSE_NOTE_TIMEOUT`을 늘리면 실행 중 재큐될 수 있다.
+- `TaskCloser`: NOTE_WRITTEN 진행 보고가 실패해 재시도하면 claude를 한 번 더 돌린다(이중 과금, 드묾). `close-stale-threshold-minutes`(60 — 산출물 꺼내기·업로드 각 10분 상한을 반영해 30에서 올림)가 노트 타임아웃+gh 타임아웃+산출물 꺼내기·업로드 상한 합보다 커야 하는데 검증이 없다 — `CLOSE_NOTE_TIMEOUT`·`CLOSE_ARTIFACT_COPY_TIMEOUT`·`CLOSE_ARTIFACT_UPLOAD_TIMEOUT`을 늘리면 실행 중 재큐될 수 있다.
 - `CloseNoteWriter`: `relativePath`를 원래 폴더 문자열로 조립(`vault.relativize` 권장), 비원자적 쓰기(임시 파일 + `ATOMIC_MOVE`), 제목의 제어문자가 `InvalidPathException`으로 샘. `CloseNotePrompt`: 사용자 입력 절을 구분자로 감싸지 않음, 비용이 null이면 `$null` 표기.
 
 **우선순위**: 낮음.

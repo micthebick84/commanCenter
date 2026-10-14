@@ -69,6 +69,14 @@ if (-not (Test-Path $EnvFile)) {
         '#CLOSE_OBSIDIAN_VAULT_DIR=C:/Users/<user>/Documents/Obsidian Vault'
         '# Merge method for the close step: merge | squash | rebase (no inline comments on the key line - the loader does not strip them)'
         '#CLOSE_MERGE_METHOD=merge'
+        ''
+        '# Close artifact + requester mail (API). Turn on per repo in the repo catalog after setting these.'
+        '#CLOSE_ARTIFACT_ENABLED=true'
+        '#APP_PUBLIC_BASE_URL=https://app-win.micthebick.dev'
+        '# Gmail SMTP with an app password (2-step verification on the sender account). Empty MAIL_USERNAME = mail off.'
+        '#MAIL_USERNAME=sender@hamonsoft.co.kr'
+        '#MAIL_PASSWORD='
+        '#MAIL_FROM='
     ) | Set-Content -Path $EnvFile -Encoding ascii
     Write-Host "Created settings template: $EnvFile  <-- edit this before the first run"
 }

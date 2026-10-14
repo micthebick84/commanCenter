@@ -48,4 +48,27 @@ class TaskResponseCloseTest {
         assertThat(r.redactSecretValues().close()).isEqualTo(r.close());
         assertThat(TaskResponse.withTotalCost(r, java.math.BigDecimal.ONE).close()).isEqualTo(r.close());
     }
+
+    @Test
+    void 산출물_모드_파일_메일을_보여준다() {
+        Task t = task(TaskStatus.CLOSED);
+        t.setCloseArtifactMode("REQUIRED");
+        t.setArtifactName("repo-task-1-abcdef1.war");
+        t.setArtifactSize(266_000_000L);
+        t.setArtifactSha256("ab".repeat(32));
+        t.setCloseMailStatus("FAILED");
+        TaskResponse.CloseView v = TaskResponse.of(t, null).close();
+        assertThat(v.artifactMode()).isEqualTo("REQUIRED");
+        assertThat(v.artifact().name()).isEqualTo("repo-task-1-abcdef1.war");
+        assertThat(v.artifact().sizeBytes()).isEqualTo(266_000_000L);
+        assertThat(v.mail().status()).isEqualTo("FAILED");
+    }
+
+    @Test
+    void 산출물이_없으면_artifact와_mail은_null() {
+        TaskResponse.CloseView v = TaskResponse.of(task(TaskStatus.CLOSE_REVIEW), null).close();
+        assertThat(v.artifactMode()).isNull();
+        assertThat(v.artifact()).isNull();
+        assertThat(v.mail()).isNull();
+    }
 }

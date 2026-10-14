@@ -13,11 +13,21 @@ import java.util.regex.Pattern;
 /**
  * 종료 노트를 볼트에 쓴다 (스펙 2026-10-13 §4 ③). 파일 이름·진행상황 추기는 여기서 결정론으로 — claude는 본문만 만든다.
  *  - 노트: {folder}/{slug}-작업{id}-{date}.md  (같은 경로면 덮어씀 — 재시도 멱등)
+ *    산출물이 있으면 프런트매터에 artifact, 본문 끝에 한 줄(NoteMeta.artifactLine)을 더한다 (스펙 2026-10-14 §4)
  *  - 진행상황: {folder}/netisMaker-진행상황-{date}.md 끝에 "- [[노트]] — 작업 #id 종료(병합 sha7)" (이미 있으면 생략)
  */
 public class CloseNoteWriter {
 
-    public record NoteMeta(long taskId, String title, String prUrl, String mergeCommitSha) {}
+    /**
+     * artifact = 프런트매터 값(파일 이름 또는 '없음(관리자 건너뜀)'), artifactLine = 본문 끝 한 줄. 둘 다 null이면 산출물 표시 없음.
+     */
+    public record NoteMeta(long taskId, String title, String prUrl, String mergeCommitSha,
+                           String artifact, String artifactLine) {
+        /** 산출물 정보 도입 전 4개 인자 — 기존 호출부·테스트 호환. */
+        public NoteMeta(long taskId, String title, String prUrl, String mergeCommitSha) {
+            this(taskId, title, prUrl, mergeCommitSha, null, null);
+        }
+    }
 
     public record Written(String relativePath, Path file) {}
 
@@ -34,7 +44,8 @@ public class CloseNoteWriter {
 
         String name = slug(meta.title()) + "-작업" + meta.taskId() + "-" + date;
         Path file = dir.resolve(name + ".md");
-        Files.writeString(file, frontmatter(meta, date) + clean(body) + "\n", StandardCharsets.UTF_8);
+        String tail = meta.artifactLine() == null ? "" : "\n\n" + maskSecrets(meta.artifactLine());
+        Files.writeString(file, frontmatter(meta, date) + clean(body) + tail + "\n", StandardCharsets.UTF_8);
 
         appendProgress(dir.resolve("netisMaker-진행상황-" + date + ".md"), name, meta, date);
         return new Written(folder.replace('\\', '/') + "/" + name + ".md", file);
@@ -58,6 +69,7 @@ public class CloseNoteWriter {
                 + "task_id: " + m.taskId() + "\n"
                 + "pr: " + (m.prUrl() == null ? "" : maskSecrets(m.prUrl())) + "\n"
                 + "merge_commit: " + (m.mergeCommitSha() == null ? "" : m.mergeCommitSha()) + "\n"
+                + (m.artifact() == null ? "" : "artifact: " + m.artifact() + "\n")
                 + "closed: " + date + "\n"
                 + "tags:\n  - netismaker/작업종료\n"
                 + "---\n\n";

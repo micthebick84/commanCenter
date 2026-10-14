@@ -1,5 +1,7 @@
 package com.hamonsoft.netismaker.workerdaemon;
 
+import com.hamonsoft.netismaker.dto.ArtifactInfo;
+import com.hamonsoft.netismaker.dto.CloseArtifactSpec;
 import com.hamonsoft.netismaker.dto.CloseContext;
 import com.hamonsoft.netismaker.dto.CloseProgressRequest;
 import com.hamonsoft.netismaker.dto.WorkerResultRequest;
@@ -32,6 +34,7 @@ class TaskCloserTest {
     private ResultReporter reporter;
     private MergeRequestCloser mr;
     private TaskCloser closer;
+    private ArtifactPublisher pub;
 
     private static final String SHA = "abcdef1234567890abcdef1234567890abcdef12";
 
@@ -277,5 +280,128 @@ class TaskCloserTest {
                 .thenReturn(new ClaudeExecAdapter.ExecResult(1, "", 10, null));
         closer.process(task("MERGED,UNDEPLOYED"));
         assertThat(work).doesNotExist();
+    }
+
+    private WorkerTaskResponse artifactTask(String progress, boolean skipped) {
+        return artifactTask(progress, skipped, null, null, "https://a.test/tasks/7");
+    }
+
+    /** artifactName/Size = 이전 실행에서 이미 올린 산출물 기록(claim의 closeContext). */
+    private WorkerTaskResponse artifactTask(String progress, boolean skipped, String artifactName, Long artifactSize,
+                                            String taskUrl) {
+        CloseContext ctx = new CloseContext(null, null, null, null, "http://h:1", null, List.of(), List.of(),
+                artifactName, artifactSize, skipped, taskUrl);
+        return new WorkerTaskResponse(7L, "acme/w", "main", "로그인 수정", "d", WorkerTaskResponse.Kind.CLOSE,
+                List.of(), null, null, "netismaker/task-7", SHA, List.of(), null, null, null, null, null, null,
+                null, null, null, "github", null, 3, "https://github.com/acme/w/pull/3", progress, ctx,
+                skipped ? null : new CloseArtifactSpec(null));
+    }
+
+    private TaskCloser closerWithPublisher() throws Exception {
+        pub = mock(ArtifactPublisher.class);
+        when(pub.publish(any())).thenReturn(new ArtifactPublisher.Published(
+                new ArtifactInfo("w-task-7-abcdef1.war", 2L * 1024 * 1024, "ab".repeat(32)), false));
+        WorkerProperties props = mock(WorkerProperties.class);
+        when(props.id()).thenReturn("w1");
+        when(props.reposDir()).thenReturn(tmp.resolve("repos").toString());
+        CloseProperties cp = new CloseProperties(tmp.resolve("vault").toString(), "HamonSoft/netisMaker", "merge",
+                "sonnet", Duration.ofMinutes(1), null);
+        return new TaskCloser(props, cp, http, deploy, worktrees, claude, reporter, List.of(mr), new CloseNoteWriter(),
+                pub, Clock.fixed(Instant.parse("2026-10-13T03:00:00Z"), ZoneId.of("Asia/Seoul")));
+    }
+
+    private String note() throws Exception {
+        return Files.readString(tmp.resolve("vault/HamonSoft/netisMaker/로그인-수정-작업7-2026-10-13.md"));
+    }
+
+    @Test
+    void 산출물_모드면_다섯_단계를_순서대로_하고_노트에_산출물을_남긴다() throws Exception {
+        closerWithPublisher().process(artifactTask(null, false));
+
+        assertThat(reportedSteps()).containsExactly(CloseStep.MERGED, CloseStep.UNDEPLOYED,
+                CloseStep.ARTIFACT_UPLOADED, CloseStep.NOTE_WRITTEN, CloseStep.BRANCH_DELETED);
+        assertThat(terminal().status()).isEqualTo(TaskStatus.CLOSED);
+        assertThat(note()).contains("artifact: w-task-7-abcdef1.war")
+                .contains("산출물: w-task-7-abcdef1.war (2.0 MB, 배포 커밋 abcdef1) — Symphony 작업 화면에서 로그인 후 내려받기: https://a.test/tasks/7");
+    }
+
+    @Test
+    void 산출물이_실패하면_노트를_쓰지_않고_종료실패() throws Exception {
+        TaskCloser c = closerWithPublisher();
+        when(pub.publish(any())).thenThrow(new ArtifactPublisher.ArtifactException(
+                "산출물: 이미지 없음(netis-task-7:abcdef1) — 재시도하거나 '산출물 없이 마무리'"));
+
+        c.process(artifactTask(null, false));
+
+        assertThat(reportedSteps()).containsExactly(CloseStep.MERGED, CloseStep.UNDEPLOYED);
+        verify(claude, never()).execWithoutTools(any(), any(), any(), any());
+        verify(mr, never()).deleteBranch(any(), any());
+        WorkerResultRequest r = terminal();
+        assertThat(r.status()).isEqualTo(TaskStatus.CLOSE_FAILED);
+        assertThat(r.failureReason()).startsWith("산출물: 이미지 없음");
+    }
+
+    @Test
+    void 산출물_지시가_없으면_업로더를_부르지_않고_건너뛴_작업은_노트에_없음을_쓴다() throws Exception {
+        closerWithPublisher().process(artifactTask("MERGED,UNDEPLOYED", true));
+
+        verify(pub, never()).publish(any());
+        assertThat(reportedSteps()).containsExactly(CloseStep.NOTE_WRITTEN, CloseStep.BRANCH_DELETED);
+        assertThat(note()).contains("artifact: 없음(관리자 건너뜀)").contains("산출물: 없음(관리자가 산출물 없이 마무리)");
+    }
+
+    @Test
+    void 산출물_모드가_없는_종료는_네_단계로_끝나고_노트에_산출물_표시가_없다() throws Exception {
+        closerWithPublisher().process(task(null));
+
+        verify(pub, never()).publish(any());
+        assertThat(reportedSteps()).containsExactly(CloseStep.MERGED, CloseStep.UNDEPLOYED,
+                CloseStep.NOTE_WRITTEN, CloseStep.BRANCH_DELETED);
+        assertThat(terminal().status()).isEqualTo(TaskStatus.CLOSED);
+        assertThat(note()).doesNotContain("artifact:").doesNotContain("산출물");
+    }
+
+    @Test
+    void 산출물_단계가_이미_끝났으면_업로더를_부르지_않고_기록된_이름과_크기로_노트를_쓴다() throws Exception {
+        closerWithPublisher().process(artifactTask("MERGED,UNDEPLOYED,ARTIFACT_UPLOADED", false,
+                "w-task-7-abcdef1.war", 3L * 1024 * 1024, "https://a.test/tasks/7"));
+
+        verify(pub, never()).publish(any());
+        assertThat(reportedSteps()).containsExactly(CloseStep.NOTE_WRITTEN, CloseStep.BRANCH_DELETED);
+        assertThat(terminal().status()).isEqualTo(TaskStatus.CLOSED);
+        assertThat(note()).contains("artifact: w-task-7-abcdef1.war")
+                .contains("산출물: w-task-7-abcdef1.war (3.0 MB, 배포 커밋 abcdef1) — Symphony 작업 화면에서 로그인 후 내려받기: https://a.test/tasks/7");
+    }
+
+    @Test
+    void 작업_화면_주소가_없으면_내려받기_링크만_뺀다() throws Exception {
+        TaskCloser c = closerWithPublisher();
+        c.process(artifactTask(null, false, null, null, null));
+
+        assertThat(note()).contains("산출물: w-task-7-abcdef1.war (2.0 MB, 배포 커밋 abcdef1)\n")
+                .doesNotContain("Symphony 작업 화면");
+    }
+
+    @Test
+    void head_sha가_없으면_배포_커밋은_latest로_쓴다() {
+        WorkerTaskResponse t = new WorkerTaskResponse(7L, "acme/w", "main", "t", "d", WorkerTaskResponse.Kind.CLOSE,
+                List.of(), null, null, "netismaker/task-7", null, List.of(), null, null, null, null, null, null,
+                null, null, null, "github", null, 3, "https://github.com/acme/w/pull/3", null,
+                new CloseContext(null, null, null, null, null, null, List.of(), List.of(), null, null, false, null),
+                new CloseArtifactSpec(null));
+        CloseNoteWriter.NoteMeta m = TaskCloser.noteMeta(t, "m3rg3", new ArtifactInfo("a.war", 1024L * 1024, "x"));
+        assertThat(m.artifact()).isEqualTo("a.war");
+        assertThat(m.artifactLine()).isEqualTo("산출물: a.war (1.0 MB, 배포 커밋 latest)");
+    }
+
+    @Test
+    void 업로더가_없는_워커는_산출물_지시가_있는_종료를_실패시킨다() throws Exception {
+        closer.process(artifactTask("MERGED,UNDEPLOYED", false));
+
+        verify(claude, never()).execWithoutTools(any(), any(), any(), any());
+        assertThat(reportedSteps()).isEmpty();
+        WorkerResultRequest r = terminal();
+        assertThat(r.status()).isEqualTo(TaskStatus.CLOSE_FAILED);
+        assertThat(r.failureReason()).isEqualTo("산출물: 워커에 산출물 업로더가 없습니다");
     }
 }

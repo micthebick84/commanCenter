@@ -4,6 +4,7 @@ import org.springframework.context.annotation.Profile;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.core.annotation.Order;
+import org.springframework.http.HttpMethod;
 import org.springframework.security.config.annotation.method.configuration.EnableMethodSecurity;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.annotation.web.configuration.EnableWebSecurity;
@@ -25,7 +26,7 @@ import java.util.stream.Collectors;
  *
  *   /worker/**  ──► WorkerApiKeyFilter (X-Worker-API-Key, ROLE_WORKER)
  *   /api/**     ──► JWT (netis-auth, ROLE_USER / ROLE_ADMIN)
- *   나머지       ──► permitAll (actuator/health, error)
+ *   나머지       ──► permitAll (actuator/health, error, GET /api/artifact-downloads/{token})
  */
 @Configuration
 @EnableWebSecurity
@@ -65,6 +66,8 @@ public class SecurityConfig {
                 .sessionManagement(s -> s.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
                 .authorizeHttpRequests(auth -> auth
                         .requestMatchers("/actuator/health", "/error").permitAll()
+                        // 산출물 1회용 내려받기 — 토큰이 권한(발급 때 등록자·관리자 확인, 스펙 2026-10-14 §6)
+                        .requestMatchers(HttpMethod.GET, "/api/artifact-downloads/*").permitAll()
                         .requestMatchers("/api/**").authenticated()
                         .anyRequest().denyAll()
                 )

@@ -1,6 +1,7 @@
 package com.hamonsoft.netismaker.service;
 
 import com.hamonsoft.netismaker.dto.ActiveWorktreeTaskSummary;
+import com.hamonsoft.netismaker.dto.CloseArtifactSpec;
 import com.hamonsoft.netismaker.dto.CloseContext;
 import com.hamonsoft.netismaker.dto.CloseProgressRequest;
 import com.hamonsoft.netismaker.dto.DeployedTaskSummary;
@@ -18,6 +19,7 @@ import com.hamonsoft.netismaker.repository.TaskRepository;
 import com.hamonsoft.netismaker.repository.TaskStageUsageRepository;
 import com.hamonsoft.netismaker.repository.TaskStatusHistoryRepository;
 import com.hamonsoft.netismaker.repository.WorkerHeartbeatRepository;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Profile;
 import org.springframework.data.domain.Limit;
 import org.springframework.data.domain.PageRequest;
@@ -62,6 +64,10 @@ public class WorkerService {
     /** task.merge_commit_sha / close_note_path 컬럼 길이 — 넘으면 500 대신 400으로 거절. */
     private static final int MAX_COMMIT_SHA_LENGTH = 40;
     private static final int MAX_NOTE_PATH_LENGTH = 500;
+
+    /** 메일·노트 링크 기준 주소 (스펙 2026-10-14 §4). 단위 테스트에서는 null. */
+    @Value("${app.public-base-url:}")
+    private String publicBaseUrl;
 
     private final TaskRepository taskRepo;
     private final TaskAnalysisRepository analysisRepo;
@@ -177,7 +183,7 @@ public class WorkerService {
             return Optional.of(WorkerTaskResponse.forUndeploy(t));
         }
         if (from == TaskStatus.CLOSE_PENDING) {
-            return Optional.of(WorkerTaskResponse.forClose(t, closeContext(t)));
+            return Optional.of(WorkerTaskResponse.forClose(t, closeContext(t), closeArtifactSpec(t)));
         }
         return Optional.of(WorkerTaskResponse.forAnalysis(t));
     }
@@ -189,7 +195,16 @@ public class WorkerService {
                 historyRepo.findByTaskIdOrderByAtDescIdDesc(t.getId(), Limit.of(CLOSE_HISTORY_LIMIT)));
         Collections.reverse(history); // 시간순(오래된 것 먼저)
         return CloseContext.of(t, registeredPlanMarkdown(t.getId()), a, history,
-                stageUsageRepo.findByTaskIdOrderByStageAsc(t.getId()));
+                stageUsageRepo.findByTaskIdOrderByStageAsc(t.getId()), CloseLinks.taskUrl(publicBaseUrl, t.getId()));
+    }
+
+    /** 산출물 모드가 REQUIRED이고 아직 안 올렸을 때만 지시를 싣는다 — 워커는 null이면 단계를 건너뛴다. */
+    private CloseArtifactSpec closeArtifactSpec(Task t) {
+        if (!CloseStep.ARTIFACT_REQUIRED.equals(t.getCloseArtifactMode())) return null;
+        if (CloseStep.parse(t.getCloseProgress()).contains(CloseStep.ARTIFACT_UPLOADED)) return null;
+        String path = RepoCatalogRepository.findForTask(repoCatalogRepo, t.getRepoCatalogId(), t.getGitUrl())
+                .map(RepoCatalogEntry::getArtifactPath).map(String::trim).filter(s -> !s.isEmpty()).orElse(null);
+        return new CloseArtifactSpec(path);
     }
 
     /**

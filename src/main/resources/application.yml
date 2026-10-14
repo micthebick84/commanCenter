@@ -123,6 +123,8 @@ app:
     artifact:                             # 종료 산출물 보관 (스펙 2026-10-14). 켜도 카탈로그에서 켠 레포만 대상
       enabled: ${CLOSE_ARTIFACT_ENABLED:false}
       max-size-mb: ${CLOSE_ARTIFACT_MAX_SIZE_MB:1024}
+  # 메일·노트 링크의 기준 주소(예: https://app-win.micthebick.dev). 비면 링크 없이 안내 문구만
+  public-base-url: ${APP_PUBLIC_BASE_URL:}
 
 logging:
   level:

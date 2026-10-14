@@ -4,6 +4,7 @@ import com.hamonsoft.netismaker.dto.CloseProgressRequest;
 import com.hamonsoft.netismaker.dto.WorkerResultRequest;
 import com.hamonsoft.netismaker.dto.WorkerTaskResponse;
 import com.hamonsoft.netismaker.entity.CloseStep;
+import com.hamonsoft.netismaker.entity.RepoCatalogEntry;
 import com.hamonsoft.netismaker.entity.Task;
 import com.hamonsoft.netismaker.entity.TaskStatus;
 import com.hamonsoft.netismaker.entity.TaskStatusHistory;
@@ -27,6 +28,7 @@ class WorkerServiceCloseTest {
     private TaskRepository taskRepo;
     private TaskStatusHistoryRepository historyRepo;
     private TaskStageUsageRepository stageUsageRepo;
+    private RepoCatalogRepository catalogRepo;
     private WorkerService service;
 
     private Task task(TaskStatus status) {
@@ -47,8 +49,9 @@ class WorkerServiceCloseTest {
         taskRepo = mock(TaskRepository.class);
         historyRepo = mock(TaskStatusHistoryRepository.class);
         stageUsageRepo = mock(TaskStageUsageRepository.class);
+        catalogRepo = mock(RepoCatalogRepository.class);
         service = new WorkerService(taskRepo, mock(TaskAnalysisRepository.class), mock(TaskDesignRepository.class),
-                mock(RepoCatalogRepository.class), historyRepo, stageUsageRepo, mock(WorkerHeartbeatRepository.class),
+                catalogRepo, historyRepo, stageUsageRepo, mock(WorkerHeartbeatRepository.class),
                 mock(DeployLogStreamService.class), mock(InterviewSessionRepository.class),
                 mock(InterviewPlanRepository.class));
         when(historyRepo.save(any())).thenAnswer(i -> i.getArgument(0));
@@ -175,5 +178,47 @@ class WorkerServiceCloseTest {
         t.setArtifactName("repo-task-7-abcdef1.war");
         service.recordCloseProgress(7L, new CloseProgressRequest("w1", CloseStep.ARTIFACT_UPLOADED, null, null));
         assertThat(t.getCloseProgress()).isEqualTo("ARTIFACT_UPLOADED");
+    }
+
+    @Test
+    void 산출물_모드면_claim에_산출물_지시와_작업_주소를_싣는다() {
+        Task t = task(TaskStatus.CLOSE_PENDING);
+        t.setCloseProgress("MERGED,UNDEPLOYED");
+        t.setCloseArtifactMode("REQUIRED");
+        t.setRepoCatalogId(3L);
+        RepoCatalogEntry e = RepoCatalogEntry.create("W", "https://github.com/owner/repo.git", "github",
+                "owner/repo", null, null, "admin");
+        e.setArtifactPath(" /usr/local/tomcat/webapps/ROOT.war ");
+        when(catalogRepo.findById(3L)).thenReturn(Optional.of(e));
+        ReflectionTestUtils.setField(service, "publicBaseUrl", "https://app-win.micthebick.dev/");
+        when(taskRepo.findClaimableForUpdateSkipLocked(any())).thenReturn(List.of(t));
+
+        WorkerTaskResponse r = service.claimNextTask("w1").orElseThrow();
+
+        assertThat(r.closeArtifact().path()).isEqualTo("/usr/local/tomcat/webapps/ROOT.war");
+        assertThat(r.closeContext().taskUrl()).isEqualTo("https://app-win.micthebick.dev/tasks/7");
+        assertThat(r.closeContext().artifactSkipped()).isFalse();
+    }
+
+    @Test
+    void 산출물_단계가_끝났거나_모드가_아니면_지시가_없고_건너뛴_작업은_표시한다() {
+        Task t = task(TaskStatus.CLOSE_PENDING);
+        t.setCloseArtifactMode("REQUIRED");
+        t.setCloseProgress("MERGED,UNDEPLOYED,ARTIFACT_UPLOADED");
+        t.setArtifactName("repo-task-7-abcdef1.war");
+        t.setArtifactSize(1024L);
+        when(taskRepo.findClaimableForUpdateSkipLocked(any())).thenReturn(List.of(t));
+        WorkerTaskResponse r = service.claimNextTask("w1").orElseThrow();
+        assertThat(r.closeArtifact()).isNull();
+        assertThat(r.closeContext().artifactName()).isEqualTo("repo-task-7-abcdef1.war");
+        assertThat(r.closeContext().artifactSizeBytes()).isEqualTo(1024L);
+
+        Task u = task(TaskStatus.CLOSE_PENDING);
+        u.setCloseArtifactMode("SKIPPED");
+        when(taskRepo.findClaimableForUpdateSkipLocked(any())).thenReturn(List.of(u));
+        WorkerTaskResponse s = service.claimNextTask("w1").orElseThrow();
+        assertThat(s.closeArtifact()).isNull();
+        assertThat(s.closeContext().artifactSkipped()).isTrue();
+        assertThat(s.closeContext().taskUrl()).isNull();   // 기준 주소 미설정
     }
 }

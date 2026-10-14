@@ -137,11 +137,11 @@ class InterviewClaimResponseTest {
     }
 
     @Test
-    void interview_kind_never_carries_db_ids() {
+    void interview_kind_carries_session_db_ids() {
         InterviewSession i = InterviewSession.create("a/b", "main", "t", "d", "user1",
                 new java.util.ArrayList<>(), "claude-sonnet-5", "medium");
         ReflectionTestUtils.setField(i, "id", 8L);
         i.setDbConnectionIds(new java.util.ArrayList<>(java.util.List.of(7L)));
-        assertThat(InterviewClaimResponse.of(i, java.util.List.of(), java.util.List.of()).dbConnectionIds()).isEmpty();
+        assertThat(InterviewClaimResponse.of(i, java.util.List.of(), java.util.List.of()).dbConnectionIds()).containsExactly(7L);
     }
 }

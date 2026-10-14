@@ -70,7 +70,7 @@ CREATE INDEX idx_task_db_mcp_token_task ON com.task_db_mcp_token(task_id, issued
 
 - `InterviewWorkerController.withDb`: `kind == QUESTION` 조건을 `QUESTION || INTERVIEW`로 넓힌다. `InterviewClaimResponse.of()`도 INTERVIEW일 때 세션의 `dbConnectionIds`를 싣는다.
 - 러너 `interviewRunner.ts` INTERVIEW 분기(`runTurn`): 질문 분기와 같이 `createDbMcp(claim)` → `buildOptions({..., dbMcpServers, dbDialects})` → 프롬프트에 `dbSection(db)` → `finally db.close()`.
-- 권한 `permissions.ts` INTERVIEW 게이트: 현재 `mcp__*` 전부 allow → `mcp__db-N__*`는 질문과 같은 `dbToolGate`로 보내고 등록되지 않은 `db-N`은 deny. 그 밖의 `mcp__*`는 기존대로 allow. 이 게이트를 거치도록 INTERVIEW의 `allowedTools`(사전 승인)에는 붙인 DB 서버를 넣지 않는다 — 넣으면 `canUseTool`/`dbToolGate`를 건너뛴다.
+- 권한 `permissions.ts` INTERVIEW 게이트: 현재 `mcp__*` 전부 allow → `mcp__db-N__*`는 질문과 같은 `dbToolGate`로 보내고 등록되지 않은 `db-N`은 deny. 그 밖의 `mcp__*`는 기존대로 allow. 이 게이트를 거치도록 INTERVIEW의 `allowedTools`(사전 승인)에는 붙인 DB 서버를 넣지 않는다 — 넣으면 `canUseTool`/`dbToolGate`를 건너뛴다. 붙이지 않았어도 이름이 `db-<숫자>`인 서버(베이스·추가 MCP)도 사전 승인에서 뺀다.
 
 ## 6. 디자인·구현 — API 호스팅 DB MCP
 
@@ -91,7 +91,7 @@ CREATE INDEX idx_task_db_mcp_token_task ON com.task_db_mcp_token(task_id, issued
 - 발급: `WorkerService.claimNextTask`에서 APPROVED→IMPLEMENTING, DESIGN_PENDING→DESIGNING 전이 시, `task.dbConnectionIds`가 비어 있지 않으면 32바이트 `SecureRandom` → base64url 토큰. 해시(SHA-256 hex)만 `task_db_mcp_token`에 저장.
 - `expires_at` = 발급 시각 + `netismaker.db-mcp.token-ttl`(API 설정, 기본 `2h` — 워커 구현 타임아웃 45m·디자인 30m보다 넉넉하게).
 - 유효 조건(모두 충족해야 함, 아니면 `401`):
-  1. 해시가 일치하는 행이 그 작업의 **가장 최근 토큰**이다(재claim하면 이전 토큰 자동 무효).
+  1. 해시가 일치하는 행이 그 작업의 **가장 최근 토큰**이다(재claim하면 이전 토큰 자동 무효). 재claim 때 쓸 수 있는 연결이 0개라 새 토큰을 주지 않으면 그 작업의 토큰을 모두 지운다(이전 토큰이 "가장 최근"으로 되살아나지 않게).
   2. 작업의 현재 상태가 행의 `stage`와 같다(IMPLEMENTING/DESIGNING을 벗어나면 즉시 무효).
   3. `expires_at`이 지나지 않았다.
 - `connectionId`가 그 작업의 `dbConnectionIds`에 없으면 `404`.
@@ -107,8 +107,9 @@ CREATE INDEX idx_task_db_mcp_token_task ON com.task_db_mcp_token(task_id, issued
   - `finally`에서 항상 `rollback()` 후 close
   - `list_tables`·`describe_table`은 방언별 메타 조회(인터뷰 서비스와 같은 쿼리 또는 `DatabaseMetaData`)
 - 결과 텍스트 형식은 인터뷰 서비스 도구 출력과 맞춘다(에이전트가 단계마다 다른 형식을 보지 않도록).
-- 오류 구분: 인자 검증 오류(SQL 거부·필수 인자 누락 등)는 private `InvalidToolInput` 타입으로 던져 그 메시지를 그대로 `isError`로 돌려준다. 그 밖의 모든 예외(드라이버가 던지는 `IllegalArgumentException` 포함)는 비밀번호를 마스킹하는 "DB 오류" 경로로 보낸다.
-- 감사 로그: 호출마다 `taskId`·`connectionId`·도구·SQL 앞 200자(로그 줄에 SQL 머리 포함)·결과 길이(`chars`, 행 수 대신)·소요 ms를 INFO로(`db-mcp task=… conn=…`). 결과값·접속정보는 남기지 않는다.
+- 사용자 SQL(`query`, 바인드 파라미터 없음)은 `Statement`로 실행한다 — `PreparedStatement`는 PostgreSQL jsonb 연산자 `?`·`?|`·`?&`를 바인드 표식으로 해석한다. 파라미터가 있는 카탈로그 조회만 `PreparedStatement`. 두 경로 모두 위 읽기 전용·타임아웃·상한·ROLLBACK이 같다. `rollback()` 실패는 SQL·접속정보 없이 WARN으로 남긴다(Oracle JDBC는 autocommit 꺼진 연결을 close할 때 커밋하므로 "close가 버린다"고 가정하지 않는다).
+- 오류 구분: 인자 검증 오류(SQL 거부·필수 인자 누락 등)는 private `InvalidToolInput` 타입으로 던져 `입력 오류: <메시지>` 형태로 `isError`에 돌려준다. 그 밖의 모든 예외(드라이버가 던지는 `IllegalArgumentException` 포함)는 비밀번호를 마스킹하는 "DB 오류" 경로로 보낸다.
+- 감사 로그: 호출마다 `taskId`·`connectionId`·도구·SQL 앞 200자(로그 줄에 SQL 머리 포함)·결과 길이(`chars`, 행 수 대신)·소요 ms를 INFO로(`db-mcp task=… conn=…`). 결과값·접속정보는 남기지 않는다. 도구 이름·SQL 머리의 CR/LF 등 제어문자는 공백으로 바꿔 로그 줄 위조를 막는다.
 
 ### 6.4 워커 데몬
 
@@ -128,6 +129,8 @@ cloudflared 터널이 API를 통째로 공개하면 `/mcp/db/**`도 외부에서
   - 목록: `fetchDbConnections(task.repoCatalogId)`. `enabled:false`면 피커 숨김.
   - 기본 선택: REPO·enabled 최대 3개. 마지막 인터뷰 설정을 프리필할 때는 그 `dbConnectionIds`가 우선.
   - "새 접속 추가"(USER) → 저장 후 목록 재조회·자동 선택(질문 화면과 같음).
+  - 등록자 기준 제시: 승인은 관리자가 하고 서버는 선택을 **작업 등록자** 기준으로 검증하지만, 목록은 보는 사람(승인자) 기준이다. 그래서 승인자 ≠ 등록자(현재 사용자 username/user_id ≠ `task.requesterId`)면 공용(REPO)만 보이고 승인자 본인의 USER 연결과 "새 접속 추가"는 숨긴다(관리자 소유 연결은 등록자 기준 검증에서 400). 승인자 = 등록자면 위 그대로.
+  - 재승인 프리필에서 승인자에게 안 보이는 id(등록자의 개인 연결)는 버리지 않고 유지해 `등록자 개인 연결 #<id>` 행으로 보여 주고 해제만 허용한다. 보이지만 쓸 수 없는 id(비활성 공용·승인자 본인 USER)는 뺀다. 유지한 id는 승인 때 서버가 다시 검증한다.
   - 요청 바디 `{model, effort, mcpCatalogIds, dbConnectionIds}` — 기능 꺼짐이면 `dbConnectionIds` 생략.
   - 400 응답 메시지는 다이얼로그에 표시.
   - DB 목록을 불러오는 동안은 승인 버튼을 비활성화하고, 늦게 도착한 응답은 로드 시퀀스로 무시한다(레포·작업이 바뀐 뒤의 응답이 선택을 덮어쓰지 않게).
@@ -157,6 +160,7 @@ cloudflared 터널이 API를 통째로 공개하면 `/mcp/db/**`도 외부에서
 - 인터뷰 서비스(vitest) — INTERVIEW claim + DB → `createDbMcp`·`close` 호출, INTERVIEW 게이트에서 `db-N` 쓰기 SQL deny·미등록 `db-N` deny
 - 프론트(vitest) — 승인 다이얼로그 DB 피커(공용 기본 체크, 프리필, 기능 꺼짐 숨김, 바디 포함), 작업 상세 칩
 - 라이브 검증(병합 후) — 실제 사내 DB 연결로 작업 승인 → 인터뷰에서 테이블 조회 → 구현 단계 claude 로그에 `mcp__db-N__query` 호출, 쓰기 SQL 거부 확인
+  - Oracle 연결 1건 확인: `setReadOnly(true)` 뒤 `SET TRANSACTION READ ONLY` 순서가 실제 Oracle에서 통과하는지(트랜잭션이 이미 시작됐다고 보면 ORA-01453 위험 — 그러면 순서 조정 필요), 조회·`list_tables`·`describe_table` 정상 여부
 
 ## 10. 범위 밖
 

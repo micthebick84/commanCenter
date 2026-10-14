@@ -124,7 +124,8 @@ export function buildOptions(input: SessionOptionsInput): Record<string, unknown
           'Grep',
           'Glob',
           ...Object.keys(merged)
-            .filter((n) => !(input.dbMcpServers && n in input.dbMcpServers))
+            // 붙은 DB 서버뿐 아니라 db-N 이름이면 전부 뺀다 — 베이스/추가 서버가 그 이름이면 dbToolGate를 우회한다.
+            .filter((n) => !(input.dbMcpServers && n in input.dbMcpServers) && !/^db-\d+$/.test(n))
             .map((n) => `mcp__${n}`),
         ],
     // 헤드리스라 AskUserQuestion에 답할 사람이 없다 — canUseTool을 넘기면 CLI가 이 도구를 노출하고,

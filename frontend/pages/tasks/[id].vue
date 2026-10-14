@@ -800,8 +800,8 @@ function onAction(kind: NextActionKind) {
         <q-card-section v-if="dbChips.length" data-test="task-db-chips">
           <div class="text-caption q-mb-xs">DB 연결 (읽기 전용 조회)</div>
           <q-chip
-            v-for="label in dbChips"
-            :key="label"
+            v-for="(label, idx) in dbChips"
+            :key="idx"
             color="teal-1"
             text-color="teal-9"
             icon="storage"

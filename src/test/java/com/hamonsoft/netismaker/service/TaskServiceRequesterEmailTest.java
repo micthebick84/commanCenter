@@ -26,7 +26,7 @@ class TaskServiceRequesterEmailTest {
         service = new TaskService(taskRepo, mock(TaskAnalysisRepository.class), mock(TaskDesignRepository.class),
                 historyRepo, mock(McpCatalogService.class), repoCatalogService, new ObjectMapper(),
                 mock(InterviewService.class), mock(TaskAttachmentRepository.class), mock(AttachmentStorage.class),
-                mock(TaskStageUsageRepository.class));
+                mock(TaskStageUsageRepository.class), mock(DbConnectionService.class));
         ReflectionTestUtils.setField(service, "userConcurrentLimit", 5);
         ReflectionTestUtils.setField(service, "maxRetry", 3);
         when(taskRepo.countActiveByRequester(any())).thenReturn(0L);

@@ -13,7 +13,15 @@ import { stageSteps, nextAction, ageOf, type NextActionKind } from '~/composable
 import { renderMarkdown } from '~/composables/useMarkdown'
 import { mrNoun, mrRef } from '~/composables/mergeRequestLabel'
 import { downloadAttachment as downloadBlob } from '~/composables/attachmentDownload'
-import { closeSteps, obsidianLink, type CloseView } from '~/composables/taskClose'
+import {
+  closeSteps,
+  obsidianLink,
+  canSkipArtifact,
+  formatMb,
+  startArtifactDownload,
+  MAIL_STATUS_LABEL,
+  type CloseView,
+} from '~/composables/taskClose'
 
 definePageMeta({ layout: 'default' })
 
@@ -397,6 +405,47 @@ const action = computed(() => (task.value ? nextAction(task.value, auth.isAdmin,
 const closeStepList = computed(() => (task.value?.close ? closeSteps(task.value.close, task.value.status) : []))
 const obsidianVault = useRuntimeConfig().public.obsidianVault as string
 const noteHref = computed(() => obsidianLink(obsidianVault, task.value?.close?.notePath ?? null))
+
+// 종료 산출물 (스펙 2026-10-14 §9) — 내려받기는 등록자 본인·관리자, 다시 보내기·산출물 없이 마무리는 관리자
+const canDownloadArtifact = computed(() => !!task.value?.close?.artifact && (auth.isAdmin || isOwner.value))
+const canResendMail = computed(
+  () =>
+    auth.isAdmin &&
+    task.value?.status === 'CLOSED' &&
+    !!task.value.close?.artifact &&
+    ['FAILED', 'NO_ADDRESS', 'DISABLED'].includes(task.value.close?.mail?.status ?? ''),
+)
+const canSkipArtifactClose = computed(
+  () => auth.isAdmin && !!task.value && canSkipArtifact(task.value.close, task.value.status),
+)
+
+// 내려받기 주소 토큰은 1회용 — 응답이 오기 전의 연타가 download-link를 두 번 POST하지 않게 진행 중에는 막는다.
+const downloadingArtifact = ref(false)
+async function downloadArtifact() {
+  if (downloadingArtifact.value) return
+  downloadingArtifact.value = true
+  try {
+    await startArtifactDownload(taskId.value, (u, o) => useApi<{ url: string }>(u, o))
+  } catch (e: any) {
+    // 410 = 보관 기간이 지나 서버가 산출물 파일을 정리했다(본문 메시지가 없어도 같은 안내)
+    const status = e?.statusCode ?? e?.response?.status ?? e?.status
+    $q.notify({
+      type: 'negative',
+      message: status === 410 ? '보관 파일이 정리되었습니다' : (e?.data?.message ?? '내려받기 실패'),
+    })
+  } finally {
+    downloadingArtifact.value = false
+  }
+}
+
+async function resendMail() {
+  await closeAction('close/mail/resend', '메일 다시 보내기 완료')
+}
+
+async function skipArtifact() {
+  if (!(await confirmDialog($q, '산출물 없이 노트·브랜치 정리를 이어 갑니다. 메일은 보내지 않습니다.', { title: '산출물 없이 마무리' }))) return
+  await closeAction('close/skip-artifact', '산출물 없이 마무리 — 종료 큐 등록')
+}
 const stepCaption = computed(() => {
   const t = task.value
   if (!t) return ''
@@ -508,16 +557,25 @@ function onAction(kind: NextActionKind) {
             data-test="close-cancel"
             @click="cancelClose"
           />
+          <q-btn
+            v-if="!$q.screen.lt.md && canSkipArtifactClose"
+            outline
+            color="warning"
+            icon="skip_next"
+            label="산출물 없이 마무리"
+            data-test="close-skip-artifact"
+            @click="skipArtifact"
+          />
         </q-card-section>
         <q-separator />
         <q-card-section>
           <div class="row" style="gap: 12px">
             <div v-for="s in closeStepList" :key="s.key" class="row items-center" style="gap: 4px" :data-test="`close-step-${s.key}`">
               <q-icon
-                :name="s.state === 'done' ? 'check_circle' : s.state === 'failed' ? 'error' : s.state === 'current' ? 'autorenew' : 'radio_button_unchecked'"
-                :color="s.state === 'done' ? 'positive' : s.state === 'failed' ? 'negative' : s.state === 'current' ? 'orange' : 'grey-5'"
+                :name="s.state === 'done' ? 'check_circle' : s.state === 'failed' ? 'error' : s.state === 'current' ? 'autorenew' : s.state === 'skipped' ? 'remove_circle_outline' : 'radio_button_unchecked'"
+                :color="s.state === 'done' ? 'positive' : s.state === 'failed' ? 'negative' : s.state === 'current' ? 'orange' : s.state === 'skipped' ? 'grey-7' : 'grey-5'"
               />
-              <span>{{ s.label }}</span>
+              <span>{{ s.label }}<template v-if="s.state === 'skipped'"> (건너뜀)</template></span>
             </div>
           </div>
           <div v-if="task.close.mergeCommitSha" class="q-mt-sm text-caption text-grey-8">
@@ -527,6 +585,37 @@ function onAction(kind: NextActionKind) {
             옵시디언 노트
             <a v-if="noteHref" :href="noteHref">{{ task.close.notePath }}</a>
             <span v-else>{{ task.close.notePath }}</span>
+          </div>
+          <div v-if="task.close.artifact" class="q-mt-sm row items-center" style="gap: 8px" data-test="close-artifact">
+            <q-icon name="inventory_2" color="grey-7" />
+            <span class="text-caption">산출물 <code>{{ task.close.artifact.name }}</code> · {{ formatMb(task.close.artifact.sizeBytes) }}</span>
+            <q-btn
+              v-if="canDownloadArtifact"
+              dense
+              flat
+              color="primary"
+              icon="download"
+              label="내려받기"
+              :loading="downloadingArtifact"
+              data-test="close-artifact-download"
+              @click="downloadArtifact"
+            />
+          </div>
+          <div v-if="task.close.mail" class="q-mt-xs row items-center" style="gap: 8px" data-test="close-mail">
+            <q-chip dense square :color="task.close.mail.status === 'SENT' ? 'positive' : 'warning'" text-color="white">
+              {{ MAIL_STATUS_LABEL[task.close.mail.status] ?? task.close.mail.status }}
+            </q-chip>
+            <span v-if="task.close.mail.at" class="text-caption text-grey-7">{{ new Date(task.close.mail.at).toLocaleString() }}</span>
+            <q-btn
+              v-if="canResendMail"
+              dense
+              flat
+              color="primary"
+              icon="forward_to_inbox"
+              label="메일 다시 보내기"
+              data-test="close-mail-resend"
+              @click="resendMail"
+            />
           </div>
           <div v-if="usageByStage['CLOSE']" class="q-mt-xs text-caption text-grey-7">
             노트 생성 비용 {{ fmtCost(usageByStage['CLOSE'].costUsd) }}
@@ -602,6 +691,10 @@ function onAction(kind: NextActionKind) {
                   <q-item v-if="canCancelClose" v-close-popup clickable class="text-warning" data-test="bar-more-close-cancel" @click="cancelClose">
                     <q-item-section avatar><q-icon name="undo" color="warning" /></q-item-section>
                     <q-item-section>종료 취소</q-item-section>
+                  </q-item>
+                  <q-item v-if="canSkipArtifactClose" v-close-popup clickable class="text-warning" data-test="bar-more-close-skip-artifact" @click="skipArtifact">
+                    <q-item-section avatar><q-icon name="skip_next" color="warning" /></q-item-section>
+                    <q-item-section>산출물 없이 마무리</q-item-section>
                   </q-item>
                   <q-item v-if="isInterviewPhase && task.interviewSessionId" v-close-popup clickable data-test="bar-more-interview" @click="onAction('open-interview')">
                     <q-item-section avatar><q-icon name="forum" /></q-item-section>

@@ -23,6 +23,7 @@ export interface DetailTask {
   totalCostUsd: number | null
   totalTokens: number | null
   mcpsExtra: { name: string; transport: string }[]
+  dbConnectionIds?: number[]
   attachments: { id: number; fileName: string; sizeBytes: number }[]
   envVars: { key: string; value: string; secret: boolean }[]
   analysis: { markdownResult: string; subtasksJson: string; approved: boolean } | null
@@ -227,6 +228,7 @@ const deployCaption = computed(() => {
               <div><span class="k">모델</span>{{ task.model }} · {{ task.effort }}</div>
               <div v-if="task.totalCostUsd != null"><span class="k">사용량</span>{{ fmtTokens(task.totalTokens ?? 0) }} 토큰 · ${{ Number(task.totalCostUsd).toFixed(2) }}</div>
               <div v-if="task.mcpsExtra.length"><span class="k">MCP</span>{{ task.mcpsExtra.map((m) => m.name).join(', ') }}</div>
+              <div v-if="task.dbConnectionIds?.length"><span class="k">DB</span>{{ task.dbConnectionIds.length }}개 연결 (읽기 전용)</div>
               <div v-if="task.attachments.length" class="column" style="gap: 4px">
                 <span class="k">첨부</span>
                 <q-chip v-for="a in task.attachments" :key="a.id" clickable dense icon="attach_file" :label="`${a.fileName} (${fmtSize(a.sizeBytes)})`" @click="emit('download', a)" />

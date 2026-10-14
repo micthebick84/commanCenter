@@ -68,6 +68,7 @@ function routeApi(
     catalog?: unknown[]
     interviews?: unknown[] | Error
     usage?: unknown
+    db?: unknown
     approve?: () => Promise<unknown>
   } = {},
 ) {
@@ -78,6 +79,8 @@ function routeApi(
         ? Promise.reject(opts.interviews)
         : Promise.resolve(opts.interviews ?? [])
     }
+    if (url.startsWith('/api/db-connections?repoCatalogId='))
+      return Promise.resolve(opts.db ?? { enabled: false, items: [] })
     if (url === '/api/usage/claude')
       return Promise.resolve(opts.usage ?? { limits: [] })
     if (url === '/api/tasks/7/approve')
@@ -374,6 +377,49 @@ describe('ApproveDialog (승인 팝업 UI/UX 개선 2026-09-06)', () => {
         .querySelector('[data-test="model-row-claude-opus-5-5"]')
         ?.getAttribute('aria-checked'),
     ).toBe('true')
+    w.unmount()
+  })
+
+  const dbList = {
+    enabled: true,
+    items: [
+      { id: 3, repoCatalogId: 9, scope: 'REPO', name: '운영', dbType: 'MYSQL', host: 'h', port: 3306, databaseName: 'app', username: 'ro', enabled: true, mine: false },
+      { id: 4, repoCatalogId: 9, scope: 'USER', name: '내 개발', dbType: 'MYSQL', host: 'h', port: 3306, databaseName: 'dev', username: 'me', enabled: true, mine: true },
+    ],
+  }
+
+  it('DB 기능이 켜져 있으면 공용 연결을 기본 선택해 승인 바디에 싣는다', async () => {
+    routeApi({ db: dbList })
+    const w = mountDialog({ repoCatalogId: 9 })
+    await flushPromises()
+    expect(document.body.querySelector('[data-test="approve-db"]')).not.toBeNull()
+    await (w.vm as any).approve()
+    await flushPromises()
+    expect(approveCall()?.[1].body.dbConnectionIds).toEqual([3])
+    w.unmount()
+  })
+
+  it('마지막 인터뷰의 DB 선택이 있으면 그것을 프리필한다(목록에 있는 것만)', async () => {
+    routeApi({
+      db: dbList,
+      interviews: [{ ...session(5, 'CANCELLED', '취소됨', 'claude-opus-5-5', 'high'), dbConnectionIds: [4, 99] }],
+    })
+    const w = mountDialog({ repoCatalogId: 9 })
+    await flushPromises()
+    await (w.vm as any).approve()
+    await flushPromises()
+    expect(approveCall()?.[1].body.dbConnectionIds).toEqual([4])
+    w.unmount()
+  })
+
+  it('DB 기능이 꺼져 있거나 레포 카탈로그가 없으면 피커가 없고 바디에도 없다', async () => {
+    routeApi({ db: { enabled: false, items: [] } })
+    const w = mountDialog({ repoCatalogId: 9 })
+    await flushPromises()
+    expect(document.body.querySelector('[data-test="approve-db"]')).toBeNull()
+    await (w.vm as any).approve()
+    await flushPromises()
+    expect(approveCall()?.[1].body).not.toHaveProperty('dbConnectionIds')
     w.unmount()
   })
 })

@@ -16,6 +16,12 @@ import {
   interviewStatusLabel,
 } from '~/composables/interviewLabels'
 import McpPicker from '~/components/McpPicker.vue'
+import DbConnectionPicker from '~/components/DbConnectionPicker.vue'
+import {
+  MAX_DB_SELECTION,
+  fetchDbConnections,
+  type DbConnectionView,
+} from '~/composables/dbConnections'
 import ModelEffortFields from '~/components/ModelEffortFields.vue'
 import ClaudeUsagePanel from '~/components/ClaudeUsagePanel.vue'
 import ApproveTaskSummary, {
@@ -29,6 +35,7 @@ interface SessionSummary {
   statusName: string
   model: string | null
   effort: string | null
+  dbConnectionIds?: number[] | null
   createdAt: string
 }
 
@@ -40,6 +47,36 @@ const $q = useQuasar()
 const model = ref(DEFAULT_MODEL)
 const effort = ref(DEFAULT_EFFORT)
 const mcpCatalogIds = ref<number[]>([])
+// DB 연결(스펙 2026-10-14 §7): 레포 공용 활성 연결을 기본 선택, 마지막 인터뷰 선택이 있으면 그것을 우선.
+// 기능이 꺼져 있으면(enabled=false) 피커를 숨기고 승인 바디에도 싣지 않는다.
+const db = reactive({ enabled: false, items: [] as DbConnectionView[] })
+const dbConnectionIds = ref<number[]>([])
+
+async function loadDb(mode: 'seed' | 'keep', preferred: number[] = []) {
+  const repoId = props.task.repoCatalogId
+  if (!repoId) {
+    db.enabled = false
+    db.items = []
+    return
+  }
+  const r = await fetchDbConnections(repoId)
+  db.enabled = r.enabled
+  db.items = r.items
+  const usable = new Set(r.items.filter((i) => i.enabled).map((i) => i.id))
+  if (mode === 'keep') {
+    dbConnectionIds.value = dbConnectionIds.value.filter((id) => usable.has(id))
+  } else if (preferred.length) {
+    dbConnectionIds.value = preferred.filter((id) => usable.has(id)).slice(0, MAX_DB_SELECTION)
+  } else {
+    dbConnectionIds.value = r.items
+      .filter((i) => i.scope === 'REPO' && i.enabled)
+      .slice(0, MAX_DB_SELECTION)
+      .map((i) => i.id)
+  }
+}
+function reloadDb() {
+  loadDb('keep')
+}
 const approving = ref(false)
 /** 이 작업의 지난(터미널) 인터뷰 세션, 최신순. 재승인 맥락 안내 + 초기값 프리필에 쓴다. */
 const previous = ref<SessionSummary[]>([])
@@ -62,6 +99,8 @@ async function init() {
   model.value = DEFAULT_MODEL
   effort.value = DEFAULT_EFFORT
   mcpCatalogIds.value = []
+  dbConnectionIds.value = []
+  let lastDbIds: number[] = []
   previous.value = []
   prefilled.value = false
   try {
@@ -75,6 +114,7 @@ async function init() {
       .sort((a, b) => b.id - a.id)
     previous.value = rows
     const last = rows[0]
+    lastDbIds = Array.isArray(last?.dbConnectionIds) ? last.dbConnectionIds : []
     // 박제된 과거 모델(fable-5 등)은 더는 고를 수 없으므로 안내만 하고 초기값은 기본값으로 둔다.
     if (last?.model && MODEL_OPTIONS.some((m) => m.value === last.model)) {
       model.value = last.model
@@ -84,6 +124,7 @@ async function init() {
   } catch {
     // 403/404 등 — 비소유자/구 API. 기본값으로 진행.
   }
+  await loadDb('seed', lastDbIds)
 }
 
 watch(
@@ -103,6 +144,7 @@ async function approve() {
         model: model.value,
         effort: effort.value,
         mcpCatalogIds: mcpCatalogIds.value,
+        ...(db.enabled ? { dbConnectionIds: dbConnectionIds.value } : {}),
       },
     })
     $q.notify({
@@ -179,6 +221,17 @@ defineExpose({ approve })
           />
           <div class="q-mt-md">
             <McpPicker v-model="mcpCatalogIds" flat />
+          </div>
+          <div v-if="db.enabled && task.repoCatalogId" class="q-mt-md" data-test="approve-db">
+            <div class="text-caption text-grey-7 q-mb-xs">
+              DB 연결 — 인터뷰·디자인·구현에서 읽기 전용으로 조회합니다
+            </div>
+            <DbConnectionPicker
+              v-model="dbConnectionIds"
+              :items="db.items"
+              :repo-catalog-id="task.repoCatalogId"
+              @reload="reloadDb"
+            />
           </div>
           <!-- 첫 폴링 뒤에 strip이 나타나며 아래 섹션이 밀리지 않도록 높이를 미리 확보한다 -->
           <div class="usage-slot q-mt-sm">

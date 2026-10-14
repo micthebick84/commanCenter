@@ -21,6 +21,13 @@ public class DbMcpTools {
 
     public record ToolResult(String text, boolean isError) {}
 
+    /** 인자 검증 실패 전용 — 드라이버가 던진 예외와 구분해 비밀번호 마스킹 경로를 타게 한다. */
+    private static final class InvalidToolInput extends RuntimeException {
+        InvalidToolInput(String message) {
+            super(message);
+        }
+    }
+
     private static final Pattern CONTROL = Pattern.compile("[\\x00-\\x1f\\x7f]");
 
     private final ReadOnlyQueryExecutor executor;
@@ -68,7 +75,7 @@ public class DbMcpTools {
                 }
                 default -> new ToolResult("알 수 없는 도구입니다: " + tool, true);
             };
-        } catch (IllegalArgumentException e) {
+        } catch (InvalidToolInput e) {
             return new ToolResult("입력 오류: " + e.getMessage(), true);
         } catch (SQLException | RuntimeException e) {
             return new ToolResult("DB 오류: " + safeMessage(e, ref.password()), true);
@@ -78,7 +85,7 @@ public class DbMcpTools {
     private ToolResult query(DbConnectionRef ref, SqlDialect d, Map<String, Object> a) throws SQLException {
         Object raw = a.get("sql");
         if (!(raw instanceof String sql) || sql.isEmpty() || sql.length() > 100_000) {
-            throw new IllegalArgumentException("sql은 1~100000자 문자열이어야 합니다");
+            throw new InvalidToolInput("sql은 1~100000자 문자열이어야 합니다");
         }
         SqlReadOnlyChecker.Check check = SqlReadOnlyChecker.check(sql, d);
         if (!check.ok()) {
@@ -92,11 +99,11 @@ public class DbMcpTools {
     private static String ident(Map<String, Object> a, String key, boolean required) {
         Object v = a.get(key);
         if (v == null) {
-            if (required) throw new IllegalArgumentException(key + "가 필요합니다");
+            if (required) throw new InvalidToolInput(key + "가 필요합니다");
             return null;
         }
         if (!(v instanceof String s) || s.isEmpty() || s.length() > 128 || CONTROL.matcher(s).find()) {
-            throw new IllegalArgumentException(key + "는 제어문자 없는 1~128자 문자열이어야 합니다");
+            throw new InvalidToolInput(key + "는 제어문자 없는 1~128자 문자열이어야 합니다");
         }
         return s;
     }

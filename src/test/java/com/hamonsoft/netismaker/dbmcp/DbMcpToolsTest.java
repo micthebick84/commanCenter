@@ -60,6 +60,16 @@ class DbMcpToolsTest {
     }
 
     @Test
+    void illegal_argument_from_executor_is_masked_db_error() {
+        ReadOnlyQueryExecutor failing = (ref, sql, params, maxRows) -> {
+            throw new IllegalArgumentException("bad url user=u password=S3cret!");
+        };
+        var r = new DbMcpTools(failing).call(ORA, "list_tables", Map.of());
+        assertThat(r.isError()).isTrue();
+        assertThat(r.text()).contains("****").doesNotContain("S3cret!");
+    }
+
+    @Test
     void describe_table_combines_columns_and_indexes() {
         var r = new DbMcpTools(fake).call(ORA, "describe_table", Map.of("table", "USERS"));
         assertThat(r.text()).startsWith("{\"columns\":{").contains(",\"indexes\":{");

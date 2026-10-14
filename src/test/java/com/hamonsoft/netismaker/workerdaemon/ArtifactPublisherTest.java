@@ -30,6 +30,7 @@ class ArtifactPublisherTest {
     private final List<List<String>> calls = new ArrayList<>();
     private String findOut = "";
     private int inspectExit = 0;
+    private String inspectFailOut = "Error response from daemon: No such image: netis-task-7:abcdef1";
     private int cpExit = 0;
 
     private static final String SHA = "abcdef1234567890abcdef1234567890abcdef12";
@@ -50,7 +51,7 @@ class ArtifactPublisherTest {
         return new ArtifactPublisher(props, cfg, http, (args, timeout) -> {
             calls.add(List.copyOf(args));
             switch (args.get(0)) {
-                case "image" -> { return new ProcessRunner.Result(inspectExit, inspectExit == 0 ? "sha256:x" : "No such image"); }
+                case "image" -> { return new ProcessRunner.Result(inspectExit, inspectExit == 0 ? "sha256:x" : inspectFailOut); }
                 case "run" -> { return new ProcessRunner.Result(1, findOut); }
                 case "cp" -> {
                     if (cpExit == 0) Files.write(Path.of(args.get(2)), WAR);
@@ -122,6 +123,37 @@ class ArtifactPublisherTest {
         assertThatThrownBy(() -> publisher().publish(task("/app/x.war", "acme/w")))
                 .isInstanceOf(ArtifactPublisher.ArtifactException.class)
                 .hasMessage("산출물: 이미지 없음(netis-task-7:abcdef1) — 재시도하거나 '산출물 없이 마무리'");
+    }
+
+    @Test
+    void 이미지_없음_출력은_대소문자와_No_such_object도_인식한다() {
+        inspectExit = 1;
+        inspectFailOut = "Error: no such object: netis-task-7:abcdef1";
+        assertThatThrownBy(() -> publisher().publish(task("/app/x.war", "acme/w")))
+                .hasMessage("산출물: 이미지 없음(netis-task-7:abcdef1) — 재시도하거나 '산출물 없이 마무리'");
+    }
+
+    @Test
+    void 데몬_오류면_이미지_없음이_아니라_데몬_확인_재시도를_안내한다() {
+        inspectExit = 1;
+        inspectFailOut = "error during connect: Get \"http://docker.example/v1.45/images/x/json\": "
+                + "ssh: connect to host 10.1.1.75 port 22: Connection refused\n";
+        assertThatThrownBy(() -> publisher().publish(task("/app/x.war", "acme/w")))
+                .isInstanceOf(ArtifactPublisher.ArtifactException.class)
+                .hasMessageStartingWith("산출물: docker 이미지 확인 실패(netis-task-7:abcdef1) — error during connect")
+                .hasMessageContaining("Connection refused")
+                .hasMessageEndingWith("데몬 상태를 확인하고 재시도")
+                .hasMessageNotContaining("산출물 없이 마무리")
+                .hasMessageNotContaining("이미지 없음");
+        assertThat(calls).hasSize(1);   // 꺼내기 단계로 넘어가지 않는다
+    }
+
+    @Test
+    void 데몬_오류_출력이_비어_있어도_사유_자리가_비지_않는다() {
+        inspectExit = 1;
+        inspectFailOut = "";
+        assertThatThrownBy(() -> publisher().publish(task("/app/x.war", "acme/w")))
+                .hasMessage("산출물: docker 이미지 확인 실패(netis-task-7:abcdef1) — 데몬 상태를 확인하고 재시도");
     }
 
     @Test

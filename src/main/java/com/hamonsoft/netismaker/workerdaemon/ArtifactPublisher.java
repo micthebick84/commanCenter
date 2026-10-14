@@ -122,9 +122,17 @@ public class ArtifactPublisher {
 
     private void inspect(String image) throws ArtifactException, InterruptedException {
         ProcessRunner.Result r = run(List.of("image", "inspect", "--format", "{{.Id}}", image), SHORT_TIMEOUT_SECONDS);
-        if (r.exitCode() != 0) {
+        if (r.exitCode() == 0) return;
+        String out = r.stdout() == null ? "" : r.stdout();
+        String lower = out.toLowerCase(Locale.ROOT);
+        // 이미지가 정말 없을 때만 '산출물 없이 마무리'를 안내한다 — 원격 데몬 중단·ssh 오류도 종료 코드는 같아서,
+        // 출력을 보지 않으면 일시 장애가 되돌릴 수 없는 마무리 선택으로 이어진다.
+        if (lower.contains("no such image") || lower.contains("no such object")) {
             throw new ArtifactException("산출물: 이미지 없음(" + image + ") — 재시도하거나 '산출물 없이 마무리'");
         }
+        String why = tail(out.replaceAll("\\s+", " "));
+        throw new ArtifactException("산출물: docker 이미지 확인 실패(" + image + ")"
+                + (why.isBlank() ? "" : " — " + why) + " — 데몬 상태를 확인하고 재시도");
     }
 
     private String resolvePath(WorkerTaskResponse task, String image) throws ArtifactException, InterruptedException {

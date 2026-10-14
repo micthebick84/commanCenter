@@ -81,20 +81,27 @@ public class ArtifactStore {
                 out.write(buf, 0, n);
             }
         } catch (IOException e) {
-            Files.deleteIfExists(part);
+            discard(part, e);
             throw e;
         }
         String actual = HexFormat.of().formatHex(md.digest());
         if (!actual.equalsIgnoreCase(expectedSha256)) {
-            Files.deleteIfExists(part);
-            throw new HashMismatch(expectedSha256, actual);
+            HashMismatch mismatch = new HashMismatch(expectedSha256, actual);
+            discard(part, mismatch);
+            throw mismatch;
         }
         try {
             Files.move(part, target, StandardCopyOption.ATOMIC_MOVE);
         } catch (IOException e) {
             // Windows 등에서 원자적 이동이 안 되거나 기존 파일에 막히면(스펙: 실패 시 REPLACE_EXISTING) 덮어쓰는 이동으로 대체한다.
-            // 이것도 실패하면 그 예외가 그대로 올라간다.
-            Files.move(part, target, StandardCopyOption.REPLACE_EXISTING);
+            // 이것도 실패하면 .part를 지우고 그 예외를 올린다(첫 시도의 예외는 suppressed로 남긴다).
+            try {
+                Files.move(part, target, StandardCopyOption.REPLACE_EXISTING);
+            } catch (IOException e2) {
+                e2.addSuppressed(e);
+                discard(part, e2);
+                throw e2;
+            }
         }
         try (DirectoryStream<Path> ds = Files.newDirectoryStream(target.getParent())) {
             for (Path p : ds) {
@@ -102,6 +109,18 @@ public class ArtifactStore {
             }
         }
         return new ArtifactInfo(name, total, actual);
+    }
+
+    /**
+     * 실패한 업로드의 .part를 지운다. 지우기까지 실패해도 원래 예외를 가리지 않도록 그 실패는
+     * original의 suppressed로만 붙인다(호출자가 original을 던진다).
+     */
+    static void discard(Path part, IOException original) {
+        try {
+            Files.deleteIfExists(part);
+        } catch (IOException | RuntimeException e) {
+            original.addSuppressed(e);
+        }
     }
 
     private static MessageDigest sha256() {

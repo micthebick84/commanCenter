@@ -172,9 +172,9 @@ public class WorkerHttpClient {
                 .build();
         HttpResponse<String> res = uploader.send(req, HttpResponse.BodyHandlers.ofString());
         if (res.statusCode() / 100 != 2) {
-            String body = res.body() == null ? "" : res.body();
-            throw new IOException("서버 응답 " + res.statusCode() + ": "
-                    + com.hamonsoft.netismaker.git.GitRemotes.mask(body.length() > 300 ? body.substring(0, 300) : body));
+            // 먼저 가리고 나서 자른다 — 자른 뒤에 가리면 경계에 걸친 "://user:secret@"가 정규식에 안 잡혀 일부가 남는다
+            String body = res.body() == null ? "" : com.hamonsoft.netismaker.git.GitRemotes.mask(res.body());
+            throw new IOException("서버 응답 " + res.statusCode() + ": " + (body.length() > 300 ? body.substring(0, 300) : body));
         }
         return mapper.readValue(res.body(), ArtifactInfo.class);
     }

@@ -4,14 +4,20 @@ import com.hamonsoft.netismaker.dto.ArtifactInfo;
 import com.hamonsoft.netismaker.entity.Task;
 import com.hamonsoft.netismaker.entity.TaskStatus;
 import com.hamonsoft.netismaker.repository.TaskRepository;
+import ch.qos.logback.classic.Level;
+import ch.qos.logback.classic.Logger;
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.read.ListAppender;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
 import org.springframework.test.util.ReflectionTestUtils;
 import org.springframework.transaction.PlatformTransactionManager;
 
 import java.io.ByteArrayInputStream;
+import java.io.IOException;
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
@@ -136,5 +142,34 @@ class CloseArtifactServiceTest {
         assertThat(service.current(7L)).isEmpty();
         service.receive(7L, "w1", "repo-task-7-abcdef1.war", null, sha, new ByteArrayInputStream(body));
         assertThat(service.current(7L)).contains(new ArtifactInfo("repo-task-7-abcdef1.war", body.length, sha));
+    }
+
+    @Test
+    void 저장_중_IO_오류는_500으로_바꾸되_서버_로그에_원인을_남긴다() throws Exception {
+        Logger logger = (Logger) LoggerFactory.getLogger(CloseArtifactService.class);
+        ListAppender<ILoggingEvent> appender = new ListAppender<>();
+        appender.start();
+        logger.addAppender(appender);
+        try {
+            InputStream broken = new InputStream() {
+                @Override
+                public int read() throws IOException {
+                    throw new IOException("disk full");
+                }
+            };
+            assertThatThrownBy(() -> service.receive(7L, "w1", "repo-task-7-abcdef1.war", null, sha, broken))
+                    .isInstanceOfSatisfying(TaskException.class, e -> {
+                        assertThat(e.getStatus()).isEqualTo(HttpStatus.INTERNAL_SERVER_ERROR);
+                        assertThat(e.getMessage()).contains("disk full");
+                    });
+            assertThat(appender.list).anySatisfy(ev -> {
+                assertThat(ev.getLevel()).isEqualTo(Level.WARN);
+                assertThat(ev.getFormattedMessage()).contains("taskId=7");
+                assertThat(ev.getThrowableProxy().getMessage()).isEqualTo("disk full");
+            });
+            assertThat(t.getArtifactName()).isNull();
+        } finally {
+            logger.detachAppender(appender);
+        }
     }
 }

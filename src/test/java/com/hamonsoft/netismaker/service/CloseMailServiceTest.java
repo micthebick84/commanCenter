@@ -109,6 +109,17 @@ class CloseMailServiceTest {
     }
 
     @Test
+    void 자르는_경계에_걸친_자격증명도_가린_뒤_자른다() {
+        // "smtp://bot:app-secret@"의 비밀번호 중간(300자째)에서 잘리는 위치 — 자른 뒤 가리면 정규식이 못 잡아 일부가 남는다
+        doThrow(new MailSendException("x".repeat(285) + " smtp://bot:app-secret@smtp.gmail.com"))
+                .when(sender).send(any(SimpleMailMessage.class));
+        assertThat(service("bot@hamonsoft.co.kr").send(7L)).isEqualTo("FAILED");
+        String reason = lastHistory();
+        assertThat(reason).contains("smtp://***@").doesNotContain("bot:").doesNotContain("app");
+        assertThat(reason.length()).isLessThanOrEqualTo("메일 실패: ".length() + 300);
+    }
+
+    @Test
     void SMTP_발송은_행_잠금_없이_하고_결과를_남길_때만_잠근다() {
         assertThat(service("bot@hamonsoft.co.kr").send(7L)).isEqualTo("SENT");
 

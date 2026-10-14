@@ -32,7 +32,8 @@ import java.util.Locale;
  * Hikari 누수 경보(leak-detection-threshold 30초)에 걸리고 같은 작업을 건드리는 다른 요청이 막히므로
  * 세 단계로 나눈다(CloseArtifactService와 같은 방식).
  * <ol>
- *   <li>준비 — 읽기 전용 트랜잭션, 잠금 없음: 대상인지 보고 수신 주소·메시지를 정한다. 대상이 아니면 null.</li>
+ *   <li>준비 — 읽기 전용 트랜잭션(잠금 없음)에서는 대상 여부만 판정한다. 대상이 아니면 null. 수신 주소 조회와
+ *       메시지 구성은 그 트랜잭션 밖에서 하므로 조회 오류가 트랜잭션을 오염시키지 않는다.</li>
  *   <li>발송 — 트랜잭션 밖: SMTP 호출. MailException은 FAILED로 바꾼다.</li>
  *   <li>기록 — 새 트랜잭션, 행 잠금 후 대상인지 다시 판정: 그새 삭제·상태 변경이면 결과를 남기지 않는다.</li>
  * </ol>
@@ -146,7 +147,9 @@ public class CloseMailService {
             return new Result(SENT, "메일 발송: " + plan.to());
         } catch (MailException e) {
             String msg = e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage();
-            String note = "메일 실패: " + GitRemotes.mask(msg.length() > 300 ? msg.substring(0, 300) : msg);
+            // 먼저 가리고 나서 자른다 — 자른 뒤에 가리면 경계에 걸친 "://user:secret@"가 정규식에 안 잡혀 일부가 남는다
+            String masked = GitRemotes.mask(msg);
+            String note = "메일 실패: " + (masked.length() > 300 ? masked.substring(0, 300) : masked);
             log.warn("종료 메일 실패: task={} {}", taskId, note);
             return new Result(FAILED, note);
         }

@@ -5,6 +5,7 @@ import com.hamonsoft.netismaker.entity.CloseStep;
 import com.hamonsoft.netismaker.entity.Task;
 import com.hamonsoft.netismaker.entity.TaskStatus;
 import com.hamonsoft.netismaker.repository.TaskRepository;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.annotation.Profile;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
@@ -27,6 +28,7 @@ import java.util.regex.Pattern;
  */
 @Service
 @Profile("api")
+@Slf4j
 public class CloseArtifactService {
 
     private static final Pattern SHA256 = Pattern.compile("[0-9a-fA-F]{64}");
@@ -73,6 +75,7 @@ public class CloseArtifactService {
         } catch (ArtifactStore.HashMismatch e) {
             throw new TaskException(HttpStatus.BAD_REQUEST, e.getMessage());
         } catch (IOException e) {
+            log.warn("산출물 저장 실패: taskId={}", taskId, e);   // 응답 사유만으로는 서버 쪽 원인(디스크·권한)을 추적할 수 없다
             throw new TaskException(HttpStatus.INTERNAL_SERVER_ERROR, "산출물 저장 실패: " + e.getMessage());
         }
         // ③ 기록 — 잠그고 다시 검사(그사이 종료실패·다른 워커로 바뀌었으면 거절, 파일은 다음 시도가 덮어쓴다)

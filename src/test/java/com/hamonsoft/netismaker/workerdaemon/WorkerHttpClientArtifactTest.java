@@ -87,6 +87,17 @@ class WorkerHttpClientArtifactTest {
     }
 
     @Test
+    void 거절_본문의_자격증명은_자르기_전에_가린다() throws Exception {
+        // "://user:secretpassword@"가 300자 경계에 걸리게 — 자른 뒤 가리면 정규식이 못 잡아 비밀번호 앞부분이 남는다
+        String body = "x".repeat(285) + " https://oauth2:secretpassword@gitlab.example/g/p.git";
+        WorkerHttpClient c = client(500, body, new AtomicReference<>());
+        Path f = Files.writeString(tmp.resolve("x.war"), "WAR");
+        assertThatThrownBy(() -> c.uploadArtifact(7L, "w-task-7-abcdef1.war", null, f, "ab", Duration.ofSeconds(10)))
+                .hasMessageContaining("500").hasMessageContaining("https://***@")
+                .hasMessageNotContaining("oauth2").hasMessageNotContaining("secret");
+    }
+
+    @Test
     void 보관된_산출물이_있으면_정보를_없으면_empty() throws Exception {
         WorkerHttpClient found = client(200, "{\"name\":\"w-task-7-abcdef1.war\",\"sizeBytes\":3,\"sha256\":\"ab\"}",
                 new AtomicReference<>());

@@ -76,6 +76,12 @@ public class Task {
     @Setter
     private List<TaskMcpSpec> mcpsExtra = new ArrayList<>();
 
+    /** 승인 때 고른 DB 연결 id (스펙 2026-10-14 §3). 접속정보는 실행 시점에 현재 행으로 해석한다. */
+    @JdbcTypeCode(SqlTypes.JSON)
+    @Column(name = "db_connection_ids", nullable = false, columnDefinition = "jsonb")
+    @Setter
+    private List<Long> dbConnectionIds = new ArrayList<>();
+
     /** 작업 등록 시 선택된 Claude 모델. 워커가 claude --model에 사용.
      *  기본값은 ModelEffortPolicy.DEFAULT_MODEL과 반드시 일치해야 한다(둘 다 바꿀 것). */
     @Column(name = "model", nullable = false, length = 64)

@@ -261,13 +261,19 @@ async function retry() {
 }
 
 // 작업 종료 (스펙 2026-10-13) — 응답에 사용량이 없으므로 액션 뒤에는 항상 refresh()로 다시 읽는다.
+// 성공 알림은 문자열(항상 positive)이거나, 서버 응답으로 정하는 함수다 — 메일 다시 보내기는 재시도가 또 실패해도 200이다.
+type CloseNotice = { type: 'positive' | 'warning'; message: string }
 let closeInFlight = false
-async function closeAction(path: string, okMessage: string, body?: Record<string, string>) {
+async function closeAction(
+  path: string,
+  ok: string | ((res: { status?: string } | null) => CloseNotice),
+  body?: Record<string, string>,
+) {
   if (closeInFlight) return // 요청이 끝나기 전의 중복 클릭은 무시한다
   closeInFlight = true
   try {
-    await useApi(`/api/tasks/${taskId.value}/${path}`, { method: 'POST', body })
-    $q.notify({ type: 'positive', message: okMessage })
+    const res = await useApi<{ status?: string } | null>(`/api/tasks/${taskId.value}/${path}`, { method: 'POST', body })
+    $q.notify(typeof ok === 'function' ? ok(res) : { type: 'positive', message: ok })
     refresh()
   } catch (e: any) {
     $q.notify({ type: 'negative', message: e?.data?.message ?? '요청 실패' })
@@ -419,27 +425,42 @@ const canSkipArtifactClose = computed(
   () => auth.isAdmin && !!task.value && canSkipArtifact(task.value.close, task.value.status),
 )
 
-// 내려받기 주소 토큰은 1회용 — 응답이 오기 전의 연타가 download-link를 두 번 POST하지 않게 진행 중에는 막는다.
+// 내려받기 주소 토큰은 1회용 — 연타가 download-link를 두 번 POST해 254MB 내려받기를 두 번 시작하지 않게 막는다.
+// 응답이 오기 전은 물론, 성공해 주소를 연 직후에도 잠깐(쿨다운) 잠근다: startArtifactDownload는 응답 직후 동기로
+// 이동하므로 빠른 API에서는 진행 중 플래그만으로 두 번째 클릭이 새어 나온다. 오류면 바로 풀어 다시 시도할 수 있게 한다.
+const DOWNLOAD_COOLDOWN_MS = 2000
 const downloadingArtifact = ref(false)
+let downloadCooldown: ReturnType<typeof setTimeout> | null = null
+onUnmounted(() => {
+  if (downloadCooldown) clearTimeout(downloadCooldown)
+})
 async function downloadArtifact() {
   if (downloadingArtifact.value) return
   downloadingArtifact.value = true
   try {
     await startArtifactDownload(taskId.value, (u, o) => useApi<{ url: string }>(u, o))
+    downloadCooldown = setTimeout(() => {
+      downloadCooldown = null
+      downloadingArtifact.value = false
+    }, DOWNLOAD_COOLDOWN_MS)
   } catch (e: any) {
+    downloadingArtifact.value = false
     // 410 = 보관 기간이 지나 서버가 산출물 파일을 정리했다(본문 메시지가 없어도 같은 안내)
     const status = e?.statusCode ?? e?.response?.status ?? e?.status
     $q.notify({
       type: 'negative',
       message: status === 410 ? '보관 파일이 정리되었습니다' : (e?.data?.message ?? '내려받기 실패'),
     })
-  } finally {
-    downloadingArtifact.value = false
   }
 }
 
+// 서버는 재시도 결과 상태를 200으로 돌려준다(스펙 2026-10-14 §7) — SENT만 성공이고 나머지는 경고로 결과를 알린다.
 async function resendMail() {
-  await closeAction('close/mail/resend', '메일 다시 보내기 완료')
+  await closeAction('close/mail/resend', (res) =>
+    res?.status === 'SENT'
+      ? { type: 'positive', message: '메일 다시 보내기 완료' }
+      : { type: 'warning', message: `메일 다시 보내기 결과: ${MAIL_STATUS_LABEL[res?.status ?? ''] ?? res?.status ?? '알 수 없음'}` },
+  )
 }
 
 async function skipArtifact() {

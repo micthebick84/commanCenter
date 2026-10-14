@@ -284,13 +284,90 @@ describe('pages/tasks/[id] — 작업 종료 (스펙 2026-10-13 §6)', () => {
     expect(useApiMock.mock.calls.filter((c) => c[0] === '/api/tasks/42/artifact/download-link')).toHaveLength(1)
     release({ url: '/api/artifact-downloads/tok' })
     await flushPromises()
+    expect(assign).toHaveBeenCalledTimes(1)
     expect(assign).toHaveBeenCalledWith('/api/artifact-downloads/tok')
-    // 끝난 뒤에는 다시 누를 수 있다
-    useApiMock.mockResolvedValueOnce({ url: '/api/artifact-downloads/tok2' })
-    await btn.trigger('click')
-    await flushPromises()
-    expect(assign).toHaveBeenLastCalledWith('/api/artifact-downloads/tok2')
     assign.mockRestore()
+    w.unmount()
+  })
+
+  // 빠른 API: startArtifactDownload가 응답 직후 동기로 이동하므로 "진행 중" 플래그만으로는 두 번째 클릭이 새어 나온다.
+  // 성공 뒤에는 쿨다운(약 2초) 동안 잠그고, 지나면 다시 누를 수 있다. 오류는 위 410 테스트처럼 바로 풀린다.
+  it('내려받기 성공 직후 쿨다운 동안은 재클릭해도 POST하지 않고, 지나면 다시 받을 수 있다', async () => {
+    authStub.isAdmin = true
+    const assign = vi.spyOn(window.location, 'assign').mockImplementation(() => {})
+    const w = await mountWith({
+      ...baseTask, status: 'CLOSED', statusLabel: '작업종료', deployment,
+      close: { ...emptyClose, artifactMode: 'REQUIRED', artifact, mail: null },
+    })
+    // flushPromises는 setImmediate를 쓰므로 setTimeout·clearTimeout만 가짜로 바꾼다(마운트 뒤에).
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    try {
+      useApiMock.mockClear()
+      const posts = () => useApiMock.mock.calls.filter((c) => c[0] === '/api/tasks/42/artifact/download-link')
+      const btn = w.find('[data-test="close-artifact-download"]')
+
+      useApiMock.mockResolvedValueOnce({ url: '/api/artifact-downloads/tok' })
+      await btn.trigger('click')
+      await flushPromises() // 응답은 이미 끝났다 — 진행 중 플래그만으로는 잠기지 않는 구간
+      expect(posts()).toHaveLength(1)
+      expect(assign).toHaveBeenCalledTimes(1)
+
+      await btn.trigger('click') // 쿨다운 중 재클릭
+      await flushPromises()
+      vi.advanceTimersByTime(1999)
+      await btn.trigger('click')
+      await flushPromises()
+      expect(posts()).toHaveLength(1)
+      expect(assign).toHaveBeenCalledTimes(1)
+
+      vi.advanceTimersByTime(1) // 쿨다운(2000ms) 끝
+      await flushPromises()
+      useApiMock.mockResolvedValueOnce({ url: '/api/artifact-downloads/tok2' })
+      await btn.trigger('click')
+      await flushPromises()
+      expect(posts()).toHaveLength(2)
+      expect(assign).toHaveBeenLastCalledWith('/api/artifact-downloads/tok2')
+
+      // 쿨다운 타이머는 페이지가 사라질 때 같이 정리된다
+      expect(vi.getTimerCount()).toBeGreaterThan(0)
+      w.unmount()
+      expect(vi.getTimerCount()).toBe(0)
+    } finally {
+      vi.useRealTimers()
+      assign.mockRestore()
+    }
+  })
+
+  // 서버는 재시도가 또 실패해도 200 {status}를 준다(스펙 §7) — SENT만 성공 알림, 나머지는 결과 상태를 경고로 알린다
+  it('메일 다시 보내기: SENT면 완료 알림, 다시 실패하면 경고로 결과 상태를 알린다', async () => {
+    authStub.isAdmin = true
+    const w = await mountWith({
+      ...baseTask, status: 'CLOSED', statusLabel: '작업종료', deployment,
+      close: { ...emptyClose, artifactMode: 'REQUIRED', artifact, mail: { status: 'FAILED', at: null } },
+    })
+    const vm = w.findComponent(TaskDetail).vm as unknown as { $q: { notify: (opts: unknown) => void } }
+    const notifySpy = vi.spyOn(vm.$q, 'notify')
+    const resend = async (res: { status: string }) => {
+      notifySpy.mockClear()
+      useApiMock.mockResolvedValueOnce(res)
+      await w.find('[data-test="close-mail-resend"]').trigger('click')
+      await flushPromises()
+    }
+
+    await resend({ status: 'SENT' })
+    expect(notifySpy).toHaveBeenCalledTimes(1)
+    expect(notifySpy).toHaveBeenCalledWith({ type: 'positive', message: '메일 다시 보내기 완료' })
+
+    await resend({ status: 'FAILED' })
+    expect(notifySpy).toHaveBeenCalledTimes(1)
+    expect(notifySpy).toHaveBeenCalledWith({ type: 'warning', message: '메일 다시 보내기 결과: 메일 실패' })
+    expect(notifySpy).not.toHaveBeenCalledWith(expect.objectContaining({ type: 'positive' }))
+
+    await resend({ status: 'NO_ADDRESS' })
+    expect(notifySpy).toHaveBeenCalledWith({ type: 'warning', message: '메일 다시 보내기 결과: 수신 주소 없음' })
+
+    await resend({ status: 'WHATEVER' }) // 모르는 상태는 원문 그대로
+    expect(notifySpy).toHaveBeenCalledWith({ type: 'warning', message: '메일 다시 보내기 결과: WHATEVER' })
     w.unmount()
   })
 

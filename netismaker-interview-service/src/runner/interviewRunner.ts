@@ -88,9 +88,10 @@ function attachmentSection(claim: InterviewClaimResponse): string {
 }
 
 /** One async-iterable user prompt for the turn. Fresh => kickoff text; resume => the injected answer. */
-async function* promptFor(claim: InterviewClaimResponse): AsyncIterable<UserTurn> {
+async function* promptFor(claim: InterviewClaimResponse, prefix = ''): AsyncIterable<UserTurn> {
   if (!claim.claudeSessionId) {
     yield userTurn(
+      prefix +
       `I want to add a feature to the repo at ${claim.githubRepo} (branch ${claim.githubBranch}).\n` +
         `Title: ${claim.title}\nRequest: ${claim.description}\n\n` +
         attachmentSection(claim) +
@@ -334,159 +335,171 @@ export class InterviewRunner {
         return;
       }
 
-      const options = buildOptions({
-        superpowersPluginPath: this.deps.superpowersPluginPath,
-        workDir: claim.workDir,
-        claudeCliPath: this.deps.claudeCliPath,
-        claudeSessionId: claim.claudeSessionId,
-        mcpsExtra: claim.mcpsExtra,
-        mcpsBase: this.deps.mcpsBase,
-        model: claim.model,
-        effort: claim.effort,
-        abortController: controller,
-      });
-      const stream: AsyncIterable<SdkMessage> = this.query({
-        prompt:
-          // Invariant: forceFinishTurns > 0 means at least one assistant turn has been recorded,
-          // which requires a claudeSessionId (the session id is set on the FIRST assistant turn).
-          // Therefore `forceFinish && !claudeSessionId` is unreachable in production; the else
-          // branch (`promptFor`) only executes on the genuine fresh-start path (turns == 0).
-          forceFinish && claim.claudeSessionId
-            ? (async function* () { yield userTurn(buildPlanReformatSplice()); })()
-            : promptFor(claim),
-        options,
-      });
-      const result = await relay(stream, { onActivity, onRateLimit, workDir: claim.workDir });
-      guard.add(result.costUsd);
+      // 작업 DB MCP(스펙 2026-10-14 §5): 질문 세션과 같은 내장 서버. 턴마다 새로 만들고 finally에서 닫는다.
+      const db = (this.deps.createDbMcp ?? createDbMcp)(claim);
+      try {
+        const options = buildOptions({
+          superpowersPluginPath: this.deps.superpowersPluginPath,
+          workDir: claim.workDir,
+          claudeCliPath: this.deps.claudeCliPath,
+          claudeSessionId: claim.claudeSessionId,
+          mcpsExtra: claim.mcpsExtra,
+          mcpsBase: this.deps.mcpsBase,
+          model: claim.model,
+          effort: claim.effort,
+          abortController: controller,
+          dbMcpServers: db.servers,
+          dbDialects: db.dialects,
+        });
+        const stream: AsyncIterable<SdkMessage> = this.query({
+          prompt:
+            // Invariant: forceFinishTurns > 0 means at least one assistant turn has been recorded,
+            // which requires a claudeSessionId (the session id is set on the FIRST assistant turn).
+            // Therefore `forceFinish && !claudeSessionId` is unreachable in production; the else
+            // branch (`promptFor`) only executes on the genuine fresh-start path (turns == 0).
+            forceFinish && claim.claudeSessionId
+              ? (async function* () { yield userTurn(buildPlanReformatSplice()); })()
+              : promptFor(claim, dbSection(db)),
+          options,
+        });
+        const result = await relay(stream, { onActivity, onRateLimit, workDir: claim.workDir });
+        guard.add(result.costUsd);
 
-      let assistantText = result.assistantText;
-      let sessionId = result.sessionId ?? claim.claudeSessionId ?? '';
-      let costUsd = result.costUsd;
-      let inputTokens = result.inputTokens;
-      let outputTokens = result.outputTokens;
-      let cacheCreationTokens = result.cacheCreationTokens;
-      let cacheReadTokens = result.cacheReadTokens;
-      let durationMs = result.durationMs;
-      // 컨텍스트 스냅샷은 "마지막 relay" 값 — 뒤이은 handoff/reformat relay가 있으면 그 값으로 갱신(null이면 유지).
-      let contextTokens = result.contextTokens;
-      let contextWindow = result.contextWindow;
+        let assistantText = result.assistantText;
+        let sessionId = result.sessionId ?? claim.claudeSessionId ?? '';
+        let costUsd = result.costUsd;
+        let inputTokens = result.inputTokens;
+        let outputTokens = result.outputTokens;
+        let cacheCreationTokens = result.cacheCreationTokens;
+        let cacheReadTokens = result.cacheReadTokens;
+        let durationMs = result.durationMs;
+        // 컨텍스트 스냅샷은 "마지막 relay" 값 — 뒤이은 handoff/reformat relay가 있으면 그 값으로 갱신(null이면 유지).
+        let contextTokens = result.contextTokens;
+        let contextWindow = result.contextWindow;
 
-      // Skill-dispatch shim: if brainstorming announced the writing-plans handoff
-      // but no plan was produced, splice the writing-plans SKILL.md into the SAME
-      // session and run one more turn (fallback when 'Skill' did not auto-fire).
-      const handoff = detectHandoff(assistantText);
-      const hasPlan = tryHarvest(assistantText).ok;
-      if (handoff && !hasPlan && sessionId) {
-        controller.signal.throwIfAborted(); // relay 사이 gap에서 abort됐으면 SDK 재진입 금지
-        const splice = buildWritingPlansSplice(this.deps.superpowersPluginPath, this.deps.spliceRead);
-        const second = await relay(
-          this.query({
-            prompt: (async function* () {
-              yield userTurn(splice);
-            })(),
-            options: buildOptions({
-              superpowersPluginPath: this.deps.superpowersPluginPath,
-              workDir: claim.workDir,
-              claudeCliPath: this.deps.claudeCliPath,
-              claudeSessionId: sessionId,
-              mcpsExtra: claim.mcpsExtra,
-              mcpsBase: this.deps.mcpsBase,
-              model: claim.model,
-              effort: claim.effort,
-              abortController: controller,
+        // Skill-dispatch shim: if brainstorming announced the writing-plans handoff
+        // but no plan was produced, splice the writing-plans SKILL.md into the SAME
+        // session and run one more turn (fallback when 'Skill' did not auto-fire).
+        const handoff = detectHandoff(assistantText);
+        const hasPlan = tryHarvest(assistantText).ok;
+        if (handoff && !hasPlan && sessionId) {
+          controller.signal.throwIfAborted(); // relay 사이 gap에서 abort됐으면 SDK 재진입 금지
+          const splice = buildWritingPlansSplice(this.deps.superpowersPluginPath, this.deps.spliceRead);
+          const second = await relay(
+            this.query({
+              prompt: (async function* () {
+                yield userTurn(splice);
+              })(),
+              options: buildOptions({
+                superpowersPluginPath: this.deps.superpowersPluginPath,
+                workDir: claim.workDir,
+                claudeCliPath: this.deps.claudeCliPath,
+                claudeSessionId: sessionId,
+                mcpsExtra: claim.mcpsExtra,
+                mcpsBase: this.deps.mcpsBase,
+                model: claim.model,
+                effort: claim.effort,
+                abortController: controller,
+                dbMcpServers: db.servers,
+                dbDialects: db.dialects,
+              }),
             }),
-          }),
-          { onActivity, onRateLimit, workDir: claim.workDir },
-        );
-        guard.add(second.costUsd);
-        assistantText = second.assistantText;
-        sessionId = second.sessionId ?? sessionId;
-        // 누적: 이 턴에 relay가 여러 번 돌면(핸드오프 shim) 각 relay분을 합산한다 — 대입 시
-        // 1차 relay의 usage가 Java 보고에서 유실된다(스펙 §1 "모든 실행 누적").
-        costUsd += second.costUsd;
-        inputTokens += second.inputTokens;
-        outputTokens += second.outputTokens;
-        cacheCreationTokens += second.cacheCreationTokens;
-        cacheReadTokens += second.cacheReadTokens;
-        durationMs = second.durationMs;
-        contextTokens = second.contextTokens ?? contextTokens;
-        contextWindow = second.contextWindow ?? contextWindow;
-      }
+            { onActivity, onRateLimit, workDir: claim.workDir },
+          );
+          guard.add(second.costUsd);
+          assistantText = second.assistantText;
+          sessionId = second.sessionId ?? sessionId;
+          // 누적: 이 턴에 relay가 여러 번 돌면(핸드오프 shim) 각 relay분을 합산한다 — 대입 시
+          // 1차 relay의 usage가 Java 보고에서 유실된다(스펙 §1 "모든 실행 누적").
+          costUsd += second.costUsd;
+          inputTokens += second.inputTokens;
+          outputTokens += second.outputTokens;
+          cacheCreationTokens += second.cacheCreationTokens;
+          cacheReadTokens += second.cacheReadTokens;
+          durationMs = second.durationMs;
+          contextTokens = second.contextTokens ?? contextTokens;
+          contextWindow = second.contextWindow ?? contextWindow;
+        }
 
-      // 채팅 본문 추출이 실패하면 이번 세션이 저장한 plan 파일로 한 번 더 판정한다 — writing-plans가
-      // plan을 파일에만 쓰고 채팅엔 요약만 남기면 완료를 영영 못 알아본다(2026-10-08 세션 21).
-      const harvestTurn = async (text: string): Promise<HarvestResult> => {
-        const fromText = tryHarvest(text);
-        return fromText.ok ? fromText : this.harvestPlanFiles(claim.workDir);
-      };
-      let harvested = await harvestTurn(assistantText);
-      // near-miss 보정: 추출 실패 + plan 의도 신호 시, 같은 세션에 정규 형식 재요청 1회.
-      // force-finish는 이미 reformat 프롬프트이므로 이중 splice 방지.
-      if (!harvested.ok && !forceFinish && detectPlanIntent(assistantText) && sessionId) {
-        controller.signal.throwIfAborted(); // relay 사이 gap에서 abort됐으면 SDK 재진입 금지
-        const reformatSplice = buildPlanReformatSplice();
-        const retry = await relay(
-          this.query({
-            prompt: (async function* () { yield userTurn(reformatSplice); })(),
-            options: buildOptions({
-              superpowersPluginPath: this.deps.superpowersPluginPath,
-              workDir: claim.workDir,
-              claudeCliPath: this.deps.claudeCliPath,
-              claudeSessionId: sessionId,
-              mcpsExtra: claim.mcpsExtra,
-              mcpsBase: this.deps.mcpsBase,
-              model: claim.model,
-              effort: claim.effort,
-              abortController: controller,
+        // 채팅 본문 추출이 실패하면 이번 세션이 저장한 plan 파일로 한 번 더 판정한다 — writing-plans가
+        // plan을 파일에만 쓰고 채팅엔 요약만 남기면 완료를 영영 못 알아본다(2026-10-08 세션 21).
+        const harvestTurn = async (text: string): Promise<HarvestResult> => {
+          const fromText = tryHarvest(text);
+          return fromText.ok ? fromText : this.harvestPlanFiles(claim.workDir);
+        };
+        let harvested = await harvestTurn(assistantText);
+        // near-miss 보정: 추출 실패 + plan 의도 신호 시, 같은 세션에 정규 형식 재요청 1회.
+        // force-finish는 이미 reformat 프롬프트이므로 이중 splice 방지.
+        if (!harvested.ok && !forceFinish && detectPlanIntent(assistantText) && sessionId) {
+          controller.signal.throwIfAborted(); // relay 사이 gap에서 abort됐으면 SDK 재진입 금지
+          const reformatSplice = buildPlanReformatSplice();
+          const retry = await relay(
+            this.query({
+              prompt: (async function* () { yield userTurn(reformatSplice); })(),
+              options: buildOptions({
+                superpowersPluginPath: this.deps.superpowersPluginPath,
+                workDir: claim.workDir,
+                claudeCliPath: this.deps.claudeCliPath,
+                claudeSessionId: sessionId,
+                mcpsExtra: claim.mcpsExtra,
+                mcpsBase: this.deps.mcpsBase,
+                model: claim.model,
+                effort: claim.effort,
+                abortController: controller,
+                dbMcpServers: db.servers,
+                dbDialects: db.dialects,
+              }),
             }),
-          }),
-          { onActivity, onRateLimit, workDir: claim.workDir },
-        );
-        guard.add(retry.costUsd);
-        assistantText = retry.assistantText;
-        sessionId = retry.sessionId ?? sessionId;
-        // 누적: near-miss reformat retry도 별도 relay다 — 합산 (위 handoff shim과 동일 근거).
-        costUsd += retry.costUsd;
-        inputTokens += retry.inputTokens;
-        outputTokens += retry.outputTokens;
-        cacheCreationTokens += retry.cacheCreationTokens;
-        cacheReadTokens += retry.cacheReadTokens;
-        durationMs = retry.durationMs;
-        contextTokens = retry.contextTokens ?? contextTokens;
-        contextWindow = retry.contextWindow ?? contextWindow;
-        harvested = await harvestTurn(assistantText);
-      }
-      // trailing 배치가 question/plan보다 늦게 도착하지 않도록, 확정 POST 전에 활동 큐를 비운다.
-      // (stop은 멱등 — finally의 stop은 에러 경로 안전망으로 유지)
-      await poster.stop();
-      if (harvested.ok) {
-        // planJson is sent as a JSON STRING — Java stores it as text/JSONB; frontend parses on use.
-        await this.client.postPlan(claim.sessionId, {
-          designMarkdown: harvested.harvest.designMarkdown,
-          planMarkdown: harvested.harvest.planMarkdown,
-          planJson: JSON.stringify(harvested.harvest.planJson),
+            { onActivity, onRateLimit, workDir: claim.workDir },
+          );
+          guard.add(retry.costUsd);
+          assistantText = retry.assistantText;
+          sessionId = retry.sessionId ?? sessionId;
+          // 누적: near-miss reformat retry도 별도 relay다 — 합산 (위 handoff shim과 동일 근거).
+          costUsd += retry.costUsd;
+          inputTokens += retry.inputTokens;
+          outputTokens += retry.outputTokens;
+          cacheCreationTokens += retry.cacheCreationTokens;
+          cacheReadTokens += retry.cacheReadTokens;
+          durationMs = retry.durationMs;
+          contextTokens = retry.contextTokens ?? contextTokens;
+          contextWindow = retry.contextWindow ?? contextWindow;
+          harvested = await harvestTurn(assistantText);
+        }
+        // trailing 배치가 question/plan보다 늦게 도착하지 않도록, 확정 POST 전에 활동 큐를 비운다.
+        // (stop은 멱등 — finally의 stop은 에러 경로 안전망으로 유지)
+        await poster.stop();
+        if (harvested.ok) {
+          // planJson is sent as a JSON STRING — Java stores it as text/JSONB; frontend parses on use.
+          await this.client.postPlan(claim.sessionId, {
+            designMarkdown: harvested.harvest.designMarkdown,
+            planMarkdown: harvested.harvest.planMarkdown,
+            planJson: JSON.stringify(harvested.harvest.planJson),
+            costUsd,
+            inputTokens,
+            outputTokens,
+            cacheCreationTokens,
+            cacheReadTokens,
+            durationMs,
+          });
+          return;
+        }
+
+        await this.client.postQuestion(claim.sessionId, {
+          content: assistantText,
+          claudeSessionId: sessionId,
+          kind: 'question',
           costUsd,
           inputTokens,
           outputTokens,
           cacheCreationTokens,
           cacheReadTokens,
-          durationMs,
+          contextTokens,
+          contextWindow,
         });
-        return;
+      } finally {
+        await db.close();
       }
-
-      await this.client.postQuestion(claim.sessionId, {
-        content: assistantText,
-        claudeSessionId: sessionId,
-        kind: 'question',
-        costUsd,
-        inputTokens,
-        outputTokens,
-        cacheCreationTokens,
-        cacheReadTokens,
-        contextTokens,
-        contextWindow,
-      });
     }
   }
 

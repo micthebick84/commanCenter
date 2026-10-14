@@ -346,16 +346,42 @@ const MCP_MUTATING_VERBS = new Set([
 /** 내장 DB 서버(`db-<id>`, dbMcp.ts) 도구 중 SQL 인자 없이 허용하는 것 (스펙 2026-10-02 §8.1). 입력은 바인딩 파라미터로만 쓰인다. */
 export const DB_READ_TOOLS: ReadonlySet<string> = new Set(['list_tables', 'describe_table']);
 
-function dbToolGate(toolName: string, tool: string, input: Record<string, unknown>, dialect: SqlDialect): PermissionResult {
+function dbToolGate(
+  toolName: string,
+  tool: string,
+  input: Record<string, unknown>,
+  dialect: SqlDialect,
+  scope = '질문 세션',
+): PermissionResult {
   if (tool === 'query') {
-    if (typeof input.sql !== 'string') return { behavior: 'deny', message: `질문 세션 DB 도구 입력에 SQL이 없습니다: ${toolName}` };
+    if (typeof input.sql !== 'string') return { behavior: 'deny', message: `${scope} DB 도구 입력에 SQL이 없습니다: ${toolName}` };
     const r = checkReadOnlySql(input.sql, dialect);
     return r.ok
       ? { behavior: 'allow' }
-      : { behavior: 'deny', message: `질문 세션 DB 도구는 읽기 전용입니다 — ${r.reason}. SELECT 계열 단일 문장만 실행할 수 있습니다.` };
+      : { behavior: 'deny', message: `${scope} DB 도구는 읽기 전용입니다 — ${r.reason}. SELECT 계열 단일 문장만 실행할 수 있습니다.` };
   }
   if (DB_READ_TOOLS.has(tool)) return { behavior: 'allow' };
-  return { behavior: 'deny', message: `질문 세션에서 허용되지 않은 DB 도구입니다: ${toolName}` };
+  return { behavior: 'deny', message: `${scope}에서 허용되지 않은 DB 도구입니다: ${toolName}` };
+}
+
+/**
+ * INTERVIEW 세션의 내장 DB 서버 게이트 (스펙 2026-10-14 §5). db-<id>가 아니면 null(기존 INTERVIEW 규칙 = allow).
+ * 이번 턴에 붙이지 않은 db-N은 다른 소스가 이름을 흉내 낸 서버로 보고 deny.
+ */
+function interviewDbGate(
+  toolName: string,
+  input: Record<string, unknown>,
+  dbServers: Record<string, SqlDialect>,
+): PermissionResult | null {
+  const rest = toolName.slice('mcp__'.length);
+  const sepIdx = rest.indexOf('__');
+  if (sepIdx === -1) return null;
+  const server = rest.slice(0, sepIdx);
+  const tool = rest.slice(sepIdx + 2);
+  const dialect = dbServers[server];
+  if (dialect) return dbToolGate(toolName, tool, input, dialect, '인터뷰');
+  if (/^db-\d+$/.test(server)) return { behavior: 'deny', message: `이번 인터뷰에 붙이지 않은 DB 서버입니다: ${toolName}` };
+  return null;
 }
 
 /**
@@ -366,7 +392,7 @@ function dbToolGate(toolName: string, tool: string, input: Record<string, unknow
  *    command_execute, open_file 전부 여기서 막힌다).
  *  - 그 외 서버는 변경 동사 denylist(위 MCP_MUTATING_VERBS)로만 차단 — `mcp__local-db__query`처럼
  *    이름을 모르는 읽기 도구가 과차단되지 않게 한다.
- * INTERVIEW 게이트는 건드리지 않는다 — 여전히 `mcp__*` 무조건 allow.
+ * INTERVIEW 게이트는 내장 DB 서버(db-<id>)만 interviewDbGate로 검사하고 나머지 `mcp__*`는 allow.
  */
 function questionMcpGate(
   toolName: string,
@@ -442,6 +468,10 @@ export function buildCanUseTool(
       return { behavior: 'deny', message: 'Write confined to docs/superpowers/**' };
     }
     if (toolName === 'Bash') return bashGate(input);
+    if (toolName.startsWith('mcp__')) {
+      const db = interviewDbGate(toolName, input, dbServers);
+      if (db) return db;
+    }
     // Read/Grep/Glob/Skill and other inspection tools are allowed.
     return { behavior: 'allow' };
   };

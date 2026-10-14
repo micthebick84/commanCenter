@@ -563,3 +563,23 @@ describe('canUseTool — kind=QUESTION DB 서버 게이트 (스펙 2026-10-02 §
     expect((await q('mcp__local-db__query', { sql: 'select 1' })).behavior).toBe('allow');
   });
 });
+
+describe('INTERVIEW 게이트 — 작업 DB 도구 (스펙 2026-10-14 §5)', () => {
+  const gate = buildCanUseTool('/tmp/repo', 'INTERVIEW', null, { 'db-7': 'mysql' });
+  const call = (name: string, input: Record<string, unknown>) =>
+    gate(name, input);
+
+  it('조회문은 허용', async () => {
+    expect((await call('mcp__db-7__query', { sql: 'SELECT 1' })).behavior).toBe('allow');
+    expect((await call('mcp__db-7__list_tables', {})).behavior).toBe('allow');
+  });
+
+  it('쓰기 SQL·미등록 db-N은 거부', async () => {
+    expect((await call('mcp__db-7__query', { sql: 'DELETE FROM t' })).behavior).toBe('deny');
+    expect((await call('mcp__db-9__query', { sql: 'SELECT 1' })).behavior).toBe('deny');
+  });
+
+  it('다른 MCP는 기존대로 허용', async () => {
+    expect((await call('mcp__ctx7__resolve', {})).behavior).toBe('allow');
+  });
+});

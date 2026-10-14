@@ -746,6 +746,23 @@ describe('InterviewRunner kind=QUESTION (스펙 §6 — plan 경로 미진입, Q
       expect(captured.prompt.startsWith('당신은')).toBe(true);
       expect(Object.keys((captured.options.mcpServers ?? {}) as object)).not.toContain('db-7');
     });
+
+    it('INTERVIEW에도 DB 서버를 붙이고 첫 프롬프트에 안내를 넣고, 끝나면 close한다 (스펙 2026-10-14 §5)', async () => {
+      const client = makeClient();
+      const { fakeQuery, captured } = capturing(() => planCompleteStream());
+      const prepared = preparedFor();
+      const createDbMcp = vi.fn().mockReturnValue(prepared);
+      const interviewDbClaim = { ...freshClaim, dbConnections: (dbClaim as { dbConnections: unknown }).dbConnections } as never;
+      const runner = new InterviewRunner(client as never, fakeQuery as never, { ...deps, createDbMcp } as never);
+      await runner.run(interviewDbClaim);
+
+      expect(createDbMcp).toHaveBeenCalledWith(interviewDbClaim);
+      expect((captured.options.mcpServers as Record<string, unknown>)['db-7']).toBe(prepared.servers['db-7']);
+      expect(captured.options.allowedTools as string[]).not.toContain('mcp__db-7');
+      expect(captured.prompt.startsWith('사용 가능한 DB 도구')).toBe(true);
+      expect(captured.prompt).toContain('PLANNING-ONLY');
+      expect(prepared.close).toHaveBeenCalledTimes(1);
+    });
   });
 });
 

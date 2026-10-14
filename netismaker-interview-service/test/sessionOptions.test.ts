@@ -8,6 +8,17 @@ const base = {
 };
 
 describe('buildOptions', () => {
+  it('INTERVIEW: DB 서버는 사전승인하지 않는다 — canUseTool(dbToolGate)을 거쳐야 한다', () => {
+    const o = buildOptions({
+      ...base,
+      claudeSessionId: null,
+      dbMcpServers: { 'db-7': { type: 'sdk', name: 'db-7', instance: {} } as never },
+      dbDialects: { 'db-7': 'mysql' },
+    });
+    expect((o.mcpServers as Record<string, unknown>)['db-7']).toBeDefined();
+    expect(o.allowedTools as string[]).not.toContain('mcp__db-7');
+  });
+
   it('loads superpowers as a local plugin (isolation: plugins-only)', () => {
     const o = buildOptions({ ...base, claudeSessionId: null });
     expect(o.plugins).toEqual([{ type: 'local', path: '/sp/5.1.0' }]);

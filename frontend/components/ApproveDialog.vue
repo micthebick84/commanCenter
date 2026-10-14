@@ -52,7 +52,12 @@ const mcpCatalogIds = ref<number[]>([])
 const db = reactive({ enabled: false, items: [] as DbConnectionView[] })
 const dbConnectionIds = ref<number[]>([])
 
-async function loadDb(mode: 'seed' | 'keep', preferred: number[] = []) {
+/** 로드 순번 — init/reload마다 증가. 늦게 도착한 이전 응답이 선택·목록을 덮어쓰지 않게 한다. */
+let loadSeq = 0
+/** DB 목록 로드 중이면 승인 버튼을 막는다(기본 선택이 반영되기 전 승인 방지). */
+const dbLoading = ref(false)
+
+async function loadDb(seq: number, mode: 'seed' | 'keep', preferred: number[] = []) {
   const repoId = props.task.repoCatalogId
   if (!repoId) {
     db.enabled = false
@@ -60,6 +65,7 @@ async function loadDb(mode: 'seed' | 'keep', preferred: number[] = []) {
     return
   }
   const r = await fetchDbConnections(repoId)
+  if (seq !== loadSeq || !show.value) return
   db.enabled = r.enabled
   db.items = r.items
   const usable = new Set(r.items.filter((i) => i.enabled).map((i) => i.id))
@@ -74,8 +80,14 @@ async function loadDb(mode: 'seed' | 'keep', preferred: number[] = []) {
       .map((i) => i.id)
   }
 }
-function reloadDb() {
-  loadDb('keep')
+async function reloadDb() {
+  const seq = ++loadSeq
+  dbLoading.value = true
+  try {
+    await loadDb(seq, 'keep')
+  } finally {
+    if (seq === loadSeq) dbLoading.value = false
+  }
 }
 const approving = ref(false)
 /** 이 작업의 지난(터미널) 인터뷰 세션, 최신순. 재승인 맥락 안내 + 초기값 프리필에 쓴다. */
@@ -96,6 +108,10 @@ const previousHint = computed(() => {
 
 /** 열릴 때마다 초기화: 기본값으로 되돌린 뒤 지난 인터뷰를 조회해 마지막 세션 설정을 프리필한다(조회 실패는 조용히 기본값). */
 async function init() {
+  const seq = ++loadSeq
+  db.enabled = false
+  db.items = []
+  dbLoading.value = !!props.task.repoCatalogId
   model.value = DEFAULT_MODEL
   effort.value = DEFAULT_EFFORT
   mcpCatalogIds.value = []
@@ -112,6 +128,7 @@ async function init() {
         (INTERVIEW_TERMINAL_STATUSES as string[]).includes(s.statusName),
       )
       .sort((a, b) => b.id - a.id)
+    if (seq !== loadSeq) return
     previous.value = rows
     const last = rows[0]
     lastDbIds = Array.isArray(last?.dbConnectionIds) ? last.dbConnectionIds : []
@@ -124,7 +141,11 @@ async function init() {
   } catch {
     // 403/404 등 — 비소유자/구 API. 기본값으로 진행.
   }
-  await loadDb('seed', lastDbIds)
+  try {
+    await loadDb(seq, 'seed', lastDbIds)
+  } finally {
+    if (seq === loadSeq) dbLoading.value = false
+  }
 }
 
 watch(
@@ -136,6 +157,7 @@ watch(
 )
 
 async function approve() {
+  if (dbLoading.value) return
   approving.value = true
   try {
     await useApi(`/api/tasks/${props.task.id}/approve`, {
@@ -272,6 +294,7 @@ defineExpose({ approve })
           icon="forum"
           label="승인하고 인터뷰 시작"
           :loading="approving"
+          :disable="dbLoading"
           @click="approve"
         />
       </q-card-actions>

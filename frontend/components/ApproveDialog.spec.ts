@@ -422,4 +422,57 @@ describe('ApproveDialog (승인 팝업 UI/UX 개선 2026-09-06)', () => {
     expect(approveCall()?.[1].body).not.toHaveProperty('dbConnectionIds')
     w.unmount()
   })
+
+  // DB 목록 조회를 호출 순서대로 수동 resolve — 늦게 오는 응답/로딩 중 승인 시나리오용
+  function deferDb() {
+    const pending: Array<(v: unknown) => void> = []
+    const base = useApiMock.getMockImplementation()!
+    useApiMock.mockImplementation((url: string, ...rest: unknown[]) => {
+      if (url.startsWith('/api/db-connections?repoCatalogId='))
+        return new Promise((res) => pending.push(res))
+      return (base as any)(url, ...rest)
+    })
+    return pending
+  }
+  const dbOf = (id: number) => ({
+    enabled: true,
+    items: [{ ...dbList.items[0], id }],
+  })
+
+  it('재오픈 후 먼저 시작한 DB 응답이 늦게 와도 선택을 덮어쓰지 않는다', async () => {
+    routeApi({})
+    const pending = deferDb()
+    const w = mountDialog({ repoCatalogId: 9 })
+    await flushPromises()
+    await w.setProps({ modelValue: false })
+    await w.setProps({ modelValue: true })
+    await flushPromises()
+    expect(pending.length).toBe(2)
+    pending[1](dbOf(4))
+    await flushPromises()
+    pending[0](dbOf(3))
+    await flushPromises()
+    await (w.vm as any).approve()
+    await flushPromises()
+    expect(approveCall()?.[1].body.dbConnectionIds).toEqual([4])
+    w.unmount()
+  })
+
+  it('DB 목록 로딩 중에는 승인 버튼이 비활성이고 approve()도 무시한다', async () => {
+    routeApi({})
+    const pending = deferDb()
+    const w = mountDialog({ repoCatalogId: 9 })
+    await flushPromises()
+    const btn = () => document.body.querySelector('[data-test="approve-submit"]')
+    expect(btn()?.hasAttribute('disabled') || btn()?.getAttribute('aria-disabled') === 'true').toBe(true)
+    await (w.vm as any).approve()
+    expect(approveCall()).toBeUndefined()
+    pending[0](dbOf(3))
+    await flushPromises()
+    expect(btn()?.hasAttribute('disabled') || btn()?.getAttribute('aria-disabled') === 'true').toBe(false)
+    await (w.vm as any).approve()
+    await flushPromises()
+    expect(approveCall()?.[1].body.dbConnectionIds).toEqual([3])
+    w.unmount()
+  })
 })

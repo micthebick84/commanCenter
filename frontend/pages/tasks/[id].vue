@@ -139,15 +139,18 @@ const { data: task, refresh } = useTaskPolling<TaskResponse>(() =>
 )
 
 const dbChips = ref<string[]>([])
+// 폴링이 5초마다 task 객체를 통째로 교체하므로, 값(repo·ids 키)이 바뀔 때만 다시 조회한다.
 watch(
-  () => [task.value?.repoCatalogId, task.value?.dbConnectionIds?.join(',')] as const,
-  async ([repoId]) => {
+  [() => task.value?.repoCatalogId, () => task.value?.dbConnectionIds?.join(',') ?? ''],
+  async ([repoId, key]) => {
     const ids = task.value?.dbConnectionIds ?? []
     if (!ids.length) {
       dbChips.value = []
       return
     }
     const r = repoId ? await fetchDbConnections(repoId) : { enabled: false, items: [] }
+    // 대기 중에 repo/ids가 바뀌었으면 이 응답은 버린다
+    if (repoId !== task.value?.repoCatalogId || key !== (task.value?.dbConnectionIds?.join(',') ?? '')) return
     dbChips.value = dbChipLabels(ids, r.items)
   },
   { immediate: true },

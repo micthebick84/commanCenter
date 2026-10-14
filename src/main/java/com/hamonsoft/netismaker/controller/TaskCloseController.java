@@ -1,6 +1,7 @@
 package com.hamonsoft.netismaker.controller;
 
 import com.hamonsoft.netismaker.dto.RejectCloseRequest;
+import com.hamonsoft.netismaker.dto.SkipArtifactRequest;
 import com.hamonsoft.netismaker.dto.TaskResponse;
 import com.hamonsoft.netismaker.entity.Task;
 import com.hamonsoft.netismaker.service.TaskCloseService;
@@ -19,6 +20,7 @@ import org.springframework.web.bind.annotation.*;
  *   POST /{id}/close/reject            ROLE_ADMIN (바디 reason)
  *   POST /{id}/close/retry             ROLE_ADMIN
  *   POST /{id}/close/cancel            ROLE_ADMIN (병합 전 종료실패만)
+ *   POST /{id}/close/skip-artifact     ROLE_ADMIN (산출물 단계에서 멈춘 종료실패만, 바디 reason 선택)
  */
 @RestController
 @RequestMapping("/api/tasks")
@@ -68,6 +70,15 @@ public class TaskCloseController {
     @PreAuthorize("hasAuthority('ROLE_ADMIN')")
     public TaskResponse cancel(@PathVariable Long id, JwtAuthenticationToken auth) {
         return view(closeService.cancel(id, AuthContext.requireUserId(auth)), true);
+    }
+
+    @PostMapping("/{id}/close/skip-artifact")
+    @PreAuthorize("hasAuthority('ROLE_ADMIN')")
+    public TaskResponse skipArtifact(@PathVariable Long id,
+                                     @RequestBody(required = false) @Valid SkipArtifactRequest body,
+                                     JwtAuthenticationToken auth) {
+        return view(closeService.skipArtifact(id, AuthContext.requireUserId(auth),
+                body == null ? null : body.reason()), true);
     }
 
     /** 관리자가 아니면 비밀 env 값을 비운다 — TaskController.forViewer와 같은 규칙. */

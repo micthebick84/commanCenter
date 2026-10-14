@@ -1,12 +1,15 @@
 package com.hamonsoft.netismaker.service;
 
+import com.hamonsoft.netismaker.entity.RepoCatalogEntry;
 import com.hamonsoft.netismaker.entity.Task;
 import com.hamonsoft.netismaker.entity.TaskStatus;
 import com.hamonsoft.netismaker.entity.TaskStatusHistory;
+import com.hamonsoft.netismaker.repository.RepoCatalogRepository;
 import com.hamonsoft.netismaker.repository.TaskRepository;
 import com.hamonsoft.netismaker.repository.TaskStatusHistoryRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
 import org.springframework.http.HttpStatus;
 import org.springframework.test.util.ReflectionTestUtils;
 
@@ -23,6 +26,7 @@ class TaskCloseServiceTest {
 
     private TaskRepository taskRepo;
     private TaskStatusHistoryRepository historyRepo;
+    private RepoCatalogRepository catalogRepo;
     private TaskCloseService service;
 
     private Task task(TaskStatus status) {
@@ -42,7 +46,8 @@ class TaskCloseServiceTest {
         taskRepo = mock(TaskRepository.class);
         historyRepo = mock(TaskStatusHistoryRepository.class);
         when(historyRepo.save(any())).thenAnswer(i -> i.getArgument(0));
-        service = new TaskCloseService(taskRepo, historyRepo);
+        catalogRepo = mock(RepoCatalogRepository.class);
+        service = new TaskCloseService(taskRepo, historyRepo, catalogRepo, new CloseArtifactProperties(false, null));
     }
 
     @Test
@@ -179,5 +184,82 @@ class TaskCloseServiceTest {
                 .isInstanceOf(TaskException.class)
                 .satisfies(e -> assertThat(((TaskException) e).getStatus()).isEqualTo(HttpStatus.CONFLICT));
         verify(historyRepo, never()).save(any());
+    }
+
+    private TaskCloseService enabledService() {
+        return new TaskCloseService(taskRepo, historyRepo, catalogRepo, new CloseArtifactProperties(true, null));
+    }
+
+    private RepoCatalogEntry catalog(boolean artifactEnabled) {
+        RepoCatalogEntry e = RepoCatalogEntry.create("W", "https://github.com/owner/repo.git", "github",
+                "owner/repo", null, null, "admin");
+        e.setArtifactEnabled(artifactEnabled);
+        return e;
+    }
+
+    @Test
+    void 승인은_전역_스위치와_카탈로그가_모두_켜졌을때만_산출물_모드를_REQUIRED로_둔다() {
+        Task t = task(TaskStatus.CLOSE_REVIEW);
+        t.setRepoCatalogId(5L);
+        RepoCatalogEntry e = catalog(true);
+        when(catalogRepo.findById(5L)).thenReturn(Optional.of(e));
+
+        assertThat(service.approve(42L, "admin").getCloseArtifactMode()).isNull();   // 전역 스위치 꺼짐
+
+        t.setStatus(TaskStatus.CLOSE_REVIEW);
+        assertThat(enabledService().approve(42L, "admin").getCloseArtifactMode()).isEqualTo("REQUIRED");
+
+        t.setStatus(TaskStatus.CLOSE_REVIEW);
+        e.setArtifactEnabled(false);
+        assertThat(enabledService().approve(42L, "admin").getCloseArtifactMode()).isNull();
+    }
+
+    @Test
+    void 카탈로그_id가_없으면_git_url로_찾고_그래도_없으면_해당_없음() {
+        Task t = task(TaskStatus.CLOSE_REVIEW);
+        t.setGitUrl("https://github.com/owner/repo.git");
+        when(catalogRepo.findByGitUrl("https://github.com/owner/repo.git")).thenReturn(Optional.of(catalog(true)));
+        assertThat(enabledService().approve(42L, "admin").getCloseArtifactMode()).isEqualTo("REQUIRED");
+
+        task(TaskStatus.CLOSE_REVIEW);   // gitUrl·catalogId 없는 새 작업
+        assertThat(enabledService().approve(42L, "admin").getCloseArtifactMode()).isNull();
+    }
+
+    @Test
+    void 산출물_단계에서_멈춘_종료실패는_산출물_없이_마무리한다() {
+        Task t = task(TaskStatus.CLOSE_FAILED);
+        t.setCloseArtifactMode("REQUIRED");
+        t.setCloseProgress("MERGED,UNDEPLOYED");
+        t.setFailureReason("산출물: 이미지 없음(netis-task-42:abcdef1)");
+
+        Task r = service.skipArtifact(42L, "admin", "이미지를 수동으로 지웠음");
+
+        assertThat(r.getStatus()).isEqualTo(TaskStatus.CLOSE_PENDING);
+        assertThat(r.getCloseArtifactMode()).isEqualTo("SKIPPED");
+        assertThat(r.getFailureReason()).isNull();
+        assertThat(r.getCloseProgress()).isEqualTo("MERGED,UNDEPLOYED");
+        ArgumentCaptor<TaskStatusHistory> cap = ArgumentCaptor.forClass(TaskStatusHistory.class);
+        verify(historyRepo).save(cap.capture());
+        assertThat(cap.getValue().getReason()).isEqualTo("산출물 없이 마무리: 이미지를 수동으로 지웠음");
+    }
+
+    @Test
+    void 산출물_없이_마무리는_조건이_안_맞으면_409() {
+        Task t = task(TaskStatus.CLOSE_FAILED);
+        t.setCloseArtifactMode("REQUIRED");
+        t.setCloseProgress("MERGED");                              // 배포 중지 전
+        assertThatThrownBy(() -> service.skipArtifact(42L, "admin", null)).isInstanceOf(TaskException.class);
+
+        t.setCloseProgress("MERGED,UNDEPLOYED,ARTIFACT_UPLOADED"); // 이미 올림
+        assertThatThrownBy(() -> service.skipArtifact(42L, "admin", null)).isInstanceOf(TaskException.class);
+
+        t.setCloseProgress("MERGED,UNDEPLOYED");
+        t.setCloseArtifactMode(null);                              // 산출물 대상 아님
+        assertThatThrownBy(() -> service.skipArtifact(42L, "admin", null)).isInstanceOf(TaskException.class);
+
+        t.setCloseArtifactMode("REQUIRED");
+        t.setStatus(TaskStatus.CLOSING);                           // 실패 상태 아님
+        assertThatThrownBy(() -> service.skipArtifact(42L, "admin", null))
+                .isInstanceOf(TaskException.class).hasMessageContaining("종료실패");
     }
 }

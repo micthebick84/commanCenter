@@ -1,9 +1,11 @@
 package com.hamonsoft.netismaker.service;
 
 import com.hamonsoft.netismaker.entity.CloseStep;
+import com.hamonsoft.netismaker.entity.RepoCatalogEntry;
 import com.hamonsoft.netismaker.entity.Task;
 import com.hamonsoft.netismaker.entity.TaskStatus;
 import com.hamonsoft.netismaker.entity.TaskStatusHistory;
+import com.hamonsoft.netismaker.repository.RepoCatalogRepository;
 import com.hamonsoft.netismaker.repository.TaskRepository;
 import com.hamonsoft.netismaker.repository.TaskStatusHistoryRepository;
 import org.springframework.context.annotation.Profile;
@@ -25,6 +27,7 @@ import java.util.Set;
  *   reject       ─► 종료승인대기 → 직전 상태 + 사유      (관리자)
  *   retry        ─► 종료실패 → 종료대기 (close_progress 유지 → 남은 단계부터)  (관리자)
  *   cancel       ─► 종료실패(MERGED 전) → 직전 상태, close_progress·사유 비움  (관리자)
+ *   skipArtifact ─► 종료실패(산출물 단계에서 멈춤) → 종료대기, 모드 SKIPPED  (관리자, 스펙 2026-10-14 §3)
  *
  * 락 정책은 TaskService와 같다 — findActiveByIdForUpdate 후 재판정.
  */
@@ -36,10 +39,15 @@ public class TaskCloseService {
 
     private final TaskRepository taskRepo;
     private final TaskStatusHistoryRepository historyRepo;
+    private final RepoCatalogRepository catalogRepo;
+    private final CloseArtifactProperties artifactProps;
 
-    public TaskCloseService(TaskRepository taskRepo, TaskStatusHistoryRepository historyRepo) {
+    public TaskCloseService(TaskRepository taskRepo, TaskStatusHistoryRepository historyRepo,
+                            RepoCatalogRepository catalogRepo, CloseArtifactProperties artifactProps) {
         this.taskRepo = taskRepo;
         this.historyRepo = historyRepo;
+        this.catalogRepo = catalogRepo;
+        this.artifactProps = artifactProps;
     }
 
     @Transactional
@@ -67,7 +75,17 @@ public class TaskCloseService {
         Task t = taskRepo.findActiveByIdForUpdate(taskId).orElseThrow(TaskException::notFound);
         requireReview(t, "승인");
         t.setFailureReason(null);
-        return move(t, TaskStatus.CLOSE_PENDING, "user", adminId, "관리자 종료 승인 → 종료 큐 진입");
+        // 산출물 모드는 승인 때 한 번 정한다 — 재시도·stale 재큐는 바꾸지 않는다 (스펙 2026-10-14 §3)
+        t.setCloseArtifactMode(artifactRequired(t) ? CloseStep.ARTIFACT_REQUIRED : null);
+        return move(t, TaskStatus.CLOSE_PENDING, "user", adminId, "관리자 종료 승인 → 종료 큐 진입"
+                + (t.getCloseArtifactMode() == null ? "" : " (산출물 보관)"));
+    }
+
+    /** 전역 스위치 + 작업 레포의 카탈로그 항목(repo_catalog_id, 없으면 git_url)이 둘 다 켜졌을 때만. */
+    boolean artifactRequired(Task t) {
+        return artifactProps.enabled()
+                && RepoCatalogRepository.findForTask(catalogRepo, t.getRepoCatalogId(), t.getGitUrl())
+                        .map(RepoCatalogEntry::isArtifactEnabled).orElse(false);
     }
 
     @Transactional
@@ -105,6 +123,29 @@ public class TaskCloseService {
         t.setFailureReason(null);
         t.setCloseProgress(null);
         return move(t, statusBeforeReview(t.getId()), "user", adminId, "종료 취소(병합 전)");
+    }
+
+    /**
+     * 산출물 단계에서 멈춘 종료실패를 산출물 없이 이어 간다 (스펙 2026-10-14 §3). 병합 뒤라 종료 취소(409)가 안 되고,
+     * 이미지가 아주 없어지면 재시도도 성공할 수 없어서 둔 출구. 워커는 다음 claim에서 노트·브랜치 정리만 한다.
+     */
+    @Transactional
+    public Task skipArtifact(Long taskId, String adminId, String reason) {
+        Task t = taskRepo.findActiveByIdForUpdate(taskId).orElseThrow(TaskException::notFound);
+        if (t.getStatus() != TaskStatus.CLOSE_FAILED) {
+            throw TaskException.conflict("종료실패 상태에서만 산출물 없이 마무리할 수 있습니다 (현재: "
+                    + t.getStatus().dbValue() + ")");
+        }
+        EnumSet<CloseStep> done = CloseStep.parse(t.getCloseProgress());
+        if (!CloseStep.ARTIFACT_REQUIRED.equals(t.getCloseArtifactMode())
+                || !done.contains(CloseStep.MERGED) || !done.contains(CloseStep.UNDEPLOYED)
+                || done.contains(CloseStep.ARTIFACT_UPLOADED)) {
+            throw TaskException.conflict("산출물 단계에서 멈춘 종료만 산출물 없이 마무리할 수 있습니다");
+        }
+        t.setCloseArtifactMode(CloseStep.ARTIFACT_SKIPPED);
+        t.setFailureReason(null);
+        return move(t, TaskStatus.CLOSE_PENDING, "user", adminId,
+                "산출물 없이 마무리" + (isBlank(reason) ? "" : ": " + reason.trim()));
     }
 
     /**

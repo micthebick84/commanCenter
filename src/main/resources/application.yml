@@ -88,7 +88,7 @@ app:
     implementation-stale-threshold-minutes: 60
     deploy-stale-threshold-minutes: 15
     design-stale-threshold-minutes: 30         # 디자인 생성(목업+DesignSync 업로드) 처리 시간 초과
-    close-stale-threshold-minutes: 30          # 종료(병합·배포 중지·노트 claude 10분·정리) 처리 시간 초과 → 종료대기로 재큐잉
+    close-stale-threshold-minutes: 60          # 종료(병합·배포 중지·산출물 꺼내기·업로드·노트 claude 10분·정리) 처리 시간 초과 → 종료대기로 재큐잉
     worker-dead-threshold-seconds: 60          # 분석 단계 heartbeat 사망 판정
     implementation-worker-dead-threshold-seconds: 300   # 구현: 긴 작업 중 블립 허용
     deploy-worker-dead-threshold-seconds: 180           # 배포/중지
@@ -119,6 +119,10 @@ app:
       task-deleted-retention-days: 30     # soft-delete 후 경과 시 task-{id}/ 삭제. 삭제 안 된 작업은 나이 무관 보존
       question-closed-retention-days: 90  # 종료(취소·만료·실패) 후 경과 시 question-{sid}/ 삭제. 진행 중·답변 완료는 보존
       orphan-grace-hours: 24              # 소유 행 없는 디렉터리(등록 롤백 잔재)는 mtime이 이보다 오래됐을 때만 삭제 (최소 1)
+  close:
+    artifact:                             # 종료 산출물 보관 (스펙 2026-10-14). 켜도 카탈로그에서 켠 레포만 대상
+      enabled: ${CLOSE_ARTIFACT_ENABLED:false}
+      max-size-mb: ${CLOSE_ARTIFACT_MAX_SIZE_MB:1024}
 
 logging:
   level:

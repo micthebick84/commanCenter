@@ -242,3 +242,19 @@ MERGED → UNDEPLOYED → ARTIFACT_UPLOADED → NOTE_WRITTEN → BRANCH_DELETED
 5. 레포 카탈로그에서 레포 하나를 켜고 실제 작업 종료로 기능 의도서의 완료 기준을 확인한다.
 
 사전 준비(코드 밖): 발신 계정 2단계 인증·앱 비밀번호, netis-auth 사용자에 실제 회사 메일 주소(지금 admin·user 모두 `example.com` 시드), API 서버에서 `smtp.gmail.com:587` 나가는지.
+
+## 13. 구현 메모(계획 단계에서 확정)
+
+- 메일 비동기는 `@Async`/`@EnableAsync` 대신 `CloseMailListener` 안의 단일 스레드 실행기 — 실행기 빈을 등록하면 Spring Boot 기본 `applicationTaskExecutor`가 꺼진다.
+- 저장 경로 규칙은 새 `ArtifactStore`(루트는 같은 `app.attachment.dir`)에 둔다. `AttachmentStorage`는 바꾸지 않는다.
+- 업로드는 검사 tx(잠금 없음) → 파일 쓰기(tx 밖) → 기록 tx(FOR UPDATE 후 재검사)로 나눈다 — Hikari 누수 경보(30초)와 행 잠금을 254MB 수신 동안 잡지 않는다.
+- 메일 발송도 같은 3단계로 나눈다(`CloseMailService`): 잠금 없는 준비(읽기 전용 tx — 대상 여부·수신 주소·메시지 결정) → 트랜잭션 밖 SMTP → 새 트랜잭션에서 `findActiveByIdForUpdate`로 대상인지 다시 판정한 뒤 `close_mail_status`·상태 이력 기록. SMTP 연결·읽기·쓰기 타임아웃이 각 10초라 FOR UPDATE tx 안에서 부르면 최악 30초를 넘겨 Hikari 누수 경보(30초)에 걸린다. 그새 작업이 삭제되거나 상태가 바뀌었으면 결과를 남기지 않는다.
+- 종료 stale 상한 `app.task.close-stale-threshold-minutes` 기본값을 30분에서 60분으로 올렸다(`StaleTaskRecoveryJob` `@Value` 기본값도 60). 산출물 꺼내기·업로드(각 10분 상한)가 기존 노트 claude 10분 등과 합쳐 30분을 넘으면 진행 중 종료가 재큐되기 때문이다.
+- 노트 산출물 줄에 배포 커밋 `head_sha` 앞 7자를 명시한다: `산출물: {이름} ({MB} MB, 배포 커밋 {sha7}) — Symphony 작업 화면에서 로그인 후 내려받기: {URL}`. 이미지는 PR head로 빌드돼 병합 커밋과 다를 수 있어 §2-1의 "두 커밋을 함께"를 맞춘다(병합 커밋은 기존 `merge_commit` 프런트매터). 재시도에서 크기 기록이 없으면 `(배포 커밋 …)`만 남는다.
+- 워커의 산출물 docker 호출 전부(`ArtifactPublisher`의 docker seam — 이미지 확인·`find`·`create`·`cp`·`rm`)는 `ProcessRunner.runBounded`를 쓴다 — 출력을 별도 스레드로 비우고 `waitFor(timeout)` → `destroyForcibly` → 읽기 스레드 join 순이라 `CLOSE_ARTIFACT_COPY_TIMEOUT`이 실제로 걸린다. 기존 `run`/`runStreaming`은 출력 EOF 뒤에야 시간 상한이 걸리는 한계가 그대로 남아 있다(바꾸면 배포 빌드 등 기존 호출부의 시간 상한이 처음 발동해 동작이 달라지므로 이 작업 밖 — 별도 후속 작업).
+- 화면: 메일 다시 보내기는 응답의 결과 상태대로 알린다(`SENT`만 완료 알림, 그 외는 `MAIL_STATUS_LABEL` 문구의 경고). 내려받기는 성공 뒤 약 2초간 버튼을 잠가 1회용 주소를 두 번 열지 않게 하고, 오류 경로는 즉시 푼다.
+- `POST /api/tasks/{id}/artifact/download-link` 판정 순서는 §6대로 권한(403) → 산출물 기록 없음(404) → 파일 없음(410).
+- 모바일 버튼은 기존 종료 카드 관례(카드는 공용, 관리자 보조 버튼은 하단 '더 보기')를 따른다. `TaskDetailMobile`·액션 시트는 바꾸지 않는다.
+- '산출물 없이 마무리' 사유 입력은 화면에서 생략(서버는 선택 사유를 받는다). 카탈로그 목록의 켜짐 표시도 생략.
+- `management.health.mail.enabled=false` — 메일 서버 접속 실패가 `/actuator/health`를 DOWN으로 만들지 않게.
+- 워커 설정은 `CloseProperties`를 바꾸지 않고 `ArtifactProperties`(`netis-maker.worker.close.artifact.*`)로 분리.

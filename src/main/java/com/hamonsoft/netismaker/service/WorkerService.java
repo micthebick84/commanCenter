@@ -53,7 +53,7 @@ import java.util.Optional;
  *                       IMPLEMENTATION_FAILED: failure_reason + (있으면)log + status=IMPLEMENTATION_FAILED
  *                       DESIGN_REVIEW       : task_design upsert(반려 이력 보존) + status=DESIGN_REVIEW
  *                       DESIGN_FAILED       : failure_reason + status=DESIGN_FAILED
- *                       CLOSED              : 종료 4단계가 모두 보고된 뒤에만 (status=CLOSED)
+ *                       CLOSED              : 이 작업에 필요한 종료 단계(CloseStep.required)가 모두 보고된 뒤에만 (status=CLOSED)
  *                       CLOSE_FAILED        : failure_reason + status=CLOSE_FAILED
  *   recordCloseProgress ─► 종료 단계 완료 보고를 task.close_progress에 누적 (멱등)
  */
@@ -341,7 +341,7 @@ public class WorkerService {
                     "다른 워커가 잡은 작업입니다 (소유: " + t.getWorkerId() + ")");
         }
 
-        // 종료 단계는 별도 처리 (4단계 완료 검증).
+        // 종료 단계는 별도 처리 (이 작업에 필요한 단계(CloseStep.required) 완료 검증).
         if (current == TaskStatus.CLOSING) {
             recordCloseResult(t, req);
             return;

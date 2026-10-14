@@ -11,6 +11,7 @@ import com.hamonsoft.netismaker.entity.TaskStatusHistory;
 import com.hamonsoft.netismaker.repository.*;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.data.domain.Limit;
 import org.springframework.test.util.ReflectionTestUtils;
 
@@ -220,5 +221,32 @@ class WorkerServiceCloseTest {
         assertThat(s.closeArtifact()).isNull();
         assertThat(s.closeContext().artifactSkipped()).isTrue();
         assertThat(s.closeContext().taskUrl()).isNull();   // 기준 주소 미설정
+    }
+
+    @Test
+    void 작업종료가_기록되면_메일_이벤트를_발행한다() {
+        ApplicationEventPublisher events = mock(ApplicationEventPublisher.class);
+        service.setEvents(events);
+        Task t = task(TaskStatus.CLOSING);
+        t.setWorkerId("w1");
+        t.setCloseProgress("MERGED,UNDEPLOYED,NOTE_WRITTEN,BRANCH_DELETED");
+        when(taskRepo.findActiveByIdForUpdate(7L)).thenReturn(Optional.of(t));
+
+        service.recordResult(7L, WorkerResultRequest.closed("w1", null));
+
+        verify(events).publishEvent(new CloseCompletedEvent(7L));
+    }
+
+    @Test
+    void 종료실패면_메일_이벤트를_발행하지_않는다() {
+        ApplicationEventPublisher events = mock(ApplicationEventPublisher.class);
+        service.setEvents(events);
+        Task t = task(TaskStatus.CLOSING);
+        t.setWorkerId("w1");
+        when(taskRepo.findActiveByIdForUpdate(7L)).thenReturn(Optional.of(t));
+
+        service.recordResult(7L, WorkerResultRequest.closeFailed("w1", "CI 대기 중: checks pending", null));
+
+        verifyNoInteractions(events);
     }
 }

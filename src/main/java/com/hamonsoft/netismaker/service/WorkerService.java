@@ -19,7 +19,9 @@ import com.hamonsoft.netismaker.repository.TaskRepository;
 import com.hamonsoft.netismaker.repository.TaskStageUsageRepository;
 import com.hamonsoft.netismaker.repository.TaskStatusHistoryRepository;
 import com.hamonsoft.netismaker.repository.WorkerHeartbeatRepository;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.context.annotation.Profile;
 import org.springframework.data.domain.Limit;
 import org.springframework.data.domain.PageRequest;
@@ -79,6 +81,14 @@ public class WorkerService {
     private final DeployLogStreamService deployLogStream;
     private final InterviewSessionRepository sessionRepo;
     private final InterviewPlanRepository planRepo;
+
+    /** 작업종료 → 커밋 뒤 메일(CloseMailListener). 생성자를 바꾸지 않으려고 setter 주입 — 단위 테스트에서는 null. */
+    private ApplicationEventPublisher events;
+
+    @Autowired
+    void setEvents(ApplicationEventPublisher events) {
+        this.events = events;
+    }
 
     public WorkerService(TaskRepository taskRepo,
                          TaskAnalysisRepository analysisRepo,
@@ -601,6 +611,7 @@ public class WorkerService {
                 String sha = t.getMergeCommitSha();
                 reason = "작업 종료" + (sha == null || sha.isBlank() ? ""
                         : ": 병합 " + sha.substring(0, Math.min(7, sha.length())));
+                if (events != null) events.publishEvent(new CloseCompletedEvent(t.getId()));
             }
             case CLOSE_FAILED -> {
                 t.setStatus(TaskStatus.CLOSE_FAILED);

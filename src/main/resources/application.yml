@@ -53,6 +53,19 @@ spring:
       max-file-size: 25MB
       max-request-size: 60MB
 
+  mail:                      # 종료 등록자 메일 (스펙 2026-10-14 §7). MAIL_USERNAME이 비면 발송 기능 꺼짐(DISABLED)
+    host: ${MAIL_HOST:smtp.gmail.com}
+    port: ${MAIL_PORT:587}
+    username: ${MAIL_USERNAME:}
+    password: ${MAIL_PASSWORD:}   # Gmail 앱 비밀번호
+    properties:
+      "[mail.smtp.auth]": true
+      "[mail.smtp.starttls.enable]": true
+      "[mail.smtp.starttls.required]": true
+      "[mail.smtp.connectiontimeout]": 10000
+      "[mail.smtp.timeout]": 10000
+      "[mail.smtp.writetimeout]": 10000
+
   security:
     oauth2:
       resourceserver:
@@ -67,6 +80,9 @@ management:
   endpoint:
     health:
       show-details: when-authorized
+  health:
+    mail:
+      enabled: false         # 메일 서버 접속 실패가 /actuator/health를 DOWN으로 만들지 않게
 
 app:
   cors:
@@ -123,6 +139,8 @@ app:
     artifact:                             # 종료 산출물 보관 (스펙 2026-10-14). 켜도 카탈로그에서 켠 레포만 대상
       enabled: ${CLOSE_ARTIFACT_ENABLED:false}
       max-size-mb: ${CLOSE_ARTIFACT_MAX_SIZE_MB:1024}
+    mail:
+      from: ${MAIL_FROM:}    # 비면 MAIL_USERNAME
   # 메일·노트 링크의 기준 주소(예: https://app-win.micthebick.dev). 비면 링크 없이 안내 문구만
   public-base-url: ${APP_PUBLIC_BASE_URL:}
 

@@ -4,6 +4,7 @@ import com.hamonsoft.netismaker.dto.WorkerHeartbeatRequest;
 import com.hamonsoft.netismaker.dto.WorkerResultRequest;
 import com.hamonsoft.netismaker.dto.WorkerTaskResponse;
 import com.hamonsoft.netismaker.entity.EnvTemplateItem;
+import com.hamonsoft.netismaker.entity.ImplementationMode;
 import com.hamonsoft.netismaker.entity.TaskStatus;
 import com.hamonsoft.netismaker.git.GitRemotes;
 import lombok.extern.slf4j.Slf4j;
@@ -13,7 +14,11 @@ import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
 import java.io.File;
+import java.nio.file.Path;
+import java.time.Duration;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 
 /**
@@ -27,14 +32,15 @@ import java.util.Optional;
  *     2) 분석 prompt 치환 + claude -p exec
  *     3) 결과 파싱 → POST result (status=COMPLETED|FAILED)
  *
- *   IMPLEMENTATION 흐름:
+ *   IMPLEMENTATION 흐름 (구현 방식은 claim의 implementation 블록 — 스펙 2026-10-15):
  *     1) git fetch/clone (베이스 브랜치 최신화)
- *     2) WorktreeService.create → 새 브랜치 worktree
- *     3) 구현 prompt 치환 (분석 markdown/subtasks 포함) + claude -p exec (worktree에서)
- *        → 커밋 전 배포 env 목록(.netis-deploy-env.json) 회수·삭제 (DeployEnvManifest)
- *     4) GitOpsService.commitAndPush → headSha
- *     5) GitOpsService.createDraftPr → prUrl/prNumber
- *     6) POST result (status=PR_CREATED 또는 IMPLEMENTATION_FAILED)
+ *     2) WorktreeService.create → 새 브랜치 worktree (재시도는 -rN) + 워커 임시 파일 info/exclude
+ *     3) 방식 준비(계획·설계 파일, 대신 진행 판정) → 방식별 구현 prompt + claude -p exec (worktree에서)
+ *        → 실패하면 남은 변경을 WIP 커밋으로 push(부분 작업 보존)
+ *        → 성공하면 리뷰 메모 회수, .netis/·목업 삭제, 배포 env 목록(.netis-deploy-env.json) 회수·삭제
+ *     4) GitOpsService.commitAndPush(에이전트 커밋 수용) → headSha
+ *     5) GitOpsService.createDraftPr → prUrl/prNumber (본문에 방식 줄·리뷰 메모)
+ *     6) POST result (status=PR_CREATED 또는 IMPLEMENTATION_FAILED, 시도 번호 포함)
  */
 @Component
 @Profile("worker")
@@ -54,6 +60,7 @@ public class WorkerMainLoop {
     private final SilentLossTracker silentLossTracker;
     private final DesignResultHarvester designHarvester;
     private final TaskCloser closer;
+    private final SuperpowersPlugin superpowers;
 
     public WorkerMainLoop(WorkerProperties props,
                           WorkerHttpClient http,
@@ -67,7 +74,8 @@ public class WorkerMainLoop {
                           ResultReporter reporter,
                           SilentLossTracker silentLossTracker,
                           DesignResultHarvester designHarvester,
-                          TaskCloser closer) {
+                          TaskCloser closer,
+                          SuperpowersPlugin superpowers) {
         this.props = props;
         this.http = http;
         this.repos = repos;
@@ -81,6 +89,7 @@ public class WorkerMainLoop {
         this.silentLossTracker = silentLossTracker;
         this.designHarvester = designHarvester;
         this.closer = closer;
+        this.superpowers = superpowers;
     }
 
     @Scheduled(fixedRateString = "#{${netis-maker.worker.heartbeat-interval-seconds:10} * 1000}")
@@ -123,7 +132,7 @@ public class WorkerMainLoop {
             // 마스킹한 뒤 찍는다. 프레임/cause 체인은 그대로 남아 진단성 손실이 없다.
             log.error("작업 처리 중 예외 task={}: {}", task.id(), safeReason(stackTrace(t)));
             switch (task.kind()) {
-                case IMPLEMENTATION -> safePostImplementationFailure(task.id(),
+                case IMPLEMENTATION -> safePostImplementationFailure(task.id(), implementationAttemptOf(task),
                         "처리 중 예외: " + t.getClass().getSimpleName() + ": " + t.getMessage(),
                         null, null, null);
                 case DEPLOY, UNDEPLOY -> safePostDeployFailure(task.id(),
@@ -196,26 +205,31 @@ public class WorkerMainLoop {
     }
 
     private void processImplementation(WorkerTaskResponse task) throws Exception {
+        WorkerTaskResponse.ImplementationSpec spec = task.implementation();
+        ImplementationMode requested = ImplementationMode.fromWireOrDirect(spec == null ? null : spec.mode());
+        int attempt = implementationAttemptOf(task);
+
         // 1. 베이스 브랜치 최신화 (worktree add 시 origin/{base} 참조)
         GitRepoCache.CheckedOutRepo repo;
         try {
             repo = repos.ensureFresh(task.repoRef(), task.githubBranch());
         } catch (Exception e) {
-            safePostImplementationFailure(task.id(),
+            safePostImplementationFailure(task.id(), attempt,
                     "레포 fetch 실패: " + e.getMessage(), null, null, null);
             return;
         }
 
-        // 2. worktree + 새 브랜치 생성
+        // 2. worktree + 새 브랜치 생성 — 재시도(2회째부터)는 -rN 브랜치 (스펙 2026-10-15 §6.1)
         WorktreeService.CreatedWorktree wt;
         try {
             wt = worktrees.create(repo.dir(), GitRemotes.localKey(task.repoRef()),
-                    task.githubBranch(), task.id(), task.title());
+                    task.githubBranch(), task.id(), task.title(), attempt);
         } catch (Exception e) {
-            safePostImplementationFailure(task.id(),
+            safePostImplementationFailure(task.id(), attempt,
                     "worktree 생성 실패: " + e.getMessage(), null, null, null);
             return;
         }
+        Path wtPath = wt.dir().toPath();
 
         // 승인된 디자인이 있으면 목업을 워크트리에 배치 (참조용 — 커밋 전 삭제)
         File designDir = null;
@@ -231,65 +245,105 @@ public class WorkerMainLoop {
             }
         }
 
-        // 3. 구현 prompt + claude exec (worktree 디렉토리에서)
+        // 3. 구현 방식 준비 — 임시 파일 exclude, 계획·설계 파일, 대신 진행 판정 (스펙 2026-10-15 §6.1·§6.5)
+        boolean excludesReady = worktrees.ensureWorkerExcludes(wt.dir());
+        boolean hasPlan = task.planMarkdown() != null && !task.planMarkdown().isBlank();
+        String planText = requested == ImplementationMode.SDD && hasPlan
+                ? ImplementationScratch.normalizeTaskHeadings(task.planMarkdown())
+                : task.planMarkdown();
+        boolean planWritten = false;
+        boolean designWritten = false;
+        if (requested != ImplementationMode.DIRECT && hasPlan) {
+            planWritten = writeScratch(wtPath, ImplementationScratch.planPath(task.id()), planText);
+            if (requested == ImplementationMode.SDD
+                    && task.analysisMarkdown() != null && !task.analysisMarkdown().isBlank()) {
+                designWritten = writeScratch(wtPath, ImplementationScratch.designPath(task.id()),
+                        task.analysisMarkdown());
+            }
+        }
+        ImplementationModeResolver.Resolution mode = ImplementationModeResolver.resolve(requested,
+                new ImplementationModeResolver.Inputs(superpowers.sddReadyPath().isPresent(), excludesReady,
+                        hasPlan, planWritten, hasPlan ? ImplementationScratch.countTaskHeadings(planText) : 0));
+        if (mode.fellBack()) {
+            log.warn("구현 방식 대신 진행: task={} {} → {} ({})",
+                    task.id(), requested, mode.effective(), mode.fallbackReason());
+        }
+        String modeLine = ImplementationPrompts.modeLine(requested, mode.effective(), attempt, mode.fallbackReason());
+        String fallbackNote = mode.fellBack() ? "\n" + modeLine.strip() : "";
+
+        // 4. 구현 prompt + claude exec (worktree 디렉토리에서)
         //    비대화식 모드에서 Write/Edit/Bash 차단 회피 위해 권한 우회 활성.
         //    worktree는 격리 환경이라 워커 머신 다른 곳에 영향 없음.
-        String prompt = renderImplementationPrompt(task, repo.commitSha(), wt.branchName())
+        String prompt = renderImplementationPrompt(task, repo.commitSha(), wt.branchName(),
+                ImplementationPrompts.planSection(task, mode.effective(), repo.commitSha(), designWritten),
+                ImplementationPrompts.commitRule(mode.effective()))
                 + DbMcpWorkerSupport.promptSection(task.dbMcp());
+        List<String> extraArgs = mode.effective() == ImplementationMode.SDD
+                ? List.of("--plugin-dir", superpowers.sddReadyPath().orElseThrow().toString())
+                : List.of();
         ClaudeExecAdapter.ExecResult exec;
         try {
-            exec = claude.exec(prompt, wt.dir(), props.implementationTimeout(),
+            exec = claude.exec(prompt, wt.dir(), implementationTimeoutOf(task, props.implementationTimeout()),
                     DbMcpWorkerSupport.withDbServers(task.mcpsExtra(), task.dbMcp(), props.apiBaseUrl()),
-                    true, task.model(), task.effort());
+                    true, task.model(), task.effort(),
+                    new ClaudeExecAdapter.ExecOptions(extraArgs,
+                            gitAuthorEnv(props.gitUserName(), props.gitUserEmail())));
         } catch (Exception e) {
-            safePostImplementationFailure(task.id(),
-                    "claude exec 실패: " + e.getMessage(),
-                    wt.branchName(), null, null);
+            String why = e.getMessage() != null && e.getMessage().startsWith("claude timeout") ? "시간 초과" : "실행 오류";
+            PartialOutcome kept = preservePartialWork(task, wt, repo.commitSha(), why);
+            safePostImplementationFailure(task.id(), attempt,
+                    "claude exec 실패: " + e.getMessage() + kept.reasonSuffix() + fallbackNote,
+                    wt.branchName(), kept.headSha(), null);
             return;
         }
         if (exec.exitCode() != 0) {
+            PartialOutcome kept = preservePartialWork(task, wt, repo.commitSha(), "비정상 종료");
             String tail = tail(exec.stdout(), 4000);
-            safePostImplementationFailure(task.id(),
-                    "claude exit=" + exec.exitCode() + "\n" + tail,
-                    wt.branchName(), null, exec.stdout(), usageOf(exec));
+            safePostImplementationFailure(task.id(), attempt,
+                    "claude exit=" + exec.exitCode() + "\n" + tail + kept.reasonSuffix() + fallbackNote,
+                    wt.branchName(), kept.headSha(), exec.stdout(), usageOf(exec));
             return;
         }
+
+        // 리뷰 메모는 PR 본문으로 회수하고 .netis/(계획·설계·메모)는 커밋 전에 지운다 — exclude가 실패했어도 안 섞이게
+        Optional<String> reviewNotes = ImplementationScratch.readReviewNotes(wtPath);
+        ImplementationScratch.deleteRoot(wtPath);
 
         // 목업 참조 파일은 커밋 대상에서 제외
         if (designDir != null) deleteDesignDir(designDir.toPath());
 
         // 배포 env 목록(.netis-deploy-env.json)도 커밋 전에 회수·삭제 — 없거나 틀려도 구현은 계속 (스펙 2026-10-07 §4.3)
-        List<EnvTemplateItem> envTemplate = DeployEnvManifest.harvest(wt.dir().toPath());
+        List<EnvTemplateItem> envTemplate = DeployEnvManifest.harvest(wtPath);
 
-        // 4. 변경 commit + push
+        // 5. 변경 commit + push — 에이전트가 만든 커밋(SDD 태스크 커밋)도 받아들인다
         String headSha;
         try {
             String commitMsg = "feat: " + task.title()
                     + "\n\n" + "task #" + task.id()
                     + "\n\nCo-Authored-By: netisMaker <" + props.gitUserEmail() + ">";
-            headSha = gitOps.commitAndPush(wt.dir(), task.repoRef(), wt.branchName(), commitMsg);
+            headSha = gitOps.commitAndPush(wt.dir(), task.repoRef(), wt.branchName(), commitMsg, repo.commitSha());
         } catch (Exception e) {
-            safePostImplementationFailure(task.id(),
-                    "commit/push 실패: " + e.getMessage(),
+            safePostImplementationFailure(task.id(), attempt,
+                    "commit/push 실패: " + e.getMessage() + fallbackNote,
                     wt.branchName(), null, exec.stdout(), usageOf(exec));
             return;
         }
 
-        // 5. gh PR create
+        // 6. Draft PR/MR
         GitOpsService.PrInfo pr;
         try {
-            String body = renderPrBody(task, exec.durationMs(), headSha);
+            String body = renderPrBody(task, exec.durationMs(), headSha, modeLine, reviewNotes.orElse(null));
             pr = gitOps.createDraftPr(wt.dir(), task.repoRef(),
                     task.githubBranch(), wt.branchName(),
                     task.title(), body);
         } catch (Exception e) {
-            safePostImplementationFailure(task.id(),
-                    "PR/MR 생성 실패: " + e.getMessage(),
+            safePostImplementationFailure(task.id(), attempt,
+                    "PR/MR 생성 실패: " + e.getMessage() + fallbackNote,
                     wt.branchName(), headSha, exec.stdout(), usageOf(exec));
             return;
         }
 
-        // 6. 성공 보고
+        // 7. 성공 보고 — 시도 번호로 이전 시도의 늦은 보고와 구분 (스펙 2026-10-15 §5.6)
         reporter.reportTerminal(task.id(), new WorkerResultRequest(
                 props.id(),
                 TaskStatus.PR_CREATED,
@@ -299,11 +353,83 @@ public class WorkerMainLoop {
                 null, null, null, null,
                 usageOf(exec),
                 envTemplate
-        ));
-        log.info("구현 완료 + PR 생성: task={} pr=#{} {} (배포 env 템플릿 {}개)",
-                task.id(), pr.number(), pr.url(), envTemplate.size());
+        ).withImplementationAttempt(attempt));
+        log.info("구현 완료 + PR 생성: task={} pr=#{} {} (방식 {}, {}회째, 배포 env 템플릿 {}개)",
+                task.id(), pr.number(), pr.url(), mode.effective(), attempt, envTemplate.size());
         // 산출물은 원격 브랜치·PR에 있다 — worktree는 더 쓰지 않으므로 바로 정리(실패해도 결과 무관, 주기 정리가 재시도)
         worktrees.discard(GitRemotes.localKey(task.repoRef()), WorktreeKind.TASK, task.id());
+    }
+
+    /** claim의 시도 번호 — 없거나(옛 API) 1보다 작으면 1. */
+    static int implementationAttemptOf(WorkerTaskResponse task) {
+        WorkerTaskResponse.ImplementationSpec s = task.implementation();
+        return s == null || s.attempt() == null || s.attempt() < 1 ? 1 : s.attempt();
+    }
+
+    /** claim의 상한(분) — 없으면(옛 API) 워커 설정 IMPLEMENTATION_TIMEOUT. */
+    static Duration implementationTimeoutOf(WorkerTaskResponse task, Duration fallback) {
+        WorkerTaskResponse.ImplementationSpec s = task.implementation();
+        return s != null && s.timeoutMinutes() != null && s.timeoutMinutes() > 0
+                ? Duration.ofMinutes(s.timeoutMinutes())
+                : fallback;
+    }
+
+    /**
+     * 에이전트 커밋(SDD 태스크 커밋·실수 커밋)도 워커와 같은 작성자로 — 이 PC엔 전역 git 작성자가 없다 (스펙 §6.1).
+     * 비었거나 없는 값은 넣지 않는다: ExecOptions가 Map.copyOf라 null 값이 하나라도 있으면 NPE로 구현이 죽는다
+     * (운영에선 WorkerProperties가 기본값을 채우지만, 레코드를 목으로 만든 테스트는 null을 돌려준다).
+     */
+    static Map<String, String> gitAuthorEnv(String name, String email) {
+        Map<String, String> env = new LinkedHashMap<>();
+        if (name != null && !name.isBlank()) {
+            env.put("GIT_AUTHOR_NAME", name);
+            env.put("GIT_COMMITTER_NAME", name);
+        }
+        if (email != null && !email.isBlank()) {
+            env.put("GIT_AUTHOR_EMAIL", email);
+            env.put("GIT_COMMITTER_EMAIL", email);
+        }
+        return env;
+    }
+
+    private static boolean writeScratch(Path worktree, String relPath, String content) {
+        try {
+            ImplementationScratch.write(worktree, relPath, content);
+            return true;
+        } catch (Exception e) {
+            log.warn("구현 임시 파일 쓰기 실패 {}: {}", relPath, e.getMessage());
+            return false;
+        }
+    }
+
+    /** claude가 중간에 끝났을 때 — 임시 파일을 지우고 남은 변경을 WIP 커밋으로 push (스펙 2026-10-15 §6.6). */
+    private PartialOutcome preservePartialWork(WorkerTaskResponse task, WorktreeService.CreatedWorktree wt,
+                                               String baseSha, String why) {
+        // git add -A가 .netis/·.design/·배포 env 목록을 WIP 커밋에 담지 않도록 먼저 지운다
+        ImplementationScratch.deleteAll(wt.dir().toPath());
+        GitOpsService.PartialWork w = gitOps.preservePartialWork(wt.dir(), task.repoRef(), wt.branchName(), baseSha,
+                "wip: 구현 중단(" + why + ") — task #" + task.id());
+        return PartialOutcome.of(w, wt.branchName());
+    }
+
+    /**
+     * 실패 사유에 붙일 문구와 보고할 head SHA. head SHA는 push한 때만 — API가 head_sha 있음 = 원격에 있음으로 읽는다
+     * (재시도 이력의 "이전 브랜치" 문구, 스펙 §5.5).
+     */
+    record PartialOutcome(String reasonSuffix, String headSha) {
+        static PartialOutcome of(GitOpsService.PartialWork w, String branch) {
+            if (w == null) return new PartialOutcome("", null);
+            if (w.pushed()) {
+                return new PartialOutcome(" — 지금까지 작업(커밋 " + w.commits() + "개)은 브랜치 `" + branch
+                        + "`에 올려 둠", w.headSha());
+            }
+            if (w.error() != null) {
+                return new PartialOutcome((w.commits() > 0
+                        ? " — 부분 작업 push 실패(worktree에만 남음): "
+                        : " — 부분 작업 보존 실패(worktree에만 남음): ") + w.error(), null);
+            }
+            return new PartialOutcome("", null);
+        }
     }
 
     private void processDesign(WorkerTaskResponse task) throws Exception {
@@ -430,12 +556,13 @@ public class WorkerMainLoop {
         reporter.reportTerminal(taskId, WorkerResultRequest.deployFailed(props.id(), safeReason(reason), deployLog));
     }
 
-    private String renderImplementationPrompt(WorkerTaskResponse task, String baseSha, String branchName) {
+    private String renderImplementationPrompt(WorkerTaskResponse task, String baseSha, String branchName,
+                                              String planSection, String commitRule) {
         String tpl = props.implementationPromptTemplate();
         if (tpl == null || tpl.isBlank()) {
             tpl = defaultImplementationPrompt();
         }
-        return fillImplementationPrompt(tpl, task, baseSha, branchName);
+        return fillImplementationPrompt(tpl, task, baseSha, branchName, planSection, commitRule);
     }
 
     /**
@@ -563,7 +690,8 @@ public class WorkerMainLoop {
                 """;
     }
 
-    private String renderPrBody(WorkerTaskResponse task, long durationMs, String headSha) {
+    static String renderPrBody(WorkerTaskResponse task, long durationMs, String headSha,
+                               String modeLine, String reviewNotes) {
         boolean gitlab = task.repoRef().isGitlab();
         boolean hasDesign = task.designMarkdown() != null && !task.designMarkdown().isBlank();
         // 마크다운 링크를 깨는 값(공백, ')', 개행 등) 방어 — 형태가 이상하면 링크만 생략
@@ -577,11 +705,14 @@ public class WorkerMainLoop {
                 + "- **Task**: #" + task.id() + " " + task.title() + "\n"
                 + "- **베이스**: `" + task.githubBranch() + "`\n"
                 + "- **구현 SHA**: `" + headSha.substring(0, Math.min(7, headSha.length())) + "`\n"
+                + (modeLine == null ? "" : modeLine)
                 + designLine
                 + "- **소요시간**: " + (durationMs / 1000) + "초\n\n"
                 + "## 사전 분석\n"
                 + (task.analysisMarkdown() == null ? "" : task.analysisMarkdown())
-                + "\n\n---\n"
+                + "\n\n"
+                + (reviewNotes == null ? "" : "## 리뷰 메모\n" + reviewNotes + "\n\n")
+                + "---\n"
                 + "🤖 Generated with netisMaker by Claude Code.\n"
                 + (gitlab ? "리뷰 후 Draft 표시를 해제하세요.\n" : "리뷰 후 Ready for review로 전환하세요.\n");
     }
@@ -599,12 +730,12 @@ public class WorkerMainLoop {
                 null, null, null, null, usage));
     }
 
-    private void safePostImplementationFailure(Long taskId, String reason,
+    private void safePostImplementationFailure(Long taskId, int attempt, String reason,
                                                String headBranch, String headSha, String log_) {
-        safePostImplementationFailure(taskId, reason, headBranch, headSha, log_, null);
+        safePostImplementationFailure(taskId, attempt, reason, headBranch, headSha, log_, null);
     }
 
-    private void safePostImplementationFailure(Long taskId, String reason,
+    private void safePostImplementationFailure(Long taskId, int attempt, String reason,
                                                String headBranch, String headSha, String log_,
                                                WorkerResultRequest.UsageReport usage) {
         reporter.reportTerminal(taskId, new WorkerResultRequest(
@@ -612,7 +743,7 @@ public class WorkerMainLoop {
                 null, null, null, null, safeReason(reason),
                 null, null, headBranch, headSha, log_,
                 null, null, null, null, null,
-                null, null, null, null, usage));
+                null, null, null, null, usage).withImplementationAttempt(attempt));
     }
 
     /** 실패 사유를 보고/로그로 내보내기 직전 경계에서 자격증명을 마스킹한다(F2). */

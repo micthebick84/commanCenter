@@ -17,6 +17,7 @@ import java.nio.file.Path;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.TimeUnit;
 
 /**
@@ -44,6 +45,18 @@ public class ClaudeExecAdapter {
      * 입력에 사용자 텍스트가 섞여도 파일·네트워크에 손댈 수단이 없다(스펙 2026-10-13 §4 ③).
      */
     static final List<String> NO_TOOLS_ARGS = List.of("--strict-mcp-config", "--tools", "");
+
+    /**
+     * 구현 세션 실행 옵션 (스펙 2026-10-15 §6.1·§6.4) — extraArgs는 SDD의 --plugin-dir, env는 에이전트 커밋용 git 작성자.
+     */
+    public record ExecOptions(List<String> extraArgs, Map<String, String> env) {
+        public static final ExecOptions NONE = new ExecOptions(List.of(), Map.of());
+
+        public ExecOptions {
+            extraArgs = extraArgs == null ? List.of() : List.copyOf(extraArgs);
+            env = env == null ? Map.of() : Map.copyOf(env);
+        }
+    }
 
     private final WorkerProperties props;
     private final WorkerMcpSupport mcp;
@@ -131,6 +144,12 @@ public class ClaudeExecAdapter {
      */
     static List<String> buildCommand(String claudePath, boolean dangerouslySkipPermissions,
                                      String model, String effort, List<String> mcpArgs) {
+        return buildCommand(claudePath, dangerouslySkipPermissions, model, effort, List.of(), mcpArgs);
+    }
+
+    /** extraArgs(SDD의 --plugin-dir 등)는 --model/--effort 뒤, mcpArgs 앞 — --allowedTools가 variadic이라 맨 뒤여야 한다. */
+    static List<String> buildCommand(String claudePath, boolean dangerouslySkipPermissions,
+                                     String model, String effort, List<String> extraArgs, List<String> mcpArgs) {
         List<String> cmd = new ArrayList<>();
         cmd.add(claudePath);
         cmd.add("-p");
@@ -143,6 +162,7 @@ public class ClaudeExecAdapter {
         if (dangerouslySkipPermissions) cmd.add("--dangerously-skip-permissions");
         if (model != null && !model.isBlank()) { cmd.add("--model"); cmd.add(model); }
         if (effort != null && !effort.isBlank()) { cmd.add("--effort"); cmd.add(effort); }
+        cmd.addAll(extraArgs);
         cmd.addAll(mcpArgs);
         return cmd;
     }
@@ -161,15 +181,24 @@ public class ClaudeExecAdapter {
     public ExecResult exec(String prompt, File workingDir, Duration timeout, List<TaskMcpSpec> extras,
                            boolean dangerouslySkipPermissions, String model, String effort)
             throws InterruptedException, IOException {
+        return exec(prompt, workingDir, timeout, extras, dangerouslySkipPermissions, model, effort, ExecOptions.NONE);
+    }
+
+    /** 구현 세션용 — options.extraArgs를 명령에 넣고 options.env를 자식 프로세스 env에 더한다 (스펙 2026-10-15 §6.1). */
+    public ExecResult exec(String prompt, File workingDir, Duration timeout, List<TaskMcpSpec> extras,
+                           boolean dangerouslySkipPermissions, String model, String effort, ExecOptions options)
+            throws InterruptedException, IOException {
         long start = System.currentTimeMillis();
+        ExecOptions opts = options == null ? ExecOptions.NONE : options;
         WorkerMcpSupport.TaskClaudeArgs mcpArgs = mcp.buildClaudeArgsForTask(extras);
         try {
             // 프롬프트는 stdin으로 전달. 이유:
             // 1) --allowedTools <tools...>가 variadic이라 뒤에 위치한 prompt arg를 삼킴
             // 2) ARG_MAX(~256KB)를 넘는 큰 프롬프트도 안전
             // 3) ps에 프롬프트 본문이 노출되지 않음 (PAT가 들어있을 경우 보호)
-            return run(buildCommand(resolvedClaudePath, dangerouslySkipPermissions, model, effort, mcpArgs.args()),
-                    prompt, workingDir, timeout, start);
+            return run(buildCommand(resolvedClaudePath, dangerouslySkipPermissions, model, effort,
+                            opts.extraArgs(), mcpArgs.args()),
+                    prompt, workingDir, timeout, start, opts.env());
         } finally {
             Path tmp = mcpArgs.tempConfigPath();
             if (tmp != null) {
@@ -180,11 +209,10 @@ public class ClaudeExecAdapter {
     }
 
     /** claude 프로세스 실행·출력 수집 공통부 (stdin 프롬프트, timeout 시 destroyTree, envelope 해제, 실패 시 stderr tail). */
-    private ExecResult run(List<String> cmd, String prompt, File workingDir, Duration timeout, long start)
+    private ExecResult run(List<String> cmd, String prompt, File workingDir, Duration timeout, long start,
+                           Map<String, String> env)
             throws InterruptedException, IOException {
-        ProcessBuilder pb = new ProcessBuilder(cmd)
-                .directory(workingDir);            // redirectErrorStream(true) 제거!
-        Process p = pb.start();
+        Process p = processBuilder(cmd, workingDir, env).start();
         try (OutputStream stdin = p.getOutputStream()) {
             stdin.write(prompt.getBytes(StandardCharsets.UTF_8));
         }
@@ -216,11 +244,18 @@ public class ClaudeExecAdapter {
         return new ExecResult(p.exitValue(), resultText, durationMs, parsed.usage());
     }
 
+    /** 자식 env = 워커 env + extraEnv(같은 키는 extraEnv가 이김). stderr는 따로 읽는다 — redirectErrorStream 쓰지 말 것. */
+    static ProcessBuilder processBuilder(List<String> cmd, File workingDir, Map<String, String> extraEnv) {
+        ProcessBuilder pb = new ProcessBuilder(cmd).directory(workingDir);
+        pb.environment().putAll(extraEnv);
+        return pb;
+    }
+
     /** 도구·MCP 없이 텍스트만 생성 (종료 노트). 권한 우회 플래그를 쓰지 않는다. */
     public ExecResult execWithoutTools(String prompt, File workingDir, Duration timeout, String model)
             throws InterruptedException, IOException {
         return run(buildCommand(resolvedClaudePath, false, model, null, NO_TOOLS_ARGS),
-                prompt, workingDir, timeout, System.currentTimeMillis());
+                prompt, workingDir, timeout, System.currentTimeMillis(), Map.of());
     }
 
     /**
@@ -278,15 +313,19 @@ public class ClaudeExecAdapter {
             // usage 추출: total_cost_usd 또는 usage 오브젝트가 존재하면 시도
             Usage usage = null;
             var u = node.path("usage");
+            var modelUsage = node.path("modelUsage");
             if (node.path("total_cost_usd").isNumber() || u.isObject()) {
-                usage = new Usage(
-                        node.path("total_cost_usd").isNumber()
-                                ? node.path("total_cost_usd").decimalValue()
-                                : java.math.BigDecimal.ZERO,
-                        u.path("input_tokens").asLong(0),
-                        u.path("output_tokens").asLong(0),
-                        u.path("cache_creation_input_tokens").asLong(0),
-                        u.path("cache_read_input_tokens").asLong(0));
+                java.math.BigDecimal cost = node.path("total_cost_usd").isNumber()
+                        ? node.path("total_cost_usd").decimalValue()
+                        : java.math.BigDecimal.ZERO;
+                // usage는 메인 세션 것뿐 — 모델별 합계(modelUsage)에는 서브에이전트가 들어 있다 (스펙 2026-10-15 §6.8)
+                usage = modelUsage.isObject() && modelUsage.size() > 0
+                        ? sumModelUsage(cost, modelUsage)
+                        : new Usage(cost,
+                                u.path("input_tokens").asLong(0),
+                                u.path("output_tokens").asLong(0),
+                                u.path("cache_creation_input_tokens").asLong(0),
+                                u.path("cache_read_input_tokens").asLong(0));
             }
 
             // result 텍스트 추출: textual이면 그 값, 아니면 raw 그대로
@@ -303,5 +342,16 @@ public class ClaudeExecAdapter {
         } catch (Exception e) {
             return new Parsed(raw, null);
         }
+    }
+
+    private static Usage sumModelUsage(java.math.BigDecimal cost, com.fasterxml.jackson.databind.JsonNode modelUsage) {
+        long in = 0, out = 0, cacheCreation = 0, cacheRead = 0;
+        for (com.fasterxml.jackson.databind.JsonNode m : modelUsage) {
+            in += m.path("inputTokens").asLong(0);
+            out += m.path("outputTokens").asLong(0);
+            cacheCreation += m.path("cacheCreationInputTokens").asLong(0);
+            cacheRead += m.path("cacheReadInputTokens").asLong(0);
+        }
+        return new Usage(cost, in, out, cacheCreation, cacheRead);
     }
 }

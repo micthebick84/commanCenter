@@ -8,6 +8,8 @@ import { downloadAttachment as downloadBlob } from '~/composables/attachmentDown
 import ChatBubble from '~/components/chat/ChatBubble.vue'
 import TypingIndicator from '~/components/chat/TypingIndicator.vue'
 import PendingBubble from '~/components/chat/PendingBubble.vue'
+import ImplementationModePicker from '~/components/ImplementationModePicker.vue'
+import { DEFAULT_IMPLEMENTATION_MODE, type ImplementationMode } from '~/composables/implementationMode'
 
 const props = defineProps<{
   sessionId: number
@@ -93,6 +95,8 @@ const statusLabel = computed(() =>
 
 const confirming = ref(false)
 const designRequested = ref(false)
+// 구현 방식 — 화면 기본은 리뷰, API는 값이 없으면 직접 (스펙 2026-10-15 §3)
+const implementationMode = ref<ImplementationMode>(DEFAULT_IMPLEMENTATION_MODE)
 
 const isTerminal = computed(() =>
   ['REGISTERED', 'CANCELLED', 'EXPIRED', 'FAILED'].includes(status.value as string),
@@ -257,7 +261,7 @@ async function confirm() {
   try {
     const res = await useApi<{ taskId: number }>(`/api/interviews/${props.sessionId}/confirm`, {
       method: 'POST',
-      body: { designRequested: designRequested.value },
+      body: { designRequested: designRequested.value, implementationMode: implementationMode.value },
     })
     $q.notify({ type: 'positive', message: '확정 완료 — 구현 큐에 진입했습니다' })
     emit('confirmed', res.taskId)
@@ -508,24 +512,27 @@ defineExpose({
             <pre class="plan-md">{{ plan.planMarkdown }}</pre>
           </div>
 
-          <div v-if="!readonly" class="row items-center justify-end q-mt-md q-gutter-sm">
-            <q-toggle
-              v-model="designRequested"
-              dense
-              label="디자인 단계 포함"
-            >
-              <q-tooltip>분석 승인 후 화면 목업을 생성해 승인받습니다</q-tooltip>
-            </q-toggle>
-            <q-btn
-              data-test="confirm"
-              unelevated
-              color="positive"
-              icon="task_alt"
-              label="구현 진행"
-              :loading="confirming"
-              :disable="status !== 'PLAN_READY' || confirming"
-              @click="confirm"
-            />
+          <div v-if="!readonly" class="q-mt-md">
+            <ImplementationModePicker v-model="implementationMode" class="q-mb-sm" />
+            <div class="row items-center justify-end q-gutter-sm">
+              <q-toggle
+                v-model="designRequested"
+                dense
+                label="디자인 단계 포함"
+              >
+                <q-tooltip>분석 승인 후 화면 목업을 생성해 승인받습니다</q-tooltip>
+              </q-toggle>
+              <q-btn
+                data-test="confirm"
+                unelevated
+                color="positive"
+                icon="task_alt"
+                label="구현 진행"
+                :loading="confirming"
+                :disable="status !== 'PLAN_READY' || confirming"
+                @click="confirm"
+              />
+            </div>
           </div>
         </div>
       </section>

@@ -5,6 +5,7 @@ import com.hamonsoft.netismaker.config.SecurityConfig;
 import com.hamonsoft.netismaker.config.WorkerApiKeyFilter;
 import com.hamonsoft.netismaker.entity.Task;
 import com.hamonsoft.netismaker.entity.TaskStatus;
+import com.hamonsoft.netismaker.service.UserProvisioner;
 import com.hamonsoft.netismaker.service.DeployLogStreamService;
 import com.hamonsoft.netismaker.service.InterviewService;
 import com.hamonsoft.netismaker.service.TaskService;
@@ -51,6 +52,9 @@ class TaskControllerSseResolverTest {
     /** Spring Security OAuth2 Resource Server가 사용하는 JwtDecoder를 스텁으로 교체. */
     @MockBean
     private JwtDecoder jwtDecoder;
+
+    @MockBean
+    private UserProvisioner userProvisioner;
 
     @MockBean
     private TaskService taskService;

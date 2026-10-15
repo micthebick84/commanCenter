@@ -1,6 +1,7 @@
 package com.hamonsoft.netismaker.dto;
 
 import com.hamonsoft.netismaker.entity.EnvVar;
+import com.hamonsoft.netismaker.entity.ImplementationMode;
 import com.hamonsoft.netismaker.entity.Task;
 import com.hamonsoft.netismaker.entity.TaskAnalysis;
 import com.hamonsoft.netismaker.entity.TaskDesign;
@@ -59,11 +60,34 @@ public record WorkerTaskResponse(
         /** CLOSE 전용: 산출물 지시. null이면 워커가 산출물 단계를 건너뛴다 (스펙 2026-10-14 §3). */
         CloseArtifactSpec closeArtifact,
         /** IMPLEMENTATION·DESIGN 전용: DB MCP 지시 (스펙 2026-10-14 §6.4). WorkerController가 claim 커밋 뒤 채운다. */
-        DbMcpGrant dbMcp
+        DbMcpGrant dbMcp,
+        /**
+         * IMPLEMENTATION 전용: 구현 방식·시도 번호·상한 (스펙 2026-10-15 §5.3). 다른 kind·구버전 API는 null —
+         * 워커는 직접·1회째·자기 설정 상한으로 돈다.
+         */
+        ImplementationSpec implementation
 ) {
+    /** 구현 지시 블록. mode는 ImplementationMode 이름, timeoutMinutes는 claim 때 작업에 기록한 상한. */
+    public record ImplementationSpec(String mode, Integer attempt, Integer timeoutMinutes) {}
+
+    /** 구현 지시(implementation) 도입 전 29개 인자 정규 생성자 — 기존 팩토리·테스트 호환. */
+    public WorkerTaskResponse(Long id, String githubRepo, String githubBranch, String title, String description,
+                              Kind kind, List<TaskMcpSpec> mcpsExtra, String analysisMarkdown, String subtasksJson,
+                              String headBranch, String headSha, List<EnvVar> envVars, String model, String effort,
+                              String designMarkdown, String mockupFilesJson, String feedbackHistoryJson,
+                              String designUrl, String designSystemProjectId, String designOutputProjectId,
+                              String gitUrl, String repoHost, String planMarkdown,
+                              Integer prNumber, String prUrl, String closeProgress, CloseContext closeContext,
+                              CloseArtifactSpec closeArtifact, DbMcpGrant dbMcp) {
+        this(id, githubRepo, githubBranch, title, description, kind, mcpsExtra, analysisMarkdown, subtasksJson,
+                headBranch, headSha, envVars, model, effort, designMarkdown, mockupFilesJson, feedbackHistoryJson,
+                designUrl, designSystemProjectId, designOutputProjectId, gitUrl, repoHost, planMarkdown,
+                prNumber, prUrl, closeProgress, closeContext, closeArtifact, dbMcp, null);
+    }
+
     /**
      * CLOSE 필드 도입 전 23개 인자 생성자 — 종료 외 kind·기존 팩토리·테스트가 그대로 쓴다.
-     * Jackson은 레코드의 정규 생성자(29개)를 쓰므로 역직렬화와 무관하다(WorkerResultRequest와 같은 방식).
+     * Jackson은 레코드의 정규 생성자(30개)를 쓰므로 역직렬화와 무관하다(WorkerResultRequest와 같은 방식).
      */
     public WorkerTaskResponse(Long id, String githubRepo, String githubBranch, String title, String description,
                               Kind kind, List<TaskMcpSpec> mcpsExtra, String analysisMarkdown, String subtasksJson,
@@ -111,7 +135,8 @@ public record WorkerTaskResponse(
         return new WorkerTaskResponse(id, githubRepo, githubBranch, title, description, kind, mcpsExtra,
                 analysisMarkdown, subtasksJson, headBranch, headSha, envVars, model, effort, designMarkdown,
                 mockupFilesJson, feedbackHistoryJson, designUrl, designSystemProjectId, designOutputProjectId,
-                gitUrl, repoHost, planMarkdown, prNumber, prUrl, closeProgress, closeContext, closeArtifact, grant);
+                gitUrl, repoHost, planMarkdown, prNumber, prUrl, closeProgress, closeContext, closeArtifact, grant,
+                implementation);
     }
 
     /** 워커가 clone/폴더/MR에 쓰는 저장소 참조. 새 필드가 없는 페이로드는 GitHub로 복원된다. */
@@ -147,7 +172,14 @@ public record WorkerTaskResponse(
                 d == null ? null : d.getMockupFilesJson(),
                 null,
                 d == null ? null : d.getDesignUrl(),
-                null, null, t.getGitUrl(), hostOf(t), planMarkdown);
+                null, null, t.getGitUrl(), hostOf(t), planMarkdown,
+                null, null, null, null, null, null,
+                implementationSpecOf(t));
+    }
+
+    private static ImplementationSpec implementationSpecOf(Task t) {
+        ImplementationMode mode = t.getImplementationMode() == null ? ImplementationMode.DIRECT : t.getImplementationMode();
+        return new ImplementationSpec(mode.name(), t.getImplementationAttempt(), t.getImplementationTimeoutMinutes());
     }
 
     public static WorkerTaskResponse forDeploy(Task t) {

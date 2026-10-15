@@ -90,6 +90,14 @@ public class WorkerService {
         this.events = events;
     }
 
+    /** 방식별 구현 상한 (스펙 2026-10-15 §5.4). 생성자를 바꾸지 않으려고 setter 주입 — 단위 테스트에서는 기본값. */
+    private ImplementationModePolicy implementationModePolicy = ImplementationModePolicy.defaults();
+
+    @Autowired
+    void setImplementationModePolicy(ImplementationModePolicy policy) {
+        this.implementationModePolicy = policy;
+    }
+
     public WorkerService(TaskRepository taskRepo,
                          TaskAnalysisRepository analysisRepo,
                          TaskDesignRepository designRepo,
@@ -148,6 +156,8 @@ public class WorkerService {
             t.setStatus(TaskStatus.IN_PROGRESS);
         } else if (from == TaskStatus.APPROVED) {
             t.setStatus(TaskStatus.IMPLEMENTING);
+            // 이번 시도의 상한을 기록 — claim 응답과 작업 화면이 같은 값을 쓴다 (스펙 2026-10-15 §5.3)
+            t.setImplementationTimeoutMinutes(implementationModePolicy.timeoutMinutes(t.getImplementationMode()));
         } else if (from == TaskStatus.DESIGN_PENDING) {
             t.setStatus(TaskStatus.DESIGNING);
         } else if (from == TaskStatus.DEPLOY_PENDING) {

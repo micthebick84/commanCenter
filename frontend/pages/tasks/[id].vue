@@ -11,9 +11,12 @@ import TaskNextAction from '~/components/tasks/TaskNextAction.vue'
 import TaskDetailMobile from '~/components/tasks/TaskDetailMobile.vue'
 import TaskHistoryTimeline from '~/components/tasks/TaskHistoryTimeline.vue'
 import DeployEnvDialog from '~/components/tasks/DeployEnvDialog.vue'
+import ImplementationRetryDialog from '~/components/tasks/ImplementationRetryDialog.vue'
 import { stageSteps, nextAction, ageOf, type NextActionKind } from '~/composables/taskStages'
 import { renderMarkdown } from '~/composables/useMarkdown'
 import { mrNoun, mrRef } from '~/composables/mergeRequestLabel'
+import { elapsedLabel, implementationModeText } from '~/composables/implementationMode'
+import { useNowTick } from '~/composables/useNowTick'
 import { downloadAttachment as downloadBlob } from '~/composables/attachmentDownload'
 import {
   closeSteps,
@@ -127,6 +130,10 @@ interface TaskResponse {
   stageUsage: StageUsageView[]
   totalCostUsd: number | null
   totalTokens: number | null
+  implementationMode?: string
+  implementationAttempt?: number
+  claimedAt?: string | null
+  implementationTimeoutMinutes?: number | null
 }
 
 const route = useRoute()
@@ -202,6 +209,7 @@ async function approve() {
 }
 
 const showApprove = ref(false)
+const showImplRetry = ref(false)
 
 function openApprove() {
   showApprove.value = true
@@ -430,6 +438,13 @@ const steps = computed(() => (task.value ? stageSteps(task.value) : []))
 const myRequesterId = computed(() => auth.me?.username ?? (auth.me?.user_id != null ? String(auth.me.user_id) : null))
 const isOwner = computed(() => !!task.value && myRequesterId.value != null && task.value.requesterId === myRequesterId.value)
 const action = computed(() => (task.value ? nextAction(task.value, auth.isAdmin, isOwner.value) : null))
+// 구현 방식·경과 시간 (스펙 2026-10-15 §7) — 경과는 마운트 뒤 30초마다 다시 계산(API 호출 없음)
+const nowTick = useNowTick()
+const elapsed = computed(() => (task.value ? elapsedLabel(task.value, nowTick.value) : null))
+const modeChip = computed(() => {
+  const text = task.value ? implementationModeText(task.value) : null
+  return text ? `구현 방식: ${text}` : null
+})
 const closeStepList = computed(() => (task.value?.close ? closeSteps(task.value.close, task.value.status) : []))
 const obsidianVault = useRuntimeConfig().public.obsidianVault as string
 const noteHref = computed(() => obsidianLink(obsidianVault, task.value?.close?.notePath ?? null))
@@ -520,6 +535,7 @@ function onAction(kind: NextActionKind) {
     case 'withdraw-close': return closeAction('close-request/withdraw', '종료 요청 철회')
     case 'approve-close': return approveClose()
     case 'retry-close': return retryClose()
+    case 'retry-implementation': return void (showImplRetry.value = true)
   }
 }
 </script>
@@ -539,10 +555,18 @@ function onAction(kind: NextActionKind) {
         <div class="text-h5">{{ task.title }}</div>
         <q-space />
         <span :class="statusClass(task.status)">{{ task.statusLabel }}</span>
+        <!-- 구현중 경과/상한 — 데스크톱·모바일 공용. 마운트 뒤에만 그려진다(useNowTick) -->
+        <span
+          v-if="elapsed"
+          class="q-ml-sm text-caption impl-elapsed"
+          :class="{ 'impl-elapsed--warn': elapsed.warn }"
+          data-test="impl-elapsed"
+        >{{ elapsed.text }}</span>
         <!-- 모델/effort/비용 칩은 데스크톱 전용 — 모바일에서는 정보 섹션(section-info)이 대신 보여준다 -->
         <div v-if="!$q.screen.lt.md" class="row items-center conv-header-chips">
           <q-chip dense size="sm" outline icon="smart_toy" :label="task.model" class="q-ml-sm" />
           <q-chip dense size="sm" outline icon="tune" :label="task.effort" />
+          <q-chip v-if="modeChip" dense size="sm" outline icon="account_tree" :label="modeChip" data-test="impl-mode-chip" />
           <q-chip v-if="task.totalCostUsd != null" dense size="sm" outline
                   icon="paid" color="primary"
                   :label="`${fmtTokens(task.totalTokens ?? 0)} 토큰 · ${fmtCost(task.totalCostUsd)}`" />
@@ -1215,6 +1239,13 @@ function onAction(kind: NextActionKind) {
 
       <ApproveDialog v-model="showApprove" :task="task" @approved="onApproved" />
 
+      <ImplementationRetryDialog
+        v-model="showImplRetry"
+        :task-id="String(task.id)"
+        :current-mode="task.implementationMode ?? 'DIRECT'"
+        @submitted="refresh"
+      />
+
       <DeployEnvDialog
         v-model="envDialog"
         :task-id="taskId"
@@ -1241,5 +1272,12 @@ function onAction(kind: NextActionKind) {
   border-radius: 4px;
   font-size: 0.75rem;
   white-space: pre-wrap;
+}
+.impl-elapsed {
+  color: #757575;
+}
+.impl-elapsed--warn {
+  color: #ef6c00;
+  font-weight: 600;
 }
 </style>

@@ -10,7 +10,7 @@ import java.util.List;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * 결과 보고 JSON — 레코드에 생성자가 둘(정규 23개 + 기존 22개)이어도 Jackson은 정규 생성자로 읽는다.
+ * 결과 보고 JSON — 레코드에 생성자가 셋(정규 24개 + 호환 23개·22개)이어도 Jackson은 정규 생성자로 읽는다.
  * 워커 전송·API 수신·dead-letter 재전송이 모두 이 경로다 (스펙 2026-10-07 §5, §9).
  */
 class WorkerResultRequestJsonTest {
@@ -67,5 +67,19 @@ class WorkerResultRequestJsonTest {
         // 사유에 인증 URL이 섞여 있으면 마스킹 경로에서 토큰이 사라진다
         assertThat(WorkerResultRequest.closeFailed("w", "사유 https://oauth2:tok@github.com/x", null)
                 .masked().failureReason()).doesNotContain("tok");
+    }
+
+    @Test
+    void the_implementation_attempt_survives_json_and_masking_and_old_reports_read_null() throws Exception {
+        var lenient = json.copy().configure(
+                com.fasterxml.jackson.databind.DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false);
+        WorkerResultRequest req = WorkerResultRequest.closed("w1", null).withImplementationAttempt(3);
+
+        WorkerResultRequest back = lenient.readValue(json.writeValueAsString(req), WorkerResultRequest.class);
+
+        assertThat(back.implementationAttempt()).isEqualTo(3);
+        assertThat(req.masked().implementationAttempt()).isEqualTo(3);
+        assertThat(json.readValue("{\"workerId\":\"w1\",\"status\":\"PR_CREATED\"}", WorkerResultRequest.class)
+                .implementationAttempt()).isNull();
     }
 }

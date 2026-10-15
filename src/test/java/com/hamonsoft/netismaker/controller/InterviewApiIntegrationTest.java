@@ -153,6 +153,31 @@ class InterviewApiIntegrationTest {
     }
 
     @Test
+    void 등록시_implementationMode를_넘기면_task에_반영되고_모르는_값은_400() throws Exception {
+        long sid = startSession("user1", "제목");
+        mvc.perform(post("/worker/interviews/claim").header("X-Worker-API-Key", apiKey)
+                        .param("workerId", "iw-1"));
+        mvc.perform(post("/worker/interviews/" + sid + "/plan").header("X-Worker-API-Key", apiKey)
+                        .param("workerId", "iw-1")
+                        .contentType(APPLICATION_JSON)
+                        .content("{\"designMarkdown\":\"# 설계\",\"planMarkdown\":\"# 플랜\",\"planJson\":\"[]\",\"costUsd\":0.1,\"durationMs\":1000}"))
+                .andExpect(status().isNoContent());
+
+        mvc.perform(post("/api/interviews/" + sid + "/confirm").with(adminJwt("admin"))
+                        .contentType(APPLICATION_JSON).content("{\"implementationMode\":\"FAST\"}"))
+                .andExpect(status().isBadRequest());
+
+        String resp = mvc.perform(post("/api/interviews/" + sid + "/confirm").with(adminJwt("admin"))
+                        .contentType(APPLICATION_JSON).content("{\"implementationMode\":\"SDD\"}"))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+        Long taskId = json.readTree(resp).get("taskId").asLong();
+
+        assertThat(taskRepo.findById(taskId).orElseThrow().getImplementationMode())
+                .isEqualTo(com.hamonsoft.netismaker.entity.ImplementationMode.SDD);
+    }
+
+    @Test
     void requester_cannot_answer_admin_only_interview() throws Exception {
         long sid = startSession("user1", "권한 확인");
         mvc.perform(post("/api/interviews/" + sid + "/answer").with(userJwt("user1"))

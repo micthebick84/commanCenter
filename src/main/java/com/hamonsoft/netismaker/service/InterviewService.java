@@ -422,6 +422,12 @@ public class InterviewService {
      */
     @Transactional
     public Long confirm(Long sessionId, String adminId, boolean designRequested) {
+        return confirm(sessionId, adminId, designRequested, ImplementationMode.DIRECT);
+    }
+
+    /** mode: 확정 때 고른 구현 방식 — null이면 직접 (스펙 2026-10-15 §5.1). */
+    @Transactional
+    public Long confirm(Long sessionId, String adminId, boolean designRequested, ImplementationMode mode) {
         InterviewSession s = requireSessionForUpdate(sessionId);
         requireNotQuestion(s, "확정");
         if (s.getStatus() != InterviewStatus.PLAN_READY) {
@@ -450,12 +456,14 @@ public class InterviewService {
         analysisRepo.save(a);
 
         t.setDesignRequested(designRequested);
+        t.setImplementationMode(mode == null ? ImplementationMode.DIRECT : mode);
         TaskStatus from = t.getStatus();
         TaskStatus to = designRequested ? TaskStatus.DESIGN_PENDING : TaskStatus.APPROVED;
         t.setStatus(to);
         t.setUpdatedAt(OffsetDateTime.now());
         historyRepo.save(TaskStatusHistory.log(t.getId(), from, to, "user", adminId,
-                "플랜 확정 → " + to.dbValue() + " (interview_session " + sessionId + ")"));
+                "플랜 확정 → " + to.dbValue() + " (interview_session " + sessionId
+                        + ", 구현 방식: " + t.getImplementationMode().label() + ")"));
 
         // 인터뷰 사용량 이관 (스펙 §4.2) — 세션당 confirm 1회(PLAN_READY 가드)라 이중 누적 없음.
         if ((s.getTotalCostUsd() != null && s.getTotalCostUsd().signum() > 0)

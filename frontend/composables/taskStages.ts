@@ -424,7 +424,7 @@ export function stageSteps(task: { status: string; designRequested?: boolean }):
 export type NextActionKind =
   | 'approve-interview' | 'open-interview' | 'approve-impl' | 'review-design'
   | 'deploy' | 'redeploy' | 'open-pr' | 'open-url' | 'retry'
-  | 'request-close' | 'withdraw-close' | 'approve-close' | 'retry-close'
+  | 'request-close' | 'withdraw-close' | 'approve-close' | 'retry-close' | 'retry-implementation'
 
 export interface NextAction {
   text: string
@@ -496,7 +496,10 @@ export function nextAction(
     case 'DESIGN_FAILED':
       return { text: '실패 — 사유 확인 후 재시도', primary: { label: '재시도', icon: 'refresh', kind: 'retry' } }
     case 'IMPLEMENTATION_FAILED':
-      return { text: '구현 실패 — 사유를 확인하세요' }
+      // 관리자는 방식을 다시 골라 처음부터 재시도 (스펙 2026-10-15 §5.5)
+      return isAdmin
+        ? { text: '구현 실패 — 사유와 보존된 브랜치를 확인하고 재시도하세요', primary: { label: '구현 재시도', icon: 'refresh', kind: 'retry-implementation' } }
+        : { text: '구현 실패 — 관리자 확인이 필요합니다' }
     case 'DEPLOY_LOST':
       if (!isAdmin && isOwner) {
         return { text: '배포 컨테이너 중단 — 결과 확인이 끝났다면 종료를 요청할 수 있습니다', primary: { label: '확인 완료 — 종료 요청', icon: 'task_alt', kind: 'request-close' } }

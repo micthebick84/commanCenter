@@ -5,6 +5,8 @@ import TaskListMobile from '~/components/tasks/TaskListMobile.vue'
 import type { CardTask } from '~/components/tasks/TaskCardCompact.vue'
 import { buildStages, stageAccepts, cancelable, DEPLOY_ACTIVE_STATUSES, type MoveDef, type StageCard } from '~/composables/taskStages'
 import { mrRef } from '~/composables/mergeRequestLabel'
+import { elapsedLabel } from '~/composables/implementationMode'
+import { useNowTick } from '~/composables/useNowTick'
 import { MAX_FILES, MAX_FILE_MB, MAX_TOTAL_MB, validateFiles } from '~/composables/attachmentLimits'
 import { useHydrationSafeAuth } from '~/composables/useHydrationSafeAuth'
 
@@ -35,6 +37,8 @@ interface TaskResponse {
   updatedAt: string
   implementation: ImplementationView | null
   totalCostUsd: number | null
+  claimedAt?: string | null
+  implementationTimeoutMinutes?: number | null
 }
 
 interface PageResponse<T> {
@@ -62,6 +66,12 @@ const { data: page, refresh } = useTaskPolling<PageResponse<TaskResponse>>(() =>
 )
 
 const tasks = computed<TaskResponse[]>(() => page.value?.content ?? [])
+
+// 구현중 경과 시간 (스펙 2026-10-15 §7) — 마운트 뒤 30초마다
+const nowTick = useNowTick()
+function elapsedOf(t: TaskResponse) {
+  return elapsedLabel(t, nowTick.value)
+}
 
 // ── 총비용 배지 ──────────────────────────────────────────────────
 // 진행 중 상태 — 배지 제외 대상 (스펙 §6: 종결 상태만 표시)
@@ -501,6 +511,12 @@ function closeDialog() {
                       {{ c.task.statusLabel }}
                     </span>
                     <span v-if="costBadge(c.task)" class="card-cost">{{ costBadge(c.task) }}</span>
+                    <span
+                      v-if="elapsedOf(c.task)"
+                      class="card-cost"
+                      :class="{ 'board-elapsed--warn': elapsedOf(c.task)!.warn }"
+                      data-test="board-elapsed"
+                    >{{ elapsedOf(c.task)!.text }}</span>
                     <q-space />
                     <q-icon
                       v-if="cancelable(c.task)"
@@ -799,6 +815,7 @@ function closeDialog() {
 .card-id { font-size: 12px; font-weight: 700; color: #9e9e9e; }
 .card-status { font-size: 11px; font-weight: 500; padding: 2px 7px; border-radius: 4px; }
 .card-cost { font-size: 11px; font-weight: 600; color: #2e7d32; padding: 2px 6px; border-radius: 4px; background: rgba(46, 125, 50, 0.08); }
+.board-elapsed--warn { color: #ef6c00; font-weight: 600; }
 .card-title {
   font-size: 14.5px;
   font-weight: 600;

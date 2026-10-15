@@ -1,6 +1,7 @@
 package com.hamonsoft.netismaker.dto;
 
 import com.hamonsoft.netismaker.entity.EnvVar;
+import com.hamonsoft.netismaker.entity.ImplementationMode;
 import com.hamonsoft.netismaker.entity.Task;
 import com.hamonsoft.netismaker.entity.TaskAnalysis;
 import com.hamonsoft.netismaker.entity.TaskAttachment;
@@ -50,7 +51,15 @@ public record TaskResponse(
         /** 레포 카탈로그 id — 승인 다이얼로그 DB 피커가 목록을 부를 때 쓴다 (스펙 2026-10-14 §4). 레거시 작업은 null. */
         Long repoCatalogId,
         /** 승인 때 고른 DB 연결 id (스펙 2026-10-14 §4). */
-        List<Long> dbConnectionIds
+        List<Long> dbConnectionIds,
+        /** 구현 방식 DIRECT|REVIEW|SDD (스펙 2026-10-15 §5.2). */
+        String implementationMode,
+        /** 구현 시도 번호(1부터). */
+        int implementationAttempt,
+        /** 워커가 마지막으로 가져간 시각 — 결과 보고 뒤에도 남으므로 화면은 구현중일 때만 쓴다. */
+        OffsetDateTime claimedAt,
+        /** 이번 시도의 구현 상한(분) — claim 때 기록, 그 전에는 null. */
+        Integer implementationTimeoutMinutes
 ) {
     public record AnalysisView(
             String markdownResult,
@@ -213,7 +222,11 @@ public record TaskResponse(
                 r.totalTokens(),
                 r.close(),
                 r.repoCatalogId(),
-                r.dbConnectionIds()
+                r.dbConnectionIds(),
+                r.implementationMode(),
+                r.implementationAttempt(),
+                r.claimedAt(),
+                r.implementationTimeoutMinutes()
         );
     }
 
@@ -228,7 +241,8 @@ public record TaskResponse(
         return new TaskResponse(id, githubRepo, repoAlias, githubBranch, title, description, status, statusLabel,
                 requesterId, retryCount, maxRetry, failureReason, mcpsExtra, redacted, createdAt, updatedAt,
                 model, effort, designRequested, analysis, design, implementation, deployment, interviewSessionId,
-                attachments, stageUsage, totalCostUsd, totalTokens, close, repoCatalogId, dbConnectionIds);
+                attachments, stageUsage, totalCostUsd, totalTokens, close, repoCatalogId, dbConnectionIds,
+                implementationMode, implementationAttempt, claimedAt, implementationTimeoutMinutes);
     }
 
     private static TaskResponse build(Task t, TaskAnalysis a, TaskDesign d, Long interviewSessionId,
@@ -301,7 +315,11 @@ public record TaskResponse(
                 totalTokens,
                 closeViewOf(t),
                 t.getRepoCatalogId(),
-                t.getDbConnectionIds() == null ? List.of() : List.copyOf(t.getDbConnectionIds())
+                t.getDbConnectionIds() == null ? List.of() : List.copyOf(t.getDbConnectionIds()),
+                (t.getImplementationMode() == null ? ImplementationMode.DIRECT : t.getImplementationMode()).name(),
+                t.getImplementationAttempt(),
+                t.getClaimedAt(),
+                t.getImplementationTimeoutMinutes()
         );
     }
 }

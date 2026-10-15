@@ -47,9 +47,6 @@ public class StaleTaskRecoveryJob {
     @Value("${app.task.stale-threshold-minutes:5}")
     private int analysisStaleThresholdMinutes;
 
-    @Value("${app.task.implementation-stale-threshold-minutes:60}")
-    private int implementationStaleThresholdMinutes;
-
     @Value("${app.task.deploy-stale-threshold-minutes:15}")
     private int deployStaleThresholdMinutes;
 
@@ -71,14 +68,18 @@ public class StaleTaskRecoveryJob {
     @Value("${app.task.close-stale-threshold-minutes:60}")
     private int closeStaleThresholdMinutes;
 
+    private final ImplementationModePolicy implementationModePolicy;
+
     public StaleTaskRecoveryJob(TaskRepository taskRepo,
                                 TaskStatusHistoryRepository historyRepo,
                                 WorkerHeartbeatRepository heartbeatRepo,
-                                DeployLogStreamService deployLogStream) {
+                                DeployLogStreamService deployLogStream,
+                                ImplementationModePolicy implementationModePolicy) {
         this.taskRepo = taskRepo;
         this.historyRepo = historyRepo;
         this.heartbeatRepo = heartbeatRepo;
         this.deployLogStream = deployLogStream;
+        this.implementationModePolicy = implementationModePolicy;
     }
 
     @Scheduled(fixedRateString = "${app.task.stale-check-interval-ms:60000}")
@@ -113,7 +114,8 @@ public class StaleTaskRecoveryJob {
             boolean workerDead = claimedLongEnough && (hb == null || hb.isBefore(workerDeadBefore));
 
             int ceilingMin = switch (from) {
-                case IMPLEMENTING -> implementationStaleThresholdMinutes;
+                // 방식별 판정 — SDD는 몇 시간 돈다 (스펙 2026-10-15 §5.4)
+                case IMPLEMENTING -> implementationModePolicy.staleThresholdMinutes(t.getImplementationMode());
                 case DESIGNING -> designStaleThresholdMinutes;
                 case CLOSING -> closeStaleThresholdMinutes;
                 case DEPLOYING, UNDEPLOYING -> deployStaleThresholdMinutes;

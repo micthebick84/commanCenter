@@ -5,6 +5,7 @@ import MarkdownViewerDialog from '~/components/MarkdownViewerDialog.vue'
 import { renderMarkdown } from '~/composables/useMarkdown'
 import type { StageStep } from '~/composables/taskStages'
 import { mrNoun, mrRef } from '~/composables/mergeRequestLabel'
+import { implementationModeText } from '~/composables/implementationMode'
 
 // [id].vue의 TaskResponse 중 이 컴포넌트가 읽는 부분집합
 export interface DetailTask {
@@ -24,6 +25,8 @@ export interface DetailTask {
   totalTokens: number | null
   mcpsExtra: { name: string; transport: string }[]
   dbConnectionIds?: number[]
+  implementationMode?: string
+  implementationAttempt?: number
   attachments: { id: number; fileName: string; sizeBytes: number }[]
   envVars: { key: string; value: string; secret: boolean }[]
   analysis: { markdownResult: string; subtasksJson: string; approved: boolean } | null
@@ -61,6 +64,8 @@ function openViewer(title: string, markdown: string | null) {
   viewer.markdown = markdown
   viewer.open = true
 }
+// 구현 방식 (스펙 2026-10-15 §7) — 플랜 확정 이후에만(아니면 null)
+const modeText = computed(() => implementationModeText(props.task))
 function fmtTokens(n: number) {
   if (n >= 1_000_000) return (n / 1_000_000).toFixed(1) + 'M'
   if (n >= 1_000) return (n / 1_000).toFixed(1) + 'k'
@@ -226,6 +231,7 @@ const deployCaption = computed(() => {
           <div v-if="open.info" class="q-expansion-item__content" :id="contentId('info')">
             <q-card-section class="kv">
               <div><span class="k">모델</span>{{ task.model }} · {{ task.effort }}</div>
+              <div v-if="modeText" data-test="info-impl-mode"><span class="k">구현</span>{{ modeText }}</div>
               <div v-if="task.totalCostUsd != null"><span class="k">사용량</span>{{ fmtTokens(task.totalTokens ?? 0) }} 토큰 · ${{ Number(task.totalCostUsd).toFixed(2) }}</div>
               <div v-if="task.mcpsExtra.length"><span class="k">MCP</span>{{ task.mcpsExtra.map((m) => m.name).join(', ') }}</div>
               <div v-if="task.dbConnectionIds?.length"><span class="k">DB</span>{{ task.dbConnectionIds.length }}개 연결 (읽기 전용)</div>

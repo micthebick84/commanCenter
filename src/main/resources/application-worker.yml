@@ -77,8 +77,10 @@ netis-maker:
     branch-prefix: ${BRANCH_PREFIX:netismaker/}
     git-user-name: ${GIT_USER_NAME:netisMaker}
     git-user-email: ${GIT_USER_EMAIL:netismaker@hamonsoft.local}
-    # 구현은 분석보다 훨씬 오래 걸림 — 큰 코드베이스의 다수 subtask 처리 가정
+    # 구현 claude 상한 — API가 방식별 상한을 claim에 실어 보내면 그 값을 쓰고(스펙 2026-10-15 §5.4), 이 값은 옛 API 대비용
     implementation-timeout: ${IMPLEMENTATION_TIMEOUT:45m}
+    # SDD 구현용 superpowers 플러그인 경로 (스펙 2026-10-15 §6.9) — SuperpowersPlugin이 읽는다. 비면 SDD 요청은 리뷰로 대신 진행
+    superpowers-plugin-path: ${SUPERPOWERS_PLUGIN_PATH:}
     # DESIGN §11: 한국어 분석 프롬프트 템플릿
     prompt-template: |
       당신은 코드베이스 분석 어시스턴트입니다. 모든 출력은 반드시 한국어로 작성하세요.

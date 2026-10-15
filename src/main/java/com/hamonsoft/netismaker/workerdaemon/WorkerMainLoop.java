@@ -690,6 +690,16 @@ public class WorkerMainLoop {
                 """;
     }
 
+    /** PR/MR 본문 전체 상한(자) — GitHub 본문 한도 65,536자보다 낮게 잡아 머리·꼬리가 조금 달라져도 넘지 않게 한다. */
+    static final int PR_BODY_MAX_CHARS = 60_000;
+    /** 줄인 절의 끝 표시 — 리뷰 메모 상한(ImplementationScratch.readReviewNotes)과 같은 문구. */
+    static final String PR_BODY_CUT_MARK = "\n\n…(이하 생략)";
+
+    /**
+     * PR/MR 본문. 전체가 PR_BODY_MAX_CHARS를 넘으면 사전 분석(설계 문서)을 먼저 줄이고, 그래도 넘으면 리뷰 메모를 줄인다 —
+     * 줄인 절은 끝에 `…(이하 생략)`. 머리 줄(방식 줄 포함)과 꼬리는 그대로 둔다. 본문이 길면 이미 push한 구현이
+     * "PR/MR 생성 실패"로 끝나기 때문이다(GitHub 65,536자 한도).
+     */
     static String renderPrBody(WorkerTaskResponse task, long durationMs, String headSha,
                                String modeLine, String reviewNotes) {
         boolean gitlab = task.repoRef().isGitlab();
@@ -701,20 +711,47 @@ public class WorkerMainLoop {
                 : "- **디자인**: 확정 디자인 기반 구현"
                 + (hasDesignUrl ? " — [Claude Design 목업](" + task.designUrl() + ")" : "")
                 + " (작업 상세의 디자인 카드 참고)\n";
-        return "## netisMaker 자동 생성 " + (gitlab ? "MR" : "PR") + "\n\n"
+        String head = "## netisMaker 자동 생성 " + (gitlab ? "MR" : "PR") + "\n\n"
                 + "- **Task**: #" + task.id() + " " + task.title() + "\n"
                 + "- **베이스**: `" + task.githubBranch() + "`\n"
                 + "- **구현 SHA**: `" + headSha.substring(0, Math.min(7, headSha.length())) + "`\n"
                 + (modeLine == null ? "" : modeLine)
                 + designLine
-                + "- **소요시간**: " + (durationMs / 1000) + "초\n\n"
-                + "## 사전 분석\n"
-                + (task.analysisMarkdown() == null ? "" : task.analysisMarkdown())
-                + "\n\n"
-                + (reviewNotes == null ? "" : "## 리뷰 메모\n" + reviewNotes + "\n\n")
-                + "---\n"
+                + "- **소요시간**: " + (durationMs / 1000) + "초\n\n";
+        String tail = "---\n"
                 + "🤖 Generated with netisMaker by Claude Code.\n"
                 + (gitlab ? "리뷰 후 Draft 표시를 해제하세요.\n" : "리뷰 후 Ready for review로 전환하세요.\n");
+        String analysisTitle = "## 사전 분석\n";
+        String notesTitle = "## 리뷰 메모\n";
+
+        String analysis = task.analysisMarkdown() == null ? "" : task.analysisMarkdown();
+        String notes = reviewNotes;
+        // 절 제목·구분 줄바꿈·머리·꼬리를 뺀, 분석과 메모가 나눠 쓸 수 있는 글자 수
+        int room = PR_BODY_MAX_CHARS - head.length() - tail.length() - analysisTitle.length() - 2
+                - (notes == null ? 0 : notesTitle.length() + 2);
+        int notesLength = notes == null ? 0 : notes.length();
+        if (analysis.length() + notesLength > room) {
+            analysis = cutForPrBody(analysis, room - notesLength);
+            if (notes != null && analysis.length() + notes.length() > room) {
+                notes = cutForPrBody(notes, room - analysis.length());
+            }
+        }
+        return head
+                + analysisTitle + analysis + "\n\n"
+                + (notes == null ? "" : notesTitle + notes + "\n\n")
+                + tail;
+    }
+
+    /**
+     * text를 max자 이내로 줄이고 끝에 표시를 붙인다. 표시 하나는 항상 들어가게 max를 그 길이 아래로 내리지 않는다
+     * (남은 자리가 없어도 절이 아무 말 없이 비지는 않게). 이모지 같은 서로게이트 쌍은 가운데서 자르지 않는다.
+     */
+    private static String cutForPrBody(String text, int max) {
+        int limit = Math.max(max, PR_BODY_CUT_MARK.length());
+        if (text.length() <= limit) return text;
+        int keep = limit - PR_BODY_CUT_MARK.length();
+        if (keep > 0 && Character.isHighSurrogate(text.charAt(keep - 1))) keep--;
+        return text.substring(0, keep) + PR_BODY_CUT_MARK;
     }
 
     private void safePostAnalysisFailure(Long taskId, String reason) {

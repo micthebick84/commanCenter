@@ -482,4 +482,80 @@ class WorkerMainLoopImplementationModeTest {
         assertThat(WorkerMainLoop.renderPrBody(task, 12_000, "abcdef1234567", null, null))
                 .doesNotContain("null").doesNotContain("구현 방식").doesNotContain("리뷰 메모");
     }
+
+    // ---- PR/MR 본문 전체 상한 60,000자 (GitHub 본문 한도 65,536자 — 최종 리뷰) ----
+
+    private static WorkerTaskResponse taskWithAnalysis(String gitUrl, String analysis) {
+        return new WorkerTaskResponse(7L, "acme/widgets", "main", "Add login", "desc",
+                WorkerTaskResponse.Kind.IMPLEMENTATION, List.of(), analysis, "[]", null, null, List.of(),
+                null, null, null, null, null, null, null, null, gitUrl, null, null);
+    }
+
+    @Test
+    void an_oversized_pr_body_shortens_the_analysis_first_and_keeps_the_header_the_notes_and_the_tail() {
+        String notes = "리뷰 결론: 수정 2건\n" + "나".repeat(20_000);
+
+        String body = WorkerMainLoop.renderPrBody(taskWithAnalysis(null, "가".repeat(100_000)), 12_000,
+                "abcdef1234567", "- **구현 방식**: SDD (2회째)\n", notes);
+
+        assertThat(body.length()).isLessThanOrEqualTo(60_000).isGreaterThan(59_000);   // 상한까지 채우고 더 자르지 않는다
+        assertThat(body).contains("- **구현 SHA**: `abcdef1`\n- **구현 방식**: SDD (2회째)\n- **소요시간**: 12초\n")
+                .contains("…(이하 생략)\n\n## 리뷰 메모\n" + notes + "\n\n---\n")   // 분석만 잘리고 메모는 온전하다
+                .endsWith("리뷰 후 Ready for review로 전환하세요.\n");
+    }
+
+    @Test
+    void the_review_notes_are_shortened_too_only_when_the_cut_analysis_still_does_not_fit() {
+        String notes = "메모 시작\n" + "나".repeat(70_000);
+
+        String body = WorkerMainLoop.renderPrBody(taskWithAnalysis(null, "가".repeat(100_000)), 12_000,
+                "abcdef1234567", "- **구현 방식**: 리뷰\n", notes);
+
+        assertThat(body.length()).isLessThanOrEqualTo(60_000).isGreaterThan(59_000);
+        assertThat(body).contains("- **구현 방식**: 리뷰\n")
+                .contains("## 사전 분석\n\n\n…(이하 생략)\n\n## 리뷰 메모\n메모 시작\n")   // 분석은 표시만 남는다
+                .contains("…(이하 생략)\n\n---\n")                                          // 메모도 표시로 끝난다
+                .endsWith("리뷰 후 Ready for review로 전환하세요.\n");
+    }
+
+    @Test
+    void a_body_exactly_at_the_cap_is_left_alone_and_one_more_char_is_cut() {
+        String mode = "- **구현 방식**: 리뷰\n";
+        int overhead = WorkerMainLoop.renderPrBody(taskWithAnalysis(null, ""), 12_000, "abcdef1234567", mode, null)
+                .length();
+
+        String atCap = WorkerMainLoop.renderPrBody(taskWithAnalysis(null, "가".repeat(60_000 - overhead)),
+                12_000, "abcdef1234567", mode, null);
+        String over = WorkerMainLoop.renderPrBody(taskWithAnalysis(null, "가".repeat(60_001 - overhead)),
+                12_000, "abcdef1234567", mode, null);
+
+        assertThat(atCap).hasSize(60_000).doesNotContain("이하 생략");
+        assertThat(over).hasSize(60_000).contains("…(이하 생략)\n\n---\n");
+    }
+
+    @Test
+    void a_gitlab_mr_body_gets_the_same_cap() {
+        String body = WorkerMainLoop.renderPrBody(
+                taskWithAnalysis("https://gitlab.example/acme/widgets.git", "가".repeat(100_000)), 12_000,
+                "abcdef1234567", "- **구현 방식**: 직접\n", null);
+
+        assertThat(body.length()).isLessThanOrEqualTo(60_000);
+        assertThat(body).startsWith("## netisMaker 자동 생성 MR\n").contains("- **구현 방식**: 직접\n")
+                .endsWith("리뷰 후 Draft 표시를 해제하세요.\n");
+    }
+
+    @Test
+    void cutting_never_splits_a_surrogate_pair() {
+        for (int pad = 0; pad < 2; pad++) {   // 자르는 자리가 짝수·홀수 어느 쪽이든
+            String analysis = "a".repeat(pad) + "😀".repeat(40_000);
+
+            String body = WorkerMainLoop.renderPrBody(taskWithAnalysis(null, analysis), 12_000, "abcdef1234567",
+                    "- **구현 방식**: 리뷰\n", null);
+
+            assertThat(body.length()).isLessThanOrEqualTo(60_000);
+            // 짝 잃은 서로게이트가 있으면 UTF-8로 쓰고 읽을 때 '?'로 바뀌어 같지 않다
+            assertThat(new String(body.getBytes(java.nio.charset.StandardCharsets.UTF_8),
+                    java.nio.charset.StandardCharsets.UTF_8)).isEqualTo(body);
+        }
+    }
 }

@@ -134,6 +134,46 @@ class WorktreeServiceTest {
         String raw = ProcessRunner.requireSuccess(dir.toFile(),
                 List.of("git", "rev-parse", "--git-path", "info/exclude"), 30).trim();
         Path exclude = Path.of(raw).isAbsolute() ? Path.of(raw) : dir.resolve(raw);
-        assertThat(Files.readAllLines(exclude).stream().filter(".netis/"::equals).count()).isEqualTo(1);
+        // 레포 루트 기준 패턴(앞의 /)으로 한 번씩만
+        assertThat(Files.readAllLines(exclude).stream().filter("/.netis/"::equals).count()).isEqualTo(1);
+        assertThat(Files.readAllLines(exclude)).contains("/.netis/", "/.design/", "/.netis-deploy-env.json")
+                .doesNotContain(".netis/", ".design/", ".netis-deploy-env.json");
+    }
+
+    /**
+     * 같은 이름이 대상 레포의 하위 폴더에 있어도(예: 소스 트리의 `.design/`) 그건 레포의 실제 파일이다 — 패턴이 어느 깊이에서나
+     * 맞으면 새 파일이 모든 방식의 커밋에서 조용히 빠진다 (최종 리뷰).
+     */
+    @Test
+    void the_exclude_patterns_cover_only_the_repo_root_not_same_named_subfolders() throws Exception {
+        WorkerProperties p = props();
+        GitRepoCache cache = new GitRepoCache(p);
+        RepoRef ref = new RepoRef("github", "acme/widgets", bareRemote().toUri().toString());
+        File repoDir = cache.ensureFresh(ref, "main").dir();
+        WorktreeService worktrees = new WorktreeService(p, cache);
+        Path dir = worktrees.create(repoDir, GitRemotes.localKey(ref), "main", 11, "root-only").dir().toPath();
+        assertThat(worktrees.ensureWorkerExcludes(dir.toFile())).isTrue();
+
+        // 루트의 워커 임시 파일
+        Files.createDirectories(dir.resolve(".netis/plan"));
+        Files.writeString(dir.resolve(".netis/plan/task-11-plan.md"), "plan");
+        Files.createDirectories(dir.resolve(".design"));
+        Files.writeString(dir.resolve(".design/a.html"), "<p/>");
+        Files.writeString(dir.resolve(".netis-deploy-env.json"), "{}");
+        // 하위 폴더의 같은 이름 — 대상 레포의 실제 파일
+        Files.createDirectories(dir.resolve("src/.design"));
+        Files.writeString(dir.resolve("src/.design/real.txt"), "x");
+        Files.createDirectories(dir.resolve("docs/.netis"));
+        Files.writeString(dir.resolve("docs/.netis/notes.md"), "x");
+        Files.writeString(dir.resolve("src/.netis-deploy-env.json"), "{}");
+
+        String status = ProcessRunner.requireSuccess(dir.toFile(),
+                List.of("git", "status", "--porcelain", "--untracked-files=all"), 30);
+        assertThat(status).contains("src/.design/real.txt")
+                .contains("docs/.netis/notes.md")
+                .contains("src/.netis-deploy-env.json")
+                .doesNotContain("?? .design/")
+                .doesNotContain("?? .netis/")
+                .doesNotContain("?? .netis-deploy-env.json");
     }
 }

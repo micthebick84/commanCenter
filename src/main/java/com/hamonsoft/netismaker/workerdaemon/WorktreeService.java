@@ -35,8 +35,12 @@ public class WorktreeService {
 
     private static final long GIT_TIMEOUT_SECONDS = 600;
 
-    /** 워커 임시 파일 — 에이전트 커밋(SDD 태스크 커밋 포함)에 섞이지 않게 info/exclude에 둔다 (스펙 2026-10-15 §6.1). */
-    static final List<String> WORKER_EXCLUDES = List.of(".netis/", ".design/", ".netis-deploy-env.json");
+    /**
+     * 워커 임시 파일 — 에이전트 커밋(SDD 태스크 커밋 포함)에 섞이지 않게 info/exclude에 둔다 (스펙 2026-10-15 §6.1).
+     * 앞의 `/`로 레포 루트에만 건다: 없으면 대상 레포 하위 폴더의 같은 이름(`src/.design/` 등)까지 맞아, 거기에 새로 만든
+     * 파일이 모든 방식의 커밋에서 조용히 빠진다.
+     */
+    static final List<String> WORKER_EXCLUDES = List.of("/.netis/", "/.design/", "/.netis-deploy-env.json");
 
     private final WorkerProperties props;
     private final GitRepoCache repos;

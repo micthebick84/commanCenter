@@ -136,7 +136,7 @@ ALTER TABLE com.task
 ### 6.1 공통 (모든 방식)
 
 - **시도 번호 브랜치**: 2회째부터 `{prefix}task-{id}-{slug}-r{n}`(slug가 비면 `{prefix}task-{id}-r{n}`). 브랜치 이름이 작업마다 고정이고 push가 강제 덮어쓰기가 아니라서, 이전 시도가 올린 브랜치와 겹치면 push가 거부되기 때문이다. 로컬 브랜치 정리(`deleteTaskBranches`)는 이미 `task-{id}-` 접두로 매칭하므로 그대로 덮인다.
-- **임시 파일 커밋 제외**: worktree를 만든 뒤 `git rev-parse --git-path info/exclude`가 가리키는 파일에 `.netis/`, `.design/`, `.netis-deploy-env.json`을 없는 줄만 추가한다(레포 캐시 공용 — 워커 전용 이름이라 다른 작업에도 무해). 실패하면 경고만 남기고 SDD는 리뷰로 대신 진행(§6.5).
+- **임시 파일 커밋 제외**: worktree를 만든 뒤 `git rev-parse --git-path info/exclude`가 가리키는 파일에 `/.netis/`, `/.design/`, `/.netis-deploy-env.json`을 없는 줄만 추가한다(앞의 `/`로 레포 루트에만 건다 — 없으면 대상 레포 하위 폴더의 같은 이름 파일이 커밋에서 조용히 빠진다. 레포 캐시 공용 — 워커 전용 이름이라 다른 작업에도 무해). 실패하면 경고만 남기고 SDD는 리뷰로 대신 진행(§6.5).
 - **git 작성자**: 구현 claude 프로세스 env에 `GIT_AUTHOR_NAME`·`GIT_AUTHOR_EMAIL`·`GIT_COMMITTER_NAME`·`GIT_COMMITTER_EMAIL` = 워커 설정 `git-user-name`·`git-user-email`.
 - **상한**: claim의 `implementationTimeoutMinutes`(양수일 때), 없으면 `IMPLEMENTATION_TIMEOUT`.
 - **커밋 지시 placeholder**: `application-worker.yml` 구현 템플릿의 `- 의미 있는 변경을 누적하세요 (커밋은 워커가 마지막에 한 번에 처리)` 줄과 `defaultImplementationPrompt()`의 `- 각 subtask 완료마다 의미 있는 변경을 누적하세요` 줄을 `- {commit_rule}`로 바꾼다. 치환값 — 직접·리뷰: "의미 있는 변경을 누적하세요 (커밋은 워커가 마지막에 한 번에 처리)"(라이브 yml 문구 그대로라 직접 방식의 실제 프롬프트는 바뀌지 않는다), SDD: "태스크별 커밋은 SDD 흐름대로 하세요 — push는 하지 마세요. 끝난 뒤 남은 변경과 push는 워커가 처리합니다".

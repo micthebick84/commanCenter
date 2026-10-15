@@ -64,14 +64,16 @@
 
 ```sql
 ALTER TABLE com.task
-    ADD COLUMN implementation_mode    VARCHAR(10) NOT NULL DEFAULT 'DIRECT',
-    ADD COLUMN implementation_attempt INTEGER     NOT NULL DEFAULT 1,
+    ADD COLUMN implementation_mode            VARCHAR(10) NOT NULL DEFAULT 'DIRECT',
+    ADD COLUMN implementation_attempt         INTEGER     NOT NULL DEFAULT 1,
+    ADD COLUMN implementation_timeout_minutes INTEGER,
     ADD CONSTRAINT ck_task_implementation_mode    CHECK (implementation_mode IN ('DIRECT', 'REVIEW', 'SDD')),
     ADD CONSTRAINT ck_task_implementation_attempt CHECK (implementation_attempt >= 1);
 ```
 
 - 기존 작업은 전부 `DIRECT`·1회째 — 지금 동작 그대로.
-- enum `ImplementationMode { DIRECT("직접"), REVIEW("리뷰"), SDD("SDD") }`, `Task.implementationMode`(`@Enumerated(STRING)`)·`Task.implementationAttempt`.
+- enum `ImplementationMode { DIRECT("직접"), REVIEW("리뷰"), SDD("SDD") }`, `Task.implementationMode`(`@Enumerated(STRING)`)·`Task.implementationAttempt`·`Task.implementationTimeoutMinutes`.
+- `implementation_timeout_minutes`는 워커가 구현을 가져갈 때(claim) 그 방식의 상한을 기록한 값이다 — 작업 응답이 설정을 몰라도 상한을 보여 줄 수 있고, 실행 중에 설정을 바꿔도 화면 숫자가 이번 시도에 실제로 걸린 상한과 같다.
 
 ## 5. API·서비스
 
@@ -93,11 +95,11 @@ ALTER TABLE com.task
 | `implementationMode` | `DIRECT`·`REVIEW`·`SDD` |
 | `implementationAttempt` | 1부터 |
 | `claimedAt` | 워커가 마지막으로 가져간 시각 — 결과 보고 뒤에도 남으므로 화면은 구현중일 때만 쓴다 |
-| `implementationTimeoutMinutes` | 이 작업 방식의 구현 상한(§5.4) |
+| `implementationTimeoutMinutes` | 이번 시도의 구현 상한(§5.4, claim 때 기록 — 그 전에는 null) |
 
 ### 5.3 워커에 넘기는 작업 (claim)
 
-`WorkerTaskResponse`에 `implementationMode`·`implementationAttempt`·`implementationTimeoutMinutes`를 추가한다(IMPLEMENTATION에만 값, 다른 kind는 null). 옛 워커는 모르는 필드를 무시한다(`WorkerHttpClient`가 `FAIL_ON_UNKNOWN_PROPERTIES=false`).
+`WorkerTaskResponse`에 구현 지시 블록 `implementation` = `{mode, attempt, timeoutMinutes}`(레코드 `ImplementationSpec`)을 추가한다(IMPLEMENTATION에만 값, 다른 kind는 null). claim이 `구현대기 → 구현중`으로 옮길 때 방식별 상한을 `task.implementation_timeout_minutes`에 기록하고 같은 값을 싣는다. 옛 워커는 모르는 필드를 무시한다(`WorkerHttpClient`가 `FAIL_ON_UNKNOWN_PROPERTIES=false`).
 
 ### 5.4 시간 상한·멈춤 판정
 
@@ -208,7 +210,7 @@ ALTER TABLE com.task
 
 ### 6.9 설정·기동 스크립트
 
-- 워커 설정 `netis-maker.worker.superpowers-plugin-path: ${SUPERPOWERS_PLUGIN_PATH:}`.
+- 워커 설정 `netis-maker.worker.superpowers-plugin-path: ${SUPERPOWERS_PLUGIN_PATH:}` — `WorkerProperties` 레코드가 아니라 전용 빈 `SuperpowersPlugin`이 읽는다(레코드를 위치 인자로 만드는 테스트 12곳을 건드리지 않으려고). 경로 아래 `skills/subagent-driven-development/SKILL.md`가 있어야 SDD 가능으로 본다.
 - Windows `scripts/start-public.ps1`: 인터뷰 서비스용 superpowers 경로 탐색(지금 인터뷰 블록 안)을 워커 기동 앞으로 옮겨 워커 env에도 넘긴다. 못 찾으면 워커는 그대로 띄우고 경고 한 줄.
 - mac `scripts/start-all.sh`: `SUPERPOWERS_PLUGIN_PATH`를 워커에도 넘긴다.
 
@@ -267,7 +269,7 @@ ALTER TABLE com.task
 |---|---|
 | DB | `src/main/resources/db/migration/V29__task_implementation_mode.sql` |
 | API | `entity/ImplementationMode.java`(신규), `entity/Task.java`, `service/ImplementationModePolicy.java`(신규 — 상한·판정 설정과 기동 검사), `controller/InterviewController.java`, `service/InterviewService.java`, `controller/TaskController.java`, `service/TaskService.java`, `dto/TaskResponse.java`, `dto/WorkerTaskResponse.java`, `dto/WorkerResultRequest.java`, `service/WorkerService.java`, `service/StaleTaskRecoveryJob.java`, `src/main/resources/application.yml` |
-| 워커 | `workerdaemon/WorkerMainLoop.java`, `workerdaemon/ImplementationPlanFiles.java`(신규 — 계획·설계 파일 쓰기, 제목 변환, 리뷰 메모 회수), `workerdaemon/ClaudeExecAdapter.java`, `workerdaemon/GitOpsService.java`, `workerdaemon/WorktreeService.java`, `workerdaemon/WorkerProperties.java`, `src/main/resources/application-worker.yml`, `src/main/resources/prompts/implementation-review-section.md`·`implementation-reviewer.md`(신규) |
+| 워커 | `workerdaemon/WorkerMainLoop.java`, `workerdaemon/ImplementationScratch.java`(신규 — 계획·설계 파일 쓰기, 제목 변환, 리뷰 메모 회수, 임시 파일 삭제), `workerdaemon/ImplementationModeResolver.java`(신규 — 대신 진행 판정), `workerdaemon/ImplementationPrompts.java`(신규 — 방식별 플랜 절·커밋 지시·PR 방식 줄), `workerdaemon/SuperpowersPlugin.java`(신규 — 플러그인 경로), `workerdaemon/ClaudeExecAdapter.java`, `workerdaemon/GitOpsService.java`, `workerdaemon/WorktreeService.java`, `src/main/resources/application-worker.yml`, `src/main/resources/prompts/implementation-review-section.md`·`implementation-reviewer.md`(신규) |
 | 스크립트 | `scripts/start-public.ps1`, `scripts/start-all.sh` |
-| 프론트 | `composables/implementationMode.ts`(신규), `components/ImplementationModePicker.vue`(신규), `components/tasks/ImplementationRetryDialog.vue`(신규), `components/InterviewPanel.vue`, `pages/tasks/[id].vue`, `pages/tasks/index.vue`, `components/tasks/TaskDetailMobile.vue`, `components/tasks/TaskCardCompact.vue`, `composables/taskStages.ts`, `test/fixtures/task.ts`, `scripts/hydration-smoke.mjs` |
+| 프론트 | `composables/implementationMode.ts`(신규), `composables/useNowTick.ts`(신규 — 30초 시계, 마운트 뒤에만), `components/ImplementationModePicker.vue`(신규), `components/tasks/ImplementationRetryDialog.vue`(신규), `components/InterviewPanel.vue`, `pages/tasks/[id].vue`, `pages/tasks/index.vue`, `components/tasks/TaskDetailMobile.vue`, `components/tasks/TaskCardCompact.vue`, `composables/taskStages.ts`, `test/fixtures/task.ts`, `scripts/hydration-smoke.mjs` |
 | 문서 | `CLAUDE.md` |

@@ -30,7 +30,7 @@ public record InterviewClaimResponse(
         List<Turn> turns,
         String model,
         String effort,
-        /** 세션 누적 SHADOW 비용. 워커가 CostGuard를 이 값으로 시드해 세션 전체 누적 가드로 쓴다(단일 턴 아님). */
+        /** 세션 누적 SHADOW 비용. 인터뷰 서비스가 resume 턴의 SDK 누적 비용에서 이 값을 빼 이번 턴 비용을 구한다(2026-10-15). */
         double totalCostUsd,
         /**
          * 등록 시 업로드된 첨부(절대경로 — work_dir과 동일한 단일 호스트 전제). 항상 non-null.

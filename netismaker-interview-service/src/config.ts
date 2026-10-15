@@ -2,8 +2,6 @@ export interface Config {
   apiBaseUrl: string;
   workerApiKey: string;
   workerId: string;
-  /** SHADOW per-session quota guard (turns/quota, NOT dollars — subscription auth). */
-  quotaGuard: number;
   claimPollIntervalMs: number;
   heartbeatIntervalMs: number;
   superpowersPluginPath: string;
@@ -54,7 +52,6 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
     apiBaseUrl: req(env, 'API_BASE_URL'),
     workerApiKey: req(env, 'WORKER_API_KEY'),
     workerId: req(env, 'WORKER_ID'),
-    quotaGuard: num(env, 'INTERVIEW_QUOTA_GUARD', 20),
     claimPollIntervalMs: num(env, 'CLAIM_POLL_INTERVAL_MS', 3000),
     heartbeatIntervalMs: num(env, 'HEARTBEAT_INTERVAL_MS', 15000),
     superpowersPluginPath: req(env, 'SUPERPOWERS_PLUGIN_PATH'),

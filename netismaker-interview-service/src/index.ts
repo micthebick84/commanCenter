@@ -17,7 +17,6 @@ async function main(): Promise<void> {
     superpowersPluginPath: cfg.superpowersPluginPath,
     claudeCliPath,
     mcpsBase,
-    quotaGuard: cfg.quotaGuard,
     maxTurns: cfg.maxTurns,
     forceFinishTurns: cfg.forceFinishTurns,
     heartbeatIntervalMs: cfg.heartbeatIntervalMs,

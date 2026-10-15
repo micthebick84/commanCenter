@@ -24,17 +24,18 @@ public class SuperpowersPlugin {
     static final String SDD_SKILL = "skills/subagent-driven-development/SKILL.md";
 
     private final String configured;
-    private final Path ready;
+    /** 설정한 경로를 절대·정규화한 것 — 설정이 비었거나 경로로 읽을 수 없으면 null. */
+    private final Path dir;
 
     public SuperpowersPlugin(@Value("${netis-maker.worker.superpowers-plugin-path:}") String configuredPath) {
         this.configured = configuredPath == null ? "" : configuredPath.trim();
-        this.ready = resolve(this.configured);
+        this.dir = absolute(this.configured);
     }
 
     @PostConstruct
     void logStatus() {
-        if (ready != null) {
-            log.info("SDD 플러그인: {}", ready);
+        if (sddReadyPath().isPresent()) {
+            log.info("SDD 플러그인: {}", dir);
         } else if (configured.isEmpty()) {
             log.warn("SDD 플러그인 없음(SUPERPOWERS_PLUGIN_PATH 미설정) — SDD 요청은 리뷰로 대신 진행");
         } else {
@@ -42,17 +43,22 @@ public class SuperpowersPlugin {
         }
     }
 
-    /** SDD를 돌릴 수 있는 플러그인 경로 — 준비가 안 됐으면 empty. */
+    /**
+     * SDD를 돌릴 수 있는 플러그인 경로 — 준비가 안 됐으면 empty. 부를 때마다 SKILL.md를 다시 확인한다(파일 하나 stat):
+     * 기동 뒤에 플러그인 폴더가 지워지거나 바뀌면 낡은 --plugin-dir을 주는 대신 리뷰로 대신 진행하게. 경로는 절대 경로다 —
+     * claude는 worktree를 작업 디렉터리로 돌아서 워커 기준 상대 경로는 거기서 맞지 않는다.
+     * 호출부는 구현 하나에서 한 번만 불러 그 값을 판정과 --plugin-dir에 함께 쓴다(그 사이 상태가 달라지지 않게).
+     */
     public Optional<Path> sddReadyPath() {
-        return Optional.ofNullable(ready);
+        if (dir == null) return Optional.empty();
+        return Files.isRegularFile(dir.resolve(SDD_SKILL)) ? Optional.of(dir) : Optional.empty();
     }
 
-    static Path resolve(String configured) {
-        if (configured == null || configured.isBlank()) return null;
+    private static Path absolute(String configured) {
+        if (configured.isBlank()) return null;
         try {
-            Path dir = Path.of(configured.trim());
-            return Files.isRegularFile(dir.resolve(SDD_SKILL)) ? dir : null;
-        } catch (Exception e) {
+            return Path.of(configured).toAbsolutePath().normalize();
+        } catch (RuntimeException e) {   // InvalidPathException 등 — 경로로 읽을 수 없으면 없는 것으로
             return null;
         }
     }

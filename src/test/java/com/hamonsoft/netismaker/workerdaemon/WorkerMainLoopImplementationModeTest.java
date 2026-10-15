@@ -77,10 +77,14 @@ class WorkerMainLoopImplementationModeTest {
     }
 
     private WorkerMainLoop loop(String pluginPath) {
+        return loop(new SuperpowersPlugin(pluginPath));
+    }
+
+    private WorkerMainLoop loop(SuperpowersPlugin plugin) {
         return new WorkerMainLoop(props(), http, repos, claude, mock(PromptResultParser.class),
                 mock(WorkerMcpSupport.class), worktrees, gitOps, mock(DeployService.class), reporter,
                 mock(SilentLossTracker.class), mock(DesignResultHarvester.class), mock(TaskCloser.class),
-                new SuperpowersPlugin(pluginPath));
+                plugin);
     }
 
     /** 인터뷰 플랜이 있는 구현 작업. mode가 null이면 claim에 implementation 블록이 없다(옛 API). */
@@ -190,6 +194,25 @@ class WorkerMainLoopImplementationModeTest {
         assertThat(r.implementationAttempt()).isEqualTo(2);
         assertThat(prBody()).contains("- **구현 방식**: SDD (2회째)\n")
                 .contains("## 리뷰 메모\nRuling: 범위 밖 정규화는 보류");
+    }
+
+    /**
+     * 준비 판정과 --plugin-dir이 같은 답을 쓴다 — 플러그인 폴더는 호출할 때마다 다시 확인하므로(SuperpowersPlugin) 두 번 부르면
+     * 그 사이에 사라져 orElseThrow로 구현이 죽을 수 있다 (최종 리뷰).
+     */
+    @Test
+    void the_plugin_is_resolved_once_per_run_so_the_readiness_check_and_plugin_dir_agree() throws Exception {
+        claims(ImplementationMode.SDD, 1, 240, "### 작업 1: A");
+        AtomicReference<Exec> exec = claudeSucceeds(dir -> { });
+        SuperpowersPlugin vanishing = mock(SuperpowersPlugin.class);
+        // 첫 호출은 준비됨, 그 뒤로 부르면 폴더가 사라진 것처럼 답한다
+        when(vanishing.sddReadyPath()).thenReturn(Optional.of(pluginDir), Optional.empty());
+
+        loop(vanishing).pollAndProcess();
+
+        assertThat(exec.get().options().extraArgs()).containsExactly("--plugin-dir", pluginDir.toString());
+        assertThat(reported().status()).isEqualTo(TaskStatus.PR_CREATED);
+        verify(vanishing, times(1)).sddReadyPath();
     }
 
     @Test

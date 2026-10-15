@@ -261,8 +261,10 @@ public class WorkerMainLoop {
                         task.analysisMarkdown());
             }
         }
+        // 플러그인은 이 구현에서 한 번만 확인해 판정과 --plugin-dir이 같은 답을 쓴다(그 사이 폴더가 지워져도 orElseThrow가 안 터진다)
+        Optional<Path> sddPlugin = superpowers.sddReadyPath();
         ImplementationModeResolver.Resolution mode = ImplementationModeResolver.resolve(requested,
-                new ImplementationModeResolver.Inputs(superpowers.sddReadyPath().isPresent(), excludesReady,
+                new ImplementationModeResolver.Inputs(sddPlugin.isPresent(), excludesReady,
                         hasPlan, planWritten, hasPlan ? ImplementationScratch.countTaskHeadings(planText) : 0));
         if (mode.fellBack()) {
             log.warn("구현 방식 대신 진행: task={} {} → {} ({})",
@@ -279,7 +281,7 @@ public class WorkerMainLoop {
                 ImplementationPrompts.commitRule(mode.effective()))
                 + DbMcpWorkerSupport.promptSection(task.dbMcp());
         List<String> extraArgs = mode.effective() == ImplementationMode.SDD
-                ? List.of("--plugin-dir", superpowers.sddReadyPath().orElseThrow().toString())
+                ? List.of("--plugin-dir", sddPlugin.orElseThrow().toString())   // SDD는 sddPlugin이 있을 때만 나온다
                 : List.of();
         ClaudeExecAdapter.ExecResult exec;
         try {

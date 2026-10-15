@@ -14,6 +14,7 @@ import com.hamonsoft.netismaker.config.WorkerApiKeyFilter;
 import com.hamonsoft.netismaker.service.UserProvisioner;
 
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.jwt;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
@@ -65,11 +66,23 @@ class MeControllerTest {
 
     @Test
     void authenticated_api_request_provisions_user() throws Exception {
-        mvc.perform(get("/api/me").with(jwt().jwt(j -> j
-                        .claim("username", "newbie")
-                        .claim("email", "newbie@hamonsoft.co.kr"))))
+        mvc.perform(get("/api/me").with(jwt()
+                        .jwt(j -> j
+                                .claim("username", "newbie")
+                                .claim("email", "newbie@hamonsoft.co.kr"))
+                        .authorities(new org.springframework.security.core.authority.SimpleGrantedAuthority("ROLE_USER"))))
                 .andExpect(status().isOk());
 
         verify(userProvisioner).ensureUser("newbie", "newbie@hamonsoft.co.kr");
+    }
+
+    @Test
+    void token_without_user_role_does_not_provision() throws Exception {
+        mvc.perform(get("/api/me").with(jwt()
+                        .jwt(j -> j.claim("sub", "some-client"))
+                        .authorities(new org.springframework.security.core.authority.SimpleGrantedAuthority("SCOPE_x"))))
+                .andExpect(status().isOk());
+
+        verifyNoInteractions(userProvisioner);
     }
 }

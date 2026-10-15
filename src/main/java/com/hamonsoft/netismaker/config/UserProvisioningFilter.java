@@ -30,7 +30,7 @@ public class UserProvisioningFilter extends OncePerRequestFilter {
                                     HttpServletResponse response,
                                     FilterChain chain) throws ServletException, IOException {
         Authentication auth = SecurityContextHolder.getContext().getAuthentication();
-        if (auth instanceof JwtAuthenticationToken jwt) {
+        if (auth instanceof JwtAuthenticationToken jwt && isHumanUser(jwt)) {
             try {
                 provisioner.ensureUser(AuthContext.requireUserId(jwt), jwt.getToken().getClaimAsString("email"));
             } catch (IllegalStateException ignored) {
@@ -38,5 +38,11 @@ public class UserProvisioningFilter extends OncePerRequestFilter {
             }
         }
         chain.doFilter(request, response);
+    }
+
+    // client_credentials 토큰은 sub=client_id라 사용자 행을 만들면 안 된다 — 사용자 역할이 있는 토큰만
+    private static boolean isHumanUser(Authentication auth) {
+        return auth.getAuthorities().stream()
+                .anyMatch(a -> "ROLE_USER".equals(a.getAuthority()) || "ROLE_ADMIN".equals(a.getAuthority()));
     }
 }

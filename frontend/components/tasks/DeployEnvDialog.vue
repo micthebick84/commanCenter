@@ -6,6 +6,7 @@ import {
   blankRow,
   isSuggestion,
   missingRequired,
+  noEnvNotice,
   rowsFromEnvVars,
   rowsFromSuggestion,
   suggestionCaption,
@@ -28,6 +29,7 @@ const emit = defineEmits<{
 const $q = useQuasar()
 const rows = ref<EnvRow[]>([])
 const caption = ref<string | null>(null)
+const notice = ref<string | null>(null)
 const loading = ref(false)
 const submitting = ref(false)
 let rowSeq = 0
@@ -45,14 +47,17 @@ async function load() {
   loading.value = true
   rows.value = []
   caption.value = null
+  notice.value = null
   let next: EnvRow[] = []
   let nextCaption: string | null = null
+  let nextNotice: string | null = null
   let failed = false
   try {
     const res = await useApi(`/api/tasks/${props.taskId}/deploy-env`)
     if (!isSuggestion(res)) throw new Error('unexpected deploy-env response')
     next = rowsFromSuggestion(res, nextId)
     nextCaption = suggestionCaption(res)
+    nextNotice = noEnvNotice(res)
   } catch {
     failed = true
   }
@@ -63,6 +68,7 @@ async function load() {
   }
   rows.value = next
   caption.value = nextCaption
+  notice.value = nextNotice
   loading.value = false
 }
 
@@ -115,6 +121,7 @@ async function submit() {
         </q-card-section>
         <q-card-section class="q-pt-none text-caption text-grey-7">
           <div v-if="caption" class="text-primary q-mb-xs" data-test="deploy-env-caption">{{ caption }}</div>
+          <div v-if="notice" class="text-orange-9 q-mb-xs" data-test="deploy-env-no-env-notice">{{ notice }}</div>
           <div>
             컨테이너에 <code>-e KEY=VALUE</code>로 주입됩니다. 값이 빈 변수는 보내지 않습니다.
             비밀 값은 마스킹 표시되지만 평문 저장됩니다.

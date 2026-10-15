@@ -82,9 +82,42 @@ class WorkerServiceImplementationAttemptTest {
 
         assertThat(t.getStatus()).isEqualTo(TaskStatus.IMPLEMENTING);
         assertThat(t.getPrUrl()).isNull();
-        assertThat(lastHistoryReason()).isEqualTo("이전 시도(1회째)의 늦은 보고 무시: PR생성");
+        // 이전 시도가 만든 PR·브랜치가 어디 있는지 이력에서 찾을 수 있다 (앞부분은 그대로)
+        assertThat(lastHistoryReason()).isEqualTo("이전 시도(1회째)의 늦은 보고 무시: PR생성"
+                + " (PR: https://github.com/acme/widgets/pull/9, 브랜치: netismaker/task-7-t)");
         verify(stageUsageRepo).accumulate(eq(7L), eq(TaskStageUsage.STAGE_IMPLEMENTATION), any(),
                 anyLong(), anyLong(), anyLong(), anyLong());
+    }
+
+    /** 늦은 보고 — PR·브랜치 값만 골라 담는다. */
+    private static WorkerResultRequest late(TaskStatus status, String prUrl, String headBranch) {
+        return new WorkerResultRequest("w1", status,
+                null, null, null, null, null,
+                prUrl, prUrl == null ? null : 9, headBranch, null, null,
+                null, null, null, null, null,
+                null, null, null, null, null)
+                .withImplementationAttempt(1);
+    }
+
+    @Test
+    void the_ignored_report_history_names_only_the_pr_or_branch_the_report_carries() {
+        task(TaskStatus.IMPLEMENTING, 2);
+        service.recordResult(7L, late(TaskStatus.IMPLEMENTATION_FAILED, null, "netismaker/task-7-t"));
+        assertThat(lastHistoryReason()).isEqualTo("이전 시도(1회째)의 늦은 보고 무시: 구현실패 (브랜치: netismaker/task-7-t)");
+    }
+
+    @Test
+    void the_ignored_report_history_names_a_pr_without_a_branch() {
+        task(TaskStatus.IMPLEMENTING, 2);
+        service.recordResult(7L, late(TaskStatus.PR_CREATED, "https://github.com/acme/widgets/pull/9", null));
+        assertThat(lastHistoryReason()).isEqualTo("이전 시도(1회째)의 늦은 보고 무시: PR생성 (PR: https://github.com/acme/widgets/pull/9)");
+    }
+
+    @Test
+    void the_ignored_report_history_has_no_detail_when_the_report_names_nothing() {
+        task(TaskStatus.IMPLEMENTING, 2);
+        service.recordResult(7L, late(TaskStatus.IMPLEMENTATION_FAILED, " ", ""));   // 공백만 — 없는 것으로
+        assertThat(lastHistoryReason()).isEqualTo("이전 시도(1회째)의 늦은 보고 무시: 구현실패");
     }
 
     @Test

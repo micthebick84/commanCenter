@@ -19,7 +19,7 @@ import java.util.List;
  *   2) gh CLI 설치 + `gh auth login` 또는 GH_TOKEN 환경변수. GitLab은 GITLAB_TOKEN(scope: api)만 있으면 됨 — CLI 불필요
  *
  *  흐름:
- *    1) git status --porcelain → 변경 없음이면 IOException("nothing to commit")
+ *    1) git status --porcelain → 변경도 베이스 이후 커밋도 없으면 IOException("nothing to commit")
  *    2) git add -A
  *    3) git -c user.name=... -c user.email=... commit -m {msg}
  *    4) git -c credential.helper= push {인증 URL} HEAD:refs/heads/{branch}
@@ -52,28 +52,80 @@ public class GitOpsService {
         return !porcelain.isBlank();
     }
 
+    /** 예전 동작 — 변경이 꼭 있어야 커밋한다(에이전트 커밋을 모르는 호출부용). */
+    public String commitAndPush(File worktreeDir, RepoRef ref, String branchName, String commitMessage)
+            throws IOException, InterruptedException {
+        return commitAndPush(worktreeDir, ref, branchName, commitMessage, null);
+    }
+
     /**
      * worktree에 있는 변경을 commit + push.
+     *
+     * baseSha가 있으면 에이전트가 이미 만든 커밋(SDD 태스크 커밋 등)도 받아들인다 (스펙 2026-10-15 §6.1): 남은 변경만
+     * 한 커밋으로 더하고, 베이스 이후 커밋도 변경도 없을 때만 nothing to commit. baseSha가 null이면 예전처럼 변경 필수.
      *
      * push는 origin이 아니라 ref의 인증 URL로 보낸다 — 캐시/워크트리 config에 자격증명을
      * 남기지 않기 위해(GitRepoCache 불변식) origin은 평문 URL이기 때문.
      *
      * @return push한 commit의 SHA
      */
-    public String commitAndPush(File worktreeDir, RepoRef ref, String branchName, String commitMessage)
-            throws IOException, InterruptedException {
-        if (!hasChanges(worktreeDir)) {
+    public String commitAndPush(File worktreeDir, RepoRef ref, String branchName, String commitMessage,
+                                String baseSha) throws IOException, InterruptedException {
+        boolean changes = hasChanges(worktreeDir);
+        if (!changes && (baseSha == null || commitsSince(worktreeDir, baseSha) == 0)) {
             throw new IOException("nothing to commit — 구현 시도 후 파일 변경이 없음");
         }
+        if (changes) commitAll(worktreeDir, commitMessage);
+        push(worktreeDir, ref, branchName);
+        return headSha(worktreeDir);
+    }
+
+    /**
+     * 중단된 구현(시간 초과·비정상 종료)의 남은 변경을 WIP 커밋으로 묶고, 베이스 이후 커밋이 있으면 작업 브랜치를
+     * push한다 (스펙 2026-10-15 §6.6). PR/MR은 만들지 않는다. 실패는 예외 대신 결과로 돌려준다 — 이미 실패 보고 중이다.
+     */
+    public PartialWork preservePartialWork(File worktreeDir, RepoRef ref, String branchName, String baseSha,
+                                           String wipMessage) {
+        int commits;
+        String sha;
+        try {
+            if (hasChanges(worktreeDir)) commitAll(worktreeDir, wipMessage);
+            commits = commitsSince(worktreeDir, baseSha);
+            if (commits == 0) return new PartialWork(0, null, null);
+            sha = headSha(worktreeDir);
+        } catch (Exception e) {
+            if (e instanceof InterruptedException) Thread.currentThread().interrupt();
+            return new PartialWork(0, null, GitRemotes.mask(String.valueOf(e.getMessage())));
+        }
+        try {
+            push(worktreeDir, ref, branchName);
+            return new PartialWork(commits, sha, null);
+        } catch (Exception e) {
+            if (e instanceof InterruptedException) Thread.currentThread().interrupt();
+            return new PartialWork(commits, sha, GitRemotes.mask(String.valueOf(e.getMessage())));
+        }
+    }
+
+    /** 중단 보존 결과. commits = 베이스 이후 커밋 수, error = 마스킹한 실패 메시지(없으면 null). */
+    public record PartialWork(int commits, String headSha, String error) {
+        public boolean pushed() {
+            return commits > 0 && error == null;
+        }
+    }
+
+    private void commitAll(File worktreeDir, String message) throws IOException, InterruptedException {
         ProcessRunner.requireSuccess(worktreeDir,
                 List.of("git", "add", "-A"), GIT_TIMEOUT_SECONDS);
         List<String> commitCmd = List.of(
                 "git",
                 "-c", "user.name=" + props.gitUserName(),
                 "-c", "user.email=" + props.gitUserEmail(),
-                "commit", "-m", commitMessage
+                "commit", "-m", message
         );
         ProcessRunner.requireSuccess(worktreeDir, commitCmd, GIT_TIMEOUT_SECONDS);
+    }
+
+    private void push(File worktreeDir, RepoRef ref, String branchName) throws IOException, InterruptedException {
         try {
             // credential.helper=(빈 값): 운영자 머신의 헬퍼가 인증 URL의 토큰을 저장하지 못하게 한다.
             ProcessRunner.requireSuccess(worktreeDir,
@@ -86,9 +138,17 @@ public class GitOpsService {
             // 방어적으로 한 번 더 가린다(mask는 멱등). cause로 원본을 달지는 않는다.
             throw new IOException(GitRemotes.mask(e.getMessage()));
         }
-        String sha = ProcessRunner.requireSuccess(worktreeDir,
+    }
+
+    private static String headSha(File worktreeDir) throws IOException, InterruptedException {
+        return ProcessRunner.requireSuccess(worktreeDir,
                 List.of("git", "rev-parse", "HEAD"), GIT_TIMEOUT_SECONDS).trim();
-        return sha;
+    }
+
+    private static int commitsSince(File worktreeDir, String baseSha) throws IOException, InterruptedException {
+        String out = ProcessRunner.requireSuccess(worktreeDir,
+                List.of("git", "rev-list", "--count", baseSha + "..HEAD"), GIT_TIMEOUT_SECONDS).trim();
+        return Integer.parseInt(out);
     }
 
     /**

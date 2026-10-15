@@ -10,6 +10,7 @@ import java.nio.file.Files;
 import java.nio.file.LinkOption;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.nio.file.StandardOpenOption;
 import java.util.List;
 import java.util.Locale;
 
@@ -21,7 +22,7 @@ import java.util.Locale;
  *    ~/netis-maker/worktrees/{owner}/{repo}/{slug}  ← 본 서비스
  *
  *  브랜치 컨벤션:
- *    netismaker/task-{id}-{slug-of-title}
+ *    netismaker/task-{id}-{slug-of-title}[-r{시도 번호}]  (2회째부터, 스펙 2026-10-15 §6.1)
  *
  *  멱등성: 같은 task를 다시 시도하면 기존 worktree 제거 후 새로 생성. 디스크에는 항상 단일 인스턴스.
  *  정리: 성공한 작업은 호출자가 끝에 discard로 지운다(구현=PR 생성 뒤, 배포=빌드·실행 뒤, 디자인=수확 뒤).
@@ -34,12 +35,22 @@ public class WorktreeService {
 
     private static final long GIT_TIMEOUT_SECONDS = 600;
 
+    /** 워커 임시 파일 — 에이전트 커밋(SDD 태스크 커밋 포함)에 섞이지 않게 info/exclude에 둔다 (스펙 2026-10-15 §6.1). */
+    static final List<String> WORKER_EXCLUDES = List.of(".netis/", ".design/", ".netis-deploy-env.json");
+
     private final WorkerProperties props;
     private final GitRepoCache repos;
 
     public WorktreeService(WorkerProperties props, GitRepoCache repos) {
         this.props = props;
         this.repos = repos;
+    }
+
+    /** 1회째 시도 — 6인자 create에 attempt=1로 위임한다. */
+    public CreatedWorktree create(File repoCacheDir, String repoKey,
+                                  String baseBranch, long taskId, String title)
+            throws IOException, InterruptedException {
+        return create(repoCacheDir, repoKey, baseBranch, taskId, title, 1);
     }
 
     /**
@@ -54,21 +65,30 @@ public class WorktreeService {
      * @param baseBranch   분석 대상 브랜치 (origin/{baseBranch}을 분기점으로)
      * @param taskId       브랜치명에 포함
      * @param title        브랜치명 슬러그 생성용
+     * @param attempt      구현 시도 번호 — 2 이상이면 브랜치 이름에 -r{attempt}
      * @return 생성된 worktree 디렉토리 + 브랜치명
      */
     public CreatedWorktree create(File repoCacheDir, String repoKey,
-                                  String baseBranch, long taskId, String title)
+                                  String baseBranch, long taskId, String title, int attempt)
             throws IOException, InterruptedException {
         return repos.withRepoLock(repoKey,
-                () -> doCreate(repoCacheDir, repoKey, baseBranch, taskId, title));
+                () -> doCreate(repoCacheDir, repoKey, baseBranch, taskId, title, attempt));
+    }
+
+    /**
+     * {prefix}task-{id}[-{slug}][-r{attempt}] — 재시도는 새 브랜치로 (이전 시도가 push한 브랜치와 겹치면
+     * 강제 아닌 push가 거부된다). deleteTaskBranches의 'task-{id}-' 접두 매칭이 그대로 덮는다.
+     */
+    static String branchName(String prefix, long taskId, String slug, int attempt) {
+        return prefix + "task-" + taskId
+                + (slug.isEmpty() ? "" : "-" + slug)
+                + (attempt >= 2 ? "-r" + attempt : "");
     }
 
     private CreatedWorktree doCreate(File repoCacheDir, String repoKey,
-                                     String baseBranch, long taskId, String title)
+                                     String baseBranch, long taskId, String title, int attempt)
             throws IOException, InterruptedException {
-        String slug = sanitizeForBranch(title);
-        String branchName = props.branchPrefix() + "task-" + taskId
-                + (slug.isEmpty() ? "" : "-" + slug);
+        String branchName = branchName(props.branchPrefix(), taskId, sanitizeForBranch(title), attempt);
 
         Path worktreeDir = worktreeDir(repoKey, WorktreeKind.TASK, taskId);
         Files.createDirectories(worktreeDir.getParent());
@@ -99,6 +119,34 @@ public class WorktreeService {
 
         log.info("worktree 생성: task={} branch={} dir={}", taskId, branchName, worktreeDir);
         return new CreatedWorktree(worktreeDir.toFile(), branchName);
+    }
+
+    /**
+     * WORKER_EXCLUDES를 레포 info/exclude에 없는 줄만 더한다(worktree면 공용 git 디렉터리의 파일 — 워커 전용 이름이라
+     * 다른 작업에도 무해). 실패는 경고만 남기고 false — 호출부가 SDD를 리뷰로 대신 진행한다 (스펙 §6.5).
+     */
+    public boolean ensureWorkerExcludes(File worktreeDir) {
+        try {
+            String raw = ProcessRunner.requireSuccess(worktreeDir,
+                    List.of("git", "rev-parse", "--git-path", "info/exclude"), GIT_TIMEOUT_SECONDS).trim();
+            Path exclude = Path.of(raw);
+            if (!exclude.isAbsolute()) exclude = worktreeDir.toPath().resolve(exclude);
+            Files.createDirectories(exclude.getParent());
+            String existing = Files.exists(exclude) ? Files.readString(exclude) : "";
+            List<String> lines = existing.lines().map(String::trim).toList();
+            List<String> missing = WORKER_EXCLUDES.stream().filter(e -> !lines.contains(e)).toList();
+            if (missing.isEmpty()) return true;
+            StringBuilder add = new StringBuilder();
+            if (!existing.isEmpty() && !existing.endsWith("\n")) add.append('\n');
+            add.append("# netisMaker 워커 임시 파일 — 구현 커밋에서 제외\n");
+            missing.forEach(m -> add.append(m).append('\n'));
+            Files.writeString(exclude, add.toString(), StandardOpenOption.CREATE, StandardOpenOption.APPEND);
+            return true;
+        } catch (Exception e) {
+            if (e instanceof InterruptedException) Thread.currentThread().interrupt();
+            log.warn("info/exclude 기록 실패 (SDD 요청은 리뷰로 대신 진행): {}", e.getMessage());
+            return false;
+        }
     }
 
     /**

@@ -86,4 +86,54 @@ class WorktreeServiceTest {
         assertThat(second.toPath().resolve("a.txt")).hasContent("hello");
         assertThat(second.toPath().resolve("node_modules")).doesNotExist();
     }
+
+    @Test
+    void branch_names_get_an_attempt_suffix_from_the_second_try() {
+        assertThat(WorktreeService.branchName("netismaker/", 13, "srtc", 1)).isEqualTo("netismaker/task-13-srtc");
+        assertThat(WorktreeService.branchName("netismaker/", 13, "srtc", 2)).isEqualTo("netismaker/task-13-srtc-r2");
+        assertThat(WorktreeService.branchName("netismaker/", 13, "", 3)).isEqualTo("netismaker/task-13-r3");
+    }
+
+    @Test
+    void a_retry_attempt_checks_out_the_suffixed_branch() throws Exception {
+        WorkerProperties p = props();
+        GitRepoCache cache = new GitRepoCache(p);
+        RepoRef ref = new RepoRef("github", "acme/widgets", bareRemote().toUri().toString());
+        File repoDir = cache.ensureFresh(ref, "main").dir();
+        WorktreeService worktrees = new WorktreeService(p, cache);
+
+        WorktreeService.CreatedWorktree wt = worktrees.create(repoDir, GitRemotes.localKey(ref), "main", 9, "retry", 2);
+
+        assertThat(wt.branchName()).isEqualTo("netismaker/task-9-retry-r2");
+        assertThat(ProcessRunner.requireSuccess(wt.dir(), List.of("git", "rev-parse", "--abbrev-ref", "HEAD"), 30).trim())
+                .isEqualTo("netismaker/task-9-retry-r2");
+    }
+
+    @Test
+    void worker_scratch_files_are_excluded_from_commits_and_registered_once() throws Exception {
+        WorkerProperties p = props();
+        GitRepoCache cache = new GitRepoCache(p);
+        RepoRef ref = new RepoRef("github", "acme/widgets", bareRemote().toUri().toString());
+        File repoDir = cache.ensureFresh(ref, "main").dir();
+        WorktreeService worktrees = new WorktreeService(p, cache);
+        Path dir = worktrees.create(repoDir, GitRemotes.localKey(ref), "main", 10, "scratch").dir().toPath();
+
+        assertThat(worktrees.ensureWorkerExcludes(dir.toFile())).isTrue();
+        assertThat(worktrees.ensureWorkerExcludes(dir.toFile())).isTrue();   // 두 번째는 중복 없이
+
+        Files.createDirectories(dir.resolve(".netis/plan"));
+        Files.writeString(dir.resolve(".netis/plan/task-10-plan.md"), "plan");
+        Files.createDirectories(dir.resolve(".design"));
+        Files.writeString(dir.resolve(".design/a.html"), "<p/>");
+        Files.writeString(dir.resolve(".netis-deploy-env.json"), "{}");
+        Files.writeString(dir.resolve("real.txt"), "x");
+        String status = ProcessRunner.requireSuccess(dir.toFile(),
+                List.of("git", "status", "--porcelain", "--untracked-files=all"), 30);
+        assertThat(status).contains("real.txt").doesNotContain(".netis").doesNotContain(".design");
+
+        String raw = ProcessRunner.requireSuccess(dir.toFile(),
+                List.of("git", "rev-parse", "--git-path", "info/exclude"), 30).trim();
+        Path exclude = Path.of(raw).isAbsolute() ? Path.of(raw) : dir.resolve(raw);
+        assertThat(Files.readAllLines(exclude).stream().filter(".netis/"::equals).count()).isEqualTo(1);
+    }
 }

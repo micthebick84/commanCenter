@@ -31,6 +31,20 @@ export function showsImplementationMode(status: string): boolean {
 }
 
 /**
+ * 방식 표시 문구 — "리뷰", 2회째부터 "SDD · 2회째". 플랜 확정 전이면 null(보여 주지 않는다).
+ * 응답에 방식·회차가 없는 옛 작업은 "직접"(1회째)이다. 작업 상세 데스크톱 칩·모바일 정보 줄이 같이 쓴다.
+ */
+export function implementationModeText(task: {
+  status: string
+  implementationMode?: string | null
+  implementationAttempt?: number | null
+}): string | null {
+  if (!showsImplementationMode(task.status)) return null
+  const attempt = task.implementationAttempt ?? 1
+  return implementationModeLabel(task.implementationMode) + (attempt >= 2 ? ` · ${attempt}회째` : '')
+}
+
+/**
  * "23분 경과 / 상한 80분" — 구현중이고 시작 시각이 있을 때만. 상한의 80% 이상이면 warn.
  * now가 null(SSR·마운트 전)이면 null — 시간에 따라 바뀌는 문구가 서버 HTML과 어긋나지 않게.
  */

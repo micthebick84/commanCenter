@@ -1,5 +1,6 @@
 import { mount } from '@vue/test-utils'
 import { describe, it, expect } from 'vitest'
+import { nextTick } from 'vue'
 import TaskCardCompact from './TaskCardCompact.vue'
 
 const base = {
@@ -143,5 +144,62 @@ describe('TaskCardCompact (스펙 2026-09-06 §4.1 카드)', () => {
     const text = admin.find('[data-test="card-next"] .card-next-text')
     expect(text.exists()).toBe(true)
     admin.unmount()
+  })
+
+  // 구현중 경과 시간 (스펙 2026-10-15 §7) — 시작 시각이 minutesAgo분 전인 작업
+  const implementing = (minutesAgo: number, timeout: number | null) => ({
+    ...base,
+    status: 'IMPLEMENTING',
+    statusLabel: '구현중',
+    implementation: null,
+    claimedAt: new Date(Date.now() - minutesAgo * 60000 - 5000).toISOString(),
+    implementationTimeoutMinutes: timeout,
+  })
+
+  it('구현중이면 경과/상한 줄을 보여 준다(마운트 뒤)', async () => {
+    const w = mount(TaskCardCompact, {
+      props: { task: implementing(3, 80), isAdmin: true },
+    })
+    // 첫 렌더에는 시간에 따라 바뀌는 문구가 없다(하이드레이션 안전) — 마운트 뒤 틱에서 생긴다
+    expect(w.find('[data-test="card-elapsed"]').exists()).toBe(false)
+    await nextTick()
+    expect(w.find('[data-test="card-elapsed"]').text()).toContain(
+      '3분 경과 / 상한 80분',
+    )
+    expect(w.find('[data-test="card-elapsed"]').classes()).not.toContain(
+      'card-elapsed--warn',
+    )
+    w.unmount()
+  })
+
+  it('상한의 80% 이상 지나면 경과 줄에 경고 클래스가 붙는다', async () => {
+    const w = mount(TaskCardCompact, {
+      props: { task: implementing(70, 80), isAdmin: true },
+    })
+    await nextTick()
+    expect(w.find('[data-test="card-elapsed"]').text()).toContain(
+      '70분 경과 / 상한 80분',
+    )
+    expect(w.find('[data-test="card-elapsed"]').classes()).toContain(
+      'card-elapsed--warn',
+    )
+    w.unmount()
+  })
+
+  it('구현중이 아니면 경과 줄이 없다', async () => {
+    // 시작 시각·상한이 있어도 상태가 구현중이 아니면 줄이 없어야 한다 — 상태 확인을 지우면 줄이 생겨 실패한다
+    const w = mount(TaskCardCompact, {
+      props: {
+        task: {
+          ...implementing(3, 80),
+          status: 'PR_CREATED',
+          statusLabel: 'PR생성',
+        },
+        isAdmin: false,
+      },
+    })
+    await nextTick() // useNowTick이 값을 가진 뒤에 확인해야 "없음"이 의미가 있다
+    expect(w.find('[data-test="card-elapsed"]').exists()).toBe(false)
+    w.unmount()
   })
 })

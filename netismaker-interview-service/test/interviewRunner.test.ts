@@ -125,6 +125,38 @@ describe('InterviewRunner', () => {
     expect(client.postQuestion).toHaveBeenCalled();
   });
 
+  // 2026-10-15 작업 13 세션 25: 첫 result 뒤 백그라운드 서브에이전트 알림을 처리하며 부른 mcp__db 도구의 권한 요청이
+  // "Stream closed"로 실패했다 — 러너의 모든 질의는 CLI가 idle을 알릴 때까지 프롬프트 입력을 열어 둬야 한다.
+  it('keeps the prompt input open past the first result until the CLI reports idle', async () => {
+    const client = makeClient();
+    let openAfterResult: boolean | undefined;
+    const fakeQuery = vi.fn(({ prompt }: { prompt: AsyncIterable<unknown> }) =>
+      (async function* () {
+        const it = prompt[Symbol.asyncIterator]();
+        await it.next();
+        let ended = false;
+        const endedP = it.next().then(() => {
+          ended = true;
+        });
+        yield { type: 'system', subtype: 'init', session_id: 'sess-gate' };
+        yield { type: 'system', subtype: 'session_state_changed', state: 'running' };
+        yield { type: 'assistant', message: { content: [{ type: 'text', text: '어느 화면부터 볼까요?' }] } };
+        yield { type: 'result', subtype: 'success', duration_ms: 10, total_cost_usd: 0.1, usage: {} };
+        await new Promise((r) => setTimeout(r, 5));
+        openAfterResult = !ended;
+        yield { type: 'system', subtype: 'session_state_changed', state: 'idle' };
+        await endedP;
+      })(),
+    );
+    const runner = new InterviewRunner(client as never, fakeQuery as never, deps as never);
+
+    await runner.run(freshClaim);
+
+    expect(openAfterResult).toBe(true);
+    expect(client.fail).not.toHaveBeenCalled();
+    expect(client.postQuestion).toHaveBeenCalledWith(42, expect.objectContaining({ claudeSessionId: 'sess-gate' }));
+  });
+
   // 2026-09-22 라이브 검증: SDK 인증 만료로 턴이 죽었는데 interview.log는 기동 한 줄에 머물렀다.
   // 서버 보고만으로는 운영자가 로그에서 원인을 볼 수 없다 — 실패 경로는 stdout에도 한 줄 남겨야 한다.
   it('logs every session failure to stdout, not just to the server', async () => {

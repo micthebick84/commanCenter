@@ -11,6 +11,7 @@ import TaskNextAction from '~/components/tasks/TaskNextAction.vue'
 import TaskDetailMobile from '~/components/tasks/TaskDetailMobile.vue'
 import TaskHistoryTimeline from '~/components/tasks/TaskHistoryTimeline.vue'
 import DeployEnvDialog from '~/components/tasks/DeployEnvDialog.vue'
+import ImplementationRetryDialog from '~/components/tasks/ImplementationRetryDialog.vue'
 import { stageSteps, nextAction, ageOf, type NextActionKind } from '~/composables/taskStages'
 import { renderMarkdown } from '~/composables/useMarkdown'
 import { mrNoun, mrRef } from '~/composables/mergeRequestLabel'
@@ -208,6 +209,7 @@ async function approve() {
 }
 
 const showApprove = ref(false)
+const showImplRetry = ref(false)
 
 function openApprove() {
   showApprove.value = true
@@ -533,6 +535,7 @@ function onAction(kind: NextActionKind) {
     case 'withdraw-close': return closeAction('close-request/withdraw', '종료 요청 철회')
     case 'approve-close': return approveClose()
     case 'retry-close': return retryClose()
+    case 'retry-implementation': return void (showImplRetry.value = true)
   }
 }
 </script>
@@ -1235,6 +1238,13 @@ function onAction(kind: NextActionKind) {
       </template>
 
       <ApproveDialog v-model="showApprove" :task="task" @approved="onApproved" />
+
+      <ImplementationRetryDialog
+        v-model="showImplRetry"
+        :task-id="String(task.id)"
+        :current-mode="task.implementationMode ?? 'DIRECT'"
+        @submitted="refresh"
+      />
 
       <DeployEnvDialog
         v-model="envDialog"

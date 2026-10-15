@@ -226,10 +226,12 @@ describe('nextAction (스펙 2026-09-06 §4.2 표)', () => {
     expect(nextAction({ status: 'DEPLOY_FAILED' }, true)?.primary?.kind).toBe('redeploy')
     expect(nextAction({ status: 'DEPLOY_LOST' }, false)?.primary).toBeUndefined()
   })
-  it('분석실패/디자인실패: 재시도 · 구현실패: 문구만 · 취소됨: null · 진행 중: 문구만', () => {
+  it('분석실패/디자인실패: 재시도 · 구현실패: 관리자는 구현 재시도 · 취소됨: null · 진행 중: 문구만', () => {
     expect(nextAction({ status: 'FAILED' }, false)?.primary?.kind).toBe('retry')
     expect(nextAction({ status: 'DESIGN_FAILED' }, true)?.primary?.kind).toBe('retry')
-    expect(nextAction({ status: 'IMPLEMENTATION_FAILED' }, true)?.primary).toBeUndefined()
+    expect(nextAction({ status: 'IMPLEMENTATION_FAILED' }, true)?.primary?.kind).toBe('retry-implementation')
+    expect(nextAction({ status: 'IMPLEMENTATION_FAILED' }, false)?.primary).toBeUndefined()
+    expect(nextAction({ status: 'IMPLEMENTATION_FAILED' }, false)?.text).toContain('관리자 확인이 필요합니다')
     expect(nextAction({ status: 'CANCELLED' }, true)).toBeNull()
     expect(nextAction({ status: 'IMPLEMENTING' }, true)?.text).toContain('진행 중')
   })

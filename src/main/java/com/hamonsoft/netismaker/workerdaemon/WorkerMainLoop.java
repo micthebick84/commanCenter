@@ -271,7 +271,10 @@ public class WorkerMainLoop {
                     task.id(), requested, mode.effective(), mode.fallbackReason());
         }
         String modeLine = ImplementationPrompts.modeLine(requested, mode.effective(), attempt, mode.fallbackReason());
-        String fallbackNote = mode.fellBack() ? "\n" + modeLine.strip() : "";
+        // 실패 사유는 화면에 평문으로 보인다 — 같은 내용을 마크다운 기호(`- **`) 없이 붙인다
+        String fallbackNote = mode.fellBack()
+                ? "\n" + ImplementationPrompts.modeNote(requested, mode.effective(), attempt, mode.fallbackReason())
+                : "";
 
         // 4. 구현 prompt + claude exec (worktree 디렉토리에서)
         //    비대화식 모드에서 Write/Edit/Bash 차단 회피 위해 권한 우회 활성.

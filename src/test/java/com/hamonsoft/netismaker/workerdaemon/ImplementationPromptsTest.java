@@ -103,6 +103,21 @@ class ImplementationPromptsTest {
                 .isEqualTo("- **구현 방식**: 직접 (3회째) (SDD 요청 — 계획 파일 쓰기 실패로 직접으로 진행)\n");
     }
 
+    /** 실패 사유는 화면에 평문으로 보인다 — PR 본문 줄과 같은 내용을 마크다운 기호 없이. */
+    @Test
+    void the_plain_text_mode_note_says_the_same_as_the_mode_line_without_markdown() {
+        assertThat(ImplementationPrompts.modeNote(REVIEW, REVIEW, 1, null)).isEqualTo("구현 방식: 리뷰");
+        assertThat(ImplementationPrompts.modeNote(SDD, SDD, 2, null)).isEqualTo("구현 방식: SDD (2회째)");
+        assertThat(ImplementationPrompts.modeNote(SDD, REVIEW, 1, ImplementationModeResolver.NO_PLUGIN))
+                .isEqualTo("구현 방식: 리뷰 (SDD 요청 — 플러그인 경로 없음으로 리뷰로 진행)");
+        assertThat(ImplementationPrompts.modeNote(SDD, DIRECT, 3, ImplementationModeResolver.PLAN_WRITE_FAILED))
+                .isEqualTo("구현 방식: 직접 (3회째) (SDD 요청 — 계획 파일 쓰기 실패로 직접으로 진행)");
+        // PR 본문의 마크다운 줄은 같은 내용에 목록·굵게 표시만 더한 것
+        String note = ImplementationPrompts.modeNote(SDD, REVIEW, 2, ImplementationModeResolver.NO_EXCLUDE);
+        assertThat(ImplementationPrompts.modeLine(SDD, REVIEW, 2, ImplementationModeResolver.NO_EXCLUDE))
+                .isEqualTo("- **구현 방식**:" + note.substring("구현 방식:".length()) + "\n");
+    }
+
     @Test
     void with_ro_follows_the_final_consonant() {
         assertThat(ImplementationPrompts.withRo("리뷰")).isEqualTo("리뷰로");

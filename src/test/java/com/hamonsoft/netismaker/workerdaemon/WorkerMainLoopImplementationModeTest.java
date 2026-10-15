@@ -382,8 +382,10 @@ class WorkerMainLoopImplementationModeTest {
 
         WorkerResultRequest r = reported();
         assertThat(r.status()).isEqualTo(TaskStatus.IMPLEMENTATION_FAILED);
+        // 실패 사유는 화면에 평문으로 보인다 — 마크다운 기호(`- **`) 없이 같은 내용만 (PR 본문 줄과 구분)
         assertThat(r.failureReason()).contains("commit/push 실패: nothing to commit")
-                .endsWith("\n- **구현 방식**: 리뷰 (2회째) (SDD 요청 — 플러그인 경로 없음으로 리뷰로 진행)");
+                .endsWith("\n구현 방식: 리뷰 (2회째) (SDD 요청 — 플러그인 경로 없음으로 리뷰로 진행)")
+                .doesNotContain("**").doesNotContain("- 구현 방식");
         assertThat(r.headSha()).isNull();
         assertThat(r.implementationAttempt()).isEqualTo(2);
         // claude 성공 뒤의 커밋·PR 실패는 부분 작업 보존 대상이 아니다 (스펙 §6.6)

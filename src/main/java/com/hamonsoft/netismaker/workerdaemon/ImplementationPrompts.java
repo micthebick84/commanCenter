@@ -77,17 +77,31 @@ final class ImplementationPrompts {
                 """.formatted(ImplementationScratch.planPath(task.id()), design);
     }
 
-    /** PR/MR 본문 방식 줄 (스펙 §6.7) — 2회째부터 회차, 낮춰서 진행했으면 요청 방식과 이유. */
+    /** PR/MR 본문 방식 줄 (스펙 §6.7) — 2회째부터 회차, 낮춰서 진행했으면 요청 방식과 이유. 마크다운 목록 항목이다. */
     static String modeLine(ImplementationMode requested, ImplementationMode effective, int attempt,
                            String fallbackReason) {
-        StringBuilder line = new StringBuilder("- **구현 방식**: ").append(effective.label());
-        if (attempt >= 2) line.append(" (").append(attempt).append("회째)");
+        return "- **구현 방식**: " + modeSummary(requested, effective, attempt, fallbackReason) + "\n";
+    }
+
+    /**
+     * modeLine과 같은 내용의 평문 — 실패 사유 끝에 붙인다. 실패 사유는 화면에 마크다운이 아니라 평문으로 보여서
+     * `- **…**` 기호가 그대로 드러나기 때문이다(PR 본문은 마크다운으로 그려지니 modeLine을 쓴다).
+     */
+    static String modeNote(ImplementationMode requested, ImplementationMode effective, int attempt,
+                           String fallbackReason) {
+        return "구현 방식: " + modeSummary(requested, effective, attempt, fallbackReason);
+    }
+
+    private static String modeSummary(ImplementationMode requested, ImplementationMode effective, int attempt,
+                                      String fallbackReason) {
+        StringBuilder text = new StringBuilder(effective.label());
+        if (attempt >= 2) text.append(" (").append(attempt).append("회째)");
         if (fallbackReason != null && requested != null && requested != effective) {
-            line.append(" (").append(requested.label()).append(" 요청 — ")
+            text.append(" (").append(requested.label()).append(" 요청 — ")
                     .append(withRo(fallbackReason)).append(' ')
                     .append(withRo(effective.label())).append(" 진행)");
         }
-        return line.append('\n').toString();
+        return text.toString();
     }
 
     /** 조사 '(으)로' — 받침 없음·ㄹ받침·한글 아님이면 '로', 그 밖의 받침이면 '으로'. */

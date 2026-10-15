@@ -252,4 +252,81 @@ class GitOpsServicePushTest {
                 .isEqualTo("wip: 구현 중단(시간 초과) — task #11");
         assertThat(ProcessRunner.requireSuccess(clone.toFile(), List.of("git", "status", "--porcelain"), 30)).isBlank();
     }
+
+    /** 죽은 claude가 남긴 index.lock — 이후 `git add`가 "Unable to create index.lock"으로 실패한다(WIP 커밋 실패 재현). */
+    private static void staleIndexLock(Path clone) throws IOException {
+        Files.writeString(clone.resolve(".git/index.lock"), "");
+    }
+
+    /** 최종 리뷰: WIP 커밋이 실패했다고 몇 시간치 SDD 태스크 커밋까지 원격에 못 올리면 안 된다. */
+    @Test
+    void a_failed_wip_commit_still_pushes_the_agent_commits_and_reports_what_stayed_behind() throws Exception {
+        Path bare = bareRemote("r12");
+        Path clone = workingClone(bare, "work12", "netismaker/task-12");
+        String base = head(clone);
+        git(clone.toFile(), "add", "-A");
+        git(clone.toFile(), "-c", "user.name=agent", "-c", "user.email=a@a", "commit", "-m", "Task 1");
+        String agentHead = head(clone);
+        Files.writeString(clone.resolve("extra.txt"), "커밋되지 못할 변경");
+        staleIndexLock(clone);
+        RepoRef ref = new RepoRef("github", "acme/widgets", bare.toUri().toString());
+
+        GitOpsService.PartialWork w = new GitOpsService(props()).preservePartialWork(clone.toFile(), ref,
+                "netismaker/task-12", base, "wip: 구현 중단(시간 초과) — task #12");
+
+        assertThat(w.pushed()).isTrue();                  // push는 성공 — 에이전트 커밋은 원격에 있다
+        assertThat(w.commits()).isEqualTo(1);
+        assertThat(w.headSha()).isEqualTo(agentHead);     // WIP 커밋은 못 만들었으니 에이전트 마지막 커밋
+        assertThat(w.error()).isNull();
+        assertThat(w.wipError()).isNotBlank().contains("index.lock");   // 커밋 안 된 변경이 PC에만 남은 이유
+        assertThat(remoteSha(bare, "netismaker/task-12")).isEqualTo(agentHead);
+        assertThat(clone.resolve("extra.txt")).exists();
+    }
+
+    @Test
+    void a_failed_wip_commit_without_agent_commits_reports_nothing_was_preserved() throws Exception {
+        Path bare = bareRemote("r13");
+        Path clone = workingClone(bare, "work13", "netismaker/task-13");   // impl.txt 미커밋
+        String base = head(clone);
+        staleIndexLock(clone);
+        RepoRef ref = new RepoRef("github", "acme/widgets", bare.toUri().toString());
+
+        GitOpsService.PartialWork w = new GitOpsService(props()).preservePartialWork(clone.toFile(), ref,
+                "netismaker/task-13", base, "wip: 구현 중단(시간 초과) — task #13");
+
+        assertThat(w.commits()).isZero();
+        assertThat(w.pushed()).isFalse();
+        assertThat(w.headSha()).isNull();
+        assertThat(w.error()).isNotBlank().contains("index.lock");   // 예전과 같다 — 보존 실패 사유
+        assertThat(ProcessRunner.run(bare.toFile(),
+                List.of("git", "rev-parse", "--verify", "refs/heads/netismaker/task-13"), 30).exitCode()).isNotZero();
+    }
+
+    @Test
+    void when_the_wip_commit_and_the_push_both_fail_both_errors_are_kept_and_masked() throws Exception {
+        Path bare = bareRemote("r14");
+        Path clone = workingClone(bare, "work14", "netismaker/task-14");
+        String base = head(clone);
+        git(clone.toFile(), "add", "-A");
+        git(clone.toFile(), "-c", "user.name=agent", "-c", "user.email=a@a", "commit", "-m", "Task 1");
+        Files.writeString(clone.resolve("extra.txt"), "커밋되지 못할 변경");
+        staleIndexLock(clone);
+        RepoRef ref = RepoRef.fromSnapshot("g/p", "https://gitlab.invalid.example/g/p.git");
+
+        GitOpsService.PartialWork w = new GitOpsService(props()).preservePartialWork(clone.toFile(), ref,
+                "netismaker/task-14", base, "wip");
+
+        assertThat(w.commits()).isEqualTo(1);
+        assertThat(w.pushed()).isFalse();                 // push 실패 — pushed()는 push가 성공했을 때만
+        assertThat(w.error()).isNotBlank().doesNotContain("glpat-SECRETTOKEN");
+        assertThat(w.wipError()).isNotBlank().contains("index.lock").doesNotContain("glpat-SECRETTOKEN");
+    }
+
+    @Test
+    void the_three_argument_result_has_no_wip_failure() {
+        GitOpsService.PartialWork w = new GitOpsService.PartialWork(2, "abc", null);
+
+        assertThat(w.wipError()).isNull();
+        assertThat(w.pushed()).isTrue();
+    }
 }

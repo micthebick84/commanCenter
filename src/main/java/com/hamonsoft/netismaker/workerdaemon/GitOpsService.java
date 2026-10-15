@@ -83,31 +83,54 @@ public class GitOpsService {
     /**
      * 중단된 구현(시간 초과·비정상 종료)의 남은 변경을 WIP 커밋으로 묶고, 베이스 이후 커밋이 있으면 작업 브랜치를
      * push한다 (스펙 2026-10-15 §6.6). PR/MR은 만들지 않는다. 실패는 예외 대신 결과로 돌려준다 — 이미 실패 보고 중이다.
+     *
+     * WIP 커밋이 실패해도(죽은 claude가 남긴 index.lock, 레포 훅 등) 멈추지 않는다 — 에이전트가 이미 만든 커밋(몇 시간치
+     * SDD 태스크 커밋)이 원격에 못 올라가면 안 되기 때문이다. 실패는 로그(WARN)와 결과의 wipError로 남기고, 커밋 안 된
+     * 변경은 이 PC의 worktree에만 남는다.
      */
     public PartialWork preservePartialWork(File worktreeDir, RepoRef ref, String branchName, String baseSha,
                                            String wipMessage) {
+        String wipError = null;
+        try {
+            if (hasChanges(worktreeDir)) commitAll(worktreeDir, wipMessage);
+        } catch (Exception e) {
+            if (e instanceof InterruptedException) {
+                Thread.currentThread().interrupt();
+                return new PartialWork(0, null, GitRemotes.mask(String.valueOf(e.getMessage())));
+            }
+            wipError = GitRemotes.mask(String.valueOf(e.getMessage()));
+            log.warn("WIP 커밋 실패 — 에이전트가 만든 커밋만 push합니다: {}", wipError);
+        }
         int commits;
         String sha;
         try {
-            if (hasChanges(worktreeDir)) commitAll(worktreeDir, wipMessage);
             commits = commitsSince(worktreeDir, baseSha);
-            if (commits == 0) return new PartialWork(0, null, null);
+            if (commits == 0) return new PartialWork(0, null, wipError);   // 올릴 커밋이 없다 — WIP 실패가 곧 보존 실패
             sha = headSha(worktreeDir);
         } catch (Exception e) {
             if (e instanceof InterruptedException) Thread.currentThread().interrupt();
-            return new PartialWork(0, null, GitRemotes.mask(String.valueOf(e.getMessage())));
+            return new PartialWork(0, null, GitRemotes.mask(String.valueOf(e.getMessage())), wipError);
         }
         try {
             push(worktreeDir, ref, branchName);
-            return new PartialWork(commits, sha, null);
+            return new PartialWork(commits, sha, null, wipError);
         } catch (Exception e) {
             if (e instanceof InterruptedException) Thread.currentThread().interrupt();
-            return new PartialWork(commits, sha, GitRemotes.mask(String.valueOf(e.getMessage())));
+            return new PartialWork(commits, sha, GitRemotes.mask(String.valueOf(e.getMessage())), wipError);
         }
     }
 
-    /** 중단 보존 결과. commits = 베이스 이후 커밋 수, error = 마스킹한 실패 메시지(없으면 null). */
-    public record PartialWork(int commits, String headSha, String error) {
+    /**
+     * 중단 보존 결과. commits = 베이스 이후 커밋 수, error = 마스킹한 실패 메시지(없으면 null) — push(또는 그 앞의 확인) 실패.
+     * wipError = WIP 커밋이 실패했다는 마스킹한 메시지(없으면 null): 이때 커밋 안 된 변경은 이 PC의 worktree에만 남지만,
+     * 에이전트가 이미 만든 커밋은 그대로 push를 시도하므로 error와 따로 둔다(pushed()는 push 성공 여부만 본다).
+     */
+    public record PartialWork(int commits, String headSha, String error, String wipError) {
+        /** WIP 커밋 실패가 없는 결과. */
+        public PartialWork(int commits, String headSha, String error) {
+            this(commits, headSha, error, null);
+        }
+
         public boolean pushed() {
             return commits > 0 && error == null;
         }

@@ -303,6 +303,26 @@ class WorkerMainLoopImplementationModeTest {
     }
 
     @Test
+    void a_failed_wip_commit_still_reports_the_pushed_agent_commits_and_what_stayed_on_the_worker() throws Exception {
+        claims(ImplementationMode.SDD, 1, 240, "### 작업 1: A");
+        when(claude.exec(anyString(), any(), any(), anyList(), anyBoolean(), any(), any(), any()))
+                .thenThrow(new IOException("claude timeout after PT4H"));
+        // 에이전트 태스크 커밋 2개는 push됐지만 남은 변경의 WIP 커밋은 실패(죽은 claude의 index.lock 등)
+        when(gitOps.preservePartialWork(any(), any(), anyString(), eq("base123"), anyString()))
+                .thenReturn(new GitOpsService.PartialWork(2, "agent9", null, "index.lock 존재"));
+
+        loop(pluginDir.toString()).pollAndProcess();
+
+        WorkerResultRequest r = reported();
+        assertThat(r.status()).isEqualTo(TaskStatus.IMPLEMENTATION_FAILED);
+        assertThat(r.failureReason()).contains("claude timeout after PT4H")
+                .contains("지금까지 작업(커밋 2개)은 브랜치 `netismaker/task-7-add-login`에 올려 둠")
+                .contains("WIP 커밋 실패로 커밋 안 된 변경은 worktree에만 남음: index.lock 존재");
+        assertThat(r.headBranch()).isEqualTo("netismaker/task-7-add-login");
+        assertThat(r.headSha()).isEqualTo("agent9");   // push는 됐으니 API가 원격에 있다고 읽는다
+    }
+
+    @Test
     void the_scratch_files_are_gone_before_partial_work_is_preserved() throws Exception {
         claims(ImplementationMode.SDD, 1, 240, "### 작업 1: A");
         when(claude.exec(anyString(), any(), any(), anyList(), anyBoolean(), any(), any(), any()))
@@ -455,6 +475,31 @@ class WorkerMainLoopImplementationModeTest {
             assertThat(none.headSha()).isNull();
             assertThat(none.reasonSuffix()).isEmpty();
         }
+    }
+
+    @Test
+    void the_partial_outcome_says_what_stayed_on_the_worker_when_the_wip_commit_failed() {
+        String branch = "netismaker/task-7-add-login";
+
+        // 에이전트 커밋은 push됨 + WIP 커밋 실패 → 올려 둔 커밋 수, 그리고 커밋 안 된 변경은 worktree에만 남는다는 말
+        WorkerMainLoop.PartialOutcome pushed = WorkerMainLoop.PartialOutcome.of(
+                new GitOpsService.PartialWork(2, "agent9", null, "index.lock 존재"), branch);
+        assertThat(pushed.headSha()).isEqualTo("agent9");
+        assertThat(pushed.reasonSuffix()).isEqualTo(" — 지금까지 작업(커밋 2개)은 브랜치 `" + branch + "`에 올려 둠"
+                + " (WIP 커밋 실패로 커밋 안 된 변경은 worktree에만 남음: index.lock 존재)");
+
+        // push도 실패 → 둘 다 말하고 head SHA는 없다
+        WorkerMainLoop.PartialOutcome both = WorkerMainLoop.PartialOutcome.of(
+                new GitOpsService.PartialWork(2, "agent9", "push 거부", "index.lock 존재"), branch);
+        assertThat(both.headSha()).isNull();
+        assertThat(both.reasonSuffix()).isEqualTo(
+                " — 부분 작업 push 실패(worktree에만 남음): push 거부 (WIP 커밋도 실패: index.lock 존재)");
+
+        // 에이전트 커밋이 없으면 예전 문구 그대로(오류가 곧 WIP 실패)
+        WorkerMainLoop.PartialOutcome nothingKept = WorkerMainLoop.PartialOutcome.of(
+                new GitOpsService.PartialWork(0, null, "index.lock 존재"), branch);
+        assertThat(nothingKept.headSha()).isNull();
+        assertThat(nothingKept.reasonSuffix()).isEqualTo(" — 부분 작업 보존 실패(worktree에만 남음): index.lock 존재");
     }
 
     @Test

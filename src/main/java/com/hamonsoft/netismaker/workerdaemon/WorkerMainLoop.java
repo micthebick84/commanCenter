@@ -420,13 +420,18 @@ public class WorkerMainLoop {
         static PartialOutcome of(GitOpsService.PartialWork w, String branch) {
             if (w == null) return new PartialOutcome("", null);
             if (w.pushed()) {
+                // WIP 커밋이 실패했으면 에이전트 커밋만 올라갔다 — 남은 변경이 이 PC에만 있다는 것도 말한다
                 return new PartialOutcome(" — 지금까지 작업(커밋 " + w.commits() + "개)은 브랜치 `" + branch
-                        + "`에 올려 둠", w.headSha());
+                        + "`에 올려 둠"
+                        + (w.wipError() == null ? ""
+                            : " (WIP 커밋 실패로 커밋 안 된 변경은 worktree에만 남음: " + w.wipError() + ")"),
+                        w.headSha());
             }
             if (w.error() != null) {
                 return new PartialOutcome((w.commits() > 0
                         ? " — 부분 작업 push 실패(worktree에만 남음): "
-                        : " — 부분 작업 보존 실패(worktree에만 남음): ") + w.error(), null);
+                        : " — 부분 작업 보존 실패(worktree에만 남음): ") + w.error()
+                        + (w.wipError() == null ? "" : " (WIP 커밋도 실패: " + w.wipError() + ")"), null);
             }
             return new PartialOutcome("", null);
         }

@@ -30,7 +30,11 @@ describe('pages/tasks/[id] — 구현 재시도 (스펙 2026-10-15 §5.5·§7)',
 
     await w.find('[data-test="next-action-primary"]').trigger('click')
     await flushPromises()
-    expect(document.body.querySelector('[data-test="impl-retry-dialog"]')).not.toBeNull()
+    const dialog = document.body.querySelector('[data-test="impl-retry-dialog"]')
+    expect(dialog).not.toBeNull()
+    // 이전 사유·브랜치가 이력에 남는다는 안내와 함께, push 안 된 부분 작업은 지워질 수 있다는 경고
+    expect(dialog!.textContent).toContain('이전 실패 사유와 브랜치는 진행 이력에 남아 있습니다')
+    expect(dialog!.textContent).toContain('push되지 않은 이전 부분 작업은 재시도하면 이 PC에서 지워질 수 있습니다')
     ;(document.body.querySelector('[data-test="impl-mode-REVIEW"]') as HTMLElement).click()
     await flushPromises()
     useApiMock.mockClear()

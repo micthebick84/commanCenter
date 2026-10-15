@@ -54,6 +54,7 @@ async function submit() {
       <q-card-section class="text-h6">구현 재시도</q-card-section>
       <q-card-section class="q-pt-none text-caption text-grey-8">
         베이스에서 처음부터 새 브랜치(시도 번호 접미사)로 다시 구현합니다. 이전 실패 사유와 브랜치는 진행 이력에 남아 있습니다.
+        push되지 않은 이전 부분 작업은 재시도하면 이 PC에서 지워질 수 있습니다.
       </q-card-section>
       <q-card-section>
         <ImplementationModePicker v-model="mode" />

@@ -5,6 +5,7 @@ import { ActivityPoster } from './activityPoster.js';
 import { RateLimitReporter } from './rateLimitReport.js';
 import { buildOptions } from '../sdk/sessionOptions.js';
 import { SessionCostMeter } from './sessionCostMeter.js';
+import { withTurnInputGate } from './turnInputGate.js';
 import { tryHarvest, type HarvestResult } from './planHarvest.js';
 import { harvestSessionPlanFiles } from './planFiles.js';
 import { relay } from './messageRelay.js';
@@ -199,11 +200,14 @@ export class InterviewRunner {
   private readonly harvestPlanFiles: (workDir: string) => Promise<HarvestResult>;
   /** 구독 한도 보고기 — 서비스 수명 동안 1개(404 비활성 상태가 세션을 넘어 유지된다). */
   private readonly rateLimits: RateLimitReporter;
+  /** 모든 질의는 턴이 끝날 때까지 프롬프트 입력을 열어 둔다 — 첫 result 뒤 권한 요청 "Stream closed" 방지(turnInputGate). */
+  private readonly query: SdkQuery;
   constructor(
     private readonly client: JavaApiClient,
-    private readonly query: SdkQuery,
+    query: SdkQuery,
     private readonly deps: RunnerDeps,
   ) {
+    this.query = withTurnInputGate(query);
     this.ensureRepo = deps.ensureRepo ?? defaultEnsureRepo;
     this.harvestPlanFiles = deps.harvestPlanFiles ?? harvestSessionPlanFiles;
     this.rateLimits = new RateLimitReporter(client);

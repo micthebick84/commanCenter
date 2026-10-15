@@ -7,6 +7,10 @@ import { InterviewRunner } from './runner/interviewRunner.js';
 import { ClaimLoop } from './claimLoop.js';
 
 async function main(): Promise<void> {
+  // CLI가 system/session_state_changed(idle = 턴 완전 종료)를 내보내게 한다. SDK 0.2.117은 이 변수를 넘기지 않고,
+  // 자식 claude 프로세스는 process.env를 물려받는다. turnInputGate가 이 신호로 프롬프트 입력을 닫는다 — 없으면 종전대로
+  // 첫 result에서 닫혀 백그라운드 서브에이전트 뒤 권한 요청이 "Stream closed"로 실패한다(2026-10-15).
+  process.env.CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS ??= '1';
   const cfg = loadConfig();
   // Subscription auth: resolve the local claude CLI (Phase-0 spike 00b). No ANTHROPIC_API_KEY.
   const claudeCliPath = resolveClaudeCli(cfg.claudeCliPath);

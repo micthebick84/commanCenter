@@ -1,7 +1,7 @@
 import { mount, flushPromises } from '@vue/test-utils'
-import { describe, it, expect, afterEach } from 'vitest'
+import { describe, it, expect, afterEach, beforeEach } from 'vitest'
 import ApproveDialog from './ApproveDialog.vue'
-import { useApiMock } from '../test/mocks/nuxt'
+import { useApiMock, authStub } from '../test/mocks/nuxt'
 import { baseTask } from '../test/fixtures/task'
 
 // 승인대기 작업 픽스처 — 다이얼로그는 부모([id].vue)가 이미 가진 task 객체를 받는다.
@@ -68,6 +68,7 @@ function routeApi(
     catalog?: unknown[]
     interviews?: unknown[] | Error
     usage?: unknown
+    db?: unknown
     approve?: () => Promise<unknown>
   } = {},
 ) {
@@ -78,6 +79,8 @@ function routeApi(
         ? Promise.reject(opts.interviews)
         : Promise.resolve(opts.interviews ?? [])
     }
+    if (url.startsWith('/api/db-connections?repoCatalogId='))
+      return Promise.resolve(opts.db ?? { enabled: false, items: [] })
     if (url === '/api/usage/claude')
       return Promise.resolve(opts.usage ?? { limits: [] })
     if (url === '/api/tasks/7/approve')
@@ -374,6 +377,167 @@ describe('ApproveDialog (승인 팝업 UI/UX 개선 2026-09-06)', () => {
         .querySelector('[data-test="model-row-claude-opus-5-5"]')
         ?.getAttribute('aria-checked'),
     ).toBe('true')
+    w.unmount()
+  })
+
+  const dbList = {
+    enabled: true,
+    items: [
+      { id: 3, repoCatalogId: 9, scope: 'REPO', name: '운영', dbType: 'MYSQL', host: 'h', port: 3306, databaseName: 'app', username: 'ro', enabled: true, mine: false },
+      { id: 4, repoCatalogId: 9, scope: 'USER', name: '내 개발', dbType: 'MYSQL', host: 'h', port: 3306, databaseName: 'dev', username: 'me', enabled: true, mine: true },
+    ],
+  }
+
+  // 이 describe는 승인자 = 등록자(admin) — 승인자 ≠ 등록자 케이스는 아래 describe에서 따로 본다(F1)
+  beforeEach(() => {
+    ;(authStub as any).me = { user_id: 1, username: 'admin', email: null, authorities: ['ROLE_ADMIN'] }
+  })
+  afterEach(() => {
+    delete (authStub as any).me
+  })
+
+  it('DB 기능이 켜져 있으면 공용 연결을 기본 선택해 승인 바디에 싣는다', async () => {
+    routeApi({ db: dbList })
+    const w = mountDialog({ repoCatalogId: 9 })
+    await flushPromises()
+    expect(document.body.querySelector('[data-test="approve-db"]')).not.toBeNull()
+    await (w.vm as any).approve()
+    await flushPromises()
+    expect(approveCall()?.[1].body.dbConnectionIds).toEqual([3])
+    w.unmount()
+  })
+
+  it('마지막 인터뷰의 DB 선택이 있으면 그것을 프리필한다(목록에 있는 것만)', async () => {
+    routeApi({
+      db: dbList,
+      interviews: [{ ...session(5, 'CANCELLED', '취소됨', 'claude-opus-5-5', 'high'), dbConnectionIds: [4, 99] }],
+    })
+    const w = mountDialog({ repoCatalogId: 9 })
+    await flushPromises()
+    await (w.vm as any).approve()
+    await flushPromises()
+    expect(approveCall()?.[1].body.dbConnectionIds).toEqual([4])
+    w.unmount()
+  })
+
+  it('DB 기능이 꺼져 있거나 레포 카탈로그가 없으면 피커가 없고 바디에도 없다', async () => {
+    routeApi({ db: { enabled: false, items: [] } })
+    const w = mountDialog({ repoCatalogId: 9 })
+    await flushPromises()
+    expect(document.body.querySelector('[data-test="approve-db"]')).toBeNull()
+    await (w.vm as any).approve()
+    await flushPromises()
+    expect(approveCall()?.[1].body).not.toHaveProperty('dbConnectionIds')
+    w.unmount()
+  })
+
+  // DB 목록 조회를 호출 순서대로 수동 resolve — 늦게 오는 응답/로딩 중 승인 시나리오용
+  function deferDb() {
+    const pending: Array<(v: unknown) => void> = []
+    const base = useApiMock.getMockImplementation()!
+    useApiMock.mockImplementation((url: string, ...rest: unknown[]) => {
+      if (url.startsWith('/api/db-connections?repoCatalogId='))
+        return new Promise((res) => pending.push(res))
+      return (base as any)(url, ...rest)
+    })
+    return pending
+  }
+  const dbOf = (id: number) => ({
+    enabled: true,
+    items: [{ ...dbList.items[0], id }],
+  })
+
+  it('재오픈 후 먼저 시작한 DB 응답이 늦게 와도 선택을 덮어쓰지 않는다', async () => {
+    routeApi({})
+    const pending = deferDb()
+    const w = mountDialog({ repoCatalogId: 9 })
+    await flushPromises()
+    await w.setProps({ modelValue: false })
+    await w.setProps({ modelValue: true })
+    await flushPromises()
+    expect(pending.length).toBe(2)
+    pending[1](dbOf(4))
+    await flushPromises()
+    pending[0](dbOf(3))
+    await flushPromises()
+    await (w.vm as any).approve()
+    await flushPromises()
+    expect(approveCall()?.[1].body.dbConnectionIds).toEqual([4])
+    w.unmount()
+  })
+
+  it('DB 목록 로딩 중에는 승인 버튼이 비활성이고 approve()도 무시한다', async () => {
+    routeApi({})
+    const pending = deferDb()
+    const w = mountDialog({ repoCatalogId: 9 })
+    await flushPromises()
+    const btn = () => document.body.querySelector('[data-test="approve-submit"]')
+    expect(btn()?.hasAttribute('disabled') || btn()?.getAttribute('aria-disabled') === 'true').toBe(true)
+    await (w.vm as any).approve()
+    expect(approveCall()).toBeUndefined()
+    pending[0](dbOf(3))
+    await flushPromises()
+    expect(btn()?.hasAttribute('disabled') || btn()?.getAttribute('aria-disabled') === 'true').toBe(false)
+    await (w.vm as any).approve()
+    await flushPromises()
+    expect(approveCall()?.[1].body.dbConnectionIds).toEqual([3])
+    w.unmount()
+  })
+})
+// F1: 승인은 관리자만 한다. 목록(/api/db-connections)은 보는 사람(관리자) 기준이라 관리자 본인의 USER 행은 보이고
+// 등록자의 USER 행은 안 보인다. 서버는 등록자 기준으로 검증하므로, 승인자 ≠ 등록자면 공용(REPO)만 고르게 하고
+// 지난 인터뷰의 안 보이는 id(등록자 개인 연결)는 버리지 않고 유지한다.
+describe('ApproveDialog DB 연결 — 승인자 ≠ 등록자 (F1)', () => {
+  const dbList = {
+    enabled: true,
+    items: [
+      { id: 3, repoCatalogId: 9, scope: 'REPO', name: '운영', dbType: 'MYSQL', host: 'h', port: 3306, databaseName: 'app', username: 'ro', enabled: true, mine: false },
+      { id: 4, repoCatalogId: 9, scope: 'USER', name: '관리자 개발', dbType: 'MYSQL', host: 'h', port: 3306, databaseName: 'dev', username: 'adm', enabled: true, mine: true },
+    ],
+  }
+  beforeEach(() => {
+    ;(authStub as any).me = { user_id: 1, username: 'admin', email: null, authorities: ['ROLE_ADMIN'] }
+  })
+  afterEach(() => {
+    delete (authStub as any).me
+  })
+
+  it('관리자 본인의 USER 연결과 "새 접속 추가"를 숨기고 공용만 보인다', async () => {
+    routeApi({ db: dbList })
+    const w = mountDialog({ repoCatalogId: 9, requesterId: 'user1' })
+    await flushPromises()
+    const box = document.body.querySelector('[data-test="approve-db"]')!
+    expect(box.textContent).toContain('운영')
+    expect(box.textContent).not.toContain('관리자 개발')
+    expect(box.querySelector('[data-test="db-add"]')).toBeNull()
+    await (w.vm as any).approve()
+    await flushPromises()
+    expect(approveCall()?.[1].body.dbConnectionIds).toEqual([3])
+    w.unmount()
+  })
+
+  it('지난 인터뷰의 안 보이는 id(등록자 개인 연결)는 유지해 칩으로 보이고, 관리자 본인 USER id는 버린다', async () => {
+    routeApi({
+      db: dbList,
+      interviews: [{ ...session(5, 'CANCELLED', '취소됨', 'claude-opus-5-5', 'high'), dbConnectionIds: [3, 4, 42] }],
+    })
+    const w = mountDialog({ repoCatalogId: 9, requesterId: 'user1' })
+    await flushPromises()
+    const box = document.body.querySelector('[data-test="approve-db"]')!
+    expect(box.textContent).toContain('등록자 개인 연결 #42')
+    await (w.vm as any).approve()
+    await flushPromises()
+    expect(approveCall()?.[1].body.dbConnectionIds).toEqual([3, 42])
+    w.unmount()
+  })
+
+  it('승인자 = 등록자면 본인 USER 연결과 "새 접속 추가"가 그대로 보인다', async () => {
+    routeApi({ db: dbList })
+    const w = mountDialog({ repoCatalogId: 9, requesterId: 'admin' })
+    await flushPromises()
+    const box = document.body.querySelector('[data-test="approve-db"]')!
+    expect(box.textContent).toContain('관리자 개발')
+    expect(box.querySelector('[data-test="db-add"]')).not.toBeNull()
     w.unmount()
   })
 })

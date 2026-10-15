@@ -48,7 +48,7 @@ public record InterviewClaimResponse(
         String gitUrl,
         /** "github" | "gitlab". */
         String repoHost,
-        /** 세션이 선택한 DB 접속정보 id (스펙 2026-10-02 §5.4). QUESTION만, INTERVIEW는 []. */
+        /** 세션이 선택한 DB 접속정보 id (스펙 2026-10-02 §5.4, 2026-10-14 §5 — INTERVIEW도). */
         List<Long> dbConnectionIds,
         /** 복호화된 접속정보 — InterviewWorkerController가 withDb로 채운다. ⚠️ 평문 비밀번호 포함, 로그 금지. */
         List<DbConnectionRef> dbConnections,
@@ -89,7 +89,7 @@ public record InterviewClaimResponse(
     }
 
     /**
-     * 복호화된 DB 접속정보 (스펙 2026-10-02 §5.4) — 질문 세션 claim에서만, 내부 워커 API로만 나간다.
+     * 복호화된 DB 접속정보 (스펙 2026-10-02 §5.4) — 질문·인터뷰 세션 claim에서만, 내부 워커 API로만 나간다.
      * ⚠️ password 평문 포함: 이 레코드(와 이를 담은 claim 응답)를 로그·예외 메시지에 넣지 말 것. toString은 가린다.
      */
     public record DbConnectionRef(String serverName, String label, String dbType, String host, int port,
@@ -135,7 +135,7 @@ public record InterviewClaimResponse(
                 mapped, s.getModel(), s.getEffort(), totalCostUsd, attachments, s.getKind().name(),
                 attachmentRoot,
                 s.getGitUrl(), RepoRef.fromSnapshot(s.getGithubRepo(), s.getGitUrl()).host(),
-                s.isQuestion() ? s.getDbConnectionIds() : List.of(), List.of(), List.of());
+                s.getDbConnectionIds() == null ? List.of() : List.copyOf(s.getDbConnectionIds()), List.of(), List.of());
     }
 
     /** DB 접속정보만 채운 사본 (스펙 §5.4). */

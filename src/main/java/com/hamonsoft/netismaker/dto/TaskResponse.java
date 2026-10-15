@@ -46,7 +46,11 @@ public record TaskResponse(
         /** input+output 토큰 합(캐시 제외). usage 행이 하나도 없으면 null(미수집). */
         Long totalTokens,
         /** 종료 단계 표시. 종료 상태이거나 종료 기록이 있을 때만 non-null (스펙 2026-10-13 §5). */
-        CloseView close
+        CloseView close,
+        /** 레포 카탈로그 id — 승인 다이얼로그 DB 피커가 목록을 부를 때 쓴다 (스펙 2026-10-14 §4). 레거시 작업은 null. */
+        Long repoCatalogId,
+        /** 승인 때 고른 DB 연결 id (스펙 2026-10-14 §4). */
+        List<Long> dbConnectionIds
 ) {
     public record AnalysisView(
             String markdownResult,
@@ -207,7 +211,9 @@ public record TaskResponse(
                 r.stageUsage(),
                 totalCostUsd,
                 r.totalTokens(),
-                r.close()
+                r.close(),
+                r.repoCatalogId(),
+                r.dbConnectionIds()
         );
     }
 
@@ -222,7 +228,7 @@ public record TaskResponse(
         return new TaskResponse(id, githubRepo, repoAlias, githubBranch, title, description, status, statusLabel,
                 requesterId, retryCount, maxRetry, failureReason, mcpsExtra, redacted, createdAt, updatedAt,
                 model, effort, designRequested, analysis, design, implementation, deployment, interviewSessionId,
-                attachments, stageUsage, totalCostUsd, totalTokens, close);
+                attachments, stageUsage, totalCostUsd, totalTokens, close, repoCatalogId, dbConnectionIds);
     }
 
     private static TaskResponse build(Task t, TaskAnalysis a, TaskDesign d, Long interviewSessionId,
@@ -293,7 +299,9 @@ public record TaskResponse(
                 stageUsage == null ? List.of() : stageUsage,
                 totalCostUsd,
                 totalTokens,
-                closeViewOf(t)
+                closeViewOf(t),
+                t.getRepoCatalogId(),
+                t.getDbConnectionIds() == null ? List.of() : List.copyOf(t.getDbConnectionIds())
         );
     }
 }

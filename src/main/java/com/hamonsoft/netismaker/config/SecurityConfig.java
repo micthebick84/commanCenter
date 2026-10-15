@@ -24,6 +24,7 @@ import java.util.stream.Collectors;
 /**
  * 두 개의 SecurityFilterChain:
  *
+ *   /mcp/**     ──► 작업 토큰(컨트롤러 검증, 스펙 2026-10-14 §6.1)
  *   /worker/**  ──► WorkerApiKeyFilter (X-Worker-API-Key, ROLE_WORKER)
  *   /api/**     ──► JWT (netis-auth, ROLE_USER / ROLE_ADMIN)
  *   나머지       ──► permitAll (actuator/health, error, GET /api/artifact-downloads/{token})
@@ -41,6 +42,21 @@ public class SecurityConfig {
                           WorkerApiKeyFilter workerApiKeyFilter) {
         this.corsConfigurationSource = corsConfigurationSource;
         this.workerApiKeyFilter = workerApiKeyFilter;
+    }
+
+    /**
+     * 디자인·구현 단계 DB MCP (스펙 2026-10-14 §6.1). 인증은 컨트롤러의 작업 토큰(Bearer)만 —
+     * 워커 API 키를 claude 프로세스에 넘기지 않으려고 /worker/** 체인과 분리한다. api 체인(anyRequest)보다 앞서야 한다.
+     */
+    @Bean
+    @Order(0)
+    public SecurityFilterChain dbMcpFilterChain(HttpSecurity http) throws Exception {
+        http
+                .securityMatcher("/mcp/**")
+                .csrf(csrf -> csrf.disable())
+                .sessionManagement(s -> s.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
+                .authorizeHttpRequests(auth -> auth.anyRequest().permitAll());
+        return http.build();
     }
 
     @Bean

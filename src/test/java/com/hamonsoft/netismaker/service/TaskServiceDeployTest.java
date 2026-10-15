@@ -61,7 +61,7 @@ class TaskServiceDeployTest {
         stageUsageRepo = mock(TaskStageUsageRepository.class);
         service = new TaskService(taskRepo, analysisRepo, designRepo, historyRepo, mcpCatalogService,
                 repoCatalogService, new ObjectMapper(), interviewService, attachmentRepo, attachmentStorage,
-                stageUsageRepo);
+                stageUsageRepo, mock(DbConnectionService.class));
         when(historyRepo.save(any())).thenAnswer(i -> i.getArgument(0));
     }
 

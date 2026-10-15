@@ -1,7 +1,7 @@
 import { mount, flushPromises } from '@vue/test-utils'
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { defineComponent, h } from 'vue'
-import { QLayout, QPageContainer } from 'quasar'
+import { QChip, QLayout, QPageContainer } from 'quasar'
 import TaskDetail from '../pages/tasks/[id].vue'
 import { authStub, useApiMock } from './mocks/nuxt'
 import { baseTask } from './fixtures/task'
@@ -100,6 +100,34 @@ describe('pages/tasks/[id] — 승인 다이얼로그 연동 (승인 팝업 UI/U
     await flushPromises()
     expect(document.getElementById('interview-card')).not.toBeNull()
     expect(scrollSpy).toHaveBeenCalled()
+    w.unmount()
+  })
+})
+
+describe('pages/tasks/[id] — DB 칩 (F6)', () => {
+  afterEach(() => {
+    document.body.innerHTML = ''
+    vi.restoreAllMocks()
+  })
+
+  it('이름·종류가 같은 연결이 둘이어도 칩이 둘 다 보이고 중복 key 경고가 없다', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const item = (id: number) => ({ id, repoCatalogId: 9, scope: 'REPO', name: '운영', dbType: 'MYSQL', host: 'h', port: 3306, databaseName: 'app', username: 'ro', enabled: true, mine: false })
+    useApiMock.mockImplementation((url: string) => {
+      if (url === '/api/tasks/42') return Promise.resolve({ ...awaiting, repoCatalogId: 9, dbConnectionIds: [3, 4] })
+      if (url.startsWith('/api/db-connections?repoCatalogId=')) return Promise.resolve({ enabled: true, items: [item(3), item(4)] })
+      if (url === '/api/usage/claude') return Promise.resolve({ limits: [] })
+      return Promise.resolve([])
+    })
+    const w = mount(PageWrapper, mountOpts)
+    await flushPromises()
+    const chips = document.body.querySelectorAll('[data-test="task-db-chips"] .q-chip')
+    expect(chips.length).toBe(2)
+    // 중복 key 경고는 갱신(patch) 때만 나므로 칩 vnode key가 서로 다른지 직접 본다
+    const keys = w.findAllComponents(QChip).filter((c) => c.props('icon') === 'storage').map((c) => c.vm.$.vnode.key)
+    expect(keys.length).toBe(2)
+    expect(new Set(keys).size).toBe(2)
+    expect(warn.mock.calls.some((c) => String(c[0]).includes('Duplicate keys'))).toBe(false)
     w.unmount()
   })
 })

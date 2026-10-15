@@ -108,6 +108,8 @@ public class InterviewService {
         s.setRepoAlias(t.getRepoAlias());
         s.setRepoCatalogId(t.getRepoCatalogId());
         s.setTaskId(t.getId());
+        // 작업 DB 연결 선택(스펙 2026-10-14 §5) — 인터뷰 claim이 이 id로 접속정보를 싣는다
+        s.setDbConnectionIds(new ArrayList<>(t.getDbConnectionIds() == null ? List.of() : t.getDbConnectionIds()));
         return sessionRepo.save(s);
     }
 

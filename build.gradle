@@ -69,6 +69,7 @@ dependencies {
     testImplementation 'org.testcontainers:testcontainers-postgresql:2.0.5'
     // TC 2.x는 commons-io/commons-lang3를 전이로 안 가져오는데 withInitScript(ScriptUtils)가 요구
     testImplementation 'commons-io:commons-io:2.22.0'
+    testRuntimeOnly 'com.h2database:h2'   // dbmcp 실행기 행 읽기 테스트 — 버전은 Spring Boot BOM 관리
     testImplementation 'org.apache.commons:commons-lang3'   // 버전은 Spring Boot BOM 관리
     testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
 }

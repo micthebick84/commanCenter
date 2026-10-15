@@ -114,10 +114,20 @@ export function buildOptions(input: SessionOptionsInput): Record<string, unknown
     strictMcpConfig: true,
     // INTERVIEW: mcp__<server>는 해당 서버의 모든 도구 매칭 — 워커의 --allowedTools 와일드카드와 동일.
     //   MCP 도구는 어차피 canUseTool 기본 분기(allow)를 타므로 보안 경계 변화 없음; Write/Bash/Edit 불변식 유지.
+    //   단 내장 DB 서버(db-<id>, 스펙 2026-10-14 §5)는 사전승인하지 않는다 — canUseTool의 dbToolGate(SQL 읽기 전용 검사)를 거치게.
     // QUESTION: 사전승인 없음 → Read/Grep/Glob/MCP 전부 canUseTool(default-deny + 경로 confinement) 단일 관문 경유.
     allowedTools: question
       ? []
-      :['Skill', 'Read', 'Grep', 'Glob', ...Object.keys(merged).map((n) => `mcp__${n}`)],
+      : [
+          'Skill',
+          'Read',
+          'Grep',
+          'Glob',
+          ...Object.keys(merged)
+            // 붙은 DB 서버뿐 아니라 db-N 이름이면 전부 뺀다 — 베이스/추가 서버가 그 이름이면 dbToolGate를 우회한다.
+            .filter((n) => !(input.dbMcpServers && n in input.dbMcpServers) && !/^db-\d+$/.test(n))
+            .map((n) => `mcp__${n}`),
+        ],
     // 헤드리스라 AskUserQuestion에 답할 사람이 없다 — canUseTool을 넘기면 CLI가 이 도구를 노출하고,
     // 호출은 "The user did not answer"로 끝나 모델이 텍스트로 재질문한다(2026-09-29 세션 #12).
     // 질문은 턴 종료 텍스트 → postQuestion → UI 경로로만 오가야 하므로 목록에서 뺀다(canUseTool deny로는 시도를 못 막음).

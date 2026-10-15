@@ -45,7 +45,7 @@ class TaskServiceRepoCatalogTest {
         stageUsageRepo = mock(TaskStageUsageRepository.class);
         service = new TaskService(taskRepo, analysisRepo, designRepo, historyRepo, mcpCatalogService,
                 repoCatalogService, new ObjectMapper(), interviewService, attachmentRepo, attachmentStorage,
-                stageUsageRepo);
+                stageUsageRepo, mock(DbConnectionService.class));
         ReflectionTestUtils.setField(service, "userConcurrentLimit", 5);
         ReflectionTestUtils.setField(service, "maxRetry", 3);
         when(taskRepo.save(any())).thenAnswer(i -> {

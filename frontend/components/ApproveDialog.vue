@@ -16,6 +16,12 @@ import {
   interviewStatusLabel,
 } from '~/composables/interviewLabels'
 import McpPicker from '~/components/McpPicker.vue'
+import DbConnectionPicker from '~/components/DbConnectionPicker.vue'
+import {
+  MAX_DB_SELECTION,
+  fetchDbConnections,
+  type DbConnectionView,
+} from '~/composables/dbConnections'
 import ModelEffortFields from '~/components/ModelEffortFields.vue'
 import ClaudeUsagePanel from '~/components/ClaudeUsagePanel.vue'
 import ApproveTaskSummary, {
@@ -29,6 +35,7 @@ interface SessionSummary {
   statusName: string
   model: string | null
   effort: string | null
+  dbConnectionIds?: number[] | null
   createdAt: string
 }
 
@@ -40,6 +47,64 @@ const $q = useQuasar()
 const model = ref(DEFAULT_MODEL)
 const effort = ref(DEFAULT_EFFORT)
 const mcpCatalogIds = ref<number[]>([])
+// DB 연결(스펙 2026-10-14 §7): 레포 공용 활성 연결을 기본 선택, 마지막 인터뷰 선택이 있으면 그것을 우선.
+// 기능이 꺼져 있으면(enabled=false) 피커를 숨기고 승인 바디에도 싣지 않는다.
+const db = reactive({ enabled: false, items: [] as DbConnectionView[] })
+const dbConnectionIds = ref<number[]>([])
+// 승인은 관리자만 하지만 서버는 선택을 작업 등록자 기준으로 검증한다(스펙 §7). 목록은 보는 사람 기준이라
+// 승인자 ≠ 등록자면 승인자 본인의 USER 연결은 쓸 수 없고 등록자의 USER 연결은 안 보인다 →
+// 공용(REPO)만 보이고 "새 접속 추가"를 숨기며, 지난 인터뷰의 안 보이는 id(등록자 개인 연결)는 버리지 않고 유지한다.
+// requesterId는 서버 AuthContext.requireUserId와 같은 값(JWT username → sub → user_id) — pages/tasks/[id].vue isOwner와 같은 비교.
+const auth = useAuthStore()
+const isRegistrant = computed(() => {
+  const me = auth.me?.username ?? (auth.me?.user_id != null ? String(auth.me.user_id) : null)
+  return me != null && props.task.requesterId === me
+})
+/** 목록에 안 보이지만 유지하는 등록자 개인 연결 id(승인자 ≠ 등록자일 때만) */
+const registrantDbIds = ref<number[]>([])
+
+/** 로드 순번 — init/reload마다 증가. 늦게 도착한 이전 응답이 선택·목록을 덮어쓰지 않게 한다. */
+let loadSeq = 0
+/** DB 목록 로드 중이면 승인 버튼을 막는다(기본 선택이 반영되기 전 승인 방지). */
+const dbLoading = ref(false)
+
+async function loadDb(seq: number, mode: 'seed' | 'keep', preferred: number[] = []) {
+  const repoId = props.task.repoCatalogId
+  if (!repoId) {
+    db.enabled = false
+    db.items = []
+    return
+  }
+  const r = await fetchDbConnections(repoId)
+  if (seq !== loadSeq || !show.value) return
+  db.enabled = r.enabled
+  const registrant = isRegistrant.value
+  db.items = registrant ? r.items : r.items.filter((i) => i.scope === 'REPO')
+  if (mode === 'seed') {
+    registrantDbIds.value = registrant ? [] : preferred.filter((id) => !r.items.some((i) => i.id === id))
+  }
+  const usable = new Set(db.items.filter((i) => i.enabled).map((i) => i.id))
+  const keepable = (id: number) => usable.has(id) || registrantDbIds.value.includes(id)
+  if (mode === 'keep') {
+    dbConnectionIds.value = dbConnectionIds.value.filter(keepable)
+  } else if (preferred.length) {
+    dbConnectionIds.value = preferred.filter(keepable).slice(0, MAX_DB_SELECTION)
+  } else {
+    dbConnectionIds.value = r.items
+      .filter((i) => i.scope === 'REPO' && i.enabled)
+      .slice(0, MAX_DB_SELECTION)
+      .map((i) => i.id)
+  }
+}
+async function reloadDb() {
+  const seq = ++loadSeq
+  dbLoading.value = true
+  try {
+    await loadDb(seq, 'keep')
+  } finally {
+    if (seq === loadSeq) dbLoading.value = false
+  }
+}
 const approving = ref(false)
 /** 이 작업의 지난(터미널) 인터뷰 세션, 최신순. 재승인 맥락 안내 + 초기값 프리필에 쓴다. */
 const previous = ref<SessionSummary[]>([])
@@ -59,9 +124,16 @@ const previousHint = computed(() => {
 
 /** 열릴 때마다 초기화: 기본값으로 되돌린 뒤 지난 인터뷰를 조회해 마지막 세션 설정을 프리필한다(조회 실패는 조용히 기본값). */
 async function init() {
+  const seq = ++loadSeq
+  db.enabled = false
+  db.items = []
+  dbLoading.value = !!props.task.repoCatalogId
   model.value = DEFAULT_MODEL
   effort.value = DEFAULT_EFFORT
   mcpCatalogIds.value = []
+  dbConnectionIds.value = []
+  registrantDbIds.value = []
+  let lastDbIds: number[] = []
   previous.value = []
   prefilled.value = false
   try {
@@ -73,8 +145,10 @@ async function init() {
         (INTERVIEW_TERMINAL_STATUSES as string[]).includes(s.statusName),
       )
       .sort((a, b) => b.id - a.id)
+    if (seq !== loadSeq) return
     previous.value = rows
     const last = rows[0]
+    lastDbIds = Array.isArray(last?.dbConnectionIds) ? last.dbConnectionIds : []
     // 박제된 과거 모델(fable-5 등)은 더는 고를 수 없으므로 안내만 하고 초기값은 기본값으로 둔다.
     if (last?.model && MODEL_OPTIONS.some((m) => m.value === last.model)) {
       model.value = last.model
@@ -83,6 +157,11 @@ async function init() {
     }
   } catch {
     // 403/404 등 — 비소유자/구 API. 기본값으로 진행.
+  }
+  try {
+    await loadDb(seq, 'seed', lastDbIds)
+  } finally {
+    if (seq === loadSeq) dbLoading.value = false
   }
 }
 
@@ -95,6 +174,7 @@ watch(
 )
 
 async function approve() {
+  if (dbLoading.value) return
   approving.value = true
   try {
     await useApi(`/api/tasks/${props.task.id}/approve`, {
@@ -103,6 +183,7 @@ async function approve() {
         model: model.value,
         effort: effort.value,
         mcpCatalogIds: mcpCatalogIds.value,
+        ...(db.enabled ? { dbConnectionIds: dbConnectionIds.value } : {}),
       },
     })
     $q.notify({
@@ -180,6 +261,19 @@ defineExpose({ approve })
           <div class="q-mt-md">
             <McpPicker v-model="mcpCatalogIds" flat />
           </div>
+          <div v-if="db.enabled && task.repoCatalogId" class="q-mt-md" data-test="approve-db">
+            <div class="text-caption text-grey-7 q-mb-xs">
+              DB 연결 — 인터뷰·디자인·구현에서 읽기 전용으로 조회합니다
+            </div>
+            <DbConnectionPicker
+              v-model="dbConnectionIds"
+              :items="db.items"
+              :repo-catalog-id="task.repoCatalogId"
+              :allow-add="isRegistrant"
+              :registrant-ids="registrantDbIds"
+              @reload="reloadDb"
+            />
+          </div>
           <!-- 첫 폴링 뒤에 strip이 나타나며 아래 섹션이 밀리지 않도록 높이를 미리 확보한다 -->
           <div class="usage-slot q-mt-sm">
             <ClaudeUsagePanel
@@ -219,6 +313,7 @@ defineExpose({ approve })
           icon="forum"
           label="승인하고 인터뷰 시작"
           :loading="approving"
+          :disable="dbLoading"
           @click="approve"
         />
       </q-card-actions>

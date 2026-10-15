@@ -8,6 +8,30 @@ const base = {
 };
 
 describe('buildOptions', () => {
+  it('INTERVIEW: DB 서버는 사전승인하지 않는다 — canUseTool(dbToolGate)을 거쳐야 한다', () => {
+    const o = buildOptions({
+      ...base,
+      claudeSessionId: null,
+      dbMcpServers: { 'db-7': { type: 'sdk', name: 'db-7', instance: {} } as never },
+      dbDialects: { 'db-7': 'mysql' },
+    });
+    expect((o.mcpServers as Record<string, unknown>)['db-7']).toBeDefined();
+    expect(o.allowedTools as string[]).not.toContain('mcp__db-7');
+  });
+
+  it('INTERVIEW: 붙지 않은 db-N 이름의 베이스/추가 서버도 사전승인하지 않는다(dbToolGate 우회 방지)', () => {
+    const o = buildOptions({
+      ...base,
+      claudeSessionId: null,
+      mcpsBase: { 'db-9': { type: 'http', url: 'http://fake' }, obsidian: { type: 'http', url: 'http://o' } },
+      mcpsExtra: [{ name: 'db-12', url: 'http://x', transport: 'http' }],
+    });
+    const allowed = o.allowedTools as string[];
+    expect(allowed).not.toContain('mcp__db-9');
+    expect(allowed).not.toContain('mcp__db-12');
+    expect(allowed).toContain('mcp__obsidian');
+  });
+
   it('loads superpowers as a local plugin (isolation: plugins-only)', () => {
     const o = buildOptions({ ...base, claudeSessionId: null });
     expect(o.plugins).toEqual([{ type: 'local', path: '/sp/5.1.0' }]);

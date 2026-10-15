@@ -14,6 +14,9 @@ export interface SummaryTask {
   createdAt: string
   description: string
   attachments: { id: number }[]
+  /** 레포 카탈로그 id — DB 피커 목록 조회용 (스펙 2026-10-14 §7). 레거시 작업은 null/없음. */
+  repoCatalogId?: number | null
+  dbConnectionIds?: number[]
 }
 
 const props = defineProps<{ task: SummaryTask }>()

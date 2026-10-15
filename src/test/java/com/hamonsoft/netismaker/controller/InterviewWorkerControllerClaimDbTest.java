@@ -57,4 +57,23 @@ class InterviewWorkerControllerClaimDbTest {
         assertThat(body.dbConnections()).isEmpty();
         assertThat(body.dbNotices()).containsExactly("DB 접속정보를 불러오지 못해 DB 도구 없이 답합니다");
     }
+
+    @Test
+    void interview_claim_with_db_ids_is_enriched() {
+        when(interviewService.claim("w1")).thenReturn(Optional.of(claimOf(false, List.of(7L))));
+        var ref = new InterviewClaimResponse.DbConnectionRef("db-7", "운영 (MySQL)", "MYSQL", "h", 3306, "app", "u", "pw");
+        when(db.resolveForClaim(List.of(7L))).thenReturn(new DbConnectionService.ClaimDb(List.of(ref), List.of()));
+        var body = controller.claim("w1").getBody();
+        assertThat(body.dbConnectionIds()).containsExactly(7L);
+        assertThat(body.dbConnections()).containsExactly(ref);
+    }
+
+    @Test
+    void interview_claim_survives_db_resolution_failure() {
+        when(interviewService.claim("w1")).thenReturn(Optional.of(claimOf(false, List.of(7L))));
+        when(db.resolveForClaim(any())).thenThrow(new RuntimeException("db down"));
+        var body = controller.claim("w1").getBody();
+        assertThat(body.dbConnections()).isEmpty();
+        assertThat(body.dbNotices()).containsExactly("DB 접속정보를 불러오지 못해 DB 도구 없이 진행합니다");
+    }
 }

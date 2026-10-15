@@ -82,4 +82,29 @@ describe('DbConnectionPicker', () => {
     expect(w.emitted('update:modelValue')!.at(-1)![0]).toEqual([97, 99])
     w.unmount()
   })
+
+  it('allowAdd=false면 "새 접속 추가"와 빈 내 접속정보 칸이 없다(기본은 보인다)', async () => {
+    const off = mount(DbConnectionPicker, { props: { modelValue: [], items: [item(1, 'REPO')], repoCatalogId: 1, allowAdd: false } })
+    await flushPromises()
+    expect(off.find('[data-test="db-add"]').exists()).toBe(false)
+    expect(off.find('[data-test="db-section-user"]').exists()).toBe(false)
+    off.unmount()
+    const on = mount(DbConnectionPicker, { props: { modelValue: [], items: [item(1, 'REPO')], repoCatalogId: 1 } })
+    await flushPromises()
+    expect(on.find('[data-test="db-add"]').exists()).toBe(true)
+    expect(on.find('[data-test="db-section-user"]').exists()).toBe(true)
+    on.unmount()
+  })
+
+  it('registrantIds는 "등록자 개인 연결 #id"로 따로 보이고 해제할 수 있다(사용할 수 없는 연결이 아니다)', async () => {
+    const w = mount(DbConnectionPicker, {
+      props: { modelValue: [1, 42], items: [item(1, 'REPO')], repoCatalogId: 1, registrantIds: [42] },
+    })
+    await flushPromises()
+    expect(w.find('[data-test="db-section-registrant"]').text()).toContain('등록자 개인 연결 #42')
+    expect(w.find('[data-test="db-section-unavailable"]').exists()).toBe(false)
+    ;(w.vm as any).toggle(42)
+    expect(w.emitted('update:modelValue')!.at(-1)![0]).toEqual([1])
+    w.unmount()
+  })
 })

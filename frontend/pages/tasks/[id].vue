@@ -2,6 +2,8 @@
 import { useQuasar } from 'quasar'
 import { confirmDialog } from '~/composables/confirmDialog'
 import ApproveDialog from '~/components/ApproveDialog.vue'
+import { fetchDbConnections } from '~/composables/dbConnections'
+import { dbChipLabels } from '~/composables/taskDbChips'
 import InterviewPanel from '~/components/InterviewPanel.vue'
 import InterviewHistoryCard from '~/components/InterviewHistoryCard.vue'
 import TaskProgressStepper from '~/components/tasks/TaskProgressStepper.vue'
@@ -97,6 +99,8 @@ interface TaskResponse {
   id: number
   githubRepo: string
   repoAlias: string | null
+  repoCatalogId?: number | null
+  dbConnectionIds?: number[]
   githubBranch: string
   title: string
   description: string
@@ -132,6 +136,24 @@ const taskId = computed(() => route.params.id as string)
 
 const { data: task, refresh } = useTaskPolling<TaskResponse>(() =>
   useApi(`/api/tasks/${taskId.value}`),
+)
+
+const dbChips = ref<string[]>([])
+// 폴링이 5초마다 task 객체를 통째로 교체하므로, 값(repo·ids 키)이 바뀔 때만 다시 조회한다.
+watch(
+  [() => task.value?.repoCatalogId, () => task.value?.dbConnectionIds?.join(',') ?? ''],
+  async ([repoId, key]) => {
+    const ids = task.value?.dbConnectionIds ?? []
+    if (!ids.length) {
+      dbChips.value = []
+      return
+    }
+    const r = repoId ? await fetchDbConnections(repoId) : { enabled: false, items: [] }
+    // 대기 중에 repo/ids가 바뀌었으면 이 응답은 버린다
+    if (repoId !== task.value?.repoCatalogId || key !== (task.value?.dbConnectionIds?.join(',') ?? '')) return
+    dbChips.value = dbChipLabels(ids, r.items)
+  },
+  { immediate: true },
 )
 
 const subtasks = computed(() => {
@@ -773,6 +795,21 @@ function onAction(kind: NextActionKind) {
           >
             <q-tooltip>{{ m.url }}</q-tooltip>
           </q-chip>
+        </q-card-section>
+        <q-separator v-if="dbChips.length" />
+        <q-card-section v-if="dbChips.length" data-test="task-db-chips">
+          <div class="text-caption q-mb-xs">DB 연결 (읽기 전용 조회)</div>
+          <q-chip
+            v-for="(label, idx) in dbChips"
+            :key="idx"
+            color="teal-1"
+            text-color="teal-9"
+            icon="storage"
+            size="sm"
+            dense
+            :label="label"
+            class="q-mr-xs q-mb-xs"
+          />
         </q-card-section>
         <q-separator v-if="task.attachments && task.attachments.length" />
         <q-card-section v-if="task.attachments && task.attachments.length">

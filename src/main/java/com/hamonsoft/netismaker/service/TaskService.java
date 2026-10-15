@@ -71,6 +71,7 @@ public class TaskService {
     private final TaskAttachmentRepository attachmentRepo;
     private final AttachmentStorage attachmentStorage;
     private final TaskStageUsageRepository stageUsageRepo;
+    private final DbConnectionService dbConnectionService;
 
     @Value("${app.task.user-concurrent-limit:5}")
     private int userConcurrentLimit;
@@ -88,7 +89,8 @@ public class TaskService {
                        InterviewService interviewService,
                        TaskAttachmentRepository attachmentRepo,
                        AttachmentStorage attachmentStorage,
-                       TaskStageUsageRepository stageUsageRepo) {
+                       TaskStageUsageRepository stageUsageRepo,
+                       DbConnectionService dbConnectionService) {
         this.taskRepo = taskRepo;
         this.analysisRepo = analysisRepo;
         this.designRepo = designRepo;
@@ -100,6 +102,7 @@ public class TaskService {
         this.attachmentRepo = attachmentRepo;
         this.attachmentStorage = attachmentStorage;
         this.stageUsageRepo = stageUsageRepo;
+        this.dbConnectionService = dbConnectionService;
     }
 
     @Transactional
@@ -308,16 +311,20 @@ public class TaskService {
         approve(taskId, adminId, null);
     }
 
-    /** 승인대기 → 인터뷰중. 세션을 만들고 모델/effort/MCP 선택을 task에도 박제한다. */
+    /** 승인대기 → 인터뷰중. 세션을 만들고 모델/effort/MCP/DB 선택을 task에도 박제한다. */
     private void startInterview(Task t, String adminId, ApproveRequest req) {
         List<TaskMcpSpec> extras = resolveMcpExtras(req == null ? null : req.mcpCatalogIds());
         String model = ModelEffortPolicy.resolveModel(req == null ? null : req.model());
         String effort = ModelEffortPolicy.resolveEffort(req == null ? null : req.effort());
         ModelEffortPolicy.validate(model, effort);   // 검증이 먼저 — 실패 시 세션이 생기면 안 된다
+        // DB 연결 검증도 세션 생성 전 — 기준은 작업 등록자 (스펙 2026-10-14 §4)
+        List<Long> dbIds = dbConnectionService.validateSelection(t.getRepoCatalogId(), t.getRequesterId(),
+                req == null ? null : req.dbConnectionIds());
 
         t.setModel(model);
         t.setEffort(effort);
         t.setMcpsExtra(new ArrayList<>(extras));
+        t.setDbConnectionIds(new ArrayList<>(dbIds));
         t.setFailureReason(null);
         interviewService.createForTask(t, model, effort, extras);
 

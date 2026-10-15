@@ -100,3 +100,13 @@ export function suggestionCaption(s: DeployEnvSuggestion): string | null {
   if (s.previousTaskId != null) parts.push(`task #${s.previousTaskId} 배포에서 값을 가져왔습니다`)
   return parts.length ? parts.join(' · ') : null
 }
+
+/**
+ * 미리 채울 변수가 하나도 없을 때(템플릿 0개·저장값 없음·직전 배포 없음)의 안내. 저장값이 있으면 SAVED 행이,
+ * 직전 배포를 썼으면 PREVIOUS 행이 생기므로 "행 없음 + 템플릿 0개"로 판정한다. 앱이 env를 읽지 않고
+ * 레포 안 설정 파일로 도는 경우 구현 세션이 빈 목록을 남긴다 — 그 이유는 구현 로그에 있다.
+ */
+export function noEnvNotice(s: DeployEnvSuggestion): string | null {
+  if (s.rows.length > 0 || s.templateCount > 0) return null
+  return '구현 단계에서 찾은 배포 환경변수가 없습니다. 이 앱은 레포 안 설정 파일 값으로 실행될 수 있으니, 근거는 작업의 구현 로그에서 확인하세요.'
+}

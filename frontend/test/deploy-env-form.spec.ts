@@ -3,6 +3,7 @@ import {
   blankRow,
   isSuggestion,
   missingRequired,
+  noEnvNotice,
   rowsFromEnvVars,
   rowsFromSuggestion,
   suggestionCaption,
@@ -73,5 +74,14 @@ describe('deployEnvForm (스펙 2026-10-07 §8)', () => {
     expect(suggestionCaption(suggestion)).toBe('구현 시 추출한 변수 2개 · task #41 배포에서 값을 가져왔습니다')
     expect(suggestionCaption({ rows: [], templateCount: 0, previousTaskId: 41 })).toBe('task #41 배포에서 값을 가져왔습니다')
     expect(suggestionCaption({ rows: [], templateCount: 0, previousTaskId: null })).toBeNull()
+  })
+
+  it('변수 없음 안내 — 템플릿·저장값·직전 배포가 모두 없을 때만', () => {
+    expect(noEnvNotice({ rows: [], templateCount: 0, previousTaskId: null })).toContain('구현 로그')
+    expect(noEnvNotice(suggestion)).toBeNull() // 템플릿 있음
+    const saved = { key: 'A', value: '1', secret: false, description: '', required: false, source: 'SAVED' as const, valueFromPrevious: false }
+    expect(noEnvNotice({ rows: [saved], templateCount: 0, previousTaskId: null })).toBeNull() // 저장값 있음
+    const prev = { ...saved, source: 'PREVIOUS' as const, valueFromPrevious: true }
+    expect(noEnvNotice({ rows: [prev], templateCount: 0, previousTaskId: 41 })).toBeNull() // 직전 배포 있음
   })
 })

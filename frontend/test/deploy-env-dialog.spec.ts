@@ -43,6 +43,16 @@ describe('DeployEnvDialog (스펙 2026-10-07 §8)', () => {
     expect(body().textContent).toContain('직전 배포 값')
     expect(body().textContent).toContain('배포 — 환경변수')
     expect(body().querySelector('[data-test="deploy-env-caption"]')?.textContent).toContain('task #41')
+    expect(body().querySelector('[data-test="deploy-env-no-env-notice"]')).toBeNull()
+    w.unmount()
+  })
+
+  it('미리 채울 변수가 하나도 없으면 레포 설정으로 실행될 수 있다는 안내를 보여 준다', async () => {
+    useApiMock.mockResolvedValueOnce({ rows: [], templateCount: 0, previousTaskId: null })
+    const w = mountDialog()
+    await flushPromises()
+    expect(body().querySelector('[data-test="deploy-env-no-env-notice"]')?.textContent).toContain('구현 로그')
+    expect(body().querySelector('[data-test="deploy-env-caption"]')).toBeNull()
     w.unmount()
   })
 

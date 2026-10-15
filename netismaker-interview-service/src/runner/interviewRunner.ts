@@ -4,7 +4,7 @@ import type { ActivityInput, AttachmentRef, InterviewClaimResponse, RateLimitInf
 import { ActivityPoster } from './activityPoster.js';
 import { RateLimitReporter } from './rateLimitReport.js';
 import { buildOptions } from '../sdk/sessionOptions.js';
-import { QuotaGuardExceeded, CostGuard } from './costGuard.js';
+import { SessionCostMeter } from './sessionCostMeter.js';
 import { tryHarvest, type HarvestResult } from './planHarvest.js';
 import { harvestSessionPlanFiles } from './planFiles.js';
 import { relay } from './messageRelay.js';
@@ -18,8 +18,6 @@ export interface RunnerDeps {
   superpowersPluginPath: string;
   /** Resolved claude CLI binary for subscription auth (Phase-0 spike 00b). */
   claudeCliPath: string;
-  /** SHADOW per-session quota guard (turns/quota, NOT dollars). */
-  quotaGuard: number;
   /** 세션 최대 assistant 질문 턴(초과 시 FAILED). */
   maxTurns: number;
   /** 이 턴 수 이상이면 force-finish 프롬프트 사용. */
@@ -217,11 +215,10 @@ export class InterviewRunner {
     // 활동 스트림: 진행(도구/델타)을 300ms 배치로 중계. 실패는 poster가 격리 — 인터뷰에 무영향.
     const poster = new ActivityPoster(this.client, claim.sessionId);
     poster.start();
-    // Seed the guard from the claim's accumulated session total so it is CUMULATIVE across all turns
-    // (not just one runaway turn): the server accumulates total_cost_usd on every /question + /plan
-    // and the claim carries it back, so a looping interview that never completes eventually trips the
-    // guard → fail (safety net for the "completion never detected" loop). Fresh claims carry 0.
-    const guard = new CostGuard(this.deps.quotaGuard, claim.totalCostUsd ?? 0);
+    // 턴 비용 계측: resume하는 Claude 세션의 SDK total_cost_usd는 세션 누적값이라 서버 세션 합계를 빼서 이번 턴
+    // 비용만 보고한다. 새 Claude 세션(claudeSessionId 없음)은 0부터. 세션 비용 상한(구 CostGuard)은 2026-10-15에
+    // 없앴다 — 끝나지 않는 인터뷰는 maxTurns와 턴 wall-clock 타임아웃이 막는다.
+    const meter = new SessionCostMeter(claim.claudeSessionId ? (claim.totalCostUsd ?? 0) : 0);
     // Wall-clock 절대 백스톱 (task쪽 StaleTaskRecoveryJob hungBackstop 미러): SDK/git이 행업해도
     // HeartbeatTicker는 계속 돌므로 서버 스윕만으로는 이 워커 슬롯이 풀리지 않는다(ClaimLoop 직렬).
     // 턴 전체를 하나의 데드라인으로 묶고, 초과 시 SDK abort + FAILED 보고로 슬롯을 회수한다.
@@ -234,7 +231,7 @@ export class InterviewRunner {
         : 1_800_000;
     const controller = new AbortController();
     let timer: ReturnType<typeof setTimeout> | null = null;
-    const turn = this.runTurn(claim, controller, guard, poster);
+    const turn = this.runTurn(claim, controller, meter, poster);
     try {
       const outcome = await Promise.race([
         turn.then(() => 'done' as const),
@@ -255,10 +252,6 @@ export class InterviewRunner {
         return;
       }
     } catch (err) {
-      if (err instanceof QuotaGuardExceeded) {
-        await this.safeFail(claim.sessionId, err.message);
-        return;
-      }
       // 원인만 보낸다 — 세션 종류별 라벨("답변 실패: "/"인터뷰 실패: ")은 서버 doFail이 붙이므로
       // 여기서 접두사를 얹으면 배너가 "답변 실패: 답변 생성 실패: …"처럼 겹친다. 다른 safeFail 사유들과 동일한 형태.
       await this.safeFail(claim.sessionId, (err as Error).message);
@@ -292,7 +285,7 @@ export class InterviewRunner {
   private async runTurn(
     claim: InterviewClaimResponse,
     controller: AbortController,
-    guard: CostGuard,
+    meter: SessionCostMeter,
     poster: ActivityPoster,
   ): Promise<void> {
     const onActivity = (e: ActivityInput) => poster.push(e);
@@ -331,7 +324,7 @@ export class InterviewRunner {
       // 질문 세션: plan 기계장치(forceFinish 삼항식·handoff splice·near-miss reformat·harvest→postPlan)에
       // 진입하지 않는 조기 분기 — 스펙 §6 kind 가드 4곳을 한 번에 만족한다.
       if (isQuestion) {
-        await this.runQuestionTurn(claim, controller, guard, poster);
+        await this.runQuestionTurn(claim, controller, meter, poster);
         return;
       }
 
@@ -363,11 +356,10 @@ export class InterviewRunner {
           options,
         });
         const result = await relay(stream, { onActivity, onRateLimit, workDir: claim.workDir });
-        guard.add(result.costUsd);
 
         let assistantText = result.assistantText;
         let sessionId = result.sessionId ?? claim.claudeSessionId ?? '';
-        let costUsd = result.costUsd;
+        let costUsd = meter.ownCost(result.costUsd);
         let inputTokens = result.inputTokens;
         let outputTokens = result.outputTokens;
         let cacheCreationTokens = result.cacheCreationTokens;
@@ -406,12 +398,12 @@ export class InterviewRunner {
             }),
             { onActivity, onRateLimit, workDir: claim.workDir },
           );
-          guard.add(second.costUsd);
           assistantText = second.assistantText;
           sessionId = second.sessionId ?? sessionId;
           // 누적: 이 턴에 relay가 여러 번 돌면(핸드오프 shim) 각 relay분을 합산한다 — 대입 시
-          // 1차 relay의 usage가 Java 보고에서 유실된다(스펙 §1 "모든 실행 누적").
-          costUsd += second.costUsd;
+          // 1차 relay의 usage가 Java 보고에서 유실된다(스펙 §1 "모든 실행 누적"). 비용은 같은 세션을 resume하므로
+          // SDK 보고값이 누적값이라 meter로 이번 relay분만 뗀다.
+          costUsd += meter.ownCost(second.costUsd);
           inputTokens += second.inputTokens;
           outputTokens += second.outputTokens;
           cacheCreationTokens += second.cacheCreationTokens;
@@ -452,11 +444,10 @@ export class InterviewRunner {
             }),
             { onActivity, onRateLimit, workDir: claim.workDir },
           );
-          guard.add(retry.costUsd);
           assistantText = retry.assistantText;
           sessionId = retry.sessionId ?? sessionId;
           // 누적: near-miss reformat retry도 별도 relay다 — 합산 (위 handoff shim과 동일 근거).
-          costUsd += retry.costUsd;
+          costUsd += meter.ownCost(retry.costUsd);
           inputTokens += retry.inputTokens;
           outputTokens += retry.outputTokens;
           cacheCreationTokens += retry.cacheCreationTokens;
@@ -510,7 +501,7 @@ export class InterviewRunner {
   private async runQuestionTurn(
     claim: InterviewClaimResponse,
     controller: AbortController,
-    guard: CostGuard,
+    meter: SessionCostMeter,
     poster: ActivityPoster,
   ): Promise<void> {
     const onActivity = (e: ActivityInput) => poster.push(e);
@@ -539,14 +530,14 @@ export class InterviewRunner {
         }),
       });
       const result = await relay(stream, { onActivity, onRateLimit, workDir: claim.workDir });
-      guard.add(result.costUsd);
+      const costUsd = meter.ownCost(result.costUsd);
       // trailing 활동 배치가 답변보다 늦게 도착하지 않도록 확정 POST 전에 큐를 비운다 (인터뷰 경로와 동일).
       await poster.stop();
       await this.client.postQuestion(claim.sessionId, {
         content: result.assistantText,
         claudeSessionId: result.sessionId ?? claim.claudeSessionId ?? '',
         kind: 'question',
-        costUsd: result.costUsd,
+        costUsd,
         inputTokens: result.inputTokens,
         outputTokens: result.outputTokens,
         cacheCreationTokens: result.cacheCreationTokens,

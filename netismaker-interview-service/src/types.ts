@@ -85,8 +85,8 @@ export interface InterviewClaimResponse {
   /** Java가 보내는 선택 모델/effort (NOT NULL — 기본 claude-opus-5-5/high). */
   model: string;
   effort: 'low' | 'medium' | 'high' | 'xhigh' | 'max';
-  /** 세션 누적 SHADOW 비용(이전 턴들까지). CostGuard를 이 값으로 시드해 가드가 세션 전체에 걸쳐
-   *  누적되도록 한다(단일 턴이 아니라). Java는 NOT NULL — 신규 claim은 0. */
+  /** 세션 누적 SHADOW 비용(이전 턴들까지). resume 턴에서 SDK total_cost_usd(세션 누적값)에서 빼 이번 턴 비용을
+   *  구하는 기준(SessionCostMeter). Java는 NOT NULL — 신규 claim은 0. */
   totalCostUsd: number;
   /**
    * 등록 시 업로드된 첨부. 신버전 Java는 항상 []-이상을 보내지만 구버전 백엔드는 필드

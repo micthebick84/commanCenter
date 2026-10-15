@@ -18,7 +18,6 @@ const ensureRepo = vi.fn().mockResolvedValue(undefined);
 const deps = {
   superpowersPluginPath: '/sp/5.1.0',
   claudeCliPath: '/home/me/.local/bin/claude',
-  quotaGuard: 5,
   maxTurns: 20,
   forceFinishTurns: 19,
   ensureRepo,
@@ -103,27 +102,27 @@ describe('InterviewRunner', () => {
     expect(client.postQuestion).not.toHaveBeenCalled();
   });
 
-  it('quota guard: when a turn shadow cost crosses the guard, reports fail and does not post a question', async () => {
+  // 2026-10-15 작업 13: resume한 세션의 result.total_cost_usd는 세션 누적값이다 — 그대로 더하면 턴마다 이중 집계된다.
+  it('resumed claim: posts only this turn cost (SDK total_cost_usd minus the prior session total)', async () => {
     const client = makeClient();
-    const fakeQuery = vi.fn(() => questionStream()); // turn shadow cost 0.12
-    // guard 0.05 < this turn's 0.12 => trips on the single turn (seeded from 0; see note below)
-    const runner = new InterviewRunner(client as never, fakeQuery as never, { ...deps, quotaGuard: 0.05 } as never);
+    const fakeQuery = vi.fn(() => questionStream()); // SDK reports session cumulative 0.12
+    const runner = new InterviewRunner(client as never, fakeQuery as never, deps as never);
 
-    await runner.run(freshClaim);
+    await runner.run({ ...resumeClaim, totalCostUsd: 0.1 });
 
-    expect(client.fail).toHaveBeenCalledWith(42, expect.stringContaining('quota'));
-    expect(client.postQuestion).not.toHaveBeenCalled();
+    expect(client.fail).not.toHaveBeenCalled();
+    expect(client.postQuestion).toHaveBeenCalledWith(42, expect.objectContaining({ costUsd: expect.closeTo(0.02, 6) }));
   });
 
-  it('quota guard is CUMULATIVE across the session: seeded from claim.totalCostUsd so a cheap turn that crosses the prior session total trips fail', async () => {
+  it('no per-session cost limit: an expensive session total never fails the turn', async () => {
     const client = makeClient();
-    const fakeQuery = vi.fn(() => questionStream()); // this turn shadow cost 0.12
-    const runner = new InterviewRunner(client as never, fakeQuery as never, deps as never); // quotaGuard 5
-    // prior accumulated 4.95 + this turn 0.12 = 5.07 > 5 => trips. (Would NOT trip if seeded from 0.)
-    await runner.run({ ...freshClaim, totalCostUsd: 4.95 });
+    const fakeQuery = vi.fn(() => questionStream());
+    const runner = new InterviewRunner(client as never, fakeQuery as never, deps as never);
 
-    expect(client.fail).toHaveBeenCalledWith(42, expect.stringContaining('quota'));
-    expect(client.postQuestion).not.toHaveBeenCalled();
+    await runner.run({ ...resumeClaim, totalCostUsd: 1000 });
+
+    expect(client.fail).not.toHaveBeenCalled();
+    expect(client.postQuestion).toHaveBeenCalled();
   });
 
   // 2026-09-22 라이브 검증: SDK 인증 만료로 턴이 죽었는데 interview.log는 기동 한 줄에 머물렀다.
@@ -354,9 +353,10 @@ describe('InterviewRunner near-miss correction', () => {
     expect(fakeQuery).toHaveBeenCalledTimes(2); // 보정 splice 1회
     expect(client.postPlan).toHaveBeenCalledTimes(1);
     // 누적 검증: reformat retry는 별도 relay다 — 두 relay의 usage 합이 postPlan에 실려야 한다
-    // (대입이면 retry분만 남아 첫 relay의 usage가 유실된다).
+    // (대입이면 retry분만 남아 첫 relay의 usage가 유실된다). 비용은 같은 세션 resume이라 SDK 보고값이 세션
+    // 누적값이다(2026-10-15) — 0.1 + (0.15 − 0.1).
     expect(client.postPlan).toHaveBeenCalledWith(42, expect.objectContaining({
-      costUsd: 0.25, // 0.1 + 0.15
+      costUsd: 0.15,
       inputTokens: 400, // 100 + 300
       outputTokens: 80, // 20 + 60
       cacheCreationTokens: 20, // 5 + 15
@@ -848,8 +848,9 @@ describe('InterviewRunner handoff shim', () => {
     expect(client.postPlan).toHaveBeenCalledTimes(1);
     // 누적 검증: handoff shim(2차 relay)의 usage가 1차 relay 위에 합산돼야 한다
     // (planCompleteStream: costUsd 0.31, inputTokens 2000, outputTokens 500, cache 60/5400).
+    // 비용만은 같은 세션 resume이라 2차 보고값 0.31이 세션 누적값이다(2026-10-15) — 0.05 + (0.31 − 0.05).
     expect(client.postPlan).toHaveBeenCalledWith(42, expect.objectContaining({
-      costUsd: 0.36, // 0.05 + 0.31
+      costUsd: 0.31,
       inputTokens: 2100, // 100 + 2000
       outputTokens: 520, // 20 + 500
       cacheCreationTokens: 65, // 5 + 60

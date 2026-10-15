@@ -252,6 +252,15 @@ public class WorkerService {
 
         TaskStatus current = t.getStatus();
 
+        // 재시도 뒤 이전 시도의 늦은 보고(스펙 2026-10-15 §5.6) — 상태는 그대로 두고 이력·사용량만 남긴다.
+        // 지각 정합화·in-flight 가드보다 먼저 본다(이전 시도가 새 시도의 상태를 덮거나 409로 dead-letter에 쌓이지 않게).
+        if (isEarlierImplementationAttempt(t, req)) {
+            historyRepo.save(TaskStatusHistory.log(t.getId(), current, current, "worker", req.workerId(),
+                    "이전 시도(" + req.implementationAttempt() + "회째)의 늦은 보고 무시: " + req.status().dbValue()));
+            accumulateUsage(t.getId(), TaskStageUsage.STAGE_IMPLEMENTATION, req);
+            return;
+        }
+
         // 지각 보고 정합화: stale 회수로 IMPLEMENTATION_FAILED가 됐지만 워커가 실제로는
         // PR 생성까지 성공한 경우, 늦게 도착한 PR_CREATED 보고를 받아 정합화한다.
         // (PR 메타가 유효할 때만 — undeploy 복귀(prUrl 없는 PR_CREATED)와 구분됨)
@@ -443,6 +452,13 @@ public class WorkerService {
         };
         historyRepo.save(TaskStatusHistory.log(t.getId(), from, t.getStatus(),
                 "worker", req.workerId(), reason));
+    }
+
+    /** 구현 결과인데 시도 번호가 작업의 현재 시도와 다르면 이전 시도의 보고다. 번호가 없으면(구버전 워커) 판단하지 않는다. */
+    private static boolean isEarlierImplementationAttempt(Task t, WorkerResultRequest req) {
+        if (req.implementationAttempt() == null) return false;
+        if (req.status() != TaskStatus.PR_CREATED && req.status() != TaskStatus.IMPLEMENTATION_FAILED) return false;
+        return req.implementationAttempt() != t.getImplementationAttempt();
     }
 
     /** 구현 성공 보고의 배포 env 템플릿 저장 — null(구버전 워커)이면 기존 값 유지 (스펙 2026-10-07 §5). */

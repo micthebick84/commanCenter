@@ -82,4 +82,42 @@ class WorkerMainLoopPlanSectionTest {
         assertThat(prompt).doesNotContain("확정된 구현 계획");
         assertThat(prompt).doesNotContain("{plan_section}");
     }
+
+    /** 직접 방식 문구는 한 글자도 바뀌지 않는다 — 리뷰 방식과 공유하는 틀을 건드리는 변경이 여기서 걸린다. */
+    @Test
+    void the_direct_plan_section_text_is_pinned_character_for_character() {
+        String expected = """
+
+                ## 확정된 구현 계획 (인터뷰에서 승인됨 — 이 계획을 기준으로 구현)
+                아래는 요청자와의 인터뷰로 확정된 구현 계획입니다. 작업 순서·범위·파일 위치는 이 계획을 따르세요.
+                - 계획 안의 git commit / push 단계는 실행하지 마세요 — 커밋은 워커가 마지막에 한 번에 처리합니다.
+                - 계획의 확인·검증 단계(테스트, grep 등)는 가능하면 수행하고 결과를 출력에 남기세요.
+                - 계획이 가리키는 서브에이전트/실행 스킬(subagent-driven-development 등) 없이 이 세션에서 직접 구현하세요.
+
+                """ + PLAN + "\n";
+
+        assertThat(WorkerMainLoop.renderPlanSection(implementationTask(PLAN))).isEqualTo(expected);
+    }
+
+    @Test
+    void both_templates_take_the_commit_rule_and_keep_the_direct_wording() {
+        for (String tpl : List.of(workerYmlTemplate(), WorkerMainLoop.defaultImplementationPrompt())) {
+            assertThat(tpl).contains("{commit_rule}");
+            String prompt = WorkerMainLoop.fillImplementationPrompt(tpl, implementationTask(PLAN),
+                    "35c9110", "netismaker/task-3-readme");
+            assertThat(prompt).doesNotContain("{commit_rule}")
+                    .contains("의미 있는 변경을 누적하세요 (커밋은 워커가 마지막에 한 번에 처리)");
+        }
+    }
+
+    @Test
+    void the_six_argument_fill_uses_the_given_plan_section_and_commit_rule() {
+        String prompt = WorkerMainLoop.fillImplementationPrompt(workerYmlTemplate(), implementationTask(PLAN),
+                "35c9110", "netismaker/task-3-readme", "\n## SDD 절\n", ImplementationPrompts.SDD_COMMIT_RULE);
+
+        assertThat(prompt).contains("## SDD 절")
+                .contains(ImplementationPrompts.SDD_COMMIT_RULE)
+                .doesNotContain("### 작업 1: 섹션 삽입")
+                .endsWith(WorkerMainLoop.DEPLOY_ENV_INSTRUCTION);
+    }
 }

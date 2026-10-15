@@ -465,8 +465,19 @@ public class WorkerMainLoop {
             - 필요한 환경변수가 없으면 {"vars":[]}를 쓰세요.
             """;
 
-    /** 구현 프롬프트 템플릿의 placeholder를 채운다(yml 템플릿·기본 템플릿 공용). 끝에 배포 env 목록 지시를 붙인다. */
+    /** 직접 방식 조각으로 채운다 — 기존 호출부·테스트용. */
     static String fillImplementationPrompt(String tpl, WorkerTaskResponse task, String baseSha, String branchName) {
+        return fillImplementationPrompt(tpl, task, baseSha, branchName,
+                renderPlanSection(task), ImplementationPrompts.DIRECT_COMMIT_RULE);
+    }
+
+    /**
+     * 구현 프롬프트 템플릿의 placeholder를 채운다(yml 템플릿·기본 템플릿 공용). planSection·commitRule은 방식별
+     * (ImplementationPrompts, 스펙 2026-10-15 §6). 끝에 배포 env 목록 지시를 붙인다.
+     * {commit_rule}은 계획·디자인 본문을 넣기 전에 치환한다(본문 안의 같은 글자를 건드리지 않게).
+     */
+    static String fillImplementationPrompt(String tpl, WorkerTaskResponse task, String baseSha, String branchName,
+                                           String planSection, String commitRule) {
         return tpl
                 .replace("{github_repo}", task.githubRepo())
                 .replace("{github_branch}", task.githubBranch())
@@ -476,8 +487,9 @@ public class WorkerMainLoop {
                 .replace("{description}", task.description())
                 .replace("{analysis_markdown}", task.analysisMarkdown() == null ? "" : task.analysisMarkdown())
                 .replace("{subtasks_json}", task.subtasksJson() == null ? "[]" : task.subtasksJson())
+                .replace("{commit_rule}", commitRule)
                 .replace("{design_section}", renderDesignSection(task))
-                .replace("{plan_section}", renderPlanSection(task))
+                .replace("{plan_section}", planSection)
                 + DEPLOY_ENV_INSTRUCTION;
     }
 
@@ -495,11 +507,23 @@ public class WorkerMainLoop {
     }
 
     /**
-     * 인터뷰에서 확정된 플랜이 있으면 구현 프롬프트에 삽입할 블록, 없으면 빈 문자열(인터뷰 없이 온 작업 불변).
-     * writing-plans 플랜에는 "git commit" 단계가 들어 있는데, 에이전트가 직접 커밋하면 워커의
-     * commitAndPush가 변경 없음("nothing to commit")으로 구현실패 처리하므로 커밋 단계는 건너뛰라고 지시한다.
+     * 직접 방식의 {plan_section} — 인터뷰에서 확정된 플랜이 있으면 구현 프롬프트에 삽입할 블록, 없으면 빈 문자열
+     * (인터뷰 없이 온 작업 불변). writing-plans 플랜에는 "git commit" 단계가 들어 있는데, 직접·리뷰 방식은 워커가 마지막에
+     * 한 번에 커밋하므로 커밋 단계는 건너뛰라고 지시한다. 플랜 머리의 "REQUIRED SUB-SKILL: subagent-driven-development"는
+     * 따르지 말라고 한다 — 서브에이전트 방식은 관리자가 고르는 별도 방식(SDD)이고, 그때는 ImplementationPrompts가
+     * 플러그인(--plugin-dir)과 SDD 전용 지시를 준다 (스펙 2026-10-15 §6.2~§6.4).
      */
     static String renderPlanSection(WorkerTaskResponse task) {
+        return renderPlanSection(task,
+                "계획이 가리키는 서브에이전트/실행 스킬(subagent-driven-development 등) 없이 이 세션에서 직접 구현하세요.");
+    }
+
+    /**
+     * 플랜 절의 공통 틀 — 머리·소개·커밋/검증 지시 두 줄은 직접·리뷰 방식이 같고, 마지막 줄(서브에이전트 사용 지시)만
+     * 방식이 정한다(리뷰 방식은 ImplementationPrompts가 자기 줄을 넘긴다). lastBullet은 앞의 "- " 없이 문장만.
+     * 플랜이 없으면 빈 문자열.
+     */
+    static String renderPlanSection(WorkerTaskResponse task, String lastBullet) {
         if (task.planMarkdown() == null || task.planMarkdown().isBlank()) return "";
         return """
 
@@ -507,9 +531,9 @@ public class WorkerMainLoop {
                 아래는 요청자와의 인터뷰로 확정된 구현 계획입니다. 작업 순서·범위·파일 위치는 이 계획을 따르세요.
                 - 계획 안의 git commit / push 단계는 실행하지 마세요 — 커밋은 워커가 마지막에 한 번에 처리합니다.
                 - 계획의 확인·검증 단계(테스트, grep 등)는 가능하면 수행하고 결과를 출력에 남기세요.
-                - 계획이 가리키는 서브에이전트/실행 스킬(subagent-driven-development 등) 없이 이 세션에서 직접 구현하세요.
+                - %s
 
-                """ + task.planMarkdown() + "\n";
+                """.formatted(lastBullet) + task.planMarkdown() + "\n";
     }
 
     static String defaultImplementationPrompt() {
@@ -533,7 +557,7 @@ public class WorkerMainLoop {
                 ## 지시
                 위 분석에서 제시한 우선순위(H → M → L) 순으로 실제 코드를 수정/추가하세요.
                 - 현재 디렉토리에서 직접 파일을 편집·생성하세요 (cd 금지)
-                - 각 subtask 완료마다 의미 있는 변경을 누적하세요
+                - {commit_rule}
                 - 빌드/테스트는 가능하면 수행하되 실패 시 명확한 사유를 남기세요
                 - 종료 직전에 `git status`로 변경 요약을 출력하세요
                 """;

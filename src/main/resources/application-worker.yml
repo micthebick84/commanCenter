@@ -115,7 +115,7 @@ netis-maker:
 
       ## 5. 위험 요소 및 미해결 질문
       - ...
-    # 구현 prompt 템플릿. {branch_name}/{analysis_markdown}/{subtasks_json}/{design_section}/{plan_section} 추가 placeholder.
+    # 구현 prompt 템플릿. {branch_name}/{analysis_markdown}/{subtasks_json}/{design_section}/{plan_section}/{commit_rule} 추가 placeholder.
     # 미설정 시 WorkerMainLoop.defaultImplementationPrompt() 사용.
     implementation-prompt-template: |
       당신은 코드 구현 전문가입니다. 현재 디렉토리는 새 git worktree이며
@@ -138,7 +138,7 @@ netis-maker:
       ## 지시
       위 분석에서 제시한 우선순위(H → M → L) 순으로 실제 코드를 수정/추가하세요.
       - 현재 디렉토리에서 직접 파일을 편집·생성하세요 (cd 금지)
-      - 의미 있는 변경을 누적하세요 (커밋은 워커가 마지막에 한 번에 처리)
+      - {commit_rule}
       - 빌드/테스트는 가능하면 수행하되 실패 시 명확한 사유를 출력에 남기세요
       - 종료 직전에 `git status` 결과를 출력하세요
     # 디자인 단계 — DesignSync로 디자인 시스템 pull + 목업 생성 + Claude Design 업로드

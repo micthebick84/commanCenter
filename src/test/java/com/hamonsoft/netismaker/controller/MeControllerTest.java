@@ -5,12 +5,15 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
 import org.springframework.context.annotation.Import;
+import org.springframework.boot.test.mock.mockito.MockBean;
 import org.springframework.test.web.servlet.MockMvc;
 
 import com.hamonsoft.netismaker.config.CorsConfig;
 import com.hamonsoft.netismaker.config.SecurityConfig;
 import com.hamonsoft.netismaker.config.WorkerApiKeyFilter;
+import com.hamonsoft.netismaker.service.UserProvisioner;
 
+import static org.mockito.Mockito.verify;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.jwt;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
@@ -23,6 +26,9 @@ class MeControllerTest {
 
     @Autowired
     private MockMvc mvc;
+
+    @MockBean
+    private UserProvisioner userProvisioner;
 
     @Test
     void unauthenticated_returns_401() throws Exception {
@@ -55,5 +61,15 @@ class MeControllerTest {
                         .authorities(new org.springframework.security.core.authority.SimpleGrantedAuthority("ROLE_ADMIN"))))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.authorities[0]").value("ROLE_ADMIN"));
+    }
+
+    @Test
+    void authenticated_api_request_provisions_user() throws Exception {
+        mvc.perform(get("/api/me").with(jwt().jwt(j -> j
+                        .claim("username", "newbie")
+                        .claim("email", "newbie@hamonsoft.co.kr"))))
+                .andExpect(status().isOk());
+
+        verify(userProvisioner).ensureUser("newbie", "newbie@hamonsoft.co.kr");
     }
 }

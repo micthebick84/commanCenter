@@ -1,5 +1,6 @@
 package com.hamonsoft.netismaker.config;
 
+import com.hamonsoft.netismaker.service.UserProvisioner;
 import org.springframework.context.annotation.Profile;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -12,6 +13,7 @@ import org.springframework.security.config.http.SessionCreationPolicy;
 import org.springframework.security.core.authority.SimpleGrantedAuthority;
 import org.springframework.security.oauth2.server.resource.authentication.JwtAuthenticationConverter;
 import org.springframework.security.oauth2.server.resource.web.BearerTokenResolver;
+import org.springframework.security.oauth2.server.resource.web.authentication.BearerTokenAuthenticationFilter;
 import org.springframework.security.oauth2.server.resource.web.DefaultBearerTokenResolver;
 import org.springframework.security.web.SecurityFilterChain;
 import org.springframework.security.web.authentication.UsernamePasswordAuthenticationFilter;
@@ -26,7 +28,7 @@ import java.util.stream.Collectors;
  *
  *   /mcp/**     ──► 작업 토큰(컨트롤러 검증, 스펙 2026-10-14 §6.1)
  *   /worker/**  ──► WorkerApiKeyFilter (X-Worker-API-Key, ROLE_WORKER)
- *   /api/**     ──► JWT (netis-auth, ROLE_USER / ROLE_ADMIN)
+ *   /api/**     ──► JWT (netis-auth, ROLE_USER / ROLE_ADMIN) + com."user" 자동 생성(UserProvisioningFilter)
  *   나머지       ──► permitAll (actuator/health, error, GET /api/artifact-downloads/{token})
  */
 @Configuration
@@ -37,11 +39,14 @@ public class SecurityConfig {
 
     private final CorsConfigurationSource corsConfigurationSource;
     private final WorkerApiKeyFilter workerApiKeyFilter;
+    private final UserProvisioner userProvisioner;
 
     public SecurityConfig(CorsConfigurationSource corsConfigurationSource,
-                          WorkerApiKeyFilter workerApiKeyFilter) {
+                          WorkerApiKeyFilter workerApiKeyFilter,
+                          UserProvisioner userProvisioner) {
         this.corsConfigurationSource = corsConfigurationSource;
         this.workerApiKeyFilter = workerApiKeyFilter;
+        this.userProvisioner = userProvisioner;
     }
 
     /**
@@ -90,7 +95,8 @@ public class SecurityConfig {
                 .oauth2ResourceServer(oauth2 -> oauth2
                         .bearerTokenResolver(bearerTokenResolver())
                         .jwt(jwt -> jwt.jwtAuthenticationConverter(jwtAuthenticationConverter()))
-                );
+                )
+                .addFilterAfter(new UserProvisioningFilter(userProvisioner), BearerTokenAuthenticationFilter.class);
         return http.build();
     }
 

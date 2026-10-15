@@ -3,6 +3,7 @@ package com.hamonsoft.netismaker.controller;
 import com.hamonsoft.netismaker.config.CorsConfig;
 import com.hamonsoft.netismaker.config.SecurityConfig;
 import com.hamonsoft.netismaker.config.WorkerApiKeyFilter;
+import com.hamonsoft.netismaker.service.UserProvisioner;
 import com.hamonsoft.netismaker.service.ArtifactDownloadService;
 import com.hamonsoft.netismaker.service.TaskException;
 import org.junit.jupiter.api.Test;
@@ -45,6 +46,9 @@ class ArtifactDownloadControllerTest {
 
     @MockBean
     private JwtDecoder jwtDecoder;
+
+    @MockBean
+    private UserProvisioner userProvisioner;
 
     @MockBean
     private ArtifactDownloadService downloads;

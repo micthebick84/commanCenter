@@ -73,6 +73,26 @@ class ImplementationPromptsTest {
         assertThat(ImplementationPrompts.commitRule(SDD)).contains("태스크별 커밋").contains("push는 하지 마세요");
     }
 
+    /**
+     * 실제 claude 스모크에서 SDD 세션이 서브에이전트를 구현 하나만 띄우고 리뷰어는 하나도 띄우지 않았다 — 계획이 작아도
+     * 태스크 리뷰와 최종 리뷰는 스킬이 정한 대로 서브에이전트로 돌려야 한다(스펙 §1 "작업마다 서브에이전트가 구현·리뷰").
+     */
+    @Test
+    void sdd_says_the_task_reviews_and_the_final_review_run_as_subagents_even_for_a_small_plan() {
+        String s = ImplementationPrompts.planSection(task(PLAN), SDD, "abc1234", false);
+
+        assertThat(s).contains("계획이 작아도")
+                .contains("태스크 리뷰 서브에이전트")
+                .contains("최종 리뷰 서브에이전트")
+                .contains("스킬이 정한 대로")
+                .contains("건너뛰거나 구현·다른 리뷰와 합치지 마세요");
+        // 이 지시는 SDD 절에만 — 직접·리뷰 방식의 프롬프트는 그대로다
+        assertThat(ImplementationPrompts.planSection(task(PLAN), REVIEW, "abc1234", false))
+                .doesNotContain("태스크 리뷰 서브에이전트").doesNotContain("최종 리뷰 서브에이전트");
+        assertThat(ImplementationPrompts.planSection(task(PLAN), DIRECT, "abc1234", false))
+                .doesNotContain("태스크 리뷰 서브에이전트").doesNotContain("최종 리뷰 서브에이전트");
+    }
+
     @Test
     void mode_line_names_attempt_and_fallback_with_korean_particles() {
         assertThat(ImplementationPrompts.modeLine(REVIEW, REVIEW, 1, null)).isEqualTo("- **구현 방식**: 리뷰\n");

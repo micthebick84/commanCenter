@@ -47,6 +47,8 @@ import static org.mockito.Mockito.*;
  *  - 산출물: 리뷰는 PR 본문의 리뷰 메모, SDD는 계획 작업마다 남은 커밋(워커 마무리 커밋 제외).
  *  - 세션 기록: Agent·Skill 도구 호출과 쓰인 모델. ClaudeExecAdapter.ExecResult.stdout은 envelope의 result 글뿐이고
  *    modelUsage는 합계(Usage)로만 남아 모델별 키를 볼 수 없어서, 같은 정보를 claude가 남긴 세션 기록에서 읽는다.
+ *    SDD는 Agent 호출이 2회 이상(구현 서브에이전트 + 리뷰어)이어야 한다 — 첫 실측에서 SDD가 구현 서브에이전트 하나만
+ *    띄우고 리뷰어를 건너뛴 적이 있다.
  */
 @EnabledIfEnvironmentVariable(named = "RUN_CLAUDE_SMOKE", matches = "true")
 class ImplementationModeClaudeSmokeTest {
@@ -59,6 +61,8 @@ class ImplementationModeClaudeSmokeTest {
     private static final String WORKER_AUTHOR = "netisMaker <netismaker@hamonsoft.local>";
     /** 연습 계획의 작업 수 — SDD는 작업마다 커밋한다. */
     private static final int PLAN_TASKS = 2;
+    /** SDD의 Agent 호출 하한 — 구현 서브에이전트 1개 + 리뷰어(태스크 리뷰·최종 리뷰) 1개 이상. 실측은 서브에이전트 7개였다. */
+    private static final int SDD_MIN_AGENT_CALLS = 2;
 
     private static final String PLAN = String.join("\n",
             "# hello 구현 계획",
@@ -103,6 +107,10 @@ class ImplementationModeClaudeSmokeTest {
                     .isGreaterThanOrEqualTo(PLAN_TASKS);
             softly.assertThat(r.session().skills()).as("Skill 도구 호출")
                     .anyMatch(s -> s.contains("subagent-driven-development"));
+            // 구현 서브에이전트 하나만 띄우고 리뷰어를 건너뛴 SDD는 통과하지 못한다 — 계획이 작아도 리뷰 단계는 서브에이전트로
+            softly.assertThat(r.session().agentCalls())
+                    .as("SDD Agent 호출 수 — 구현 서브에이전트 + 리뷰어(태스크 리뷰·최종 리뷰) 1개 이상. 1개면 리뷰 단계를 건너뛴 것")
+                    .isGreaterThanOrEqualTo(SDD_MIN_AGENT_CALLS);
             assertSubagentsRan(softly, r.session());
         });
     }

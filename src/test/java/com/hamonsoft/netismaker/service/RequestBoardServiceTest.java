@@ -249,7 +249,20 @@ class RequestBoardServiceTest {
         service.changeStatus(1L,
                 new RequestBoardDto.StatusChangeRequest(RequestStatus.REVIEWING, "무시"), "admin1");
 
-        assertThat(savedComments().get(0).getBody()).isEqualTo("관리자(admin1)가 상태를 검토중로 변경");
+        assertThat(savedComments().get(0).getBody()).isEqualTo("관리자(admin1)가 상태를 검토중으로 변경");
+    }
+
+    @Test
+    void system_comment_uses_matching_particle_for_each_label() {
+        post(1L, RequestKind.FEATURE, RequestStatus.REVIEWING, "user1");
+        service.changeStatus(1L, new RequestBoardDto.StatusChangeRequest(RequestStatus.DONE, null), "admin1");
+        service.changeStatus(1L, new RequestBoardDto.StatusChangeRequest(RequestStatus.REVIEWING, null), "admin1");
+        service.changeStatus(1L, new RequestBoardDto.StatusChangeRequest(RequestStatus.RECEIVED, null), "admin1");
+
+        assertThat(savedComments()).extracting(RequestComment::getBody).containsExactly(
+                "관리자(admin1)가 상태를 처리완료로 변경",
+                "관리자(admin1)가 상태를 검토중으로 변경",
+                "관리자(admin1)가 상태를 접수로 변경");
     }
 
     @Test

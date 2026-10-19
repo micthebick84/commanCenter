@@ -144,7 +144,7 @@ public class RequestBoardService {
         if (next == RequestStatus.REJECTED && reason.isEmpty()) {
             throw new TaskException(HttpStatus.BAD_REQUEST, "반려 사유를 입력하세요");
         }
-        String body = "관리자(" + adminId + ")가 상태를 " + next.dbValue() + "로 변경";
+        String body = "관리자(" + adminId + ")가 상태를 " + next.dbValue() + withParticle(next.dbValue()) + " 변경";
         if (next == RequestStatus.REJECTED) body += " — 사유: " + reason;
         post.setStatus(next);
         comments.save(RequestComment.create(id, RequestCommentKind.SYSTEM, adminId, true, body));
@@ -205,6 +205,16 @@ public class RequestBoardService {
         }
         return repoCatalogService.create(new RepoCatalogDto.UpsertRequest(
                 alias, gitUrl, project.defaultBranch(), "요청 #" + requestId + "에서 등록", true), adminId);
+    }
+
+    /** 방향격 조사: 받침이 있고 ㄹ이 아니면 "으로", 아니면 "로". 한글이 아니면 "로". */
+    private static String withParticle(String label) {
+        char last = label.charAt(label.length() - 1);
+        if (last >= 0xAC00 && last <= 0xD7A3) {
+            int jong = (last - 0xAC00) % 28;
+            if (jong != 0 && jong != 8) return "으로";
+        }
+        return "로";
     }
 
     private static void requireOpenRepo(RequestPost post) {

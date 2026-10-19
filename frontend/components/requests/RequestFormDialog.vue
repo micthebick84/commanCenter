@@ -3,7 +3,7 @@
 // 레포 힌트는 종류가 REPO일 때만 받고 보낸다.
 import { useQuasar } from 'quasar'
 import AdminFormDialog from '~/components/AdminFormDialog.vue'
-import { KIND_OPTIONS, type RequestDetail, type RequestKind } from '~/composables/requestBoard'
+import { KIND_OPTIONS, type RequestDetail, type RequestKind, type RequestListItem } from '~/composables/requestBoard'
 
 const props = defineProps<{
   modelValue: boolean
@@ -11,7 +11,8 @@ const props = defineProps<{
 }>()
 const emit = defineEmits<{
   'update:modelValue': [value: boolean]
-  saved: [item: RequestDetail]
+  // 새 요청(POST)은 목록 항목, 수정(PUT)은 상세를 돌려준다 — 응답 객체를 그대로 내보낸다
+  saved: [item: RequestListItem | RequestDetail]
 }>()
 
 const $q = useQuasar()
@@ -48,7 +49,7 @@ async function submit() {
   submitting.value = true
   try {
     const hint = form.kind === 'REPO' ? form.repoHint.trim() || null : null
-    let saved: RequestDetail
+    let saved: RequestListItem | RequestDetail
     if (props.initial) {
       saved = await useApi<RequestDetail>(`/api/requests/${props.initial.id}`, {
         method: 'PUT',
@@ -56,7 +57,7 @@ async function submit() {
       })
       $q.notify({ type: 'positive', message: '수정 완료' })
     } else {
-      saved = await useApi<RequestDetail>('/api/requests', {
+      saved = await useApi<RequestListItem>('/api/requests', {
         method: 'POST',
         body: { kind: form.kind, title: form.title.trim(), content: form.content.trim(), repoHint: hint },
       })

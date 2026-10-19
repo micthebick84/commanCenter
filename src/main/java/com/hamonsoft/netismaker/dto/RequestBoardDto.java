@@ -33,6 +33,9 @@ public class RequestBoardDto {
             @Size(max = 2000) String reason
     ) {}
 
+    /** REPO 추가 요청 처리: 등록할 GitLab 프로젝트 id(Task 6). */
+    public record AddRepoRequest(@NotNull Long gitlabProjectId) {}
+
     /** 관리자 배지용 건수. attention = 접수이거나 관리자가 못 본 활동이 있는 요청. */
     public record Summary(long received, long attention) {}
 

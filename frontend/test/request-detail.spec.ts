@@ -83,7 +83,17 @@ describe('requests/[id]', () => {
     w.unmount()
   })
 
-  it('404면 "요청을 찾을 수 없습니다" 빈 상태를 보여 준다', async () => {
+  it('헤더는 updatedAt을 "최근 활동"으로 표기하고 "수정"이라 하지 않는다', async () => {
+    const w = await mountPage(detail({ createdAt: '2026-10-19T01:00:00Z', updatedAt: '2026-10-19T05:00:00Z' }))
+    const activity = w.find('[data-test="request-activity"]')
+    expect(activity.exists()).toBe(true)
+    expect(activity.text()).toContain('최근 활동')
+    expect(activity.text()).not.toContain('수정 ')
+    expect(w.text()).not.toContain('(수정 ')
+    w.unmount()
+  })
+
+  it('404면"요청을 찾을 수 없습니다" 빈 상태를 보여 준다', async () => {
     useApiMock.mockRejectedValueOnce({ status: 404, data: { message: '요청을 찾을 수 없습니다' } })
     const w = mount(PageWrapper, { attachTo: document.body })
     await flushPromises()

@@ -208,7 +208,7 @@ async function confirmReject() {
       <div class="text-h5 q-mb-xs" data-test="request-title">{{ req.title }}</div>
       <div class="text-caption text-grey-7 q-mb-md">
         <span v-if="isAdmin">{{ req.requesterId }} · </span>{{ fmt(req.createdAt) }}
-        <span v-if="req.updatedAt !== req.createdAt"> (수정 {{ fmt(req.updatedAt) }})</span>
+        <span v-if="req.updatedAt !== req.createdAt" data-test="request-activity"> · 최근 활동 {{ fmt(req.updatedAt) }}</span>
       </div>
 
       <!-- 본문 -->

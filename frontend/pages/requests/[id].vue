@@ -1,6 +1,7 @@
 <script setup lang="ts">
 // 요청 상세 — 본문(마크다운) · 답글 스레드 · 수정/취소(editable) · 관리자 상태 변경.
 import { useQuasar } from 'quasar'
+import RepoAddDropdown from '~/components/requests/RepoAddDropdown.vue'
 import RequestFormDialog from '~/components/requests/RequestFormDialog.vue'
 import RequestThread from '~/components/requests/RequestThread.vue'
 import { confirmDialog } from '~/composables/confirmDialog'
@@ -69,6 +70,10 @@ const showRepoAddSlot = computed(
 // ── 답글 ──
 function onPosted(c: RequestComment) {
   if (req.value) req.value.comments = [...req.value.comments, c]
+}
+
+function onRepoAdded(d: RequestDetail) {
+  req.value = d
 }
 
 // ── 수정 · 취소 ──
@@ -223,8 +228,10 @@ async function confirmReject() {
 
       <!-- REPO 처리 결과 -->
       <div v-if="repoResult" class="q-mb-md text-body2" data-test="repo-result">{{ repoResult }}</div>
-      <!-- Task 9: REPO 추가 처리 UI가 들어갈 자리 -->
-      <div v-if="showRepoAddSlot" class="q-mb-md" data-test="repo-add-slot" />
+      <!-- REPO 추가 처리 — 등록되면 응답 상세로 화면을 바꾼다(상태·답글·등록된 레포 갱신) -->
+      <div v-if="showRepoAddSlot" class="q-mb-md" data-test="repo-add-slot">
+        <RepoAddDropdown :request-id="req.id" @added="onRepoAdded" />
+      </div>
 
       <!-- 답글 스레드 -->
       <div class="text-subtitle1 text-weight-medium q-mb-sm">답글</div>

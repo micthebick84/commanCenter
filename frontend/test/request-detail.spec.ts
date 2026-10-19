@@ -269,4 +269,33 @@ describe('requests/[id]', () => {
     expect(w.find('[data-test="repo-add-slot"]').exists()).toBe(false)
     w.unmount()
   })
+
+  it('repo-add: 드롭다운에서 레포를 고르면 응답 상세로 화면이 바뀐다', async () => {
+    authStub.isAdmin = true
+    const w = await mountPage(detail({ kind: 'REPO', kindLabel: 'REPO 추가' }))
+    useApiMock.mockResolvedValueOnce([
+      { id: 5, name: 'p', pathWithNamespace: 'g/p', defaultBranch: 'main', description: null, registered: false },
+    ]) // repo-candidates
+    await w.find('[data-test="repo-add-btn"]').trigger('click')
+    await flushPromises()
+    expect(useApiMock).toHaveBeenCalledWith('/api/admin/requests/3/repo-candidates')
+
+    useApiMock.mockResolvedValueOnce(
+      detail({
+        kind: 'REPO', kindLabel: 'REPO 추가', status: 'DONE', statusLabel: '처리완료',
+        repoAlias: 'p', repoGitUrl: 'https://gitlab.hamon.vip/g/p',
+      }),
+    ) // add-repo
+    ;(document.querySelector('[data-test="cand-5"]') as HTMLElement).click()
+    await flushPromises()
+    expect(useApiMock).toHaveBeenCalledWith('/api/admin/requests/3/add-repo', {
+      method: 'POST',
+      body: { gitlabProjectId: 5 },
+    })
+    expect(w.find('[data-test="request-status"]').text()).toBe('처리완료')
+    expect(w.find('[data-test="repo-result"]').text()).toContain('등록된 레포: p')
+    // 처리완료가 되었으니 추가 자리는 사라진다
+    expect(w.find('[data-test="repo-add-slot"]').exists()).toBe(false)
+    w.unmount()
+  })
 })

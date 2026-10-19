@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { useQuasar } from 'quasar'
+import RepoAddDropdown from '~/components/requests/RepoAddDropdown.vue'
 import RequestFormDialog from '~/components/requests/RequestFormDialog.vue'
 import { useHydrationSafeAuth } from '~/composables/useHydrationSafeAuth'
 import {
@@ -128,7 +129,7 @@ const showCreate = ref(false)
           </div>
         </q-card-section>
         <q-card-actions v-if="isAdmin && isOpenRepo(r)" align="right" @click.stop>
-          <span data-test="repo-add-slot" />
+          <span data-test="repo-add-slot"><RepoAddDropdown :request-id="r.id" @added="load" /></span>
         </q-card-actions>
       </q-card>
     </div>
@@ -173,8 +174,9 @@ const showCreate = ref(false)
       </template>
       <template #body-cell-actions="props">
         <q-td :props="props" @click.stop>
-          <!-- Task 9: REPO 추가 요청 처리 버튼이 들어갈 자리 -->
-          <span v-if="isAdmin && isOpenRepo(props.row)" data-test="repo-add-slot" />
+          <span v-if="isAdmin && isOpenRepo(props.row)" data-test="repo-add-slot">
+            <RepoAddDropdown :request-id="props.row.id" @added="load" />
+          </span>
         </q-td>
       </template>
     </q-table>

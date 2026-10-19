@@ -42,7 +42,7 @@ async function mountPage(rows: any[]) {
 
 beforeEach(() => navigateToMock.mockReset())
 afterEach(() => {
-  document.querySelectorAll('.q-dialog').forEach((n) => n.remove())
+  document.querySelectorAll('.q-dialog, .q-menu').forEach((n) => n.remove())
 })
 
 describe('requests/index', () => {
@@ -83,6 +83,28 @@ describe('requests/index', () => {
     expect(w.findAll('[data-test="repo-add-slot"]')).toHaveLength(1)
     await w.find('[data-test="req-row-7"]').trigger('click')
     expect(navigateToMock).toHaveBeenCalledWith('/requests/7')
+    w.unmount()
+  })
+
+  it('repo-add: 드롭다운으로 레포를 등록하면 목록을 다시 읽는다', async () => {
+    authStub.isAdmin = true
+    const w = await mountPage([item({ id: 7, kind: 'REPO', kindLabel: 'REPO 추가', title: '레포 추가해 주세요' })])
+    useApiMock.mockResolvedValueOnce([
+      { id: 5, name: 'p', pathWithNamespace: 'g/p', defaultBranch: 'main', description: null, registered: false },
+    ]) // repo-candidates
+    await w.find('[data-test="repo-add-btn"]').trigger('click')
+    await flushPromises()
+    // 드롭다운 클릭이 줄 이동으로 번지지 않는다
+    expect(navigateToMock).not.toHaveBeenCalled()
+
+    useApiMock.mockResolvedValueOnce({ id: 7, repoAlias: 'p' }) // add-repo
+    useApiMock.mockResolvedValueOnce([item({ id: 7, kind: 'REPO', status: 'DONE', statusLabel: '처리완료' })]) // 목록 재조회
+    ;(document.querySelector('[data-test="cand-5"]') as HTMLElement).click()
+    await flushPromises()
+    const urls = useApiMock.mock.calls.map((c) => String(c[0]))
+    expect(urls[urls.length - 1]).toContain('/api/requests?')
+    expect(w.findAll('[data-test="repo-add-slot"]')).toHaveLength(0)
+    expect(navigateToMock).not.toHaveBeenCalled()
     w.unmount()
   })
 

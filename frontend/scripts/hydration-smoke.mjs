@@ -38,6 +38,7 @@ const AUTH_PATHS = [
   '/questions',
   '/questions/3',
   '/requests',
+  '/requests/1',
   '/admin/repo-catalog',
   '/admin/mcp-catalog',
   '/admin/workers',
@@ -70,7 +71,15 @@ const QUESTION = {
 const REPOS = [{ id: 1, alias: 'Widgets', gitUrl: 'https://github.com/acme/widgets', host: 'github', ownerRepo: 'acme/widgets', defaultBranch: 'main', description: null, enabled: true, createdBy: 'admin', createdAt: NOW, updatedAt: NOW }]
 const MCPS = [{ id: 1, name: 'docs', displayName: 'Docs', url: 'https://mcp.example/sse', transport: 'sse', description: null, enabled: true, createdBy: 'admin', createdAt: NOW, updatedAt: NOW, lastCheckAt: null, lastCheckStatus: null, lastCheckError: null }]
 const REQUESTS = [{ id: 1, kind: 'REPO', kindLabel: 'REPO 추가', title: '스모크 요청', status: 'RECEIVED', statusLabel: '접수', requesterId: 'admin', unread: true, createdAt: NOW, updatedAt: NOW }]
-const WORKERS = [{ workerId: 'smoke-worker-1', hostname: 'smoke', version: '1.0', lastSeenAt: NOW, alive: true, claudeSessionOk: true, vpnStatus: null, mcps: ['docs'], lostReportCount: 0 }]
+const REQUEST_DETAIL = {
+  ...REQUESTS[0], content: '스모크 **본문**', repoHint: null, repoCatalogId: null, repoAlias: null, repoGitUrl: null,
+  repoCatalogDeleted: false, editable: true,
+  comments: [
+    { id: 1, kind: 'COMMENT', authorId: 'admin', authorAdmin: true, body: '검토 **시작**', createdAt: NOW },
+    { id: 2, kind: 'SYSTEM', authorId: 'admin', authorAdmin: true, body: '상태가 검토중으로 바뀌었습니다', createdAt: NOW },
+  ],
+}
+const WORKERS =[{ workerId: 'smoke-worker-1', hostname: 'smoke', version: '1.0', lastSeenAt: NOW, alive: true, claudeSessionOk: true, vpnStatus: null, mcps: ['docs'], lostReportCount: 0 }]
 
 /** pathname → 응답 본문. 목록에 없는 /api/ 요청은 null(200)로 답하고 보고서에 남긴다. */
 function apiResponse(path) {
@@ -88,6 +97,7 @@ function apiResponse(path) {
   if (path === '/api/workers/health') return WORKERS
   if (path === '/api/db-connections') return []
   if (path === '/api/requests') return REQUESTS
+  if (/^\/api\/requests\/\d+$/.test(path)) return REQUEST_DETAIL
   return undefined
 }
 

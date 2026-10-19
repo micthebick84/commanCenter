@@ -113,6 +113,33 @@ describe('RepoAddDropdown', () => {
     w.unmount()
   })
 
+  it('clear_search_restores_candidates: 지우기 아이콘(null)으로 검색을 비우면 원래 후보가 돌아오고 오류가 없다', async () => {
+    routeApi({
+      [CAND_URL]: () => [cand(5)],
+      '/api/admin/gitlab-projects?search=co': () => [cand(9)],
+    })
+    const w = await mountAndOpen()
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    vi.useFakeTimers()
+    await typeSearch('co')
+    vi.advanceTimersByTime(300)
+    await flushPromises()
+    expect(q('[data-test="cand-9"]')).not.toBeNull()
+    expect(q('[data-test="cand-5"]')).toBeNull()
+
+    const clearIcon = (q('[data-test="cand-search"]') as HTMLElement).closest('.q-field')!.querySelector(
+      '.q-field__append .q-icon',
+    ) as HTMLElement
+    expect(clearIcon).not.toBeNull()
+    clearIcon.click()
+    await flushPromises()
+    expect(q('[data-test="cand-9"]')).toBeNull()
+    expect(q('[data-test="cand-5"]')).not.toBeNull()
+    expect(errSpy).not.toHaveBeenCalled()
+    errSpy.mockRestore()
+    w.unmount()
+  })
+
   it('click_adds_and_emits: 항목을 누르면 확인 없이 POST하고 added를 emit한다', async () => {
     const detail = { id: 7, kind: 'REPO', repoAlias: 'Proj5' }
     routeApi({
@@ -162,6 +189,18 @@ describe('RepoAddDropdown', () => {
     await flushPromises()
     expect(w.emitted('added')).toBeUndefined()
     expect(document.body.textContent).toContain('이미 처리된 요청입니다')
+    w.unmount()
+  })
+
+  it('transient_load_error_keeps_search: 502면 메시지를 보이되 검색창은 남긴다', async () => {
+    routeApi({
+      [CAND_URL]: () => {
+        throw { statusCode: 502, data: { message: 'GitLab 조회에 실패했습니다' } }
+      },
+    })
+    const w = await mountAndOpen()
+    expect(document.body.textContent).toContain('GitLab 조회에 실패했습니다')
+    expect(q('[data-test="cand-search"]')).not.toBeNull()
     w.unmount()
   })
 

@@ -13,11 +13,13 @@ const dropdown = ref<{ hide: () => void } | null>(null)
 const searchInput = ref<{ focus: () => void } | null>(null)
 
 const loading = ref(false)
-// GitLab 미설정(503) 등 후보 조회 자체가 막힌 경우의 서버 메시지 — 있으면 검색창도 숨긴다
+// GitLab 미설정(503)일 때의 서버 메시지 — 있으면 검색창도 숨기고 이것만 보여 준다
 const blockedMessage = ref('')
+// 그 밖의 일시 오류(502 등) — 메시지는 보여 주되 검색창은 그대로 둔다
+const loadError = ref('')
 const candidates = ref<RepoCandidate[]>([])
 
-const query = ref('')
+const query = ref<string | null>('')
 const searching = ref(false)
 // null이면 검색 중이 아니다(후보 영역을 보여 준다)
 const results = ref<RepoCandidate[] | null>(null)
@@ -46,6 +48,7 @@ async function onBeforeShow() {
   results.value = null
   searching.value = false
   blockedMessage.value = ''
+  loadError.value = ''
   candidates.value = []
   const seq = ++loadSeq
   loading.value = true
@@ -56,8 +59,8 @@ async function onBeforeShow() {
   } catch (e: any) {
     if (seq !== loadSeq) return
     const status = e?.statusCode ?? e?.response?.status ?? e?.status
-    blockedMessage.value =
-      status === 503 ? (e?.data?.message ?? '사내 GitLab이 설정되지 않았습니다') : (e?.data?.message ?? '후보를 불러오지 못했습니다')
+    if (status === 503) blockedMessage.value = e?.data?.message ?? '사내 GitLab이 설정되지 않았습니다'
+    else loadError.value = e?.data?.message ?? '후보를 불러오지 못했습니다'
   } finally {
     if (seq === loadSeq) loading.value = false
   }
@@ -69,7 +72,8 @@ async function onBeforeShow() {
 
 watch(query, (v) => {
   clearTimer()
-  const q = v.trim()
+  // q-input의 지우기 아이콘은 null을 내보낸다
+  const q = (v ?? '').trim()
   if (q.length < MIN_QUERY) {
     // 검색어를 지우면 후보 영역으로 돌아간다
     searchSeq++
@@ -148,7 +152,7 @@ onUnmounted(clearTimer)
         </div>
         <div v-if="searching" class="text-center q-pa-sm"><q-spinner size="20px" color="primary" /></div>
         <div v-else-if="!shown.length" class="q-px-md q-pb-md text-body2 text-grey-7" data-test="cand-empty">
-          {{ results ? '검색 결과가 없어요.' : '추측한 후보가 없어요. 검색해 주세요.' }}
+          {{ results ? '검색 결과가 없어요.' : loadError || '추측한 후보가 없어요. 검색해 주세요.' }}
         </div>
         <q-list v-else separator style="max-height: 320px; overflow: auto">
           <q-item v-for="c in shown" :key="c.id" clickable :disable="adding" :data-test="`cand-${c.id}`" @click="pick(c)">

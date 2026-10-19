@@ -36,7 +36,9 @@ function buildUrl(): string {
   const qs = new URLSearchParams()
   qs.set('all', 'true')
   if (kindFilter.value) qs.set('kind', kindFilter.value)
-  for (const s of statusFilter.value) qs.append('status', s)
+  // 칩을 모두 끄면 "전체 상태" — 파라미터를 생략하면 백엔드가 열린 상태만 내려 UI와 어긋난다
+  const statuses = statusFilter.value.length ? statusFilter.value : STATUS_OPTIONS.map((o) => o.value)
+  for (const s of statuses) qs.append('status', s)
   qs.set('includeUnread', String(includeUnread.value))
   return `/api/requests?${qs.toString()}`
 }
@@ -148,7 +150,7 @@ const showCreate = ref(false)
         { name: 'title', label: '제목', field: 'title', align: 'left' },
         { name: 'status', label: '상태', field: 'statusLabel', align: 'center', style: 'width:100px' },
         ...(isAdmin ? [{ name: 'requesterId', label: '요청자', field: 'requesterId', align: 'left' as const }] : []),
-        { name: 'updatedAt', label: '수정', field: 'updatedAt', align: 'left' },
+        { name: 'updatedAt', label: '최근 활동', field: 'updatedAt', align: 'left' },
         { name: 'actions', label: '', field: () => '', align: 'right' },
       ]"
       @row-click="(_evt: Event, r: RequestListItem) => open(r)"

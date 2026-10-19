@@ -33,6 +33,7 @@ import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.atLeast;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -156,6 +157,17 @@ class RequestBoardServiceTest {
         assertThat(p.getContent()).isEqualTo("새 내용");
         assertThat(p.getRepoHint()).isNull();
         assertThat(d.editable()).isTrue();
+    }
+
+    @Test
+    void update_and_cancel_take_the_row_lock() {
+        post(1L, RequestKind.FEATURE, RequestStatus.RECEIVED, "user1");
+
+        service.update(1L, new RequestBoardDto.UpdateRequest("t", "c", null), "user1");
+        service.cancel(1L, "user1");
+
+        verify(posts, times(2)).findByIdForUpdate(1L);
+        verify(posts, never()).findById(anyLong());
     }
 
     @Test
@@ -403,6 +415,35 @@ class RequestBoardServiceTest {
                 .isInstanceOf(TaskException.class)
                 .satisfies(t -> assertThat(statusOf(t)).isEqualTo(HttpStatus.CONFLICT))
                 .hasMessage("이미 존재하는 별칭 — 레포 카탈로그 화면에서 등록하세요");
+        verify(catalogService, never()).create(any(), any());
+    }
+
+    @Test
+    void complete_repo_skips_alias_candidates_over_100_chars() {
+        post(7L, RequestKind.REPO, RequestStatus.RECEIVED, "user1");
+        when(catalog.findByGitUrl(any())).thenReturn(Optional.empty());
+        when(catalog.findByAlias("a/b")).thenReturn(Optional.empty());
+        when(catalogService.create(any(), any())).thenReturn(entry(11L, "a/b"));
+        var longName = new GitLabProjectClient.GitLabProject(42, "가".repeat(101), "a/b", "main", null);
+
+        service.completeRepoRequest(7L, longName, URL, "admin1");
+
+        ArgumentCaptor<RepoCatalogDto.UpsertRequest> cap = ArgumentCaptor.forClass(RepoCatalogDto.UpsertRequest.class);
+        verify(catalogService).create(cap.capture(), any());
+        assertThat(cap.getValue().alias()).isEqualTo("a/b");
+        verify(catalog, never()).findByAlias("가".repeat(101));
+    }
+
+    @Test
+    void complete_repo_without_usable_alias_is_409_with_own_message() {
+        post(7L, RequestKind.REPO, RequestStatus.RECEIVED, "user1");
+        when(catalog.findByGitUrl(any())).thenReturn(Optional.empty());
+        var tooLong = new GitLabProjectClient.GitLabProject(42, "가".repeat(101), "나".repeat(101), "main", null);
+
+        assertThatThrownBy(() -> service.completeRepoRequest(7L, tooLong, URL, "admin1"))
+                .isInstanceOf(TaskException.class)
+                .satisfies(t -> assertThat(statusOf(t)).isEqualTo(HttpStatus.CONFLICT))
+                .hasMessage("별칭으로 쓸 수 있는 이름이 없습니다 — 레포 카탈로그 화면에서 등록하세요");
         verify(catalogService, never()).create(any(), any());
     }
 

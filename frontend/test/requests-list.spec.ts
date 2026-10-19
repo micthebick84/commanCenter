@@ -1,7 +1,7 @@
 import { mount, flushPromises } from '@vue/test-utils'
 import { describe, it, expect, afterEach, beforeEach, vi } from 'vitest'
 import { defineComponent, h } from 'vue'
-import { QLayout, QPageContainer } from 'quasar'
+import { QLayout, QPageContainer, QSelect } from 'quasar'
 import RequestsIndex from '../pages/requests/index.vue'
 import { authStub, useApiMock } from './mocks/nuxt'
 
@@ -70,6 +70,25 @@ describe('requests/index', () => {
     expect(url).toContain('status=REVIEWING')
     expect(url).toContain('includeUnread=true')
     expect(w.text()).toContain('hong')
+    w.unmount()
+  })
+
+  it('admin_clear_status_chips: 상태 칩을 모두 끄면 네 상태를 모두 보내 UI(필터 없음)와 맞춘다', async () => {
+    authStub.isAdmin = true
+    const w = await mountPage([item()])
+    useApiMock.mockResolvedValueOnce([item()]) // 재조회
+    w.findAllComponents(QSelect)[1].vm.$emit('update:modelValue', [])
+    await flushPromises()
+    const url = String(useApiMock.mock.calls[useApiMock.mock.calls.length - 1][0])
+    for (const s of ['RECEIVED', 'REVIEWING', 'DONE', 'REJECTED']) expect(url).toContain(`status=${s}`)
+    w.unmount()
+  })
+
+  it('시간 열 머리글은 "최근 활동"이다(updatedAt은 활동 시각)', async () => {
+    authStub.isAdmin = true
+    const w = await mountPage([item()])
+    expect(w.text()).toContain('최근 활동')
+    expect(w.text()).not.toMatch(/(^|\s)수정(\s|$)/)
     w.unmount()
   })
 

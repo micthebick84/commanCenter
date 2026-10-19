@@ -10,8 +10,11 @@ import java.time.OffsetDateTime;
 
 /**
  * 요청 게시판 요청 (스펙 2026-10-19 §5). 읽음 판단은 시각 4개로 한다(§5.4).
+ * {@code @DynamicUpdate}: 읽음·활동 시각 갱신이 동시에 일어난 관리자의 상태·레포 변경을 옛 값으로 덮지 않도록
+ * 바뀐 컬럼만 UPDATE한다.
  */
 @Entity
+@org.hibernate.annotations.DynamicUpdate
 @Table(name = "request_post", schema = "com")
 @Getter
 @Setter

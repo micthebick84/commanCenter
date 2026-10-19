@@ -33,6 +33,7 @@ public class RequestBoardService {
 
     private static final String NOT_FOUND_MESSAGE = "요청을 찾을 수 없습니다";
     private static final int LIST_LIMIT = 200;
+    private static final int MAX_ALIAS_LENGTH = 100;
     private static final Set<RequestStatus> OPEN_STATUSES = Set.of(RequestStatus.RECEIVED, RequestStatus.REVIEWING);
 
     private final RequestPostRepository posts;
@@ -93,7 +94,7 @@ public class RequestBoardService {
 
     @Transactional
     public RequestBoardDto.Detail update(Long id, RequestBoardDto.UpdateRequest req, String userId) {
-        RequestPost post = findOwned(id, userId);
+        RequestPost post = findOwnedForUpdate(id, userId);
         if (post.getStatus() != RequestStatus.RECEIVED) {
             throw TaskException.conflict("접수 상태에서만 수정할 수 있습니다");
         }
@@ -106,7 +107,7 @@ public class RequestBoardService {
 
     @Transactional
     public void cancel(Long id, String userId) {
-        RequestPost post = findOwned(id, userId);
+        RequestPost post = findOwnedForUpdate(id, userId);
         if (post.getStatus() != RequestStatus.RECEIVED) {
             throw TaskException.conflict("접수 상태에서만 취소할 수 있습니다");
         }
@@ -196,12 +197,21 @@ public class RequestBoardService {
 
     private RepoCatalogEntry registerNew(Long requestId, GitLabProjectClient.GitLabProject project,
                                          String gitUrl, String adminId) {
-        String alias = project.name();
-        if (catalog.findByAlias(alias).isPresent()) {
-            alias = project.pathWithNamespace();
-            if (catalog.findByAlias(alias).isPresent()) {
-                throw TaskException.conflict("이미 존재하는 별칭 — 레포 카탈로그 화면에서 등록하세요");
+        // repo_catalog.alias는 VARCHAR(100) — 넘치는 후보는 건너뛴다.
+        String alias = null;
+        boolean fitted = false;
+        for (String candidate : new String[]{project.name(), project.pathWithNamespace()}) {
+            if (candidate == null || candidate.isBlank() || candidate.length() > MAX_ALIAS_LENGTH) continue;
+            fitted = true;
+            if (catalog.findByAlias(candidate).isEmpty()) {
+                alias = candidate;
+                break;
             }
+        }
+        if (alias == null) {
+            throw TaskException.conflict(fitted
+                    ? "이미 존재하는 별칭 — 레포 카탈로그 화면에서 등록하세요"
+                    : "별칭으로 쓸 수 있는 이름이 없습니다 — 레포 카탈로그 화면에서 등록하세요");
         }
         return repoCatalogService.create(new RepoCatalogDto.UpsertRequest(
                 alias, gitUrl, project.defaultBranch(), "요청 #" + requestId + "에서 등록", true), adminId);
@@ -232,8 +242,9 @@ public class RequestBoardService {
         return new TaskException(HttpStatus.NOT_FOUND, NOT_FOUND_MESSAGE);
     }
 
-    private RequestPost findOwned(Long id, String userId) {
-        RequestPost post = posts.findById(id).orElseThrow(RequestBoardService::notFound);
+    /** 상태를 확인하고 쓰는 경로는 행 락을 잡아 관리자 상태 변경과 직렬화한다(없거나 남의 것이면 같은 404). */
+    private RequestPost findOwnedForUpdate(Long id, String userId) {
+        RequestPost post = posts.findByIdForUpdate(id).orElseThrow(RequestBoardService::notFound);
         if (!post.isOwnedBy(userId)) throw notFound();
         return post;
     }

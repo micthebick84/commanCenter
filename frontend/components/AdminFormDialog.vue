@@ -11,6 +11,8 @@ const props = defineProps<{
   submitting?: boolean
   canSubmit?: boolean
   submitColor?: string
+  // 제출 버튼 data-test (기본 form-submit) — 같은 화면에 다이얼로그가 여럿이거나 호출부가 이름을 정해야 할 때
+  submitTest?: string
 }>()
 const emit = defineEmits<{
   'update:modelValue': [value: boolean]
@@ -64,7 +66,7 @@ const show = computed({
           :label="submitLabel"
           :loading="submitting"
           :disable="!canSubmit"
-          data-test="form-submit"
+          :data-test="submitTest ?? 'form-submit'"
           @click="emit('submit')"
         />
       </q-card-actions>

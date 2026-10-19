@@ -2,7 +2,7 @@ import { mount, flushPromises } from '@vue/test-utils'
 import { describe, it, expect, beforeEach } from 'vitest'
 import { defineComponent, h } from 'vue'
 import DefaultLayout from '../layouts/default.vue'
-import { authStub } from './mocks/nuxt'
+import { authStub, useApiMock } from './mocks/nuxt'
 import { setViewportWidth } from './mocks/screen'
 
 // useRoute는 Nuxt 자동 임포트 — setup.ts에 없어 전역 주입(관리 탭 활성 판정용).
@@ -17,7 +17,7 @@ const NuxtLinkStub = defineComponent({
 })
 const QRouteTabStub = defineComponent({
   props: { label: String, to: String, icon: String },
-  setup: (props) => () => h('div', { class: 'q-tab-stub' }, props.label),
+  setup: (props, { slots }) => () => h('div', { class: 'q-tab-stub' }, [props.label, slots.default?.()]),
 })
 
 function mountLayout() {
@@ -104,7 +104,7 @@ describe('layouts/default — 하단 내비 (스펙 2026-09-06 §4.4, 결정 4)'
     Object.assign(authStub, { isAuthenticated: true, isAdmin: true, me: { username: 'admin', email: null } })
   })
 
-  it('lt.md: 헤더 탭은 사라지고 하단 내비에 작업·질문·관리 3탭', async () => {
+  it('lt.md: 헤더 탭은 사라지고 하단 내비에 작업·질문·요청·관리 4탭', async () => {
     await setViewportWidth(390)
     try {
       const w = mountLayout()
@@ -112,7 +112,7 @@ describe('layouts/default — 하단 내비 (스펙 2026-09-06 §4.4, 결정 4)'
       expect(w.find('.q-header .q-tab-stub').exists()).toBe(false)
       const nav = w.find('[data-test="bottom-nav"]')
       expect(nav.exists()).toBe(true)
-      expect(nav.findAll('.q-tab-stub').map((t) => t.text())).toEqual(['작업', '질문', '관리'])
+      expect(nav.findAll('.q-tab-stub').map((t) => t.text())).toEqual(['작업', '질문', '요청', '관리'])
       w.unmount()
     } finally {
       await setViewportWidth(1024)
@@ -125,18 +125,75 @@ describe('layouts/default — 하단 내비 (스펙 2026-09-06 §4.4, 결정 4)'
     try {
       const w = mountLayout()
       await flushPromises()
-      expect(w.find('[data-test="bottom-nav"]').findAll('.q-tab-stub').map((t) => t.text())).toEqual(['작업', '질문'])
+      expect(w.find('[data-test="bottom-nav"]').findAll('.q-tab-stub').map((t) => t.text())).toEqual(['작업', '질문', '요청'])
       w.unmount()
     } finally {
       await setViewportWidth(1024)
     }
   })
 
-  it('데스크톱: 헤더 탭 5개, 하단 내비 없음', async () => {
+  it('데스크톱: 헤더 탭 6개, 하단 내비 없음', async () => {
     const w = mountLayout()
     await flushPromises()
-    expect(w.findAll('.q-header .q-tab-stub')).toHaveLength(5)
+    expect(w.findAll('.q-header .q-tab-stub')).toHaveLength(6)
     expect(w.find('[data-test="bottom-nav"]').exists()).toBe(false)
+    w.unmount()
+  })
+})
+
+describe('layouts/default — 요청 탭·관리자 배지', () => {
+  beforeEach(() => {
+    Object.assign(authStub, { isAuthenticated: true, isAdmin: false, me: { username: 'user', email: null } })
+  })
+
+  it('shows_requests_tab_for_users: 비관리자 넓은 화면에도 "요청" 탭이 질문 뒤에 있다', async () => {
+    const w = mountLayout()
+    await flushPromises()
+    const labels = w.findAll('.q-header .q-tab-stub').map((t) => t.text())
+    expect(labels).toEqual(['작업', '질문', '요청'])
+    expect(w.find('[data-test="requests-badge"]').exists()).toBe(false)
+    expect(useApiMock).not.toHaveBeenCalledWith('/api/admin/requests/summary')
+    w.unmount()
+  })
+
+  it('lt.md: 하단 내비에도 "요청"이 질문 뒤에 있다', async () => {
+    await setViewportWidth(390)
+    try {
+      const w = mountLayout()
+      await flushPromises()
+      expect(w.find('[data-test="bottom-nav"]').findAll('.q-tab-stub').map((t) => t.text())).toEqual(['작업', '질문', '요청'])
+      w.unmount()
+    } finally {
+      await setViewportWidth(1024)
+    }
+  })
+
+  it('admin_badge_shows_attention: 관리자는 attention 건수를 배지로 본다', async () => {
+    authStub.isAdmin = true
+    useApiMock.mockResolvedValue({ received: 0, attention: 2 })
+    const w = mountLayout()
+    await flushPromises()
+    expect(useApiMock).toHaveBeenCalledWith('/api/admin/requests/summary')
+    expect(w.find('[data-test="requests-badge"]').text()).toBe('2')
+    w.unmount()
+  })
+
+  it('badge_hidden_when_zero: attention 0이면 배지가 없다', async () => {
+    authStub.isAdmin = true
+    useApiMock.mockResolvedValue({ received: 3, attention: 0 })
+    const w = mountLayout()
+    await flushPromises()
+    expect(w.find('[data-test="requests-badge"]').exists()).toBe(false)
+    w.unmount()
+  })
+
+  it('조회 실패는 무시하고 배지 없이 그린다', async () => {
+    authStub.isAdmin = true
+    useApiMock.mockRejectedValue(new Error('boom'))
+    const w = mountLayout()
+    await flushPromises()
+    expect(w.find('[data-test="requests-badge"]').exists()).toBe(false)
+    expect(w.findAll('.q-header .q-tab-stub').map((t) => t.text())).toContain('요청')
     w.unmount()
   })
 })

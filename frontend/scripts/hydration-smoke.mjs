@@ -29,7 +29,7 @@ const VIEWPORTS = [
   { name: '820', width: 820, height: 1180 },
   { name: '390', width: 390, height: 844 },
 ]
-const ANON_PATHS = ['/login', '/tasks', '/questions']
+const ANON_PATHS = ['/login', '/tasks', '/questions', '/requests']
 const AUTH_PATHS = [
   '/',
   '/login',
@@ -79,7 +79,7 @@ const REQUEST_DETAIL = {
     { id: 2, kind: 'SYSTEM', authorId: 'admin', authorAdmin: true, body: '상태가 검토중으로 바뀌었습니다', createdAt: NOW },
   ],
 }
-const WORKERS =[{ workerId: 'smoke-worker-1', hostname: 'smoke', version: '1.0', lastSeenAt: NOW, alive: true, claudeSessionOk: true, vpnStatus: null, mcps: ['docs'], lostReportCount: 0 }]
+const WORKERS = [{ workerId: 'smoke-worker-1', hostname: 'smoke', version: '1.0', lastSeenAt: NOW, alive: true, claudeSessionOk: true, vpnStatus: null, mcps: ['docs'], lostReportCount: 0 }]
 
 /** pathname → 응답 본문. 목록에 없는 /api/ 요청은 null(200)로 답하고 보고서에 남긴다. */
 function apiResponse(path) {
@@ -96,6 +96,7 @@ function apiResponse(path) {
   if (path === '/api/mcp-catalog' || path === '/api/admin/mcp-catalog') return MCPS
   if (path === '/api/workers/health') return WORKERS
   if (path === '/api/db-connections') return []
+  if (path === '/api/admin/requests/summary') return { received: 1, attention: 1 }
   if (path === '/api/requests') return REQUESTS
   if (/^\/api\/requests\/\d+$/.test(path)) return REQUEST_DETAIL
   return undefined

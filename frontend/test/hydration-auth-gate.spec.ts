@@ -84,7 +84,7 @@ describe('layouts/default — 하이드레이션 전에는 SSR(비로그인)과 
         .find('[data-test="bottom-nav"]')
         .findAll('.q-tab-stub')
         .map((t) => t.text()),
-    ).toEqual(['작업', '질문', '관리'])
+    ).toEqual(['작업', '질문', '요청', '관리'])
     w.unmount()
   })
 
@@ -96,7 +96,7 @@ describe('layouts/default — 하이드레이션 전에는 SSR(비로그인)과 
 
     hydration.isHydrated.value = true
     await flushPromises()
-    expect(w.findAll('.q-header .q-tab-stub')).toHaveLength(5)
+    expect(w.findAll('.q-header .q-tab-stub')).toHaveLength(6)
     expect(w.find('[data-test="toolbar-user"]').text()).toContain('admin')
     w.unmount()
   })

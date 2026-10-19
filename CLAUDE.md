@@ -175,6 +175,7 @@ PR 본문/브랜치 prefix/timeout은 `application-worker.yml`의 `netis-maker.w
 | 질문 세션 DB 접속정보 (CRUD·권한·선택 검증·claim 복호화 · JDBC 접속 테스트 · 암호화) | `service/DbConnectionService.java`, `controller/DbConnectionController.java`, `service/JdbcDbConnectionTester.java`, `service/DbSecretCipher.java`, `entity/DbConnection.java`, 마이그레이션 `V24__db_connection.sql` |
 | 질문 세션 내장 DB MCP (서버·도구 · 읽기 전용 어댑터 · 카탈로그 · 결과 상한 · SQL 게이트) | `netismaker-interview-service/src/sdk/dbMcp.ts`, `src/sdk/db/{adapters,catalog,result,limits}.ts`, `src/sdk/sqlReadOnly.ts`, `src/sdk/permissions.ts`(`dbToolGate`) |
 | DB 연결 선택·접속정보 다이얼로그·관리자 공용 관리 | `frontend/components/DbConnectionPicker.vue`, `DbConnectionDialog.vue`, `DbConnectionAdminDialog.vue`, `frontend/composables/dbConnections.ts` |
+| 요청 게시판(기능·MCP·레포 추가 요청 · 레포 후보 클릭 등록) | service/RequestBoardService.java, service/RepoRequestService.java, service/GitLabProjectClient.java, controller/RequestBoardController.java, controller/RepoRequestController.java, 마이그레이션 V30__request_board.sql, frontend/pages/requests/*, frontend/components/requests/* |
 
 ## 운영자 환경 권장 셋업
 

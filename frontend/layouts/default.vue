@@ -10,6 +10,23 @@ const $q = useQuasar()
 const route = useRoute()
 const isAdminRoute = computed(() => route.path.startsWith('/admin'))
 
+// 요청 탭 배지 — 관리자에게만, 처리가 필요한 요청 수(attention). 조회 실패·빈 응답은 0으로 두고 조용히 넘어간다.
+const requestsAttention = ref(0)
+async function loadRequestsAttention() {
+  if (!auth.isAdmin) {
+    requestsAttention.value = 0
+    return
+  }
+  try {
+    const summary = await useApi<{ received: number; attention: number }>('/api/admin/requests/summary')
+    requestsAttention.value = summary?.attention ?? 0
+  } catch {
+    requestsAttention.value = 0
+  }
+}
+onMounted(loadRequestsAttention)
+watch(() => route.path, loadRequestsAttention)
+
 function handleLogout() {
   $q.dialog({
     title: '로그아웃',
@@ -39,6 +56,9 @@ function handleLogout() {
         <q-tabs v-if="isAuthenticated && !$q.screen.lt.md" shrink>
           <q-route-tab to="/tasks" label="작업" />
           <q-route-tab to="/questions" label="질문" />
+          <q-route-tab to="/requests" label="요청">
+            <q-badge v-if="isAdmin && requestsAttention > 0" color="red" floating data-test="requests-badge">{{ requestsAttention }}</q-badge>
+          </q-route-tab>
           <q-route-tab v-if="isAdmin" to="/admin/workers" label="워커 헬스" />
           <q-route-tab v-if="isAdmin" to="/admin/mcp-catalog" label="MCP 카탈로그" />
           <q-route-tab v-if="isAdmin" to="/admin/repo-catalog" label="레포 카탈로그" />
@@ -63,6 +83,9 @@ function handleLogout() {
       <q-tabs dense no-caps align="justify" active-color="primary" indicator-color="transparent" class="text-grey-7">
         <q-route-tab to="/tasks" icon="assignment" label="작업" />
         <q-route-tab to="/questions" icon="forum" label="질문" />
+        <q-route-tab to="/requests" icon="campaign" label="요청">
+          <q-badge v-if="isAdmin && requestsAttention > 0" color="red" floating data-test="requests-badge">{{ requestsAttention }}</q-badge>
+        </q-route-tab>
         <q-route-tab v-if="isAdmin" to="/admin/workers" icon="settings" label="관리" :class="{ 'q-tab--active text-primary': isAdminRoute }" />
       </q-tabs>
     </q-footer>

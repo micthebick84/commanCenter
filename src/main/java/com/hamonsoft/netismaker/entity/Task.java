@@ -113,6 +113,22 @@ public class Task {
     @Setter
     private boolean designRequested;
 
+    /** 구현 방식 (스펙 2026-10-15 §4). 플랜 확정·구현 재시도 때 정한다. */
+    @Enumerated(EnumType.STRING)
+    @Column(name = "implementation_mode", nullable = false, length = 10)
+    @Setter
+    private ImplementationMode implementationMode = ImplementationMode.DIRECT;
+
+    /** 구현 시도 번호 — 구현 재시도마다 +1. 2회째부터 브랜치 이름에 -rN, 결과 보고의 시도 번호와 대조한다. */
+    @Column(name = "implementation_attempt", nullable = false)
+    @Setter
+    private int implementationAttempt = 1;
+
+    /** 이번 시도의 구현 상한(분) — claim 때 방식별 설정값으로 기록, 화면 경과 표시용. 그 전에는 null. */
+    @Column(name = "implementation_timeout_minutes")
+    @Setter
+    private Integer implementationTimeoutMinutes;
+
     /** 구현 결과 PR URL. PR_CREATED 시 set. */
     @Column(name = "pr_url", length = 500)
     @Setter

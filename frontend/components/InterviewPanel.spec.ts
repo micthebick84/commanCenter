@@ -95,7 +95,7 @@ describe('InterviewPanel — confirm flow', () => {
 
     expect(useApiMock).toHaveBeenCalledWith('/api/interviews/9/confirm', {
       method: 'POST',
-      body: { designRequested: false },
+      body: { designRequested: false, implementationMode: 'REVIEW' },
     })
     expect(w.emitted('confirmed')?.[0]).toEqual([123])
     w.unmount()
@@ -116,8 +116,34 @@ describe('InterviewPanel — confirm flow', () => {
 
     expect(useApiMock).toHaveBeenCalledWith('/api/interviews/9/confirm', {
       method: 'POST',
-      body: { designRequested: true },
+      body: { designRequested: true, implementationMode: 'REVIEW' },
     })
+    w.unmount()
+  })
+
+  it('sends the chosen implementation mode (default REVIEW, switchable to SDD)', async () => {
+    const w = await mountPanel(9)
+    const es = FakeEventSource.last()
+    es.emit('plan_ready', { designMarkdown: 'd', planMarkdown: 'p', planJson: JSON.stringify([]) })
+    await flushPromises()
+    expect(w.find('[data-test="impl-mode-description"]').text()).toContain('리뷰 1회')
+
+    await w.find('[data-test="impl-mode-SDD"]').trigger('click')
+    await flushPromises()
+    useApiMock.mockResolvedValueOnce({ taskId: 125 })
+    await w.find('[data-test="confirm"]').trigger('click')
+    await flushPromises()
+
+    expect(useApiMock).toHaveBeenCalledWith('/api/interviews/9/confirm', {
+      method: 'POST',
+      body: { designRequested: false, implementationMode: 'SDD' },
+    })
+    w.unmount()
+  })
+
+  it('hides the mode picker for read-only viewers', async () => {
+    const w = await mountPanel(9, { statusName: null, turns: [], plan: null }, { readonly: true })
+    expect(w.find('[data-test="impl-mode-picker"]').exists()).toBe(false)
     w.unmount()
   })
 })
@@ -380,7 +406,7 @@ describe('InterviewPanel — 확정 / 읽기 전용', () => {
 
     expect(useApiMock).toHaveBeenCalledWith('/api/interviews/9/confirm', {
       method: 'POST',
-      body: { designRequested: false },
+      body: { designRequested: false, implementationMode: 'REVIEW' },
     })
     expect(w.emitted('confirmed')).toBeTruthy()
     w.unmount()

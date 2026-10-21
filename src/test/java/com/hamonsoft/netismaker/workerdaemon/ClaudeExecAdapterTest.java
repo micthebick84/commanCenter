@@ -114,4 +114,55 @@ class ClaudeExecAdapterTest {
         assertThat(cmd).containsSubsequence("--strict-mcp-config", "--tools", "");
         assertThat(cmd).doesNotContain("--dangerously-skip-permissions", "--mcp-config");
     }
+
+    @Test
+    void buildCommand_puts_extra_args_after_model_and_before_mcp_args() {
+        List<String> cmd = ClaudeExecAdapter.buildCommand("/bin/claude", true, "claude-opus-5-5", "high",
+                List.of("--plugin-dir", "C:/sp/6.4.1"),
+                List.of("--mcp-config", "/tmp/x", "--strict-mcp-config", "--allowedTools", "mcp__a"));
+        assertThat(cmd).containsExactly("/bin/claude", "-p", "--output-format", "json",
+                "--setting-sources", "project", "--dangerously-skip-permissions",
+                "--model", "claude-opus-5-5", "--effort", "high",
+                "--plugin-dir", "C:/sp/6.4.1",
+                "--mcp-config", "/tmp/x", "--strict-mcp-config", "--allowedTools", "mcp__a");
+    }
+
+    @Test
+    void process_builder_adds_the_extra_env_on_top_of_the_worker_env() {
+        ProcessBuilder pb = ClaudeExecAdapter.processBuilder(List.of("claude"), new java.io.File("."),
+                java.util.Map.of("GIT_AUTHOR_NAME", "netisMaker", "GIT_COMMITTER_EMAIL", "netismaker@hamonsoft.local"));
+        assertThat(pb.environment())
+                .containsEntry("GIT_AUTHOR_NAME", "netisMaker")
+                .containsEntry("GIT_COMMITTER_EMAIL", "netismaker@hamonsoft.local");
+        assertThat(pb.directory()).isEqualTo(new java.io.File("."));
+    }
+
+    /** 2026-10-15 헤드리스 SDD 실측 결과 JSON — usage는 메인 세션 것뿐이고 modelUsage에 서브에이전트가 들어 있다. */
+    @Test
+    void parseEnvelope_sums_model_usage_so_subagent_tokens_count() {
+        String raw = """
+                {"type":"result","result":"끝","total_cost_usd":1.8929,
+                 "usage":{"input_tokens":50,"output_tokens":18219,"cache_creation_input_tokens":63011,"cache_read_input_tokens":1381990},
+                 "modelUsage":{
+                   "claude-opus-5-5":{"inputTokens":58,"outputTokens":25320,"cacheReadInputTokens":1453215,"cacheCreationInputTokens":93089,"costUSD":1.4518},
+                   "claude-haiku-4-5-20251001":{"inputTokens":236,"outputTokens":10917,"cacheReadInputTokens":614504,"cacheCreationInputTokens":42292,"costUSD":0.1691},
+                   "claude-sonnet-5-5":{"inputTokens":24,"outputTokens":8780,"cacheReadInputTokens":207346,"cacheCreationInputTokens":57085,"costUSD":0.2720}}}
+                """;
+        ClaudeExecAdapter.Parsed p = ClaudeExecAdapter.parseEnvelope(raw);
+        assertThat(p.resultText()).isEqualTo("끝");
+        assertThat(p.usage().costUsd()).isEqualByComparingTo("1.8929");
+        assertThat(p.usage().inputTokens()).isEqualTo(58 + 236 + 24);
+        assertThat(p.usage().outputTokens()).isEqualTo(25320 + 10917 + 8780);
+        assertThat(p.usage().cacheReadTokens()).isEqualTo(1453215L + 614504L + 207346L);
+        assertThat(p.usage().cacheCreationTokens()).isEqualTo(93089L + 42292L + 57085L);
+    }
+
+    @Test
+    void parseEnvelope_with_an_empty_model_usage_falls_back_to_usage() {
+        String raw = "{\"type\":\"result\",\"result\":\"ok\",\"total_cost_usd\":0.1,\"modelUsage\":{},"
+                + "\"usage\":{\"input_tokens\":7,\"output_tokens\":3,\"cache_creation_input_tokens\":0,\"cache_read_input_tokens\":0}}";
+        ClaudeExecAdapter.Parsed p = ClaudeExecAdapter.parseEnvelope(raw);
+        assertThat(p.usage().inputTokens()).isEqualTo(7);
+        assertThat(p.usage().outputTokens()).isEqualTo(3);
+    }
 }

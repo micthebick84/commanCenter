@@ -51,7 +51,8 @@ const task = (id, status, statusLabel, extra = {}) => ({
   description: '하이드레이션 스모크용 작업', status, statusLabel, requesterId: 'admin', retryCount: 0, maxRetry: 3,
   failureReason: null, mcpsExtra: [], envVars: [], createdAt: NOW, updatedAt: NOW, model: 'claude-opus-5-5',
   effort: 'medium', designRequested: false, analysis: null, design: null, implementation: null, deployment: null, close: null,
-  interviewSessionId: null, attachments: [], stageUsage: [], totalCostUsd: null, totalTokens: null, ...extra,
+  interviewSessionId: null, attachments: [], stageUsage: [], totalCostUsd: null, totalTokens: null,
+  implementationMode: 'DIRECT', implementationAttempt: 1, claimedAt: null, implementationTimeoutMinutes: null, ...extra,
 })
 const TASKS = [
   task(1, 'PR_CREATED', 'PR생성', {
@@ -60,6 +61,8 @@ const TASKS = [
   }),
   task(2, 'AWAITING_APPROVAL', '승인대기'),
   task(3, 'CANCELLED', '취소됨'),
+  // 구현중 작업 — 경과 문구는 마운트 뒤에만 그려지므로(useNowTick) 하이드레이션 불일치가 없어야 한다
+  task(9, 'IMPLEMENTING', '구현중', { implementationMode: 'REVIEW', claimedAt: NOW, implementationTimeoutMinutes: 80 }),
 ]
 const QUESTION = {
   id: 3, title: '인증 흐름 확인', githubRepo: 'acme/widgets', githubBranch: 'main', repoAlias: 'Widgets',

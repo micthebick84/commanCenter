@@ -1,5 +1,6 @@
 package com.hamonsoft.netismaker.service;
 
+import com.hamonsoft.netismaker.entity.ImplementationMode;
 import com.hamonsoft.netismaker.entity.Task;
 import com.hamonsoft.netismaker.entity.TaskStatus;
 import com.hamonsoft.netismaker.entity.WorkerHeartbeat;
@@ -35,9 +36,9 @@ class StaleTaskRecoveryJobTest {
         heartbeatRepo = mock(WorkerHeartbeatRepository.class);
         deployLogStream = mock(DeployLogStreamService.class);
         when(deployLogStream.consolidate(any())).thenReturn(java.util.Optional.empty());
-        job = new StaleTaskRecoveryJob(taskRepo, historyRepo, heartbeatRepo, deployLogStream);
+        job = new StaleTaskRecoveryJob(taskRepo, historyRepo, heartbeatRepo, deployLogStream,
+                ImplementationModePolicy.defaults());
         ReflectionTestUtils.setField(job, "analysisStaleThresholdMinutes", 5);
-        ReflectionTestUtils.setField(job, "implementationStaleThresholdMinutes", 60);
         ReflectionTestUtils.setField(job, "deployStaleThresholdMinutes", 15);
         ReflectionTestUtils.setField(job, "workerDeadThresholdSeconds", 60);
         ReflectionTestUtils.setField(job, "implementationWorkerDeadThresholdSeconds", 300);
@@ -243,5 +244,55 @@ class StaleTaskRecoveryJobTest {
         when(heartbeatRepo.findAllById(any())).thenReturn(List.of(hb("w1", 300)));
         job.recoverStale();
         assertThat(t.getStatus()).isEqualTo(TaskStatus.CLOSE_PENDING);
+    }
+
+    @Test
+    void an_sdd_implementation_gets_the_longer_ceiling() {
+        Task t = task(10L, TaskStatus.IMPLEMENTING, "w1", 100, 0);
+        t.setImplementationMode(ImplementationMode.SDD);
+        when(taskRepo.findInFlightClaimed()).thenReturn(List.of(t));
+        when(heartbeatRepo.findAllById(any())).thenReturn(List.of(hb("w1", 5)));
+
+        job.recoverStale();
+
+        assertThat(t.getStatus()).isEqualTo(TaskStatus.IMPLEMENTING);
+    }
+
+    @Test
+    void a_review_implementation_past_its_ceiling_is_recovered() {
+        Task t = task(11L, TaskStatus.IMPLEMENTING, "w1", 100, 0);
+        t.setImplementationMode(ImplementationMode.REVIEW);
+        when(taskRepo.findInFlightClaimed()).thenReturn(List.of(t));
+        when(heartbeatRepo.findAllById(any())).thenReturn(List.of(hb("w1", 5)));
+
+        job.recoverStale();
+
+        assertThat(t.getStatus()).isEqualTo(TaskStatus.IMPLEMENTATION_FAILED);
+        assertThat(t.getFailureReason()).contains("처리 시간 초과(95분)");
+    }
+
+    @Test
+    void an_sdd_implementation_past_260_minutes_is_recovered() {
+        Task t = task(12L, TaskStatus.IMPLEMENTING, "w1", 261, 0);
+        t.setImplementationMode(ImplementationMode.SDD);
+        when(taskRepo.findInFlightClaimed()).thenReturn(List.of(t));
+        when(heartbeatRepo.findAllById(any())).thenReturn(List.of(hb("w1", 5)));
+
+        job.recoverStale();
+
+        assertThat(t.getStatus()).isEqualTo(TaskStatus.IMPLEMENTATION_FAILED);
+        assertThat(t.getFailureReason()).contains("처리 시간 초과(260분)");
+    }
+
+    @Test
+    void a_direct_implementation_keeps_the_60_minute_ceiling() {
+        Task t = task(13L, TaskStatus.IMPLEMENTING, "w1", 61, 0);
+        when(taskRepo.findInFlightClaimed()).thenReturn(List.of(t));
+        when(heartbeatRepo.findAllById(any())).thenReturn(List.of(hb("w1", 5)));
+
+        job.recoverStale();
+
+        assertThat(t.getStatus()).isEqualTo(TaskStatus.IMPLEMENTATION_FAILED);
+        assertThat(t.getFailureReason()).contains("처리 시간 초과(60분)");
     }
 }

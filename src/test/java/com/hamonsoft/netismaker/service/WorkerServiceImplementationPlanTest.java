@@ -1,6 +1,7 @@
 package com.hamonsoft.netismaker.service;
 
 import com.hamonsoft.netismaker.dto.WorkerTaskResponse;
+import com.hamonsoft.netismaker.entity.ImplementationMode;
 import com.hamonsoft.netismaker.entity.InterviewPlan;
 import com.hamonsoft.netismaker.entity.InterviewSession;
 import com.hamonsoft.netismaker.entity.InterviewStatus;
@@ -110,5 +111,30 @@ class WorkerServiceImplementationPlanTest {
         WorkerTaskResponse r = service.claimNextTask("w1").orElseThrow();
 
         assertThat(r.planMarkdown()).isNull();
+    }
+
+    @Test
+    void implementation_claim_records_and_carries_the_policy_timeout_for_the_mode() {
+        Task t = approvedTask();
+        t.setImplementationMode(ImplementationMode.SDD);
+        t.setImplementationAttempt(2);
+        when(sessionRepo.findByTaskIdOrderByCreatedAtDesc(3L)).thenReturn(List.of());
+
+        WorkerTaskResponse r = service.claimNextTask("w1").orElseThrow();
+
+        assertThat(t.getImplementationTimeoutMinutes()).isEqualTo(240);
+        assertThat(r.implementation()).isEqualTo(new WorkerTaskResponse.ImplementationSpec("SDD", 2, 240));
+    }
+
+    @Test
+    void the_injected_policy_decides_the_timeout() {
+        service.setImplementationModePolicy(new ImplementationModePolicy(30, 70, 200, 60, 95, 260));
+        Task t = approvedTask();
+        t.setImplementationMode(ImplementationMode.REVIEW);
+        when(sessionRepo.findByTaskIdOrderByCreatedAtDesc(3L)).thenReturn(List.of());
+
+        WorkerTaskResponse r = service.claimNextTask("w1").orElseThrow();
+
+        assertThat(r.implementation().timeoutMinutes()).isEqualTo(70);
     }
 }

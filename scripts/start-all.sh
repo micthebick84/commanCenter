@@ -96,6 +96,17 @@ else
   fi
 fi
 
+# superpowers 플러그인 — 워커의 SDD 구현용 (스펙 2026-10-15 §6.9). 인터뷰 서비스는 자기 .env 값을 쓴다.
+if [ -z "${SUPERPOWERS_PLUGIN_PATH:-}" ]; then
+  sp_root="$HOME/.claude/plugins/cache/claude-plugins-official/superpowers"
+  SUPERPOWERS_PLUGIN_PATH="$(ls -d "$sp_root"/*/ 2>/dev/null | sed 's:/*$::' | sort -V | tail -n 1 || true)"
+fi
+if [ -n "${SUPERPOWERS_PLUGIN_PATH:-}" ]; then
+  echo "● SDD 플러그인: $SUPERPOWERS_PLUGIN_PATH"
+else
+  echo "● SDD 플러그인 없음 — SDD 구현 요청은 리뷰로 대신 진행 (SUPERPOWERS_PLUGIN_PATH)"
+fi
+
 # ── 2) 워커 N개 ────────────────────────────────────────────────
 for n in $(seq 1 "$WORKERS"); do
   wid="mac-worker-$n"
@@ -115,6 +126,7 @@ for n in $(seq 1 "$WORKERS"); do
     REPOS_DIR="$REPOS_DIR" \
     DEPLOY_PUBLIC_ACCESS_ENABLED="$DEPLOY_PUBLIC_ACCESS_ENABLED" \
     ${CLAUDE_CLI:+CLAUDE_CLI="$CLAUDE_CLI"} \
+    ${SUPERPOWERS_PLUGIN_PATH:+SUPERPOWERS_PLUGIN_PATH="$SUPERPOWERS_PLUGIN_PATH"} \
     "$GRADLE" bootRun --args='--spring.profiles.active=worker' -q > "$logf" 2>&1 &
   echo $! > "$pidf"
   if wait_for_log "$logf" 'Started NetisMakerApplication|APPLICATION FAILED|BUILD FAILED' "$wid"; then

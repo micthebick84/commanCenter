@@ -52,17 +52,18 @@ class WorktreeImmediateDiscardTest {
 
         when(http.nextTask()).thenReturn(Optional.of(task(WorkerTaskResponse.Kind.IMPLEMENTATION)));
         when(repos.ensureFresh(any(), eq("main"))).thenReturn(new GitRepoCache.CheckedOutRepo(dir, "base123"));
-        when(worktrees.create(any(), eq("acme/widgets"), eq("main"), eq(7L), eq("Add login")))
+        when(worktrees.create(any(), eq("acme/widgets"), eq("main"), eq(7L), eq("Add login"), eq(1)))
                 .thenReturn(new WorktreeService.CreatedWorktree(dir, "netismaker/task-7-add-login"));
-        when(claude.exec(anyString(), any(), any(), anyList(), anyBoolean(), any(), any()))
+        when(claude.exec(anyString(), any(), any(), anyList(), anyBoolean(), any(), any(), any()))
                 .thenReturn(new ClaudeExecAdapter.ExecResult(claudeExit, "done", 10, null));
-        when(gitOps.commitAndPush(any(), any(), anyString(), anyString())).thenReturn("head456");
+        when(gitOps.commitAndPush(any(), any(), anyString(), anyString(), any())).thenReturn("head456");
         when(gitOps.createDraftPr(any(), any(), anyString(), anyString(), anyString(), anyString()))
                 .thenReturn(new GitOpsService.PrInfo("https://github.com/acme/widgets/pull/3", 3));
 
         WorkerMainLoop loop = new WorkerMainLoop(props(), http, repos, claude, mock(PromptResultParser.class),
                 mock(WorkerMcpSupport.class), worktrees, gitOps, mock(DeployService.class), reporter,
-                mock(SilentLossTracker.class), mock(DesignResultHarvester.class), mock(TaskCloser.class));
+                mock(SilentLossTracker.class), mock(DesignResultHarvester.class), mock(TaskCloser.class),
+                new SuperpowersPlugin(""));
         return new Loop(loop, worktrees, reporter, gitOps, claude);
     }
 

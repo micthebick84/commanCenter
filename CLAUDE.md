@@ -54,7 +54,7 @@ WORKER_ID=mac-worker-1 \
 
 ## 핵심 설계 제약
 
-- **claude 구독 1개 = macOS 1대 = 워커 1대 = 직렬 처리** (DESIGN.md P6). 분석/구현이 같은 큐를 공유. 동시성은 V2 이후.
+- **claude 구독 1개 = macOS 1대 = 워커 1대 = 직렬 처리** (DESIGN.md P6). 분석/구현이 같은 큐를 공유. 동시성은 V2 이후. (인터뷰 서비스의 질문·인터뷰 턴은 예외 — `INTERVIEW_CONCURRENCY`, 아래 "다중 워커 운영")
 - **워커는 사내망 외부에서 폴링**: `/worker/*` 엔드포인트는 `X-Worker-API-Key` 인증. JWT 아님.
 - **모든 분석 결과는 한국어 마크다운**: `application-worker.yml`의 `prompt-template` 참고. 섹션 헤더는 파서가 사용하므로 변경 금지.
 - **MCP 자동 주입**: `WorkerMcpSupport`가 `~/.claude.json`의 글로벌+프로젝트 mcpServers를 머지해 `~/netis-maker/worker-mcp.json` 생성. claude -p 호출 시 `--mcp-config + --strict-mcp-config + --allowedTools` prepend. 워커는 `--setting-sources project`도 고정(`ClaudeExecAdapter.buildCommand`) — 생략하면 운영자 플러그인·훅이 `--dangerously-skip-permissions` 구현 세션에 붙고, `project`라 대상 레포 CLAUDE.md는 계속 읽힌다(빈 값이면 CLAUDE.md도 빠짐, 2026-10-01 프로브). 인터뷰 세션도 동일 합본을 씀 — `netismaker-interview-service/src/sdk/mcpBase.ts`가 부팅 시 1회 스냅샷해 SDK `options.mcpServers`로 주입(작업별 extras와 머지, 충돌 시 extras 우선). ⚠️ 인터뷰·질문 세션은 `settingSources: []` + `strictMcpConfig: true`가 **둘 다** 있어야 격리된다 — `settingSources`를 생략하면 CLI가 운영자 `~/.claude/settings.json`(플러그인·훅·`permissions.allow` → canUseTool 우회)을 읽고, `strictMcpConfig`가 없으면 claude.ai 커넥터(Gmail/Drive)가 붙는다(2026-10-01 질문 세션 #17 실측, `sessionOptions.test.ts`가 가드).
@@ -80,6 +80,8 @@ WORKER_ID=mac-worker-2 ./gradlew bootRun --args='--spring.profiles.active=worker
 - **GitRepoCache**: `~/netis-maker/repos/{owner}/{repo}.lock` FileLock으로 cross-process fetch 직렬화
 - **WorktreeService.create**: 같은 락 안에서 worktree add → `.git/worktrees/` 메타 race 방지
 - **heartbeat**: worker_id별로 별도 row, admin/workers UI에 둘 다 표시
+
+**인터뷰 서비스 동시 처리(2026-10-21)**: 질문·인터뷰 턴은 한 프로세스가 `INTERVIEW_CONCURRENCY`(기본 1 = 직렬)건까지 함께 돈다(`ClaimLoop` — 자리가 차 있으면 claim하지 않아 남은 세션은 QUEUED로 남고, stop은 진행 중 턴을 기다린다). 세션마다 체크아웃(`session-{id}`)·SDK 옵션·heartbeat·DB MCP가 따로라 턴끼리 공유 상태가 없다. Windows 스택은 `public.env`에 `INTERVIEW_CONCURRENCY=N`을 넣고 인터뷰 서비스만 재기동(기동 로그 `concurrency=N`). 실측(i5-1135G7·16GB, 여유 약 5GB, opus-5-5/high 질문 턴): 턴당 claude 프로세스 약 300MB(3건 동시 약 950MB), 동시 3건이어도 턴 지연은 단독과 같았다(51–91초), 질문 1턴은 five_hour 약 0.3–0.5%p. 이 PC 권장값 **3** — 인터뷰 턴(superpowers·서브에이전트)은 더 무겁고 Java 워커 구현 세션도 같은 메모리를 쓴다.
 
 **진짜 천장은 Anthropic quota**. 워커가 N대지만 같은 user 구독을 공유 → 시간당 메시지 cap에 빨리 도달하면 모든 워커가 retry/backoff로 자연 직렬화. Max 5x 이상 권장.
 

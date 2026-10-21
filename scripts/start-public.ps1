@@ -25,6 +25,7 @@
 # then %USERPROFILE%\netis-maker\public.env (KEY=VALUE lines; see install-autostart.ps1).
 #   AUTH_ORIGIN / APP_ORIGIN    public origins
 #   PG_DIR                      zip-installed PostgreSQL root; started if :5432 is not listening
+#   INTERVIEW_CONCURRENCY       interview service: question/interview turns run at once (default 1 = serial)
 # Secrets are read from there too, never stored in this file:
 #   SPRING_DATASOURCE_PASSWORD  DB password (both Spring apps; falls back to application.yml)
 #   WORKER_API_KEY              shared secret for API <-> worker/interview (dev default if unset)

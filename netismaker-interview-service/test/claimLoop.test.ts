@@ -93,3 +93,142 @@ describe('ClaimLoop', () => {
     expect(client.claim.mock.calls.length).toBeGreaterThan(1);
   });
 });
+
+/** 밖에서 끝낼 수 있는 runner.run — 동시에 몇 턴이 돌고 있는지 센다. */
+function controllableRunner() {
+  const pending: Array<() => void> = [];
+  let active = 0;
+  let peak = 0;
+  const runner = {
+    run: vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          active++;
+          peak = Math.max(peak, active);
+          pending.push(() => {
+            active--;
+            resolve();
+          });
+        }),
+    ),
+  };
+  return {
+    runner,
+    finishOne: () => pending.shift()?.(),
+    finishAll: () => {
+      while (pending.length) pending.shift()!();
+    },
+    active: () => active,
+    peak: () => peak,
+  };
+}
+
+const tick = (ms = 10) => new Promise((r) => setTimeout(r, ms));
+
+describe('ClaimLoop concurrency', () => {
+  const claims = [1, 2, 3, 4].map((n) => ({ ...freshClaim, sessionId: 100 + n }));
+
+  it('concurrency 1 (default) keeps turns strictly serial', async () => {
+    const queue = [...claims];
+    const client = {
+      claim: vi.fn().mockImplementation(async () => queue.shift() ?? null),
+      fail: vi.fn(),
+    };
+    const r = controllableRunner();
+    const loop = new ClaimLoop(client as never, r.runner as never, { pollIntervalMs: 1 });
+
+    const p = loop.start();
+    await tick();
+    expect(r.active()).toBe(1);
+    // 앞 턴이 안 끝났으면 다음 claim을 하지 않는다 — 큐에 남은 세션은 다른 워커 몫으로 남는다.
+    expect(client.claim).toHaveBeenCalledTimes(1);
+    r.finishOne();
+    await tick();
+    expect(r.runner.run).toHaveBeenCalledTimes(2);
+    loop.stop();
+    r.finishAll();
+    await p;
+    expect(r.peak()).toBe(1);
+  });
+
+  it('runs up to N turns at once and claims no more until a slot frees', async () => {
+    const queue = [...claims];
+    const client = {
+      claim: vi.fn().mockImplementation(async () => queue.shift() ?? null),
+      fail: vi.fn(),
+    };
+    const r = controllableRunner();
+    const loop = new ClaimLoop(client as never, r.runner as never, { pollIntervalMs: 1, concurrency: 2 });
+
+    const p = loop.start();
+    await tick();
+    expect(r.active()).toBe(2);
+    expect(client.claim).toHaveBeenCalledTimes(2);
+    expect(r.runner.run.mock.calls.map((c) => (c as unknown[])[0])).toEqual([claims[0], claims[1]]);
+
+    r.finishOne();
+    await tick();
+    expect(r.active()).toBe(2);
+    expect(r.runner.run).toHaveBeenCalledTimes(3);
+    expect(r.peak()).toBe(2);
+
+    loop.stop();
+    r.finishAll();
+    await p;
+  });
+
+  it('stop() waits for in-flight turns before start() resolves', async () => {
+    const queue = [...claims];
+    const client = {
+      claim: vi.fn().mockImplementation(async () => queue.shift() ?? null),
+      fail: vi.fn(),
+    };
+    const r = controllableRunner();
+    const loop = new ClaimLoop(client as never, r.runner as never, { pollIntervalMs: 1, concurrency: 3 });
+
+    const p = loop.start();
+    await tick();
+    expect(r.active()).toBe(3);
+    loop.stop();
+    let done = false;
+    void p.then(() => {
+      done = true;
+    });
+    await tick();
+    expect(done).toBe(false);
+    r.finishAll();
+    await p;
+    expect(done).toBe(true);
+    // 멈춘 뒤에는 새로 claim하지 않는다.
+    expect(client.claim).toHaveBeenCalledTimes(3);
+  });
+
+  it('a crashing turn is reported and frees its slot without disturbing the other', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const queue = [claims[0], claims[1], claims[2]];
+    const client = {
+      claim: vi.fn().mockImplementation(async () => queue.shift() ?? null),
+      fail: vi.fn().mockResolvedValue(undefined),
+    };
+    const releases: Array<() => void> = [];
+    const runner = {
+      run: vi.fn().mockImplementation(async (c: { sessionId: number }) => {
+        if (c.sessionId === claims[0]!.sessionId) throw new Error('boom');
+        await new Promise<void>((r) => releases.push(r));
+      }),
+    };
+    const loop = new ClaimLoop(client as never, runner as never, { pollIntervalMs: 1, concurrency: 2 });
+
+    const p = loop.start();
+    await tick();
+    expect(client.fail).toHaveBeenCalledWith(claims[0]!.sessionId, expect.stringContaining('boom'));
+    // 실패한 턴의 자리로 세 번째 세션을 claim했고, 두 번째 세션은 그대로 돌고 있다.
+    expect(runner.run).toHaveBeenCalledTimes(3);
+    expect(releases).toHaveLength(2);
+    expect(client.fail).toHaveBeenCalledTimes(1);
+    loop.stop();
+    releases.forEach((r) => r());
+    await p;
+    vi.restoreAllMocks();
+  });
+});

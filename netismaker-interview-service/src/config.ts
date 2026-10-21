@@ -17,6 +17,8 @@ export interface Config {
   githubPat?: string;
   /** 사내 GitLab clone용(선택). Java 워커와 같은 GITLAB_TOKEN. */
   gitlabToken?: string;
+  /** 동시에 돌릴 턴 수(INTERVIEW_CONCURRENCY, 기본 1 = 직렬). 질문·인터뷰 공용 큐에서 최대 N건을 함께 claim한다. */
+  concurrency: number;
 }
 
 function req(env: Record<string, string | undefined>, key: string): string {
@@ -47,6 +49,19 @@ function posNum(env: Record<string, string | undefined>, key: string, dflt: numb
   return n;
 }
 
+/** 양의 정수 env — 비정수·0·음수는 경고 후 기본값 폴백(posNum과 같은 규칙). */
+function posInt(env: Record<string, string | undefined>, key: string, dflt: number): number {
+  const v = env[key];
+  if (v === undefined || v === '') return dflt;
+  const n = Number(v);
+  if (!Number.isInteger(n) || n <= 0) {
+    // eslint-disable-next-line no-console
+    console.warn(`[config] ${key}=${v} 무시 — 양의 정수가 아님, 기본값 ${dflt} 사용`);
+    return dflt;
+  }
+  return n;
+}
+
 export function loadConfig(env: Record<string, string | undefined> = process.env): Config {
   return {
     apiBaseUrl: req(env, 'API_BASE_URL'),
@@ -62,5 +77,6 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
     turnTimeoutMs: posNum(env, 'INTERVIEW_TURN_TIMEOUT_MS', 1_800_000),
     githubPat: env.GITHUB_PAT || undefined,
     gitlabToken: env.GITLAB_TOKEN || undefined,
+    concurrency: posInt(env, 'INTERVIEW_CONCURRENCY', 1),
   };
 }

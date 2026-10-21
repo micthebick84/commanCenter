@@ -64,4 +64,18 @@ describe('loadConfig', () => {
     expect(warnSpy).toHaveBeenCalled();
     warnSpy.mockRestore();
   });
+
+  it('defaults concurrency=1 (serial) and honors INTERVIEW_CONCURRENCY', () => {
+    expect(loadConfig(base).concurrency).toBe(1);
+    expect(loadConfig({ ...base, INTERVIEW_CONCURRENCY: '3' }).concurrency).toBe(3);
+  });
+
+  it('invalid INTERVIEW_CONCURRENCY falls back to 1 with a warning', () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    for (const bad of ['0', '-2', '1.5', 'two']) {
+      expect(loadConfig({ ...base, INTERVIEW_CONCURRENCY: bad }).concurrency).toBe(1);
+    }
+    expect(warnSpy).toHaveBeenCalledTimes(4);
+    warnSpy.mockRestore();
+  });
 });

@@ -224,7 +224,7 @@ export class InterviewRunner {
     // 없앴다 — 끝나지 않는 인터뷰는 maxTurns와 턴 wall-clock 타임아웃이 막는다.
     const meter = new SessionCostMeter(claim.claudeSessionId ? (claim.totalCostUsd ?? 0) : 0);
     // Wall-clock 절대 백스톱 (task쪽 StaleTaskRecoveryJob hungBackstop 미러): SDK/git이 행업해도
-    // HeartbeatTicker는 계속 돌므로 서버 스윕만으로는 이 워커 슬롯이 풀리지 않는다(ClaimLoop 직렬).
+    // HeartbeatTicker는 계속 돌므로 서버 스윕만으로는 이 워커 슬롯이 풀리지 않는다(ClaimLoop 자리 1개).
     // 턴 전체를 하나의 데드라인으로 묶고, 초과 시 SDK abort + FAILED 보고로 슬롯을 회수한다.
     // ??는 NaN/0을 통과시킨다 — NaN은 setTimeout에서 1ms로 클램프돼 전 턴 즉시 abort가 되므로
     // 여기서도 방어한다 (config posNum과 이중 방어).

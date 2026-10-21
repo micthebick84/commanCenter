@@ -90,6 +90,14 @@ public class WorkerService {
         this.events = events;
     }
 
+    /** 방식별 구현 상한 (스펙 2026-10-15 §5.4). 생성자를 바꾸지 않으려고 setter 주입 — 단위 테스트에서는 기본값. */
+    private ImplementationModePolicy implementationModePolicy = ImplementationModePolicy.defaults();
+
+    @Autowired
+    void setImplementationModePolicy(ImplementationModePolicy policy) {
+        this.implementationModePolicy = policy;
+    }
+
     public WorkerService(TaskRepository taskRepo,
                          TaskAnalysisRepository analysisRepo,
                          TaskDesignRepository designRepo,
@@ -148,6 +156,8 @@ public class WorkerService {
             t.setStatus(TaskStatus.IN_PROGRESS);
         } else if (from == TaskStatus.APPROVED) {
             t.setStatus(TaskStatus.IMPLEMENTING);
+            // 이번 시도의 상한을 기록 — claim 응답과 작업 화면이 같은 값을 쓴다 (스펙 2026-10-15 §5.3)
+            t.setImplementationTimeoutMinutes(implementationModePolicy.timeoutMinutes(t.getImplementationMode()));
         } else if (from == TaskStatus.DESIGN_PENDING) {
             t.setStatus(TaskStatus.DESIGNING);
         } else if (from == TaskStatus.DEPLOY_PENDING) {
@@ -241,6 +251,16 @@ public class WorkerService {
                 .orElseThrow(TaskException::notFound);
 
         TaskStatus current = t.getStatus();
+
+        // 재시도 뒤 이전 시도의 늦은 보고(스펙 2026-10-15 §5.6) — 상태는 그대로 두고 이력·사용량만 남긴다.
+        // 지각 정합화·in-flight 가드보다 먼저 본다(이전 시도가 새 시도의 상태를 덮거나 409로 dead-letter에 쌓이지 않게).
+        if (isEarlierImplementationAttempt(t, req)) {
+            historyRepo.save(TaskStatusHistory.log(t.getId(), current, current, "worker", req.workerId(),
+                    "이전 시도(" + req.implementationAttempt() + "회째)의 늦은 보고 무시: " + req.status().dbValue()
+                            + ignoredWorkDetail(req)));
+            accumulateUsage(t.getId(), TaskStageUsage.STAGE_IMPLEMENTATION, req);
+            return;
+        }
 
         // 지각 보고 정합화: stale 회수로 IMPLEMENTATION_FAILED가 됐지만 워커가 실제로는
         // PR 생성까지 성공한 경우, 늦게 도착한 PR_CREATED 보고를 받아 정합화한다.
@@ -433,6 +453,24 @@ public class WorkerService {
         };
         historyRepo.save(TaskStatusHistory.log(t.getId(), from, t.getStatus(),
                 "worker", req.workerId(), reason));
+    }
+
+    /** 구현 결과인데 시도 번호가 작업의 현재 시도와 다르면 이전 시도의 보고다. 번호가 없으면(구버전 워커) 판단하지 않는다. */
+    private static boolean isEarlierImplementationAttempt(Task t, WorkerResultRequest req) {
+        if (req.implementationAttempt() == null) return false;
+        if (req.status() != TaskStatus.PR_CREATED && req.status() != TaskStatus.IMPLEMENTATION_FAILED) return false;
+        return req.implementationAttempt() != t.getImplementationAttempt();
+    }
+
+    /**
+     * 무시한 이전 시도 보고가 가리키던 PR·브랜치 — 그 작업물이 어디 남아 있는지 이력에서 찾을 수 있게 뒤에 붙인다
+     * (예: ` (PR: https://…/pull/9, 브랜치: netismaker/task-7-x)`). 둘 다 없으면 빈 문자열.
+     */
+    private static String ignoredWorkDetail(WorkerResultRequest req) {
+        List<String> parts = new ArrayList<>();
+        if (req.prUrl() != null && !req.prUrl().isBlank()) parts.add("PR: " + req.prUrl().strip());
+        if (req.headBranch() != null && !req.headBranch().isBlank()) parts.add("브랜치: " + req.headBranch().strip());
+        return parts.isEmpty() ? "" : " (" + String.join(", ", parts) + ")";
     }
 
     /** 구현 성공 보고의 배포 env 템플릿 저장 — null(구버전 워커)이면 기존 값 유지 (스펙 2026-10-07 §5). */

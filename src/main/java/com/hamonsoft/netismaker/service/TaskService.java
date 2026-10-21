@@ -5,6 +5,7 @@ import com.hamonsoft.netismaker.dto.ApproveRequest;
 import com.hamonsoft.netismaker.dto.DeployEnvSuggestionResponse;
 import com.hamonsoft.netismaker.dto.TaskCreateRequest;
 import com.hamonsoft.netismaker.entity.EnvVar;
+import com.hamonsoft.netismaker.entity.ImplementationMode;
 import com.hamonsoft.netismaker.entity.Task;
 import com.hamonsoft.netismaker.entity.TaskAnalysis;
 import com.hamonsoft.netismaker.entity.TaskAttachment;
@@ -49,7 +50,7 @@ import java.util.Optional;
  *                 COMPLETED         → APPROVED/DESIGN_PENDING + approved=true (레거시 자동분석 경로)
  *   retry    ─► FAILED → PENDING + retry_count++  (retry_count < max_retry)
  *
- * 락 정책: 상태를 전이시키는 모든 admin/user 진입점(approve/cancel/softDelete/retry/
+ * 락 정책: 상태를 전이시키는 모든 admin/user 진입점(approve/cancel/softDelete/retry/retryImplementation/
  * approveDesign/rejectDesign/deploy/redeploy/undeploy)은 findActiveByIdForUpdate
  * (FOR UPDATE, SKIP LOCKED 없음)로 task 행을 잠근 뒤 상태를 재판정한다 — 동시 호출(더블클릭,
  * 워커 보고와의 경합)은 앞선 커밋을 기다렸다가 가드에서 409/404로 거절. 읽기 경로는 잠그지 않는다.
@@ -459,6 +460,48 @@ public class TaskService {
         historyRepo.save(TaskStatusHistory.log(t.getId(), from, TaskStatus.PENDING,
                 isAdmin ? "system" : "user", actorId,
                 "재시도 (" + t.getRetryCount() + "/" + t.getMaxRetry() + ")"));
+        return t;
+    }
+
+    /**
+     * 구현실패 → 구현대기 (스펙 2026-10-15 §5.5). 관리자 한정(컨트롤러 @PreAuthorize). 시도 번호를 올려 워커가 베이스부터
+     * 새 브랜치(-rN)로 다시 구현한다 — 이어하기 아님. rawMode가 null·공백이면 지금 방식 유지, 모르는 값이면 400.
+     * 이전 실패 사유는 직전 이력에 남는다. 이전 브랜치는 이전 시도가 push했을 때(head_sha 있음)만 이 이력 사유에 적는다 —
+     * 구현실패 보고의 head_branch는 push 여부와 무관해서, head_sha 없는 브랜치는 원격에 없을 수 있다.
+     */
+    @Transactional
+    public Task retryImplementation(Long taskId, String adminId, String rawMode) {
+        ImplementationMode requested = ImplementationModePolicy.parse(rawMode, null);
+        // 비관적 락(FOR UPDATE) — 연타 재시도의 시도 번호 이중 증가와 claim 경합 방지.
+        Task t = taskRepo.findActiveByIdForUpdate(taskId).orElseThrow(TaskException::notFound);
+        if (t.getStatus() != TaskStatus.IMPLEMENTATION_FAILED) {
+            throw TaskException.conflict("구현실패 상태에서만 구현을 재시도할 수 있습니다 (현재: "
+                    + t.getStatus().dbValue() + ")");
+        }
+        ImplementationMode before = t.getImplementationMode();
+        ImplementationMode after = requested == null ? before : requested;
+        boolean pushed = t.getHeadSha() != null && !t.getHeadSha().isBlank();
+        String previousBranch = pushed ? t.getHeadBranch() : null;
+        TaskStatus from = t.getStatus();
+
+        t.setImplementationAttempt(t.getImplementationAttempt() + 1);
+        t.setImplementationMode(after);
+        t.setStatus(TaskStatus.APPROVED);
+        t.setFailureReason(null);
+        t.setHeadBranch(null);
+        t.setHeadSha(null);
+        t.setPrUrl(null);
+        t.setPrNumber(null);
+        t.setImplementationLog(null);
+        t.setImplementationTimeoutMinutes(null);
+        t.setWorkerId(null);
+        t.setClaimedAt(null);
+        t.setUpdatedAt(OffsetDateTime.now());
+
+        String modeText = before == after ? after.label() : before.label() + " → " + after.label();
+        String reason = "구현 재시도 (" + t.getImplementationAttempt() + "회째, 구현 방식: " + modeText
+                + (previousBranch == null || previousBranch.isBlank() ? "" : ", 이전 브랜치: " + previousBranch) + ")";
+        historyRepo.save(TaskStatusHistory.log(t.getId(), from, TaskStatus.APPROVED, "user", adminId, reason));
         return t;
     }
 

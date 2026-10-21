@@ -105,4 +105,228 @@ class GitOpsServicePushTest {
                 .isInstanceOf(IOException.class)
                 .hasMessageContaining("nothing to commit");
     }
+
+    private static String head(Path dir) throws Exception {
+        return ProcessRunner.requireSuccess(dir.toFile(), List.of("git", "rev-parse", "HEAD"), 30).trim();
+    }
+
+    private static String remoteSha(Path bare, String branch) throws Exception {
+        return ProcessRunner.requireSuccess(bare.toFile(), List.of("git", "rev-parse", "refs/heads/" + branch), 30).trim();
+    }
+
+    @Test
+    void commits_the_agent_already_made_are_pushed_even_when_the_tree_is_clean() throws Exception {
+        Path bare = bareRemote("r4");
+        Path clone = workingClone(bare, "work4", "netismaker/task-4");
+        String base = head(clone);
+        git(clone.toFile(), "add", "-A");
+        git(clone.toFile(), "-c", "user.name=agent", "-c", "user.email=a@a", "commit", "-m", "Task 1");
+        RepoRef ref = new RepoRef("github", "acme/widgets", bare.toUri().toString());
+
+        String sha = new GitOpsService(props())
+                .commitAndPush(clone.toFile(), ref, "netismaker/task-4", "feat: 구현", base);
+
+        assertThat(sha).isEqualTo(head(clone));
+        assertThat(remoteSha(bare, "netismaker/task-4")).isEqualTo(sha);
+    }
+
+    @Test
+    void leftover_changes_after_agent_commits_get_one_more_commit() throws Exception {
+        Path bare = bareRemote("r5");
+        Path clone = workingClone(bare, "work5", "netismaker/task-5");
+        String base = head(clone);
+        git(clone.toFile(), "add", "-A");
+        git(clone.toFile(), "-c", "user.name=agent", "-c", "user.email=a@a", "commit", "-m", "Task 1");
+        Files.writeString(clone.resolve("extra.txt"), "남은 변경");
+        RepoRef ref = new RepoRef("github", "acme/widgets", bare.toUri().toString());
+
+        new GitOpsService(props()).commitAndPush(clone.toFile(), ref, "netismaker/task-5", "feat: 구현", base);
+
+        assertThat(ProcessRunner.requireSuccess(clone.toFile(),
+                List.of("git", "rev-list", "--count", base + "..HEAD"), 30).trim()).isEqualTo("2");
+        assertThat(ProcessRunner.requireSuccess(clone.toFile(), List.of("git", "status", "--porcelain"), 30)).isBlank();
+    }
+
+    @Test
+    void with_a_base_and_nothing_at_all_it_is_still_nothing_to_commit() throws Exception {
+        Path bare = bareRemote("r6");
+        Path clone = tmp.resolve("work6");
+        git(tmp.toFile(), "clone", bare.toUri().toString(), clone.toString());
+        RepoRef ref = new RepoRef("github", "acme/widgets", bare.toUri().toString());
+
+        assertThatThrownBy(() -> new GitOpsService(props())
+                .commitAndPush(clone.toFile(), ref, "netismaker/task-6", "feat: 구현", head(clone)))
+                .isInstanceOf(IOException.class)
+                .hasMessageContaining("nothing to commit");
+    }
+
+    @Test
+    void partial_work_is_committed_as_wip_and_pushed() throws Exception {
+        Path bare = bareRemote("r7");
+        Path clone = workingClone(bare, "work7", "netismaker/task-7");   // impl.txt 미커밋
+        String base = head(clone);
+        RepoRef ref = new RepoRef("github", "acme/widgets", bare.toUri().toString());
+
+        GitOpsService.PartialWork w = new GitOpsService(props()).preservePartialWork(clone.toFile(), ref,
+                "netismaker/task-7", base, "wip: 구현 중단(시간 초과) — task #7");
+
+        assertThat(w.pushed()).isTrue();
+        assertThat(w.commits()).isEqualTo(1);
+        assertThat(w.headSha()).isEqualTo(head(clone));
+        assertThat(remoteSha(bare, "netismaker/task-7")).isEqualTo(w.headSha());
+        assertThat(ProcessRunner.requireSuccess(clone.toFile(), List.of("git", "log", "-1", "--format=%s"), 30).trim())
+                .isEqualTo("wip: 구현 중단(시간 초과) — task #7");
+    }
+
+    @Test
+    void nothing_to_preserve_reports_zero_commits_without_pushing() throws Exception {
+        Path bare = bareRemote("r8");
+        Path clone = tmp.resolve("work8");
+        git(tmp.toFile(), "clone", bare.toUri().toString(), clone.toString());
+        RepoRef ref = new RepoRef("github", "acme/widgets", bare.toUri().toString());
+
+        GitOpsService.PartialWork w = new GitOpsService(props())
+                .preservePartialWork(clone.toFile(), ref, "netismaker/task-8", head(clone), "wip");
+
+        assertThat(w.commits()).isZero();
+        assertThat(w.pushed()).isFalse();
+        assertThat(w.error()).isNull();
+        assertThat(ProcessRunner.run(bare.toFile(), List.of("git", "rev-parse", "--verify", "refs/heads/netismaker/task-8"), 30)
+                .exitCode()).isNotZero();
+    }
+
+    @Test
+    void a_failed_partial_push_keeps_the_commit_and_masks_the_error() throws Exception {
+        Path bare = bareRemote("r9");
+        Path clone = workingClone(bare, "work9", "netismaker/task-9");
+        String base = head(clone);
+        RepoRef ref = RepoRef.fromSnapshot("g/p", "https://gitlab.invalid.example/g/p.git");
+
+        GitOpsService.PartialWork w = new GitOpsService(props())
+                .preservePartialWork(clone.toFile(), ref, "netismaker/task-9", base, "wip");
+
+        assertThat(w.commits()).isEqualTo(1);
+        assertThat(w.pushed()).isFalse();
+        assertThat(w.error()).isNotBlank().doesNotContain("glpat-SECRETTOKEN");
+    }
+
+    @Test
+    void partial_work_that_is_only_agent_commits_is_pushed_without_a_new_wip_commit() throws Exception {
+        Path bare = bareRemote("r10");
+        Path clone = workingClone(bare, "work10", "netismaker/task-10");
+        String base = head(clone);
+        git(clone.toFile(), "add", "-A");
+        git(clone.toFile(), "-c", "user.name=agent", "-c", "user.email=a@a", "commit", "-m", "Task 1");
+        String agentHead = head(clone);   // 작업 트리는 깨끗하다
+        RepoRef ref = new RepoRef("github", "acme/widgets", bare.toUri().toString());
+
+        GitOpsService.PartialWork w = new GitOpsService(props()).preservePartialWork(clone.toFile(), ref,
+                "netismaker/task-10", base, "wip: 구현 중단(비정상 종료) — task #10");
+
+        assertThat(w.pushed()).isTrue();
+        assertThat(w.commits()).isEqualTo(1);             // 에이전트 커밋 수 그대로
+        assertThat(w.headSha()).isEqualTo(agentHead);     // WIP 커밋을 새로 만들지 않았다
+        assertThat(w.error()).isNull();
+        assertThat(remoteSha(bare, "netismaker/task-10")).isEqualTo(agentHead);
+    }
+
+    @Test
+    void partial_work_with_agent_commits_and_leftover_changes_gets_one_wip_commit_on_top() throws Exception {
+        Path bare = bareRemote("r11");
+        Path clone = workingClone(bare, "work11", "netismaker/task-11");
+        String base = head(clone);
+        git(clone.toFile(), "add", "-A");
+        git(clone.toFile(), "-c", "user.name=agent", "-c", "user.email=a@a", "commit", "-m", "Task 1");
+        Files.writeString(clone.resolve("extra.txt"), "남은 변경");
+        RepoRef ref = new RepoRef("github", "acme/widgets", bare.toUri().toString());
+
+        GitOpsService.PartialWork w = new GitOpsService(props()).preservePartialWork(clone.toFile(), ref,
+                "netismaker/task-11", base, "wip: 구현 중단(시간 초과) — task #11");
+
+        assertThat(w.pushed()).isTrue();
+        assertThat(w.commits()).isEqualTo(2);             // 에이전트 커밋 1개 + WIP 커밋 1개
+        assertThat(w.headSha()).isEqualTo(head(clone));
+        assertThat(w.error()).isNull();
+        assertThat(remoteSha(bare, "netismaker/task-11")).isEqualTo(w.headSha());
+        assertThat(ProcessRunner.requireSuccess(clone.toFile(), List.of("git", "log", "-1", "--format=%s"), 30).trim())
+                .isEqualTo("wip: 구현 중단(시간 초과) — task #11");
+        assertThat(ProcessRunner.requireSuccess(clone.toFile(), List.of("git", "status", "--porcelain"), 30)).isBlank();
+    }
+
+    /** 죽은 claude가 남긴 index.lock — 이후 `git add`가 "Unable to create index.lock"으로 실패한다(WIP 커밋 실패 재현). */
+    private static void staleIndexLock(Path clone) throws IOException {
+        Files.writeString(clone.resolve(".git/index.lock"), "");
+    }
+
+    /** 최종 리뷰: WIP 커밋이 실패했다고 몇 시간치 SDD 태스크 커밋까지 원격에 못 올리면 안 된다. */
+    @Test
+    void a_failed_wip_commit_still_pushes_the_agent_commits_and_reports_what_stayed_behind() throws Exception {
+        Path bare = bareRemote("r12");
+        Path clone = workingClone(bare, "work12", "netismaker/task-12");
+        String base = head(clone);
+        git(clone.toFile(), "add", "-A");
+        git(clone.toFile(), "-c", "user.name=agent", "-c", "user.email=a@a", "commit", "-m", "Task 1");
+        String agentHead = head(clone);
+        Files.writeString(clone.resolve("extra.txt"), "커밋되지 못할 변경");
+        staleIndexLock(clone);
+        RepoRef ref = new RepoRef("github", "acme/widgets", bare.toUri().toString());
+
+        GitOpsService.PartialWork w = new GitOpsService(props()).preservePartialWork(clone.toFile(), ref,
+                "netismaker/task-12", base, "wip: 구현 중단(시간 초과) — task #12");
+
+        assertThat(w.pushed()).isTrue();                  // push는 성공 — 에이전트 커밋은 원격에 있다
+        assertThat(w.commits()).isEqualTo(1);
+        assertThat(w.headSha()).isEqualTo(agentHead);     // WIP 커밋은 못 만들었으니 에이전트 마지막 커밋
+        assertThat(w.error()).isNull();
+        assertThat(w.wipError()).isNotBlank().contains("index.lock");   // 커밋 안 된 변경이 PC에만 남은 이유
+        assertThat(remoteSha(bare, "netismaker/task-12")).isEqualTo(agentHead);
+        assertThat(clone.resolve("extra.txt")).exists();
+    }
+
+    @Test
+    void a_failed_wip_commit_without_agent_commits_reports_nothing_was_preserved() throws Exception {
+        Path bare = bareRemote("r13");
+        Path clone = workingClone(bare, "work13", "netismaker/task-13");   // impl.txt 미커밋
+        String base = head(clone);
+        staleIndexLock(clone);
+        RepoRef ref = new RepoRef("github", "acme/widgets", bare.toUri().toString());
+
+        GitOpsService.PartialWork w = new GitOpsService(props()).preservePartialWork(clone.toFile(), ref,
+                "netismaker/task-13", base, "wip: 구현 중단(시간 초과) — task #13");
+
+        assertThat(w.commits()).isZero();
+        assertThat(w.pushed()).isFalse();
+        assertThat(w.headSha()).isNull();
+        assertThat(w.error()).isNotBlank().contains("index.lock");   // 예전과 같다 — 보존 실패 사유
+        assertThat(ProcessRunner.run(bare.toFile(),
+                List.of("git", "rev-parse", "--verify", "refs/heads/netismaker/task-13"), 30).exitCode()).isNotZero();
+    }
+
+    @Test
+    void when_the_wip_commit_and_the_push_both_fail_both_errors_are_kept_and_masked() throws Exception {
+        Path bare = bareRemote("r14");
+        Path clone = workingClone(bare, "work14", "netismaker/task-14");
+        String base = head(clone);
+        git(clone.toFile(), "add", "-A");
+        git(clone.toFile(), "-c", "user.name=agent", "-c", "user.email=a@a", "commit", "-m", "Task 1");
+        Files.writeString(clone.resolve("extra.txt"), "커밋되지 못할 변경");
+        staleIndexLock(clone);
+        RepoRef ref = RepoRef.fromSnapshot("g/p", "https://gitlab.invalid.example/g/p.git");
+
+        GitOpsService.PartialWork w = new GitOpsService(props()).preservePartialWork(clone.toFile(), ref,
+                "netismaker/task-14", base, "wip");
+
+        assertThat(w.commits()).isEqualTo(1);
+        assertThat(w.pushed()).isFalse();                 // push 실패 — pushed()는 push가 성공했을 때만
+        assertThat(w.error()).isNotBlank().doesNotContain("glpat-SECRETTOKEN");
+        assertThat(w.wipError()).isNotBlank().contains("index.lock").doesNotContain("glpat-SECRETTOKEN");
+    }
+
+    @Test
+    void the_three_argument_result_has_no_wip_failure() {
+        GitOpsService.PartialWork w = new GitOpsService.PartialWork(2, "abc", null);
+
+        assertThat(w.wipError()).isNull();
+        assertThat(w.pushed()).isTrue();
+    }
 }

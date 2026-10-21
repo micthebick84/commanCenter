@@ -42,4 +42,8 @@ export const baseTask = {
   stageUsage: [],
   totalCostUsd: 0.42,
   totalTokens: 123000,
+  implementationMode: 'REVIEW',
+  implementationAttempt: 1,
+  claimedAt: null,
+  implementationTimeoutMinutes: null,
 }

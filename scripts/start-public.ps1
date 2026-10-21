@@ -283,6 +283,17 @@ if ($WithWorkers) {
     if (-not (Test-Path $claudeCli)) { Write-Host "[warn] claude CLI not found at $claudeCli (set CLAUDE_CLI)" }
     $claudeCli = $claudeCli -replace '\\', '/'
 
+    # superpowers plugin - interview service (brainstorming/writing-plans) and worker SDD implementation share it
+    $sp = $env:SUPERPOWERS_PLUGIN_PATH
+    if (-not $sp) {
+        $spRoot = Join-Path $env:USERPROFILE '.claude\plugins\cache\claude-plugins-official\superpowers'
+        $spDir = Get-ChildItem $spRoot -Directory -ErrorAction SilentlyContinue |
+            Where-Object { Test-Path (Join-Path $_.FullName 'skills\brainstorming') } |
+            Sort-Object { try { [version]$_.Name } catch { [version]'0.0' } } -Descending | Select-Object -First 1
+        if ($spDir) { $sp = $spDir.FullName }
+    }
+    if ($sp) { $sp = $sp -replace '\\', '/' }
+
     if (Test-PidAlive 'worker') {
         Write-Host "[skip] worker: already running"
     } else {
@@ -294,6 +305,8 @@ if ($WithWorkers) {
             WORKER_ID      = $(if ($env:WORKER_ID) { $env:WORKER_ID } else { 'win-worker-1' })
             CLAUDE_CLI     = $claudeCli
         }
+        if ($sp) { $workerEnv['SUPERPOWERS_PLUGIN_PATH'] = $sp }
+        else { Write-Host "[warn] superpowers plugin not found - SDD implementation requests fall back to REVIEW (set SUPERPOWERS_PLUGIN_PATH)" }
         Start-Service-Proc 'worker' $Root "`"$(Join-Path $Root 'gradlew.bat')`" bootRun -q --args=--spring.profiles.active=worker" $workerEnv | Out-Null
         if (Wait-Log 'worker' $SpringOk $SpringFail 240) { Write-Host "[ok]   worker ready" }
         else { Write-Host "[FAIL] worker - see .run\worker.log"; $failed += 'worker' }
@@ -302,14 +315,6 @@ if ($WithWorkers) {
     if (Test-PidAlive 'interview') {
         Write-Host "[skip] interview: already running"
     } else {
-        $sp = $env:SUPERPOWERS_PLUGIN_PATH
-        if (-not $sp) {
-            $spRoot = Join-Path $env:USERPROFILE '.claude\plugins\cache\claude-plugins-official\superpowers'
-            $spDir = Get-ChildItem $spRoot -Directory -ErrorAction SilentlyContinue |
-                Where-Object { Test-Path (Join-Path $_.FullName 'skills\brainstorming') } |
-                Sort-Object Name -Descending | Select-Object -First 1
-            if ($spDir) { $sp = $spDir.FullName }
-        }
         if (-not $sp) {
             Write-Host "[FAIL] interview - superpowers plugin not found (set SUPERPOWERS_PLUGIN_PATH)"; $failed += 'interview'
         } else {
@@ -322,7 +327,7 @@ if ($WithWorkers) {
                 WORKER_API_KEY          = $workerKey
                 WORKER_ID               = 'interview-worker-1'
                 CLAUDE_CLI              = $claudeCli
-                SUPERPOWERS_PLUGIN_PATH = ($sp -replace '\\', '/')
+                SUPERPOWERS_PLUGIN_PATH = $sp
             } | Out-Null
             if (Wait-Log 'interview' '\[interview-service\].*polling' 'Missing required env|Error:' 60) { Write-Host "[ok]   interview ready" }
             else { Write-Host "[FAIL] interview - see .run\interview.log"; $failed += 'interview' }

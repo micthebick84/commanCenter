@@ -9,6 +9,8 @@ import {
   nextAction,
 } from '~/composables/taskStages'
 import { mrRef } from '~/composables/mergeRequestLabel'
+import { elapsedLabel } from '~/composables/implementationMode'
+import { useNowTick } from '~/composables/useNowTick'
 
 export interface CardTask {
   id: number
@@ -24,6 +26,8 @@ export interface CardTask {
   designRequested?: boolean
   implementation?: { prUrl: string | null; prNumber: number | null } | null
   deployment?: { deployUrl: string | null } | null
+  claimedAt?: string | null
+  implementationTimeoutMinutes?: number | null
 }
 
 const props = defineProps<{ task: CardTask; isAdmin: boolean }>()
@@ -39,6 +43,9 @@ const next = computed(() =>
     ? nextAction(props.task, props.isAdmin)
     : null,
 )
+// 구현중 경과 시간 (스펙 2026-10-15 §7) — 마운트 뒤 30초마다
+const nowTick = useNowTick()
+const elapsed = computed(() => elapsedLabel(props.task, nowTick.value))
 const deployHost = computed(() => {
   const url = props.task.deployment?.deployUrl
   if (!url) return null
@@ -115,6 +122,16 @@ function segStyle(state: string, color: string) {
           >
         </div>
       </div>
+    </div>
+
+    <div
+      v-if="elapsed"
+      class="card-elapsed"
+      :class="{ 'card-elapsed--warn': elapsed.warn }"
+      data-test="card-elapsed"
+    >
+      <q-icon name="schedule" size="14px" />
+      <span>{{ elapsed.text }}</span>
     </div>
 
     <div class="card-meta">
@@ -270,5 +287,16 @@ function segStyle(state: string, color: string) {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+.card-elapsed {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  color: #757575;
+}
+.card-elapsed--warn {
+  color: #ef6c00;
+  font-weight: 600;
 }
 </style>

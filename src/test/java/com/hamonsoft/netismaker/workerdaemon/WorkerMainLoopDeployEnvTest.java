@@ -108,14 +108,14 @@ class WorkerMainLoopDeployEnvTest {
 
         when(http.nextTask()).thenReturn(Optional.of(queuedImplementation()));
         when(repos.ensureFresh(any(), eq("main"))).thenReturn(new GitRepoCache.CheckedOutRepo(dir, "base123"));
-        when(worktrees.create(any(), eq("acme/widgets"), eq("main"), eq(7L), eq("Add login")))
+        when(worktrees.create(any(), eq("acme/widgets"), eq("main"), eq(7L), eq("Add login"), eq(1)))
                 .thenReturn(new WorktreeService.CreatedWorktree(dir, "netismaker/task-7-add-login"));
-        when(claude.exec(anyString(), any(), any(), anyList(), anyBoolean(), any(), any()))
+        when(claude.exec(anyString(), any(), any(), anyList(), anyBoolean(), any(), any(), any()))
                 .thenAnswer(inv -> {
                     if (manifestJson != null) Files.writeString(manifest, manifestJson);
                     return new ClaudeExecAdapter.ExecResult(claudeExit, "done", 10, null);
                 });
-        when(gitOps.commitAndPush(any(), any(), anyString(), anyString())).thenAnswer(inv -> {
+        when(gitOps.commitAndPush(any(), any(), anyString(), anyString(), any())).thenAnswer(inv -> {
             presentAtCommit.set(Files.exists(manifest));   // 남아 있으면 git add -A로 PR에 섞인다
             return "head456";
         });
@@ -124,7 +124,8 @@ class WorkerMainLoopDeployEnvTest {
 
         WorkerMainLoop loop = new WorkerMainLoop(props(), http, repos, claude, mock(PromptResultParser.class),
                 mock(WorkerMcpSupport.class), worktrees, gitOps, mock(DeployService.class), reporter,
-                mock(SilentLossTracker.class), mock(DesignResultHarvester.class), mock(TaskCloser.class));
+                mock(SilentLossTracker.class), mock(DesignResultHarvester.class), mock(TaskCloser.class),
+                new SuperpowersPlugin(""));
         loop.pollAndProcess();
         return new Run(reporter, gitOps, presentAtCommit);
     }
@@ -161,6 +162,6 @@ class WorkerMainLoopDeployEnvTest {
         WorkerResultRequest req = reported(r.reporter());
         assertThat(req.status()).isEqualTo(TaskStatus.IMPLEMENTATION_FAILED);
         assertThat(req.envTemplate()).isNull();
-        verify(r.gitOps(), never()).commitAndPush(any(), any(), anyString(), anyString());
+        verify(r.gitOps(), never()).commitAndPush(any(), any(), anyString(), anyString(), any());
     }
 }

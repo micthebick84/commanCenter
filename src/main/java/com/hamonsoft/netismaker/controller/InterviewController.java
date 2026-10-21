@@ -3,8 +3,10 @@ package com.hamonsoft.netismaker.controller;
 import com.hamonsoft.netismaker.dto.AnswerRequest;
 import com.hamonsoft.netismaker.dto.InterviewResponse;
 import com.hamonsoft.netismaker.dto.RegisterResponse;
+import com.hamonsoft.netismaker.entity.ImplementationMode;
 import com.hamonsoft.netismaker.entity.InterviewKind;
 import com.hamonsoft.netismaker.entity.InterviewStatus;
+import com.hamonsoft.netismaker.service.ImplementationModePolicy;
 import com.hamonsoft.netismaker.service.InterviewService;
 import com.hamonsoft.netismaker.service.InterviewStreamService;
 import jakarta.validation.Valid;
@@ -69,15 +71,21 @@ public class InterviewController {
                                     JwtAuthenticationToken auth) {
         interviewService.requireKind(id, InterviewKind.INTERVIEW); // 질문 세션은 이 API로 조작 불가 (404)
         String adminId = AuthContext.requireUserId(auth);
+        // 잘못된 방식은 상태를 건드리기 전에 400
+        ImplementationMode mode = ImplementationModePolicy.parse(
+                body == null ? null : body.implementationMode(), ImplementationMode.DIRECT);
         Long taskId = interviewService.confirm(id, adminId,
-                body != null && Boolean.TRUE.equals(body.designRequested()));
+                body != null && Boolean.TRUE.equals(body.designRequested()), mode);
         interviewStream.pushStatus(id, InterviewStatus.REGISTERED);
         interviewStream.finish(id); // terminal → done 이벤트
         return new RegisterResponse(taskId);
     }
 
-    /** confirm 요청 바디 — designRequested 미지정 시 false 취급. */
-    public record InterviewConfirmRequest(Boolean designRequested) {}
+    /**
+     * confirm 요청 바디 — designRequested 미지정 시 false, implementationMode 미지정 시 DIRECT
+     * (옛 화면·다른 호출자는 지금과 같음, 스펙 2026-10-15 §5.1).
+     */
+    public record InterviewConfirmRequest(Boolean designRequested, String implementationMode) {}
 
     @PostMapping("/{id}/cancel")
     @PreAuthorize("hasAuthority('ROLE_ADMIN')")

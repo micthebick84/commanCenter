@@ -27,7 +27,10 @@ async function main(): Promise<void> {
     turnTimeoutMs: cfg.turnTimeoutMs,
     gitTokens: { githubPat: cfg.githubPat, gitlabToken: cfg.gitlabToken },
   });
-  const loop = new ClaimLoop(client, runner, { pollIntervalMs: cfg.claimPollIntervalMs });
+  const loop = new ClaimLoop(client, runner, {
+    pollIntervalMs: cfg.claimPollIntervalMs,
+    concurrency: cfg.concurrency,
+  });
 
   const shutdown = (): void => loop.stop();
   process.on('SIGINT', shutdown);
@@ -35,7 +38,7 @@ async function main(): Promise<void> {
 
   // eslint-disable-next-line no-console
   console.log(
-    `[interview-service] worker=${cfg.workerId} cli=${claudeCliPath} mcps=[${Object.keys(mcpsBase).join(', ')}] polling ${cfg.apiBaseUrl} git=[${cfg.githubPat ? 'github' : ''}${cfg.gitlabToken ? ' gitlab' : ''}]`,
+    `[interview-service] worker=${cfg.workerId} concurrency=${cfg.concurrency} cli=${claudeCliPath} mcps=[${Object.keys(mcpsBase).join(', ')}] polling ${cfg.apiBaseUrl} git=[${cfg.githubPat ? 'github' : ''}${cfg.gitlabToken ? ' gitlab' : ''}]`,
   );
   await loop.start();
 }

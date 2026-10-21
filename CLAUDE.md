@@ -81,7 +81,7 @@ WORKER_ID=mac-worker-2 ./gradlew bootRun --args='--spring.profiles.active=worker
 - **WorktreeService.create**: 같은 락 안에서 worktree add → `.git/worktrees/` 메타 race 방지
 - **heartbeat**: worker_id별로 별도 row, admin/workers UI에 둘 다 표시
 
-**인터뷰 서비스 동시 처리(2026-10-21)**: 질문·인터뷰 턴은 한 프로세스가 `INTERVIEW_CONCURRENCY`(기본 1 = 직렬)건까지 함께 돈다(`ClaimLoop` — 자리가 차 있으면 claim하지 않아 남은 세션은 QUEUED로 남고, stop은 진행 중 턴을 기다린다). 세션마다 체크아웃(`session-{id}`)·SDK 옵션·heartbeat·DB MCP가 따로라 턴끼리 공유 상태가 없다. Windows 스택은 `public.env`에 `INTERVIEW_CONCURRENCY=N`을 넣고 인터뷰 서비스만 재기동(기동 로그 `concurrency=N`). 실측(i5-1135G7·16GB, 여유 약 5GB, opus-5-5/high 질문 턴): 턴당 claude 프로세스 약 300MB(3건 동시 약 950MB), 동시 3건이어도 턴 지연은 단독과 같았다(51–91초), 질문 1턴은 five_hour 약 0.3–0.5%p. 이 PC 권장값 **3** — 인터뷰 턴(superpowers·서브에이전트)은 더 무겁고 Java 워커 구현 세션도 같은 메모리를 쓴다.
+**인터뷰 서비스 동시 처리(2026-10-21)**: 질문·인터뷰 턴은 한 프로세스가 `INTERVIEW_CONCURRENCY`(기본 1 = 직렬)건까지 함께 돈다(`ClaimLoop` — 자리가 차 있으면 claim하지 않아 남은 세션은 QUEUED로 남고, stop은 진행 중 턴을 기다린다). 세션마다 체크아웃(`session-{id}`)·SDK 옵션·heartbeat·DB MCP가 따로라 턴끼리 공유 상태가 없다. Windows 스택은 `public.env`에 `INTERVIEW_CONCURRENCY=N`을 넣고 인터뷰 서비스만 재기동(기동 로그 `concurrency=N`). 실측(i5-1135G7·16GB, 여유 약 5GB, opus-5-5/high 질문 턴): 동시 1–5건 모두 턴 지연이 단독과 같았고(40–91초, 5건 전체 84초), 여유 메모리 감소는 5건에서 약 1GB(턴당 약 200–300MB), 질문 1턴은 five_hour 약 0.3–0.5%p. 이 PC 권장값 **4** — 질문만이면 5도 무리 없지만 인터뷰 턴(superpowers·서브에이전트)은 더 무겁고 Java 워커 구현 세션도 같은 메모리를 쓴다.
 
 **진짜 천장은 Anthropic quota**. 워커가 N대지만 같은 user 구독을 공유 → 시간당 메시지 cap에 빨리 도달하면 모든 워커가 retry/backoff로 자연 직렬화. Max 5x 이상 권장.
 

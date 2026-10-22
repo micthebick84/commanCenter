@@ -128,6 +128,10 @@ app:
     stale-check-interval-ms: 60000  # InterviewStaleRecoveryJob 주기
     # 인터뷰·질문 체크아웃 루트. 경로 계산(InterviewWorkPaths)과 체크아웃 정리 잡이 같은 값을 쓴다 (스펙 2026-10-22 §3.3)
     work-root: ${user.home}/netis-maker/interviews
+    checkout-cleanup:                     # InterviewCheckoutCleanupJob — 끝난 세션의 체크아웃(대상 session-{id} + 참조 _refs/{id})만 지운다. DB 행·첨부·플랜은 남긴다 (스펙 2026-10-22 §6)
+      enabled: true
+      cron: "0 50 3 * * *"                # 매일 03:50 (서버 로컬 시각). 02:30 worktree · 03:00 레포 캐시 · 03:30 첨부 · 03:40 DB MCP 토큰 정리와 겹치지 않게
+      retention-days: 7                   # 마지막 활동(last_activity_at) 후 경과 시 삭제. 진행 중 세션은 나이 무관 보존. 1 미만이면 기동 실패
   question:
     max-active-per-user: 3          # 사용자당 활성(QUEUED/RUNNING/AWAITING_INPUT) 질문 세션 상한 → 초과 시 429
     max-qa-turns: 10                # 세션당 assistant 답변 상한 → ask 시 초과면 400. 불변식: < 러너 INTERVIEW_MAX_TURNS(20)

@@ -1,11 +1,15 @@
 package com.hamonsoft.netismaker.service;
 
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.NullAndEmptySource;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
 
 import java.nio.file.Path;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /** 인터뷰·질문 체크아웃 경로 규칙 — 대상 work_dir는 기존 형식 그대로, 참조는 짧은 별도 경로 (스펙 2026-10-22 §3.3). */
 class InterviewWorkPathsTest {
@@ -34,6 +38,23 @@ class InterviewWorkPathsTest {
         assertThat(new InterviewWorkPaths("/r").root()).isEqualTo(Path.of("/r"));
     }
 
+    // 정리 잡의 스캔이 이 이름들로 폴더를 찾는다 — 경로를 만드는 쪽과 한 곳에서 읽는다
+    @Test
+    void scan_names_are_the_ones_the_paths_are_built_from() {
+        InterviewWorkPaths p = new InterviewWorkPaths("/r");
+        assertThat(p.workDirFor("owner/repo", null, 7)).endsWith("/" + InterviewWorkPaths.SESSION_DIR_PREFIX + "7");
+        assertThat(p.refDir(7, 2)).isEqualTo("/r/" + InterviewWorkPaths.REFS_DIR + "/7/2");
+    }
+
+    // ── 빈 루트는 기동 때 거부한다 — 그대로 두면 "/session-1"처럼 파일시스템 루트 아래 경로가 만들어진다 ──
+
+    @ParameterizedTest
+    @NullAndEmptySource
+    @ValueSource(strings = {" ", "\t", "  \n "})
+    void blank_root_is_rejected(String root) {
+        assertThatThrownBy(() -> new InterviewWorkPaths(root)).isInstanceOf(IllegalArgumentException.class);
+    }
+
     // ── 설정 연결: app.interview.work-root 하나가 대상·참조·정리 잡의 기준 루트다 ──
 
     private static ApplicationContextRunner runner() {
@@ -50,6 +71,15 @@ class InterviewWorkPathsTest {
             InterviewWorkPaths p = ctx.getBean(InterviewWorkPaths.class);
             assertThat(p.workDirFor("owner/repo", null, 1)).isEqualTo(legacyRoot + "/owner/repo/session-1");
             assertThat(p.root()).isEqualTo(Path.of(legacyRoot));
+        });
+    }
+
+    @Test
+    void blank_work_root_property_fails_the_context() {
+        // app.interview.work-root= (빈 값)은 @Value 기본값으로 대체되지 않는다 → 생성자가 거부해 기동이 실패한다
+        runner().withPropertyValues("app.interview.work-root=").run(ctx -> {
+            assertThat(ctx).hasFailed();
+            assertThat(ctx).getFailure().rootCause().isInstanceOf(IllegalArgumentException.class);
         });
     }
 

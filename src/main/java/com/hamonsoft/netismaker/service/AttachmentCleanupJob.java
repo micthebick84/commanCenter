@@ -35,7 +35,7 @@ import java.util.stream.Collectors;
  *  - DB 첨부 행(task_attachment/question_attachment)은 감사용으로 남긴다 — 파일만 지운다.
  *    질문 다운로드는 파일이 없으면 410(QuestionController), 삭제된 작업은 다운로드 전에 404.
  *  - 디렉터리 단위 실패는 로그만 남기고 다음 디렉터리로 진행 — 남은 것은 다음 주기에 재시도된다.
- *  - 인터뷰 work_dir(~/netis-maker/interviews)는 범위 밖 — 별도 정책.
+ *  - 인터뷰 work_dir(~/netis-maker/interviews)는 범위 밖 — InterviewCheckoutCleanupJob이 따로 정리한다.
  */
 @Component
 @Profile("api")

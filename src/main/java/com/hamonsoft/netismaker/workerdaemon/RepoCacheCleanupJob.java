@@ -1,6 +1,6 @@
 package com.hamonsoft.netismaker.workerdaemon;
 
-import com.hamonsoft.netismaker.util.FileDeletion;
+import com.hamonsoft.netismaker.util.FileTrees;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.annotation.Profile;
 import org.springframework.scheduling.annotation.SchedulingConfigurer;
@@ -12,14 +12,12 @@ import java.nio.channels.FileChannel;
 import java.nio.channels.FileLock;
 import java.nio.channels.OverlappingFileLockException;
 import java.nio.file.DirectoryStream;
-import java.nio.file.FileVisitResult;
 import java.nio.file.Files;
 import java.nio.file.InvalidPathException;
 import java.nio.file.LinkOption;
 import java.nio.file.NoSuchFileException;
 import java.nio.file.Path;
 import java.nio.file.Paths;
-import java.nio.file.SimpleFileVisitor;
 import java.nio.file.StandardCopyOption;
 import java.nio.file.StandardOpenOption;
 import java.nio.file.attribute.BasicFileAttributes;
@@ -67,6 +65,7 @@ import java.util.Optional;
  *
  *  삭제는 repos-dir 하위로 엄격히 한정(정규화 + containment 확인)하고 심볼릭 링크·Windows 정션은 따라가지
  *   않는다(링크 자체만 지운다). Windows의 읽기 전용 파일(git pack/idx)은 속성을 풀고 지운다.
+ *   트리 삭제 구현은 util.FileTrees(API의 체크아웃 정리 잡과 공용)에 있고 deleteTree는 그쪽에 위임한다.
  *
  *  스케줄은 @Scheduled 플레이스홀더가 아니라 정규화된 설정값(cfg.cron())으로 등록한다(configureTasks).
  *
@@ -459,67 +458,12 @@ public class RepoCacheCleanupJob implements SchedulingConfigurer {
     record DeleteResult(long freedBytes, int failures) {}
 
     /**
-     * root 이하를 지운다. 링크를 따라가지 않는다 — FOLLOW_LINKS 없이 걸으면 심볼릭 링크는 visitFile로 와서
-     * 링크 자체만 지워지고, Windows 정션(리파스 포인트)은 isOther라 안으로 들어가지 않고 링크만 지운다.
-     * 실패 항목이 있어도 나머지는 계속 지워 최대한 비운다.
+     * root 이하를 지운다. 구현은 공용 {@link FileTrees#deleteTree}에 있다(링크·정션을 따라가지 않고, 실패 항목이
+     * 있어도 나머지는 계속 지운다). 호출부 5곳이 쓰는 {@link DeleteResult}로 바꿔 돌려준다.
      */
     static DeleteResult deleteTree(Path root) {
-        long[] freed = {0};
-        int[] failures = {0};
-        try {
-            Files.walkFileTree(root, new SimpleFileVisitor<>() {
-                @Override
-                public FileVisitResult preVisitDirectory(Path dir, BasicFileAttributes attrs) {
-                    // root 자신이 정션이어도 마찬가지 — 대상 쪽으로 내려가지 않는다
-                    if (attrs.isOther()) {
-                        if (!deleteEntry(dir)) failures[0]++;
-                        return FileVisitResult.SKIP_SUBTREE;
-                    }
-                    return FileVisitResult.CONTINUE;
-                }
-
-                @Override
-                public FileVisitResult visitFile(Path file, BasicFileAttributes attrs) {
-                    if (deleteEntry(file)) {
-                        if (attrs.isRegularFile()) freed[0] += attrs.size();
-                    } else {
-                        failures[0]++;
-                    }
-                    return FileVisitResult.CONTINUE;
-                }
-
-                @Override
-                public FileVisitResult visitFileFailed(Path file, IOException exc) {
-                    if (!(exc instanceof NoSuchFileException)) {
-                        log.debug("삭제 대상 읽기 실패: {} ({})", file, exc.toString());
-                        failures[0]++;
-                    }
-                    return FileVisitResult.CONTINUE;
-                }
-
-                @Override
-                public FileVisitResult postVisitDirectory(Path dir, IOException exc) {
-                    if (!deleteEntry(dir)) failures[0]++;
-                    return FileVisitResult.CONTINUE;
-                }
-            });
-        } catch (IOException e) {
-            failures[0]++;
-        }
-        return new DeleteResult(freed[0], failures[0]);
-    }
-
-    /** 항목 1개 삭제. 이미 없으면 성공으로 본다. Windows: git pack/idx는 읽기 전용 속성이라 FileDeletion이 풀고 지운다. */
-    private static boolean deleteEntry(Path p) {
-        try {
-            FileDeletion.deleteClearingReadOnly(p);
-            return true;
-        } catch (NoSuchFileException e) {
-            return true;
-        } catch (IOException e) {
-            log.debug("삭제 실패: {} ({})", p, e.toString());
-            return false;
-        }
+        FileTrees.DeleteResult r = FileTrees.deleteTree(root);
+        return new DeleteResult(r.freedBytes(), r.failures());
     }
 
     private static List<Path> list(Path dir) throws IOException {

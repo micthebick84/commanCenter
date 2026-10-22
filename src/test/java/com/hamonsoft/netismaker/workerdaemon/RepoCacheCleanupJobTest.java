@@ -736,6 +736,19 @@ class RepoCacheCleanupJobTest {
         }
     }
 
+    /** 트리 삭제 구현은 util.FileTrees로 옮겼다 — deleteTree는 위임하고 호출부 5곳이 쓰는 DeleteResult로 바꿔 돌려준다. */
+    @Test
+    void delete_tree_delegates_to_the_shared_implementation() throws Exception {
+        Path scratch = Files.createDirectories(tmp.resolve("scratch/sub"));
+        Files.writeString(scratch.resolve("a.txt"), "0123456789");
+        Files.writeString(scratch.getParent().resolve("b.txt"), "01234");
+
+        RepoCacheCleanupJob.DeleteResult r = RepoCacheCleanupJob.deleteTree(scratch.getParent());
+
+        assertThat(r).isEqualTo(new RepoCacheCleanupJob.DeleteResult(15, 0));
+        assertThat(scratch.getParent()).doesNotExist();
+    }
+
     @Test
     void human_readable_sizes() {
         assertThat(RepoCacheCleanupJob.humanBytes(512)).isEqualTo("512 B");

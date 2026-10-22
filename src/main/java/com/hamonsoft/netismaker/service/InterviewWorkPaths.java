@@ -23,9 +23,23 @@ import java.nio.file.Path;
 @Profile("api")
 public class InterviewWorkPaths {
 
+    /** 대상 체크아웃 폴더 이름 접두어(session-{id}). 경로 계산과 체크아웃 정리 잡의 스캔이 같은 값을 쓴다. */
+    static final String SESSION_DIR_PREFIX = "session-";
+
+    /** 참조 루트 폴더 이름({루트}/_refs). 경로 계산과 체크아웃 정리 잡의 스캔이 같은 값을 쓴다. */
+    static final String REFS_DIR = "_refs";
+
     private final String root;
 
+    /**
+     * @throws IllegalArgumentException 루트가 null이거나 비었을 때 — 빈 값은 @Value 기본값으로 대체되지 않으므로
+     *         (app.interview.work-root= 처럼 설정을 비운 경우) 그대로 두면 "/session-1"처럼 파일시스템 루트 아래
+     *         경로가 만들어지고 정리 잡의 스캔 기준도 흐려진다. 기동 때 거부한다.
+     */
     public InterviewWorkPaths(@Value("${app.interview.work-root:${user.home}/netis-maker/interviews}") String root) {
+        if (root == null || root.isBlank()) {
+            throw new IllegalArgumentException("app.interview.work-root는 비어 있을 수 없습니다");
+        }
         this.root = root;
     }
 
@@ -37,12 +51,12 @@ public class InterviewWorkPaths {
     public String workDirFor(String githubRepo, String gitUrl, long sessionId) {
         String key = GitRemotes.localKey(RepoRef.fromSnapshot(githubRepo, gitUrl));
         if (!key.contains("/")) key = "_/" + key;   // 방어: 1단계 값(레거시 이상 데이터)
-        return root + "/" + key + "/session-" + sessionId;
+        return root + "/" + key + "/" + SESSION_DIR_PREFIX + sessionId;
     }
 
     /** 참조 repo 폴더: {루트}/_refs/{세션 id}/{카탈로그 id}. 한 세션의 참조끼리는 카탈로그 id가 겹치지 않는다. */
     public String refDir(long sessionId, long catalogId) {
-        return root + "/_refs/" + sessionId + "/" + catalogId;
+        return root + "/" + REFS_DIR + "/" + sessionId + "/" + catalogId;
     }
 
     /** 체크아웃 루트. 정리 잡이 스캔·삭제 범위를 이 안으로 제한할 때 쓴다. */

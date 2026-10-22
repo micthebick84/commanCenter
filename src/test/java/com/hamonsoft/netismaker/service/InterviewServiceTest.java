@@ -1,6 +1,9 @@
 package com.hamonsoft.netismaker.service;
 
+import com.hamonsoft.netismaker.dto.InterviewClaimResponse;
 import com.hamonsoft.netismaker.dto.WorkerPlanRequest;
+import com.hamonsoft.netismaker.dto.WorkerQuestionRequest;
+import com.hamonsoft.netismaker.dto.WorkerQuestionRequest.RefState;
 import com.hamonsoft.netismaker.entity.*;
 import com.hamonsoft.netismaker.repository.*;
 import org.junit.jupiter.api.BeforeEach;
@@ -9,6 +12,7 @@ import org.springframework.http.HttpStatus;
 import org.springframework.test.util.ReflectionTestUtils;
 
 import java.math.BigDecimal;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
 
@@ -621,6 +625,293 @@ class InterviewServiceTest {
         assertThatThrownBy(() -> service.requireKind(8L, InterviewKind.INTERVIEW))
                 .isInstanceOf(TaskException.class)
                 .satisfies(e -> assertThat(((TaskException) e).getStatus()).isEqualTo(HttpStatus.NOT_FOUND));
+    }
+
+    // ── 질문 세션 참조 repo: claim 페이로드·답변 보고 (스펙 2026-10-22 §4.4·§4.5) ─────────────────
+
+    private static final String SHA_A = "a".repeat(40);
+    private static final String SHA_B = "b".repeat(40);
+
+    private static RefRepo ref(long catalogId, String branch, String sha, String fetchedAt, String error) {
+        return new RefRepo(catalogId, "참조" + catalogId, "acme/ref" + catalogId,
+                "https://github.com/acme/ref" + catalogId + ".git", branch, sha, fetchedAt, error);
+    }
+
+    /** 참조 repo를 가진 RUNNING 질문 세션 + recordQuestion이 쓰는 목 준비. */
+    private InterviewSession runningQuestionWithRefs(long id, RefRepo... refs) {
+        InterviewSession s = questionSession(id, InterviewStatus.RUNNING);
+        s.setWorkerId("w1");
+        s.setRefRepos(new ArrayList<>(List.of(refs)));
+        when(sessionRepo.findByIdForUpdate(id)).thenReturn(Optional.of(s));
+        when(turnRepo.findMaxSeq(id)).thenReturn(null);
+        return s;
+    }
+
+    /** 답변 보고 뒤(AWAITING_INPUT) 세션을 다음 턴처럼 다시 RUNNING으로 돌린다. */
+    private static void nextTurn(InterviewSession s) {
+        s.setStatus(InterviewStatus.RUNNING);
+        s.setWorkerId("w1");
+    }
+
+    private static WorkerQuestionRequest answerWith(RefState... states) {
+        return new WorkerQuestionRequest("답변", "sess-q", "question", BigDecimal.ZERO,
+                null, null, null, null, null, null, java.util.Arrays.asList(states));
+    }
+
+    @Test
+    void claim_question_session_carries_reference_dirs_under_the_refs_root() {
+        InterviewSession s = questionSession(1L, InterviewStatus.QUEUED);
+        s.setRefRepos(new ArrayList<>(List.of(
+                new RefRepo(11L, "Netis6.5(구)", "product/netis/web/package/netis-v6.5",
+                        "https://gitlab.hamon.vip/product/netis/web/package/netis-v6.5.git",
+                        "release/6.5", null, null, null),
+                new RefRepo(12L, "공통 UI", "acme/ui", "https://github.com/acme/ui.git", "main",
+                        "c".repeat(40), "2026-10-22T10:00:00+09:00", null))));
+        when(sessionRepo.findClaimableForUpdateSkipLocked(any())).thenReturn(List.of(s));
+        when(turnRepo.findBySessionIdOrderBySeqAsc(1L)).thenReturn(List.of());
+
+        InterviewClaimResponse c = service.claim("w1").orElseThrow();
+
+        String root = System.getProperty("user.home") + "/netis-maker/interviews";
+        assertThat(c.refRepos()).extracting(InterviewClaimResponse.ClaimRefRepo::dir)
+                .containsExactly(root + "/_refs/1/11", root + "/_refs/1/12");
+        assertThat(c.refRepos().get(0).repoHost()).isEqualTo("gitlab");
+        assertThat(c.refRepos().get(1).sha()).isEqualTo("c".repeat(40));
+    }
+
+    @Test
+    void claim_question_session_maps_every_reference_field_in_selection_order() {
+        InterviewSession s = questionSession(1L, InterviewStatus.QUEUED);
+        s.setRefRepos(new ArrayList<>(List.of(
+                ref(12L, "main", SHA_A, "2026-10-22T10:00:00+09:00", null),
+                ref(11L, "release/6.5", null, null, "브랜치를 찾을 수 없음"))));
+        when(sessionRepo.findClaimableForUpdateSkipLocked(any())).thenReturn(List.of(s));
+        when(turnRepo.findBySessionIdOrderBySeqAsc(1L)).thenReturn(List.of());
+
+        InterviewClaimResponse c = service.claim("w1").orElseThrow();
+
+        String root = System.getProperty("user.home") + "/netis-maker/interviews";
+        assertThat(c.refRepos()).containsExactly(
+                new InterviewClaimResponse.ClaimRefRepo(12L, "참조12", "acme/ref12",
+                        "https://github.com/acme/ref12.git", "github", "main", root + "/_refs/1/12", SHA_A),
+                new InterviewClaimResponse.ClaimRefRepo(11L, "참조11", "acme/ref11",
+                        "https://github.com/acme/ref11.git", "github", "release/6.5", root + "/_refs/1/11", null));
+    }
+
+    @Test
+    void claim_question_session_without_refs_has_an_empty_list() {
+        InterviewSession s = questionSession(1L, InterviewStatus.QUEUED);
+        when(sessionRepo.findClaimableForUpdateSkipLocked(any())).thenReturn(List.of(s));
+        when(turnRepo.findBySessionIdOrderBySeqAsc(1L)).thenReturn(List.of());
+
+        assertThat(service.claim("w1").orElseThrow().refRepos()).isNotNull().isEmpty();
+    }
+
+    @Test
+    void claim_interview_session_has_no_refs() {
+        // INTERVIEW 세션은 refRepos 컬럼에 값이 있어도(이 단계에선 항상 []) claim 페이로드는 비어 있다
+        InterviewSession s = session(1L, InterviewStatus.QUEUED);
+        s.setRefRepos(new ArrayList<>(List.of(ref(11L, "main", null, null, null))));
+        when(sessionRepo.findClaimableForUpdateSkipLocked(any())).thenReturn(List.of(s));
+        when(turnRepo.findBySessionIdOrderBySeqAsc(1L)).thenReturn(List.of());
+
+        InterviewClaimResponse c = service.claim("w1").orElseThrow();
+
+        assertThat(c.refRepos()).isNotNull().isEmpty();
+    }
+
+    @Test
+    void recordQuestion_pins_sha_only_once() {
+        InterviewSession s = runningQuestionWithRefs(5L, ref(11L, "main", null, null, null));
+
+        service.recordQuestion(5L, "w1", answerWith(new RefState(11L, "main", SHA_A, null)));
+
+        RefRepo pinned = s.getRefRepos().get(0);
+        assertThat(pinned.sha()).isEqualTo(SHA_A);
+        assertThat(pinned.fetchedAt()).isNotNull();
+        assertThat(java.time.OffsetDateTime.parse(pinned.fetchedAt())).isNotNull();   // ISO-8601 문자열
+        assertThat(pinned.error()).isNull();
+
+        // 다음 턴에 다른 커밋을 보고해도 처음 받은 커밋·시각을 유지한다
+        nextTurn(s);
+        service.recordQuestion(5L, "w1", answerWith(new RefState(11L, "main", SHA_B, null)));
+
+        assertThat(s.getRefRepos().get(0).sha()).isEqualTo(SHA_A);
+        assertThat(s.getRefRepos().get(0).fetchedAt()).isEqualTo(pinned.fetchedAt());
+    }
+
+    @Test
+    void recordQuestion_records_and_then_clears_errors() {
+        InterviewSession s = runningQuestionWithRefs(5L, ref(11L, "main", null, null, null));
+
+        service.recordQuestion(5L, "w1", answerWith(new RefState(11L, "main", null, "권한 없음")));
+
+        assertThat(s.getRefRepos().get(0).error()).isEqualTo("권한 없음");
+        assertThat(s.getRefRepos().get(0).sha()).isNull();
+
+        nextTurn(s);
+        service.recordQuestion(5L, "w1", answerWith(new RefState(11L, "main", SHA_A, null)));
+
+        assertThat(s.getRefRepos().get(0).error()).isNull();
+        assertThat(s.getRefRepos().get(0).sha()).isEqualTo(SHA_A);
+    }
+
+    @Test
+    void recordQuestion_clears_a_stale_error_on_an_already_pinned_ref_and_keeps_the_pin() {
+        // 처음 받은 뒤 폴더가 사라져 다시 받다 실패 → error만 붙은 상태. 이후 성공 보고는 error만 지우고 고정 커밋은 그대로 둔다
+        InterviewSession s = runningQuestionWithRefs(5L,
+                ref(11L, "main", SHA_A, "2026-10-22T10:00:00+09:00", "네트워크 오류"));
+
+        service.recordQuestion(5L, "w1", answerWith(new RefState(11L, "main", SHA_B, null)));
+
+        RefRepo r = s.getRefRepos().get(0);
+        assertThat(r.error()).isNull();
+        assertThat(r.sha()).isEqualTo(SHA_A);
+        assertThat(r.fetchedAt()).isEqualTo("2026-10-22T10:00:00+09:00");
+    }
+
+    @Test
+    void recordQuestion_error_keeps_an_existing_pin() {
+        InterviewSession s = runningQuestionWithRefs(5L,
+                ref(11L, "main", SHA_A, "2026-10-22T10:00:00+09:00", null));
+
+        service.recordQuestion(5L, "w1", answerWith(new RefState(11L, "main", null, "네트워크 오류")));
+
+        RefRepo r = s.getRefRepos().get(0);
+        assertThat(r.error()).isEqualTo("네트워크 오류");
+        assertThat(r.sha()).isEqualTo(SHA_A);
+        assertThat(r.fetchedAt()).isEqualTo("2026-10-22T10:00:00+09:00");
+    }
+
+    @Test
+    void recordQuestion_error_wins_over_a_sha_in_the_same_state() {
+        InterviewSession s = runningQuestionWithRefs(5L, ref(11L, "main", null, null, null));
+
+        service.recordQuestion(5L, "w1", answerWith(new RefState(11L, "main", SHA_A, "일부만 받음")));
+
+        assertThat(s.getRefRepos().get(0).error()).isEqualTo("일부만 받음");
+        assertThat(s.getRefRepos().get(0).sha()).isNull();
+        assertThat(s.getRefRepos().get(0).fetchedAt()).isNull();
+    }
+
+    @Test
+    void recordQuestion_ignores_a_state_with_neither_sha_nor_error() {
+        InterviewSession s = runningQuestionWithRefs(5L,
+                ref(11L, "main", null, null, "이전 오류"));
+        List<RefRepo> before = s.getRefRepos();
+
+        service.recordQuestion(5L, "w1", answerWith(
+                new RefState(11L, "main", null, null),
+                new RefState(11L, "main", "  ", null)));
+
+        assertThat(s.getRefRepos()).isSameAs(before);   // 바뀐 게 없으면 목록을 갈아 끼우지 않는다
+        assertThat(s.getRefRepos().get(0).error()).isEqualTo("이전 오류");
+        assertThat(s.getRefRepos().get(0).sha()).isNull();
+    }
+
+    @Test
+    void recordQuestion_ignores_states_for_refs_no_longer_selected() {
+        InterviewSession s = runningQuestionWithRefs(5L, ref(11L, "main", null, null, null));
+        List<RefRepo> before = s.getRefRepos();
+        RefRepo original = before.get(0);
+
+        service.recordQuestion(5L, "w1", answerWith(new RefState(12L, "main", SHA_A, null)));
+
+        assertThat(s.getRefRepos()).isSameAs(before);
+        assertThat(s.getRefRepos()).containsExactly(original);
+    }
+
+    @Test
+    void recordQuestion_ignores_a_state_for_the_same_repo_on_another_branch() {
+        // 같은 카탈로그 id를 다른 브랜치로 바꾸면 "빼고 다시 넣기" — 이전 브랜치 기준 보고가 새 원소를 건드리면 안 된다
+        InterviewSession s = runningQuestionWithRefs(5L, ref(11L, "release/6.5", null, null, null));
+        List<RefRepo> before = s.getRefRepos();
+
+        service.recordQuestion(5L, "w1", answerWith(new RefState(11L, "main", SHA_A, null)));
+
+        assertThat(s.getRefRepos()).isSameAs(before);
+        assertThat(s.getRefRepos().get(0).sha()).isNull();
+    }
+
+    @Test
+    void recordQuestion_applies_each_state_to_its_own_ref_and_keeps_the_order() {
+        InterviewSession s = runningQuestionWithRefs(5L,
+                ref(11L, "main", null, null, null),
+                ref(12L, "release/6.5", null, null, null),
+                ref(13L, "main", null, null, null));
+
+        service.recordQuestion(5L, "w1", answerWith(
+                new RefState(12L, "release/6.5", null, "브랜치를 찾을 수 없음"),
+                new RefState(11L, "main", SHA_A, null)));
+
+        assertThat(s.getRefRepos()).extracting(RefRepo::catalogId).containsExactly(11L, 12L, 13L);
+        assertThat(s.getRefRepos().get(0).sha()).isEqualTo(SHA_A);
+        assertThat(s.getRefRepos().get(1).error()).isEqualTo("브랜치를 찾을 수 없음");
+        assertThat(s.getRefRepos().get(2).sha()).isNull();
+        assertThat(s.getRefRepos().get(2).error()).isNull();
+    }
+
+    @Test
+    void recordQuestion_skips_null_state_entries() {
+        InterviewSession s = runningQuestionWithRefs(5L, ref(11L, "main", null, null, null));
+
+        service.recordQuestion(5L, "w1", answerWith(null, new RefState(11L, "main", SHA_A, null)));
+
+        assertThat(s.getRefRepos().get(0).sha()).isEqualTo(SHA_A);
+    }
+
+    @Test
+    void recordQuestion_without_ref_states_leaves_refs_untouched() {
+        // 구버전 러너 — 10인자 생성자(refStates = null)
+        InterviewSession s = runningQuestionWithRefs(5L, ref(11L, "main", SHA_A, "2026-10-22T10:00:00+09:00", "오류"));
+        List<RefRepo> before = s.getRefRepos();
+        RefRepo original = before.get(0);
+
+        service.recordQuestion(5L, "w1", new WorkerQuestionRequest("답변", "sess-q", "question",
+                BigDecimal.ZERO, null, null, null, null, null, null));
+
+        assertThat(s.getStatus()).isEqualTo(InterviewStatus.AWAITING_INPUT);
+        assertThat(s.getRefRepos()).isSameAs(before);
+        assertThat(s.getRefRepos()).containsExactly(original);
+    }
+
+    @Test
+    void recordQuestion_with_an_empty_ref_state_list_leaves_refs_untouched() {
+        InterviewSession s = runningQuestionWithRefs(5L, ref(11L, "main", null, null, null));
+        List<RefRepo> before = s.getRefRepos();
+
+        service.recordQuestion(5L, "w1", answerWith());
+
+        assertThat(s.getRefRepos()).isSameAs(before);
+        assertThat(s.getRefRepos().get(0).sha()).isNull();
+    }
+
+    @Test
+    void recordQuestion_does_not_replace_the_ref_list_when_the_pin_is_already_there() {
+        // 이미 고정됐고 오류도 없으면 아무것도 바뀌지 않는다 — 불필요한 갱신(JSONB 쓰기)을 만들지 않는다
+        InterviewSession s = runningQuestionWithRefs(5L, ref(11L, "main", SHA_A, "2026-10-22T10:00:00+09:00", null));
+        List<RefRepo> before = s.getRefRepos();
+
+        service.recordQuestion(5L, "w1", answerWith(new RefState(11L, "main", SHA_B, null)));
+
+        assertThat(s.getRefRepos()).isSameAs(before);
+        assertThat(s.getRefRepos().get(0).sha()).isEqualTo(SHA_A);
+    }
+
+    @Test
+    void recordQuestion_ref_states_do_not_disturb_the_turn_itself() {
+        InterviewSession s = runningQuestionWithRefs(5L, ref(11L, "main", null, null, null));
+
+        InterviewTurn turn = service.recordQuestion(5L, "w1", new WorkerQuestionRequest("답변입니다", "sess-q",
+                "question", new BigDecimal("0.01"), null, null, null, null, null, null,
+                List.of(new RefState(11L, "main", SHA_A, null))));
+
+        assertThat(turn.getContent()).isEqualTo("답변입니다");
+        assertThat(s.getStatus()).isEqualTo(InterviewStatus.AWAITING_INPUT);
+        assertThat(s.getWorkerId()).isNull();
+        assertThat(s.getClaudeSessionId()).isEqualTo("sess-q");
+        assertThat(s.getTotalCostUsd()).isEqualByComparingTo("0.01");
+        assertThat(s.getRefRepos().get(0).sha()).isEqualTo(SHA_A);
     }
 
 }

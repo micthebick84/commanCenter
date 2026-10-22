@@ -7,6 +7,7 @@ import com.hamonsoft.netismaker.dto.InterviewSummaryResponse;
 import com.hamonsoft.netismaker.dto.WorkerPlanRequest;
 import com.hamonsoft.netismaker.dto.WorkerQuestionRequest;
 import com.hamonsoft.netismaker.entity.*;
+import com.hamonsoft.netismaker.git.RepoRef;
 import com.hamonsoft.netismaker.repository.*;
 import org.springframework.context.annotation.Profile;
 import org.springframework.data.domain.PageRequest;
@@ -168,7 +169,22 @@ public class InterviewService {
         touch(s);
         List<InterviewTurn> turns = turnRepo.findBySessionIdOrderBySeqAsc(s.getId());
         return Optional.of(InterviewClaimResponse.of(s, turns, attachmentRefsFor(s),
-                turnAttachmentsFor(s), attachmentRootFor(s)));
+                turnAttachmentsFor(s), attachmentRootFor(s)).withRefRepos(refsFor(s)));
+    }
+
+    /**
+     * QUESTION이면 세션의 참조 repo를 claim 원소로 바꾼다 (스펙 2026-10-22 §4.4), INTERVIEW면 [] — 참조는 질문 세션 전용이다.
+     * dir은 저장하지 않고 claim마다 같은 규칙({루트}/_refs/{세션 id}/{카탈로그 id})으로 계산한다.
+     * sha는 처음 받아 고정한 커밋이고 아직 없으면 null — 러너는 그 커밋을 쓰고, 없으면 브랜치 최신을 받아 보고한다.
+     */
+    private List<InterviewClaimResponse.ClaimRefRepo> refsFor(InterviewSession s) {
+        if (!s.isQuestion() || s.getRefRepos() == null) return List.of();
+        return s.getRefRepos().stream()
+                .map(r -> new InterviewClaimResponse.ClaimRefRepo(
+                        r.catalogId(), r.alias(), r.path(), r.gitUrl(),
+                        RepoRef.fromSnapshot(r.path(), r.gitUrl()).host(),
+                        r.branch(), workPaths.refDir(s.getId(), r.catalogId()), r.sha()))
+                .toList();
     }
 
     /**
@@ -234,6 +250,7 @@ public class InterviewService {
         // 컨텍스트 스냅샷(스펙 2026-09-05 §4.2): 마지막 턴 값으로 덮어쓴다. 미보고(null)면 이전 값 유지.
         if (req.contextTokens() != null) s.setContextTokens(req.contextTokens());
         if (req.contextWindow() != null) s.setContextWindow(req.contextWindow());
+        applyRefStates(s, req.refStates());
         String kind = req.kind() == null || req.kind().isBlank() ? "question" : req.kind();
         InterviewTurn turn = appendTurn(sessionId, "assistant", kind,
                 req.content() == null ? "" : req.content());
@@ -245,6 +262,43 @@ public class InterviewService {
         touch(s);
         mirrorTask(s, TaskStatus.INTERVIEW_INPUT, workerId, "인터뷰 질문 도착 → 관리자 답변 대기");
         return turn;
+    }
+
+    /**
+     * 러너가 보고한 참조 repo 준비 결과를 세션의 현재 참조에 반영한다 (스펙 2026-10-22 §4.5).
+     * 상태마다 {@link RefRepo#matches}(카탈로그 id + 브랜치)인 원소에만 적용하고, 그새 빠진 참조의 보고는 무시한다.
+     * <ul>
+     *   <li>error가 있으면 그 사유를 기록한다(같은 상태의 sha는 무시). 이미 고정된 커밋·시각은 건드리지 않는다.</li>
+     *   <li>아니고 sha가 있으면 처음 받은 커밋으로 고정하고 낡은 error를 지운다 — 이미 고정된 sha는 바뀌지 않는다
+     *       ({@link RefRepo#pinned}).</li>
+     *   <li>둘 다 없으면 무시한다.</li>
+     * </ul>
+     * 바뀐 게 있을 때만 목록을 갈아 끼운다. refStates가 null이거나 비면(구버전 러너·참조 없는 질문) 아무것도 하지 않는다.
+     */
+    private void applyRefStates(InterviewSession s, List<WorkerQuestionRequest.RefState> states) {
+        if (states == null || states.isEmpty() || s.getRefRepos() == null || s.getRefRepos().isEmpty()) return;
+        List<RefRepo> next = new ArrayList<>(s.getRefRepos());
+        boolean changed = false;
+        for (WorkerQuestionRequest.RefState st : states) {
+            if (st == null) continue;
+            for (int i = 0; i < next.size(); i++) {
+                RefRepo cur = next.get(i);
+                if (!cur.matches(st.catalogId(), st.branch())) continue;
+                RefRepo upd;
+                if (st.error() != null) {
+                    upd = cur.withError(st.error());
+                } else if (st.sha() != null && !st.sha().isBlank()) {
+                    upd = cur.pinned(st.sha(), OffsetDateTime.now().toString());
+                } else {
+                    continue;
+                }
+                if (!upd.equals(cur)) {
+                    next.set(i, upd);
+                    changed = true;
+                }
+            }
+        }
+        if (changed) s.setRefRepos(new ArrayList<>(next));
     }
 
     /**

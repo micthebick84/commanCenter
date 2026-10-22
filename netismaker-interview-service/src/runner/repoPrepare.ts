@@ -1,8 +1,9 @@
 import { execFile } from 'node:child_process';
-import { existsSync, mkdirSync } from 'node:fs';
+import { existsSync, mkdirSync, renameSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
 import { buildCloneUrl, maskSecrets, type GitTokens } from '../sdk/gitRemote.js';
+import type { RefRepoClaim } from '../types.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -72,4 +73,118 @@ export async function ensureRepo(input: RepoInput, ops: RepoOps = defaultOps): P
     }
     throw e;
   }
+}
+
+/** 참조 repo 1개의 준비 결과. `error === null`이면 사용 가능 — `ref.dir`에 체크아웃이 있고 `sha`가 그 HEAD 커밋이다. */
+export interface RefPrepared {
+  ref: RefRepoClaim;
+  /** 사용 가능하면 HEAD 커밋, 실패면 null. */
+  sha: string | null;
+  /**
+   * 실패 사유 — 자격증명을 가린, 비어 있지 않은 문구. 성공이면 null.
+   * API는 error를 있는 그대로(빈 문자열이어도) 저장하므로 실패 사유는 절대 비워 두지 않는다.
+   */
+  error: string | null;
+}
+
+export interface RefRepoOps extends RepoOps {
+  /** git 출력(stdout)을 돌려준다 — rev-parse용. 끝의 줄바꿈은 부르는 쪽이 다듬는다. */
+  output: (cmd: string, args: string[], opts: { cwd?: string; signal?: AbortSignal }) => Promise<string>;
+  /** 폴더를 통째로 지운다. 없으면 아무 일도 하지 않는다. */
+  rm: (path: string) => void;
+  rename: (from: string, to: string) => void;
+}
+
+const defaultRefOps: RefRepoOps = {
+  ...defaultOps,
+  output: async (cmd, args, opts) => (await execFileAsync(cmd, args, opts)).stdout,
+  rm: (path) => {
+    rmSync(path, { recursive: true, force: true });
+  },
+  rename: renameSync,
+};
+
+/** 받는 동안 쓰는 임시 폴더 접미어 — 다 받았을 때만 최종 이름으로 바꾼다. */
+const PART_SUFFIX = '.part';
+
+/** 실패 사유가 (가린 뒤) 비어 있을 때 쓰는 문구. */
+const REF_FAILURE_FALLBACK = '참조 repo를 받지 못했습니다';
+
+/**
+ * 질문 세션의 읽기 전용 참조 repo를 준비한다 (스펙 2026-10-22 §5.1). claim마다(새 질문·추가 질문 모두)
+ * 대상 `ensureRepo` 다음에 부른다. 참조마다 입력 순서대로 하나씩 처리하고, 하나가 실패해도 나머지는 계속한다.
+ * 예외를 던지지 않는다 — 실패한 참조는 `{ sha: null, error }`로 돌려주고 턴은 계속된다.
+ *
+ * - 폴더에 `.git`이 있고 HEAD 브랜치가 요청 브랜치와 같으면 그대로 쓴다. fetch하지 않는 것이 곧 커밋 고정이다.
+ * - 폴더가 없거나 브랜치가 다르면 폴더를 지우고 `<dir>.part`에 shallow clone → origin을 평문 URL로 → `<dir>`로 rename.
+ *   임시 폴더에 받아 성공했을 때만 제자리로 옮기므로, 받는 도중 실패·중단돼도(턴 타임아웃 포함) 반쪽 체크아웃이
+ *   남지 않는다. 남으면 다음 턴의 "그대로 쓴다" 판정이 그 폴더를 성공으로 보고 엉뚱한 커밋에 고정하게 된다.
+ * - 자격증명은 clone 전송에만 쓰고 `.git/config`(origin)에는 남기지 않는다(대상 `ensureRepo`와 같은 규칙) —
+ *   세션이 참조 폴더도 읽을 수 있기 때문. 실패 사유는 `maskSecrets`로 가린다.
+ * - claim에 `sha`가 있는데 폴더가 사라져 새로 받았다면 브랜치 최신을 받는다. 고정 커밋 재현은 하지 않고(스펙의
+ *   단순화 허용) 받은 커밋이 다르면 경고 로그만 남긴다 — API는 이미 정해진 sha를 바꾸지 않는다.
+ * - 읽지 못한 폴더(HEAD 확인 실패)는 지우지 않고 오류만 돌려준다. 폴더는 브랜치가 다르다고 확인됐을 때만 지운다.
+ * - `signal`(턴 타임아웃)은 모든 git 자식 프로세스에 넘긴다.
+ */
+export async function ensureRefRepos(
+  refs: RefRepoClaim[],
+  opts: { tokens?: GitTokens; signal?: AbortSignal },
+  ops: RefRepoOps = defaultRefOps,
+): Promise<RefPrepared[]> {
+  const results: RefPrepared[] = [];
+  for (const ref of refs) {
+    results.push(await prepareRefRepo(ref, opts, ops));
+  }
+  return results;
+}
+
+async function prepareRefRepo(
+  ref: RefRepoClaim,
+  opts: { tokens?: GitTokens; signal?: AbortSignal },
+  ops: RefRepoOps,
+): Promise<RefPrepared> {
+  const { dir, branch } = ref;
+  const part = `${dir}${PART_SUFFIX}`;
+  const abort = opts.signal ? { signal: opts.signal } : {};
+  const headSha = async (): Promise<string> =>
+    (await ops.output('git', ['rev-parse', 'HEAD'], { cwd: dir, ...abort })).trim();
+  try {
+    if (ops.exists(join(dir, '.git'))) {
+      const head = (await ops.output('git', ['rev-parse', '--abbrev-ref', 'HEAD'], { cwd: dir, ...abort })).trim();
+      if (head === branch) return prepared(ref, await headSha());
+    }
+    // 폴더가 없거나 다른 브랜치다 — 낡은 폴더와 지난 시도의 찌꺼기를 지우고 .part에 새로 받는다.
+    ops.rm(dir);
+    ops.rm(part);
+    const plainUrl = buildCloneUrl(ref, {});
+    const authUrl = buildCloneUrl(ref, opts.tokens ?? {});
+    await ops.run('git', ['clone', '--depth', '1', '--branch', branch, authUrl, part], { ...abort });
+    await ops.run('git', ['remote', 'set-url', 'origin', plainUrl], { cwd: part, ...abort });
+    ops.rename(part, dir);
+    return prepared(ref, await headSha());
+  } catch (e) {
+    try {
+      ops.rm(part);
+    } catch {
+      // best effort — 지우지 못해도 원래 실패 사유를 돌려주는 것이 먼저다
+    }
+    return { ref, sha: null, error: describeFailure(e) };
+  }
+}
+
+/** 성공 결과. claim에 고정 커밋이 있는데 받은 커밋이 다르면 경고만 남긴다(재현하지 않음). */
+function prepared(ref: RefRepoClaim, sha: string): RefPrepared {
+  if (ref.sha && ref.sha !== sha) {
+    console.warn(
+      `[refRepos] 고정 커밋과 다른 커밋을 받음: ${ref.alias}(${ref.branch}) catalog=${ref.catalogId}` +
+        ` 고정=${ref.sha.slice(0, 7)} 받음=${sha.slice(0, 7)} — 고정 커밋 재현은 하지 않는다`,
+    );
+  }
+  return { ref, sha, error: null };
+}
+
+/** 실패 사유 — 자격증명을 가리고, 비면 고정 문구. */
+function describeFailure(e: unknown): string {
+  const raw = e instanceof Error ? e.message : typeof e === 'string' ? e : '';
+  return maskSecrets(raw).trim() || REF_FAILURE_FALLBACK;
 }

@@ -57,6 +57,35 @@ export interface AttachmentRef {
 }
 
 /**
+ * Java InterviewClaimResponse.ClaimRefRepo — 질문 세션의 읽기 전용 참조 repo 1개 (스펙 2026-10-22 §4.4).
+ * githubRepo = GitHub owner/repo 또는 GitLab 프로젝트 전체 경로(대상과 같은 규칙), dir = 체크아웃 절대경로
+ * (API가 claim마다 `{루트}/_refs/{세션 id}/{카탈로그 id}`로 계산), sha = 처음 받아 고정한 커밋(아직 안 받았으면 null).
+ * 필드 이름은 JSON 계약이다 — Java 쪽과 함께만 바꿀 것.
+ */
+export interface RefRepoClaim {
+  catalogId: number;
+  alias: string;
+  githubRepo: string;
+  gitUrl?: string | null;
+  repoHost?: 'github' | 'gitlab' | null;
+  branch: string;
+  dir: string;
+  sha?: string | null;
+}
+
+/**
+ * Java WorkerQuestionRequest.RefState — 답변 보고에 싣는 참조 repo 준비 결과 (스펙 2026-10-22 §4.5).
+ * sha = 이번 턴에 확인한 HEAD 커밋(성공), error = 자격증명을 가린 실패 사유(실패). API는 error를 있는 그대로
+ * (빈 문자열이어도) 저장하므로 실패는 항상 비어 있지 않은 문구, 성공은 null이어야 한다.
+ */
+export interface RefState {
+  catalogId: number;
+  branch: string;
+  sha: string | null;
+  error: string | null;
+}
+
+/**
  * Returned by POST /worker/interviews/claim?workerId=... — the Java `InterviewClaimResponse`
  * record. All pending state lives here — never in memory.
  */
@@ -117,6 +146,11 @@ export interface InterviewClaimResponse {
   dbConnectionIds?: number[];
   dbConnections?: DbConnectionRef[];
   dbNotices?: string[];
+  /**
+   * 질문 세션의 읽기 전용 참조 repo (스펙 2026-10-22 §4.4) — QUESTION만 값이 있고 그 외는 []. 구버전 백엔드는
+   * 필드 자체가 없다 → 읽는 쪽은 Array.isArray 가드 (dbConnections 선례).
+   */
+  refRepos?: RefRepoClaim[];
 }
 
 /** SSE activity 와이어 계약의 활동 type (스펙 §4.1). */
@@ -158,6 +192,11 @@ export interface WorkerQuestionRequest {
   contextTokens: number | null;
   /** result.modelUsage 주 모델의 contextWindow. 없으면 null. */
   contextWindow: number | null;
+  /**
+   * 이번 턴의 참조 repo 준비 결과 (스펙 2026-10-22 §4.5). 참조가 없으면 생략한다 — 구버전 API·참조 없는 질문의
+   * 바디는 지금과 같다. API는 catalogId+branch가 같은 원소에만 반영하고, sha는 처음 한 번만 고정한다.
+   */
+  refStates?: RefState[];
 }
 
 /**

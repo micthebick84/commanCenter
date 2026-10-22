@@ -5,9 +5,12 @@ import QuestionComposer from '~/components/chat/QuestionComposer.vue'
 import ClaudeUsagePanel from '~/components/ClaudeUsagePanel.vue'
 import McpPicker from '~/components/McpPicker.vue'
 import DbConnectionPicker from '~/components/DbConnectionPicker.vue'
+import RefRepoChips from '~/components/RefRepoChips.vue'
+import RefRepoAddForm from '~/components/RefRepoAddForm.vue'
 import { interviewStatusLabel, interviewStatusChip } from '~/composables/interviewLabels'
 import { contextPercent, type QuestionDetail, type AttachmentView } from '~/composables/questions'
 import { dbTypeLabel, fetchDbConnections, type DbConnectionView } from '~/composables/dbConnections'
+import { sameRefSet, toInputs, type RefRepoInput, type RefRepoView, type RepoCatalogOption } from '~/composables/refRepos'
 import { usageColor } from '~/composables/claudeUsage'
 import { DEFAULT_MODEL, DEFAULT_EFFORT } from '~/composables/modelEffort'
 import { formatSize } from '~/composables/attachmentLimits'
@@ -57,6 +60,9 @@ async function loadDb(repoId: number) {
 function reloadDb() {
   if (detail.value?.repoCatalogId) loadDb(detail.value.repoCatalogId)
 }
+// 대화 중 참조 repo 변경(스펙 2026-10-22 §7.3): 같은 원리 — 세션 값으로 1회 시드, 이후엔 "다음 질문에 쓸 초안".
+// 헤더 아래 칩 줄은 서버 값(커밋·상태)을, "✎ 참조 변경" 메뉴는 이 초안을 보여 준다 — 폴링이 서버 값으로 되돌리면 보내기 전의 변경이 지워진다.
+const pickedRefs = ref<RefRepoView[]>([])
 const pickedSeeded = ref(false)
 watch(detail, (d) => {
   if (pickedSeeded.value || !d?.model) return
@@ -64,6 +70,7 @@ watch(detail, (d) => {
   picked.effort = d.effort ?? DEFAULT_EFFORT
   pickedMcp.value = [...(d.mcpCatalogIds ?? [])]
   pickedDb.value = [...(d.dbConnectionIds ?? [])]
+  pickedRefs.value = [...(d.refRepos ?? [])]
   if (d.repoCatalogId) loadDb(d.repoCatalogId)
   pickedSeeded.value = true
 })
@@ -75,17 +82,68 @@ type SendFn = (extra: {
   effort: string
   mcpCatalogIds: number[]
   dbConnectionIds?: number[]
+  refRepos?: RefRepoInput[]
   files: File[]
 }) => Promise<boolean>
 async function onSend(send: SendFn) {
+  // 참조 repo는 초안이 서버 값과 다른 집합일 때만 싣는다 — 참조를 안 건드린 질문의 ask 바디는 예전과 똑같다(서버도 같은 집합이면 no-op).
+  // 시드 전의 빈 초안(model이 없어 시드 블록을 건너뛴 세션)은 사용자가 비운 것이 아니므로 싣지 않는다 — 서버 참조가 전부 해제되지 않게.
+  const refInputs = toInputs(pickedRefs.value)
+  const refsChanged = pickedSeeded.value && !sameRefSet(refInputs, toInputs(detail.value?.refRepos ?? []))
   const ok = await send({
     model: picked.model,
     effort: picked.effort,
     mcpCatalogIds: pickedMcp.value,
     ...(dbState.enabled ? { dbConnectionIds: pickedDb.value } : {}),
+    ...(refsChanged ? { refRepos: refInputs } : {}),
     files: files.value,
   })
   if (ok) files.value = []
+}
+
+// "✎ 참조 변경" 메뉴(스펙 2026-10-22 §7.3). 후보 카탈로그는 메뉴를 처음 열 때 한 번만 불러온다 — 페이지를 여는 시점의 API 호출은 늘리지 않는다.
+// 실패하면 알리고 다음에 열 때 다시 시도한다. 지원하지 않는 호스트(other)는 추가 폼이 스스로 뺀다.
+const repoCatalog = ref<RepoCatalogOption[]>([])
+let catalogLoaded = false
+let catalogLoading = false
+async function loadRepoCatalogOnce() {
+  if (catalogLoaded || catalogLoading) return
+  catalogLoading = true
+  try {
+    const res = await useApi<RepoCatalogOption[]>('/api/repo-catalog')
+    repoCatalog.value = Array.isArray(res) ? res : []
+    catalogLoaded = true
+  } catch (e: any) {
+    $q.notify({ type: 'negative', message: e?.data?.message ?? '레포 목록을 불러오지 못했습니다' })
+  } finally {
+    catalogLoading = false
+  }
+}
+
+// 메뉴가 고치는 것은 서버 값이 아니라 초안(pickedRefs)이다. 추가 폼 후보에서는 대상 레포(헤더 📁)와 이미 고른 참조를 뺀다 —
+// 서버도 같은 규칙으로 검증한다. 새 질문 화면(pages/questions/index.vue)의 인라인 폼과 같은 토글·접힘 동작.
+// 메뉴에 그릴 칩 = 초안의 구성(어느 레포·브랜치)에 서버가 아는 상태(커밋·받은 시각·사유)를 입힌 것. 초안은 처음 한 번만 시드해서 그 안의 상태는
+// 시드 때 그대로 굳는다 — 첫 답변이 참조를 고정한 뒤에도 메뉴에 "다음 답변 때 받음"이 남지 않게 한다(바로 위 칩 줄은 서버 값을 따라간다).
+// 서버에 없는 짝(새로 더했거나 브랜치를 바꾼 참조)은 초안 그대로라 대기로 보인다. 입히는 것은 표시뿐이고 초안(pickedRefs)은 건드리지 않는다.
+const draftChips = computed<RefRepoView[]>(() =>
+  pickedRefs.value.map(
+    (p) => detail.value?.refRepos?.find((s) => s.catalogId === p.catalogId && s.branch === p.branch) ?? p,
+  ),
+)
+const refAddOpen = ref(false)
+const refExcludeIds = computed(() => {
+  const targetId = detail.value?.repoCatalogId
+  return [...(targetId != null ? [targetId] : []), ...pickedRefs.value.map((r) => r.catalogId)]
+})
+function toggleRefAdd() {
+  refAddOpen.value = !refAddOpen.value
+}
+function addPickedRef(added: RefRepoView) {
+  pickedRefs.value.push(added)
+  refAddOpen.value = false // 추가하면 접는다
+}
+function removePickedRef(catalogId: number) {
+  pickedRefs.value = pickedRefs.value.filter((r) => r.catalogId !== catalogId)
 }
 
 // 등록 시 첨부(헤더 칩 줄) 다운로드 — 말풍선 칩(InterviewPanel)과 같은 blob 헬퍼·경로.
@@ -99,6 +157,9 @@ async function downloadSessionAttachment(a: AttachmentView) {
 
 const liveStatus = ref<InterviewStatus | null>(null)
 const statusName = computed(() => liveStatus.value ?? detail.value?.statusName ?? null)
+// "참조 변경"은 입력창 슬롯 밖(헤더 아래 칩 줄)이라 슬롯의 awaiting을 못 쓴다 — InterviewPanel이 상태를 즉시·변경마다 emit하므로
+// (`@status`, immediate) 이 값은 슬롯의 awaiting(status === 'AWAITING_INPUT')과 같다.
+const awaiting = computed(() => statusName.value === 'AWAITING_INPUT')
 const statusLabel = computed(() => interviewStatusLabel(statusName.value, 'QUESTION'))
 const statusChip = computed(() => interviewStatusChip(statusName.value))
 const isTerminal = computed(() =>
@@ -197,6 +258,33 @@ function onPanelClose() {
         data-test="close-session"
         @click="requestClose"
       />
+    </div>
+    <!-- 참조 repo 줄 (스펙 2026-10-22 §7.3) — 서버 값(커밋·상태)을 읽기 전용으로 보인다. 질문 대화 화면에는 항상 그리고, 비면 "참조 repo 없음".
+         "✎ 참조 변경"은 입력 대기일 때만 열리고, 메뉴는 "다음 질문에 쓸 초안"(pickedRefs)을 고친다 — 보낼 때 ask 바디에 실린다. -->
+    <div class="row items-end no-wrap session-refs" data-test="session-ref-chips">
+      <RefRepoChips :items="detail?.refRepos ?? []" class="session-refs-chips" />
+      <q-btn
+        flat
+        dense
+        no-caps
+        size="sm"
+        color="deep-purple-7"
+        label="✎ 참조 변경"
+        aria-label="참조 변경"
+        class="session-refs-change"
+        :disable="!awaiting"
+        data-test="ref-change"
+      >
+        <q-tooltip>대화 중 변경 — 다음 질문부터 적용</q-tooltip>
+        <q-menu @show="loadRepoCatalogOnce" @hide="refAddOpen = false">
+          <div class="ref-menu">
+            <div class="ref-menu-chips">
+              <RefRepoChips :items="draftChips" editable @remove="removePickedRef" @add="toggleRefAdd" />
+            </div>
+            <RefRepoAddForm v-if="refAddOpen" :catalog="repoCatalog" :exclude-ids="refExcludeIds" @add="addPickedRef" />
+          </div>
+        </q-menu>
+      </q-btn>
     </div>
     <div
       v-if="detail?.dbConnections?.length"
@@ -340,6 +428,28 @@ function onPanelClose() {
 .mcp-menu {
   min-width: 360px;
   max-width: 480px;
+}
+/* 참조 repo 줄: 칩 줄은 내용 폭만큼만 차지하고(넓은 화면에서 "참조 변경"이 칩 바로 옆에 붙는다), 좁으면 남는 폭까지 줄어 칩이 줄바꿈한다 */
+.session-refs {
+  gap: 8px;
+  padding: 6px 20px 0;
+}
+.session-refs-chips {
+  flex: 0 1 auto;
+  min-width: 0;
+}
+/* 버튼은 줄어들지 않는다 — 좁은 화면에서 줄어드는 쪽은 칩 줄뿐이고, 라벨이 세로로 꺾이지 않는다 */
+.session-refs-change {
+  flex: none;
+  white-space: nowrap;
+}
+/* 참조 변경 메뉴 폭 — 추가 폼 루트(RefRepoAddForm)와 같은 값. 390px 화면에서도 좌우 16px 여백 안에 든다 */
+.ref-menu {
+  box-sizing: border-box;
+  width: min(340px, calc(100vw - 32px));
+}
+.ref-menu-chips {
+  padding: 12px 16px 4px;
 }
 .composer-wrap {
   width: 100%;

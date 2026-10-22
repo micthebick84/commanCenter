@@ -1,6 +1,6 @@
 import { execFile } from 'node:child_process';
 import { existsSync, mkdirSync, renameSync, rmSync } from 'node:fs';
-import { join } from 'node:path';
+import { isAbsolute, join } from 'node:path';
 import { promisify } from 'node:util';
 import { buildCloneUrl, maskSecrets, type GitTokens } from '../sdk/gitRemote.js';
 import type { RefRepoClaim } from '../types.js';
@@ -20,8 +20,15 @@ export interface RepoInput {
   signal?: AbortSignal;
 }
 
+/** git 자식 프로세스 호출 옵션. `env`가 없으면 부모 환경을 그대로 물려받는다(대상 `ensureRepo`가 그렇다). */
+export interface GitCallOptions {
+  cwd?: string;
+  signal?: AbortSignal;
+  env?: NodeJS.ProcessEnv;
+}
+
 export interface RepoOps {
-  run: (cmd: string, args: string[], opts: { cwd?: string; signal?: AbortSignal }) => Promise<unknown>;
+  run: (cmd: string, args: string[], opts: GitCallOptions) => Promise<unknown>;
   exists: (path: string) => boolean;
   /** Create the checkout dir before a fresh clone. Optional so unit tests can omit fs side effects. */
   mkdir?: (path: string) => void;
@@ -89,10 +96,13 @@ export interface RefPrepared {
 
 export interface RefRepoOps extends RepoOps {
   /** git 출력(stdout)을 돌려준다 — rev-parse용. 끝의 줄바꿈은 부르는 쪽이 다듬는다. */
-  output: (cmd: string, args: string[], opts: { cwd?: string; signal?: AbortSignal }) => Promise<string>;
+  output: (cmd: string, args: string[], opts: GitCallOptions) => Promise<string>;
   /** 폴더를 통째로 지운다. 없으면 아무 일도 하지 않는다. */
   rm: (path: string) => void;
-  rename: (from: string, to: string) => void;
+  /** 받은 임시 폴더를 최종 이름으로 옮긴다. 동기든 비동기든 기다린다. 일시적 잠금 오류는 부르는 쪽(`renameWithRetry`)이 다시 시도한다. */
+  rename: (from: string, to: string) => void | Promise<void>;
+  /** rename 재시도 사이의 대기(ms). 없으면 실제로 기다린다 — 테스트가 갈아 끼워 느려지지 않게 한다. */
+  sleep?: (ms: number) => Promise<void>;
 }
 
 const defaultRefOps: RefRepoOps = {
@@ -106,6 +116,110 @@ const defaultRefOps: RefRepoOps = {
 
 /** 받는 동안 쓰는 임시 폴더 접미어 — 다 받았을 때만 최종 이름으로 바꾼다. */
 const PART_SUFFIX = '.part';
+
+/**
+ * 참조 repo의 모든 git 호출이 하위 명령 앞에 달고 가는 인자. 운영자 PC의 자격증명 도우미와 askpass 프로그램을 쓰지 않는다.
+ * 이 PC처럼 시스템 git 설정에 `credential.helper=manager`(GCM)가 있으면, 인증이 필요한 원격(토큰이 없는 호스트·비공개/없는 repo는 401)에서
+ * git이 GCM을 불러 데스크톱 대화상자를 띄운 채 턴 상한까지 멈추고 세션이 FAILED로 끝난다(스펙 §1.2). GCM이 운영자의 개인 GitHub
+ * 자격증명을 몰래 쓰거나 URL 토큰을 Windows 자격 증명 관리자에 저장하는 부작용도 막는다. 빈 값은 도우미 목록을 비운다
+ * (Java 워커 `GitRepoCache.GIT_NO_HELPER`와 같은 방식). 프롬프트 쪽은 환경(`refGitEnv`)이 막는다.
+ */
+const REF_GIT_PREFIX: readonly string[] = ['-c', 'credential.helper=', '-c', 'core.askPass='];
+
+/**
+ * 자식에게서 지울 askpass 프로그램 변수. git은 `GIT_ASKPASS` 변수 → `core.askPass` 설정 → `SSH_ASKPASS` 변수 순으로 찾으므로
+ * (git의 `git_prompt`), 변수가 남아 있으면 `-c core.askPass=`가 있어도 운영자 PC의 프로그램이 먼저 뜬다.
+ */
+const ASKPASS_ENV_NAMES: readonly string[] = ['GIT_ASKPASS', 'SSH_ASKPASS'];
+/** 자식에게 강제하는 값 — git의 터미널 프롬프트와 GCM의 대화상자를 끈다. 인증이 필요하면 묻지 않고 바로 실패한다. */
+const PROMPT_OFF_ENV: Readonly<Record<string, string>> = { GIT_TERMINAL_PROMPT: '0', GCM_INTERACTIVE: 'never' };
+
+/**
+ * 참조 repo의 git 자식 프로세스 환경 — `base`(기본 `process.env`)의 사본에서 askpass 프로그램 변수를 지우고 프롬프트를 끈 것.
+ * 부모 환경은 건드리지 않는다. Windows는 환경변수 이름의 대소문자를 구분하지 않아 `git_askpass`도 같은 변수이므로 이름은
+ * 대소문자 무시로 비교한다(Node는 대소문자만 다른 키가 여럿이면 그중 하나만 자식에게 넘긴다).
+ */
+export function refGitEnv(base: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+  const overridden = new Set([...ASKPASS_ENV_NAMES, ...Object.keys(PROMPT_OFF_ENV)]);
+  const env: NodeJS.ProcessEnv = {};
+  for (const [name, value] of Object.entries(base)) {
+    if (!overridden.has(name.toUpperCase())) env[name] = value;
+  }
+  return Object.assign(env, PROMPT_OFF_ENV);
+}
+
+/**
+ * 참조 repo용 git 호출 한 쌍(run·output) — 모든 호출이 같은 앞 인자·환경·중단 신호를 달고 나가도록 여기 한 곳을 거친다.
+ * 환경은 호출 한 번(= 참조 하나)에 한 번만 만든다.
+ */
+function refGit(ops: RefRepoOps, signal: AbortSignal | undefined) {
+  const env = refGitEnv();
+  const optionsFor = (cwd: string | undefined): GitCallOptions => ({
+    ...(cwd === undefined ? {} : { cwd }),
+    env,
+    ...(signal ? { signal } : {}),
+  });
+  return {
+    run: (args: string[], cwd?: string): Promise<unknown> =>
+      ops.run('git', [...REF_GIT_PREFIX, ...args], optionsFor(cwd)),
+    output: (args: string[], cwd?: string): Promise<string> =>
+      ops.output('git', [...REF_GIT_PREFIX, ...args], optionsFor(cwd)),
+  };
+}
+
+/** API가 만드는 참조 폴더의 위쪽 폴더 이름 — `{체크아웃 루트}/_refs/{세션 id}/{카탈로그 id}`(InterviewWorkPaths.refDir). */
+const REFS_DIR_NAME = '_refs';
+
+/** 받은 참조 폴더 경로가 약속된 모양이 아닐 때의 사유 — 러너(refReason)가 그대로 한 줄 사유로 쓰고 칩 툴팁에 보인다. */
+const REF_DIR_INVALID_REASON = '참조 폴더 경로가 올바르지 않습니다';
+
+/**
+ * 이 참조의 폴더로 믿을 수 있는 경로인지 — 절대경로이고 `_refs/<숫자>/<이 참조의 catalogId>`로 끝나야 한다.
+ * 러너는 이 폴더를(그리고 `.part`를) 통째로 지우므로 API가 보낸 값을 그대로 믿지 않는다. 끝 마디가 catalogId와 다르면
+ * 같은 세션의 다른 참조 폴더를 지울 수 있어 거부한다. 구분자는 `/`와 `\` 둘 다 본다(API는 Windows에서도 `/`를 섞어 만든다).
+ * 끝에 구분자가 붙으면(`…/12/`) 끝 마디가 비어 거부된다.
+ */
+function isRefDir(ref: RefRepoClaim): boolean {
+  const { dir } = ref;
+  if (typeof dir !== 'string' || !isAbsolute(dir)) return false;
+  const [refsDir, session, catalog] = dir.split(/[\\/]+/).slice(-3);
+  return (
+    refsDir === REFS_DIR_NAME &&
+    /^\d+$/.test(session ?? '') &&
+    /^\d+$/.test(catalog ?? '') &&
+    catalog === String(ref.catalogId)
+  );
+}
+
+/** 디렉터리 rename이 일시적으로 막힐 때 Windows가 돌려주는 코드 — 백신·검색 인덱서가 방금 쓴 파일의 핸들을 잠깐 잡고 있는 경우. */
+const TRANSIENT_RENAME_CODES: ReadonlySet<string> = new Set(['EPERM', 'EBUSY', 'EACCES']);
+/** rename 재시도 사이의 대기(ms) — 처음 시도 + 재시도 4번 = 최대 5번 시도하고, 기다림은 합쳐 3초다. */
+const RENAME_RETRY_DELAYS_MS: readonly number[] = [200, 400, 800, 1600];
+
+const defaultSleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
+
+function isTransientRenameError(e: unknown): boolean {
+  const code = (e as { code?: unknown } | null | undefined)?.code;
+  return typeof code === 'string' && TRANSIENT_RENAME_CODES.has(code);
+}
+
+/**
+ * `from`을 `to`로 옮긴다. 일시적 잠금 코드(EPERM·EBUSY·EACCES)만 짧게 다시 시도하고(`RENAME_RETRY_DELAYS_MS`),
+ * 그 밖의 오류·시도를 다 쓴 뒤의 오류·턴이 이미 중단된 뒤의 오류는 그대로 던져 기존 실패 경로(.part 삭제 + 사유 반환)를 탄다.
+ */
+async function renameWithRetry(ops: RefRepoOps, from: string, to: string, signal: AbortSignal | undefined): Promise<void> {
+  const sleep = ops.sleep ?? defaultSleep;
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      await ops.rename(from, to);
+      return;
+    } catch (e) {
+      const wait = RENAME_RETRY_DELAYS_MS[attempt];
+      if (wait === undefined || !isTransientRenameError(e) || signal?.aborted) throw e;
+      await sleep(wait);
+    }
+  }
+}
 
 /**
  * 실패 사유가 (가린 뒤) 비어 있을 때 쓰는 문구. 러너(interviewRunner.refReason)도 사유를 한 줄로 줄이고 나서
@@ -124,10 +238,16 @@ export const REF_PREPARE_FALLBACK_REASON = '참조 repo를 받지 못했습니�
  *   남지 않는다. 남으면 다음 턴의 "그대로 쓴다" 판정이 그 폴더를 성공으로 보고 엉뚱한 커밋에 고정하게 된다.
  * - 자격증명은 clone 전송에만 쓰고 `.git/config`(origin)에는 남기지 않는다(대상 `ensureRepo`와 같은 규칙) —
  *   세션이 참조 폴더도 읽을 수 있기 때문. 실패 사유는 `maskSecrets`로 가린다.
+ * - git 호출은 전부 운영자 PC의 자격증명 도우미·askpass·터미널 프롬프트 없이 돈다(`REF_GIT_PREFIX`·`refGitEnv`). 인증이 필요한
+ *   원격은 묻지 않고 바로 실패해 ⚠로 끝난다 — 도우미가 데스크톱 대화상자를 띄우고 턴 상한까지 멈추면 세션이 FAILED가 되기 때문이다
+ *   (스펙 §1.2). 그래서 비공개 GitHub 참조는 `GITHUB_PAT`을 설정해야 하고, 설정하지 않은 호스트의 비공개 repo는 받지 못한다.
  * - claim에 `sha`가 있는데 폴더가 사라져 새로 받았다면 브랜치 최신을 받는다. 고정 커밋 재현은 하지 않고(스펙의
  *   단순화 허용) 받은 커밋이 다르면 경고 로그만 남긴다 — API는 이미 정해진 sha를 바꾸지 않는다.
  * - `.git`이 있는 폴더는 HEAD가 다른 브랜치로 확인됐을 때만 지운다. HEAD를 읽지 못하면 지우지 않고 오류만 돌려준다
  *   (일시 오류가 고정한 체크아웃을 날리지 않게). `.git`이 없는 폴더는 체크아웃이 아니므로 함께 지우고 새로 받는다.
+ * - 지우기 전에 `dir`이 절대경로이고 `_refs/<숫자>/<catalogId>`로 끝나는지 본다(`isRefDir`). 아니면 어떤 디스크 작업·git 호출도
+ *   하지 않고 `REF_DIR_INVALID_REASON`을 돌려준다 — API가 보낸 값을 그대로 지우지 않기 위한 방어다.
+ * - 마지막 rename이 EPERM·EBUSY·EACCES로 막히면(백신·인덱서가 방금 받은 파일을 잡고 있을 때) 최대 5번까지 짧게 다시 시도한다.
  * - `signal`(턴 타임아웃)은 모든 git 자식 프로세스에 넘긴다.
  */
 export async function ensureRefRepos(
@@ -147,17 +267,24 @@ async function prepareRefRepo(
   opts: { tokens?: GitTokens; signal?: AbortSignal },
   ops: RefRepoOps,
 ): Promise<RefPrepared> {
+  // 어떤 디스크 작업·git 호출보다 먼저 — 아래에서 dir과 dir.part를 통째로 지우므로 API가 보낸 경로를 그대로 믿지 않는다.
+  if (!isRefDir(ref)) {
+    // 칩에는 고정 문구만 보이므로 API가 보낸 경로는 로그로만 남는다(경로에는 자격증명이 없다).
+    console.warn(
+      `[refRepos] 참조 폴더 경로가 올바르지 않아 건너뜀: ${ref.alias}(${ref.branch}) catalog=${ref.catalogId} dir=${JSON.stringify(ref.dir)}`,
+    );
+    return { ref, sha: null, error: REF_DIR_INVALID_REASON };
+  }
   const { dir, branch } = ref;
   const part = `${dir}${PART_SUFFIX}`;
-  const abort = opts.signal ? { signal: opts.signal } : {};
-  const headSha = async (): Promise<string> =>
-    (await ops.output('git', ['rev-parse', 'HEAD'], { cwd: dir, ...abort })).trim();
+  const git = refGit(ops, opts.signal);
+  const headSha = async (): Promise<string> => (await git.output(['rev-parse', 'HEAD'], dir)).trim();
   try {
     if (ops.exists(join(dir, '.git'))) {
       // 브랜치는 전체 이름(refs/heads/…)으로 비교한다. `--abbrev-ref`는 브랜치와 같은 이름의 태그가 있으면 모호성을
       // 피하려고 `heads/<이름>`을 돌려줘 재사용 판정이 어긋나고, 그러면 매 턴 다시 받아 커밋 고정이 풀린다.
       // 분리된 HEAD는 (종료 코드 0으로) `HEAD`를 돌려주므로 다른 브랜치로 취급된다.
-      const head = (await ops.output('git', ['rev-parse', '--symbolic-full-name', 'HEAD'], { cwd: dir, ...abort })).trim();
+      const head = (await git.output(['rev-parse', '--symbolic-full-name', 'HEAD'], dir)).trim();
       if (head === `refs/heads/${branch}`) return prepared(ref, await headSha());
     }
     // 체크아웃이 없거나(.git 없음) 다른 브랜치다 — 낡은 폴더와 지난 시도의 찌꺼기를 지우고 .part에 새로 받는다.
@@ -165,9 +292,9 @@ async function prepareRefRepo(
     ops.rm(part);
     const plainUrl = buildCloneUrl(ref, {});
     const authUrl = buildCloneUrl(ref, opts.tokens ?? {});
-    await ops.run('git', ['clone', '--depth', '1', '--branch', branch, authUrl, part], { ...abort });
-    await ops.run('git', ['remote', 'set-url', 'origin', plainUrl], { cwd: part, ...abort });
-    ops.rename(part, dir);
+    await git.run(['clone', '--depth', '1', '--branch', branch, authUrl, part]);
+    await git.run(['remote', 'set-url', 'origin', plainUrl], part);
+    await renameWithRetry(ops, part, dir, opts.signal);
     return prepared(ref, await headSha());
   } catch (e) {
     try {

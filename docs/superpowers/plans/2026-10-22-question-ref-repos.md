@@ -471,7 +471,7 @@ describe('ensureRefRepos', () => {
     // rename('/r/_refs/5/12.part', '/r/_refs/5/12'); 결과 [{sha: 'a'*40, error: null}]
   });
   it('reuses an existing checkout on the same branch without fetching', async () => {
-    // exists(.git) → true; abbrev-ref HEAD → 'release/6.5' → clone·fetch 호출 없음, sha = rev-parse HEAD
+    // exists(.git) → true; rev-parse --symbolic-full-name HEAD → 'refs/heads/release/6.5' → clone·fetch 호출 없음, sha = rev-parse HEAD
   });
   it('re-clones when the existing checkout is on a different branch')  // rm(dir) 후 clone
   it('returns a masked error and leaves no folder when the clone fails', async () => {
@@ -488,7 +488,7 @@ describe('ensureRefRepos', () => {
   - Expected: FAIL(`ensureRefRepos` 없음)
 - [ ] **Step 3: 구현**
   - 참조마다 순서대로 처리한다.
-    1. `.git`이 있고 `git rev-parse --abbrev-ref HEAD`가 브랜치와 같으면 그대로 쓰고, `sha`는 `git rev-parse HEAD`.
+    1. `.git`이 있고 `git rev-parse --symbolic-full-name HEAD`가 `refs/heads/<branch>`와 같으면 그대로 쓰고(분리된 HEAD는 `HEAD`를 돌려줘 다른 브랜치로 취급, 같은 이름의 태그가 있어도 판정이 어긋나지 않는다), `sha`는 `git rev-parse HEAD`.
     2. 아니면 `rm(dir)` → `rm(dir + '.part')` → `<dir>.part`로 clone → origin을 평문 URL로 → `rename` → `sha`.
   - URL은 기존 `buildCloneUrl`로 만들고, 오류는 `maskSecrets`로 가린다.
   - 실패하면 `rm(part)`(best effort) 후 `{ sha: null, error }`.

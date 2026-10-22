@@ -1011,6 +1011,38 @@ class QuestionServiceTest {
         verify(interviewService, never()).appendSystemNote(anyLong(), anyString());
     }
 
+    // 아래 두 케이스는 kept(Set)가 중복 적중을 합쳐서 current와 같은 크기가 되는 경우다. no-op 판정의
+    // `kept.size() == slots.size()` 절이 없으면 중복이 "같은 집합"으로 조용히 새어 나간다. 바로 위 테스트(세션 [11,12] + 입력
+    // [11,11])는 kept(1) ≠ current(2)라 다른 절에서 이미 걸려서 이 절을 고정하지 못한다.
+
+    @Test
+    void ask_input_repeating_the_only_current_ref_is_a_duplicate_400_not_a_noop() {
+        // 세션 [11 main]에 입력 [11 main, 11 main] — 두 입력이 같은 현재 원소를 가리켜 kept={11}, current도 1개
+        InterviewSession s = askableSessionWithRefs(ref(11L, "main"));
+
+        assertThatThrownBy(() -> service.ask(5L, "user1", false,
+                askReq(List.of(in(11L, "main"), in(11L, "main"))), null))
+                .satisfies(t -> assertBadRequest(t, "같은 레포를 참조로 두 번 고를 수 없습니다"));
+
+        assertThat(s.getRefRepos()).containsExactly(ref(11L, "main"));
+        verify(repoCatalog, never()).resolveReferences(any(), any());
+        verify(interviewService, never()).appendSystemNote(anyLong(), anyString());
+    }
+
+    @Test
+    void ask_input_repeating_one_of_several_current_refs_is_a_duplicate_400_not_a_noop() {
+        // 세션 [11 main, 12 dev]에 입력 [11 main, 12 dev, 12 dev] — 12가 두 번 적중해 kept={11,12}, current도 2개
+        InterviewSession s = askableSessionWithRefs(ref(11L, "main"), ref(12L, "dev"));
+
+        assertThatThrownBy(() -> service.ask(5L, "user1", false,
+                askReq(List.of(in(11L, "main"), in(12L, "dev"), in(12L, "dev"))), null))
+                .satisfies(t -> assertBadRequest(t, "같은 레포를 참조로 두 번 고를 수 없습니다"));
+
+        assertThat(s.getRefRepos()).containsExactly(ref(11L, "main"), ref(12L, "dev"));
+        verify(repoCatalog, never()).resolveReferences(any(), any());
+        verify(interviewService, never()).appendSystemNote(anyLong(), anyString());
+    }
+
     @Test
     void ask_invalid_added_reference_is_rejected_and_leaves_refs_untouched() {
         InterviewSession s = askableSessionWithRefs(stateful(11L, "main"));

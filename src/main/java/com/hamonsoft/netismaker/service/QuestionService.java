@@ -310,6 +310,7 @@ public class QuestionService {
         }
         Set<RefRepo> kept = slots.stream().filter(Objects::nonNull)
                 .collect(Collectors.toCollection(LinkedHashSet::new));
+        // kept는 Set이라 같은 현재 원소를 두 번 가리키는 중복 입력이 하나로 합쳐진다 — slots와 크기를 비교해야 [A,A]가 "같은 집합" no-op으로 새지 않는다
         if (added.isEmpty() && kept.size() == slots.size() && kept.size() == current.size()) return null;
 
         RepoCatalogService.checkRefShape(s.getRepoCatalogId(), wanted);

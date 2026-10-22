@@ -1,6 +1,6 @@
 import type { JavaApiClient } from '../api/javaClient.js';
 import type { SdkMessage, SdkQuery } from '../sdk/sdkAdapter.js';
-import type { ActivityInput, AttachmentRef, InterviewClaimResponse, RateLimitInfo } from '../types.js';
+import type { ActivityInput, AttachmentRef, InterviewClaimResponse, RateLimitInfo, RefRepoClaim, RefState } from '../types.js';
 import { ActivityPoster } from './activityPoster.js';
 import { RateLimitReporter } from './rateLimitReport.js';
 import { buildOptions } from '../sdk/sessionOptions.js';
@@ -9,7 +9,12 @@ import { withTurnInputGate } from './turnInputGate.js';
 import { tryHarvest, type HarvestResult } from './planHarvest.js';
 import { harvestSessionPlanFiles } from './planFiles.js';
 import { relay } from './messageRelay.js';
-import { ensureRepo as defaultEnsureRepo, type RepoInput } from './repoPrepare.js';
+import {
+  ensureRepo as defaultEnsureRepo,
+  ensureRefRepos as defaultEnsureRefRepos,
+  type RefPrepared,
+  type RepoInput,
+} from './repoPrepare.js';
 import { maskSecrets, type GitTokens } from '../sdk/gitRemote.js';
 import { buildWritingPlansSplice, buildPlanReformatSplice, detectHandoff, detectPlanIntent } from './skillDispatch.js';
 import { HeartbeatTicker } from './heartbeat.js';
@@ -30,6 +35,11 @@ export interface RunnerDeps {
   mcpsBase?: Record<string, unknown>;
   /** Injectable repo prepare (defaults to the real git clone/fetch). */
   ensureRepo?: (input: RepoInput) => Promise<void>;
+  /**
+   * 테스트용 주입 — 기본 repoPrepare.ensureRefRepos (질문 세션의 읽기 전용 참조 repo 준비, 스펙 2026-10-22 §5.1).
+   * 참조 하나가 실패해도(abort 포함) 던지지 않고 `{ error }`로 돌려주는 계약이다.
+   */
+  ensureRefRepos?: (refs: RefRepoClaim[], opts: { tokens?: GitTokens; signal?: AbortSignal }) => Promise<RefPrepared[]>;
   /** Injectable SKILL.md reader for the writing-plans splice fallback (defaults to real fs read). */
   spliceRead?: (path: string, enc: 'utf8') => string;
   heartbeatIntervalMs?: number;
@@ -158,6 +168,93 @@ export function dbSection(db: Pick<PreparedDbMcp, 'labels' | 'notices'>): string
   return lines.join('\n') + '\n\n';
 }
 
+/** 못 받은 참조의 사유 요약 상한(글자). */
+const REF_REASON_MAX = 200;
+/** 사유가 (가린 뒤) 비어 있을 때 쓰는 문구 — repoPrepare의 고정 문구와 같다. API는 error를 있는 그대로 저장하므로 비워 두지 않는다. */
+const REF_REASON_FALLBACK = '참조 repo를 받지 못했습니다';
+
+/**
+ * 못 받은 참조의 실패 사유를 한 줄로 줄인다 — 프롬프트의 "사용할 수 없는 참조" 줄과 보고 `refStates[].error`(칩 툴팁)가 같은 값을 쓴다.
+ * git 오류 전문은 여러 줄이고 로컬 경로가 섞이므로, 가린 문구의 첫 비어 있지 않은 줄을 다듬어 200자 이내로 자른다.
+ * 전체 문구는 로그에만 남는다(logRefFailures). 가린 뒤에 자르는 이유: 자르다가 토큰이 반쪽이 되면 maskSecrets가 알아보지 못한다.
+ */
+function refReason(error: string): string {
+  const firstLine = maskSecrets(error)
+    .split(/\r\n|\r|\n/)
+    .map((line) => line.trim())
+    .find((line) => line.length > 0);
+  if (!firstLine) return REF_REASON_FALLBACK;
+  let cut = firstLine.slice(0, REF_REASON_MAX);
+  // 서로게이트 쌍의 앞 절반에서 잘렸으면 그 반쪽을 버린다 — 깨진 문자가 JSON·DB로 나가지 않게.
+  if (/[\uD800-\uDBFF]$/.test(cut)) cut = cut.slice(0, -1);
+  return cut.trim() || REF_REASON_FALLBACK;
+}
+
+/**
+ * 질문 세션 참조 repo 안내 (스펙 2026-10-22 §5.2) — 이번 턴 ensureRefRepos 결과로 만든다. 새 질문·추가 질문 모두 매 턴 접두로 붙는다
+ * (대화 중 참조를 바꾸거나 한 참조가 못 받아질 수 있으니 resume 턴에도 현재 상태를 다시 알려 준다).
+ * 사용 가능한 참조는 `별칭 · 브랜치@커밋 앞 7자 : 절대경로`, 못 받은 참조는 참조마다 한 줄(`별칭(브랜치) — 한 줄 사유`).
+ * 빈 배열이면 빈 문자열이라 참조 없는 질문의 프롬프트는 지금과 같다. 사용 가능한 참조가 없으면 머리말과 `- …` 줄을,
+ * 실패가 없으면 "사용할 수 없는 참조" 줄을 뺀다. 끝에 빈 줄 하나(dbSection과 같은 모양).
+ */
+export function refSection(prepared: RefPrepared[]): string {
+  if (prepared.length === 0) return '';
+  const lines: string[] = [];
+  const usable = prepared.filter((p) => p.error === null);
+  if (usable.length > 0) {
+    lines.push('참조 repo (읽기 전용 — 비교·참고용, 수정 금지):');
+    for (const p of usable) {
+      const commit = p.sha ? `@${p.sha.slice(0, 7)}` : '';
+      lines.push(`- ${p.ref.alias} · ${p.ref.branch}${commit} : ${p.ref.dir}`);
+    }
+  }
+  for (const p of prepared) {
+    if (p.error !== null) lines.push(`사용할 수 없는 참조: ${p.ref.alias}(${p.ref.branch}) — ${refReason(p.error)}`);
+  }
+  lines.push(
+    '규칙:',
+    '- 대상 repo는 현재 작업 디렉토리다. 참조 repo는 위 절대 경로를 Read/Grep/Glob의 경로로 주어 읽는다(셸 명령은 대상 안에서만 동작한다).',
+    '- 참조 파일 근거는 `별칭:경로:줄`(예: `옛앱:src/a/B.java:12`), 대상 파일은 `경로:줄`로 적는다.',
+    '- 사용할 수 없는 참조의 내용은 추측하지 말고 못 읽었다고 답한다.',
+  );
+  return lines.join('\n') + '\n\n';
+}
+
+/**
+ * 질문 claim의 참조 repo 목록 (스펙 2026-10-22 §4.4). 구버전 백엔드 claim에는 필드가 없다 → Array.isArray 가드(dbConnections 선례).
+ * 인터뷰(INTERVIEW) claim은 값이 있어도 무시한다 — 이 단계에서 참조는 질문 세션 전용이다.
+ */
+function claimRefRepos(claim: InterviewClaimResponse): RefRepoClaim[] {
+  return claim.kind === 'QUESTION' && Array.isArray(claim.refRepos) ? claim.refRepos : [];
+}
+
+/**
+ * 참조 준비 결과 → 답변 보고용 상태 (스펙 2026-10-22 §4.5, 입력 순서 그대로). 성공은 `{ sha, error: null }`,
+ * 실패는 `{ sha: null, error }` — error는 프롬프트와 같은 한 줄 요약이다(API는 그대로 저장해 칩 툴팁에 보인다).
+ */
+function refStatesOf(prepared: RefPrepared[]): RefState[] {
+  return prepared.map((p) => ({
+    catalogId: p.ref.catalogId,
+    branch: p.ref.branch,
+    sha: p.sha,
+    error: p.error === null ? null : refReason(p.error),
+  }));
+}
+
+/**
+ * 못 받은 참조는 세션을 실패시키지 않으므로(스펙 §1.2) 운영자가 원인을 볼 곳은 로그뿐이다 — 한 줄 요약이 아니라 전체 문구를 남긴다.
+ * repoPrepare가 이미 가린 문구지만 주입된 준비기까지 믿지 않고 한 번 더 가린다(safeFail과 같은 이중 방어).
+ */
+function logRefFailures(sessionId: number, prepared: RefPrepared[]): void {
+  for (const p of prepared) {
+    if (p.error === null) continue;
+    // eslint-disable-next-line no-console
+    console.warn(
+      `[refRepos] 참조 준비 실패: session=${sessionId} ${p.ref.alias}(${p.ref.branch}) catalog=${p.ref.catalogId} — ${maskSecrets(p.error)}`,
+    );
+  }
+}
+
 /**
  * 질문 세션(Q&A) 프롬프트 — 스킬 언급 없음. fresh = Q&A 전용 계약 + 질문 본문 + (등록 시 첨부) + 읽기 전용 규칙
  * (스펙 §6-④), resume = 후속 질문(lastAnswer) + (그 메시지의 첨부) 주입. 허용 Bash 목록은 permissions.ts
@@ -197,6 +294,7 @@ async function* questionPromptFor(claim: InterviewClaimResponse, prefix = ''): A
  */
 export class InterviewRunner {
   private readonly ensureRepo: (input: RepoInput) => Promise<void>;
+  private readonly ensureRefRepos: NonNullable<RunnerDeps['ensureRefRepos']>;
   private readonly harvestPlanFiles: (workDir: string) => Promise<HarvestResult>;
   /** 구독 한도 보고기 — 서비스 수명 동안 1개(404 비활성 상태가 세션을 넘어 유지된다). */
   private readonly rateLimits: RateLimitReporter;
@@ -209,6 +307,7 @@ export class InterviewRunner {
   ) {
     this.query = withTurnInputGate(query);
     this.ensureRepo = deps.ensureRepo ?? defaultEnsureRepo;
+    this.ensureRefRepos = deps.ensureRefRepos ?? defaultEnsureRefRepos;
     this.harvestPlanFiles = deps.harvestPlanFiles ?? harvestSessionPlanFiles;
     this.rateLimits = new RateLimitReporter(client);
   }
@@ -311,7 +410,13 @@ export class InterviewRunner {
 
       // CLONE: ensure the checkout exists at workDir before the (fresh OR resume) turn.
       // signal 전파: 타임아웃 abort가 git 자식 프로세스까지 종료해 좀비를 남기지 않는다.
-      poster.push({ type: 'tool', label: '환경 준비', detail: claim.githubRepo });
+      // 질문 claim에 참조 repo가 있으면 대상 뒤에 ` + 참조 n`을 붙인다(받는 일은 runQuestionTurn — 스펙 2026-10-22 §5.2).
+      const refCount = claimRefRepos(claim).length;
+      poster.push({
+        type: 'tool',
+        label: '환경 준비',
+        detail: refCount > 0 ? `${claim.githubRepo} + 참조 ${refCount}` : claim.githubRepo,
+      });
       await this.ensureRepo({
         githubRepo: claim.githubRepo,
         githubBranch: claim.githubBranch,
@@ -510,12 +615,26 @@ export class InterviewRunner {
   ): Promise<void> {
     const onActivity = (e: ActivityInput) => poster.push(e);
     const onRateLimit = (info: RateLimitInfo) => this.rateLimits.report(info);
+    // 읽기 전용 참조 repo(스펙 2026-10-22 §5.1): 질문 claim에 참조가 있을 때만 준비한다 — 없으면 refs가 빈 배열이라
+    // 프롬프트·옵션·보고가 지금과 같다. 대상 ensureRepo(runTurn) 다음, SDK 진입 전에 순차로 받는다.
+    // 참조를 못 받아도 세션은 실패하지 않는다 — 그 참조 없이 답하고 사유는 프롬프트·보고·로그로 알린다.
+    let refs: RefPrepared[] = [];
+    const refClaims = claimRefRepos(claim);
+    if (refClaims.length > 0) {
+      refs = await this.ensureRefRepos(refClaims, { tokens: this.deps.gitTokens, signal: controller.signal });
+      // ensureRefRepos는 abort를 예외가 아니라 "못 받은 참조"로 돌려준다 — 타임아웃으로 이미 끝난 턴이 이어 가
+      // SDK에 들어가거나 refStates를 보고하지 않도록 여기서 직접 확인한다.
+      controller.signal.throwIfAborted();
+      logRefFailures(claim.sessionId, refs);
+    }
+    // 이번 턴에 준비에 성공한 참조 폴더만 읽기 루트다 — 못 받은 참조·대화 중 빠진 참조는 게이트가 거부한다(§5.3).
+    const refRoots = refs.filter((p) => p.error === null).map((p) => p.ref.dir);
     // 내장 DB MCP(스펙 2026-10-02 §6.4): 서버는 턴마다 새로 만들고(DB 접속은 첫 도구 호출 때),
     // 성공·실패와 무관하게 finally에서 열린 커넥션을 닫는다.
     const db = (this.deps.createDbMcp ?? createDbMcp)(claim);
     try {
       const stream: AsyncIterable<SdkMessage> = this.query({
-        prompt: questionPromptFor(claim, dbSection(db)),
+        prompt: questionPromptFor(claim, refSection(refs) + dbSection(db)),
         options: buildOptions({
           superpowersPluginPath: this.deps.superpowersPluginPath,
           workDir: claim.workDir,
@@ -529,6 +648,8 @@ export class InterviewRunner {
           sessionKind: 'QUESTION',
           // 세션 첨부 디렉토리 — Read 게이트의 두 번째 허용 루트 (스펙 2026-09-13 §6). 구버전 Java는 필드 없음 → null.
           attachmentRoot: claim.attachmentRoot ?? null,
+          // 이번 턴에 준비에 성공한 참조 폴더 — Read/Grep/Glob 허용 루트(스펙 2026-10-22 §5.3). Bash는 대상 안만 그대로.
+          refRoots,
           dbMcpServers: db.servers,
           dbDialects: db.dialects,
         }),
@@ -549,6 +670,9 @@ export class InterviewRunner {
         // 컨텍스트 스냅샷 (스펙 2026-09-05 §4.2) — 구버전 Java는 미지 필드를 무시한다.
         contextTokens: result.contextTokens,
         contextWindow: result.contextWindow,
+        // 참조 준비 결과 (스펙 2026-10-22 §4.5·§5.4) — 이번 턴에 참조를 준비했을 때만 싣는다. 참조 없는 질문의 바디는 지금과 같다
+        // (키 자체를 생략). 턴이 실패해 fail로 끝나면 이 줄에 닿지 않으므로 보고하지 않는다.
+        ...(refs.length > 0 ? { refStates: refStatesOf(refs) } : {}),
       });
     } finally {
       await db.close();

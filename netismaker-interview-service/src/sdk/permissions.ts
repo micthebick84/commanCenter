@@ -55,6 +55,7 @@ function isWithin(root: string, target: string): boolean {
  * 비교하면 같은 레포 안인데도 접두사가 달라 오탐 deny가 난다. 그래서 존재 여부로 먼저 분기해
  * lexical(둘 다 원본 경로) vs realpath(둘 다 해소된 경로)를 대칭으로 비교한다.
  * TOCTOU는 닫지 않는다 — existsSync와 realpathSync 사이에 symlink가 바뀌면 여전히 우회 가능하다.
+ * 상대 경로 p는 repoDir 기준으로 풀린다 — 루트가 둘 이상이면 이 함수를 직접 부르지 말고 insideAnyRoot를 쓸 것.
  */
 function insideRepoReal(repoDir: string, p: string): boolean {
   const abs = resolve(repoDir, p);
@@ -73,6 +74,18 @@ function insideRepoReal(repoDir: string, p: string): boolean {
   } catch {
     return false;
   }
+}
+
+/**
+ * QUESTION 게이트의 다중 루트 판정 — p(file_path/path)가 roots 중 하나의 안쪽 실제 경로인가. 루트마다 insideRepoReal을 적용한다.
+ * 상대 경로는 도구가 cwd(= repoDir) 기준으로 풀어 읽으므로 여기서도 repoDir 기준으로 **한 번만** 절대화해 모든 루트에 같은 경로를 비교한다.
+ * 루트마다 `insideRepoReal(root, p)`에 상대 경로를 그대로 넘기면 `resolve(root, p)`가 그 루트 기준으로 풀려, 도구가 실제로 읽는
+ * `repoDir/<p>`(예: 레포에 커밋된 symlink `link -> /etc/hosts`)와 다른 파일을 판정한다 — 그 루트 밑에 없는 이름은 lexical 판정으로
+ * "안쪽"이 되므로 repoDir 검사에서 거부된 symlink가 두 번째 루트 검사에서 통과한다(2026-10-22 attachmentRoot 실측).
+ */
+function insideAnyRoot(repoDir: string, roots: readonly string[], p: string): boolean {
+  const abs = resolve(repoDir, p);
+  return roots.some((root) => insideRepoReal(root, abs));
 }
 
 /**
@@ -240,9 +253,10 @@ function questionBashGate(repoDir: string, input: Record<string, unknown>): Perm
 /**
  * 질문 세션 Read 게이트: file_path 필수 + `~` 금지(라운드3 (b)) + repoDir 안쪽 실제 경로(symlink 포함)만 허용.
  * attachmentRoot(세션 첨부 디렉토리, 스펙 2026-09-13 §6)가 있으면 그 안쪽도 허용 — Read 전용 두 번째 루트로,
- * 같은 insideRepoReal(realpath 대칭 비교)을 쓴다. Grep/Glob/Bash 게이트는 이 루트를 모른다(레포 한정 유지).
+ * 같은 insideRepoReal(realpath 대칭 비교)을 쓴다. refRoots(이번 턴에 준비된 참조 repo 폴더, 스펙 2026-10-22 §5.3)도
+ * 허용 루트다. Bash 게이트는 이 루트들을 모른다(레포 한정 유지).
  */
-function questionReadGate(repoDir: string, attachmentRoot: string | null, input: Record<string, unknown>): PermissionResult {
+function questionReadGate(repoDir: string, attachmentRoot: string | null, refRoots: readonly string[], input: Record<string, unknown>): PermissionResult {
   const fp = input.file_path;
   if (typeof fp !== 'string' || fp.length === 0) {
     return { behavior: 'deny', message: '질문 세션 Read는 file_path가 필요합니다' };
@@ -250,28 +264,30 @@ function questionReadGate(repoDir: string, attachmentRoot: string | null, input:
   if (fp.startsWith('~')) {
     return { behavior: 'deny', message: `질문 세션 경로에 ~ 사용 금지: ${fp}` };
   }
-  if (insideRepoReal(repoDir, fp)) return { behavior: 'allow' };
-  if (attachmentRoot && insideRepoReal(attachmentRoot, fp)) return { behavior: 'allow' };
+  const roots = attachmentRoot ? [repoDir, attachmentRoot, ...refRoots] : [repoDir, ...refRoots];
+  if (insideAnyRoot(repoDir, roots, fp)) return { behavior: 'allow' };
+  const refNote = refRoots.length > 0 ? ' 또는 참조 repo' : '';
   return {
     behavior: 'deny',
     message: attachmentRoot
-      ? `질문 세션 Read는 레포 체크아웃 또는 세션 첨부 디렉토리 안쪽 경로만 허용합니다: ${fp}`
-      : `질문 세션 Read는 레포 체크아웃 안쪽 경로만 허용합니다: ${fp}`,
+      ? `질문 세션 Read는 레포 체크아웃 또는 세션 첨부 디렉토리${refNote} 안쪽 경로만 허용합니다: ${fp}`
+      : `질문 세션 Read는 레포 체크아웃${refNote} 안쪽 경로만 허용합니다: ${fp}`,
   };
 }
 
 /**
- * Grep/Glob 공용: input.path가 문자열로 있으면 `~` 금지(라운드3 (b)) + repoDir 안쪽 실제 경로(symlink
- * 포함)인지 검사, 없으면 allow(cwd=repoDir).
+ * Grep/Glob 공용: input.path가 문자열로 있으면 `~` 금지(라운드3 (b)) + repoDir 또는 refRoots(참조 repo 폴더) 안쪽
+ * 실제 경로(symlink 포함)인지 검사, 없으면 allow(cwd=repoDir). attachmentRoot는 여기서 허용하지 않는다(Read 전용).
  */
-function questionPathScopedGate(repoDir: string, input: Record<string, unknown>, toolName: string): PermissionResult {
+function questionPathScopedGate(repoDir: string, refRoots: readonly string[], input: Record<string, unknown>, toolName: string): PermissionResult {
   const p = input.path;
   if (typeof p !== 'string' || p.length === 0) return { behavior: 'allow' };
   if (p.startsWith('~')) {
     return { behavior: 'deny', message: `질문 세션 경로에 ~ 사용 금지: ${p}` };
   }
-  if (!insideRepoReal(repoDir, p)) {
-    return { behavior: 'deny', message: `질문 세션 ${toolName}은 레포 체크아웃 안쪽 경로만 허용합니다: ${p}` };
+  if (!insideAnyRoot(repoDir, [repoDir, ...refRoots], p)) {
+    const refNote = refRoots.length > 0 ? ' 또는 참조 repo' : '';
+    return { behavior: 'deny', message: `질문 세션 ${toolName}은 레포 체크아웃${refNote} 안쪽 경로만 허용합니다: ${p}` };
   }
   return { behavior: 'allow' };
 }
@@ -281,12 +297,12 @@ function questionPathScopedGate(repoDir: string, input: Record<string, unknown>,
 const WINDOWS_ABSOLUTE_PATTERN = /^([A-Za-z]:|\\)/;
 
 /**
- * Glob 게이트: path confinement(공용, `~` 포함) + pattern이 `~`로 시작하거나(라운드3 (b)) 절대경로로
- * 시작하거나 `..`를 포함하면 거부(pattern은 glob 패턴이지 정규식이 아니므로 경로 취급 — bypass #3:
- * `../../../etc/passwd`는 `/`나 `~`로 시작하지 않지만 여전히 레포를 탈출한다).
+ * Glob 게이트: path confinement(공용 — repoDir 또는 참조 repo 폴더, `~` 포함) + pattern이 `~`로 시작하거나(라운드3 (b))
+ * 절대경로로 시작하거나 `..`를 포함하면 거부(pattern은 glob 패턴이지 정규식이 아니므로 경로 취급 — bypass #3:
+ * `../../../etc/passwd`는 `/`나 `~`로 시작하지 않지만 여전히 레포를 탈출한다). 참조 repo는 pattern이 아니라 path로 지정한다.
  */
-function questionGlobGate(repoDir: string, input: Record<string, unknown>): PermissionResult {
-  const pathResult = questionPathScopedGate(repoDir, input, 'Glob');
+function questionGlobGate(repoDir: string, refRoots: readonly string[], input: Record<string, unknown>): PermissionResult {
+  const pathResult = questionPathScopedGate(repoDir, refRoots, input, 'Glob');
   if (pathResult.behavior === 'deny') return pathResult;
   const pattern = input.pattern;
   if (typeof pattern === 'string' && pattern.startsWith('~')) {
@@ -440,19 +456,26 @@ function questionMcpGate(
  *   attachmentRoot(스펙 2026-09-13 §6, 세션 첨부 디렉토리 `{dir}/question-{sid}`)가 주어지면 **Read만** 그 안쪽도
  *   허용한다(원본 + Tika sidecar .txt를 에이전트가 읽는 경로). Grep/Glob/Bash는 여전히 repoDir 한정이고 `~` 금지도
  *   그대로. null/미지정이면 종전과 동일. INTERVIEW 게이트는 이 인자를 무시한다(애초에 경로 confinement 없음).
+ *   refRoots(스펙 2026-10-22 §5.3, 이번 턴에 준비에 성공한 참조 repo 폴더 `{체크아웃 루트}/_refs/{sid}/{catalogId}`)가 주어지면
+ *   **Read·Grep·Glob**이 그 안쪽도 허용한다 — Read는 file_path, Grep/Glob은 path로 지정한다(`~` 금지와 Glob pattern의
+ *   절대경로·`..`·`~` 금지는 그대로). 판정은 attachmentRoot와 같은 insideRepoReal을 루트마다 적용한다(insideAnyRoot). **Bash는 바뀌지 않는다** —
+ *   대상 체크아웃 안의 상대 경로만. 빈 배열/미지정이면 종전과 동일. 절대경로가 아닌 항목(빈 문자열 포함)은 버린다: 빈 루트는
+ *   `path.relative`가 서비스 프로세스 cwd로 풀어 인터뷰 서비스 자신의 폴더를 열어 버린다. INTERVIEW 게이트는 이 인자도 무시한다.
  */
 export function buildCanUseTool(
   repoDir: string,
   kind: SessionKind = 'INTERVIEW',
   attachmentRoot: string | null = null,
   dbServers: Record<string, SqlDialect> = {},
+  refRoots: string[] = [],
 ): CanUseTool {
   if (kind === 'QUESTION') {
+    const refs = refRoots.filter((r) => typeof r === 'string' && isAbsolute(r));
     return async (toolName, input) => {
       if (toolName === 'Bash') return questionBashGate(repoDir, input);
-      if (toolName === 'Read') return questionReadGate(repoDir, attachmentRoot, input);
-      if (toolName === 'Grep') return questionPathScopedGate(repoDir, input, 'Grep');
-      if (toolName === 'Glob') return questionGlobGate(repoDir, input);
+      if (toolName === 'Read') return questionReadGate(repoDir, attachmentRoot, refs, input);
+      if (toolName === 'Grep') return questionPathScopedGate(repoDir, refs, input, 'Grep');
+      if (toolName === 'Glob') return questionGlobGate(repoDir, refs, input);
       if (toolName.startsWith('mcp__')) return questionMcpGate(toolName, input, dbServers);
       return { behavior: 'deny', message: `질문 세션에서는 ${toolName} 도구를 사용할 수 없습니다 (읽기 전용 Q&A)` };
     };

@@ -35,6 +35,13 @@ export interface SessionOptionsInput {
    */
   attachmentRoot?: string | null;
   /**
+   * 이번 턴에 준비에 성공한 참조 repo 폴더 절대경로들 (스펙 2026-10-22 §5.3, `{체크아웃 루트}/_refs/{sid}/{catalogId}`) —
+   * QUESTION 게이트의 Read/Grep/Glob 허용 루트로 buildCanUseTool에 전달만 한다(SDK 옵션에는 싣지 않음, attachmentRoot와 같은 방식).
+   * Bash는 대상 체크아웃 한정 그대로. 미지정/빈 배열 = 추가 허용 루트 없음(종전 동작). INTERVIEW에서는 무시된다.
+   * 대화 중 빠진 참조나 준비에 실패한 참조는 여기 없으므로 다음 턴부터 거부된다.
+   */
+  refRoots?: string[];
+  /**
    * 이번 턴의 내장 DB MCP 서버(스펙 2026-10-02 §6.4) — dbMcp.createDbMcp 결과({type:'sdk', name, instance}).
    * SDK가 CLI에는 이름만 넘긴다. merge 순서 base → extras → db(마지막 우선).
    */
@@ -90,10 +97,11 @@ function toMcpServers(mcpsExtra: unknown): Record<string, { type: string; url: s
  *   reaches canUseTool. Pre-approving Read/Grep/Glob made their path confinement dead code: the CLI
  *   skipped canUseTool and a question session read `C:\Windows\win.ini` (2026-09-29 라이브 실측,
  *   SDK 프로브로 allowedTools 등재 시 canUseTool 0회 호출 확인). canUseTool itself is
- *   buildCanUseTool(repoDir,'QUESTION',attachmentRoot): default-deny
+ *   buildCanUseTool(repoDir,'QUESTION',attachmentRoot,dbDialects,refRoots): default-deny
  *   with Read/Grep/Glob path-confined to repoDir (Read additionally allowed under attachmentRoot, the
- *   session attachment dir — 스펙 2026-09-13 §6) and Bash further restricted beyond the read-only
- *   whitelist (see permissions.ts).
+ *   session attachment dir — 스펙 2026-09-13 §6; Read/Grep/Glob additionally allowed under refRoots, the
+ *   reference-repo folders prepared for this turn — 스펙 2026-10-22 §5.3) and Bash further restricted
+ *   beyond the read-only whitelist, still repoDir-only (see permissions.ts).
  */
 export function buildOptions(input: SessionOptionsInput): Record<string, unknown> {
   // 베이스(글로벌+프로젝트 합본) + 작업별 extras — 충돌 시 extras 우선 (워커 패리티).
@@ -141,6 +149,6 @@ export function buildOptions(input: SessionOptionsInput): Record<string, unknown
     ...(input.model ? { model: input.model } : {}),
     ...(input.effort ? { effort: input.effort } : {}),
     ...(input.abortController ? { abortController: input.abortController } : {}),
-    canUseTool: buildCanUseTool(input.workDir, input.sessionKind ?? 'INTERVIEW', input.attachmentRoot ?? null, input.dbDialects ?? {}),
+    canUseTool: buildCanUseTool(input.workDir, input.sessionKind ?? 'INTERVIEW', input.attachmentRoot ?? null, input.dbDialects ?? {}, input.refRoots ?? []),
   };
 }

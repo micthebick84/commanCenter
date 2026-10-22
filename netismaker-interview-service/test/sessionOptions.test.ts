@@ -271,6 +271,45 @@ describe('buildOptions — attachmentRoot passthrough (스펙 2026-09-13 §6)', 
   });
 });
 
+describe('buildOptions — refRoots passthrough (스펙 2026-10-22 §5.3)', () => {
+  type Gate = (t: string, i: Record<string, unknown>) => Promise<{ behavior: string }>;
+
+  it('passes refRoots to the QUESTION gate', async () => {
+    const o = buildOptions({ ...base, claudeSessionId: null, sessionKind: 'QUESTION', refRoots: ['/tmp/refs/5/12'] });
+    const gate = o.canUseTool as Gate;
+    expect((await gate('Read', { file_path: '/tmp/refs/5/12/a' })).behavior).toBe('allow');
+    expect((await gate('Grep', { pattern: 'x', path: '/tmp/refs/5/12' })).behavior).toBe('allow');
+    expect((await gate('Glob', { pattern: '*.java', path: '/tmp/refs/5/12' })).behavior).toBe('allow');
+    expect((await gate('Bash', { command: 'cat /tmp/refs/5/12/a' })).behavior).toBe('deny'); // Bash는 대상 체크아웃 안만
+    expect((await gate('Read', { file_path: '/tmp/refs/5/120/a' })).behavior).toBe('deny'); // 이름 접두 형제
+    expect(o).not.toHaveProperty('refRoots');
+  });
+
+  it('keeps QUESTION pre-approving nothing — reading a reference still goes through canUseTool', () => {
+    const o = buildOptions({ ...base, claudeSessionId: null, sessionKind: 'QUESTION', refRoots: ['/tmp/refs/5/12'] });
+    expect(o.allowedTools).toEqual([]);
+  });
+
+  it('QUESTION without refRoots (omitted or empty): a reference path stays denied', async () => {
+    for (const input of [
+      { ...base, claudeSessionId: null, sessionKind: 'QUESTION' as const },
+      { ...base, claudeSessionId: null, sessionKind: 'QUESTION' as const, refRoots: [] },
+    ]) {
+      const gate = buildOptions(input).canUseTool as Gate;
+      expect((await gate('Read', { file_path: '/tmp/refs/5/12/a' })).behavior).toBe('deny');
+    }
+  });
+
+  it('INTERVIEW ignores refRoots (no gate change, no options change)', async () => {
+    const o = buildOptions({ ...base, claudeSessionId: null, refRoots: ['/tmp/refs/5/12'] });
+    const gate = o.canUseTool as Gate;
+    expect((await gate('Write', { file_path: '/tmp/refs/5/12/a' })).behavior).toBe('deny'); // docs/superpowers 밖
+    expect((await gate('Write', { file_path: '/tmp/repo/docs/superpowers/x.md' })).behavior).toBe('allow');
+    expect(o).not.toHaveProperty('refRoots');
+    expect(o.allowedTools).toEqual(['Skill', 'Read', 'Grep', 'Glob']);
+  });
+});
+
 describe('buildOptions — DB MCP (스펙 2026-10-02 §6.4)', () => {
   const dbServer = { type: 'sdk', name: 'db-7', instance: {} };
 

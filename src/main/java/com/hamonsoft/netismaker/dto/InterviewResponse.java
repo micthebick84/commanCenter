@@ -3,6 +3,7 @@ package com.hamonsoft.netismaker.dto;
 import com.hamonsoft.netismaker.entity.InterviewPlan;
 import com.hamonsoft.netismaker.entity.InterviewSession;
 import com.hamonsoft.netismaker.entity.InterviewTurn;
+import com.hamonsoft.netismaker.entity.RefRepo;
 
 import java.math.BigDecimal;
 import java.time.OffsetDateTime;
@@ -43,7 +44,9 @@ public record InterviewResponse(
         /** 선택한 DB 접속정보 id. 항상 non-null. */
         List<Long> dbConnectionIds,
         /** 칩 표시용 {id,name,dbType} — 현재 행 기준. QuestionService.get이 withDbConnections로 채운다. 항상 non-null. */
-        List<DbConnectionDto.Chip> dbConnections
+        List<DbConnectionDto.Chip> dbConnections,
+        /** 읽기 전용 참조 repo 칩 (스펙 2026-10-22 §4.3) — 세션에 박제된 순서 그대로. 항상 non-null(없으면 []). */
+        List<RefRepoView> refRepos
 ) {
     public InterviewResponse {
         mcpCatalogIds = mcpCatalogIds == null ? List.of() : List.copyOf(mcpCatalogIds);
@@ -52,13 +55,14 @@ public record InterviewResponse(
         dbConnectionIds = dbConnectionIds == null ? List.of() : ((List<?>) dbConnectionIds).stream()
                 .map(o -> ((Number) o).longValue()).toList();
         dbConnections = dbConnections == null ? List.of() : List.copyOf(dbConnections);
+        refRepos = refRepos == null ? List.of() : List.copyOf(refRepos);
     }
 
     /** 칩만 바꾼 사본 (QuestionService.get이 DbConnectionService.chipsFor 결과로 채운다). */
     public InterviewResponse withDbConnections(List<DbConnectionDto.Chip> chips) {
         return new InterviewResponse(id, githubRepo, githubBranch, title, description, status, statusName, currentPhase,
                 workDir, taskId, model, effort, turns, plan, createdAt, updatedAt, kind, totalCostUsd, contextTokens,
-                contextWindow, mcpCatalogIds, attachments, repoCatalogId, dbConnectionIds, chips);
+                contextWindow, mcpCatalogIds, attachments, repoCatalogId, dbConnectionIds, chips, refRepos);
     }
 
     /** attachments = 이 턴(user answer)에 첨부된 파일. 항상 non-null. */
@@ -80,6 +84,17 @@ public record InterviewResponse(
 
     /** 브라우저용 첨부 메타 — 경로 없음(다운로드는 GET /api/questions/{id}/attachments/{attId}). */
     public record AttachmentView(long id, String fileName, String contentType, long sizeBytes) {}
+
+    /**
+     * 참조 repo 칩 한 개 (스펙 2026-10-22 §4.3) — 화면에 필요한 것만 싣는다(path·gitUrl은 내보내지 않는다).
+     * sha = 처음 받아 고정한 커밋(없으면 null = 아직 안 받음), fetchedAt = 그 시각(ISO-8601),
+     * error = 마지막 준비 실패 사유(자격증명을 가린 문구, 없으면 null).
+     */
+    public record RefRepoView(Long catalogId, String alias, String branch, String sha, String fetchedAt, String error) {
+        static RefRepoView of(RefRepo r) {
+            return new RefRepoView(r.catalogId(), r.alias(), r.branch(), r.sha(), r.fetchedAt(), r.error());
+        }
+    }
 
     /** 레거시 3-arg — 첨부/MCP id 없음 (INTERVIEW 세션 형태). */
     public static InterviewResponse of(InterviewSession s, List<InterviewTurn> turns, InterviewPlan plan) {
@@ -103,6 +118,12 @@ public record InterviewResponse(
                 s.getModel(), s.getEffort(), tvs, pv, s.getCreatedAt(), s.getUpdatedAt(),
                 s.getKind().name(), s.getTotalCostUsd(), s.getContextTokens(), s.getContextWindow(),
                 s.getMcpCatalogIds(), attachments,
-                s.getRepoCatalogId(), s.getDbConnectionIds(), List.of());
+                s.getRepoCatalogId(), s.getDbConnectionIds(), List.of(), refViews(s));
+    }
+
+    /** 세션의 참조 repo → 칩 뷰. 세션 쪽 값이 null이어도 [] (INTERVIEW 세션은 항상 []). */
+    private static List<RefRepoView> refViews(InterviewSession s) {
+        List<RefRepo> refs = s.getRefRepos();
+        return refs == null ? List.of() : refs.stream().map(RefRepoView::of).toList();
     }
 }

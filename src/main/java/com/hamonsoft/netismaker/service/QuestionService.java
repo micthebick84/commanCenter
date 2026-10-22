@@ -5,10 +5,12 @@ import com.hamonsoft.netismaker.dto.InterviewResponse;
 import com.hamonsoft.netismaker.dto.QuestionAskRequest;
 import com.hamonsoft.netismaker.dto.QuestionCreateRequest;
 import com.hamonsoft.netismaker.dto.QuestionSummaryResponse;
+import com.hamonsoft.netismaker.dto.RefRepoInput;
 import com.hamonsoft.netismaker.entity.InterviewKind;
 import com.hamonsoft.netismaker.entity.InterviewSession;
 import com.hamonsoft.netismaker.entity.InterviewTurn;
 import com.hamonsoft.netismaker.entity.QuestionAttachment;
+import com.hamonsoft.netismaker.entity.RefRepo;
 import com.hamonsoft.netismaker.entity.TaskMcpSpec;
 import com.hamonsoft.netismaker.repository.InterviewSessionRepository;
 import com.hamonsoft.netismaker.repository.InterviewTurnRepository;
@@ -24,11 +26,14 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.HashSet;
+import java.util.Iterator;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
 import java.util.stream.Collectors;
+import java.util.stream.Stream;
 
 /**
  * 질문 세션(Q&A) — 스펙 docs/superpowers/specs/2026-08-30-question-sessions-design.md.
@@ -81,12 +86,16 @@ public class QuestionService {
     }
 
     /**
-     * ask 결과 (스펙 2026-09-13 §5.2, 2026-10-02 §5.3). mcpNote/dbNote = MCP·DB 선택이 실제로 바뀌었을 때의
-     * system note 턴, 아니면 null.
+     * ask 결과 (스펙 2026-09-13 §5.2, 2026-10-02 §5.3, 2026-10-22 §4.2). mcpNote/dbNote/refNote = MCP·DB·참조 repo
+     * 선택이 실제로 바뀌었을 때의 system note 턴, 아니면 null.
      */
-    public record AskResult(InterviewSession session, InterviewTurn mcpNote, InterviewTurn dbNote) {
+    public record AskResult(InterviewSession session, InterviewTurn mcpNote, InterviewTurn dbNote, InterviewTurn refNote) {
         public AskResult(InterviewSession session, InterviewTurn mcpNote) {
-            this(session, mcpNote, null);
+            this(session, mcpNote, null, null);
+        }
+
+        public AskResult(InterviewSession session, InterviewTurn mcpNote, InterviewTurn dbNote) {
+            this(session, mcpNote, dbNote, null);
         }
     }
 
@@ -104,6 +113,9 @@ public class QuestionService {
         ModelEffortPolicy.validate(model, effort);   // 검증이 먼저 — 실패 시 세션이 생기면 안 된다
         // DB 선택 검증도 세션 생성 전에 (스펙 2026-10-02 §5.3) — 기준은 등록자(=세션 소유자)와 선택 레포
         List<Long> dbIds = dbConnectionService.validateSelection(repo.catalogId(), requesterId, req.dbConnectionIds());
+        // 참조 repo 검증·스냅샷도 세션 생성 전에 (스펙 2026-10-22 §4.1) — 대상 카탈로그 id 기준으로 상한·대상과 같음·중복을
+        // 거르고 항목마다 카탈로그를 확인한다. 하나라도 거절되면 400이고 세션은 만들어지지 않는다.
+        List<RefRepo> refs = repoCatalogService.resolveReferences(repo.catalogId(), req.refRepos());
 
         InterviewSession s = InterviewSession.createQuestion(repo.ownerRepo(), req.githubBranch(),
                 deriveTitle(req.title(), req.question()), req.question(), requesterId, extras, model, effort);
@@ -113,6 +125,7 @@ public class QuestionService {
         // 선택 id 스냅샷 — 프론트 픽커 시딩 + applyMcpChange 집합 비교 (스펙 2026-09-13 §4)
         s.setMcpCatalogIds(req.mcpCatalogIds() == null ? new ArrayList<>() : new ArrayList<>(req.mcpCatalogIds()));
         s.setDbConnectionIds(dbIds);
+        s.setRefRepos(new ArrayList<>(refs));   // resolveReferences는 불변 리스트를 돌려준다
         return sessionRepo.save(s);
     }
 
@@ -168,8 +181,9 @@ public class QuestionService {
      * --model/--effort를 그대로 적용한다(2026-09-06 실측: sonnet 세션 resume + haiku → modelUsage=haiku).
      *
      * 순서(스펙 2026-09-13 §5.2): kind 가드 → 문답 상한 → validate(files) → submitAnswer → applyModelChange
-     * → applyMcpChange → applyDbChange → (새 턴이 생겼을 때만) writeAttachments. 파일 쓰기가 <b>마지막</b>이라 400 경로는
-     * 고아 파일을 남기지 않고, 중복 제출(turnSeq null)이면 첨부는 텍스트와 마찬가지로 조용히 버려진다.
+     * → applyMcpChange → applyDbChange → applyRefChange(스펙 2026-10-22 §4.2) → (새 턴이 생겼을 때만) writeAttachments.
+     * 파일 쓰기가 <b>마지막</b>이라 400 경로는 고아 파일을 남기지 않고, 중복 제출(turnSeq null)이면 첨부는 텍스트와
+     * 마찬가지로 조용히 버려진다.
      */
     @Transactional
     public AskResult ask(Long id, String actorId, boolean isAdmin, QuestionAskRequest req,
@@ -188,10 +202,11 @@ public class QuestionService {
         applyModelChange(s, req.model(), req.effort());
         InterviewTurn note = applyMcpChange(s, req.mcpCatalogIds());
         InterviewTurn dbNote = applyDbChange(s, req.dbConnectionIds());
+        InterviewTurn refNote = applyRefChange(s, req.refRepos());
         if (outcome.turnSeq() != null) {
             writeAttachments(id, outcome.turnSeq(), attached, actorId);
         }
-        return new AskResult(s, note, dbNote);
+        return new AskResult(s, note, dbNote, refNote);
     }
 
     /**
@@ -258,6 +273,59 @@ public class QuestionService {
                 ? "DB 연결 변경: 없음(전부 해제)"
                 : "DB 연결 변경: " + dbConnectionService.chipsFor(validated).stream()
                         .map(DbConnectionDto.Chip::name).collect(Collectors.joining(", "));
+        return interviewService.appendSystemNote(s.getId(), note);
+    }
+
+    /**
+     * 대화 중 참조 repo 변경 (스펙 2026-10-22 §4.2) — applyMcpChange·applyDbChange와 같은 규칙. inputs == null → 유지.
+     * 입력마다 현재 원소 중 {@link RefRepo#matches}인 첫 원소를 찾아 있으면 유지, 없으면 새로 들어오는 짝으로 본다.
+     * 새 짝이 없고 현재 원소를 빠짐없이 가리키면 <b>같은 집합</b>(순서 무관)이라 <b>검증 없이</b> 무시한다 — 사후
+     * 비활성·삭제된 카탈로그 항목이 무관한 다음 질문을 막지 않게. 같은 현재 원소를 두 번 가리키는 입력(중복)은 같은 집합이
+     * 아니므로 no-op이 아니라 아래 모양 검사에서 400이다.
+     * 다르면 결과 집합을 {@link RepoCatalogService#checkRefShape}로 먼저 검사(상한은 결과 기준)한 뒤 <b>새로 들어오는
+     * 짝만</b> {@link RepoCatalogService#resolveReferences}로 검증·스냅샷한다. 이미 세션에 있던 짝은 카탈로그가 나중에
+     * 꺼지거나 지워져도 유지·해제할 수 있다(보이지 않는 낡은 항목 때문에 선택을 영영 못 고치는 일을 막는다).
+     * 유지되는 짝은 기존 원소(sha·fetchedAt·error 포함)를 그대로 둔다 — 대화 끝까지 처음 받은 커밋 기준(스펙 §3.2).
+     * 같은 카탈로그 id의 브랜치가 바뀌면 "빼고 다시 넣기"라 새 원소가 되어 sha·fetchedAt·error가 비워진다.
+     * 결과 목록은 입력 순서를 따른다. 입력 브랜치는 strip한 뒤 비교한다 — resolveReferences가 strip해 저장하므로
+     * {@code " main "}이 저장된 {@code main}과 같은 짝이어야 no-op이고 sha가 초기화되지 않는다.
+     * 갱신 후 system note(추가 먼저, 해제 나중). 다음 claim이 현재 목록을 다시 읽으므로 러너는 턴마다 새 목록으로 받는다.
+     * @return 노트 턴(변경 시) 또는 null
+     */
+    private InterviewTurn applyRefChange(InterviewSession s, List<RefRepoInput> inputs) {
+        if (inputs == null) return null;
+        List<RefRepo> current = s.getRefRepos() == null ? List.of() : s.getRefRepos();
+        List<RefRepoInput> wanted = inputs.stream().filter(Objects::nonNull)
+                .map(in -> new RefRepoInput(in.repoCatalogId(), in.branch() == null ? null : in.branch().strip()))
+                .toList();
+
+        // wanted[i]에 대응하는 현재 원소 — 없으면 null(= 새로 들어오는 짝)
+        List<RefRepo> slots = new ArrayList<>(wanted.size());
+        List<RefRepoInput> added = new ArrayList<>();
+        for (RefRepoInput in : wanted) {
+            RefRepo hit = current.stream().filter(r -> r.matches(in.repoCatalogId(), in.branch()))
+                    .findFirst().orElse(null);
+            slots.add(hit);
+            if (hit == null) added.add(in);
+        }
+        Set<RefRepo> kept = slots.stream().filter(Objects::nonNull)
+                .collect(Collectors.toCollection(LinkedHashSet::new));
+        if (added.isEmpty() && kept.size() == slots.size() && kept.size() == current.size()) return null;
+
+        RepoCatalogService.checkRefShape(s.getRepoCatalogId(), wanted);
+        List<RefRepo> resolved = repoCatalogService.resolveReferences(s.getRepoCatalogId(), added);
+        Iterator<RefRepo> fresh = resolved.iterator();
+        List<RefRepo> next = new ArrayList<>(slots.size());
+        for (RefRepo hit : slots) next.add(hit != null ? hit : fresh.next());
+        List<RefRepo> removed = current.stream().filter(r -> !kept.contains(r)).toList();
+        s.setRefRepos(next);
+
+        // ＋ = U+FF0B, − = U+2212 (스펙의 시스템 메모 문구 그대로)
+        String note = next.isEmpty()
+                ? "참조 repo 변경: 없음(전부 해제)"
+                : "참조 repo 변경: " + Stream.concat(
+                        resolved.stream().map(r -> "＋ " + r.label()),
+                        removed.stream().map(r -> "− " + r.label())).collect(Collectors.joining(", "));
         return interviewService.appendSystemNote(s.getId(), note);
     }
 

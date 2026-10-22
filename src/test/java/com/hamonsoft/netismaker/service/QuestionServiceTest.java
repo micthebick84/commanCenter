@@ -4,11 +4,13 @@ import com.hamonsoft.netismaker.dto.AnswerRequest;
 import com.hamonsoft.netismaker.dto.DbConnectionDto;
 import com.hamonsoft.netismaker.dto.QuestionAskRequest;
 import com.hamonsoft.netismaker.dto.QuestionCreateRequest;
+import com.hamonsoft.netismaker.dto.RefRepoInput;
 import com.hamonsoft.netismaker.entity.InterviewKind;
 import com.hamonsoft.netismaker.entity.InterviewSession;
 import com.hamonsoft.netismaker.entity.InterviewStatus;
 import com.hamonsoft.netismaker.entity.InterviewTurn;
 import com.hamonsoft.netismaker.entity.QuestionAttachment;
+import com.hamonsoft.netismaker.entity.RefRepo;
 import com.hamonsoft.netismaker.entity.TaskMcpSpec;
 import com.hamonsoft.netismaker.repository.InterviewSessionRepository;
 import com.hamonsoft.netismaker.repository.InterviewTurnRepository;
@@ -16,6 +18,7 @@ import com.hamonsoft.netismaker.repository.QuestionAttachmentRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
+import org.mockito.InOrder;
 import org.springframework.http.HttpStatus;
 import org.springframework.mock.web.MockMultipartFile;
 import org.springframework.test.util.ReflectionTestUtils;
@@ -23,9 +26,11 @@ import org.springframework.test.util.ReflectionTestUtils;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyBoolean;
@@ -34,6 +39,7 @@ import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
@@ -736,5 +742,353 @@ class QuestionServiceTest {
                 new QuestionAskRequest("추가", 3, null, null, null, List.of(7L, 8L, 9L, 10L)), null))
                 .isInstanceOfSatisfying(TaskException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.BAD_REQUEST));
         assertThat(s.getDbConnectionIds()).containsExactly(7L, 8L, 9L);
+    }
+
+    // ── 참조 repo (스펙 2026-10-22 §4.1·§4.2) ──────────────────────────────────
+
+    /** 참조로 쓰는 카탈로그 11·12·13·14 = 대상(1)과 다른 레포. alias는 시스템 메모 문구 검증에 쓴다. */
+    private static final Map<Long, String> REF_ALIASES =
+            Map.of(11L, "옛앱", 12L, "배치 서버", 13L, "공통 UI", 14L, "분석 도구");
+    private static final String SHA_A = "a".repeat(40);
+
+    /** 방금 고른 참조 — 러너가 아직 받지 않아 sha·fetchedAt·error가 없다. */
+    private static RefRepo ref(long catalogId, String branch) {
+        return new RefRepo(catalogId, REF_ALIASES.get(catalogId), "grp/app-" + catalogId,
+                "https://gitlab.example/grp/app-" + catalogId + ".git", branch, null, null, null);
+    }
+
+    /** 러너가 커밋을 고정하고 한 번 실패도 보고한 참조 — 유지될 때 세 상태 필드가 모두 보존되는지 보는 용도. */
+    private static RefRepo stateful(long catalogId, String branch) {
+        return ref(catalogId, branch).pinned(SHA_A, "2026-10-22T10:00:00+09:00").withError("네트워크 오류");
+    }
+
+    private static RefRepoInput in(long catalogId, String branch) {
+        return new RefRepoInput(catalogId, branch);
+    }
+
+    private static QuestionCreateRequest createReq(List<RefRepoInput> refs) {
+        return new QuestionCreateRequest(1L, "dev", "t", "q", null, null, null, null, refs);
+    }
+
+    private static QuestionAskRequest askReq(List<RefRepoInput> refs) {
+        return new QuestionAskRequest("추가", 3, null, null, null, null, refs);
+    }
+
+    /** 새로 들어오는 짝은 입력 그대로 스냅샷이 된다고 가정하는 목(실제 해석은 RepoCatalogServiceTest가 검증). */
+    @SuppressWarnings("unchecked")
+    private void stubResolveAsFreshSnapshots() {
+        when(repoCatalog.resolveReferences(eq(1L), any())).thenAnswer(i ->
+                ((List<RefRepoInput>) i.getArgument(1)).stream().map(r -> ref(r.repoCatalogId(), r.branch())).toList());
+    }
+
+    /** ask 가능한 질문 세션(askableSession) + 현재 참조. */
+    private InterviewSession askableSessionWithRefs(RefRepo... refs) {
+        InterviewSession s = askableSession();
+        s.setRefRepos(new ArrayList<>(List.of(refs)));
+        return s;
+    }
+
+    private static void assertBadRequest(Throwable t, String message) {
+        assertThat(t).isInstanceOfSatisfying(TaskException.class, e -> {
+            assertThat(e.getStatus()).isEqualTo(HttpStatus.BAD_REQUEST);
+            assertThat(e.getMessage()).isEqualTo(message);
+        });
+    }
+
+    @Test
+    void create_saves_reference_snapshots_resolved_against_the_target() {
+        when(sessionRepo.countActiveQuestionsByRequester("u1")).thenReturn(0L);
+        List<RefRepoInput> refs = List.of(in(11L, "release/6.5"));
+        when(repoCatalog.resolveReferences(eq(1L), any())).thenReturn(List.of(ref(11L, "release/6.5")));   // 불변 리스트
+
+        InterviewSession s = service.create(createReq(refs), "u1");
+
+        verify(repoCatalog).resolveReferences(1L, refs);   // 대상(요청의 repoCatalogId=1)을 기준으로, 요청 그대로
+        assertThat(s.getRefRepos()).extracting(RefRepo::catalogId).containsExactly(11L);
+        assertThat(s.getRefRepos()).containsExactly(ref(11L, "release/6.5"));
+        // 엔티티가 들고 있는 목록은 가변이어야 한다 — 불변 결과를 그대로 넣지 않았다
+        assertThatCode(() -> s.getRefRepos().add(ref(12L, "main"))).doesNotThrowAnyException();
+        verify(sessionRepo).save(s);
+    }
+
+    @Test
+    void create_without_references_stores_an_empty_list() {
+        when(sessionRepo.countActiveQuestionsByRequester("u1")).thenReturn(0L);
+        InterviewSession s = service.create(createReq(null), "u1");
+        assertThat(s.getRefRepos()).isNotNull().isEmpty();
+    }
+
+    @Test
+    void create_reference_failure_creates_no_session() {
+        when(sessionRepo.countActiveQuestionsByRequester("u1")).thenReturn(0L);
+        when(repoCatalog.resolveReferences(any(), any()))
+                .thenThrow(new TaskException(HttpStatus.BAD_REQUEST, "대상 레포는 참조로 고를 수 없습니다"));
+
+        assertThatThrownBy(() -> service.create(createReq(List.of(in(1L, "main"))), "u1"))
+                .satisfies(t -> assertBadRequest(t, "대상 레포는 참조로 고를 수 없습니다"));
+        verify(sessionRepo, never()).save(any());
+    }
+
+    @Test
+    void ask_with_null_refs_keeps_current_selection() {
+        InterviewSession s = askableSessionWithRefs(stateful(11L, "main"));
+
+        QuestionService.AskResult r = service.ask(5L, "user1", false, askReq(null), null);
+
+        assertThat(r.refNote()).isNull();
+        assertThat(s.getRefRepos()).containsExactly(stateful(11L, "main"));
+        verify(repoCatalog, never()).resolveReferences(any(), any());
+        verify(interviewService, never()).appendSystemNote(anyLong(), anyString());
+    }
+
+    @Test
+    void ask_with_same_ref_set_in_any_order_is_a_noop_without_resolving() {
+        // 세션 [11 main, 12 dev], 입력 [12 dev, 11 main] — 순서만 다르다
+        InterviewSession s = askableSessionWithRefs(stateful(11L, "main"), ref(12L, "dev"));
+
+        QuestionService.AskResult r = service.ask(5L, "user1", false,
+                askReq(List.of(in(12L, "dev"), in(11L, "main"))), null);
+
+        assertThat(r.refNote()).isNull();
+        verify(repoCatalog, never()).resolveReferences(any(), any());
+        verify(interviewService, never()).appendSystemNote(anyLong(), anyString());
+        assertThat(s.getRefRepos()).containsExactly(stateful(11L, "main"), ref(12L, "dev"));   // 순서·상태 그대로
+    }
+
+    @Test
+    void ask_empty_list_when_nothing_is_selected_is_a_noop() {
+        InterviewSession s = askableSessionWithRefs();
+
+        QuestionService.AskResult r = service.ask(5L, "user1", false, askReq(List.of()), null);
+
+        assertThat(r.refNote()).isNull();
+        assertThat(s.getRefRepos()).isEmpty();
+        verify(interviewService, never()).appendSystemNote(anyLong(), anyString());
+    }
+
+    @Test
+    void ask_keeps_state_of_retained_refs_and_resolves_only_added_ones() {
+        // 세션 [11 main — 커밋 고정·오류 기록 있음], 입력 [11 main, 12 master]
+        RefRepo retained = stateful(11L, "main");
+        InterviewSession s = askableSessionWithRefs(retained);
+        stubResolveAsFreshSnapshots();
+
+        QuestionService.AskResult r = service.ask(5L, "user1", false,
+                askReq(List.of(in(11L, "main"), in(12L, "master"))), null);
+
+        verify(repoCatalog).resolveReferences(1L, List.of(in(12L, "master")));   // 유지되는 짝은 다시 검증하지 않는다
+        assertThat(s.getRefRepos()).containsExactly(retained, ref(12L, "master"));
+        assertThat(s.getRefRepos().get(0)).isSameAs(retained);   // 기존 원소 그대로 — sha·fetchedAt·error 보존
+        assertThat(s.getRefRepos().get(0).sha()).isEqualTo(SHA_A);
+        verify(interviewService).appendSystemNote(5L, "참조 repo 변경: ＋ 배치 서버(master)");
+        assertThat(r.refNote().getContent()).isEqualTo("참조 repo 변경: ＋ 배치 서버(master)");
+    }
+
+    @Test
+    void ask_note_lists_additions_then_removals() {
+        InterviewSession s = askableSessionWithRefs(ref(11L, "main"), ref(12L, "dev"));
+        stubResolveAsFreshSnapshots();
+
+        QuestionService.AskResult r = service.ask(5L, "user1", false,
+                askReq(List.of(in(11L, "main"), in(13L, "master"))), null);
+
+        assertThat(s.getRefRepos()).containsExactly(ref(11L, "main"), ref(13L, "master"));
+        assertThat(r.refNote().getContent()).isEqualTo("참조 repo 변경: ＋ 공통 UI(master), − 배치 서버(dev)");
+    }
+
+    @Test
+    void ask_removal_only_note_has_just_the_minus_part() {
+        InterviewSession s = askableSessionWithRefs(ref(11L, "main"), ref(12L, "dev"));
+
+        QuestionService.AskResult r = service.ask(5L, "user1", false, askReq(List.of(in(12L, "dev"))), null);
+
+        assertThat(s.getRefRepos()).containsExactly(ref(12L, "dev"));
+        assertThat(r.refNote().getContent()).isEqualTo("참조 repo 변경: − 옛앱(main)");
+    }
+
+    @Test
+    void ask_branch_change_counts_as_remove_plus_add_and_clears_state() {
+        // 세션 [11 main — 커밋 고정·오류 있음], 입력 [11 dev]
+        InterviewSession s = askableSessionWithRefs(stateful(11L, "main"));
+        stubResolveAsFreshSnapshots();
+
+        QuestionService.AskResult r = service.ask(5L, "user1", false, askReq(List.of(in(11L, "dev"))), null);
+
+        verify(repoCatalog).resolveReferences(1L, List.of(in(11L, "dev")));
+        assertThat(s.getRefRepos()).containsExactly(ref(11L, "dev"));
+        assertThat(s.getRefRepos().get(0).sha()).isNull();
+        assertThat(s.getRefRepos().get(0).fetchedAt()).isNull();
+        assertThat(s.getRefRepos().get(0).error()).isNull();
+        assertThat(r.refNote().getContent()).isEqualTo("참조 repo 변경: ＋ 옛앱(dev), − 옛앱(main)");
+    }
+
+    @Test
+    void ask_empty_list_clears_all_and_notes_it() {
+        InterviewSession s = askableSessionWithRefs(ref(11L, "main"), ref(12L, "dev"));
+
+        QuestionService.AskResult r = service.ask(5L, "user1", false, askReq(List.of()), null);
+
+        assertThat(s.getRefRepos()).isEmpty();
+        verify(interviewService).appendSystemNote(5L, "참조 repo 변경: 없음(전부 해제)");
+        assertThat(r.refNote().getContent()).isEqualTo("참조 repo 변경: 없음(전부 해제)");
+    }
+
+    @Test
+    void ask_result_follows_the_input_order_mixing_retained_and_new_refs() {
+        RefRepo retained = stateful(11L, "main");
+        InterviewSession s = askableSessionWithRefs(retained);
+        stubResolveAsFreshSnapshots();
+
+        service.ask(5L, "user1", false,
+                askReq(List.of(in(12L, "main"), in(11L, "main"), in(13L, "main"))), null);
+
+        verify(repoCatalog).resolveReferences(1L, List.of(in(12L, "main"), in(13L, "main")));
+        assertThat(s.getRefRepos()).containsExactly(ref(12L, "main"), retained, ref(13L, "main"));
+    }
+
+    @Test
+    void ask_swap_at_the_cap_is_allowed_because_the_cap_applies_to_the_result() {
+        InterviewSession s = askableSessionWithRefs(ref(11L, "main"), ref(12L, "main"), ref(13L, "main"));
+        stubResolveAsFreshSnapshots();
+
+        QuestionService.AskResult r = service.ask(5L, "user1", false,
+                askReq(List.of(in(11L, "main"), in(12L, "main"), in(14L, "main"))), null);
+
+        assertThat(s.getRefRepos()).extracting(RefRepo::catalogId).containsExactly(11L, 12L, 14L);
+        assertThat(r.refNote().getContent()).isEqualTo("참조 repo 변경: ＋ 분석 도구(main), − 공통 UI(main)");
+    }
+
+    @Test
+    void ask_over_the_cap_is_400_and_changes_nothing() {
+        InterviewSession s = askableSessionWithRefs(ref(11L, "main"), ref(12L, "main"), ref(13L, "main"));
+
+        assertThatThrownBy(() -> service.ask(5L, "user1", false,
+                askReq(List.of(in(11L, "main"), in(12L, "main"), in(13L, "main"), in(14L, "main"))), null))
+                .satisfies(t -> assertBadRequest(t, "참조 repo는 최대 3개까지 고를 수 있습니다"));
+
+        assertThat(s.getRefRepos()).extracting(RefRepo::catalogId).containsExactly(11L, 12L, 13L);
+        verify(repoCatalog, never()).resolveReferences(any(), any());
+        verify(interviewService, never()).appendSystemNote(anyLong(), anyString());
+    }
+
+    @Test
+    void ask_target_repo_as_a_reference_is_400_and_changes_nothing() {
+        InterviewSession s = askableSessionWithRefs(ref(11L, "main"));   // 대상 = 카탈로그 1
+
+        assertThatThrownBy(() -> service.ask(5L, "user1", false,
+                askReq(List.of(in(11L, "main"), in(1L, "main"))), null))
+                .satisfies(t -> assertBadRequest(t, "대상 레포는 참조로 고를 수 없습니다"));
+
+        assertThat(s.getRefRepos()).containsExactly(ref(11L, "main"));
+        verify(repoCatalog, never()).resolveReferences(any(), any());
+        verify(interviewService, never()).appendSystemNote(anyLong(), anyString());
+    }
+
+    @Test
+    void ask_same_repo_twice_is_400_and_changes_nothing() {
+        // [11 main, 11 dev] — 11 dev는 새로 들어오는 짝이라 모양 검사에서 걸린다
+        InterviewSession s = askableSessionWithRefs(ref(11L, "main"));
+
+        assertThatThrownBy(() -> service.ask(5L, "user1", false,
+                askReq(List.of(in(11L, "main"), in(11L, "dev"))), null))
+                .satisfies(t -> assertBadRequest(t, "같은 레포를 참조로 두 번 고를 수 없습니다"));
+
+        assertThat(s.getRefRepos()).containsExactly(ref(11L, "main"));
+        verify(repoCatalog, never()).resolveReferences(any(), any());
+    }
+
+    @Test
+    void ask_input_hitting_the_same_current_ref_twice_is_a_duplicate_not_the_same_set() {
+        // 세션 [11 main, 12 dev]에 입력 [11 main, 11 main] — 개수는 같지만 집합이 다르다(12가 빠진다).
+        // "같은 집합" no-op으로 조용히 넘기면 안 되고, 중복으로 400이어야 한다(스펙 §4.1의 4번).
+        InterviewSession s = askableSessionWithRefs(ref(11L, "main"), ref(12L, "dev"));
+
+        assertThatThrownBy(() -> service.ask(5L, "user1", false,
+                askReq(List.of(in(11L, "main"), in(11L, "main"))), null))
+                .satisfies(t -> assertBadRequest(t, "같은 레포를 참조로 두 번 고를 수 없습니다"));
+
+        assertThat(s.getRefRepos()).containsExactly(ref(11L, "main"), ref(12L, "dev"));
+        verify(interviewService, never()).appendSystemNote(anyLong(), anyString());
+    }
+
+    @Test
+    void ask_invalid_added_reference_is_rejected_and_leaves_refs_untouched() {
+        InterviewSession s = askableSessionWithRefs(stateful(11L, "main"));
+        when(repoCatalog.resolveReferences(eq(1L), any()))
+                .thenThrow(new TaskException(HttpStatus.BAD_REQUEST, "비활성화된 레포 카탈로그 항목: 배치 서버"));
+
+        assertThatThrownBy(() -> service.ask(5L, "user1", false,
+                askReq(List.of(in(11L, "main"), in(12L, "main"))), null))
+                .satisfies(t -> assertBadRequest(t, "비활성화된 레포 카탈로그 항목: 배치 서버"));
+
+        assertThat(s.getRefRepos()).containsExactly(stateful(11L, "main"));
+        verify(interviewService, never()).appendSystemNote(anyLong(), anyString());
+    }
+
+    @Test
+    void ask_strips_input_branches_so_a_padded_name_matches_the_stored_ref() {
+        InterviewSession s = askableSessionWithRefs(stateful(11L, "main"));
+
+        QuestionService.AskResult r = service.ask(5L, "user1", false, askReq(List.of(in(11L, " main "))), null);
+
+        assertThat(r.refNote()).isNull();   // " main " == main → 빼고 다시 넣기가 아니라 no-op
+        verify(repoCatalog, never()).resolveReferences(any(), any());
+        assertThat(s.getRefRepos()).containsExactly(stateful(11L, "main"));
+    }
+
+    @Test
+    void ask_resolves_a_new_ref_with_the_stripped_branch() {
+        askableSessionWithRefs();
+        stubResolveAsFreshSnapshots();
+
+        service.ask(5L, "user1", false, askReq(List.of(in(12L, "  master\t"))), null);
+
+        verify(repoCatalog).resolveReferences(1L, List.of(in(12L, "master")));
+    }
+
+    @Test
+    void ask_blank_branch_for_an_already_selected_repo_keeps_that_ref() {
+        // RefRepo.matches: branch가 null·blank면 카탈로그 id만 비교한다 — strip이 null을 ""로 바꾸지 않는지도 함께 본다
+        InterviewSession s = askableSessionWithRefs(stateful(11L, "main"));
+
+        QuestionService.AskResult nullBranch = service.ask(5L, "user1", false, askReq(List.of(in(11L, null))), null);
+        QuestionService.AskResult blankBranch = service.ask(5L, "user1", false, askReq(List.of(in(11L, "  "))), null);
+
+        assertThat(nullBranch.refNote()).isNull();
+        assertThat(blankBranch.refNote()).isNull();
+        assertThat(s.getRefRepos()).containsExactly(stateful(11L, "main"));
+        verify(repoCatalog, never()).resolveReferences(any(), any());
+    }
+
+    @Test
+    void ask_appends_the_reference_note_after_the_db_note() {
+        InterviewSession s = askableSessionWithRefs(ref(11L, "main"));
+        when(dbConnections.chipsFor(List.of(8L))).thenReturn(List.of(new DbConnectionDto.Chip(8, "분석 DB", "ORACLE")));
+
+        QuestionService.AskResult r = service.ask(5L, "user1", false,
+                new QuestionAskRequest("추가", 3, null, null, null, List.of(8L), List.of()), null);
+
+        InOrder order = inOrder(interviewService);
+        order.verify(interviewService).appendSystemNote(5L, "DB 연결 변경: 분석 DB");
+        order.verify(interviewService).appendSystemNote(5L, "참조 repo 변경: 없음(전부 해제)");
+        assertThat(r.dbNote().getContent()).isEqualTo("DB 연결 변경: 분석 DB");
+        assertThat(r.refNote().getContent()).isEqualTo("참조 repo 변경: 없음(전부 해제)");
+        assertThat(s.getRefRepos()).isEmpty();
+    }
+
+    @Test
+    void ask_result_keeps_the_legacy_two_and_three_arg_constructors() {
+        InterviewSession s = questionSession("claude-opus-5", "high");
+        InterviewTurn mcp = InterviewTurn.of(5L, 5, "system", "note", "m", null);
+        InterviewTurn db = InterviewTurn.of(5L, 6, "system", "note", "d", null);
+
+        QuestionService.AskResult two = new QuestionService.AskResult(s, mcp);
+        QuestionService.AskResult three = new QuestionService.AskResult(s, mcp, db);
+
+        assertThat(two.mcpNote()).isSameAs(mcp);
+        assertThat(two.dbNote()).isNull();
+        assertThat(two.refNote()).isNull();
+        assertThat(three.dbNote()).isSameAs(db);
+        assertThat(three.refNote()).isNull();
     }
 }

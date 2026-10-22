@@ -126,6 +126,8 @@ app:
     running-dead-seconds: 600       # RUNNING heartbeat 두절 → FAILED (워커 사망; 부팅 후 동일 시간 유예)
     queued-ttl-minutes: 60          # QUEUED 체류 초과 → EXPIRED (인터뷰 서비스 미가동 감지)
     stale-check-interval-ms: 60000  # InterviewStaleRecoveryJob 주기
+    # 인터뷰·질문 체크아웃 루트. 경로 계산(InterviewWorkPaths)과 체크아웃 정리 잡이 같은 값을 쓴다 (스펙 2026-10-22 §3.3)
+    work-root: ${user.home}/netis-maker/interviews
   question:
     max-active-per-user: 3          # 사용자당 활성(QUEUED/RUNNING/AWAITING_INPUT) 질문 세션 상한 → 초과 시 429
     max-qa-turns: 10                # 세션당 assistant 답변 상한 → ask 시 초과면 400. 불변식: < 러너 INTERVIEW_MAX_TURNS(20)

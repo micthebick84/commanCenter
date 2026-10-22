@@ -45,7 +45,8 @@ class InterviewServiceTest {
         questionAttachmentRepo = mock(QuestionAttachmentRepository.class);
         service = new InterviewService(sessionRepo, turnRepo, planRepo,
                 taskRepo, analysisRepo, historyRepo, attachmentRepo, attachmentStorage, stageUsageRepo,
-                questionAttachmentRepo);
+                questionAttachmentRepo,
+                new InterviewWorkPaths(System.getProperty("user.home") + "/netis-maker/interviews"));
         when(sessionRepo.save(any())).thenAnswer(i -> i.getArgument(0));
         when(turnRepo.save(any())).thenAnswer(i -> i.getArgument(0));
         when(planRepo.save(any())).thenAnswer(i -> i.getArgument(0));
@@ -104,6 +105,22 @@ class InterviewServiceTest {
                 .endsWith("/netis-maker/interviews/_gitlab/product+netis+web+package+netis-v7.0/session-1");
         assertThat(resp.get().repoHost()).isEqualTo("gitlab");
         assertThat(resp.get().gitUrl()).isEqualTo(s.getGitUrl());
+    }
+
+    @Test
+    void claim_derives_work_dir_from_the_configured_checkout_root() {
+        // 체크아웃 루트는 설정(app.interview.work-root) 하나 — claim이 user.home을 직접 읽지 않는다 (스펙 2026-10-22 §3.3)
+        InterviewService custom = new InterviewService(sessionRepo, turnRepo, planRepo,
+                taskRepo, analysisRepo, historyRepo, attachmentRepo, attachmentStorage, stageUsageRepo,
+                questionAttachmentRepo, new InterviewWorkPaths("/data/interviews"));
+        InterviewSession s = session(1L, InterviewStatus.QUEUED);
+        when(sessionRepo.findClaimableForUpdateSkipLocked(any())).thenReturn(List.of(s));
+        when(turnRepo.findBySessionIdOrderBySeqAsc(1L)).thenReturn(List.of());
+
+        Optional<com.hamonsoft.netismaker.dto.InterviewClaimResponse> resp = custom.claim("w1");
+
+        assertThat(s.getWorkDir()).isEqualTo("/data/interviews/owner/repo/session-1");
+        assertThat(resp.get().workDir()).isEqualTo("/data/interviews/owner/repo/session-1");
     }
 
     @Test

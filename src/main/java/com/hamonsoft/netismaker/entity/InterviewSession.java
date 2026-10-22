@@ -144,6 +144,16 @@ public class InterviewSession {
     @Setter
     private List<Long> dbConnectionIds = new ArrayList<>();
 
+    /**
+     * 질문 세션의 읽기 전용 참조 repo — 선택 당시 스냅샷 + 러너가 보고한 고정 커밋·실패 사유 (스펙 2026-10-22 §3).
+     * 대상 repo 박제(git_url·repo_alias·repo_catalog_id)·mcps_extra와 같은 방식이라 카탈로그를 고치거나 지워도 그대로다.
+     * 인터뷰 세션은 이 단계에서 항상 [].
+     */
+    @JdbcTypeCode(SqlTypes.JSON)
+    @Column(name = "ref_repos", nullable = false, columnDefinition = "jsonb")
+    @Setter
+    private List<RefRepo> refRepos = new ArrayList<>();
+
     /** 작업 등록 시 선택된 Claude 모델. 워커가 claude --model에 사용.
      *  기본값은 ModelEffortPolicy.DEFAULT_MODEL과 반드시 일치해야 한다(둘 다 바꿀 것). */
     @Column(name = "model", nullable = false, length = 64)

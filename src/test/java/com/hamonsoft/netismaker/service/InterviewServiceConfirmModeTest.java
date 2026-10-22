@@ -31,7 +31,8 @@ class InterviewServiceConfirmModeTest {
         service = new InterviewService(sessionRepo, mock(InterviewTurnRepository.class), planRepo,
                 taskRepo, analysisRepo, historyRepo, mock(TaskAttachmentRepository.class),
                 mock(AttachmentStorage.class), mock(TaskStageUsageRepository.class),
-                mock(QuestionAttachmentRepository.class));
+                mock(QuestionAttachmentRepository.class),
+                new InterviewWorkPaths(System.getProperty("user.home") + "/netis-maker/interviews"));
         when(historyRepo.save(any())).thenAnswer(i -> i.getArgument(0));
         when(analysisRepo.save(any())).thenAnswer(i -> i.getArgument(0));
 

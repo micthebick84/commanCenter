@@ -40,6 +40,22 @@ class InterviewSessionTest {
     }
 
     @Test
+    void ref_repos_default_to_an_empty_list_for_both_kinds() {
+        // 컬럼이 NOT NULL DEFAULT '[]' — 참조를 고르지 않은 세션은 null이 아니라 빈 목록이어야 한다 (스펙 2026-10-22 §3.1)
+        InterviewSession interview = InterviewSession.create(
+                "o/r", "main", "t", "d", "u1", List.of(), "claude-opus-4-8", "high");
+        InterviewSession question = InterviewSession.createQuestion(
+                "o/r", "main", "t", "q?", "u1", List.of(), "claude-opus-4-8", "high");
+        assertThat(interview.getRefRepos()).isNotNull().isEmpty();
+        assertThat(question.getRefRepos()).isNotNull().isEmpty();
+
+        RefRepo ref = new RefRepo(12L, "옛앱", "g/old", "https://x/g/old.git", "release/6.5", null, null, null);
+        question.setRefRepos(List.of(ref));
+        assertThat(question.getRefRepos()).containsExactly(ref);
+        assertThat(interview.getRefRepos()).isEmpty();   // 인스턴스 간 공유 없음
+    }
+
+    @Test
     void createQuestion_sets_kind_question_keeps_other_columns_and_no_task() {
         InterviewSession s = InterviewSession.createQuestion(
                 "owner/repo", "", "인증 흐름", "로그인은 어디서 처리되나요?", "user1",

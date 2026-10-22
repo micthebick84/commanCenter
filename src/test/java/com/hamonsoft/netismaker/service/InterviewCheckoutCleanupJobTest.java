@@ -479,6 +479,27 @@ class InterviewCheckoutCleanupJobTest {
         }
     }
 
+    @Test
+    @EnabledOnOs(OS.WINDOWS)
+    void deletes_a_folder_that_holds_a_dangling_junction() throws Exception {
+        // 대상이 사라져 끊긴 정션(pnpm식 node_modules 등)이 든 폴더도 한 회차에 끝까지 지운다 — 못 지우면 매 회차 실패로 남는다
+        Path gone = Files.createDirectories(tmp.resolve("gone"));
+        Path target = folder("owner/repo/session-5", OLD, "x.txt");
+        Path link = target.resolve("dangling");
+        junction(link, gone);
+        Files.delete(gone);
+        Files.setLastModifiedTime(target, FileTime.from(OLD));
+        session(5, InterviewStatus.CANCELLED, 10);
+        try {
+            Summary s = job().runOnce(NOW);
+
+            assertThat(target).doesNotExist();
+            assertThat(s).isEqualTo(new Summary(1, 10, 0, 0));
+        } finally {
+            Files.deleteIfExists(link);
+        }
+    }
+
     /** 체크아웃 루트 안의 어느 단계가 링크로 바뀌어도 그 안으로 들어가지 않는다. */
     enum LinkedLevel {
         OWNER("owner", "repo/session-5/x.txt"),

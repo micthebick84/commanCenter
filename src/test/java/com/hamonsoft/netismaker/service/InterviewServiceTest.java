@@ -794,6 +794,86 @@ class InterviewServiceTest {
         assertThat(s.getRefRepos().get(0).fetchedAt()).isNull();
     }
 
+    // ── 보고된 실패 사유는 저장 전에 한 번 더 가리고 500자로 자른다 (방어 겹치기 — 러너가 이미 가리고 200자로 줄여 보낸다) ──
+
+    @Test
+    void recordQuestion_masks_credentials_in_a_reported_error_before_storing_it() {
+        InterviewSession s = runningQuestionWithRefs(5L, ref(11L, "main", null, null, null));
+
+        service.recordQuestion(5L, "w1", answerWith(new RefState(11L, "main", null,
+                "fatal: unable to access 'https://oauth2:glpat-SECRET@gitlab.hamon.vip/g/p.git/': 403")));
+
+        assertThat(s.getRefRepos().get(0).error())
+                .isEqualTo("fatal: unable to access 'https://***@gitlab.hamon.vip/g/p.git/': 403")
+                .doesNotContain("glpat-SECRET");
+    }
+
+    @Test
+    void recordQuestion_masks_every_credential_in_a_multi_line_error() {
+        InterviewSession s = runningQuestionWithRefs(5L, ref(11L, "main", null, null, null));
+
+        service.recordQuestion(5L, "w1", answerWith(new RefState(11L, "main", null,
+                "Command failed: git clone https://oauth2:glpat-ONE@gitlab.hamon.vip/g/p.git /x\n"
+                        + "fatal: could not read from remote https://user:pw-TWO@gitlab.hamon.vip/g/p.git")));
+
+        assertThat(s.getRefRepos().get(0).error())
+                .doesNotContain("glpat-ONE").doesNotContain("pw-TWO")
+                .contains("https://***@gitlab.hamon.vip/g/p.git /x")
+                .contains("https://***@gitlab.hamon.vip/g/p.git");
+    }
+
+    @Test
+    void recordQuestion_cuts_an_error_longer_than_500_characters_to_500() {
+        InterviewSession s = runningQuestionWithRefs(5L, ref(11L, "main", null, null, null));
+
+        service.recordQuestion(5L, "w1", answerWith(new RefState(11L, "main", null, "x".repeat(600))));
+
+        assertThat(s.getRefRepos().get(0).error()).hasSize(500).isEqualTo("x".repeat(500));
+    }
+
+    @Test
+    void recordQuestion_keeps_an_error_of_exactly_500_characters_as_it_is() {
+        InterviewSession s = runningQuestionWithRefs(5L, ref(11L, "main", null, null, null));
+
+        service.recordQuestion(5L, "w1", answerWith(new RefState(11L, "main", null, "y".repeat(500))));
+
+        assertThat(s.getRefRepos().get(0).error()).isEqualTo("y".repeat(500));
+    }
+
+    @Test
+    void recordQuestion_masks_first_and_cuts_after_so_a_token_at_the_cut_is_not_left_half_visible() {
+        // 가리기 전에 500자에서 자르면 `https://oauth2:glpat…`처럼 토큰이 반쪽으로 남고 mask(…@ 까지 있어야 가림)가 알아보지 못한다
+        InterviewSession s = runningQuestionWithRefs(5L, ref(11L, "main", null, null, null));
+        String error = "a".repeat(480) + "https://oauth2:glpat-SECRET@gitlab.hamon.vip/g/p.git";
+
+        service.recordQuestion(5L, "w1", answerWith(new RefState(11L, "main", null, error)));
+
+        String stored = s.getRefRepos().get(0).error();
+        assertThat(stored).hasSize(500).doesNotContain("oauth2").doesNotContain("glpat").doesNotContain("SECRET");
+        assertThat(stored).startsWith("a".repeat(480) + "https://***@gitlab");
+    }
+
+    @Test
+    void recordQuestion_does_not_leave_half_a_surrogate_pair_when_the_cut_splits_one() {
+        // 이모지(서로게이트 쌍 2글자)가 499~500번째에 걸치면 앞 절반만 남아 JSONB 직렬화가 깨진다 — 그 반쪽은 버린다
+        InterviewSession s = runningQuestionWithRefs(5L, ref(11L, "main", null, null, null));
+
+        service.recordQuestion(5L, "w1", answerWith(new RefState(11L, "main", null, "x".repeat(499) + "😀" + "tail")));
+
+        String stored = s.getRefRepos().get(0).error();
+        assertThat(stored).isEqualTo("x".repeat(499));
+        assertThat(Character.isHighSurrogate(stored.charAt(stored.length() - 1))).isFalse();
+    }
+
+    @Test
+    void recordQuestion_keeps_a_whole_surrogate_pair_that_ends_exactly_at_500() {
+        InterviewSession s = runningQuestionWithRefs(5L, ref(11L, "main", null, null, null));
+
+        service.recordQuestion(5L, "w1", answerWith(new RefState(11L, "main", null, "x".repeat(498) + "😀" + "tail")));
+
+        assertThat(s.getRefRepos().get(0).error()).isEqualTo("x".repeat(498) + "😀");
+    }
+
     @Test
     void recordQuestion_ignores_a_state_with_neither_sha_nor_error() {
         InterviewSession s = runningQuestionWithRefs(5L,

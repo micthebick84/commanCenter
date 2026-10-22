@@ -7,6 +7,7 @@ import com.hamonsoft.netismaker.dto.InterviewSummaryResponse;
 import com.hamonsoft.netismaker.dto.WorkerPlanRequest;
 import com.hamonsoft.netismaker.dto.WorkerQuestionRequest;
 import com.hamonsoft.netismaker.entity.*;
+import com.hamonsoft.netismaker.git.GitRemotes;
 import com.hamonsoft.netismaker.git.RepoRef;
 import com.hamonsoft.netismaker.repository.*;
 import org.springframework.context.annotation.Profile;
@@ -268,7 +269,9 @@ public class InterviewService {
      * 러너가 보고한 참조 repo 준비 결과를 세션의 현재 참조에 반영한다 (스펙 2026-10-22 §4.5).
      * 상태마다 {@link RefRepo#matches}(카탈로그 id + 브랜치)인 원소에만 적용하고, 그새 빠진 참조의 보고는 무시한다.
      * <ul>
-     *   <li>error가 있으면 그 사유를 기록한다(같은 상태의 sha는 무시). 이미 고정된 커밋·시각은 건드리지 않는다.</li>
+     *   <li>error가 있으면 그 사유를 기록한다(같은 상태의 sha는 무시). 이미 고정된 커밋·시각은 건드리지 않는다.
+     *       저장하는 값은 자격증명을 한 번 더 가리고({@link GitRemotes#mask}) {@value #REF_ERROR_MAX_LENGTH}자로 자른 것이다
+     *       ({@link #storedRefError}) — 러너가 이미 가리고 줄여 보내지만 워커 API는 러너의 출력을 그대로 믿지 않는다.</li>
      *   <li>아니고 sha가 있으면 처음 받은 커밋으로 고정하고 낡은 error를 지운다 — 이미 고정된 sha는 바뀌지 않는다
      *       ({@link RefRepo#pinned}).</li>
      *   <li>둘 다 없으면 무시한다.</li>
@@ -286,7 +289,7 @@ public class InterviewService {
                 if (!cur.matches(st.catalogId(), st.branch())) continue;
                 RefRepo upd;
                 if (st.error() != null) {
-                    upd = cur.withError(st.error());
+                    upd = cur.withError(storedRefError(st.error()));
                 } else if (st.sha() != null && !st.sha().isBlank()) {
                     upd = cur.pinned(st.sha(), OffsetDateTime.now().toString());
                 } else {
@@ -299,6 +302,23 @@ public class InterviewService {
             }
         }
         if (changed) s.setRefRepos(new ArrayList<>(next));
+    }
+
+    /** 저장하는 참조 실패 사유의 글자 수 상한(UTF-16 단위). 러너는 이미 200자 이내로 줄여 보내므로 이 값은 방어용이다. */
+    static final int REF_ERROR_MAX_LENGTH = 500;
+
+    /**
+     * 러너가 보고한 참조 실패 사유를 저장 형태로 바꾼다 — 자격증명을 가리고({@link GitRemotes#mask}) 나서
+     * {@value #REF_ERROR_MAX_LENGTH}자로 자른다. 가린 뒤에 자르는 이유: 먼저 자르면 토큰이 반쪽으로 남고 mask(끝의 `@`까지 있어야
+     * 가린다)가 알아보지 못한다. 서로게이트 쌍의 앞 절반에서 잘렸으면 그 반쪽은 버린다 — 깨진 문자가 JSONB로 나가면 직렬화가 실패해
+     * 답변 보고 전체가 500이 된다.
+     */
+    private static String storedRefError(String error) {
+        String masked = GitRemotes.mask(error);
+        if (masked.length() <= REF_ERROR_MAX_LENGTH) return masked;
+        int end = REF_ERROR_MAX_LENGTH;
+        if (Character.isHighSurrogate(masked.charAt(end - 1))) end--;
+        return masked.substring(0, end);
     }
 
     /**

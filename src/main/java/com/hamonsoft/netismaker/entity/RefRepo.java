@@ -10,7 +10,8 @@ import java.util.Objects;
  * 카탈로그에서 고른 시점의 별칭·경로·URL·브랜치를 박제한다(TaskMcpSpec과 같은 방식) — 카탈로그를 고치거나
  * 지워도 세션의 참조는 그대로 남는다. sha·fetchedAt·error는 인터뷰 서비스가 답변 보고로 알려 주는 런타임 상태다.
  * fetchedAt은 ISO-8601 문자열(OffsetDateTime.toString()) — JSONB 매핑에 날짜 타입을 쓰지 않기 위해서다.
- * 값은 불변이라 바꾸려면 새 인스턴스를 돌려받는다. error에는 자격증명을 가린 문구만 담는다(GitRemotes.mask).
+ * 값은 불변이라 바꾸려면 새 인스턴스를 돌려받는다. error는 러너가 보고한 실패 사유다 — 러너가 이미 가리고 줄여 보내지만
+ * API도 저장 직전에 한 번 더 자격증명을 가리고(GitRemotes.mask) 500자로 자른다(InterviewService.applyRefStates).
  */
 @JsonInclude(JsonInclude.Include.NON_NULL)
 public record RefRepo(

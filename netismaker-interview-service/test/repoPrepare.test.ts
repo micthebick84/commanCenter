@@ -171,11 +171,14 @@ function fakeRefOps() {
 }
 type FakeRefOps = ReturnType<typeof fakeRefOps>;
 
-/** 폴더가 이미 있고 HEAD가 branch인 상태 — `rev-parse --abbrev-ref HEAD`는 branch, `rev-parse HEAD`는 sha. */
-function withCheckoutOn(ops: FakeRefOps, branch: string, sha: string = SHA_A): FakeRefOps {
+/**
+ * 폴더가 이미 있고 HEAD가 branch인 상태 — `rev-parse --symbolic-full-name HEAD`는 `refs/heads/<branch>`(분리된 HEAD면
+ * branch를 null로 주고 git처럼 `HEAD`), `rev-parse HEAD`는 sha. 실제 git처럼 줄바꿈이 붙는다.
+ */
+function withCheckoutOn(ops: FakeRefOps, branch: string | null, sha: string = SHA_A): FakeRefOps {
   ops.exists.mockReturnValue(true);
   ops.output.mockImplementation(async (_cmd: string, args: string[]) =>
-    args.includes('--abbrev-ref') ? `${branch}\n` : `${sha}\n`,
+    args.includes('--symbolic-full-name') ? `${branch === null ? 'HEAD' : `refs/heads/${branch}`}\n` : `${sha}\n`,
   );
   return ops;
 }
@@ -263,7 +266,7 @@ describe('ensureRefRepos', () => {
     expect(ops.rm).not.toHaveBeenCalled();
     expect(ops.rename).not.toHaveBeenCalled();
     expect(ops.output.mock.calls).toEqual([
-      ['git', ['rev-parse', '--abbrev-ref', 'HEAD'], { cwd: '/r/_refs/5/12' }],
+      ['git', ['rev-parse', '--symbolic-full-name', 'HEAD'], { cwd: '/r/_refs/5/12' }],
       ['git', ['rev-parse', 'HEAD'], { cwd: '/r/_refs/5/12' }],
     ]);
     expect(result).toEqual([{ ref, sha: SHA_B, error: null }]);
@@ -289,8 +292,8 @@ describe('ensureRefRepos', () => {
   });
 
   it('treats a detached HEAD as a different branch', async () => {
-    // 분리된 HEAD면 git이 "HEAD"를 돌려준다 — 요청 브랜치와 같다고 볼 수 없다
-    const ops = withCheckoutOn(fakeRefOps(), 'HEAD');
+    // 분리된 HEAD면 git이 (종료 코드 0으로) "HEAD"를 돌려준다 — 요청 브랜치(refs/heads/…)와 같다고 볼 수 없다
+    const ops = withCheckoutOn(fakeRefOps(), null);
 
     await ensureRefRepos([refClaim()], {}, ops);
 
@@ -395,7 +398,7 @@ describe('ensureRefRepos', () => {
     // 새로 받는 경로: clone · set-url · rev-parse
     const fresh = fakeRefOps();
     await ensureRefRepos([refClaim()], { signal }, fresh);
-    // 재사용 경로: rev-parse --abbrev-ref · rev-parse
+    // 재사용 경로: rev-parse --symbolic-full-name · rev-parse
     const reuse = withCheckoutOn(fakeRefOps(), 'release/6.5');
     await ensureRefRepos([refClaim()], { signal }, reuse);
 
@@ -587,12 +590,41 @@ describe('ensureRefRepos with the default ops (real git, local file:// origin)',
 
     // 다른 브랜치를 요청하면 폴더를 지우고 그 브랜치로 다시 받는다
     expect(await ensureRefRepos([{ ...ref, branch: 'main' }], {})).toMatchObject([{ sha: c1, error: null }]);
-    expect(git(ref.dir, 'rev-parse', '--abbrev-ref', 'HEAD')).toBe('main');
+    expect(git(ref.dir, 'rev-parse', '--symbolic-full-name', 'HEAD')).toBe('refs/heads/main');
 
     // 없는 브랜치는 사유만 돌려주고 폴더도 .part도 남기지 않는다
     const missing: RefRepoClaim = { ...ref, catalogId: 13, branch: 'nope', dir: join(work, 'root', '_refs', '5', '13') };
     expect(await ensureRefRepos([missing], {})).toMatchObject([{ sha: null, error: expect.stringContaining('nope') }]);
     expect(existsSync(missing.dir)).toBe(false);
     expect(existsSync(`${missing.dir}.part`)).toBe(false);
+  }, 30_000);
+
+  it('keeps reusing the checkout (no re-clone, same pinned commit) when a tag has the same name as the branch', async () => {
+    // 브랜치 끝 커밋에 브랜치와 같은 이름의 태그가 붙은 원본 — clone하면 태그도 함께 들어오고, 그러면 git은
+    // `rev-parse --abbrev-ref HEAD`·`symbolic-ref --short HEAD`에서 모호성을 피하려고 `heads/<이름>`을 돌려준다.
+    // 그 문자열을 브랜치 이름과 비교하면 거짓이 되어 매 턴 폴더를 지우고 다시 받는다 — 고정이 풀린다.
+    const c1 = commitToOrigin('a.txt');
+    git(origin, 'tag', 'release/6.5');
+    const ref: RefRepoClaim = {
+      catalogId: 12,
+      alias: 'legacy',
+      githubRepo: 'acme/legacy',
+      gitUrl: pathToFileURL(origin).href,
+      repoHost: 'github',
+      branch: 'release/6.5',
+      dir: join(work, 'root', '_refs', '5', '12'),
+      sha: null,
+    };
+
+    expect(await ensureRefRepos([ref], {})).toEqual([{ ref, sha: c1, error: null }]);
+    expect(git(ref.dir, 'tag', '--list', 'release/6.5')).toBe('release/6.5'); // 전제: 같은 이름의 태그가 체크아웃에 있다
+
+    // 체크아웃 안에 표식을 두고 원본을 앞서 보낸다 — 다시 받았다면 표식이 사라지고 sha가 c2로 바뀐다
+    writeFileSync(join(ref.dir, 'marker.txt'), 'kept\n');
+    commitToOrigin('b.txt');
+
+    expect(await ensureRefRepos([{ ...ref, sha: c1 }], {})).toMatchObject([{ sha: c1, error: null }]);
+    expect(existsSync(join(ref.dir, 'marker.txt'))).toBe(true);
+    expect(existsSync(join(ref.dir, 'b.txt'))).toBe(false);
   }, 30_000);
 });

@@ -123,7 +123,8 @@ const REF_FAILURE_FALLBACK = '참조 repo를 받지 못했습니다';
  *   세션이 참조 폴더도 읽을 수 있기 때문. 실패 사유는 `maskSecrets`로 가린다.
  * - claim에 `sha`가 있는데 폴더가 사라져 새로 받았다면 브랜치 최신을 받는다. 고정 커밋 재현은 하지 않고(스펙의
  *   단순화 허용) 받은 커밋이 다르면 경고 로그만 남긴다 — API는 이미 정해진 sha를 바꾸지 않는다.
- * - 읽지 못한 폴더(HEAD 확인 실패)는 지우지 않고 오류만 돌려준다. 폴더는 브랜치가 다르다고 확인됐을 때만 지운다.
+ * - `.git`이 있는 폴더는 HEAD가 다른 브랜치로 확인됐을 때만 지운다. HEAD를 읽지 못하면 지우지 않고 오류만 돌려준다
+ *   (일시 오류가 고정한 체크아웃을 날리지 않게). `.git`이 없는 폴더는 체크아웃이 아니므로 함께 지우고 새로 받는다.
  * - `signal`(턴 타임아웃)은 모든 git 자식 프로세스에 넘긴다.
  */
 export async function ensureRefRepos(
@@ -150,10 +151,13 @@ async function prepareRefRepo(
     (await ops.output('git', ['rev-parse', 'HEAD'], { cwd: dir, ...abort })).trim();
   try {
     if (ops.exists(join(dir, '.git'))) {
-      const head = (await ops.output('git', ['rev-parse', '--abbrev-ref', 'HEAD'], { cwd: dir, ...abort })).trim();
-      if (head === branch) return prepared(ref, await headSha());
+      // 브랜치는 전체 이름(refs/heads/…)으로 비교한다. `--abbrev-ref`는 브랜치와 같은 이름의 태그가 있으면 모호성을
+      // 피하려고 `heads/<이름>`을 돌려줘 재사용 판정이 어긋나고, 그러면 매 턴 다시 받아 커밋 고정이 풀린다.
+      // 분리된 HEAD는 (종료 코드 0으로) `HEAD`를 돌려주므로 다른 브랜치로 취급된다.
+      const head = (await ops.output('git', ['rev-parse', '--symbolic-full-name', 'HEAD'], { cwd: dir, ...abort })).trim();
+      if (head === `refs/heads/${branch}`) return prepared(ref, await headSha());
     }
-    // 폴더가 없거나 다른 브랜치다 — 낡은 폴더와 지난 시도의 찌꺼기를 지우고 .part에 새로 받는다.
+    // 체크아웃이 없거나(.git 없음) 다른 브랜치다 — 낡은 폴더와 지난 시도의 찌꺼기를 지우고 .part에 새로 받는다.
     ops.rm(dir);
     ops.rm(part);
     const plainUrl = buildCloneUrl(ref, {});

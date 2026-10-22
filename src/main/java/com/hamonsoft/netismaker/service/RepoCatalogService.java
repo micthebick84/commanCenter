@@ -1,6 +1,8 @@
 package com.hamonsoft.netismaker.service;
 
+import com.hamonsoft.netismaker.dto.RefRepoInput;
 import com.hamonsoft.netismaker.dto.RepoCatalogDto;
+import com.hamonsoft.netismaker.entity.RefRepo;
 import com.hamonsoft.netismaker.entity.RepoCatalogEntry;
 import com.hamonsoft.netismaker.git.RepoRef;
 import com.hamonsoft.netismaker.repository.RepoCatalogRepository;
@@ -12,11 +14,18 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.OffsetDateTime;
+import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Objects;
+import java.util.Set;
 
 @Service
 @Profile("api")
 public class RepoCatalogService {
+
+    /** 질문 세션에 붙일 수 있는 참조 repo 상한 (스펙 2026-10-22 §2). 프론트 composables/refRepos.ts의 상수와 같은 값이다. */
+    public static final int MAX_REF_REPOS = 3;
 
     private final RepoCatalogRepository repo;
     private final GitRefService gitRefService;
@@ -109,6 +118,65 @@ public class RepoCatalogService {
         RepoUrlParser.Parsed p = reparse(e);
         return new ResolvedRepo(e.getId(), e.getAlias(), p.canonicalUrl(),
                 p.host(), p.ownerRepo(), e.getDefaultBranch());
+    }
+
+    /**
+     * 참조 repo 입력의 모양 검사 — 카탈로그를 조회하지 않는다 (스펙 2026-10-22 §4.1의 1·3·4번). 위반이면 400.
+     * 순서는 상한({@link #MAX_REF_REPOS}) → 대상과 같은 카탈로그 id → 참조끼리 같은 카탈로그 id다.
+     * 널 원소는 세지도 검사하지도 않고, 카탈로그 id가 빠진 항목도 여기서는 걸러내지 않는다
+     * ({@link #resolveForRegistration}이 "repoCatalogId가 필요합니다"로 거절한다).
+     * 대화 중 변경은 결과 집합을 이 메서드로 먼저 검사한 뒤 새로 들어오는 항목만 {@link #resolveReferences}에 넘긴다.
+     */
+    public static void checkRefShape(Long targetCatalogId, List<RefRepoInput> inputs) {
+        if (inputs == null) return;
+        List<RefRepoInput> refs = inputs.stream().filter(Objects::nonNull).toList();
+        if (refs.size() > MAX_REF_REPOS) {
+            throw new TaskException(HttpStatus.BAD_REQUEST,
+                    "참조 repo는 최대 " + MAX_REF_REPOS + "개까지 고를 수 있습니다");
+        }
+        for (RefRepoInput ref : refs) {
+            if (ref.repoCatalogId() != null && ref.repoCatalogId().equals(targetCatalogId)) {
+                throw new TaskException(HttpStatus.BAD_REQUEST, "대상 레포는 참조로 고를 수 없습니다");
+            }
+        }
+        Set<Long> seen = new HashSet<>();
+        for (RefRepoInput ref : refs) {
+            if (ref.repoCatalogId() != null && !seen.add(ref.repoCatalogId())) {
+                throw new TaskException(HttpStatus.BAD_REQUEST, "같은 레포를 참조로 두 번 고를 수 없습니다");
+            }
+        }
+    }
+
+    /**
+     * 질문 등록 때 고른 참조 repo → 세션에 박제할 스냅샷 (스펙 2026-10-22 §4.1). 입력 순서를 지킨다.
+     * null·빈 목록(널 원소뿐인 목록 포함)은 참조 없음이다. 하나라도 거절되면 전체가 400이다.
+     * 순서: {@link #checkRefShape}(상한·대상·중복, 조회 없음) → 항목마다 {@link #resolveForRegistration}
+     * (없음·비활성·지원하지 않는 호스트) → 브랜치 결정(비면 카탈로그 기본, 그것도 없으면 400).
+     * 브랜치가 실제로 있는지는 확인하지 않는다 — 러너가 받지 못하면 칩에 ⚠로 보인다.
+     * sha·fetchedAt·error는 러너가 보고로 채우므로 비워 둔다.
+     */
+    @Transactional(readOnly = true)
+    public List<RefRepo> resolveReferences(Long targetCatalogId, List<RefRepoInput> inputs) {
+        if (inputs == null || inputs.isEmpty()) return List.of();
+        checkRefShape(targetCatalogId, inputs);
+        List<RefRepo> resolved = new ArrayList<>();
+        for (RefRepoInput input : inputs) {
+            if (input == null) continue;
+            ResolvedRepo r = resolveForRegistration(input.repoCatalogId());
+            resolved.add(new RefRepo(r.catalogId(), r.alias(), r.ownerRepo(), r.gitUrl(),
+                    refBranch(input.branch(), r), null, null, null));
+        }
+        return List.copyOf(resolved);
+    }
+
+    /** 참조 브랜치 — 입력(앞뒤 공백 제거) → 카탈로그 기본 브랜치 → 둘 다 비면 400. */
+    private static String refBranch(String requested, ResolvedRepo r) {
+        String branch = blankToNull(requested);
+        if (branch == null) branch = blankToNull(r.defaultBranch());
+        if (branch == null) {
+            throw new TaskException(HttpStatus.BAD_REQUEST, "참조 브랜치를 지정하세요");
+        }
+        return branch;
     }
 
     /** 라이브 도달성 체크 — ls-remote 성공 여부. DB 영속 안 함. */

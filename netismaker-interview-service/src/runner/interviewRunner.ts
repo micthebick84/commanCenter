@@ -12,6 +12,7 @@ import { relay } from './messageRelay.js';
 import {
   ensureRepo as defaultEnsureRepo,
   ensureRefRepos as defaultEnsureRefRepos,
+  REF_PREPARE_FALLBACK_REASON,
   type RefPrepared,
   type RepoInput,
 } from './repoPrepare.js';
@@ -170,24 +171,30 @@ export function dbSection(db: Pick<PreparedDbMcp, 'labels' | 'notices'>): string
 
 /** 못 받은 참조의 사유 요약 상한(글자). */
 const REF_REASON_MAX = 200;
-/** 사유가 (가린 뒤) 비어 있을 때 쓰는 문구 — repoPrepare의 고정 문구와 같다. API는 error를 있는 그대로 저장하므로 비워 두지 않는다. */
-const REF_REASON_FALLBACK = '참조 repo를 받지 못했습니다';
+/** Node execFile 오류 메시지의 첫 줄 접두(`Command failed: <명령줄>`) — 명령줄과 로컬 경로뿐이라 사유로 쓰지 않는다. */
+const EXEC_FAILED_PREFIX = 'Command failed:';
+/** git 자신의 진단 줄(`fatal: …`, `error: …`). */
+const GIT_DIAGNOSTIC = /^(?:fatal|error):/;
 
 /**
  * 못 받은 참조의 실패 사유를 한 줄로 줄인다 — 프롬프트의 "사용할 수 없는 참조" 줄과 보고 `refStates[].error`(칩 툴팁)가 같은 값을 쓴다.
- * git 오류 전문은 여러 줄이고 로컬 경로가 섞이므로, 가린 문구의 첫 비어 있지 않은 줄을 다듬어 200자 이내로 자른다.
- * 전체 문구는 로그에만 남는다(logRefFailures). 가린 뒤에 자르는 이유: 자르다가 토큰이 반쪽이 되면 maskSecrets가 알아보지 못한다.
+ * ensureRefRepos가 돌려주는 전문은 Node execFile의 오류 모양이라 `Command failed: <명령줄>\n<stderr>`다. 첫 줄은 명령줄(로컬 경로 포함)이고
+ * 진짜 원인(`fatal: Remote branch … not found`, `Could not resolve host` 등)은 stderr 쪽에 있다(스펙 §5.2 예시의 "브랜치를 찾을 수 없음"에 해당).
+ * 그래서 가린 문구를 줄로 나눠 (a) `Command failed:` 줄을 버리고, (b) git의 마지막 `fatal:`/`error:` 줄이 있으면 그 줄을, (c) 없으면 남은 줄 중
+ * 마지막 비어 있지 않은 줄을 고른다. (d) 다듬어 200자 이내로 자르고 (e) 아무것도 안 남으면 고정 문구(REF_PREPARE_FALLBACK_REASON).
+ * 전체 문구는 로그에만 남는다(logRefFailures). 가린 뒤에 고르고 자르는 이유: 자르다가 토큰이 반쪽이 되면 maskSecrets가 알아보지 못한다.
  */
 function refReason(error: string): string {
-  const firstLine = maskSecrets(error)
+  const lines = maskSecrets(error)
     .split(/\r\n|\r|\n/)
     .map((line) => line.trim())
-    .find((line) => line.length > 0);
-  if (!firstLine) return REF_REASON_FALLBACK;
-  let cut = firstLine.slice(0, REF_REASON_MAX);
+    .filter((line) => line.length > 0 && !line.startsWith(EXEC_FAILED_PREFIX));
+  const picked = lines.slice().reverse().find((line) => GIT_DIAGNOSTIC.test(line)) ?? lines[lines.length - 1];
+  if (!picked) return REF_PREPARE_FALLBACK_REASON;
+  let cut = picked.slice(0, REF_REASON_MAX);
   // 서로게이트 쌍의 앞 절반에서 잘렸으면 그 반쪽을 버린다 — 깨진 문자가 JSON·DB로 나가지 않게.
   if (/[\uD800-\uDBFF]$/.test(cut)) cut = cut.slice(0, -1);
-  return cut.trim() || REF_REASON_FALLBACK;
+  return cut.trim() || REF_PREPARE_FALLBACK_REASON;
 }
 
 /**

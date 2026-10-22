@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { InterviewRunner, refSection } from '../src/runner/interviewRunner.js';
-import type { RefPrepared } from '../src/runner/repoPrepare.js';
+import { REF_PREPARE_FALLBACK_REASON, type RefPrepared } from '../src/runner/repoPrepare.js';
 import type { InterviewClaimResponse, RefRepoClaim } from '../src/types.js';
 import { freshClaim, resumeClaim, freshClaimWithAttachments, questionClaim, questionClaimWithAttachments, questionClaimWithRefs } from './fixtures/claims.js';
 import { planCompleteStream, questionStream, streamingQuestionStream, usageAwareQuestionStream } from './fixtures/sdkMessages.js';
@@ -973,41 +973,54 @@ describe('InterviewRunner kind=QUESTION (스펙 §6 — plan 경로 미진입, Q
       warn.mockRestore();
     });
 
-    it('prompt and report carry only a one-line reason; the full message goes to the log (masked)', async () => {
+    it("prompt and report carry git's fatal line only; the command line and the rest go to the log (masked)", async () => {
       const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      // 실제 Node execFile 오류 모양(ensureRefRepos가 돌려주는 전문): `Command failed: <명령줄>` + stderr.
+      // 첫 줄은 명령줄(로컬 경로 포함)이라 사유가 아니다 — 사유는 git의 fatal 줄이다 (Ruling 8b).
       const full =
-        '권한 없음 (403)\n' +
-        'fatal: unable to access https://oauth2:glpat-SECRET@gitlab.hamon.vip/g/p.git into C:\\netis\\_refs\\5\\12.part\n';
+        'Command failed: git clone --depth 1 --branch release/6.5 https://***@gitlab.example/g/old.git C:\\netis\\_refs\\5\\12.part\n' +
+        "Cloning into 'C:\\netis\\_refs\\5\\12.part'...\n" +
+        'fatal: Remote branch release/6.5 not found in upstream origin\n';
+      const reason = 'fatal: Remote branch release/6.5 not found in upstream origin';
       const client = makeClient();
       const { fakeQuery, captured } = capturing(() => questionStream());
       await runnerWith(client, fakeQuery, preparer([refFailed(full)])).run(questionClaimWithRefs);
 
-      expect(captured.prompt).toContain('사용할 수 없는 참조: 옛앱(release/6.5) — 권한 없음 (403)\n규칙:\n');
-      expect(captured.prompt).not.toContain('unable to access');
-      expect(reportedBody(client).refStates).toEqual([{ catalogId: 12, branch: 'release/6.5', sha: null, error: '권한 없음 (403)' }]);
+      expect(captured.prompt).toContain(`사용할 수 없는 참조: 옛앱(release/6.5) — ${reason}\n규칙:\n`);
+      expect(reportedBody(client).refStates).toEqual([{ catalogId: 12, branch: 'release/6.5', sha: null, error: reason }]);
+      // 명령줄·로컬 경로·그 밖의 줄은 프롬프트와 보고에 나가지 않는다
+      for (const text of [captured.prompt, JSON.stringify(reportedBody(client))]) {
+        expect(text).not.toContain('Command failed');
+        expect(text).not.toContain('C:\\netis');
+        expect(text).not.toContain('Cloning into');
+      }
+      // 전체 문구는 운영자 로그에만 남는다
       const log = logged(warn);
-      expect(log).toContain('unable to access'); // 전체 문구(로컬 경로 포함)는 운영자 로그에만 남는다
+      expect(log).toContain('Command failed: git clone');
       expect(log).toContain('C:\\netis\\_refs\\5\\12.part');
+      expect(log).toContain('Cloning into');
+      expect(log).toContain(reason);
       expect(log).toContain('77');
       expect(log).toContain('옛앱(release/6.5)');
-      expect(log).toContain('***@');
-      for (const text of [log, captured.prompt, JSON.stringify(reportedBody(client))]) expect(text).not.toContain('glpat-SECRET');
       warn.mockRestore();
     });
 
-    it('masks credentials even when the preparer left them in the reason', async () => {
+    it('masks credentials even when the preparer left them in the message', async () => {
       const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      const full =
+        'Command failed: git clone --depth 1 --branch release/6.5 https://oauth2:glpat-SECRET@gitlab.hamon.vip/g/p.git /r/_refs/5/12.part\n' +
+        "fatal: unable to access 'https://oauth2:glpat-SECRET@gitlab.hamon.vip/g/p.git/': Could not resolve host: gitlab.hamon.vip\n";
+      const reason = "fatal: unable to access 'https://***@gitlab.hamon.vip/g/p.git/': Could not resolve host: gitlab.hamon.vip";
       const client = makeClient();
       const { fakeQuery, captured } = capturing(() => questionStream());
-      await runnerWith(client, fakeQuery, preparer([
-        refFailed('fatal: https://oauth2:glpat-SECRET@gitlab.hamon.vip/g/p.git not found'),
-      ])).run(questionClaimWithRefs);
+      await runnerWith(client, fakeQuery, preparer([refFailed(full)])).run(questionClaimWithRefs);
 
-      expect(captured.prompt).toContain('— fatal: https://***@gitlab.hamon.vip/g/p.git not found\n');
-      expect(reportedBody(client).refStates).toEqual([
-        { catalogId: 12, branch: 'release/6.5', sha: null, error: 'fatal: https://***@gitlab.hamon.vip/g/p.git not found' },
-      ]);
-      for (const text of [logged(warn), captured.prompt, JSON.stringify(reportedBody(client))]) expect(text).not.toContain('glpat-SECRET');
+      expect(captured.prompt).toContain(`— ${reason}\n`);
+      expect(reportedBody(client).refStates).toEqual([{ catalogId: 12, branch: 'release/6.5', sha: null, error: reason }]);
+      const log = logged(warn);
+      expect(log).toContain('***@'); // 로그의 전체 문구도 가려서 남는다
+      expect(log).toContain('Could not resolve host');
+      for (const text of [log, captured.prompt, JSON.stringify(reportedBody(client))]) expect(text).not.toContain('glpat-SECRET');
       warn.mockRestore();
     });
 
@@ -1152,15 +1165,39 @@ describe('refSection (스펙 2026-10-22 §5.2)', () => {
     );
   });
 
-  // Ruling 8: 사유는 마스킹한 뒤 첫 비어 있지 않은 줄을 다듬어 200자 이내로 줄인다. 비면 고정 문구.
+  // Ruling 8b: 사유 요약 — 마스킹한 문구를 줄로 나눠 `Command failed:` 줄은 버리고, git의 마지막 `fatal:`/`error:` 줄을 먼저 쓰며,
+  // 없으면 남은 줄 중 마지막 비어 있지 않은 줄을 쓴다. 다듬어 200자 이내로 자르고, 아무것도 안 남으면 고정 문구.
+  // Node execFile 오류는 `Command failed: <명령줄>\n<stderr>`라 첫 줄은 명령줄이고 원인은 stderr의 fatal 줄에 있다.
+  const EXEC_FAILED =
+    'Command failed: git clone --depth 1 --branch nope https://***@gitlab.example/g/old.git C:\\netis\\_refs\\5\\12.part';
   it.each<[string, string, string]>([
-    ['a single line as is', '권한 없음', '권한 없음'],
-    ['only the first line of a multi-line message', '첫 줄\n둘째 줄\n셋째 줄', '첫 줄'],
-    ['skips leading blank lines and trims', '\n  \r\n   fatal: x  \nmore', 'fatal: x'],
-    ['CRLF line breaks', 'first\r\nsecond', 'first'],
-    ['a bare CR (git progress output)', 'Cloning...\rReceiving objects: 10%', 'Cloning...'],
-    ['masks credentials before cutting', 'fatal: https://oauth2:glpat-SECRET@gitlab.hamon.vip/g/p.git not found\n뒷줄', 'fatal: https://***@gitlab.hamon.vip/g/p.git not found'],
+    ['an unprefixed single line as is', 'boom', 'boom'],
+    [
+      'a Node execFile message: the git fatal line, not the command line',
+      `${EXEC_FAILED}\nCloning into 'C:\\netis\\_refs\\5\\12.part'...\nfatal: Remote branch nope not found in upstream origin\n`,
+      'fatal: Remote branch nope not found in upstream origin',
+    ],
+    ['only a Command failed line: nothing useful is left', EXEC_FAILED, FALLBACK],
+    ['a Command failed line plus blank lines only', `${EXEC_FAILED}\n\n  \n`, FALLBACK],
+    [
+      'the LAST fatal/error line wins',
+      'Command failed: x\nerror: RPC failed; curl 18 transfer closed\nfatal: early EOF\nfatal: fetch-pack: invalid index-pack output\n',
+      'fatal: fetch-pack: invalid index-pack output',
+    ],
+    ['error: counts like fatal: (the last of both kinds wins)', 'fatal: first\nerror: second', 'error: second'],
+    ['a git diagnostic beats later plain lines', 'fatal: Authentication failed for repo\nhint: check the token', 'fatal: Authentication failed for repo'],
+    ['without a diagnostic: the last non-empty line', '첫 줄\n둘째 줄\n셋째 줄\n\n', '셋째 줄'],
+    ['without a diagnostic: Command failed is dropped, the last line stays', `${EXEC_FAILED}\nCloning into 'x'...\n`, "Cloning into 'x'..."],
+    ['trims the chosen line and ignores blank lines around it', '\n  \r\n   fatal: x  \n \n', 'fatal: x'],
+    ['CRLF line breaks', 'Command failed: x\r\nfatal: y\r\n', 'fatal: y'],
+    ['a bare CR (git progress output)', 'Receiving objects: 10%\rReceiving objects: 20%', 'Receiving objects: 20%'],
+    [
+      'masks credentials before choosing',
+      "Command failed: x\nfatal: unable to access 'https://oauth2:glpat-SECRET@gitlab.hamon.vip/g/p.git/': Could not resolve host",
+      "fatal: unable to access 'https://***@gitlab.hamon.vip/g/p.git/': Could not resolve host",
+    ],
     ['at most 200 characters', 'a'.repeat(300), 'a'.repeat(200)],
+    ['the 200-character cut applies to the chosen fatal line', `Command failed: x\nfatal: ${'f'.repeat(300)}`, `fatal: ${'f'.repeat(193)}`],
     ['exactly 200 characters stays whole', 'b'.repeat(200), 'b'.repeat(200)],
     ['no trailing space after the cut', `${'c'.repeat(199)} dddd`, 'c'.repeat(199)],
     ['never splits a surrogate pair at the cut', `${'e'.repeat(199)}😀tail`, 'e'.repeat(199)],
@@ -1170,6 +1207,13 @@ describe('refSection (스펙 2026-10-22 §5.2)', () => {
     expect(refSection([refFailed(error)])).toBe(unavailable(expected) + RULES);
     expect(expected.length).toBeLessThanOrEqual(200);
     expect(expected).not.toBe('');
+  });
+
+  it('reuses the fallback text exported by repoPrepare instead of its own copy', () => {
+    expect(REF_PREPARE_FALLBACK_REASON).toBe(FALLBACK); // 사용자에게 보이는 문구는 여기서 한 번 고정한다
+    expect(refSection([refFailed('Command failed: git clone only the command line')])).toBe(
+      unavailable(REF_PREPARE_FALLBACK_REASON) + RULES,
+    );
   });
 });
 

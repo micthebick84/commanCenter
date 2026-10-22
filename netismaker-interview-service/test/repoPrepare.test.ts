@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { ensureRefRepos, ensureRepo } from '../src/runner/repoPrepare.js';
+import { REF_PREPARE_FALLBACK_REASON, ensureRefRepos, ensureRepo } from '../src/runner/repoPrepare.js';
 import type { InterviewClaimResponse, RefRepoClaim, RefState, WorkerQuestionRequest } from '../src/types.js';
 
 describe('ensureRepo', () => {
@@ -390,6 +390,10 @@ describe('ensureRefRepos', () => {
 
     expect(result[0]!.sha).toBeNull();
     expect(result[0]!.error).toBe(FALLBACK_REASON);
+  });
+
+  it('exports the fallback reason so the runner reuses it instead of keeping its own copy', () => {
+    expect(REF_PREPARE_FALLBACK_REASON).toBe(FALLBACK_REASON);
   });
 
   it('passes the abort signal to every git call', async () => {

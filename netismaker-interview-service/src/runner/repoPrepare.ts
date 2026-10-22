@@ -107,8 +107,11 @@ const defaultRefOps: RefRepoOps = {
 /** 받는 동안 쓰는 임시 폴더 접미어 — 다 받았을 때만 최종 이름으로 바꾼다. */
 const PART_SUFFIX = '.part';
 
-/** 실패 사유가 (가린 뒤) 비어 있을 때 쓰는 문구. */
-const REF_FAILURE_FALLBACK = '참조 repo를 받지 못했습니다';
+/**
+ * 실패 사유가 (가린 뒤) 비어 있을 때 쓰는 문구. 러너(interviewRunner.refReason)도 사유를 한 줄로 줄이고 나서
+ * 아무것도 안 남으면 같은 문구를 쓴다 — 사용자에게 보이는 문구가 한 곳에서만 정해지도록 내보낸다.
+ */
+export const REF_PREPARE_FALLBACK_REASON = '참조 repo를 받지 못했습니다';
 
 /**
  * 질문 세션의 읽기 전용 참조 repo를 준비한다 (스펙 2026-10-22 §5.1). claim마다(새 질문·추가 질문 모두)
@@ -190,5 +193,5 @@ function prepared(ref: RefRepoClaim, sha: string): RefPrepared {
 /** 실패 사유 — 자격증명을 가리고, 비면 고정 문구. */
 function describeFailure(e: unknown): string {
   const raw = e instanceof Error ? e.message : typeof e === 'string' ? e : '';
-  return maskSecrets(raw).trim() || REF_FAILURE_FALLBACK;
+  return maskSecrets(raw).trim() || REF_PREPARE_FALLBACK_REASON;
 }

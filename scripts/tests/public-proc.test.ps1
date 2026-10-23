@@ -147,7 +147,7 @@ try {
     $appGone = Wait-Gone $f.App
     $wrapGone = Wait-Gone $f.Wrapper
     $pidFileGone = -not (Test-Path (Join-Path $RunDir 'fake.pid'))
-    Assert-True ($appGone -and $wrapGone -and $pidFileGone -and ($out.Count -eq 1) -and ($out[0] -match '^\[stop\] fake \(wrapper \d+, app ')) `
+    Assert-True ($appGone -and $wrapGone -and $pidFileGone -and ($out.Count -eq 1) -and ($out[0] -match '^\[stop\] fake \(wrapper \d+\)$')) `
         'legacy pid file: stops matching cmd wrapper' "app=$appGone wrapper=$wrapGone pidFile=$pidFileGone out=$($out -join '|')"
     Assert-True (Test-Alive $PID) 'stop: test process itself still alive (3)'
     Stop-Spawned $f.Wrapper; Clear-Run
@@ -160,6 +160,51 @@ try {
     Clear-Run
     $out = @(Stop-ServiceRecord $RunDir 'fake')
     Assert-True (($out.Count -eq 1) -and ($out[0] -eq '[gone] fake')) 'stop: no files at all is [gone]'
+
+    # ---- Stop-ProcTree never throws under ErrorActionPreference=Stop -------
+    # taskkill on a pid that does not exist writes to stderr; that used to throw.
+    $threw = $false; $res = $null
+    try { $res = Invoke-TaskKill 2147483000 } catch { $threw = $true }
+    Assert-True (-not $threw) 'taskkill on a nonexistent pid does not throw under Stop'
+    $threw = $false
+    try { $res = Stop-ProcTree 2147483000 } catch { $threw = $true }
+    Assert-True ((-not $threw) -and ($res -eq $true)) 'Stop-ProcTree: already-gone target is true, no throw'
+    Assert-True ((Stop-ProcTree $PID) -eq $false) 'Stop-ProcTree: refuses its own pid'
+    Assert-True (Test-Alive $PID) 'stop: test process itself still alive (4)'
+
+    # ---- stop when the wrapper already exited before step 2 ----------------
+    # Kill only the wrapper (no /T), so the app survives as an orphan with a matching record.
+    $f = New-Fake $true
+    Write-ProcRecord $RunDir 'fake' $f.Wrapper $f.App
+    Stop-Process -Id $f.Wrapper -Force
+    [void](Wait-Gone $f.Wrapper)
+    $threw = $false; $out = @()
+    try { $out = @(Stop-ServiceRecord $RunDir 'fake') } catch { $threw = $true }
+    $appGone = Wait-Gone $f.App
+    $filesGone = (-not (Test-Path (Join-Path $RunDir 'fake.pid'))) -and (-not (Test-Path (Join-Path $RunDir 'fake.json')))
+    Assert-True ((-not $threw) -and $appGone -and $filesGone -and ($out.Count -eq 1) -and ($out[0] -match '^\[stop\] fake \(app \d+\)$')) `
+        'stop with wrapper already exited: kills app, no throw, files removed' "threw=$threw app=$appGone files=$filesGone out=$($out -join '|')"
+    Assert-True (Test-Alive $PID) 'stop: test process itself still alive (5)'
+    Stop-Spawned $f.Wrapper; Stop-Spawned $f.App; Clear-Run
+
+    # ---- failing kill: [fail], keep pid file and json ----------------------
+    # Replace the taskkill wrapper with a no-op so the target survives, then restore the real one.
+    $f = New-Fake $true
+    Write-ProcRecord $RunDir 'fake' $f.Wrapper $f.App
+    function Invoke-TaskKill([int]$ProcessId) { }
+    $out = @(Stop-ServiceRecord $RunDir 'fake')
+    $filesKept = (Test-Path (Join-Path $RunDir 'fake.pid')) -and (Test-Path (Join-Path $RunDir 'fake.json'))
+    $stillAlive = (Test-Alive $f.App) -and (Test-Alive $f.Wrapper)
+    Assert-True (($out.Count -eq 1) -and ($out[0] -match '^\[fail\] fake \(wrapper \d+, app \d+ still running') -and $filesKept -and $stillAlive) `
+        'failed kill: [fail] line, record kept, process untouched' "out=$($out -join '|') kept=$filesKept alive=$stillAlive"
+    Remove-Item Function:\Invoke-TaskKill
+    . (Join-Path $PSScriptRoot '..\public-proc.ps1')
+    $out = @(Stop-ServiceRecord $RunDir 'fake')
+    $filesGone = (-not (Test-Path (Join-Path $RunDir 'fake.pid'))) -and (-not (Test-Path (Join-Path $RunDir 'fake.json')))
+    Assert-True (($out.Count -eq 1) -and ($out[0] -match '^\[stop\] fake ') -and $filesGone -and (Wait-Gone $f.App) -and (Wait-Gone $f.Wrapper)) `
+        'failed kill: rerun with the real taskkill stops it and removes the record' "out=$($out -join '|') files=$filesGone"
+    Assert-True (Test-Alive $PID) 'stop: test process itself still alive (6)'
+    Stop-Spawned $f.Wrapper; Stop-Spawned $f.App; Clear-Run
 
     # ---- Select-WorkerJvm --------------------------------------------------
     $root = 'C:\Users\x\commanCenter'

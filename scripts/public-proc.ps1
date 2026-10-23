@@ -164,48 +164,81 @@ function Find-AppPid([string]$Name, [int]$WrapperPid, [string]$Root) {
     }
 }
 
-function Stop-ProcTree([int]$ProcessId) {
-    if ($ProcessId -le 4 -or $ProcessId -eq $PID) { return }
-    & taskkill.exe /PID $ProcessId /T /F *> $null
+# The only place that runs taskkill (tests replace this function to simulate a failing kill).
+# taskkill writes to stderr when the target is already gone or access is denied; under the
+# caller's $ErrorActionPreference = 'Stop' that would throw, so it is relaxed here.
+function Invoke-TaskKill([int]$ProcessId) {
+    $ErrorActionPreference = 'Continue'
+    try { & taskkill.exe /PID $ProcessId /T /F *> $null } catch { }
 }
 
-# Spec 5.4 steps 1-3. Returns the output lines ("[stop] name (wrapper X, app Y)" or "[gone] name").
+# Kills the process tree and answers $true only when the target is no longer running
+# (waits up to ~3s for it to disappear). Never throws; refuses pid <= 4 and our own pid.
+function Stop-ProcTree([int]$ProcessId) {
+    try {
+        if ($ProcessId -le 4 -or $ProcessId -eq $PID) { return $false }
+        if (-not (Get-Process -Id $ProcessId -ErrorAction SilentlyContinue)) { return $true }
+        Invoke-TaskKill $ProcessId
+        $deadline = (Get-Date).AddSeconds(3)
+        while ((Get-Date) -lt $deadline) {
+            if (-not (Get-Process -Id $ProcessId -ErrorAction SilentlyContinue)) { return $true }
+            Start-Sleep -Milliseconds 100
+        }
+        return (-not (Get-Process -Id $ProcessId -ErrorAction SilentlyContinue))
+    } catch {
+        return $false
+    }
+}
+
+# Spec 5.4 steps 1-3. Returns the output lines:
+#   "[stop] name (wrapper X, app Y)"  what matched was killed (only the parts that matched are shown)
+#   "[gone] name"                     nothing of ours was running
+#   "[fail] name (... still running)" a kill did not take; pid file and json are KEPT so a rerun can retry
 #  1) json with appPid whose start time matches -> kill the app tree
 #  2) pid-file wrapper that is our cmd (Test-WrapperPid) -> kill the wrapper tree; otherwise leave it
-#  3) remove the pid file and json
+#  3) remove the pid file and json (only when nothing we meant to kill is still alive)
+# Steps 1 and 2 are independent: a failure in one never skips the other or the reporting.
 function Stop-ServiceRecord([string]$RunDir, [string]$Name) {
-    $lines = @()
+    $rec = $null; $wrapperId = $null; $appId = $null
+    $wrapperMatched = $false; $appMatched = $false
+    $appStopped = $true; $wrapperStopped = $true
+
+    # Decide what is ours before killing anything (the wrapper exits by itself once its child dies).
     try {
         $rec = Read-ProcRecord $RunDir $Name
         $wrapperId = Read-WrapperPidFile $RunDir $Name
-        $killedApp = $null
-        $killedWrapper = $null
-
         if ($rec -and $null -ne $rec.appPid -and $null -ne $rec.appStart) {
             $ticks = Get-ProcStartTicks ([int]$rec.appPid)
-            if (($null -ne $ticks) -and ($ticks -eq [long]$rec.appStart)) {
-                Stop-ProcTree ([int]$rec.appPid)
-                $killedApp = [int]$rec.appPid
-            }
+            if (($null -ne $ticks) -and ($ticks -eq [long]$rec.appStart)) { $appMatched = $true; $appId = [int]$rec.appPid }
         }
-        if ($null -ne $wrapperId -and (Test-WrapperPid $RunDir $Name $wrapperId)) {
-            Stop-ProcTree $wrapperId
-            $killedWrapper = $wrapperId
-        }
+        if ($null -ne $wrapperId -and (Test-WrapperPid $RunDir $Name $wrapperId)) { $wrapperMatched = $true }
+    } catch { }
 
-        if ($null -ne $killedApp -or $null -ne $killedWrapper) {
-            $w = if ($null -ne $wrapperId) { "$wrapperId" } else { '-' }
-            $a = if ($null -ne $killedApp) { "$killedApp" } else { '-' }
-            $lines += "[stop] $Name (wrapper $w, app $a)"
-        } else {
-            $lines += "[gone] $Name"
-        }
-    } catch {
-        $lines += "[gone] $Name"
+    if ($appMatched) {
+        try { $appStopped = [bool](Stop-ProcTree $appId) } catch { $appStopped = $false }
     }
-    Remove-Item (Join-Path $RunDir "$Name.pid") -Force -ErrorAction SilentlyContinue
-    Remove-Item (Join-Path $RunDir "$Name.json") -Force -ErrorAction SilentlyContinue
-    return $lines
+    if ($wrapperMatched) {
+        try {
+            if (Get-Process -Id $wrapperId -ErrorAction SilentlyContinue) {
+                # still running: confirm it is still our wrapper (not a reused pid) before killing
+                if (Test-WrapperPid $RunDir $Name $wrapperId) { $wrapperStopped = [bool](Stop-ProcTree $wrapperId) }
+            }
+        } catch { $wrapperStopped = $false }
+    }
+
+    $parts = @()
+    if ($wrapperMatched) { $parts += "wrapper $wrapperId" }
+    if ($appMatched) { $parts += "app $appId" }
+    if ($appStopped -and $wrapperStopped) {
+        Remove-Item (Join-Path $RunDir "$Name.pid") -Force -ErrorAction SilentlyContinue
+        Remove-Item (Join-Path $RunDir "$Name.json") -Force -ErrorAction SilentlyContinue
+        if ($parts.Count -gt 0) { return @("[stop] $Name ($($parts -join ', '))") }
+        return @("[gone] $Name")
+    }
+    $left = @()
+    if (-not $wrapperStopped) { $left += "wrapper $wrapperId" }
+    if (-not $appStopped) { $left += "app $appId" }
+    return @("[fail] $Name ($($left -join ', ') still running; kept $Name.pid/.json)")
 }
 
 # Pure. claude.exe processes running the stack's claude CLI whose parent is gone, or started

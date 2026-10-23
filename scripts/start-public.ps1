@@ -19,7 +19,8 @@
 #   .\scripts\start-public.ps1 -AuthOrigin https://auth.example.com -AppOrigin https://app.example.com
 #   .\scripts\start-public.ps1 -WithWorkers
 #   .\scripts\stop-public.ps1
-# Logs / pids: .run\{auth,api,front,worker,interview}.log|.pid
+# Logs / pids: .run\{auth,api,front,worker,interview}.log|.pid|.json
+#   .pid  = the cmd wrapper's pid (unchanged); .json = the real JVM / node process (scripts/public-proc.ps1)
 #
 # Settings come from (highest priority first): parameters, environment variables,
 # then %USERPROFILE%\netis-maker\public.env (KEY=VALUE lines; see install-autostart.ps1).
@@ -49,20 +50,14 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
+# Shared helpers: Import-PublicEnv, Test-ServiceAlive, Find-AppPid, Write-ProcRecord, ...
+. (Join-Path $PSScriptRoot 'public-proc.ps1')
+
 # ---- settings file (KEY=VALUE lines, '#' comments) --------------------------
 # Lives outside the repo so secrets never get committed. Variables already set
 # in the environment win over the file. Used by the logon autostart task.
 # Keys: AUTH_ORIGIN, APP_ORIGIN, PG_DIR, SPRING_DATASOURCE_PASSWORD, WORKER_API_KEY, GITHUB_PAT, ...
-if (Test-Path $EnvFile) {
-    foreach ($line in Get-Content $EnvFile) {
-        if ($line -match '^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*?)\s*$') {
-            $k = $Matches[1]; $v = $Matches[2].Trim('"').Trim("'")
-            if (-not [Environment]::GetEnvironmentVariable($k, 'Process')) {
-                [Environment]::SetEnvironmentVariable($k, $v, 'Process')
-            }
-        }
-    }
-}
+Import-PublicEnv $EnvFile
 if (-not $AuthOrigin) { $AuthOrigin = if ($env:AUTH_ORIGIN) { $env:AUTH_ORIGIN } else { 'https://auth.micthebick.dev' } }
 if (-not $AppOrigin)  { $AppOrigin  = if ($env:APP_ORIGIN)  { $env:APP_ORIGIN }  else { 'https://app.micthebick.dev' } }
 if (-not $JavaHome)   { $JavaHome   = $env:JAVA_HOME }
@@ -92,12 +87,14 @@ function Test-PortListening([int]$Port) {
     [bool](Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue)
 }
 
-function Test-PidAlive([string]$Name) {
-    $pidFile = Join-Path $RunDir "$Name.pid"
-    if (-not (Test-Path $pidFile)) { return $false }
-    $id = (Get-Content $pidFile -ErrorAction SilentlyContinue | Select-Object -First 1)
-    if (-not $id) { return $false }
-    [bool](Get-Process -Id $id -ErrorAction SilentlyContinue)
+# Record the REAL process (JVM / node) of a service this run just started and found ready.
+# $AppRoot is only used by the worker lookup (its build\classes path); the others are found by port / child.
+function Register-Service([string]$Name, [int]$WrapperPid, [string]$AppRoot) {
+    $appPid = Find-AppPid $Name $WrapperPid $AppRoot
+    if ($null -eq $appPid) {
+        Write-Host "[warn] ${Name}: real process not found - stop falls back to the wrapper"
+    }
+    Write-ProcRecord $RunDir $Name $WrapperPid $appPid
 }
 
 # Start a command line detached, with extra env vars, stdout+stderr -> .run\<name>.log.
@@ -211,34 +208,36 @@ if (Test-PortListening 9000) {
 } else {
     if (-not (Test-Path (Join-Path $AuthDir 'gradlew.bat'))) { throw "netis-auth not found at $AuthDir (pass -AuthDir)" }
     Write-Host "[..]   auth starting (:9000)"
-    Start-Service-Proc 'auth' $AuthDir "`"$(Join-Path $AuthDir 'gradlew.bat')`" bootRun -q" @{
+    $authPid = Start-Service-Proc 'auth' $AuthDir "`"$(Join-Path $AuthDir 'gradlew.bat')`" bootRun -q" @{
         JAVA_HOME                       = $JavaHome
         AUTH_ISSUER_URI                 = $AuthOrigin
         SERVER_FORWARD_HEADERS_STRATEGY = 'framework'
         CORS_ALLOWED_ORIGINS            = "$AppOrigin,http://localhost:9000,http://localhost:3001,http://localhost:3000,http://localhost:8080"
-    } | Out-Null
+    }
     # The API fetches JWKS from auth at startup, so wait for auth first.
-    if (Wait-Log 'auth' $SpringOk $SpringFail 240) { Write-Host "[ok]   auth ready" }
+    if (Wait-Log 'auth' $SpringOk $SpringFail 240) { Write-Host "[ok]   auth ready"; Register-Service 'auth' $authPid $AuthDir }
     else { Write-Host "[FAIL] auth - see .run\auth.log"; $failed += 'auth' }
 }
 
 # ---- 2) netisMaker API (:8090) ----------------------------------------------
 $apiStarted = $false
+$apiPid = 0
 if (Test-PortListening 8090) {
     Write-Host "[skip] api: port 8090 already listening"
 } else {
     Write-Host "[..]   api starting (:8090)"
-    Start-Service-Proc 'api' $Root "`"$(Join-Path $Root 'gradlew.bat')`" bootRun -q" @{
+    $apiPid = Start-Service-Proc 'api' $Root "`"$(Join-Path $Root 'gradlew.bat')`" bootRun -q" @{
         JAVA_HOME                                             = $JavaHome
         SPRING_SECURITY_OAUTH2_RESOURCESERVER_JWT_JWK_SET_URI = 'http://localhost:9000/oauth2/jwks'
         SPRING_SECURITY_OAUTH2_RESOURCESERVER_JWT_ISSUER_URI  = $AuthOrigin
         CORS_ALLOWED_ORIGINS                                  = "$AppOrigin,http://localhost:3001,http://localhost:3000"
-    } | Out-Null
+    }
     $apiStarted = $true
 }
 
 # ---- 3) frontend (:3001) - production build ---------------------------------
 $frontStarted = $false
+$frontPid = 0
 if (Test-PortListening 3001) {
     Write-Host "[skip] front: port 3001 already listening"
 } else {
@@ -254,23 +253,23 @@ if (Test-PortListening 3001) {
     }
     if (Test-Path $entry) {
         Write-Host "[..]   front starting (:3001)"
-        Start-Service-Proc 'front' $FrontDir 'node .output\server\index.mjs' @{
+        $frontPid = Start-Service-Proc 'front' $FrontDir 'node .output\server\index.mjs' @{
             PORT                     = '3001'
             HOST                     = '0.0.0.0'
             NUXT_PUBLIC_AUTH_ISSUER  = $AuthOrigin
             NUXT_PUBLIC_REDIRECT_URI = "$AppOrigin/oauth/callback"
             NUXT_PUBLIC_CLIENT_ID    = 'netis-maker-spa'
-        } | Out-Null
+        }
         $frontStarted = $true
     }
 }
 
 if ($apiStarted) {
-    if (Wait-Log 'api' $SpringOk $SpringFail 240) { Write-Host "[ok]   api ready" }
+    if (Wait-Log 'api' $SpringOk $SpringFail 240) { Write-Host "[ok]   api ready"; Register-Service 'api' $apiPid $Root }
     else { Write-Host "[FAIL] api - see .run\api.log"; $failed += 'api' }
 }
 if ($frontStarted) {
-    if (Wait-Port 3001 90) { Write-Host "[ok]   front ready" }
+    if (Wait-Port 3001 90) { Write-Host "[ok]   front ready"; Register-Service 'front' $frontPid $FrontDir }
     else { Write-Host "[FAIL] front - see .run\front.log"; $failed += 'front' }
 }
 
@@ -295,7 +294,7 @@ if ($WithWorkers) {
     }
     if ($sp) { $sp = $sp -replace '\\', '/' }
 
-    if (Test-PidAlive 'worker') {
+    if (Test-ServiceAlive $RunDir 'worker') {
         Write-Host "[skip] worker: already running"
     } else {
         Write-Host "[..]   worker starting"
@@ -308,12 +307,12 @@ if ($WithWorkers) {
         }
         if ($sp) { $workerEnv['SUPERPOWERS_PLUGIN_PATH'] = $sp }
         else { Write-Host "[warn] superpowers plugin not found - SDD implementation requests fall back to REVIEW (set SUPERPOWERS_PLUGIN_PATH)" }
-        Start-Service-Proc 'worker' $Root "`"$(Join-Path $Root 'gradlew.bat')`" bootRun -q --args=--spring.profiles.active=worker" $workerEnv | Out-Null
-        if (Wait-Log 'worker' $SpringOk $SpringFail 240) { Write-Host "[ok]   worker ready" }
+        $workerPid = Start-Service-Proc 'worker' $Root "`"$(Join-Path $Root 'gradlew.bat')`" bootRun -q --args=--spring.profiles.active=worker" $workerEnv
+        if (Wait-Log 'worker' $SpringOk $SpringFail 240) { Write-Host "[ok]   worker ready"; Register-Service 'worker' $workerPid $Root }
         else { Write-Host "[FAIL] worker - see .run\worker.log"; $failed += 'worker' }
     }
 
-    if (Test-PidAlive 'interview') {
+    if (Test-ServiceAlive $RunDir 'interview') {
         Write-Host "[skip] interview: already running"
     } else {
         if (-not $sp) {
@@ -323,14 +322,14 @@ if ($WithWorkers) {
                 Invoke-Logged $IvDir 'npm install' 'interview-install.log' | Out-Null
             }
             Write-Host "[..]   interview starting"
-            Start-Service-Proc 'interview' $IvDir 'node --import tsx src/index.ts' @{
+            $interviewPid = Start-Service-Proc 'interview' $IvDir 'node --import tsx src/index.ts' @{
                 API_BASE_URL            = 'http://localhost:8090'
                 WORKER_API_KEY          = $workerKey
                 WORKER_ID               = 'interview-worker-1'
                 CLAUDE_CLI              = $claudeCli
                 SUPERPOWERS_PLUGIN_PATH = $sp
-            } | Out-Null
-            if (Wait-Log 'interview' '\[interview-service\].*polling' 'Missing required env|Error:' 60) { Write-Host "[ok]   interview ready" }
+            }
+            if (Wait-Log 'interview' '\[interview-service\].*polling' 'Missing required env|Error:' 60) { Write-Host "[ok]   interview ready"; Register-Service 'interview' $interviewPid $IvDir }
             else { Write-Host "[FAIL] interview - see .run\interview.log"; $failed += 'interview' }
         }
     }

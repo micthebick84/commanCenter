@@ -45,6 +45,20 @@ export class JavaApiClient {
     return `workerId=${encodeURIComponent(this.cfg.workerId)}`;
   }
 
+  /**
+   * 기동 알림 — 이전 프로세스가 잡고 있던 RUNNING 세션을 API가 되돌리게 한다(첫 claim 전에 1회).
+   * 404(알림을 모르는 구 API)면 null, 그 밖의 비정상 응답은 HttpStatusError.
+   */
+  async startup(): Promise<{ released: number[]; failed: number[] } | null> {
+    const res = await this.fetchFn(this.url(`/worker/interviews/startup?${this.wq()}`), {
+      method: 'POST',
+      headers: this.headers(),
+    });
+    if (res.status === 404) return null;
+    if (!res.ok) throw new HttpStatusError(res.status, `startup failed: ${res.status}`);
+    return (await res.json()) as { released: number[]; failed: number[] };
+  }
+
   async claim(): Promise<InterviewClaimResponse | null> {
     // workerId is a QUERY param (LOCKED CONTRACT); auth is the X-Worker-API-Key header.
     const res = await this.fetchFn(

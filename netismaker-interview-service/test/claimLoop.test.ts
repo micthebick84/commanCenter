@@ -5,6 +5,7 @@ import { freshClaim } from './fixtures/claims.js';
 describe('ClaimLoop', () => {
   it('claims work, hands it to the runner, then continues; stops when stop() called', async () => {
     const client = {
+      startup: vi.fn().mockResolvedValue({ released: [], failed: [] }),
       claim: vi.fn().mockResolvedValueOnce(freshClaim).mockResolvedValue(null),
       heartbeat: vi.fn().mockResolvedValue(undefined),
       fail: vi.fn().mockResolvedValue(undefined),
@@ -22,7 +23,12 @@ describe('ClaimLoop', () => {
   });
 
   it('does not run the runner when claim returns null (no work)', async () => {
-    const client = { claim: vi.fn().mockResolvedValue(null), heartbeat: vi.fn(), fail: vi.fn() };
+    const client = {
+      startup: vi.fn().mockResolvedValue({ released: [], failed: [] }),
+      claim: vi.fn().mockResolvedValue(null),
+      heartbeat: vi.fn(),
+      fail: vi.fn(),
+    };
     const runner = { run: vi.fn() };
     const loop = new ClaimLoop(client as never, runner as never, { pollIntervalMs: 1 });
 
@@ -36,6 +42,7 @@ describe('ClaimLoop', () => {
 
   it('reports fail to Java if the runner throws (does not crash the loop)', async () => {
     const client = {
+      startup: vi.fn().mockResolvedValue({ released: [], failed: [] }),
       claim: vi.fn().mockResolvedValueOnce(freshClaim).mockResolvedValue(null),
       heartbeat: vi.fn(),
       fail: vi.fn().mockResolvedValue(undefined),
@@ -54,6 +61,7 @@ describe('ClaimLoop', () => {
   it('logs the runner crash to stdout (interview.log must not stay silent)', async () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     const client = {
+      startup: vi.fn().mockResolvedValue({ released: [], failed: [] }),
       claim: vi.fn().mockResolvedValueOnce(freshClaim).mockResolvedValue(null),
       heartbeat: vi.fn(),
       fail: vi.fn().mockResolvedValue(undefined),
@@ -76,6 +84,7 @@ describe('ClaimLoop', () => {
     // 회귀 가드: fail 보고가 네트워크 오류/409로 거부되면 예전엔 start()가 통째로 죽어
     // 워커가 영구 유휴가 됐다 — 보고 실패는 격리하고 다음 틱을 계속 돌아야 한다.
     const client = {
+      startup: vi.fn().mockResolvedValue({ released: [], failed: [] }),
       claim: vi.fn().mockResolvedValueOnce(freshClaim).mockResolvedValue(null),
       heartbeat: vi.fn(),
       fail: vi.fn().mockRejectedValue(new Error('api down')),
@@ -131,6 +140,7 @@ describe('ClaimLoop concurrency', () => {
   it('concurrency 1 (default) keeps turns strictly serial', async () => {
     const queue = [...claims];
     const client = {
+      startup: vi.fn().mockResolvedValue({ released: [], failed: [] }),
       claim: vi.fn().mockImplementation(async () => queue.shift() ?? null),
       fail: vi.fn(),
     };
@@ -154,6 +164,7 @@ describe('ClaimLoop concurrency', () => {
   it('runs up to N turns at once and claims no more until a slot frees', async () => {
     const queue = [...claims];
     const client = {
+      startup: vi.fn().mockResolvedValue({ released: [], failed: [] }),
       claim: vi.fn().mockImplementation(async () => queue.shift() ?? null),
       fail: vi.fn(),
     };
@@ -180,6 +191,7 @@ describe('ClaimLoop concurrency', () => {
   it('stop() waits for in-flight turns before start() resolves', async () => {
     const queue = [...claims];
     const client = {
+      startup: vi.fn().mockResolvedValue({ released: [], failed: [] }),
       claim: vi.fn().mockImplementation(async () => queue.shift() ?? null),
       fail: vi.fn(),
     };
@@ -207,6 +219,7 @@ describe('ClaimLoop concurrency', () => {
     vi.spyOn(console, 'warn').mockImplementation(() => {});
     const queue = [claims[0], claims[1], claims[2]];
     const client = {
+      startup: vi.fn().mockResolvedValue({ released: [], failed: [] }),
       claim: vi.fn().mockImplementation(async () => queue.shift() ?? null),
       fail: vi.fn().mockResolvedValue(undefined),
     };
@@ -229,6 +242,95 @@ describe('ClaimLoop concurrency', () => {
     loop.stop();
     releases.forEach((r) => r());
     await p;
+    vi.restoreAllMocks();
+  });
+});
+
+describe('ClaimLoop startup', () => {
+  it('does not claim before startup succeeds', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+    const client = {
+      startup: vi.fn(),
+      claim: vi.fn().mockResolvedValue(null),
+      fail: vi.fn(),
+    };
+    // startup이 성공하는 순간까지 claim이 몇 번 불렸는지 기록한다.
+    let claimsAtSuccess = -1;
+    client.startup.mockImplementation(async () => {
+      if (client.startup.mock.calls.length < 3) throw new Error('api down');
+      claimsAtSuccess = client.claim.mock.calls.length;
+      return { released: [1], failed: [] };
+    });
+    const loop = new ClaimLoop(client as never, { run: vi.fn() } as never, { pollIntervalMs: 1 });
+
+    const p = loop.start();
+    await tick(30);
+    loop.stop();
+    await p;
+
+    expect(client.startup).toHaveBeenCalledTimes(3);
+    expect(claimsAtSuccess).toBe(0);
+    expect(client.claim).toHaveBeenCalled();
+    vi.restoreAllMocks();
+  });
+
+  it('proceeds after 404 (startup returns null)', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const client = {
+      startup: vi.fn().mockResolvedValue(null),
+      claim: vi.fn().mockResolvedValue(null),
+      fail: vi.fn(),
+    };
+    const loop = new ClaimLoop(client as never, { run: vi.fn() } as never, { pollIntervalMs: 1 });
+
+    const p = loop.start();
+    await tick();
+    loop.stop();
+    await p;
+
+    expect(client.startup).toHaveBeenCalledTimes(1);
+    expect(client.claim).toHaveBeenCalled();
+    const logged = [...warn.mock.calls, ...log.mock.calls].map((c) => c.join(' ')).join('\n');
+    expect(logged).toContain('[claim-loop] API가 /worker/interviews/startup을 모름 — 기동 정합 건너뜀');
+    vi.restoreAllMocks();
+  });
+
+  it('logs released/failed on success', async () => {
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const client = {
+      startup: vi.fn().mockResolvedValue({ released: [3, 4], failed: [5] }),
+      claim: vi.fn().mockResolvedValue(null),
+      fail: vi.fn(),
+    };
+    const loop = new ClaimLoop(client as never, { run: vi.fn() } as never, { pollIntervalMs: 1 });
+
+    const p = loop.start();
+    await tick();
+    loop.stop();
+    await p;
+
+    const logged = log.mock.calls.map((c) => c.join(' ')).join('\n');
+    expect(logged).toContain('[claim-loop] startup: released=[3,4] failed=[5]');
+    vi.restoreAllMocks();
+  });
+
+  it('stop during startup retry ends start() without claiming', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const client = {
+      startup: vi.fn().mockRejectedValue(new Error('api down')),
+      claim: vi.fn().mockResolvedValue(null),
+      fail: vi.fn(),
+    };
+    const loop = new ClaimLoop(client as never, { run: vi.fn() } as never, { pollIntervalMs: 1 });
+
+    const p = loop.start();
+    await tick();
+    expect(client.startup.mock.calls.length).toBeGreaterThan(1);
+    loop.stop();
+    await p; // 재시도 대기 중 stop()이면 start()가 끝나야 한다
+    expect(client.claim).not.toHaveBeenCalled();
     vi.restoreAllMocks();
   });
 });

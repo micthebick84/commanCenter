@@ -136,3 +136,30 @@ describe('JavaApiClient', () => {
     await expect(new JavaApiClient(cfg, notFound).postRateLimit(body)).rejects.toBeInstanceOf(HttpStatusError);
   });
 });
+
+  it('startup posts workerId query and returns body', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(new Response(JSON.stringify({ released: [1, 2], failed: [3] }), { status: 200 }));
+    const client = new JavaApiClient(cfg, fetchMock);
+    const res = await client.startup();
+    const [url, init] = fetchMock.mock.calls[0]!;
+    expect(url).toBe('http://api:8090/worker/interviews/startup?workerId=iw-1');
+    expect(init.method).toBe('POST');
+    expect(init.headers['X-Worker-API-Key']).toBe('KEY');
+    expect(init.body).toBeUndefined();
+    expect(res).toEqual({ released: [1, 2], failed: [3] });
+  });
+
+  it('startup returns null on 404 (older API)', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(null, { status: 404 }));
+    const client = new JavaApiClient(cfg, fetchMock);
+    expect(await client.startup()).toBeNull();
+  });
+
+  it('startup throws HttpStatusError on other non-2xx', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(null, { status: 500 }));
+    const client = new JavaApiClient(cfg, fetchMock);
+    await expect(client.startup()).rejects.toMatchObject({ status: 500 });
+    await expect(client.startup()).rejects.toBeInstanceOf(HttpStatusError);
+  });

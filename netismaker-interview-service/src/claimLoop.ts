@@ -38,6 +38,11 @@ export class ClaimLoop {
 
   async start(): Promise<void> {
     this.running = true;
+    // 첫 claim 전에 기동 알림 — 성공(또는 404 = null)할 때까지 pollIntervalMs 간격으로 다시 시도한다.
+    // 알림 전에 claim하면 이전 프로세스가 잡던 RUNNING 세션과 새 claim이 뒤섞이므로 그동안은 claim하지 않는다.
+    while (this.running && !(await this.notifyStartup())) {
+      await sleep(this.cfg.pollIntervalMs);
+    }
     const slots = Math.max(1, Math.floor(this.cfg.concurrency ?? 1));
     while (this.running) {
       if (this.inFlight.size >= slots) {
@@ -60,6 +65,27 @@ export class ClaimLoop {
       await sleep(this.cfg.pollIntervalMs);
     }
     await Promise.all(this.inFlight);
+  }
+
+  /** 기동 알림 1회 시도. 끝났으면(성공 또는 API가 모름) true, 다시 시도해야 하면 false. */
+  private async notifyStartup(): Promise<boolean> {
+    try {
+      const res = await this.client.startup();
+      if (res === null) {
+        // eslint-disable-next-line no-console
+        console.log('[claim-loop] API가 /worker/interviews/startup을 모름 — 기동 정합 건너뜀');
+      } else {
+        // eslint-disable-next-line no-console
+        console.log(
+          `[claim-loop] startup: released=[${res.released.join(',')}] failed=[${res.failed.join(',')}]`,
+        );
+      }
+      return true;
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.warn(`[claim-loop] startup 알림 실패, 재시도: ${maskSecrets((err as Error).message)}`);
+      return false;
+    }
   }
 
   /** 한 턴. 런너를 빠져나온 throw는 /fail로 보고하고 삼킨다 — 다른 턴과 루프에 번지지 않게. */

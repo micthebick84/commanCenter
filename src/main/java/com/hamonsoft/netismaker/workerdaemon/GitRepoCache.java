@@ -311,7 +311,12 @@ public class GitRepoCache {
             String line;
             while ((line = br.readLine()) != null) out.append(line);
         }
-        p.waitFor(30, TimeUnit.SECONDS);
+        try {
+            p.waitFor(30, TimeUnit.SECONDS);
+        } catch (InterruptedException e) {
+            p.destroyForcibly();
+            throw e;
+        }
         return out.toString();
     }
 

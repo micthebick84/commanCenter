@@ -208,9 +208,9 @@ public class ClaudeExecAdapter {
         }
     }
 
-    /** claude 프로세스 실행·출력 수집 공통부 (stdin 프롬프트, timeout 시 destroyTree, envelope 해제, 실패 시 stderr tail). */
-    private ExecResult run(List<String> cmd, String prompt, File workingDir, Duration timeout, long start,
-                           Map<String, String> env)
+    /** claude 프로세스 실행·출력 수집 공통부 (stdin 프롬프트, timeout·인터럽트 시 destroyTree, envelope 해제, 실패 시 stderr tail). */
+    ExecResult run(List<String> cmd, String prompt, File workingDir, Duration timeout, long start,
+                   Map<String, String> env)
             throws InterruptedException, IOException {
         Process p = processBuilder(cmd, workingDir, env).start();
         try (OutputStream stdin = p.getOutputStream()) {
@@ -222,7 +222,14 @@ public class ClaudeExecAdapter {
         Thread reader = drain(p.getInputStream(), out);
         Thread errReader = drain(p.getErrorStream(), err);
 
-        boolean finished = p.waitFor(timeout.toMillis(), TimeUnit.MILLISECONDS);
+        boolean finished;
+        try {
+            finished = p.waitFor(timeout.toMillis(), TimeUnit.MILLISECONDS);
+        } catch (InterruptedException e) {
+            // 종료·취소로 대기가 끊기면 claude와 그 자식을 함께 끝내고(고아 방지) 인터럽트를 그대로 전한다.
+            destroyTree(p);
+            throw e;
+        }
         long durationMs = System.currentTimeMillis() - start;
         if (!finished) {
             destroyTree(p);

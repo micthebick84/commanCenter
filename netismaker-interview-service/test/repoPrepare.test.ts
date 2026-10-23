@@ -1,15 +1,49 @@
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { REF_PREPARE_FALLBACK_REASON, ensureRefRepos, ensureRepo, refGitEnv } from '../src/runner/repoPrepare.js';
+import {
+  REF_PREPARE_FALLBACK_REASON,
+  ensureRefRepos,
+  ensureRepo,
+  noPromptGitEnv,
+  type RepoInput,
+} from '../src/runner/repoPrepare.js';
 import type { InterviewClaimResponse, RefRepoClaim, RefState, WorkerQuestionRequest } from '../src/types.js';
 
+/** 대상·참조의 모든 git 호출이 하위 명령 앞에 달고 가는 인자 — 운영자 PC의 자격증명 도우미(GCM)와 askpass를 끈다. */
+const NO_PROMPT_GIT_PREFIX = ['-c', 'credential.helper=', '-c', 'core.askPass='];
+
+type GitCallOptionsLike = { cwd?: string; signal?: AbortSignal; env?: NodeJS.ProcessEnv };
+/** 목 git 호출의 세 번째 인자(옵션). */
+const optsOf = (call: unknown[]): GitCallOptionsLike => call[2] as GitCallOptionsLike;
+
+/** 프롬프트를 끈 환경인지 — askpass 프로그램 변수가 없고(대소문자 무관), 터미널 프롬프트와 GCM 대화상자가 꺼져 있다. */
+function expectPromptsOff(env: NodeJS.ProcessEnv | undefined): void {
+  expect(env).toBeDefined();
+  expect(Object.keys(env!).filter((name) => /^(git|ssh)_askpass$/i.test(name))).toEqual([]);
+  expect(env!.GIT_TERMINAL_PROMPT).toBe('0');
+  expect(env!.GCM_INTERACTIVE).toBe('never');
+}
+
+/** run 호출들을 `git <하위 명령…>` 한 줄씩으로 — 앞의 공통 인자(-c …)가 붙었는지 확인하고 뗀 뒤 본다. */
+function gitCommandLines(run: ReturnType<typeof vi.fn>): string[] {
+  return run.mock.calls.map((c) => {
+    const args = c[1] as string[];
+    expect(args.slice(0, NO_PROMPT_GIT_PREFIX.length)).toEqual(NO_PROMPT_GIT_PREFIX);
+    return [c[0], ...args.slice(NO_PROMPT_GIT_PREFIX.length)].join(' ');
+  });
+}
+
 describe('ensureRepo', () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
   it('clones --depth 1 --branch into workDir when the checkout does not exist', async () => {
     const run = vi.fn().mockResolvedValue(undefined);
     const exists = vi.fn().mockReturnValue(false); // no .git yet
@@ -19,7 +53,7 @@ describe('ensureRepo', () => {
     );
     expect(run).toHaveBeenCalledWith(
       'git',
-      ['clone', '--depth', '1', '--branch', 'main', 'https://github.com/acme/widgets.git', '/wd/session-42'],
+      [...NO_PROMPT_GIT_PREFIX, 'clone', '--depth', '1', '--branch', 'main', 'https://github.com/acme/widgets.git', '/wd/session-42'],
       expect.any(Object),
     );
   });
@@ -31,7 +65,7 @@ describe('ensureRepo', () => {
       { githubRepo: 'acme/widgets', githubBranch: 'main', workDir: '/wd/session-42' },
       { run, exists },
     );
-    const cmds = run.mock.calls.map((c) => [c[0], ...(c[1] as string[])].join(' '));
+    const cmds = gitCommandLines(run);
     expect(cmds).toContain(
       'git fetch --depth 1 https://github.com/acme/widgets.git +refs/heads/main:refs/remotes/origin/main',
     );
@@ -53,12 +87,12 @@ describe('ensureRepo', () => {
     );
     expect(run).toHaveBeenCalledWith(
       'git',
-      ['clone', '--depth', '1', '--branch', 'develop', 'https://oauth2:glpat-B@gitlab.hamon.vip/g/sub/p.git', '/wd/s1'],
+      [...NO_PROMPT_GIT_PREFIX, 'clone', '--depth', '1', '--branch', 'develop', 'https://oauth2:glpat-B@gitlab.hamon.vip/g/sub/p.git', '/wd/s1'],
       expect.any(Object),
     );
     expect(run).toHaveBeenCalledWith(
       'git',
-      ['remote', 'set-url', 'origin', 'https://gitlab.hamon.vip/g/sub/p.git'],
+      [...NO_PROMPT_GIT_PREFIX, 'remote', 'set-url', 'origin', 'https://gitlab.hamon.vip/g/sub/p.git'],
       expect.objectContaining({ cwd: '/wd/s1' }),
     );
   });
@@ -69,7 +103,7 @@ describe('ensureRepo', () => {
       { githubRepo: 'acme/widgets', githubBranch: 'main', workDir: '/wd/s2', tokens: { githubPat: 'ghp_A' } },
       { run, exists: vi.fn().mockReturnValue(true) },
     );
-    const cmds = run.mock.calls.map((c) => [c[0], ...(c[1] as string[])].join(' '));
+    const cmds = gitCommandLines(run);
     expect(cmds[0]).toBe('git remote set-url origin https://github.com/acme/widgets.git');
     expect(cmds[1]).toBe(
       'git fetch --depth 1 https://oauth2:ghp_A@github.com/acme/widgets.git +refs/heads/main:refs/remotes/origin/main',
@@ -103,30 +137,40 @@ describe('ensureRepo', () => {
     );
 
     for (const run of [freshRun, existingRun]) {
-      const setUrlCalls = run.mock.calls.filter(
-        (c) => (c[1] as string[])[0] === 'remote' && (c[1] as string[])[1] === 'set-url',
-      );
-      expect(setUrlCalls.length).toBeGreaterThan(0);
-      for (const call of setUrlCalls) {
-        const joined = (call[1] as string[]).join(' ');
-        expect(joined).not.toContain('oauth2:');
-        expect(joined).not.toContain('ghp_SECRET');
-        expect(joined).not.toContain('glpat-SECRET');
+      const setUrlLines = gitCommandLines(run).filter((line) => line.startsWith('git remote set-url '));
+      expect(setUrlLines.length).toBeGreaterThan(0);
+      for (const line of setUrlLines) {
+        expect(line).not.toContain('oauth2:');
+        expect(line).not.toContain('ghp_SECRET');
+        expect(line).not.toContain('glpat-SECRET');
       }
     }
   });
 
-  it('leaves the target checkout as it was: no credential-helper override, no env (the ref-only hardening does not leak in)', async () => {
-    // 대상 ensureRepo는 이 브랜치에서 바꾸지 않는다(참조 repo 호출만 자격증명 도우미·프롬프트를 끈다).
+  // 대상도 참조와 같은 git 호출을 쓴다 — 운영자 PC의 자격증명 도우미·askpass·터미널 프롬프트 없이. 이 PC처럼 시스템 git 설정에
+  // `credential.helper=manager`(GCM)가 있고 로그온 세션에서 돌면, 토큰이 없는 호스트의 401(비공개·이름이 바뀐·지워진 repo — GitHub는
+  // 없는 repo에도 401)에서 GCM 대화상자가 뜬 채 턴 상한(30분)까지 멈췄다가 세션이 늦게 FAILED로 끝났다.
+  it('runs every git call without the credential helper, askpass or prompts, on a fresh clone and an existing checkout alike', async () => {
+    vi.stubEnv('GIT_ASKPASS', '/operator/askpass');
+    vi.stubEnv('GIT_TERMINAL_PROMPT', '1');
+    vi.stubEnv('REPOTEST_KEEP', 'kept');
+    const { signal } = new AbortController();
     const run = vi.fn().mockResolvedValue(undefined);
-    await ensureRepo({ githubRepo: 'acme/widgets', githubBranch: 'main', workDir: '/wd/a' }, { run, exists: vi.fn().mockReturnValue(false) });
-    await ensureRepo({ githubRepo: 'acme/widgets', githubBranch: 'main', workDir: '/wd/b' }, { run, exists: vi.fn().mockReturnValue(true) });
 
-    expect(run).toHaveBeenCalledTimes(2 + 3);
+    await ensureRepo({ githubRepo: 'acme/widgets', githubBranch: 'main', workDir: '/wd/a', signal }, { run, exists: vi.fn().mockReturnValue(false) });
+    await ensureRepo({ githubRepo: 'acme/widgets', githubBranch: 'main', workDir: '/wd/b', signal }, { run, exists: vi.fn().mockReturnValue(true) });
+
+    // 다섯 호출 모두 하위 명령 앞에 도우미를 끄는 인자가 붙고(gitCommandLines가 확인), 프롬프트를 끈 환경 사본과 턴 신호를 받는다
+    expect(gitCommandLines(run).map((line) => line.split(' ')[1])).toEqual(['clone', 'remote', 'remote', 'fetch', 'reset']);
     for (const call of run.mock.calls) {
-      expect((call[1] as string[])[0]).not.toBe('-c');
-      expect(Object.keys(call[2] as object)).not.toContain('env');
+      const { env, signal: passed } = optsOf(call);
+      expectPromptsOff(env);
+      expect(env!.REPOTEST_KEEP).toBe('kept'); // 나머지 변수(PATH 등)는 그대로 물려준다
+      expect(passed).toBe(signal);
     }
+    // 부모 환경은 건드리지 않는다 — 자식에게 주는 것은 사본이다
+    expect(process.env.GIT_ASKPASS).toBe('/operator/askpass');
+    expect(process.env.GIT_TERMINAL_PROMPT).toBe('1');
   });
 
   it('never leaks the token through a git failure', async () => {
@@ -163,8 +207,6 @@ const SHA_A = 'a'.repeat(40);
 const SHA_B = 'b'.repeat(40);
 const FALLBACK_REASON = '참조 repo를 받지 못했습니다';
 const INVALID_DIR_REASON = '참조 폴더 경로가 올바르지 않습니다';
-/** 참조 repo의 모든 git 호출이 하위 명령 앞에 달고 가는 인자 — 운영자 PC의 자격증명 도우미(GCM)와 askpass를 끈다. */
-const REF_GIT_PREFIX = ['-c', 'credential.helper=', '-c', 'core.askPass='];
 
 /**
  * 참조 git 호출의 옵션 모양 — cwd(있을 때만)와 프롬프트를 끈 환경. 환경의 세부(askpass 제거·process.env 복사)는 전용 테스트가 본다.
@@ -220,7 +262,7 @@ const callOrder = (fn: { mock: { invocationCallOrder: number[] } }, index: numbe
 
 /** run 호출들의 git 하위 명령(clone·remote·fetch…) — 앞의 공통 인자(-c …)는 건너뛴다. */
 const gitSubcommands = (run: FakeRefOps['run']): string[] =>
-  run.mock.calls.map((c) => (c[1] as string[])[REF_GIT_PREFIX.length]!);
+  run.mock.calls.map((c) => (c[1] as string[])[NO_PROMPT_GIT_PREFIX.length]!);
 
 describe('ensureRefRepos', () => {
   afterEach(() => {
@@ -240,7 +282,7 @@ describe('ensureRefRepos', () => {
       [
         'git',
         [
-          ...REF_GIT_PREFIX,
+          ...NO_PROMPT_GIT_PREFIX,
           'clone',
           '--depth',
           '1',
@@ -253,7 +295,7 @@ describe('ensureRefRepos', () => {
       ],
       [
         'git',
-        [...REF_GIT_PREFIX, 'remote', 'set-url', 'origin', 'https://github.com/acme/legacy.git'],
+        [...NO_PROMPT_GIT_PREFIX, 'remote', 'set-url', 'origin', 'https://github.com/acme/legacy.git'],
         refOpts('/r/_refs/5/12.part'),
       ],
     ]);
@@ -264,7 +306,7 @@ describe('ensureRefRepos', () => {
     expect(callOrder(ops.rm, 1)).toBeLessThan(callOrder(ops.run, 0));
     expect(callOrder(ops.run, 1)).toBeLessThan(callOrder(ops.rename, 0));
     expect(callOrder(ops.rename, 0)).toBeLessThan(callOrder(ops.output, 0));
-    expect(ops.output).toHaveBeenCalledWith('git', [...REF_GIT_PREFIX, 'rev-parse', 'HEAD'], refOpts('/r/_refs/5/12'));
+    expect(ops.output).toHaveBeenCalledWith('git', [...NO_PROMPT_GIT_PREFIX, 'rev-parse', 'HEAD'], refOpts('/r/_refs/5/12'));
     expect(result).toEqual([{ ref, sha: SHA_A, error: null }]);
   });
 
@@ -283,7 +325,7 @@ describe('ensureRefRepos', () => {
       1,
       'git',
       [
-        ...REF_GIT_PREFIX,
+        ...NO_PROMPT_GIT_PREFIX,
         'clone',
         '--depth',
         '1',
@@ -297,7 +339,7 @@ describe('ensureRefRepos', () => {
     expect(ops.run).toHaveBeenNthCalledWith(
       2,
       'git',
-      [...REF_GIT_PREFIX, 'remote', 'set-url', 'origin', 'https://gitlab.hamon.vip/g/sub/p.git'],
+      [...NO_PROMPT_GIT_PREFIX, 'remote', 'set-url', 'origin', 'https://gitlab.hamon.vip/g/sub/p.git'],
       refOpts('/r/_refs/5/12.part'),
     );
   });
@@ -313,8 +355,8 @@ describe('ensureRefRepos', () => {
     expect(ops.rm).not.toHaveBeenCalled();
     expect(ops.rename).not.toHaveBeenCalled();
     expect(ops.output.mock.calls).toEqual([
-      ['git', [...REF_GIT_PREFIX, 'rev-parse', '--symbolic-full-name', 'HEAD'], refOpts('/r/_refs/5/12')],
-      ['git', [...REF_GIT_PREFIX, 'rev-parse', 'HEAD'], refOpts('/r/_refs/5/12')],
+      ['git', [...NO_PROMPT_GIT_PREFIX, 'rev-parse', '--symbolic-full-name', 'HEAD'], refOpts('/r/_refs/5/12')],
+      ['git', [...NO_PROMPT_GIT_PREFIX, 'rev-parse', 'HEAD'], refOpts('/r/_refs/5/12')],
     ]);
     expect(result).toEqual([{ ref, sha: SHA_B, error: null }]);
   });
@@ -330,7 +372,7 @@ describe('ensureRefRepos', () => {
     expect(ops.run).toHaveBeenNthCalledWith(
       1,
       'git',
-      [...REF_GIT_PREFIX, 'clone', '--depth', '1', '--branch', 'release/6.5', 'https://github.com/acme/legacy.git', '/r/_refs/5/12.part'],
+      [...NO_PROMPT_GIT_PREFIX, 'clone', '--depth', '1', '--branch', 'release/6.5', 'https://github.com/acme/legacy.git', '/r/_refs/5/12.part'],
       refOpts(),
     );
     expect(ops.rename).toHaveBeenCalledWith('/r/_refs/5/12.part', '/r/_refs/5/12');
@@ -467,16 +509,6 @@ describe('ensureRefRepos', () => {
   // 비공개/없는 repo는 401)에서 git이 GCM을 불러 데스크톱 대화상자를 띄운 채 턴 상한(30분)까지 멈춘다 → 세션 FAILED(스펙 §1.2 위반).
   // 운영자의 개인 자격증명이 몰래 쓰이거나 GitLab URL 토큰이 Windows 자격 증명 관리자에 저장되는 부작용도 있다.
   describe('no credential helper and no prompt', () => {
-    /** 프롬프트를 끈 환경인지 — askpass 프로그램 변수가 없고(대소문자 무관), 터미널 프롬프트와 GCM 대화상자가 꺼져 있다. */
-    function expectPromptsOff(env: NodeJS.ProcessEnv | undefined): void {
-      expect(env).toBeDefined();
-      expect(Object.keys(env!).filter((name) => /^(git|ssh)_askpass$/i.test(name))).toEqual([]);
-      expect(env!.GIT_TERMINAL_PROMPT).toBe('0');
-      expect(env!.GCM_INTERACTIVE).toBe('never');
-    }
-    const optsOf = (call: unknown[]): GitCallOptionsLike => call[2] as GitCallOptionsLike;
-    type GitCallOptionsLike = { cwd?: string; signal?: AbortSignal; env?: NodeJS.ProcessEnv };
-
     it('puts the helper-off prefix before the subcommand and the prompt-off env on every git call of a fresh clone', async () => {
       const ops = fakeRefOps();
 
@@ -487,11 +519,11 @@ describe('ensureRefRepos', () => {
       expect(calls).toHaveLength(3);
       for (const call of calls) {
         expect(call[0]).toBe('git');
-        expect((call[1] as string[]).slice(0, REF_GIT_PREFIX.length)).toEqual(REF_GIT_PREFIX);
+        expect((call[1] as string[]).slice(0, NO_PROMPT_GIT_PREFIX.length)).toEqual(NO_PROMPT_GIT_PREFIX);
         expectPromptsOff(optsOf(call).env);
       }
       expect(gitSubcommands(ops.run)).toEqual(['clone', 'remote']);
-      expect((ops.output.mock.calls[0]![1] as string[]).slice(REF_GIT_PREFIX.length)).toEqual(['rev-parse', 'HEAD']);
+      expect((ops.output.mock.calls[0]![1] as string[]).slice(NO_PROMPT_GIT_PREFIX.length)).toEqual(['rev-parse', 'HEAD']);
     });
 
     it('does the same on the reuse path (both rev-parse calls)', async () => {
@@ -503,10 +535,10 @@ describe('ensureRefRepos', () => {
       expect(ops.output).toHaveBeenCalledTimes(2);
       for (const call of ops.output.mock.calls) {
         expect(call[0]).toBe('git');
-        expect((call[1] as string[]).slice(0, REF_GIT_PREFIX.length)).toEqual(REF_GIT_PREFIX);
+        expect((call[1] as string[]).slice(0, NO_PROMPT_GIT_PREFIX.length)).toEqual(NO_PROMPT_GIT_PREFIX);
         expectPromptsOff(optsOf(call).env);
       }
-      expect(ops.output.mock.calls.map((c) => (c[1] as string[]).slice(REF_GIT_PREFIX.length))).toEqual([
+      expect(ops.output.mock.calls.map((c) => (c[1] as string[]).slice(NO_PROMPT_GIT_PREFIX.length))).toEqual([
         ['rev-parse', '--symbolic-full-name', 'HEAD'],
         ['rev-parse', 'HEAD'],
       ]);
@@ -521,7 +553,7 @@ describe('ensureRefRepos', () => {
       const calls = [...ops.run.mock.calls, ...ops.output.mock.calls];
       expect(calls).toHaveLength(4);
       for (const call of calls) {
-        expect((call[1] as string[]).slice(0, REF_GIT_PREFIX.length)).toEqual(REF_GIT_PREFIX);
+        expect((call[1] as string[]).slice(0, NO_PROMPT_GIT_PREFIX.length)).toEqual(NO_PROMPT_GIT_PREFIX);
         expectPromptsOff(optsOf(call).env);
       }
     });
@@ -550,7 +582,7 @@ describe('ensureRefRepos', () => {
     });
 
     it('drops the askpass variables whatever their letter case (Windows env names are case-insensitive)', () => {
-      const env = refGitEnv({
+      const env = noPromptGitEnv({
         PATH: '/usr/bin',
         git_askpass: '/op/lower',
         Ssh_Askpass: '/op/mixed',
@@ -565,7 +597,7 @@ describe('ensureRefRepos', () => {
     it('defaults to the real process.env as the base', () => {
       vi.stubEnv('REFTEST_KEEP', 'kept');
 
-      expect(refGitEnv().REFTEST_KEEP).toBe('kept');
+      expect(noPromptGitEnv().REFTEST_KEEP).toBe('kept');
     });
   });
 
@@ -951,23 +983,70 @@ describe('ensureRefRepos', () => {
   });
 });
 
-// 기본 ops(execFile·rmSync·renameSync)는 가짜 ops로는 검증되지 않는다 — 로컬 저장소를 file:// URL로 받아 실제 git으로 확인한다
-// (planFiles.test.ts와 같은 방식).
+// ─────────────────────────────────────────────────────────────────────────────
+// 기본 ops(execFile·rmSync·renameSync) — 가짜 ops로는 검증되지 않으므로 실제 git으로 확인한다
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** 테스트 쪽 git — 작성자와 줄바꿈을 고정한다(이 PC의 `core.autocrlf=true`가 커밋 내용을 바꾸지 않게). */
+const git = (cwd: string, ...args: string[]): string =>
+  execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@t', '-c', 'core.autocrlf=false', ...args], {
+    cwd,
+    encoding: 'utf8',
+  }).trim();
+
+/** 저장소에 파일 하나(내용 `<이름>\n`)를 커밋하고 그 커밋을 돌려준다. */
+function commitFile(repo: string, file: string): string {
+  writeFileSync(join(repo, file), `${file}\n`);
+  git(repo, 'add', '-A');
+  git(repo, 'commit', '-q', '-m', file);
+  return git(repo, 'rev-parse', 'HEAD');
+}
+
+// 로컬 저장소를 file:// URL로 받는다(planFiles.test.ts와 같은 방식).
+describe('ensureRepo with the default ops (real git, local file:// origin)', () => {
+  let work: string;
+  let origin: string;
+
+  beforeEach(() => {
+    work = mkdtempSync(join(tmpdir(), 'ensurerepo-'));
+    origin = join(work, 'origin');
+    mkdirSync(origin);
+    git(origin, 'init', '-q', '-b', 'main');
+  });
+  afterEach(() => {
+    rmSync(work, { recursive: true, force: true });
+  });
+
+  it('clones a fresh checkout, then fetches and hard-resets it to the new tip on the next turn, keeping origin plain', async () => {
+    // 모든 호출 앞에 붙는 도우미 끄기 인자(-c …)가 clone·remote·fetch·reset 어느 하위 명령도 깨지 않는지 본다
+    const c1 = commitFile(origin, 'a.txt');
+    const input: RepoInput = {
+      githubRepo: 'acme/widgets',
+      githubBranch: 'main',
+      workDir: join(work, 'session-1'),
+      gitUrl: pathToFileURL(origin).href,
+      repoHost: 'github',
+    };
+
+    await ensureRepo(input);
+    expect(git(input.workDir, 'rev-parse', 'HEAD')).toBe(c1);
+    expect(git(input.workDir, 'remote', 'get-url', 'origin')).toBe(input.gitUrl);
+
+    // 다음 턴: 원본이 앞서 가 있고, 체크아웃에 남은 수정은 버려진다
+    const c2 = commitFile(origin, 'b.txt');
+    writeFileSync(join(input.workDir, 'a.txt'), 'local edit\n');
+    await ensureRepo(input);
+    expect(git(input.workDir, 'rev-parse', 'HEAD')).toBe(c2);
+    expect(readFileSync(join(input.workDir, 'a.txt'), 'utf8')).toMatch(/^a\.txt\r?\n$/); // 이 PC는 CRLF로 꺼낸다
+    expect(existsSync(join(input.workDir, 'b.txt'))).toBe(true);
+  }, 30_000);
+});
+
 describe('ensureRefRepos with the default ops (real git, local file:// origin)', () => {
   let work: string;
   let origin: string;
 
-  const git = (cwd: string, ...args: string[]): string =>
-    execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@t', '-c', 'core.autocrlf=false', ...args], {
-      cwd,
-      encoding: 'utf8',
-    }).trim();
-  const commitToOrigin = (file: string): string => {
-    writeFileSync(join(origin, file), `${file}\n`);
-    git(origin, 'add', '-A');
-    git(origin, 'commit', '-q', '-m', file);
-    return git(origin, 'rev-parse', 'HEAD');
-  };
+  const commitToOrigin = (file: string): string => commitFile(origin, file);
 
   beforeEach(() => {
     work = mkdtempSync(join(tmpdir(), 'refrepos-'));
@@ -1046,13 +1125,54 @@ describe('ensureRefRepos with the default ops (real git, local file:// origin)',
   }, 30_000);
 });
 
-// 인증이 필요한 원격(401)에서 도우미·프롬프트를 기다리지 않고 바로 실패하는지 실제 git으로 본다. 가짜 ops로는 인자가 붙었다는 것만
-// 확인되고, 이 PC의 시스템 git 설정(`credential.helper=manager`)이 정말 꺼지는지는 알 수 없다 — 옵션이 빠지면 GCM이 데스크톱 대화상자를
-// 띄운 채 턴 상한까지 멈춘다. 로컬 HTTP 서버(127.0.0.1)만 쓰고 실제 원격으로는 나가지 않는다.
-describe('ensureRefRepos with the default ops against a remote that answers 401 (real git, local HTTP server)', () => {
+/**
+ * 운영자 PC의 자격증명 도우미·askpass 자리에 가짜를 심고, 불린 기록이 쌓일 로그 파일 경로를 돌려준다. 가짜는 빈 답을 주고 바로 끝난다.
+ * 이 PC의 시스템 도우미(GCM)는 환경 설정(`GIT_CONFIG_COUNT`)의 빈 값으로 먼저 비운다 — 차단이 빠진 코드로 돌려도 데스크톱 대화상자 대신
+ * 가짜가 불려 테스트가 바로 실패한다. git은 환경 설정을 `git -c`보다 먼저 읽으므로 `-c credential.helper=`는 이 가짜 도우미도 비운다.
+ * 터미널 프롬프트도 켜 둔다 — 부르는 쪽이 `GIT_TERMINAL_PROMPT=0`으로 덮어써야 한다.
+ */
+function plantOperatorPrompts(dir: string): string {
+  const log = join(dir, 'prompt-calls.log');
+  const askpass = join(dir, 'askpass.sh');
+  writeFileSync(askpass, '#!/bin/sh\necho "askpass $1" >> "$PROMPT_CALLS_LOG"\necho\n', { mode: 0o755 });
+  vi.stubEnv('PROMPT_CALLS_LOG', log.replace(/\\/g, '/'));
+  vi.stubEnv('GIT_CONFIG_COUNT', '2');
+  vi.stubEnv('GIT_CONFIG_KEY_0', 'credential.helper');
+  vi.stubEnv('GIT_CONFIG_VALUE_0', '');
+  vi.stubEnv('GIT_CONFIG_KEY_1', 'credential.helper');
+  vi.stubEnv('GIT_CONFIG_VALUE_1', '!f() { echo "helper $1" >> "$PROMPT_CALLS_LOG"; }; f');
+  vi.stubEnv('GIT_ASKPASS', askpass);
+  vi.stubEnv('SSH_ASKPASS', askpass);
+  vi.stubEnv('GIT_TERMINAL_PROMPT', '1');
+  return log;
+}
+
+// 인증이 필요한 원격(401)에서 도우미·프롬프트를 기다리지 않고 바로 실패하는지 실제 git으로 본다 — 대상(`ensureRepo`)과 참조(`ensureRefRepos`)는
+// 같은 git 호출을 쓴다. 가짜 ops로는 인자가 붙었다는 것만 확인되고, 이 PC의 시스템 git 설정(`credential.helper=manager`)이 정말 꺼지는지는
+// 알 수 없다 — 옵션이 빠지면 GCM이 데스크톱 대화상자를 띄운 채 턴 상한까지 멈춘다. 그래서 운영자 PC의 도우미·askpass 자리에 기록만 남기는
+// 가짜를 심어(`plantOperatorPrompts`) 정말 아무것도 불리지 않는지까지 본다. 로컬 HTTP 서버(127.0.0.1)만 쓰고 실제 원격으로는 나가지 않는다.
+describe('ensureRepo and ensureRefRepos with the default ops against a remote that answers 401 (real git, local HTTP server)', () => {
   let work: string;
   let server: Server;
   let requests: { method?: string; url?: string; authorization?: string }[];
+  let promptLog: string;
+
+  /** 가짜 도우미·askpass가 불린 기록 — 한 번에 한 줄(`helper get`, `askpass Username for …`). */
+  const promptCalls = (): string[] =>
+    existsSync(promptLog) ? readFileSync(promptLog, 'utf8').split('\n').filter((line) => line.trim() !== '') : [];
+
+  /** 대상 체크아웃 입력 — 토큰을 줄 때는 GitLab 자리(`gitlabToken`)로 준다. */
+  const targetAt = (port: number, workDir: string): RepoInput => ({
+    githubRepo: 'grp/proj',
+    githubBranch: 'main',
+    workDir,
+    gitUrl: `http://127.0.0.1:${port}/grp/proj.git`,
+    repoHost: 'gitlab',
+    // 멈추면(차단이 빠져 프롬프트를 기다리는 경우) git을 20초 뒤에 끊어 자식 프로세스를 남기지 않는다
+    signal: AbortSignal.timeout(20_000),
+  });
+  /** 대상 실패를 값으로 받는다 — 성공하면 undefined. */
+  const failureOf = (input: RepoInput): Promise<unknown> => ensureRepo(input).then(() => undefined, (e: unknown) => e);
 
   const refAt = (port: number): RefRepoClaim => ({
     catalogId: 12,
@@ -1076,6 +1196,8 @@ describe('ensureRefRepos with the default ops against a remote that answers 401 
     await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
     // 환경에 프록시가 있어도 로컬 서버로는 직접 간다
     vi.stubEnv('no_proxy', '127.0.0.1');
+    vi.stubEnv('LC_ALL', 'C'); // git 메시지를 영어로 고정한다
+    promptLog = plantOperatorPrompts(work);
   });
   afterEach(async () => {
     vi.unstubAllEnvs();
@@ -1084,8 +1206,7 @@ describe('ensureRefRepos with the default ops against a remote that answers 401 
     rmSync(work, { recursive: true, force: true });
   });
 
-  it('fails fast with git\'s "terminal prompts disabled" instead of waiting for a credential prompt, and leaves no folder', async () => {
-    vi.stubEnv('LC_ALL', 'C'); // git 메시지를 영어로 고정한다
+  it('ensureRefRepos fails fast with git\'s "terminal prompts disabled" instead of waiting for a credential prompt, and leaves no folder', async () => {
     const ref = refAt((server.address() as AddressInfo).port);
 
     const started = Date.now();
@@ -1097,11 +1218,12 @@ describe('ensureRefRepos with the default ops against a remote that answers 401 
     // git은 서버까지 갔고(연결 오류가 아니다), 인증 정보 없이 평문 URL로 물어봤다 — 개인 자격증명이 끼어들지 않았다
     expect(requests.length).toBeGreaterThan(0);
     expect(requests.every((r) => r.authorization === undefined)).toBe(true);
+    expect(promptCalls()).toEqual([]);
     expect(existsSync(ref.dir)).toBe(false);
     expect(existsSync(`${ref.dir}.part`)).toBe(false);
   }, 30_000);
 
-  it('fails fast when the supplied token is rejected too, and the reported reason never carries the token', async () => {
+  it('ensureRefRepos fails fast when the supplied token is rejected too, and the reported reason never carries the token', async () => {
     const ref = refAt((server.address() as AddressInfo).port);
 
     const [result] = await ensureRefRepos([ref], { tokens: { gitlabToken: 'glpat-SECRET' }, signal: AbortSignal.timeout(20_000) });
@@ -1111,7 +1233,57 @@ describe('ensureRefRepos with the default ops against a remote that answers 401 
     expect(result!.error).not.toMatch(/abort/i); // 멈췄다가 끊긴 것이 아니라 git이 스스로 실패했다
     // 토큰은 clone 전송에만 쓰였다 — 서버는 Basic 인증을 받았다
     expect(requests.some((r) => r.authorization?.startsWith('Basic '))).toBe(true);
+    expect(promptCalls()).toEqual([]); // 거부된 자격증명을 지우라고(erase) 도우미를 부르지도 않는다
     expect(existsSync(ref.dir)).toBe(false);
     expect(existsSync(`${ref.dir}.part`)).toBe(false);
+  }, 30_000);
+
+  it('ensureRepo fails a fresh clone fast with git\'s "terminal prompts disabled": no helper, no askpass, no credentials sent', async () => {
+    const input = targetAt((server.address() as AddressInfo).port, join(work, 'session-1'));
+
+    const started = Date.now();
+    const error = await failureOf(input);
+
+    expect(error).toBeInstanceOf(Error);
+    expect((error as Error).message).toContain('terminal prompts disabled');
+    expect(Date.now() - started).toBeLessThan(15_000);
+    // git은 서버까지 갔고(연결 오류가 아니다), 인증 정보 없이 평문 URL로 물어봤다 — 운영자의 자격증명이 끼어들지 않았다
+    expect(requests.length).toBeGreaterThan(0);
+    expect(requests.every((r) => r.authorization === undefined)).toBe(true);
+    expect(promptCalls()).toEqual([]);
+  }, 30_000);
+
+  it('ensureRepo fails a fetch into an existing checkout just as fast', async () => {
+    const input = targetAt((server.address() as AddressInfo).port, join(work, 'session-2'));
+    mkdirSync(input.workDir);
+    git(input.workDir, 'init', '-q');
+    git(input.workDir, 'remote', 'add', 'origin', 'https://example.invalid/old.git'); // 지난 턴의 체크아웃 — origin이 있다
+
+    const started = Date.now();
+    const error = await failureOf(input);
+
+    expect(error).toBeInstanceOf(Error);
+    expect((error as Error).message).toContain('terminal prompts disabled');
+    expect(Date.now() - started).toBeLessThan(15_000);
+    expect(git(input.workDir, 'remote', 'get-url', 'origin')).toBe(input.gitUrl); // fetch 앞의 set-url은 했다
+    expect(requests.length).toBeGreaterThan(0);
+    expect(promptCalls()).toEqual([]);
+  }, 30_000);
+
+  it('ensureRepo fails fast when the supplied token is rejected too, and the error never carries the token', async () => {
+    const input: RepoInput = {
+      ...targetAt((server.address() as AddressInfo).port, join(work, 'session-3')),
+      tokens: { gitlabToken: 'glpat-SECRET' },
+    };
+
+    const error = (await failureOf(input)) as Error & { stderr?: string; cmd?: string };
+
+    expect(error).toBeInstanceOf(Error);
+    expect(error.message).not.toMatch(/abort/i); // 멈췄다가 끊긴 것이 아니라 git이 스스로 실패했다
+    // 세션 실패 사유·로그로 나가는 문구 어디에도 토큰이 없다(실제 execFile 오류의 cmd·stderr 포함)
+    expect(`${error.message}\n${error.stderr ?? ''}\n${error.cmd ?? ''}`).not.toContain('glpat-SECRET');
+    // 토큰은 clone 전송에만 쓰였다 — 서버는 Basic 인증을 받았다
+    expect(requests.some((r) => r.authorization?.startsWith('Basic '))).toBe(true);
+    expect(promptCalls()).toEqual([]); // 거부된 자격증명을 지우라고(erase) 도우미를 부르지도 않는다
   }, 30_000);
 });

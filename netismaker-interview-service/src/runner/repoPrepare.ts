@@ -20,7 +20,7 @@ export interface RepoInput {
   signal?: AbortSignal;
 }
 
-/** git 자식 프로세스 호출 옵션. `env`가 없으면 부모 환경을 그대로 물려받는다(대상 `ensureRepo`가 그렇다). */
+/** git 자식 프로세스 호출 옵션. `env`가 없으면 부모 환경을 그대로 물려받는다 — 이 파일의 git 호출은 늘 `noPromptGit`이 만든 환경을 넘긴다. */
 export interface GitCallOptions {
   cwd?: string;
   signal?: AbortSignal;
@@ -43,6 +43,52 @@ const defaultOps: RepoOps = {
 };
 
 /**
+ * 대상 체크아웃(`ensureRepo`)과 참조 repo(`ensureRefRepos`)의 모든 git 호출이 하위 명령 앞에 달고 가는 인자. 운영자 PC의 자격증명 도우미와
+ * askpass 프로그램을 쓰지 않는다. 이 PC처럼 시스템 git 설정에 `credential.helper=manager`(GCM)가 있으면, 인증이 필요한 원격(토큰이 없는
+ * 호스트의 비공개·이름이 바뀐·지워진 repo는 401 — GitHub는 없는 repo에도 401을 준다)에서 git이 GCM을 불러 데스크톱 대화상자를 띄운 채
+ * 턴 상한(30분)까지 멈춘다. 대상이면 세션이 그제야 FAILED로 끝나고, 참조면 참조 문제로 세션이 FAILED가 된다(참조 스펙 2026-10-22 §1.2 위반).
+ * GCM이 운영자의 개인 GitHub 자격증명을 몰래 쓰거나 URL 토큰을 Windows 자격 증명 관리자에 저장하는 부작용도 막는다. 빈 값은 도우미 목록을
+ * 비운다(Java 워커 `GitRepoCache.GIT_NO_HELPER`와 같은 방식). 프롬프트 쪽은 환경(`noPromptGitEnv`)이 막는다.
+ */
+const NO_PROMPT_GIT_PREFIX: readonly string[] = ['-c', 'credential.helper=', '-c', 'core.askPass='];
+
+/**
+ * 자식에게서 지울 askpass 프로그램 변수. git은 `GIT_ASKPASS` 변수 → `core.askPass` 설정 → `SSH_ASKPASS` 변수 순으로 찾으므로
+ * (git의 `git_prompt`), 변수가 남아 있으면 `-c core.askPass=`가 있어도 운영자 PC의 프로그램이 먼저 뜬다.
+ */
+const ASKPASS_ENV_NAMES: readonly string[] = ['GIT_ASKPASS', 'SSH_ASKPASS'];
+/** 자식에게 강제하는 값 — git의 터미널 프롬프트와 GCM의 대화상자를 끈다. 인증이 필요하면 묻지 않고 바로 실패한다. */
+const PROMPT_OFF_ENV: Readonly<Record<string, string>> = { GIT_TERMINAL_PROMPT: '0', GCM_INTERACTIVE: 'never' };
+
+/**
+ * git 자식 프로세스 환경 — `base`(기본 `process.env`)의 사본에서 askpass 프로그램 변수를 지우고 프롬프트를 끈 것.
+ * 부모 환경은 건드리지 않는다. Windows는 환경변수 이름의 대소문자를 구분하지 않아 `git_askpass`도 같은 변수이므로 이름은
+ * 대소문자 무시로 비교한다(Node는 대소문자만 다른 키가 여럿이면 그중 하나만 자식에게 넘긴다).
+ */
+export function noPromptGitEnv(base: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+  const overridden = new Set([...ASKPASS_ENV_NAMES, ...Object.keys(PROMPT_OFF_ENV)]);
+  const env: NodeJS.ProcessEnv = {};
+  for (const [name, value] of Object.entries(base)) {
+    if (!overridden.has(name.toUpperCase())) env[name] = value;
+  }
+  return Object.assign(env, PROMPT_OFF_ENV);
+}
+
+/**
+ * 운영자 PC의 자격증명 도우미·askpass·터미널 프롬프트 없이 도는 git 호출 — 대상·참조의 모든 git 호출이 같은 앞 인자·환경·중단 신호를
+ * 달고 나가도록 여기 한 곳을 거친다. 돌려주는 함수는 `ops.run`·`ops.output`에 그대로 펼쳐 넘길 `[명령, 인자, 옵션]`을 만든다.
+ * 환경은 이 함수를 부를 때(= 체크아웃 하나에) 한 번만 만든다.
+ */
+function noPromptGit(signal: AbortSignal | undefined): (args: string[], cwd?: string) => [string, string[], GitCallOptions] {
+  const env = noPromptGitEnv();
+  return (args, cwd) => [
+    'git',
+    [...NO_PROMPT_GIT_PREFIX, ...args],
+    { ...(cwd === undefined ? {} : { cwd }), env, ...(signal ? { signal } : {}) },
+  ];
+}
+
+/**
  * Ensures the repo is checked out at workDir BEFORE the first turn AND before every resume
  * (resume is cwd-pinned — spike 02). Fresh => shallow clone; existing => fetch + hard reset.
  * URL은 claim의 gitUrl + 호스트별 토큰으로 만든다(비공개 GitHub/사내 GitLab).
@@ -50,27 +96,28 @@ const defaultOps: RepoOps = {
  * workDir 안의 파일을 읽을 수 있기 때문. 그래서 clone/fetch는 인증 URL로 하되, origin은
  * 항상 토큰 없는 평문 URL로 맞춘다(기존 체크아웃은 먼저 origin부터 정리해 취약 버전이
  * 남긴 인증 URL도 함께 지운다).
+ * git 호출은 전부 운영자 PC의 자격증명 도우미·askpass·터미널 프롬프트 없이 돈다(`noPromptGit`, 참조 repo와 같다).
+ * 인증이 필요한 원격(토큰이 없는 호스트의 비공개·이름이 바뀐·지워진 repo)은 묻지 않고 바로 실패해 세션이 git의 fatal 줄을
+ * 사유로 끝난다 — 그래서 비공개 GitHub 대상은 `GITHUB_PAT`이 있어야 받는다.
  * git 오류 메시지는 자격증명을 가린 뒤 다시 던진다 — 세션 실패 사유로 화면에 노출되기 때문.
  */
 export async function ensureRepo(input: RepoInput, ops: RepoOps = defaultOps): Promise<void> {
   const { githubBranch, workDir } = input;
-  const abort = input.signal ? { signal: input.signal } : {};
+  const git = noPromptGit(input.signal);
   const plainUrl = buildCloneUrl(input, {});
   const authUrl = buildCloneUrl(input, input.tokens ?? {});
   try {
     if (ops.exists(join(workDir, '.git'))) {
-      await ops.run('git', ['remote', 'set-url', 'origin', plainUrl], { cwd: workDir, ...abort });
+      await ops.run(...git(['remote', 'set-url', 'origin', plainUrl], workDir));
       await ops.run(
-        'git',
-        ['fetch', '--depth', '1', authUrl, `+refs/heads/${githubBranch}:refs/remotes/origin/${githubBranch}`],
-        { cwd: workDir, ...abort },
+        ...git(['fetch', '--depth', '1', authUrl, `+refs/heads/${githubBranch}:refs/remotes/origin/${githubBranch}`], workDir),
       );
-      await ops.run('git', ['reset', '--hard', `origin/${githubBranch}`], { cwd: workDir, ...abort });
+      await ops.run(...git(['reset', '--hard', `origin/${githubBranch}`], workDir));
       return;
     }
     ops.mkdir?.(workDir);
-    await ops.run('git', ['clone', '--depth', '1', '--branch', githubBranch, authUrl, workDir], { ...abort });
-    await ops.run('git', ['remote', 'set-url', 'origin', plainUrl], { cwd: workDir, ...abort });
+    await ops.run(...git(['clone', '--depth', '1', '--branch', githubBranch, authUrl, workDir]));
+    await ops.run(...git(['remote', 'set-url', 'origin', plainUrl], workDir));
   } catch (e) {
     if (e instanceof Error) {
       e.message = maskSecrets(e.message);
@@ -116,56 +163,6 @@ const defaultRefOps: RefRepoOps = {
 
 /** 받는 동안 쓰는 임시 폴더 접미어 — 다 받았을 때만 최종 이름으로 바꾼다. */
 const PART_SUFFIX = '.part';
-
-/**
- * 참조 repo의 모든 git 호출이 하위 명령 앞에 달고 가는 인자. 운영자 PC의 자격증명 도우미와 askpass 프로그램을 쓰지 않는다.
- * 이 PC처럼 시스템 git 설정에 `credential.helper=manager`(GCM)가 있으면, 인증이 필요한 원격(토큰이 없는 호스트·비공개/없는 repo는 401)에서
- * git이 GCM을 불러 데스크톱 대화상자를 띄운 채 턴 상한까지 멈추고 세션이 FAILED로 끝난다(스펙 §1.2). GCM이 운영자의 개인 GitHub
- * 자격증명을 몰래 쓰거나 URL 토큰을 Windows 자격 증명 관리자에 저장하는 부작용도 막는다. 빈 값은 도우미 목록을 비운다
- * (Java 워커 `GitRepoCache.GIT_NO_HELPER`와 같은 방식). 프롬프트 쪽은 환경(`refGitEnv`)이 막는다.
- */
-const REF_GIT_PREFIX: readonly string[] = ['-c', 'credential.helper=', '-c', 'core.askPass='];
-
-/**
- * 자식에게서 지울 askpass 프로그램 변수. git은 `GIT_ASKPASS` 변수 → `core.askPass` 설정 → `SSH_ASKPASS` 변수 순으로 찾으므로
- * (git의 `git_prompt`), 변수가 남아 있으면 `-c core.askPass=`가 있어도 운영자 PC의 프로그램이 먼저 뜬다.
- */
-const ASKPASS_ENV_NAMES: readonly string[] = ['GIT_ASKPASS', 'SSH_ASKPASS'];
-/** 자식에게 강제하는 값 — git의 터미널 프롬프트와 GCM의 대화상자를 끈다. 인증이 필요하면 묻지 않고 바로 실패한다. */
-const PROMPT_OFF_ENV: Readonly<Record<string, string>> = { GIT_TERMINAL_PROMPT: '0', GCM_INTERACTIVE: 'never' };
-
-/**
- * 참조 repo의 git 자식 프로세스 환경 — `base`(기본 `process.env`)의 사본에서 askpass 프로그램 변수를 지우고 프롬프트를 끈 것.
- * 부모 환경은 건드리지 않는다. Windows는 환경변수 이름의 대소문자를 구분하지 않아 `git_askpass`도 같은 변수이므로 이름은
- * 대소문자 무시로 비교한다(Node는 대소문자만 다른 키가 여럿이면 그중 하나만 자식에게 넘긴다).
- */
-export function refGitEnv(base: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
-  const overridden = new Set([...ASKPASS_ENV_NAMES, ...Object.keys(PROMPT_OFF_ENV)]);
-  const env: NodeJS.ProcessEnv = {};
-  for (const [name, value] of Object.entries(base)) {
-    if (!overridden.has(name.toUpperCase())) env[name] = value;
-  }
-  return Object.assign(env, PROMPT_OFF_ENV);
-}
-
-/**
- * 참조 repo용 git 호출 한 쌍(run·output) — 모든 호출이 같은 앞 인자·환경·중단 신호를 달고 나가도록 여기 한 곳을 거친다.
- * 환경은 호출 한 번(= 참조 하나)에 한 번만 만든다.
- */
-function refGit(ops: RefRepoOps, signal: AbortSignal | undefined) {
-  const env = refGitEnv();
-  const optionsFor = (cwd: string | undefined): GitCallOptions => ({
-    ...(cwd === undefined ? {} : { cwd }),
-    env,
-    ...(signal ? { signal } : {}),
-  });
-  return {
-    run: (args: string[], cwd?: string): Promise<unknown> =>
-      ops.run('git', [...REF_GIT_PREFIX, ...args], optionsFor(cwd)),
-    output: (args: string[], cwd?: string): Promise<string> =>
-      ops.output('git', [...REF_GIT_PREFIX, ...args], optionsFor(cwd)),
-  };
-}
 
 /** API가 만드는 참조 폴더의 위쪽 폴더 이름 — `{체크아웃 루트}/_refs/{세션 id}/{카탈로그 id}`(InterviewWorkPaths.refDir). */
 const REFS_DIR_NAME = '_refs';
@@ -238,7 +235,7 @@ export const REF_PREPARE_FALLBACK_REASON = '참조 repo를 받지 못했습니�
  *   남지 않는다. 남으면 다음 턴의 "그대로 쓴다" 판정이 그 폴더를 성공으로 보고 엉뚱한 커밋에 고정하게 된다.
  * - 자격증명은 clone 전송에만 쓰고 `.git/config`(origin)에는 남기지 않는다(대상 `ensureRepo`와 같은 규칙) —
  *   세션이 참조 폴더도 읽을 수 있기 때문. 실패 사유는 `maskSecrets`로 가린다.
- * - git 호출은 전부 운영자 PC의 자격증명 도우미·askpass·터미널 프롬프트 없이 돈다(`REF_GIT_PREFIX`·`refGitEnv`). 인증이 필요한
+ * - git 호출은 전부 운영자 PC의 자격증명 도우미·askpass·터미널 프롬프트 없이 돈다(`noPromptGit`, 대상 `ensureRepo`와 같다). 인증이 필요한
  *   원격은 묻지 않고 바로 실패해 ⚠로 끝난다 — 도우미가 데스크톱 대화상자를 띄우고 턴 상한까지 멈추면 세션이 FAILED가 되기 때문이다
  *   (스펙 §1.2). 그래서 비공개 GitHub 참조는 `GITHUB_PAT`을 설정해야 하고, 설정하지 않은 호스트의 비공개 repo는 받지 못한다.
  * - claim에 `sha`가 있는데 폴더가 사라져 새로 받았다면 브랜치 최신을 받는다. 고정 커밋 재현은 하지 않고(스펙의
@@ -277,14 +274,14 @@ async function prepareRefRepo(
   }
   const { dir, branch } = ref;
   const part = `${dir}${PART_SUFFIX}`;
-  const git = refGit(ops, opts.signal);
-  const headSha = async (): Promise<string> => (await git.output(['rev-parse', 'HEAD'], dir)).trim();
+  const git = noPromptGit(opts.signal);
+  const headSha = async (): Promise<string> => (await ops.output(...git(['rev-parse', 'HEAD'], dir))).trim();
   try {
     if (ops.exists(join(dir, '.git'))) {
       // 브랜치는 전체 이름(refs/heads/…)으로 비교한다. `--abbrev-ref`는 브랜치와 같은 이름의 태그가 있으면 모호성을
       // 피하려고 `heads/<이름>`을 돌려줘 재사용 판정이 어긋나고, 그러면 매 턴 다시 받아 커밋 고정이 풀린다.
       // 분리된 HEAD는 (종료 코드 0으로) `HEAD`를 돌려주므로 다른 브랜치로 취급된다.
-      const head = (await git.output(['rev-parse', '--symbolic-full-name', 'HEAD'], dir)).trim();
+      const head = (await ops.output(...git(['rev-parse', '--symbolic-full-name', 'HEAD'], dir))).trim();
       if (head === `refs/heads/${branch}`) return prepared(ref, await headSha());
     }
     // 체크아웃이 없거나(.git 없음) 다른 브랜치다 — 낡은 폴더와 지난 시도의 찌꺼기를 지우고 .part에 새로 받는다.
@@ -292,8 +289,8 @@ async function prepareRefRepo(
     ops.rm(part);
     const plainUrl = buildCloneUrl(ref, {});
     const authUrl = buildCloneUrl(ref, opts.tokens ?? {});
-    await git.run(['clone', '--depth', '1', '--branch', branch, authUrl, part]);
-    await git.run(['remote', 'set-url', 'origin', plainUrl], part);
+    await ops.run(...git(['clone', '--depth', '1', '--branch', branch, authUrl, part]));
+    await ops.run(...git(['remote', 'set-url', 'origin', plainUrl], part));
     await renameWithRetry(ops, part, dir, opts.signal);
     return prepared(ref, await headSha());
   } catch (e) {

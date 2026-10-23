@@ -36,7 +36,7 @@ class StaleTaskRecoveryJobTest {
         heartbeatRepo = mock(WorkerHeartbeatRepository.class);
         deployLogStream = mock(DeployLogStreamService.class);
         when(deployLogStream.consolidate(any())).thenReturn(java.util.Optional.empty());
-        job = new StaleTaskRecoveryJob(taskRepo, historyRepo, heartbeatRepo, deployLogStream,
+        job = new StaleTaskRecoveryJob(taskRepo, heartbeatRepo, new TaskRecovery(historyRepo, deployLogStream),
                 ImplementationModePolicy.defaults());
         ReflectionTestUtils.setField(job, "analysisStaleThresholdMinutes", 5);
         ReflectionTestUtils.setField(job, "deployStaleThresholdMinutes", 15);
@@ -68,7 +68,7 @@ class StaleTaskRecoveryJobTest {
 
     @Test
     void none_inflight_does_nothing() {
-        when(taskRepo.findInFlightClaimed()).thenReturn(List.of());
+        when(taskRepo.findInFlightClaimedForUpdateSkipLocked()).thenReturn(List.of());
         job.recoverStale();
         verifyNoInteractions(historyRepo);
     }
@@ -76,7 +76,7 @@ class StaleTaskRecoveryJobTest {
     @Test
     void alive_worker_within_ceiling_not_recovered() {
         Task t = task(1L, TaskStatus.DEPLOYING, "w1", 5, 0); // 5분 < 15분, 워커 살아있음
-        when(taskRepo.findInFlightClaimed()).thenReturn(List.of(t));
+        when(taskRepo.findInFlightClaimedForUpdateSkipLocked()).thenReturn(List.of(t));
         when(heartbeatRepo.findAllById(any())).thenReturn(List.of(hb("w1", 5))); // 5초 전
         job.recoverStale();
         assertThat(t.getStatus()).isEqualTo(TaskStatus.DEPLOYING);
@@ -86,7 +86,7 @@ class StaleTaskRecoveryJobTest {
     @Test
     void dead_worker_deploying_to_deploy_failed() {
         Task t = task(2L, TaskStatus.DEPLOYING, "w1", 5, 0); // claimed 5분 전(>60s), heartbeat 끊김
-        when(taskRepo.findInFlightClaimed()).thenReturn(List.of(t));
+        when(taskRepo.findInFlightClaimedForUpdateSkipLocked()).thenReturn(List.of(t));
         when(heartbeatRepo.findAllById(any())).thenReturn(List.of(hb("w1", 300))); // 5분 전
         job.recoverStale();
         assertThat(t.getStatus()).isEqualTo(TaskStatus.DEPLOY_FAILED);
@@ -102,7 +102,7 @@ class StaleTaskRecoveryJobTest {
     @Test
     void dead_worker_deploying_consolidates_partial_log_into_deploy_log() {
         Task t = task(2L, TaskStatus.DEPLOYING, "w1", 5, 0);
-        when(taskRepo.findInFlightClaimed()).thenReturn(List.of(t));
+        when(taskRepo.findInFlightClaimedForUpdateSkipLocked()).thenReturn(List.of(t));
         when(heartbeatRepo.findAllById(any())).thenReturn(List.of(hb("w1", 300)));
         when(deployLogStream.consolidate(2L)).thenReturn(java.util.Optional.of("partial build output"));
         job.recoverStale();
@@ -115,7 +115,7 @@ class StaleTaskRecoveryJobTest {
     @Test
     void dead_worker_undeploying_requeues_to_undeploy_pending() {
         Task t = task(3L, TaskStatus.UNDEPLOYING, "w1", 5, 0);
-        when(taskRepo.findInFlightClaimed()).thenReturn(List.of(t));
+        when(taskRepo.findInFlightClaimedForUpdateSkipLocked()).thenReturn(List.of(t));
         when(heartbeatRepo.findAllById(any())).thenReturn(List.of()); // heartbeat 없음 = 사망
         job.recoverStale();
         assertThat(t.getStatus()).isEqualTo(TaskStatus.UNDEPLOY_PENDING);
@@ -127,7 +127,7 @@ class StaleTaskRecoveryJobTest {
     @Test
     void freshly_claimed_missing_heartbeat_not_recovered() {
         Task t = task(4L, TaskStatus.IN_PROGRESS, "w1", 0, 0); // 방금 claim (0분 전)
-        when(taskRepo.findInFlightClaimed()).thenReturn(List.of(t));
+        when(taskRepo.findInFlightClaimedForUpdateSkipLocked()).thenReturn(List.of(t));
         when(heartbeatRepo.findAllById(any())).thenReturn(List.of()); // 아직 heartbeat 전
         job.recoverStale();
         assertThat(t.getStatus()).isEqualTo(TaskStatus.IN_PROGRESS); // 유예로 보호
@@ -137,7 +137,7 @@ class StaleTaskRecoveryJobTest {
     @Test
     void hung_backstop_alive_worker_implementing_to_failed() {
         Task t = task(5L, TaskStatus.IMPLEMENTING, "w1", 61, 0); // 61분 > 60분 ceiling
-        when(taskRepo.findInFlightClaimed()).thenReturn(List.of(t));
+        when(taskRepo.findInFlightClaimedForUpdateSkipLocked()).thenReturn(List.of(t));
         when(heartbeatRepo.findAllById(any())).thenReturn(List.of(hb("w1", 5))); // 살아있어도 백스톱
         job.recoverStale();
         assertThat(t.getStatus()).isEqualTo(TaskStatus.IMPLEMENTATION_FAILED);
@@ -146,7 +146,7 @@ class StaleTaskRecoveryJobTest {
     @Test
     void dead_worker_in_progress_under_retry_returns_pending() {
         Task t = task(6L, TaskStatus.IN_PROGRESS, "w1", 6, 0);
-        when(taskRepo.findInFlightClaimed()).thenReturn(List.of(t));
+        when(taskRepo.findInFlightClaimedForUpdateSkipLocked()).thenReturn(List.of(t));
         when(heartbeatRepo.findAllById(any())).thenReturn(List.of(hb("w1", 300)));
         job.recoverStale();
         assertThat(t.getStatus()).isEqualTo(TaskStatus.PENDING);
@@ -157,7 +157,7 @@ class StaleTaskRecoveryJobTest {
     void stale_at_max_retry_transitions_to_failed() {
         // retry==maxRetry(3) → FAILED, retry_count 변경 없음, failureReason에 "한도 초과" 포함
         Task t = task(7L, TaskStatus.IN_PROGRESS, "w1", 6, 3); // retryCount=3 == maxRetry=3
-        when(taskRepo.findInFlightClaimed()).thenReturn(List.of(t));
+        when(taskRepo.findInFlightClaimedForUpdateSkipLocked()).thenReturn(List.of(t));
         when(heartbeatRepo.findAllById(any())).thenReturn(List.of(hb("w1", 300))); // 사망 워커
         job.recoverStale();
         assertThat(t.getStatus()).isEqualTo(TaskStatus.FAILED);
@@ -170,7 +170,7 @@ class StaleTaskRecoveryJobTest {
     void implementing_short_heartbeat_gap_not_recovered() {
         // 구현 작업: heartbeat 90초 전 (< 300초 임계) → 회수 안 됨
         Task t = task(10L, TaskStatus.IMPLEMENTING, "w1", 6, 0);
-        when(taskRepo.findInFlightClaimed()).thenReturn(List.of(t));
+        when(taskRepo.findInFlightClaimedForUpdateSkipLocked()).thenReturn(List.of(t));
         when(heartbeatRepo.findAllById(any())).thenReturn(List.of(hb("w1", 90)));
         job.recoverStale();
         assertThat(t.getStatus()).isEqualTo(TaskStatus.IMPLEMENTING);
@@ -181,7 +181,7 @@ class StaleTaskRecoveryJobTest {
     void implementing_long_heartbeat_gap_recovered() {
         // 구현 작업: heartbeat 320초 전 (> 300초 임계) → 회수
         Task t = task(11L, TaskStatus.IMPLEMENTING, "w1", 6, 0);
-        when(taskRepo.findInFlightClaimed()).thenReturn(List.of(t));
+        when(taskRepo.findInFlightClaimedForUpdateSkipLocked()).thenReturn(List.of(t));
         when(heartbeatRepo.findAllById(any())).thenReturn(List.of(hb("w1", 320)));
         job.recoverStale();
         assertThat(t.getStatus()).isEqualTo(TaskStatus.IMPLEMENTATION_FAILED);
@@ -191,7 +191,7 @@ class StaleTaskRecoveryJobTest {
     void deploying_short_heartbeat_gap_not_recovered() {
         // 배포 작업: heartbeat 90초 전 (< 180초 임계) → 회수 안 됨
         Task t = task(12L, TaskStatus.DEPLOYING, "w1", 5, 0);
-        when(taskRepo.findInFlightClaimed()).thenReturn(List.of(t));
+        when(taskRepo.findInFlightClaimedForUpdateSkipLocked()).thenReturn(List.of(t));
         when(heartbeatRepo.findAllById(any())).thenReturn(List.of(hb("w1", 90)));
         job.recoverStale();
         assertThat(t.getStatus()).isEqualTo(TaskStatus.DEPLOYING);
@@ -202,7 +202,7 @@ class StaleTaskRecoveryJobTest {
     void 디자인중_작업은_stale시_디자인대기로_재큐잉된다() {
         // given: DESIGNING task, workerId="dead-worker", claimedAt=now-2h, heartbeat 없음
         Task t = task(13L, TaskStatus.DESIGNING, "dead-worker", 120, 0);
-        when(taskRepo.findInFlightClaimed()).thenReturn(List.of(t));
+        when(taskRepo.findInFlightClaimedForUpdateSkipLocked()).thenReturn(List.of(t));
         when(heartbeatRepo.findAllById(any())).thenReturn(List.of()); // heartbeat 없음 = 사망
         // when
         job.recoverStale();
@@ -216,7 +216,7 @@ class StaleTaskRecoveryJobTest {
         // CLOSING, 31분 전 claim(> 30분 천장), 워커는 살아있음
         Task t = task(14L, TaskStatus.CLOSING, "w1", 31, 0);
         t.setCloseProgress("MERGED,UNDEPLOYED");
-        when(taskRepo.findInFlightClaimed()).thenReturn(List.of(t));
+        when(taskRepo.findInFlightClaimedForUpdateSkipLocked()).thenReturn(List.of(t));
         when(heartbeatRepo.findAllById(any())).thenReturn(List.of(hb("w1", 5)));
         job.recoverStale();
         assertThat(t.getStatus()).isEqualTo(TaskStatus.CLOSE_PENDING);
@@ -230,7 +230,7 @@ class StaleTaskRecoveryJobTest {
     @Test
     void 종료중_작업은_천장_이내이고_워커가_살아있으면_회수하지_않는다() {
         Task t = task(15L, TaskStatus.CLOSING, "w1", 29, 0);
-        when(taskRepo.findInFlightClaimed()).thenReturn(List.of(t));
+        when(taskRepo.findInFlightClaimedForUpdateSkipLocked()).thenReturn(List.of(t));
         when(heartbeatRepo.findAllById(any())).thenReturn(List.of(hb("w1", 5)));
         job.recoverStale();
         assertThat(t.getStatus()).isEqualTo(TaskStatus.CLOSING);
@@ -240,7 +240,7 @@ class StaleTaskRecoveryJobTest {
     @Test
     void 종료중_작업은_워커_사망시_종료대기로_재큐잉된다() {
         Task t = task(16L, TaskStatus.CLOSING, "w1", 5, 0); // 5분 전 claim, heartbeat 끊김(> 180초)
-        when(taskRepo.findInFlightClaimed()).thenReturn(List.of(t));
+        when(taskRepo.findInFlightClaimedForUpdateSkipLocked()).thenReturn(List.of(t));
         when(heartbeatRepo.findAllById(any())).thenReturn(List.of(hb("w1", 300)));
         job.recoverStale();
         assertThat(t.getStatus()).isEqualTo(TaskStatus.CLOSE_PENDING);
@@ -250,7 +250,7 @@ class StaleTaskRecoveryJobTest {
     void an_sdd_implementation_gets_the_longer_ceiling() {
         Task t = task(10L, TaskStatus.IMPLEMENTING, "w1", 100, 0);
         t.setImplementationMode(ImplementationMode.SDD);
-        when(taskRepo.findInFlightClaimed()).thenReturn(List.of(t));
+        when(taskRepo.findInFlightClaimedForUpdateSkipLocked()).thenReturn(List.of(t));
         when(heartbeatRepo.findAllById(any())).thenReturn(List.of(hb("w1", 5)));
 
         job.recoverStale();
@@ -262,7 +262,7 @@ class StaleTaskRecoveryJobTest {
     void a_review_implementation_past_its_ceiling_is_recovered() {
         Task t = task(11L, TaskStatus.IMPLEMENTING, "w1", 100, 0);
         t.setImplementationMode(ImplementationMode.REVIEW);
-        when(taskRepo.findInFlightClaimed()).thenReturn(List.of(t));
+        when(taskRepo.findInFlightClaimedForUpdateSkipLocked()).thenReturn(List.of(t));
         when(heartbeatRepo.findAllById(any())).thenReturn(List.of(hb("w1", 5)));
 
         job.recoverStale();
@@ -275,7 +275,7 @@ class StaleTaskRecoveryJobTest {
     void an_sdd_implementation_past_260_minutes_is_recovered() {
         Task t = task(12L, TaskStatus.IMPLEMENTING, "w1", 261, 0);
         t.setImplementationMode(ImplementationMode.SDD);
-        when(taskRepo.findInFlightClaimed()).thenReturn(List.of(t));
+        when(taskRepo.findInFlightClaimedForUpdateSkipLocked()).thenReturn(List.of(t));
         when(heartbeatRepo.findAllById(any())).thenReturn(List.of(hb("w1", 5)));
 
         job.recoverStale();
@@ -287,7 +287,7 @@ class StaleTaskRecoveryJobTest {
     @Test
     void a_direct_implementation_keeps_the_60_minute_ceiling() {
         Task t = task(13L, TaskStatus.IMPLEMENTING, "w1", 61, 0);
-        when(taskRepo.findInFlightClaimed()).thenReturn(List.of(t));
+        when(taskRepo.findInFlightClaimedForUpdateSkipLocked()).thenReturn(List.of(t));
         when(heartbeatRepo.findAllById(any())).thenReturn(List.of(hb("w1", 5)));
 
         job.recoverStale();

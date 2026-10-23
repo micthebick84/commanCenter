@@ -149,6 +149,25 @@ public interface TaskRepository extends JpaRepository<Task, Long> {
     List<Task> findInFlightClaimedForUpdateSkipLocked();
 
     /**
+     * 워커 기동 정합: 그 워커가 claim해 처리중인(in-flight) 작업을 행 잠금(FOR UPDATE)으로 읽는다.
+     * SKIP LOCKED가 아니다 — 결과 보고 등이 쥔 행은 끝나길 기다렸다가 갱신된 상태로 재판정한다.
+     */
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("""
+        SELECT t FROM Task t
+        WHERE t.status IN (com.hamonsoft.netismaker.entity.TaskStatus.IN_PROGRESS,
+                           com.hamonsoft.netismaker.entity.TaskStatus.IMPLEMENTING,
+                           com.hamonsoft.netismaker.entity.TaskStatus.DESIGNING,
+                           com.hamonsoft.netismaker.entity.TaskStatus.DEPLOYING,
+                           com.hamonsoft.netismaker.entity.TaskStatus.UNDEPLOYING,
+                           com.hamonsoft.netismaker.entity.TaskStatus.CLOSING)
+          AND t.workerId = :workerId
+          AND t.deletedAt IS NULL
+        ORDER BY t.id ASC
+    """)
+    List<Task> findInFlightClaimedByWorkerForUpdate(@Param("workerId") String workerId);
+
+    /**
      * 배포 계열 활성 task: reconcile 관측 + GC 보호 겸용.
      * DeployReconcileJob은 이 중 DEPLOYED/DEPLOY_LOST만 대사하고 나머지는 무시한다.
      * in-flight 상태(배포대기~중지중)를 포함하는 이유: GC 보호 목록이 DEPLOYED만 담으면

@@ -116,4 +116,74 @@ class TaskRecoveryTest {
         assertThat(cause.requeueImplementation()).isTrue();
         assertThat(TaskRecovery.MAX_RESTART_REQUEUES).isEqualTo(2);
     }
+
+    @Test
+    void restart_requeues_implementation_and_counts() {
+        Task t = task(5L, TaskStatus.IMPLEMENTING, 0);
+        t.setHeadBranch("netis/task-5");
+        assertThat(t.getImplementationAttempt()).isEqualTo(1);
+        assertThat(t.getRestartRequeueCount()).isZero();
+
+        assertThat(recovery.recover(t, RecoveryCause.workerRestart("w1"))).isEqualTo(TaskStatus.APPROVED);
+
+        assertThat(t.getStatus()).isEqualTo(TaskStatus.APPROVED);
+        assertThat(t.getImplementationAttempt()).isEqualTo(2);
+        assertThat(t.getRestartRequeueCount()).isEqualTo(1);
+        assertThat(t.getHeadBranch()).isNull();
+        assertThat(t.getWorkerId()).isNull();
+        assertThat(t.getClaimedAt()).isNull();
+        TaskStatusHistory h = savedHistory();
+        assertThat(h.getActorType()).isEqualTo("system");
+        assertThat(h.getActorId()).isEqualTo("worker-restart");
+        assertThat(h.getReason()).isEqualTo("워커 w1 재기동으로 중단 → 자동 재큐 (2회째 시도, 재기동 재큐 1/2)");
+    }
+
+    @Test
+    void restart_fails_implementation_after_two_requeues() {
+        Task t = task(6L, TaskStatus.IMPLEMENTING, 0);
+        t.setRestartRequeueCount(2);
+
+        assertThat(recovery.recover(t, RecoveryCause.workerRestart("w1"))).isEqualTo(TaskStatus.IMPLEMENTATION_FAILED);
+
+        assertThat(t.getStatus()).isEqualTo(TaskStatus.IMPLEMENTATION_FAILED);
+        assertThat(t.getFailureReason()).isEqualTo("워커 w1 재기동으로 중단(자동 재큐 2회 소진)");
+        assertThat(t.getRestartRequeueCount()).isEqualTo(2);
+        assertThat(t.getImplementationAttempt()).isEqualTo(1);
+        assertThat(t.getWorkerId()).isNull();
+        assertThat(savedHistory().getActorId()).isEqualTo("worker-restart");
+    }
+
+    @Test
+    void restart_uses_stale_transitions_for_other_states() {
+        RecoveryCause cause = RecoveryCause.workerRestart("w1");
+
+        Task design = task(7L, TaskStatus.DESIGNING, 0);
+        assertThat(recovery.recover(design, cause)).isEqualTo(TaskStatus.DESIGN_PENDING);
+        TaskStatusHistory h1 = savedHistory();
+        assertThat(h1.getActorId()).isEqualTo("worker-restart");
+        assertThat(h1.getActorType()).isEqualTo("system");
+        assertThat(h1.getReason()).isEqualTo("워커 w1 재기동으로 중단 → 디자인대기");
+
+        reset(historyRepo);
+        when(historyRepo.save(any())).thenAnswer(i -> i.getArgument(0));
+        Task close = task(8L, TaskStatus.CLOSING, 0);
+        assertThat(recovery.recover(close, cause)).isEqualTo(TaskStatus.CLOSE_PENDING);
+        assertThat(savedHistory().getReason()).isEqualTo("워커 w1 재기동으로 중단 → 종료대기");
+
+        reset(historyRepo);
+        when(historyRepo.save(any())).thenAnswer(i -> i.getArgument(0));
+        Task deploy = task(9L, TaskStatus.DEPLOYING, 0);
+        assertThat(recovery.recover(deploy, cause)).isEqualTo(TaskStatus.DEPLOY_FAILED);
+        assertThat(deploy.getFailureReason()).isEqualTo("워커 w1 재기동으로 중단 (배포 중단)");
+        TaskStatusHistory h3 = savedHistory();
+        assertThat(h3.getActorId()).isEqualTo("worker-restart");
+        assertThat(h3.getReason()).isEqualTo("워커 w1 재기동으로 중단 → 배포실패");
+    }
+
+    @Test
+    void exhausted_label_is_carried_by_the_cause() {
+        assertThat(RecoveryCause.stale(WHY).exhaustedLabel()).isEqualTo("Stale 회수 한도 초과: " + WHY);
+        assertThat(RecoveryCause.workerRestart("w1").exhaustedLabel())
+                .isEqualTo("워커 w1 재기동으로 중단(재시도 한도 초과)");
+    }
 }

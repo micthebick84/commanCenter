@@ -6,7 +6,7 @@ import ModelEffortFields from './ModelEffortFields.vue'
 // v-model 2개(model/effort)를 실제로 갱신하는 호스트 — ModelEffortPicker.spec 선례.
 function host(
   initialModel = 'claude-opus-5-5',
-  initialEffort = 'high',
+  initialEffort = 'medium',
   disabled = false,
 ) {
   const model = ref(initialModel)
@@ -64,11 +64,11 @@ describe('ModelEffortFields (승인 다이얼로그 — 모델 라디오 + 추�
     w.unmount()
   })
 
-  it('모델 행을 누르면 model v-model이 바뀌고, Haiku면 effort가 high로 강등되며 세그먼트 3개 + 힌트', async () => {
+  it('모델 행을 누르면 model v-model이 바뀌고, Haiku면 effort가 기본값(medium)으로 강등되며 세그먼트 3개 + 힌트', async () => {
     const { w, model, effort } = host('claude-opus-5', 'max')
     await w.find('[data-test="model-row-claude-haiku-4-5"]').trigger('click')
     expect(model.value).toBe('claude-haiku-4-5')
-    expect(effort.value).toBe('high')
+    expect(effort.value).toBe('medium')
     expect(w.findAll('[data-test="effort-toggle"] button')).toHaveLength(3)
     expect(w.text()).toContain('Haiku는 low/medium/high만 지원')
     w.unmount()

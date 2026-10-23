@@ -163,7 +163,7 @@ public class InterviewSession {
     /** 추론 effort (low/medium/high/xhigh/max). 워커가 claude --effort에 사용. */
     @Column(name = "effort", nullable = false, length = 16)
     @Setter
-    private String effort = "high";
+    private String effort = "medium";
 
     @Column(name = "git_url", columnDefinition = "TEXT")
     @Setter

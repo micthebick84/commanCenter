@@ -132,7 +132,7 @@ describe('ApproveDialog (승인 팝업 UI/UX 개선 2026-09-06)', () => {
     await flushPromises()
     expect(approveCall()?.[1]).toEqual({
       method: 'POST',
-      body: { model: 'claude-opus-5-5', effort: 'high', mcpCatalogIds: [] },
+      body: { model: 'claude-opus-5-5', effort: 'medium', mcpCatalogIds: [] },
     })
     expect(w.emitted('approved')).toBeTruthy()
     expect(w.emitted('update:modelValue')?.at(-1)).toEqual([false])
@@ -162,7 +162,7 @@ describe('ApproveDialog (승인 팝업 UI/UX 개선 2026-09-06)', () => {
     await (w.vm as any).approve()
     expect(approveCall()?.[1]).toEqual({
       method: 'POST',
-      body: { model: 'claude-opus-5-5', effort: 'high', mcpCatalogIds: [3] },
+      body: { model: 'claude-opus-5-5', effort: 'medium', mcpCatalogIds: [3] },
     })
     w.unmount()
   })
@@ -197,7 +197,7 @@ describe('ApproveDialog (승인 팝업 UI/UX 개선 2026-09-06)', () => {
     w.unmount()
   })
 
-  it('지난 인터뷰가 없으면 기본값(Opus 5.5 · high)이고 안내는 없다', async () => {
+  it('지난 인터뷰가 없으면 기본값(Opus 5.5 · medium)이고 안내는 없다', async () => {
     routeApi({ interviews: [] })
     const w = mountDialog()
     await flushPromises()
@@ -222,7 +222,7 @@ describe('ApproveDialog (승인 팝업 UI/UX 개선 2026-09-06)', () => {
     await (w.vm as any).approve()
     expect(approveCall()?.[1]).toEqual({
       method: 'POST',
-      body: { model: 'claude-opus-5-5', effort: 'high', mcpCatalogIds: [] },
+      body: { model: 'claude-opus-5-5', effort: 'medium', mcpCatalogIds: [] },
     })
     w.unmount()
   })

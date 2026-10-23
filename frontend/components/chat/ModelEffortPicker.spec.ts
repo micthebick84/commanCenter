@@ -32,12 +32,12 @@ describe('ModelEffortPicker (스펙 2026-09-05 §2·§5.4)', () => {
     w.unmount()
   })
 
-  it('Haiku로 바꾸면 xhigh/max가 사라지고 effort는 high로 강등되며 힌트를 보여준다', async () => {
+  it('Haiku로 바꾸면 xhigh/max가 사라지고 effort는 기본값(medium)으로 강등되며 힌트를 보여준다', async () => {
     const { w, model, effort } = host()
     ;(w.findComponent(ModelEffortPicker).vm as any).pickModel('claude-haiku-4-5')
     await w.vm.$nextTick()
     expect(model.value).toBe('claude-haiku-4-5')
-    expect(effort.value).toBe('high')
+    expect(effort.value).toBe('medium')
     const toggle = w.find('[data-test="effort-toggle"]')
     expect(toggle.findAll('button')).toHaveLength(3)
     expect(toggle.text()).not.toContain('xhigh')

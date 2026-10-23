@@ -9,7 +9,7 @@ import java.util.Map;
 public final class ModelEffortPolicy {
 
     public static final String DEFAULT_MODEL = "claude-opus-5-5";
-    public static final String DEFAULT_EFFORT = "high";
+    public static final String DEFAULT_EFFORT = "medium";
 
     /**
      * ultracode는 일부러 뺐다 — 실수로 누락된 게 아니다.
@@ -41,7 +41,7 @@ public final class ModelEffortPolicy {
      *
      * claude-opus-5-5는 2026-09-29 기본값으로 추가했다(opus-5는 교체가 아니라 병행 유지).
      * claude CLI 2.1.280 이상이 필요하다 — 그 미만은 "does not support this model" 400으로 실패한다.
-     * API 기본 effort가 medium이지만 작업·세션은 effort를 항상 명시적으로 넘기므로(기본 high) 영향 없다
+     * API 기본 effort가 medium이지만 작업·세션은 effort를 항상 명시적으로 넘긴다(기본 medium, 2026-10-23 high에서 변경)
      * (모델·effort 없이 도는 배포 Dockerfile 생성은 CLI 기본값을 따르며 이 목록과 무관).
      *
      * claude-sonnet-5-5도 2026-09-29 추가(sonnet-5 병행 유지). CLI 2.1.284에서 low~max 다섯 단계 실측 통과.

@@ -11,8 +11,8 @@ class ModelEffortPolicyTest {
     void resolve_blank_returns_defaults() {
         assertThat(ModelEffortPolicy.resolveModel(null)).isEqualTo("claude-opus-5-5");
         assertThat(ModelEffortPolicy.resolveModel("  ")).isEqualTo("claude-opus-5-5");
-        assertThat(ModelEffortPolicy.resolveEffort(null)).isEqualTo("high");
-        assertThat(ModelEffortPolicy.resolveEffort("")).isEqualTo("high");
+        assertThat(ModelEffortPolicy.resolveEffort(null)).isEqualTo("medium");
+        assertThat(ModelEffortPolicy.resolveEffort("")).isEqualTo("medium");
     }
 
     @Test

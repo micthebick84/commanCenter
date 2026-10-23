@@ -111,7 +111,7 @@ export interface InterviewClaimResponse {
   mcpsExtra: McpSpec[];
   /** Prior turns (questions + answers) for context/logging */
   turns: InterviewTurn[];
-  /** Java가 보내는 선택 모델/effort (NOT NULL — 기본 claude-opus-5-5/high). */
+  /** Java가 보내는 선택 모델/effort (NOT NULL — 기본 claude-opus-5-5/medium). */
   model: string;
   effort: 'low' | 'medium' | 'high' | 'xhigh' | 'max';
   /** 세션 누적 SHADOW 비용(이전 턴들까지). resume 턴에서 SDK total_cost_usd(세션 누적값)에서 빼 이번 턴 비용을

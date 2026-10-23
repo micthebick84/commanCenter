@@ -99,15 +99,18 @@ function Read-WrapperPidFile([string]$RunDir, [string]$Name) {
 }
 
 # Spec 5.3: json with appPid -> alive only when that pid exists with the same start time.
-# Otherwise (legacy / appPid null) -> pid file's process must be our cmd wrapper.
+# The json only counts while it belongs to the current pid file (its wrapperPid equals the pid file's pid);
+# a stale json left by an earlier run is ignored. Otherwise (legacy / appPid null / stale json)
+# -> pid file's process must be our cmd wrapper.
 function Test-ServiceAlive([string]$RunDir, [string]$Name) {
     try {
         $rec = Read-ProcRecord $RunDir $Name
-        if ($rec -and $null -ne $rec.appPid -and $null -ne $rec.appStart) {
+        $wp = Read-WrapperPidFile $RunDir $Name
+        if ($rec -and $null -ne $rec.appPid -and $null -ne $rec.appStart -and
+            $null -ne $wp -and $null -ne $rec.wrapperPid -and ([int]$rec.wrapperPid) -eq $wp) {
             $ticks = Get-ProcStartTicks ([int]$rec.appPid)
             return (($null -ne $ticks) -and ($ticks -eq [long]$rec.appStart))
         }
-        $wp = Read-WrapperPidFile $RunDir $Name
         if ($null -eq $wp) { return $false }
         return (Test-WrapperPid $RunDir $Name $wp)
     } catch {

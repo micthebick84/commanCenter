@@ -113,6 +113,8 @@ function Start-Service-Proc([string]$Name, [string]$WorkDir, [string]$CommandLin
     } finally {
         foreach ($k in $saved.Keys) { [Environment]::SetEnvironmentVariable($k, $saved[$k], 'Process') }
     }
+    # a newly started service must not inherit the record of an earlier run (stale appPid would fool Test-ServiceAlive)
+    Remove-Item -LiteralPath (Join-Path $RunDir "$Name.json") -Force -ErrorAction SilentlyContinue
     Set-Content -Path (Join-Path $RunDir "$Name.pid") -Value $p.Id -Encoding ascii
     return $p.Id
 }

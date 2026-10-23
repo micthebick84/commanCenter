@@ -24,10 +24,13 @@ $spawned = New-Object System.Collections.ArrayList
 
 # Start a fake service exactly like start-public's Start-Service-Proc:
 # cmd wrapper -> ping child. Returns @{ Wrapper = <pid>; App = <pid> }.
-function New-Fake([bool]$WritePidFile) {
+function New-Fake([bool]$WritePidFile, [string]$ExtraLog = '') {
     $log = Join-Path $RunDir 'fake.log'
+    # $ExtraLog: a second fake cannot share fake.log (file in use), so it redirects elsewhere and only
+    # carries the fake.log path in its command line (all Test-WrapperPid looks at).
+    $cmdLine = if ($ExtraLog) { "/c `"ping -n 120 127.0.0.1 > `"$ExtraLog`" 2>&1 & rem $log`"" } else { "/c `"ping -n 120 127.0.0.1 > `"$log`" 2>&1`"" }
     $p = Start-Process -FilePath $env:ComSpec `
-        -ArgumentList "/c `"ping -n 120 127.0.0.1 > `"$log`" 2>&1`"" `
+        -ArgumentList $cmdLine `
         -WindowStyle Hidden -PassThru
     [void]$spawned.Add($p.Id)
     $app = $null
@@ -113,6 +116,33 @@ try {
     Stop-Spawned $f.Wrapper
     Clear-Run
     Remove-Item (Join-Path $RunDir 'nulls.json') -Force -ErrorAction SilentlyContinue
+
+    # ---- stale json (wrapperPid differs from the pid file) is ignored -------
+    # (1) json of fake A (app alive) + pid file of fake B (live cmd wrapper): follows the wrapper check.
+    $a = New-Fake $false
+    Write-ProcRecord $RunDir 'fake' $a.Wrapper $a.App
+    $b = New-Fake $true (Join-Path $RunDir 'fake-b.out')
+    Assert-True (Test-ServiceAlive $RunDir 'fake') 'stale json: pid file wrapper B alive -> alive'
+    Stop-Spawned $b.Wrapper
+    [void](Wait-Gone $b.Wrapper)
+    Assert-True ((Test-Alive $a.App) -and (-not (Test-ServiceAlive $RunDir 'fake'))) 'stale json: live app of A does not count when wrapper B is dead'
+    Stop-Spawned $a.Wrapper
+    Clear-Run
+    # json with a live app but no pid file: not alive (json does not belong to any pid file)
+    $a = New-Fake $false
+    Write-ProcRecord $RunDir 'fake' $a.Wrapper $a.App
+    Assert-True (-not (Test-ServiceAlive $RunDir 'fake')) 'stale json: json alone without pid file is not alive'
+    Stop-Spawned $a.Wrapper
+    Clear-Run
+    # (2) json with a mismatched app + pid file of a live matching wrapper B (other pid): legacy path -> alive.
+    $a = New-Fake $false
+    Write-ProcRecord $RunDir 'fake' $a.Wrapper $a.App
+    Set-AppStartOffByOne
+    $b = New-Fake $true (Join-Path $RunDir 'fake-b.out')
+    Assert-True (Test-ServiceAlive $RunDir 'fake') 'stale json: mismatched app but pid file wrapper B matches -> alive'
+    Stop-Spawned $a.Wrapper
+    Stop-Spawned $b.Wrapper
+    Clear-Run
 
     # ---- stop kills app tree and wrapper, removes files --------------------
     $f = New-Fake $true

@@ -27,6 +27,7 @@ import java.util.stream.Collectors;
  *  회수 조건(둘 중 하나):
  *    1. 워커 사망: claimed_at이 worker-dead-threshold-seconds보다 오래됐고(=워커가 등록할 시간 충분),
  *       소유 워커의 heartbeat.last_seen_at이 임계 이전이거나 heartbeat가 아예 없음.
+ *       단, API가 뜬 지 그 상태의 임계(deadSec)가 지나기 전에는 이 판정을 쉰다(재기동 중 heartbeat를 못 받았으므로).
  *    2. 행업 백스톱: claimed_at이 단계별 절대 임계(분석/구현/디자인/배포/종료)를 넘김 — 워커가 살아있어도 회수.
  *
  *  회수 전이(TaskRecovery): 분석중→PENDING(재시도)/FAILED, 디자인중→DESIGN_PENDING(idempotent 재큐잉), 구현중→IMPLEMENTATION_FAILED,
@@ -68,6 +69,9 @@ public class StaleTaskRecoveryJob {
 
     private final ImplementationModePolicy implementationModePolicy;
 
+    // API 기동 시각 — InterviewStaleRecoveryJob.startedAt과 같은 방식. 테스트가 덮어쓴다.
+    private OffsetDateTime startedAt = OffsetDateTime.now();
+
     public StaleTaskRecoveryJob(TaskRepository taskRepo,
                                 WorkerHeartbeatRepository heartbeatRepo,
                                 TaskRecovery taskRecovery,
@@ -107,7 +111,10 @@ public class StaleTaskRecoveryJob {
             // 갓 claim한 작업은 워커가 첫 heartbeat 보낼 시간을 준다 (오탐 방지).
             boolean claimedLongEnough = claimedAt != null && claimedAt.isBefore(workerDeadBefore);
             OffsetDateTime hb = workerId == null ? null : lastSeen.get(workerId);
-            boolean workerDead = claimedLongEnough && (hb == null || hb.isBefore(workerDeadBefore));
+            // API가 막 떴으면 그동안 heartbeat를 못 받았으니 워커 사망으로 판단하지 않는다(deadSec만큼 유예).
+            // 행업 백스톱(claimed_at 기준)은 이 유예와 무관하다.
+            boolean apiUpLongEnough = !startedAt.isAfter(workerDeadBefore);
+            boolean workerDead = apiUpLongEnough && claimedLongEnough && (hb == null || hb.isBefore(workerDeadBefore));
 
             int ceilingMin = switch (from) {
                 // 방식별 판정 — SDD는 몇 시간 돈다 (스펙 2026-10-15 §5.4)

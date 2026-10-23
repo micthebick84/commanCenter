@@ -46,6 +46,8 @@ class StaleTaskRecoveryJobTest {
         ReflectionTestUtils.setField(job, "designStaleThresholdMinutes", 30);
         ReflectionTestUtils.setField(job, "designWorkerDeadThresholdSeconds", 300);
         ReflectionTestUtils.setField(job, "closeStaleThresholdMinutes", 30);
+        // 기동 유예가 기존 테스트의 의미를 바꾸지 않게 API가 오래전에 뜬 것으로 둔다
+        ReflectionTestUtils.setField(job, "startedAt", OffsetDateTime.now().minusHours(1));
         when(historyRepo.save(any())).thenAnswer(i -> i.getArgument(0));
     }
 
@@ -294,5 +296,43 @@ class StaleTaskRecoveryJobTest {
 
         assertThat(t.getStatus()).isEqualTo(TaskStatus.IMPLEMENTATION_FAILED);
         assertThat(t.getFailureReason()).contains("처리 시간 초과(60분)");
+    }
+
+    @Test
+    void worker_dead_not_judged_during_boot_grace() {
+        // API가 뜬 지 60초 — 구현중 임계(300초)보다 짧아 heartbeat 공백을 워커 탓으로 볼 수 없다
+        ReflectionTestUtils.setField(job, "startedAt", OffsetDateTime.now().minusSeconds(60));
+        Task t = task(20L, TaskStatus.IMPLEMENTING, "w1", 30, 0);
+        when(taskRepo.findInFlightClaimedForUpdateSkipLocked()).thenReturn(List.of(t));
+        when(heartbeatRepo.findAllById(any())).thenReturn(List.of(hb("w1", 600)));
+
+        job.recoverStale();
+
+        assertThat(t.getStatus()).isEqualTo(TaskStatus.IMPLEMENTING);
+        verifyNoInteractions(historyRepo);
+    }
+
+    @Test
+    void worker_dead_judged_after_boot_grace() {
+        ReflectionTestUtils.setField(job, "startedAt", OffsetDateTime.now().minusSeconds(301));
+        Task t = task(21L, TaskStatus.IMPLEMENTING, "w1", 30, 0);
+        when(taskRepo.findInFlightClaimedForUpdateSkipLocked()).thenReturn(List.of(t));
+        when(heartbeatRepo.findAllById(any())).thenReturn(List.of(hb("w1", 600)));
+
+        job.recoverStale();
+
+        assertThat(t.getStatus()).isEqualTo(TaskStatus.IMPLEMENTATION_FAILED);
+    }
+
+    @Test
+    void hung_backstop_ignores_boot_grace() {
+        ReflectionTestUtils.setField(job, "startedAt", OffsetDateTime.now().minusSeconds(10));
+        Task t = task(22L, TaskStatus.IN_PROGRESS, "w1", 6, 0); // 6분 > 분석 천장 5분
+        when(taskRepo.findInFlightClaimedForUpdateSkipLocked()).thenReturn(List.of(t));
+        when(heartbeatRepo.findAllById(any())).thenReturn(List.of(hb("w1", 5)));
+
+        job.recoverStale();
+
+        assertThat(t.getStatus()).isEqualTo(TaskStatus.PENDING);
     }
 }

@@ -460,6 +460,329 @@ describe('canUseTool — kind=QUESTION attachmentRoot (스펙 2026-09-13 §6 —
   });
 });
 
+describe('canUseTool — QUESTION with reference roots (스펙 2026-10-22 §5.3 — Read/Grep/Glob 허용 루트)', () => {
+  const q = buildCanUseTool('/tmp/repo', 'QUESTION', null, {}, ['/tmp/refs/5/12']);
+
+  it('allows Read inside a reference root', async () => {
+    expect((await q('Read', { file_path: '/tmp/refs/5/12/src/A.java' })).behavior).toBe('allow');
+    expect((await q('Read', { file_path: '/tmp/refs/5/12/README.md' })).behavior).toBe('allow');
+    expect((await q('Read', { file_path: '/tmp/repo/src/a.ts' })).behavior).toBe('allow'); // 대상 체크아웃은 종전대로
+  });
+
+  it('allows Grep and Glob with a path inside a reference root', async () => {
+    expect((await q('Grep', { pattern: 'x', path: '/tmp/refs/5/12/src' })).behavior).toBe('allow');
+    expect((await q('Grep', { pattern: 'x', path: '/tmp/refs/5/12' })).behavior).toBe('allow');
+    expect((await q('Glob', { path: '/tmp/refs/5/12', pattern: '**/*.java' })).behavior).toBe('allow');
+    // path가 없으면 cwd(대상 체크아웃)다 — 종전과 같다.
+    expect((await q('Grep', { pattern: 'x' })).behavior).toBe('allow');
+    expect((await q('Glob', { pattern: '**/*.java' })).behavior).toBe('allow');
+  });
+
+  it('still denies Glob patterns that are absolute or climb out', async () => {
+    for (const pattern of ['../**', '../../refs/6/**', 'src/../../**', '/tmp/refs/5/12/**', 'C:/Users/**', '\\Windows\\**', '~/**']) {
+      expect((await q('Glob', { path: '/tmp/refs/5/12', pattern })).behavior, pattern).toBe('deny');
+    }
+  });
+
+  it('keeps the ~ ban for Read, Grep and Glob', async () => {
+    expect((await q('Read', { file_path: '~/refs/5/12/src/A.java' })).behavior).toBe('deny');
+    expect((await q('Grep', { pattern: 'x', path: '~/refs/5/12' })).behavior).toBe('deny');
+    expect((await q('Glob', { pattern: '*', path: '~' })).behavior).toBe('deny');
+  });
+
+  it('denies paths outside every root', async () => {
+    for (const p of [
+      '/etc/hosts',
+      '/tmp/refs',
+      '/tmp/refs/5',
+      '/tmp/refs/6/12/x', // 다른 세션의 참조 폴더
+      '/tmp/refs/5/12/../13/x', // 같은 세션의 다른 참조(이번 턴 루트가 아님)
+      '/tmp/refs/5/12/../../../../etc/hosts',
+    ]) {
+      expect((await q('Read', { file_path: p })).behavior, `Read ${p}`).toBe('deny');
+    }
+    for (const p of ['/etc', '/tmp/refs', '/tmp/refs/5', '/tmp/refs/5/12/..']) {
+      expect((await q('Grep', { pattern: 'x', path: p })).behavior, `Grep ${p}`).toBe('deny');
+      expect((await q('Glob', { pattern: '*', path: p })).behavior, `Glob ${p}`).toBe('deny');
+    }
+    expect((await q('Read', {})).behavior).toBe('deny'); // file_path 필수는 그대로
+  });
+
+  it('denies sibling folders that share a name prefix', async () => {
+    // 참조 폴더가 .../5/12일 때: 같은 세션의 다른 카탈로그(120), 다른 세션(50 — 세션 5의 이름 접두), 이름 앞부분만 같은 폴더.
+    for (const p of ['/tmp/refs/5/120/x', '/tmp/refs/50/x', '/tmp/refs/5/12x/x', '/tmp/refs/5/12-evil/x', '/tmp/refs/50/12/x']) {
+      expect((await q('Read', { file_path: p })).behavior, `Read ${p}`).toBe('deny');
+      expect((await q('Grep', { pattern: 'x', path: p })).behavior, `Grep ${p}`).toBe('deny');
+      expect((await q('Glob', { pattern: '*', path: p })).behavior, `Glob ${p}`).toBe('deny');
+    }
+  });
+
+  it('denies the in-progress clone folder <refRoot>.part while the root itself is allowed', async () => {
+    // 참조 준비(ensureRefRepos)는 <dir>.part에 받고 성공했을 때만 <dir>로 바꾼다 — 받는 중인 반쪽 폴더는 읽히면 안 된다.
+    // 대조군: 루트 안쪽은 허용된다(그래서 아래 거부가 "참조 루트가 통째로 무시돼서"가 아니라 이름 비교 때문임이 드러난다).
+    expect((await q('Read', { file_path: '/tmp/refs/5/12/x' })).behavior).toBe('allow');
+    for (const p of ['/tmp/refs/5/12.part', '/tmp/refs/5/12.part/x', '/tmp/refs/5/12.part/src/A.java']) {
+      expect((await q('Read', { file_path: p })).behavior, `Read ${p}`).toBe('deny');
+      expect((await q('Grep', { pattern: 'x', path: p })).behavior, `Grep ${p}`).toBe('deny');
+      expect((await q('Glob', { pattern: '*', path: p })).behavior, `Glob ${p}`).toBe('deny');
+    }
+  });
+
+  it('keeps Bash confined to the target checkout', async () => {
+    for (const cmd of [
+      'cat /tmp/refs/5/12/src/A.java',
+      'ls /tmp/refs/5/12',
+      'rg foo /tmp/refs/5/12',
+      'grep -rn foo /tmp/refs/5/12',
+      'find /tmp/refs/5/12 -name x',
+      'cat ../../refs/5/12/src/A.java',
+    ]) {
+      expect((await q('Bash', { command: cmd })).behavior, cmd).toBe('deny');
+    }
+    for (const cmd of ['cat README.md', 'rg foo src/']) {
+      expect((await q('Bash', { command: cmd })).behavior, cmd).toBe('allow');
+    }
+  });
+
+  it('INTERVIEW gate is unchanged by refRoots', async () => {
+    const i = buildCanUseTool('/tmp/repo', 'INTERVIEW', null, {}, ['/tmp/refs/5/12']);
+    expect((await i('Write', { file_path: '/tmp/refs/5/12/x' })).behavior).toBe('deny'); // docs/superpowers 밖
+    expect((await i('Edit', { file_path: '/tmp/refs/5/12/x' })).behavior).toBe('deny');
+    expect((await i('Write', { file_path: '/tmp/repo/docs/superpowers/specs/x.md' })).behavior).toBe('allow');
+    expect((await i('Read', { file_path: '/etc/passwd' })).behavior).toBe('allow'); // 인터뷰는 원래 경로 제한이 없다 — 그대로
+    expect((await i('Bash', { command: 'cat /tmp/refs/5/12/x' })).behavior).toBe('allow'); // Bash 규칙도 종전 그대로
+  });
+
+  it('several roots plus attachmentRoot: Read may use all of them, Grep/Glob never the attachment dir', async () => {
+    const m = buildCanUseTool('/tmp/repo', 'QUESTION', '/tmp/attachments/question-77', {}, ['/tmp/refs/5/12', '/tmp/refs/5/13']);
+    for (const p of ['/tmp/repo/a.ts', '/tmp/refs/5/12/a', '/tmp/refs/5/13/a', '/tmp/attachments/question-77/create/1-a.txt']) {
+      expect((await m('Read', { file_path: p })).behavior, `Read ${p}`).toBe('allow');
+    }
+    expect((await m('Read', { file_path: '/tmp/refs/5/14/a' })).behavior).toBe('deny');
+    expect((await m('Grep', { pattern: 'x', path: '/tmp/refs/5/13' })).behavior).toBe('allow');
+    expect((await m('Glob', { pattern: '*', path: '/tmp/refs/5/12' })).behavior).toBe('allow');
+    expect((await m('Grep', { pattern: 'x', path: '/tmp/attachments/question-77' })).behavior).toBe('deny');
+    expect((await m('Glob', { pattern: '*', path: '/tmp/attachments/question-77' })).behavior).toBe('deny');
+  });
+
+  it('no reference roots (omitted or empty) → identical to today: reference paths denied, deny messages unchanged', async () => {
+    const att = buildCanUseTool('/tmp/repo', 'QUESTION', '/tmp/attachments/question-77');
+    for (const gate of [buildCanUseTool('/tmp/repo', 'QUESTION'), buildCanUseTool('/tmp/repo', 'QUESTION', null, {}, [])]) {
+      const read = await gate('Read', { file_path: '/tmp/refs/5/12/src/A.java' });
+      expect(read.behavior).toBe('deny');
+      expect(read.message).toBe('질문 세션 Read는 레포 체크아웃 안쪽 경로만 허용합니다: /tmp/refs/5/12/src/A.java');
+      const grep = await gate('Grep', { pattern: 'x', path: '/tmp/refs/5/12' });
+      expect(grep.behavior).toBe('deny');
+      expect(grep.message).toBe('질문 세션 Grep은 레포 체크아웃 안쪽 경로만 허용합니다: /tmp/refs/5/12');
+      expect((await gate('Glob', { pattern: '*', path: '/tmp/refs/5/12' })).behavior).toBe('deny');
+    }
+    expect((await att('Read', { file_path: '/etc/hosts' })).message).toBe(
+      '질문 세션 Read는 레포 체크아웃 또는 세션 첨부 디렉토리 안쪽 경로만 허용합니다: /etc/hosts',
+    );
+  });
+
+  it('names the reference repo in the deny messages when a reference root is configured', async () => {
+    const both = buildCanUseTool('/tmp/repo', 'QUESTION', '/tmp/attachments/question-77', {}, ['/tmp/refs/5/12']);
+    expect((await q('Read', { file_path: '/etc/hosts' })).message).toBe('질문 세션 Read는 레포 체크아웃 또는 참조 repo 안쪽 경로만 허용합니다: /etc/hosts');
+    expect((await both('Read', { file_path: '/etc/hosts' })).message).toBe(
+      '질문 세션 Read는 레포 체크아웃 또는 세션 첨부 디렉토리 또는 참조 repo 안쪽 경로만 허용합니다: /etc/hosts',
+    );
+    expect((await q('Grep', { pattern: 'x', path: '/etc' })).message).toBe('질문 세션 Grep은 레포 체크아웃 또는 참조 repo 안쪽 경로만 허용합니다: /etc');
+    expect((await q('Glob', { pattern: '*', path: '/etc' })).message).toBe('질문 세션 Glob은 레포 체크아웃 또는 참조 repo 안쪽 경로만 허용합니다: /etc');
+  });
+
+  it('ignores roots that are not absolute paths — an empty or relative root would resolve against the service cwd', async () => {
+    // path.relative('', x)는 ''를 프로세스 cwd로 푼다 — 빈 루트가 그대로 들어가면 인터뷰 서비스 자신의 폴더(.env 등)가 열린다.
+    const svcFile = join(process.cwd(), 'package.json');
+    const bad = buildCanUseTool('/tmp/repo', 'QUESTION', null, {}, ['', 'refs/5/12', '.']);
+    expect((await bad('Read', { file_path: svcFile })).behavior).toBe('deny');
+    expect((await bad('Grep', { pattern: 'x', path: process.cwd() })).behavior).toBe('deny');
+    expect((await bad('Glob', { pattern: '*', path: process.cwd() })).behavior).toBe('deny');
+    expect((await bad('Read', { file_path: '/tmp/repo/src/a.ts' })).behavior).toBe('allow'); // 대상 체크아웃은 그대로
+  });
+});
+
+// 실제 폴더 구성(스펙 §3.3): <체크아웃 루트>/<localKey>/session-5(대상) + <체크아웃 루트>/_refs/5/12(참조), 받는 중 임시 폴더 12.part,
+// 이름 앞부분만 같은 형제 120. 디렉토리 junction(Windows)/symlink(POSIX)는 권한 없이 만들어져 이 PC에서도 realpath 분기를 검증한다.
+describe('canUseTool — QUESTION reference roots (real temp dirs)', () => {
+  let base = '';
+  let repo = '';
+  let ref = '';
+  let q: CanUseTool;
+
+  beforeAll(() => {
+    base = mkdtempSync(join(tmpdir(), 'qref-'));
+    repo = join(base, 'o', 'r', 'session-5');
+    ref = join(base, '_refs', '5', '12');
+    const outside = join(base, 'outside');
+    for (const d of [repo, join(ref, 'src'), join(base, '_refs', '5', '120', 'src'), join(base, '_refs', '5', '12.part', 'src'), outside]) {
+      mkdirSync(d, { recursive: true });
+    }
+    writeFileSync(join(repo, 'README.md'), 'r');
+    writeFileSync(join(ref, 'src', 'A.java'), 'a');
+    writeFileSync(join(base, '_refs', '5', '120', 'src', 'B.java'), 'b');
+    writeFileSync(join(base, '_refs', '5', '12.part', 'src', 'C.java'), 'c');
+    writeFileSync(join(outside, 'secret.txt'), 's');
+    symlinkSync(outside, join(ref, 'jlink'), 'junction'); // 참조 폴더 안의 이름이지만 밖을 가리킨다(참조 repo에 커밋된 링크)
+    symlinkSync(join(ref, 'src'), join(ref, 'back'), 'junction'); // 목표가 참조 폴더 안으로 되돌아오는 링크
+    symlinkSync(outside, join(repo, 'rlink'), 'junction'); // 대상 체크아웃 안에서 밖을 가리키는 링크
+    writeFileSync(join(ref, 'dup'), 'd'); // 같은 이름: 참조 폴더에는 일반 파일
+    symlinkSync(outside, join(repo, 'dup'), 'junction'); // …대상 체크아웃에서는 밖을 가리키는 링크
+    q = buildCanUseTool(repo, 'QUESTION', null, {}, [ref]);
+  });
+
+  afterAll(() => {
+    rmSync(base, { recursive: true, force: true });
+  });
+
+  it('allows existing, nonexistent and relative-to-cwd paths inside the reference root', async () => {
+    expect((await q('Read', { file_path: join(ref, 'src', 'A.java') })).behavior).toBe('allow');
+    expect((await q('Read', { file_path: join(ref, 'src', 'nope.java') })).behavior).toBe('allow'); // 도구가 스스로 실패하게 둔다
+    expect((await q('Read', { file_path: join('..', '..', '..', '_refs', '5', '12', 'src', 'A.java') })).behavior).toBe('allow'); // 도구가 cwd(대상)에서 푸는 방식 그대로
+    expect((await q('Grep', { pattern: 'x', path: join(ref, 'src') })).behavior).toBe('allow');
+    expect((await q('Glob', { pattern: '**/*.java', path: ref })).behavior).toBe('allow');
+    expect((await q('Read', { file_path: join(repo, 'README.md') })).behavior).toBe('allow');
+  });
+
+  it('denies existing files in the name-prefix sibling and in the <refRoot>.part clone folder', async () => {
+    for (const p of [join(base, '_refs', '5', '120', 'src', 'B.java'), join(base, '_refs', '5', '12.part', 'src', 'C.java')]) {
+      expect((await q('Read', { file_path: p })).behavior, `Read ${p}`).toBe('deny');
+    }
+    for (const p of [join(base, '_refs', '5', '120', 'src'), join(base, '_refs', '5', '12.part')]) {
+      expect((await q('Grep', { pattern: 'x', path: p })).behavior, `Grep ${p}`).toBe('deny');
+      expect((await q('Glob', { pattern: '*', path: p })).behavior, `Glob ${p}`).toBe('deny');
+    }
+  });
+
+  it('denies a junction/symlink inside the reference root that points outside (Read, Grep, Glob)', async () => {
+    expect((await q('Read', { file_path: join(ref, 'jlink', 'secret.txt') })).behavior).toBe('deny');
+    expect((await q('Grep', { pattern: 'x', path: join(ref, 'jlink') })).behavior).toBe('deny');
+    expect((await q('Glob', { pattern: '*', path: join(ref, 'jlink') })).behavior).toBe('deny');
+  });
+
+  it('allows a junction/symlink inside the reference root whose target resolves back inside it', async () => {
+    expect((await q('Read', { file_path: join(ref, 'back', 'A.java') })).behavior).toBe('allow');
+    expect((await q('Grep', { pattern: 'x', path: join(ref, 'back') })).behavior).toBe('allow');
+  });
+
+  it('judges relative paths against the target checkout (the tool cwd), never against a reference root', async () => {
+    // 도구는 상대 경로를 cwd(대상 체크아웃)에서 푼다. rlink는 대상 체크아웃 안에서 밖을 가리키는 링크라 거부돼야 한다 —
+    // 참조 루트 기준으로 풀면 <ref>/rlink/secret.txt는 없는 경로라 lexical 판정으로 "안쪽"이 돼 통과한다.
+    expect((await q('Read', { file_path: join('rlink', 'secret.txt') })).behavior).toBe('deny');
+    expect((await q('Grep', { pattern: 'x', path: 'rlink' })).behavior).toBe('deny');
+    expect((await q('Glob', { pattern: '*', path: 'rlink' })).behavior).toBe('deny');
+    // 같은 이름이 참조 폴더에는 일반 파일로 있어도 도구가 읽는 건 <대상>/dup(밖을 가리키는 링크)이다.
+    expect((await q('Read', { file_path: 'dup' })).behavior).toBe('deny');
+    expect((await q('Grep', { pattern: 'x', path: 'dup' })).behavior).toBe('deny');
+  });
+
+  it('applies the same cwd-relative judgement to attachmentRoot (no lexical pass for a name that exists nowhere under it)', async () => {
+    const att = mkdtempSync(join(tmpdir(), 'qrefatt-'));
+    try {
+      const qa = buildCanUseTool(repo, 'QUESTION', att, {}, [ref]);
+      expect((await qa('Read', { file_path: join('rlink', 'secret.txt') })).behavior).toBe('deny');
+      expect((await qa('Read', { file_path: 'README.md' })).behavior).toBe('allow');
+    } finally {
+      rmSync(att, { recursive: true, force: true });
+    }
+  });
+});
+
+// 참조 폴더 안에 symlink가 있어도 밖을 읽을 수 없어야 한다 — 위 블록의 junction 케이스와 같은 방식이고, 파일 symlink가 필요해 권한 없는 Windows에선 건너뛴다.
+describe.skipIf(!fileSymlinks)('canUseTool — symlink inside a reference root pointing outside (real temp dir)', () => {
+  let base = '';
+  let q: CanUseTool;
+  let ref = '';
+
+  beforeAll(() => {
+    base = mkdtempSync(join(tmpdir(), 'qrefsym-'));
+    ref = join(base, '_refs', '5', '12');
+    mkdirSync(join(ref, 'sub'), { recursive: true });
+    mkdirSync(join(base, 'outside'));
+    writeFileSync(join(ref, 'A.java'), 'a');
+    writeFileSync(join(base, 'outside', 'secret.txt'), 's');
+    // link -> ../../../outside/secret.txt: 참조 폴더 안의 이름이지만 커밋된 상대 symlink로 폴더 밖을 가리킨다.
+    symlinkSync(join('..', '..', '..', 'outside', 'secret.txt'), join(ref, 'link'));
+    // sub/ok -> A.java: 목표가 참조 폴더 안으로 되돌아오는 symlink.
+    symlinkSync(join(ref, 'A.java'), join(ref, 'sub', 'ok'));
+    q = buildCanUseTool(join(base, 'repo'), 'QUESTION', null, {}, [ref]);
+  });
+
+  afterAll(() => {
+    rmSync(base, { recursive: true, force: true });
+  });
+
+  it('denies Read through the link', async () => {
+    expect((await q('Read', { file_path: join(ref, 'link') })).behavior).toBe('deny');
+  });
+
+  it('allows Read of a symlink whose target resolves back inside the reference root', async () => {
+    expect((await q('Read', { file_path: join(ref, 'sub', 'ok') })).behavior).toBe('allow');
+  });
+});
+
+// Windows 표기(스펙 §5.3): `C:/`와 `C:\` 둘 다, 드라이브 문자·경로 대소문자 차이, 섞인 구분자, 끝 구분자를 루트·경로 양쪽에 돌려 가며 본다.
+describe.runIf(process.platform === 'win32')('canUseTool — reference roots on Windows (real temp dir)', () => {
+  let base = '';
+  let repo = '';
+  let root = '';
+  const forward = (p: string): string => p.replaceAll('\\', '/');
+  const flipDrive = (p: string): string => (p.charAt(0) === p.charAt(0).toUpperCase() ? p.charAt(0).toLowerCase() : p.charAt(0).toUpperCase()) + p.slice(1);
+  const mixed = (p: string): string => {
+    let n = 0;
+    return p.replace(/\\/g, () => (n++ % 2 === 0 ? '\\' : '/'));
+  };
+  const spellings = (p: string): string[] => [p, forward(p), flipDrive(p), flipDrive(forward(p)), mixed(p), p.toUpperCase(), forward(p).toLowerCase()];
+
+  beforeAll(() => {
+    base = mkdtempSync(join(tmpdir(), 'qrefwin-'));
+    repo = join(base, 'repo');
+    root = join(base, 'refs', '5', '12');
+    for (const d of [repo, join(root, 'src'), join(base, 'refs', '5', '120', 'src'), join(base, 'refs', '5', '12.part', 'src')]) {
+      mkdirSync(d, { recursive: true });
+    }
+    for (const d of [root, join(base, 'refs', '5', '120'), join(base, 'refs', '5', '12.part')]) {
+      writeFileSync(join(d, 'src', 'A.java'), 'a');
+    }
+  });
+
+  afterAll(() => {
+    rmSync(base, { recursive: true, force: true });
+  });
+
+  it('allows ref paths in either separator and drive-letter case', async () => {
+    const rootSpellings = [...spellings(root), root + '\\', forward(root) + '/'];
+    for (const rootSpelling of rootSpellings) {
+      const gate = buildCanUseTool(repo, 'QUESTION', null, {}, [rootSpelling]);
+      for (const p of spellings(join(root, 'src', 'A.java'))) {
+        expect((await gate('Read', { file_path: p })).behavior, `root ${rootSpelling} / Read ${p}`).toBe('allow');
+      }
+      for (const p of spellings(join(root, 'src'))) {
+        expect((await gate('Grep', { pattern: 'x', path: p })).behavior, `root ${rootSpelling} / Grep ${p}`).toBe('allow');
+        expect((await gate('Glob', { pattern: '*', path: p })).behavior, `root ${rootSpelling} / Glob ${p}`).toBe('allow');
+      }
+    }
+  });
+
+  it('still denies the name-prefix siblings and the .part folder in every spelling', async () => {
+    for (const rootSpelling of spellings(root)) {
+      const gate = buildCanUseTool(repo, 'QUESTION', null, {}, [rootSpelling]);
+      for (const sibling of ['120', '12.part']) {
+        const dir = join(base, 'refs', '5', sibling, 'src');
+        for (const p of spellings(join(dir, 'A.java'))) {
+          expect((await gate('Read', { file_path: p })).behavior, `root ${rootSpelling} / Read ${p}`).toBe('deny');
+        }
+        for (const p of spellings(dir)) {
+          expect((await gate('Grep', { pattern: 'x', path: p })).behavior, `root ${rootSpelling} / Grep ${p}`).toBe('deny');
+          expect((await gate('Glob', { pattern: '*', path: p })).behavior, `root ${rootSpelling} / Glob ${p}`).toBe('deny');
+        }
+      }
+      // 구분자·대소문자를 바꾼 ..로도 형제로 빠질 수 없다.
+      expect((await gate('Read', { file_path: forward(join(root, '..', '120', 'src', 'A.java')) })).behavior).toBe('deny');
+    }
+  });
+});
+
 // 플랫폼 네이티브 경로(Windows면 `C:\...\qnative-xxx`) 회귀 가드 — 위 블록들은 '/tmp/repo' 같은 POSIX 리터럴이라
 // 비교 로직이 `/` 구분자를 가정해도 Linux CI에선 드러나지 않는다(2026-09-29 Windows 인터뷰 워커에서 QUESTION
 // Read/Grep/Bash와 INTERVIEW의 docs/superpowers Write가 전부 deny되던 실제 버그). mkdtemp 실제 경로로 검증한다.

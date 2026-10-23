@@ -10,6 +10,7 @@ import TypingIndicator from '~/components/chat/TypingIndicator.vue'
 import PendingBubble from '~/components/chat/PendingBubble.vue'
 import ImplementationModePicker from '~/components/ImplementationModePicker.vue'
 import { DEFAULT_IMPLEMENTATION_MODE, type ImplementationMode } from '~/composables/implementationMode'
+import type { RefRepoInput } from '../composables/refRepos'
 
 const props = defineProps<{
   sessionId: number
@@ -181,8 +182,9 @@ watch(
 /**
  * composer 슬롯의 send(extra) — 질문 세션은 다음 턴에 쓸 모델·effort·MCP 집합을 ask 바디에 싣고(스펙 2026-09-05 §2 개정,
  * 2026-09-13 §7), 파일이 있으면 multipart(meta JSON + files)로 보낸다. 성공 여부를 돌려줘 페이지가 대기 파일을 비운다.
+ * 참조 repo(`refRepos`)는 페이지가 바꿨을 때만 넘긴다 — 있으면 그대로 싣고(JSON·multipart meta 같다), 없으면 필드 자체를 생략한다.
  */
-type AskExtra = { model?: string; effort?: string; mcpCatalogIds?: number[]; dbConnectionIds?: number[]; files?: File[] }
+type AskExtra = { model?: string; effort?: string; mcpCatalogIds?: number[]; dbConnectionIds?: number[]; refRepos?: RefRepoInput[]; files?: File[] }
 
 async function sendAnswer(extra?: AskExtra): Promise<boolean> {
   const text = answer.value.trim()
@@ -198,6 +200,8 @@ async function sendAnswer(extra?: AskExtra): Promise<boolean> {
     if (Array.isArray(extra?.mcpCatalogIds)) body.mcpCatalogIds = extra.mcpCatalogIds
     // DB 연결도 같은 규칙 — 페이지가 기능이 켜져 있을 때만 넘긴다(스펙 2026-10-02 §7)
     if (Array.isArray(extra?.dbConnectionIds)) body.dbConnectionIds = extra.dbConnectionIds
+    // 참조 repo는 같은 규칙에 "바뀌었을 때만"을 더한다 — []는 "전부 해제", 생략은 "유지" (스펙 2026-10-22 §7.3, 서버 QuestionAskRequest)
+    if (Array.isArray(extra?.refRepos)) body.refRepos = extra.refRepos
   }
   sending.value = true
   try {

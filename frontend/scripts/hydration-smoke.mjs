@@ -69,6 +69,12 @@ const QUESTION = {
   requesterId: 'admin', status: '입력대기', statusName: 'AWAITING_INPUT', model: 'claude-sonnet-5-5', effort: 'medium',
   kind: 'QUESTION', totalCostUsd: 0.42, contextTokens: 76004, contextWindow: 200000, mcpCatalogIds: [],
   dbConnectionIds: [], attachments: [], createdAt: NOW, updatedAt: NOW,
+  // 읽기 전용 참조 repo — 커밋 고정·아직 안 받음·실패 각 1개: 대화 화면 칩 줄이 세 상태(고정 칩의 툴팁·대기 안내·⚠)를 모두 그린다
+  refRepos: [
+    { catalogId: 2, alias: '옛앱', branch: 'release/6.5', sha: 'a1b2c3d4e5f60718293a4b5c6d7e8f9012345678', fetchedAt: NOW, error: null },
+    { catalogId: 3, alias: '공통 UI', branch: 'main', sha: null, fetchedAt: null, error: null },
+    { catalogId: 5, alias: '인증 서버', branch: 'develop', sha: null, fetchedAt: null, error: 'fatal: Remote branch develop not found in upstream origin' },
+  ],
   turns: [{ seq: 1, role: 'assistant', kind: 'question', content: '**AuthController**입니다' }], plan: null,
 }
 const REPOS = [{ id: 1, alias: 'Widgets', gitUrl: 'https://github.com/acme/widgets', host: 'github', ownerRepo: 'acme/widgets', defaultBranch: 'main', description: null, enabled: true, createdBy: 'admin', createdAt: NOW, updatedAt: NOW }]

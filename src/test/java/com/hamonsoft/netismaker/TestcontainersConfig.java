@@ -38,7 +38,10 @@ public class TestcontainersConfig implements ApplicationContextInitializer<Confi
                 // 첨부 정리 cron 차단 — 대부분의 통합 테스트는 app.attachment.dir 기본값(운영자 실제
                 // ~/netis-maker/attachments)을 그대로 쓴다. 03:30에 컨텍스트가 살아 있으면 테스트 DB 기준으로
                 // 실제 디렉터리를 고아로 오판해 지울 수 있다. 잡 자체는 runOnce 직접 호출로 검증한다.
-                "app.attachment.cleanup.enabled=false"
+                "app.attachment.cleanup.enabled=false",
+                // 체크아웃 정리 cron 차단 — app.interview.work-root 기본값은 운영자 실제 ~/netis-maker/interviews다.
+                // 03:50에 컨텍스트가 살아 있으면 테스트 DB 기준으로 실제 체크아웃을 고아로 오판해 지울 수 있다. 위와 같은 이유.
+                "app.interview.checkout-cleanup.enabled=false"
         ).applyTo(ctx.getEnvironment());
     }
 }

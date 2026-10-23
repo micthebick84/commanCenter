@@ -1,5 +1,6 @@
 // 질문 세션 API 계약 미러 (Java QuestionSummaryResponse / InterviewResponse 부분집합) + 사이드바/헤더 순수 계산.
 import type { DbConnectionChip } from './dbConnections'
+import type { RefRepoView } from './refRepos'
 
 export interface QuestionSummary {
   id: number
@@ -47,6 +48,8 @@ export interface QuestionDetail {
   dbConnectionIds?: number[]
   /** 헤더 칩용 {id,name,dbType} — 현재 행 기준. */
   dbConnections?: DbConnectionChip[]
+  /** 읽기 전용 참조 repo(고른 순서) — 헤더 아래 칩 줄(커밋·상태)과 "참조 변경" 초안 시딩용 (스펙 2026-10-22 §7.3). 구버전 백엔드는 미제공. */
+  refRepos?: RefRepoView[]
   /** 등록 시(킥오프) 첨부 — 첫 질문은 말풍선이 없으므로 헤더 아래 칩 줄로 (스펙 2026-09-13 §2). */
   attachments?: AttachmentView[]
   turns?: Array<{

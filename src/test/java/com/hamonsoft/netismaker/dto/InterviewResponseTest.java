@@ -1,12 +1,18 @@
 package com.hamonsoft.netismaker.dto;
 
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 import com.hamonsoft.netismaker.entity.InterviewSession;
 import com.hamonsoft.netismaker.entity.InterviewStatus;
 import com.hamonsoft.netismaker.entity.InterviewTurn;
+import com.hamonsoft.netismaker.entity.RefRepo;
 import org.junit.jupiter.api.Test;
 import org.springframework.test.util.ReflectionTestUtils;
 
+import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -121,5 +127,89 @@ class InterviewResponseTest {
         InterviewResponse filled = r.withDbConnections(java.util.List.of(new DbConnectionDto.Chip(7, "운영", "MYSQL")));
         assertThat(filled.dbConnections()).extracting(DbConnectionDto.Chip::name).containsExactly("운영");
         assertThat(filled.id()).isEqualTo(r.id());
+    }
+
+    // ── 참조 repo (스펙 2026-10-22 §4.3) ───────────────────────────────────────
+
+    private static InterviewSession questionWithRefs(RefRepo... refs) {
+        InterviewSession q = InterviewSession.createQuestion("o/r", "main", "t", "q?", "user1",
+                List.of(), "claude-opus-5", "high");
+        q.setRefRepos(new ArrayList<>(List.of(refs)));
+        return q;
+    }
+
+    private static final RefRepo FRESH = new RefRepo(11L, "옛앱", "grp/old", "https://gitlab.example/grp/old.git",
+            "release/6.5", null, null, null);
+    private static final RefRepo PINNED = new RefRepo(12L, "배치 서버", "grp/batch", "https://gitlab.example/grp/batch.git",
+            "main", "a".repeat(40), "2026-10-22T10:00:00+09:00", null);
+    private static final RefRepo FAILED = new RefRepo(13L, "공통 UI", "owner/ui", "https://github.com/owner/ui.git",
+            "dev", null, null, "권한 없음");
+
+    @Test
+    void of_maps_session_ref_repos_to_views_in_order_without_internal_fields() {
+        InterviewResponse r = InterviewResponse.of(questionWithRefs(FRESH, PINNED, FAILED), List.of(), null);
+
+        assertThat(r.refRepos()).containsExactly(
+                new InterviewResponse.RefRepoView(11L, "옛앱", "release/6.5", null, null, null),
+                new InterviewResponse.RefRepoView(12L, "배치 서버", "main", "a".repeat(40), "2026-10-22T10:00:00+09:00", null),
+                new InterviewResponse.RefRepoView(13L, "공통 UI", "dev", null, null, "권한 없음"));
+    }
+
+    @Test
+    void of_with_attachments_overload_also_carries_ref_repos() {
+        InterviewResponse r = InterviewResponse.of(questionWithRefs(PINNED), List.of(), null, List.of(), Map.of());
+        assertThat(r.refRepos()).extracting(InterviewResponse.RefRepoView::catalogId).containsExactly(12L);
+    }
+
+    @Test
+    void ref_repos_is_never_null_when_the_session_has_none() {
+        InterviewSession none = InterviewSession.createQuestion("o/r", "main", "t", "q?", "user1",
+                List.of(), "claude-opus-5", "high");
+        assertThat(InterviewResponse.of(none, List.of(), null).refRepos()).isNotNull().isEmpty();
+        assertThat(InterviewResponse.of(none, List.of(), null, List.of(), Map.of()).refRepos()).isNotNull().isEmpty();
+
+        none.setRefRepos(null);   // 방어: 세션 쪽 값이 null이어도 응답은 []
+        assertThat(InterviewResponse.of(none, List.of(), null).refRepos()).isNotNull().isEmpty();
+
+        InterviewSession interview = InterviewSession.create("o/r", "main", "t", "d", "u1", List.of(), "claude-opus-5", "high");
+        assertThat(InterviewResponse.of(interview, List.of(), null).refRepos()).isNotNull().isEmpty();   // INTERVIEW 세션
+    }
+
+    @Test
+    void direct_construction_normalizes_null_ref_repos_to_an_empty_list() {
+        // 컴팩트 생성자가 "항상 non-null"을 지킨다 — of()를 거치지 않는 호출처도 null을 못 내보낸다
+        InterviewResponse r = new InterviewResponse(1L, "o/r", "main", "t", "d", "큐", "QUEUED", null, null, null,
+                "m", "e", List.of(), null, null, null, "QUESTION", null, null, null, null, null, null, null, null, null);
+        assertThat(r.refRepos()).isNotNull().isEmpty();
+        assertThat(r.mcpCatalogIds()).isEmpty();
+    }
+
+    @Test
+    void with_db_connections_keeps_ref_repos() {
+        InterviewResponse r = InterviewResponse.of(questionWithRefs(FRESH, PINNED), List.of(), null);
+
+        InterviewResponse filled = r.withDbConnections(List.of(new DbConnectionDto.Chip(7, "운영", "MYSQL")));
+
+        assertThat(filled.refRepos()).isEqualTo(r.refRepos()).hasSize(2);
+        assertThat(filled.dbConnections()).hasSize(1);
+    }
+
+    @Test
+    void ref_repos_serialize_as_an_array_with_exactly_the_fields_the_screen_needs() throws Exception {
+        InterviewResponse r = InterviewResponse.of(questionWithRefs(FRESH, PINNED), List.of(), null);
+
+        JsonNode root = new ObjectMapper()
+                .registerModule(new JavaTimeModule()).valueToTree(r);
+
+        JsonNode refs = root.get("refRepos");
+        assertThat(refs.isArray()).isTrue();
+        assertThat(refs).hasSize(2);
+        List<String> names = new ArrayList<>();
+        refs.get(0).fieldNames().forEachRemaining(names::add);
+        // path·gitUrl은 화면이 안 쓰므로 내보내지 않는다. 값이 없는 필드도 null로 실어 TS 쪽 모양이 늘 같다
+        assertThat(names).containsExactlyInAnyOrder("catalogId", "alias", "branch", "sha", "fetchedAt", "error");
+        assertThat(refs.get(0).get("sha").isNull()).isTrue();
+        assertThat(refs.get(1).get("sha").asText()).isEqualTo("a".repeat(40));
+        assertThat(refs.get(1).get("branch").asText()).isEqualTo("main");
     }
 }

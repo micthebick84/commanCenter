@@ -1,6 +1,8 @@
 import { describe, expect, it, vi } from 'vitest';
-import { InterviewRunner } from '../src/runner/interviewRunner.js';
-import { freshClaim, resumeClaim, freshClaimWithAttachments, questionClaim, questionClaimWithAttachments } from './fixtures/claims.js';
+import { InterviewRunner, refSection } from '../src/runner/interviewRunner.js';
+import { REF_PREPARE_FALLBACK_REASON, type RefPrepared } from '../src/runner/repoPrepare.js';
+import type { InterviewClaimResponse, RefRepoClaim } from '../src/types.js';
+import { freshClaim, resumeClaim, freshClaimWithAttachments, questionClaim, questionClaimWithAttachments, questionClaimWithRefs } from './fixtures/claims.js';
 import { planCompleteStream, questionStream, streamingQuestionStream, usageAwareQuestionStream } from './fixtures/sdkMessages.js';
 import { detectHandoff } from '../src/runner/skillDispatch.js';
 
@@ -446,6 +448,14 @@ function turns(assistantCount: number) {
   return out;
 }
 
+// ---- 참조 repo(스펙 2026-10-22) 테스트 공용 — describe 본문이 수집 시점에 읽으므로 사용처보다 앞에 둔다 ----
+const REF_SHA = 'a'.repeat(40);
+const REF_CLAIM: RefRepoClaim = questionClaimWithRefs.refRepos![0]!;
+/** 준비에 성공한 참조 (error === null, sha = HEAD). */
+const refAvailable = (over: Partial<RefPrepared> = {}): RefPrepared => ({ ref: REF_CLAIM, sha: REF_SHA, error: null, ...over });
+/** 준비에 실패한 참조 — repoPrepare 계약처럼 sha는 null, error는 비어 있지 않은 문구. */
+const refFailed = (error: string, over: Partial<RefRepoClaim> = {}): RefPrepared => ({ ref: { ...REF_CLAIM, ...over }, sha: null, error });
+
 describe('InterviewRunner kind=QUESTION (스펙 §6 — plan 경로 미진입, Q&A 전용)', () => {
   type Captured = { prompt: string; options: Record<string, unknown> };
   /** 프롬프트 텍스트 + options를 캡처하고 주어진 스트림을 돌려주는 fakeQuery. */
@@ -795,6 +805,415 @@ describe('InterviewRunner kind=QUESTION (스펙 §6 — plan 경로 미진입, Q
       expect(captured.prompt).toContain('PLANNING-ONLY');
       expect(prepared.close).toHaveBeenCalledTimes(1);
     });
+  });
+
+  describe('참조 repo (스펙 2026-10-22 §5.2·§5.4)', () => {
+    type Gate = (t: string, i: Record<string, unknown>) => Promise<{ behavior: string }>;
+    type Client = ReturnType<typeof makeClient>;
+    /** 주입한 ensureRefRepos가 항상 results를 돌려준다 — 실제 git은 돌지 않는다. */
+    const preparer = (results: RefPrepared[]) => vi.fn().mockResolvedValue(results);
+    const runnerWith = (client: Client, fakeQuery: unknown, ensureRefRepos: unknown, extra: Record<string, unknown> = {}) =>
+      new InterviewRunner(client as never, fakeQuery as never, { ...deps, ...extra, ensureRefRepos } as never);
+    const reportedBody = (client: Client): Record<string, unknown> => client.postQuestion.mock.calls[0]![1] as Record<string, unknown>;
+    const logged = (warn: { mock: { calls: unknown[][] } }): string => warn.mock.calls.map((c) => c.join(' ')).join('\n');
+
+    it('question claim without refRepos never prepares refs and keeps the kickoff prompt unchanged', async () => {
+      const runs: { prompt: string; body: Record<string, unknown> }[] = [];
+      // refRepos 필드가 아예 없는 claim(구버전 Java)과 빈 배열(참조 없는 질문)은 같은 동작이어야 한다
+      for (const claim of [questionClaim, { ...questionClaim, refRepos: [] }]) {
+        const client = makeClient();
+        const { fakeQuery, captured } = capturing(() => questionStream());
+        const ensureRefRepos = vi.fn();
+        await runnerWith(client, fakeQuery, ensureRefRepos).run(claim);
+
+        expect(ensureRefRepos).not.toHaveBeenCalled();
+        expect(client.fail).not.toHaveBeenCalled();
+        expect(captured.prompt.startsWith('당신은')).toBe(true);
+        expect(captured.prompt).not.toContain('참조 repo');
+        expect(reportedBody(client)).not.toHaveProperty('refStates'); // 키 자체가 없다 — undefined 값도 아니다
+        // 참조 폴더는 게이트 루트가 아니다
+        const gate = captured.options.canUseTool as Gate;
+        expect((await gate('Read', { file_path: '/r/_refs/5/12/A.java' })).behavior).toBe('deny');
+        runs.push({ prompt: captured.prompt, body: reportedBody(client) });
+      }
+      expect(runs[1]!.prompt).toBe(runs[0]!.prompt);
+      expect(JSON.stringify(runs[1]!.body)).toBe(JSON.stringify(runs[0]!.body));
+    });
+
+    it('question claim with refs: prepares them, prefixes the ref section, lets the gate read them, and reports refStates', async () => {
+      const client = makeClient();
+      const { fakeQuery, captured } = capturing(() => questionStream());
+      const ensureRefRepos = preparer([refAvailable()]);
+      const gitTokens = { gitlabToken: 'glpat-X' };
+      await runnerWith(client, fakeQuery, ensureRefRepos, { gitTokens }).run(questionClaimWithRefs);
+
+      // claim의 참조 목록 그대로 + 서비스의 git 토큰 + 턴의 AbortSignal(SDK에 넘기는 abortController와 같은 것)
+      expect(ensureRefRepos).toHaveBeenCalledTimes(1);
+      expect(ensureRefRepos).toHaveBeenCalledWith(questionClaimWithRefs.refRepos, { tokens: gitTokens, signal: expect.any(AbortSignal) });
+      expect((ensureRefRepos.mock.calls[0]![1] as { signal: AbortSignal }).signal)
+        .toBe((captured.options.abortController as AbortController).signal);
+
+      // 프롬프트: 참조 절이 맨 앞, 그 뒤에 지금과 같은 질문 킥오프
+      const p = captured.prompt;
+      expect(p.startsWith('참조 repo (읽기 전용 — 비교·참고용, 수정 금지):\n')).toBe(true);
+      expect(p).toContain('- 옛앱 · release/6.5@aaaaaaa : /r/_refs/5/12\n');
+      expect(p).not.toContain('사용할 수 없는 참조:'); // 규칙 줄에도 같은 말이 들어 있어 콜론까지 본다 — 못 받은 참조 줄이 없다
+      expect(p.indexOf('규칙:\n- 대상 repo는 현재 작업 디렉토리다.')).toBeLessThan(p.indexOf('당신은'));
+      expect(p).toContain('로그인은 어디서 처리되나요?');
+
+      // 게이트: 참조 폴더 안은 Read/Grep/Glob 허용, Bash는 그대로(대상 안만)
+      const gate = captured.options.canUseTool as Gate;
+      expect((await gate('Read', { file_path: '/r/_refs/5/12/A.java' })).behavior).toBe('allow');
+      expect((await gate('Grep', { pattern: 'login', path: '/r/_refs/5/12' })).behavior).toBe('allow');
+      expect((await gate('Glob', { pattern: '**/*.java', path: '/r/_refs/5/12' })).behavior).toBe('allow');
+      expect((await gate('Bash', { command: 'cat /r/_refs/5/12/A.java' })).behavior).toBe('deny');
+      expect((await gate('Read', { file_path: '/r/_refs/5/120/A.java' })).behavior).toBe('deny'); // 이름 앞부분만 같은 형제
+
+      // 보고: 참조 준비 결과가 답변과 함께 간다
+      expect(client.postQuestion).toHaveBeenCalledWith(77, expect.objectContaining({
+        content: 'Which columns should the CSV include?',
+        refStates: [{ catalogId: 12, branch: 'release/6.5', sha: REF_SHA, error: null }],
+      }));
+      expect(client.fail).not.toHaveBeenCalled();
+    });
+
+    it('ref prepare failure still answers and reports the masked error', async () => {
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      const client = makeClient();
+      const { fakeQuery, captured } = capturing(() => questionStream());
+      await runnerWith(client, fakeQuery, preparer([refFailed('권한 없음')])).run(questionClaimWithRefs);
+
+      // 세션 실패가 아니다 — 그 참조 없이 답한다
+      expect(client.fail).not.toHaveBeenCalled();
+      expect(fakeQuery).toHaveBeenCalledTimes(1);
+      // 프롬프트: 사용 가능한 참조가 없으면 머리말과 `- …` 줄은 빠지고 "사용할 수 없는 참조" 줄만 남는다
+      expect(captured.prompt.startsWith('사용할 수 없는 참조: 옛앱(release/6.5) — 권한 없음\n규칙:\n')).toBe(true);
+      expect(captured.prompt).not.toContain('참조 repo (읽기 전용');
+      // 게이트: 못 받은 참조 폴더는 허용 루트가 아니다
+      const gate = captured.options.canUseTool as Gate;
+      expect((await gate('Read', { file_path: '/r/_refs/5/12/A.java' })).behavior).toBe('deny');
+      expect((await gate('Grep', { pattern: 'x', path: '/r/_refs/5/12' })).behavior).toBe('deny');
+      // 보고: 답변은 정상 보고되고 refStates에 사유가 그대로 실린다
+      expect(client.postQuestion).toHaveBeenCalledWith(77, expect.objectContaining({
+        content: 'Which columns should the CSV include?',
+        refStates: [{ catalogId: 12, branch: 'release/6.5', sha: null, error: '권한 없음' }],
+      }));
+      warn.mockRestore();
+    });
+
+    it('resume turn re-sends the ref section', async () => {
+      const client = makeClient();
+      const { fakeQuery, captured } = capturing(() => questionStream());
+      const ensureRefRepos = preparer([refAvailable({ ref: { ...REF_CLAIM, sha: REF_SHA } })]);
+      await runnerWith(client, fakeQuery, ensureRefRepos).run({
+        ...questionClaimWithRefs, claudeSessionId: 'sess-q-1', lastAnswer: '토큰 검증은요?', turns: turns(1),
+      });
+
+      expect(ensureRefRepos).toHaveBeenCalledTimes(1); // 추가 질문 claim마다 다시 준비한다(스펙 §5.1)
+      expect(captured.options.resume).toBe('sess-q-1');
+      expect(captured.prompt.startsWith('참조 repo (읽기 전용 — 비교·참고용, 수정 금지):\n')).toBe(true);
+      expect(captured.prompt).toContain('- 옛앱 · release/6.5@aaaaaaa : /r/_refs/5/12\n');
+      expect(captured.prompt.endsWith('못 읽었다고 답한다.\n\n토큰 검증은요?')).toBe(true); // 접두 뒤에 후속 질문이 그대로 온다
+      const gate = captured.options.canUseTool as Gate;
+      expect((await gate('Read', { file_path: '/r/_refs/5/12/A.java' })).behavior).toBe('allow');
+      expect(client.postQuestion).toHaveBeenCalledWith(77, expect.objectContaining({
+        refStates: [{ catalogId: 12, branch: 'release/6.5', sha: REF_SHA, error: null }],
+      }));
+    });
+
+    it('interview (non-question) claims ignore refRepos', async () => {
+      // kind 없음(구버전 백엔드)과 명시적 INTERVIEW 모두 — 참조는 질문 세션 전용이다
+      for (const claim of [
+        { ...freshClaim, refRepos: questionClaimWithRefs.refRepos },
+        { ...freshClaim, kind: 'INTERVIEW' as const, refRepos: questionClaimWithRefs.refRepos },
+      ]) {
+        const client = makeClient();
+        const { fakeQuery, captured } = capturing(() => questionStream());
+        const ensureRefRepos = vi.fn();
+        await runnerWith(client, fakeQuery, ensureRefRepos).run(claim);
+
+        expect(ensureRefRepos).not.toHaveBeenCalled();
+        expect(captured.prompt).not.toContain('참조 repo');
+        expect(captured.prompt).toContain('PLANNING-ONLY'); // 인터뷰 킥오프 그대로
+        expect(client.postQuestion).toHaveBeenCalledTimes(1);
+        expect(reportedBody(client)).not.toHaveProperty('refStates');
+      }
+    });
+
+    it('prepares references after the target checkout and before the SDK turn', async () => {
+      ensureRepo.mockClear();
+      const client = makeClient();
+      const { fakeQuery } = capturing(() => questionStream());
+      const ensureRefRepos = preparer([refAvailable()]);
+      await runnerWith(client, fakeQuery, ensureRefRepos).run(questionClaimWithRefs);
+
+      const firstCall = (fn: { mock: { invocationCallOrder: number[] } }) => fn.mock.invocationCallOrder[0]!;
+      expect(firstCall(ensureRepo)).toBeLessThan(firstCall(ensureRefRepos));
+      expect(firstCall(ensureRefRepos)).toBeLessThan(firstCall(fakeQuery));
+    });
+
+    it('only successfully prepared references become gate roots, and refStates keeps the input order', async () => {
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      const client = makeClient();
+      const { fakeQuery, captured } = capturing(() => questionStream());
+      const second = { catalogId: 13, alias: '공통 UI', branch: 'main', dir: '/r/_refs/5/13' };
+      const claim = { ...questionClaimWithRefs, refRepos: [REF_CLAIM, { ...REF_CLAIM, ...second }] };
+      await runnerWith(client, fakeQuery, preparer([refAvailable(), refFailed('브랜치를 찾을 수 없음', second)])).run(claim);
+
+      const gate = captured.options.canUseTool as Gate;
+      expect((await gate('Read', { file_path: '/r/_refs/5/12/A.java' })).behavior).toBe('allow');
+      expect((await gate('Read', { file_path: '/r/_refs/5/13/B.java' })).behavior).toBe('deny');
+      expect(captured.prompt).toContain(
+        '- 옛앱 · release/6.5@aaaaaaa : /r/_refs/5/12\n사용할 수 없는 참조: 공통 UI(main) — 브랜치를 찾을 수 없음\n규칙:\n',
+      );
+      expect(reportedBody(client).refStates).toEqual([
+        { catalogId: 12, branch: 'release/6.5', sha: REF_SHA, error: null },
+        { catalogId: 13, branch: 'main', sha: null, error: '브랜치를 찾을 수 없음' },
+      ]);
+      warn.mockRestore();
+    });
+
+    it("prompt and report carry git's fatal line only; the command line and the rest go to the log (masked)", async () => {
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      // 실제 Node execFile 오류 모양(ensureRefRepos가 돌려주는 전문): `Command failed: <명령줄>` + stderr.
+      // 첫 줄은 명령줄(로컬 경로 포함)이라 사유가 아니다 — 사유는 git의 fatal 줄이다 (Ruling 8b).
+      const full =
+        'Command failed: git clone --depth 1 --branch release/6.5 https://***@gitlab.example/g/old.git C:\\netis\\_refs\\5\\12.part\n' +
+        "Cloning into 'C:\\netis\\_refs\\5\\12.part'...\n" +
+        'fatal: Remote branch release/6.5 not found in upstream origin\n';
+      const reason = 'fatal: Remote branch release/6.5 not found in upstream origin';
+      const client = makeClient();
+      const { fakeQuery, captured } = capturing(() => questionStream());
+      await runnerWith(client, fakeQuery, preparer([refFailed(full)])).run(questionClaimWithRefs);
+
+      expect(captured.prompt).toContain(`사용할 수 없는 참조: 옛앱(release/6.5) — ${reason}\n규칙:\n`);
+      expect(reportedBody(client).refStates).toEqual([{ catalogId: 12, branch: 'release/6.5', sha: null, error: reason }]);
+      // 명령줄·로컬 경로·그 밖의 줄은 프롬프트와 보고에 나가지 않는다
+      for (const text of [captured.prompt, JSON.stringify(reportedBody(client))]) {
+        expect(text).not.toContain('Command failed');
+        expect(text).not.toContain('C:\\netis');
+        expect(text).not.toContain('Cloning into');
+      }
+      // 전체 문구는 운영자 로그에만 남는다
+      const log = logged(warn);
+      expect(log).toContain('Command failed: git clone');
+      expect(log).toContain('C:\\netis\\_refs\\5\\12.part');
+      expect(log).toContain('Cloning into');
+      expect(log).toContain(reason);
+      expect(log).toContain('77');
+      expect(log).toContain('옛앱(release/6.5)');
+      warn.mockRestore();
+    });
+
+    it('masks credentials even when the preparer left them in the message', async () => {
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      const full =
+        'Command failed: git clone --depth 1 --branch release/6.5 https://oauth2:glpat-SECRET@gitlab.hamon.vip/g/p.git /r/_refs/5/12.part\n' +
+        "fatal: unable to access 'https://oauth2:glpat-SECRET@gitlab.hamon.vip/g/p.git/': Could not resolve host: gitlab.hamon.vip\n";
+      const reason = "fatal: unable to access 'https://***@gitlab.hamon.vip/g/p.git/': Could not resolve host: gitlab.hamon.vip";
+      const client = makeClient();
+      const { fakeQuery, captured } = capturing(() => questionStream());
+      await runnerWith(client, fakeQuery, preparer([refFailed(full)])).run(questionClaimWithRefs);
+
+      expect(captured.prompt).toContain(`— ${reason}\n`);
+      expect(reportedBody(client).refStates).toEqual([{ catalogId: 12, branch: 'release/6.5', sha: null, error: reason }]);
+      const log = logged(warn);
+      expect(log).toContain('***@'); // 로그의 전체 문구도 가려서 남는다
+      expect(log).toContain('Could not resolve host');
+      for (const text of [log, captured.prompt, JSON.stringify(reportedBody(client))]) expect(text).not.toContain('glpat-SECRET');
+      warn.mockRestore();
+    });
+
+    it('"환경 준비" 활동의 detail에 참조 수(+ 참조 n)를 덧붙인다 — 참조 없는 질문·인터뷰는 대상만', async () => {
+      const detailOf = async (claim: InterviewClaimResponse): Promise<unknown> => {
+        const client = makeClient();
+        await runnerWith(client, vi.fn(() => questionStream()), preparer([refAvailable()])).run(claim);
+        const events = client.postActivity.mock.calls.flatMap(
+          (c: unknown[]) => (c[1] as { events: Array<Record<string, unknown>> }).events,
+        );
+        expect(events[0]).toMatchObject({ type: 'tool', label: '환경 준비' });
+        return events[0]!.detail;
+      };
+      const three = { ...questionClaimWithRefs, refRepos: [REF_CLAIM, { ...REF_CLAIM, catalogId: 13 }, { ...REF_CLAIM, catalogId: 14 }] };
+
+      expect(await detailOf(questionClaimWithRefs)).toBe('acme/widgets + 참조 1');
+      expect(await detailOf(three)).toBe('acme/widgets + 참조 3');
+      expect(await detailOf(questionClaim)).toBe('acme/widgets');
+      expect(await detailOf({ ...questionClaim, refRepos: [] })).toBe('acme/widgets');
+      expect(await detailOf({ ...freshClaim, refRepos: questionClaimWithRefs.refRepos })).toBe('acme/widgets'); // 인터뷰는 참조를 무시한다
+    });
+
+    it('puts the ref section before the DB section', async () => {
+      const db = {
+        servers: {}, tools: {}, dialects: {},
+        labels: [{ serverName: 'db-7', label: '운영 DB (MySQL)' }], notices: [],
+        close: vi.fn().mockResolvedValue(undefined),
+      };
+      const client = makeClient();
+      const { fakeQuery, captured } = capturing(() => questionStream());
+      await runnerWith(client, fakeQuery, preparer([refAvailable()]), { createDbMcp: vi.fn().mockReturnValue(db) }).run(questionClaimWithRefs);
+
+      const p = captured.prompt;
+      expect(p.startsWith('참조 repo (')).toBe(true);
+      expect(p.indexOf('참조 repo (')).toBeLessThan(p.indexOf('사용 가능한 DB 도구'));
+      expect(p.indexOf('사용 가능한 DB 도구')).toBeLessThan(p.indexOf('당신은'));
+      expect(db.close).toHaveBeenCalledTimes(1);
+    });
+
+    it('treats an empty preparation result as no references (no section, no refStates)', async () => {
+      const client = makeClient();
+      const { fakeQuery, captured } = capturing(() => questionStream());
+      await runnerWith(client, fakeQuery, preparer([])).run(questionClaimWithRefs);
+
+      expect(captured.prompt.startsWith('당신은')).toBe(true);
+      expect(reportedBody(client)).not.toHaveProperty('refStates');
+      expect(client.fail).not.toHaveBeenCalled();
+    });
+
+    it('does not report refStates when the turn fails (the session ends, nothing to pin)', async () => {
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      const client = makeClient();
+      const fakeQuery = vi.fn(() => {
+        throw new Error('boom');
+      });
+      await runnerWith(client, fakeQuery, preparer([refAvailable()])).run(questionClaimWithRefs);
+
+      expect(client.postQuestion).not.toHaveBeenCalled();
+      expect(client.fail).toHaveBeenCalledTimes(1);
+      expect(client.fail).toHaveBeenCalledWith(77, 'boom');
+      warn.mockRestore();
+    });
+
+    it('a turn aborted while references are being prepared stops there: no SDK turn and no refStates report', async () => {
+      vi.useFakeTimers();
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      try {
+        const client = { ...makeClient(), heartbeat: vi.fn().mockResolvedValue(undefined) };
+        const fakeQuery = vi.fn(() => questionStream());
+        // 실제 ensureRefRepos처럼 abort를 예외가 아니라 "실패한 참조" 결과로 돌려준다 — 그래서 러너가 직접 abort를 확인해야 한다
+        const ensureRefRepos = vi.fn((_refs: RefRepoClaim[], opts: { signal?: AbortSignal }) =>
+          new Promise<RefPrepared[]>((resolve) => {
+            opts.signal!.addEventListener('abort', () => resolve([refFailed('This operation was aborted')]));
+          }),
+        );
+        const runner = new InterviewRunner(client as never, fakeQuery as never, { ...deps, ensureRefRepos, turnTimeoutMs: 60_000 } as never);
+
+        const done = runner.run(questionClaimWithRefs);
+        await vi.advanceTimersByTimeAsync(60_000);
+        await done;
+
+        expect(fakeQuery).not.toHaveBeenCalled();
+        expect(client.postQuestion).not.toHaveBeenCalled();
+        expect(client.fail).toHaveBeenCalledTimes(1);
+        expect(client.fail).toHaveBeenCalledWith(77, expect.stringContaining('wall-clock 타임아웃'));
+      } finally {
+        warn.mockRestore();
+        vi.useRealTimers();
+      }
+    });
+  });
+});
+
+describe('refSection (스펙 2026-10-22 §5.2)', () => {
+  const HEADER = '참조 repo (읽기 전용 — 비교·참고용, 수정 금지):\n';
+  const RULES =
+    '규칙:\n' +
+    '- 대상 repo는 현재 작업 디렉토리다. 참조 repo는 위 절대 경로를 Read/Grep/Glob의 경로로 주어 읽는다(셸 명령은 대상 안에서만 동작한다).\n' +
+    '- 참조 파일 근거는 `별칭:경로:줄`(예: `옛앱:src/a/B.java:12`), 대상 파일은 `경로:줄`로 적는다.\n' +
+    '- 사용할 수 없는 참조의 내용은 추측하지 말고 못 읽었다고 답한다.\n' +
+    '\n'; // 끝에 빈 줄 하나
+  const FALLBACK = '참조 repo를 받지 못했습니다';
+  const OLD_APP = '- 옛앱 · release/6.5@aaaaaaa : /r/_refs/5/12\n';
+  const unavailable = (reason: string): string => `사용할 수 없는 참조: 옛앱(release/6.5) — ${reason}\n`;
+
+  it('refSection returns an empty string for no refs', () => {
+    expect(refSection([])).toBe('');
+  });
+
+  it('available references only: header and one line each, no unavailable line, then the rules and one blank line', () => {
+    expect(refSection([refAvailable()])).toBe(HEADER + OLD_APP + RULES);
+  });
+
+  it('available and unavailable: the unavailable line follows the list', () => {
+    const batch = refFailed('브랜치를 찾을 수 없음', { catalogId: 13, alias: '배치 서버', branch: 'master', dir: '/r/_refs/5/13' });
+    expect(refSection([refAvailable(), batch])).toBe(
+      HEADER + OLD_APP + '사용할 수 없는 참조: 배치 서버(master) — 브랜치를 찾을 수 없음\n' + RULES,
+    );
+  });
+
+  it('unavailable only: the header and "- …" lines are dropped, the rules stay', () => {
+    expect(refSection([refFailed('권한 없음')])).toBe(unavailable('권한 없음') + RULES);
+  });
+
+  it('keeps the input order, one line per reference, and shows only the first 7 characters of the commit', () => {
+    const second = { catalogId: 13, alias: '공통 UI', branch: 'main', dir: '/r/_refs/5/13' };
+    const third = { catalogId: 14, alias: '배치', branch: 'master', dir: '/r/_refs/5/14' };
+    const fourth = { catalogId: 15, alias: '문서', branch: 'docs', dir: '/r/_refs/5/15' };
+    const out = refSection([
+      refAvailable({ sha: 'abcdef0123456789abcdef0123456789abcdef01' }),
+      refFailed('권한 없음', third),
+      refAvailable({ ref: { ...REF_CLAIM, ...second }, sha: '0123456789abcdef0123456789abcdef01234567' }),
+      refFailed('시간 초과', fourth),
+    ]);
+    expect(out).toBe(
+      HEADER +
+        '- 옛앱 · release/6.5@abcdef0 : /r/_refs/5/12\n' +
+        '- 공통 UI · main@0123456 : /r/_refs/5/13\n' +
+        '사용할 수 없는 참조: 배치(master) — 권한 없음\n' +
+        '사용할 수 없는 참조: 문서(docs) — 시간 초과\n' +
+        RULES,
+    );
+  });
+
+  // Ruling 8b: 사유 요약 — 마스킹한 문구를 줄로 나눠 `Command failed:` 줄은 버리고, git의 마지막 `fatal:`/`error:` 줄을 먼저 쓰며,
+  // 없으면 남은 줄 중 마지막 비어 있지 않은 줄을 쓴다. 다듬어 200자 이내로 자르고, 아무것도 안 남으면 고정 문구.
+  // Node execFile 오류는 `Command failed: <명령줄>\n<stderr>`라 첫 줄은 명령줄이고 원인은 stderr의 fatal 줄에 있다.
+  const EXEC_FAILED =
+    'Command failed: git clone --depth 1 --branch nope https://***@gitlab.example/g/old.git C:\\netis\\_refs\\5\\12.part';
+  it.each<[string, string, string]>([
+    ['an unprefixed single line as is', 'boom', 'boom'],
+    [
+      'a Node execFile message: the git fatal line, not the command line',
+      `${EXEC_FAILED}\nCloning into 'C:\\netis\\_refs\\5\\12.part'...\nfatal: Remote branch nope not found in upstream origin\n`,
+      'fatal: Remote branch nope not found in upstream origin',
+    ],
+    ['only a Command failed line: nothing useful is left', EXEC_FAILED, FALLBACK],
+    ['a Command failed line plus blank lines only', `${EXEC_FAILED}\n\n  \n`, FALLBACK],
+    [
+      'the LAST fatal/error line wins',
+      'Command failed: x\nerror: RPC failed; curl 18 transfer closed\nfatal: early EOF\nfatal: fetch-pack: invalid index-pack output\n',
+      'fatal: fetch-pack: invalid index-pack output',
+    ],
+    ['error: counts like fatal: (the last of both kinds wins)', 'fatal: first\nerror: second', 'error: second'],
+    ['a git diagnostic beats later plain lines', 'fatal: Authentication failed for repo\nhint: check the token', 'fatal: Authentication failed for repo'],
+    ['without a diagnostic: the last non-empty line', '첫 줄\n둘째 줄\n셋째 줄\n\n', '셋째 줄'],
+    ['without a diagnostic: Command failed is dropped, the last line stays', `${EXEC_FAILED}\nCloning into 'x'...\n`, "Cloning into 'x'..."],
+    ['trims the chosen line and ignores blank lines around it', '\n  \r\n   fatal: x  \n \n', 'fatal: x'],
+    ['CRLF line breaks', 'Command failed: x\r\nfatal: y\r\n', 'fatal: y'],
+    ['a bare CR (git progress output)', 'Receiving objects: 10%\rReceiving objects: 20%', 'Receiving objects: 20%'],
+    [
+      'masks credentials before choosing',
+      "Command failed: x\nfatal: unable to access 'https://oauth2:glpat-SECRET@gitlab.hamon.vip/g/p.git/': Could not resolve host",
+      "fatal: unable to access 'https://***@gitlab.hamon.vip/g/p.git/': Could not resolve host",
+    ],
+    ['at most 200 characters', 'a'.repeat(300), 'a'.repeat(200)],
+    ['the 200-character cut applies to the chosen fatal line', `Command failed: x\nfatal: ${'f'.repeat(300)}`, `fatal: ${'f'.repeat(193)}`],
+    ['exactly 200 characters stays whole', 'b'.repeat(200), 'b'.repeat(200)],
+    ['no trailing space after the cut', `${'c'.repeat(199)} dddd`, 'c'.repeat(199)],
+    ['never splits a surrogate pair at the cut', `${'e'.repeat(199)}😀tail`, 'e'.repeat(199)],
+    ['an empty message', '', FALLBACK],
+    ['only whitespace and line breaks', ' \n\t\r\n  ', FALLBACK],
+  ])('condenses an unavailable reason: %s', (_name, error, expected) => {
+    expect(refSection([refFailed(error)])).toBe(unavailable(expected) + RULES);
+    expect(expected.length).toBeLessThanOrEqual(200);
+    expect(expected).not.toBe('');
+  });
+
+  it('reuses the fallback text exported by repoPrepare instead of its own copy', () => {
+    expect(REF_PREPARE_FALLBACK_REASON).toBe(FALLBACK); // 사용자에게 보이는 문구는 여기서 한 번 고정한다
+    expect(refSection([refFailed('Command failed: git clone only the command line')])).toBe(
+      unavailable(REF_PREPARE_FALLBACK_REASON) + RULES,
+    );
   });
 });
 

@@ -572,6 +572,66 @@ describe('InterviewPanel — kind=QUESTION (스펙 2026-08-30 §7)', () => {
     w.unmount()
   })
 
+  // 참조 repo (스펙 2026-10-22 §7.3) — 배열이면 그대로 싣는다. []는 "전부 해제"라 빈 배열도 필드를 남긴다(생략은 "유지").
+  it.each([
+    ['참조를 바꾸면 그 목록', [{ repoCatalogId: 2, branch: 'release/6.5' }]],
+    ['빈 배열은 빈 배열(전부 해제)', []],
+  ])('composer 슬롯의 send({refRepos})는 QUESTION ask 바디에 싣는다 — %s', async (_label, refRepos) => {
+    authStub.accessToken = 'jwt'
+    useApiMock.mockResolvedValueOnce(answered)
+    const w = mount(InterviewPanel, {
+      props: { sessionId: 9, kind: 'QUESTION' },
+      slots: {
+        composer: ({ setAnswer, send }: any) =>
+          h('button', {
+            'data-test': 'slot-send',
+            onClick: () => {
+              setAnswer('옛앱 기준으로')
+              send({ refRepos })
+            },
+          }),
+      },
+    })
+    await flushPromises()
+    await w.find('[data-test="slot-send"]').trigger('click')
+    await flushPromises()
+    expect(useApiMock).toHaveBeenCalledWith('/api/questions/9/ask', {
+      method: 'POST',
+      body: { answer: '옛앱 기준으로', replyToSeq: 1, refRepos },
+    })
+    w.unmount()
+  })
+
+  it('INTERVIEW 세션의 answer 바디는 send({refRepos})가 와도 refRepos를 싣지 않는다', async () => {
+    authStub.accessToken = 'jwt'
+    useApiMock.mockResolvedValueOnce({
+      statusName: 'AWAITING_INPUT',
+      turns: [{ seq: 1, role: 'assistant', kind: 'question', content: '어떤 DB인가요?' }],
+      plan: null,
+    })
+    const w = mount(InterviewPanel, {
+      props: { sessionId: 9 },
+      slots: {
+        composer: ({ setAnswer, send }: any) =>
+          h('button', {
+            'data-test': 'slot-send',
+            onClick: () => {
+              setAnswer('PostgreSQL')
+              send({ refRepos: [{ repoCatalogId: 2, branch: 'release/6.5' }] })
+            },
+          }),
+      },
+    })
+    await flushPromises()
+    await w.find('[data-test="slot-send"]').trigger('click')
+    await flushPromises()
+    expect(useApiMock).toHaveBeenCalledWith('/api/interviews/9/answer', {
+      method: 'POST',
+      body: { answer: 'PostgreSQL', replyToSeq: 1 },
+    })
+    w.unmount()
+  })
+
   it('턴 상한 400은 경고 토스트로 안내하고 입력을 지우지 않는다', async () => {
     const w = await mountPanel(9, answered, { kind: 'QUESTION' })
     await w.find('textarea').setValue('또?')

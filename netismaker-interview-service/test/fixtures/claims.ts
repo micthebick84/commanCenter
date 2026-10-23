@@ -90,3 +90,24 @@ export const questionClaimWithAttachments: InterviewClaimResponse = {
     },
   ],
 };
+
+/**
+ * 질문 세션 fresh claim + 읽기 전용 참조 repo 1개 (스펙 2026-10-22 §4.4). `dir`은 API가 claim마다 계산하는
+ * `{체크아웃 루트}/_refs/{세션 id}/{카탈로그 id}` 절대경로다 — 테스트는 이 폴더를 만들지 않고 ensureRefRepos를 주입한다.
+ * 아직 받은 적이 없으므로 sha는 null(첫 턴). 러너는 이 목록으로 참조를 준비해 프롬프트 접두·게이트 루트·보고에 쓴다.
+ */
+export const questionClaimWithRefs: InterviewClaimResponse = {
+  ...questionClaim,
+  refRepos: [
+    {
+      catalogId: 12,
+      alias: '옛앱',
+      githubRepo: 'acme/legacy',
+      gitUrl: 'https://github.com/acme/legacy.git',
+      repoHost: 'github',
+      branch: 'release/6.5',
+      dir: '/r/_refs/5/12',
+      sha: null,
+    },
+  ],
+};

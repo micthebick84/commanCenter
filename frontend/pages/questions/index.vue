@@ -6,6 +6,9 @@ import QuestionComposer from '~/components/chat/QuestionComposer.vue'
 import ClaudeUsagePanel from '~/components/ClaudeUsagePanel.vue'
 import DbConnectionPicker from '~/components/DbConnectionPicker.vue'
 import { MAX_DB_SELECTION, fetchDbConnections, type DbConnectionView } from '~/composables/dbConnections'
+import RefRepoChips from '~/components/RefRepoChips.vue'
+import RefRepoAddForm from '~/components/RefRepoAddForm.vue'
+import { toInputs, type RefRepoView } from '~/composables/refRepos'
 
 definePageMeta({ layout: 'default' })
 
@@ -23,6 +26,8 @@ const draft = reactive({
   effort: DEFAULT_EFFORT,
   mcpCatalogIds: [] as number[],
   dbConnectionIds: [] as number[],
+  // 참조 repo(스펙 2026-10-22 §7.2): 대상과 별개로 읽기만 하는 다른 레포 — 상한 3은 칩 줄(RefRepoChips)이 건다
+  refRepos: [] as RefRepoView[],
 })
 // 첨부(스펙 2026-09-13 §7): 대기 파일은 QuestionComposer가 검증·누적하고(v-model:files) 등록 성공 시 비운다 — 실패면 유지.
 const files = ref<File[]>([])
@@ -131,6 +136,7 @@ function onRepoSelected(catalogId: number | null) {
   db.enabled = false
   db.items = []
   draft.dbConnectionIds = []
+  removeRef(catalogId) // 새 대상과 같은 레포를 참조로 두지 않는다 — 그 참조만 빠지고 나머지는 유지 (스펙 2026-10-22 §7.2)
   const entry = repoCatalog.value.find((r) => r.id === catalogId)
   if (!entry) return
   if (entry.host === 'other') {
@@ -157,6 +163,24 @@ function onBranchFilter(val: string, update: (cb: () => void) => void) {
   })
 }
 
+// 참조 repo (스펙 2026-10-22 §7.2, B안): 대상 레포·브랜치 선택 바로 아래 편집 칩 줄 + "＋ 참조 추가"가 그 아래에 펼치는 추가 폼.
+// 추가 폼 후보에서는 대상과 이미 고른 참조를 뺀다(지원하지 않는 호스트는 폼이 스스로 뺀다) — 서버도 등록 때 같은 규칙으로 검증한다.
+const refAddOpen = ref(false)
+const refExcludeIds = computed(() => [
+  ...(draft.repoCatalogId !== null ? [draft.repoCatalogId] : []),
+  ...draft.refRepos.map((r) => r.catalogId),
+])
+function toggleRefAdd() {
+  refAddOpen.value = !refAddOpen.value
+}
+function addRef(picked: RefRepoView) {
+  draft.refRepos.push(picked)
+  refAddOpen.value = false // 추가하면 접는다
+}
+function removeRef(catalogId: number | null) {
+  draft.refRepos = draft.refRepos.filter((r) => r.catalogId !== catalogId)
+}
+
 onMounted(loadRepoCatalog)
 
 const canSubmit = computed(
@@ -180,6 +204,8 @@ async function submit() {
       effort: draft.effort,
       mcpCatalogIds: draft.mcpCatalogIds,
       ...(db.enabled ? { dbConnectionIds: draft.dbConnectionIds } : {}),
+      // 참조는 하나라도 골랐을 때만 싣는다 — 없으면 필드를 생략해 등록 바디가 예전과 같다 (스펙 2026-10-22 §7.2)
+      ...(draft.refRepos.length > 0 ? { refRepos: toInputs(draft.refRepos) } : {}),
     }
     let created: { id: number }
     if (files.value.length > 0) {
@@ -213,7 +239,7 @@ defineExpose({ draft, submit, onRepoSelected, db })
     <div v-if="$q.screen.lt.md" class="row items-center q-px-sm q-pt-sm">
       <q-btn flat dense round icon="menu" data-test="open-drawer" @click="openDrawer" />
     </div>
-    <div class="col column items-center justify-center q-px-lg new-question-body">
+    <div class="col column no-wrap items-center q-px-lg new-question-body">
       <div class="hero text-center">
         <div class="text-h5">무엇이 궁금하세요?</div>
         <div class="text-body2 text-grey-8 q-mt-xs">
@@ -282,6 +308,14 @@ defineExpose({ draft, submit, onRepoSelected, db })
                 </template>
               </q-select>
             </div>
+            <!-- 참조 repo 줄 (스펙 2026-10-22 §7.2) — 선택 줄 아래. "＋ 참조 추가"를 누르면 추가 폼이 그 아래에 펼쳐진다.
+                 입력창 툴바는 390px에서 이미 꽉 차 있어 건드리지 않는다. -->
+            <div class="q-px-sm q-pb-sm">
+              <RefRepoChips :items="draft.refRepos" editable @remove="removeRef" @add="toggleRefAdd" />
+              <div v-if="refAddOpen" class="ref-add-panel">
+                <RefRepoAddForm :catalog="repoCatalog" :exclude-ids="refExcludeIds" @add="addRef" />
+              </div>
+            </div>
           </template>
           <template #tools>
             <!-- xs(<600px)에서는 라벨이 두 줄로 꺾이므로 아이콘만 — 이름은 aria-label로 유지 (2026-09-06 모바일 QA) -->
@@ -337,8 +371,18 @@ defineExpose({ draft, submit, onRepoSelected, db })
 .new-question {
   height: 100%;
 }
+/* 본문은 줄바꿈하지 않고(no-wrap) 내용이 영역보다 커지면 스크롤한다. Quasar `.column`은 기본이 flex-wrap이라, 참조 칩 줄·추가 폼으로
+   입력창이 높아져 hero와 함께 남은 높이를 넘으면 입력창이 오른쪽 새 열로 밀려 나가 셸(overflow:hidden)에 가려졌다(390px 프리뷰 실측).
+   세로 중앙은 justify-center 대신 자동 마진으로 — justify-center는 넘칠 때 위쪽이 잘려 스크롤로도 못 닿는다. */
 .new-question-body {
+  overflow-y: auto;
   padding-bottom: 96px; /* 세로 중앙보다 살짝 위 — 모델 메뉴가 아래로 열릴 공간 */
+}
+.new-question-body > :first-child {
+  margin-top: auto;
+}
+.new-question-body > :last-child {
+  margin-bottom: auto;
 }
 .hero {
   max-width: 760px;
@@ -350,5 +394,18 @@ defineExpose({ draft, submit, onRepoSelected, db })
 .mcp-menu {
   min-width: 360px;
   max-width: 480px;
+}
+/* 추가 폼은 칩 줄 아래에 인라인으로 펼친다. 폼 루트는 q-menu에 넣는 용도라 폭이 340px·여백 16px로 고정돼 있어,
+   입력창 안쪽(390px 화면에서 약 300px)에서는 줄 폭에 맞추고 윤곽선으로 입력창과 구분한다. */
+.ref-add-panel {
+  box-sizing: border-box;
+  max-width: 360px;
+  margin-top: 8px;
+  border: 1px solid rgba(0, 0, 0, 0.12);
+  border-radius: 8px;
+}
+.ref-add-panel :deep(.ref-add-form) {
+  width: auto;
+  padding: 12px;
 }
 </style>

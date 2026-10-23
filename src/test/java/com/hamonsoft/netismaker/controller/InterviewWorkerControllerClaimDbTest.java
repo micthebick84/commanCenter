@@ -76,4 +76,28 @@ class InterviewWorkerControllerClaimDbTest {
         assertThat(body.dbConnections()).isEmpty();
         assertThat(body.dbNotices()).containsExactly("DB 접속정보를 불러오지 못해 DB 도구 없이 진행합니다");
     }
+
+    // ── 참조 repo는 DB 보강을 거쳐도 그대로 실린다 (스펙 2026-10-22 §4.4) ───────────────────────
+
+    private static final InterviewClaimResponse.ClaimRefRepo REF = new InterviewClaimResponse.ClaimRefRepo(
+            11L, "참조", "acme/ref", "https://github.com/acme/ref.git", "github", "main", "/root/_refs/7/11", null);
+
+    @Test
+    void question_claim_keeps_reference_repos_when_db_is_enriched() {
+        when(interviewService.claim("w1")).thenReturn(Optional.of(claimOf(true, List.of(7L)).withRefRepos(List.of(REF))));
+        var ref = new InterviewClaimResponse.DbConnectionRef("db-7", "운영 (MySQL)", "MYSQL", "h", 3306, "app", "u", "pw");
+        when(db.resolveForClaim(List.of(7L))).thenReturn(new DbConnectionService.ClaimDb(List.of(ref), List.of()));
+        var body = controller.claim("w1").getBody();
+        assertThat(body.dbConnections()).containsExactly(ref);
+        assertThat(body.refRepos()).containsExactly(REF);
+    }
+
+    @Test
+    void question_claim_keeps_reference_repos_when_db_resolution_fails() {
+        when(interviewService.claim("w1")).thenReturn(Optional.of(claimOf(true, List.of(7L)).withRefRepos(List.of(REF))));
+        when(db.resolveForClaim(any())).thenThrow(new RuntimeException("db down"));
+        var body = controller.claim("w1").getBody();
+        assertThat(body.dbConnections()).isEmpty();
+        assertThat(body.refRepos()).containsExactly(REF);
+    }
 }

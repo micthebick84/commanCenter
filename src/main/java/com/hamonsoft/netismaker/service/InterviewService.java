@@ -58,6 +58,7 @@ public class InterviewService {
     private final AttachmentStorage attachmentStorage;
     private final TaskStageUsageRepository stageUsageRepo;
     private final QuestionAttachmentRepository questionAttachmentRepo;
+    private final InterviewWorkPaths workPaths;
 
     public InterviewService(InterviewSessionRepository sessionRepo,
                             InterviewTurnRepository turnRepo,
@@ -68,7 +69,8 @@ public class InterviewService {
                             TaskAttachmentRepository attachmentRepo,
                             AttachmentStorage attachmentStorage,
                             TaskStageUsageRepository stageUsageRepo,
-                            QuestionAttachmentRepository questionAttachmentRepo) {
+                            QuestionAttachmentRepository questionAttachmentRepo,
+                            InterviewWorkPaths workPaths) {
         this.sessionRepo = sessionRepo;
         this.turnRepo = turnRepo;
         this.planRepo = planRepo;
@@ -79,6 +81,7 @@ public class InterviewService {
         this.attachmentStorage = attachmentStorage;
         this.stageUsageRepo = stageUsageRepo;
         this.questionAttachmentRepo = questionAttachmentRepo;
+        this.workPaths = workPaths;
     }
 
     /**
@@ -162,12 +165,27 @@ public class InterviewService {
         s.setClaimedAt(OffsetDateTime.now());
         // 첫 claim에만 work_dir 배정. resume이면 기존 값 유지.
         if (s.getWorkDir() == null || s.getWorkDir().isBlank()) {
-            s.setWorkDir(deriveWorkDir(s.getGithubRepo(), s.getGitUrl(), s.getId()));
+            s.setWorkDir(workPaths.workDirFor(s.getGithubRepo(), s.getGitUrl(), s.getId()));
         }
         touch(s);
         List<InterviewTurn> turns = turnRepo.findBySessionIdOrderBySeqAsc(s.getId());
         return Optional.of(InterviewClaimResponse.of(s, turns, attachmentRefsFor(s),
-                turnAttachmentsFor(s), attachmentRootFor(s)));
+                turnAttachmentsFor(s), attachmentRootFor(s)).withRefRepos(refsFor(s)));
+    }
+
+    /**
+     * QUESTION이면 세션의 참조 repo를 claim 원소로 바꾼다 (스펙 2026-10-22 §4.4), INTERVIEW면 [] — 참조는 질문 세션 전용이다.
+     * dir은 저장하지 않고 claim마다 같은 규칙({루트}/_refs/{세션 id}/{카탈로그 id})으로 계산한다.
+     * sha는 처음 받아 고정한 커밋이고 아직 없으면 null — 러너는 그 커밋을 쓰고, 없으면 브랜치 최신을 받아 보고한다.
+     */
+    private List<InterviewClaimResponse.ClaimRefRepo> refsFor(InterviewSession s) {
+        if (!s.isQuestion() || s.getRefRepos() == null) return List.of();
+        return s.getRefRepos().stream()
+                .map(r -> new InterviewClaimResponse.ClaimRefRepo(
+                        r.catalogId(), r.alias(), r.path(), r.gitUrl(),
+                        RepoRef.fromSnapshot(r.path(), r.gitUrl()).host(),
+                        r.branch(), workPaths.refDir(s.getId(), r.catalogId()), r.sha()))
+                .toList();
     }
 
     /**
@@ -214,18 +232,6 @@ public class InterviewService {
     }
 
     /**
-     * 결정적 체크아웃 경로: ~/netis-maker/interviews/{localKey}/session-{id}.
-     * localKey는 GitHub면 owner/repo(기존 세션의 work_dir와 동일 값), GitLab이면 _gitlab/<평탄화 경로>.
-     * 단일 호스트/공유 FS 전제. 같은 세션은 resume마다 항상 같은 경로 → 동일 cwd 보장.
-     */
-    private String deriveWorkDir(String githubRepo, String gitUrl, Long sessionId) {
-        String key = GitRemotes.localKey(RepoRef.fromSnapshot(githubRepo, gitUrl));
-        if (!key.contains("/")) key = "_/" + key;   // 방어: 1단계 값(레거시 이상 데이터)
-        String home = System.getProperty("user.home");
-        return home + "/netis-maker/interviews/" + key + "/session-" + sessionId;
-    }
-
-    /**
      * 워커가 질문(평문) emit → AWAITING_INPUT, 워커 반납.
      * turn(role=assistant) 저장 + claude_session_id 캡처 + 비용 누적.
      */
@@ -245,6 +251,7 @@ public class InterviewService {
         // 컨텍스트 스냅샷(스펙 2026-09-05 §4.2): 마지막 턴 값으로 덮어쓴다. 미보고(null)면 이전 값 유지.
         if (req.contextTokens() != null) s.setContextTokens(req.contextTokens());
         if (req.contextWindow() != null) s.setContextWindow(req.contextWindow());
+        applyRefStates(s, req.refStates());
         String kind = req.kind() == null || req.kind().isBlank() ? "question" : req.kind();
         InterviewTurn turn = appendTurn(sessionId, "assistant", kind,
                 req.content() == null ? "" : req.content());
@@ -256,6 +263,62 @@ public class InterviewService {
         touch(s);
         mirrorTask(s, TaskStatus.INTERVIEW_INPUT, workerId, "인터뷰 질문 도착 → 관리자 답변 대기");
         return turn;
+    }
+
+    /**
+     * 러너가 보고한 참조 repo 준비 결과를 세션의 현재 참조에 반영한다 (스펙 2026-10-22 §4.5).
+     * 상태마다 {@link RefRepo#matches}(카탈로그 id + 브랜치)인 원소에만 적용하고, 그새 빠진 참조의 보고는 무시한다.
+     * <ul>
+     *   <li>error가 있으면 그 사유를 기록한다(같은 상태의 sha는 무시). 이미 고정된 커밋·시각은 건드리지 않는다.
+     *       저장하는 값은 자격증명을 한 번 더 가리고({@link GitRemotes#mask}) {@value #REF_ERROR_MAX_LENGTH}자로 자른 것이다
+     *       ({@link #storedRefError}) — 러너가 이미 가리고 줄여 보내지만 워커 API는 러너의 출력을 그대로 믿지 않는다.</li>
+     *   <li>아니고 sha가 있으면 처음 받은 커밋으로 고정하고 낡은 error를 지운다 — 이미 고정된 sha는 바뀌지 않는다
+     *       ({@link RefRepo#pinned}).</li>
+     *   <li>둘 다 없으면 무시한다.</li>
+     * </ul>
+     * 바뀐 게 있을 때만 목록을 갈아 끼운다. refStates가 null이거나 비면(구버전 러너·참조 없는 질문) 아무것도 하지 않는다.
+     */
+    private void applyRefStates(InterviewSession s, List<WorkerQuestionRequest.RefState> states) {
+        if (states == null || states.isEmpty() || s.getRefRepos() == null || s.getRefRepos().isEmpty()) return;
+        List<RefRepo> next = new ArrayList<>(s.getRefRepos());
+        boolean changed = false;
+        for (WorkerQuestionRequest.RefState st : states) {
+            if (st == null) continue;
+            for (int i = 0; i < next.size(); i++) {
+                RefRepo cur = next.get(i);
+                if (!cur.matches(st.catalogId(), st.branch())) continue;
+                RefRepo upd;
+                if (st.error() != null) {
+                    upd = cur.withError(storedRefError(st.error()));
+                } else if (st.sha() != null && !st.sha().isBlank()) {
+                    upd = cur.pinned(st.sha(), OffsetDateTime.now().toString());
+                } else {
+                    continue;
+                }
+                if (!upd.equals(cur)) {
+                    next.set(i, upd);
+                    changed = true;
+                }
+            }
+        }
+        if (changed) s.setRefRepos(new ArrayList<>(next));
+    }
+
+    /** 저장하는 참조 실패 사유의 글자 수 상한(UTF-16 단위). 러너는 이미 200자 이내로 줄여 보내므로 이 값은 방어용이다. */
+    static final int REF_ERROR_MAX_LENGTH = 500;
+
+    /**
+     * 러너가 보고한 참조 실패 사유를 저장 형태로 바꾼다 — 자격증명을 가리고({@link GitRemotes#mask}) 나서
+     * {@value #REF_ERROR_MAX_LENGTH}자로 자른다. 가린 뒤에 자르는 이유: 먼저 자르면 토큰이 반쪽으로 남고 mask(끝의 `@`까지 있어야
+     * 가린다)가 알아보지 못한다. 서로게이트 쌍의 앞 절반에서 잘렸으면 그 반쪽은 버린다 — 깨진 문자가 JSONB로 나가면 직렬화가 실패해
+     * 답변 보고 전체가 500이 된다.
+     */
+    private static String storedRefError(String error) {
+        String masked = GitRemotes.mask(error);
+        if (masked.length() <= REF_ERROR_MAX_LENGTH) return masked;
+        int end = REF_ERROR_MAX_LENGTH;
+        if (Character.isHighSurrogate(masked.charAt(end - 1))) end--;
+        return masked.substring(0, end);
     }
 
     /**

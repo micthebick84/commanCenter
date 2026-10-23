@@ -53,7 +53,12 @@ public record InterviewClaimResponse(
         /** 복호화된 접속정보 — InterviewWorkerController가 withDb로 채운다. ⚠️ 평문 비밀번호 포함, 로그 금지. */
         List<DbConnectionRef> dbConnections,
         /** 사용할 수 없는 연결 등 프롬프트에 붙일 안내 (비밀번호 없음). */
-        List<String> dbNotices
+        List<String> dbNotices,
+        /**
+         * 질문 세션의 읽기 전용 참조 repo (스펙 2026-10-22 §4.4) — InterviewService.claim이 withRefRepos로 채운다.
+         * 항상 non-null, 참조가 없거나 INTERVIEW 세션이면 [].
+         */
+        List<ClaimRefRepo> refRepos
 ) {
     /** 어느 경로로 생성돼도 non-null 계약 유지 (스펙 §5.4). */
     public InterviewClaimResponse {
@@ -62,6 +67,7 @@ public record InterviewClaimResponse(
                 .map(o -> ((Number) o).longValue()).toList();
         dbConnections = dbConnections == null ? List.of() : List.copyOf(dbConnections);
         dbNotices = dbNotices == null ? List.of() : List.copyOf(dbNotices);
+        refRepos = refRepos == null ? List.of() : List.copyOf(refRepos);
     }
 
     public RepoRef repoRef() {
@@ -101,6 +107,15 @@ public record InterviewClaimResponse(
         }
     }
 
+    /**
+     * 질문 세션 참조 repo 1개 (스펙 2026-10-22 §4.4) — 인터뷰 서비스(TS)가 이 필드 이름 그대로 읽는다.
+     * githubRepo = GitHub owner/repo 또는 GitLab 프로젝트 전체 경로(RefRepo.path), repoHost = "github" | "gitlab",
+     * dir = 체크아웃 절대경로({루트}/_refs/{세션 id}/{카탈로그 id} — 저장하지 않고 claim마다 같은 규칙으로 계산),
+     * sha = 처음 받아 고정한 커밋(아직 안 받았으면 null).
+     */
+    public record ClaimRefRepo(Long catalogId, String alias, String githubRepo, String gitUrl, String repoHost,
+                               String branch, String dir, String sha) {}
+
     /** 레거시 3-arg — 턴별 첨부 없음, attachmentRoot null (INTERVIEW 경로와 동일 형태). */
     public static InterviewClaimResponse of(InterviewSession s, List<InterviewTurn> turns,
                                             List<AttachmentRef> attachments) {
@@ -135,13 +150,21 @@ public record InterviewClaimResponse(
                 mapped, s.getModel(), s.getEffort(), totalCostUsd, attachments, s.getKind().name(),
                 attachmentRoot,
                 s.getGitUrl(), RepoRef.fromSnapshot(s.getGithubRepo(), s.getGitUrl()).host(),
-                s.getDbConnectionIds() == null ? List.of() : List.copyOf(s.getDbConnectionIds()), List.of(), List.of());
+                s.getDbConnectionIds() == null ? List.of() : List.copyOf(s.getDbConnectionIds()), List.of(), List.of(),
+                List.of());
     }
 
-    /** DB 접속정보만 채운 사본 (스펙 §5.4). */
+    /** DB 접속정보만 채운 사본 (스펙 §5.4). 참조 repo는 그대로 실어 나른다. */
     public InterviewClaimResponse withDb(List<DbConnectionRef> refs, List<String> notices) {
         return new InterviewClaimResponse(sessionId, githubRepo, githubBranch, title, description, claudeSessionId,
                 currentPhase, workDir, lastAnswer, replyToSeq, mcpsExtra, turns, model, effort, totalCostUsd,
-                attachments, kind, attachmentRoot, gitUrl, repoHost, dbConnectionIds, refs, notices);
+                attachments, kind, attachmentRoot, gitUrl, repoHost, dbConnectionIds, refs, notices, refRepos);
+    }
+
+    /** 참조 repo만 채운 사본 (스펙 2026-10-22 §4.4). DB 접속정보는 그대로 실어 나른다. */
+    public InterviewClaimResponse withRefRepos(List<ClaimRefRepo> refs) {
+        return new InterviewClaimResponse(sessionId, githubRepo, githubBranch, title, description, claudeSessionId,
+                currentPhase, workDir, lastAnswer, replyToSeq, mcpsExtra, turns, model, effort, totalCostUsd,
+                attachments, kind, attachmentRoot, gitUrl, repoHost, dbConnectionIds, dbConnections, dbNotices, refs);
     }
 }

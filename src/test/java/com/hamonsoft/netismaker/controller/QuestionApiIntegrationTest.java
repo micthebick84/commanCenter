@@ -6,9 +6,11 @@ import com.hamonsoft.netismaker.TestcontainersConfig;
 import com.hamonsoft.netismaker.entity.InterviewSession;
 import com.hamonsoft.netismaker.entity.McpCatalogEntry;
 import com.hamonsoft.netismaker.entity.QuestionAttachment;
+import com.hamonsoft.netismaker.entity.RepoCatalogEntry;
 import com.hamonsoft.netismaker.repository.InterviewSessionRepository;
 import com.hamonsoft.netismaker.repository.McpCatalogRepository;
 import com.hamonsoft.netismaker.repository.QuestionAttachmentRepository;
+import com.hamonsoft.netismaker.repository.RepoCatalogRepository;
 import com.hamonsoft.netismaker.repository.TaskRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -60,6 +62,7 @@ class QuestionApiIntegrationTest {
     @Autowired private TaskRepository taskRepo;
     @Autowired private QuestionAttachmentRepository attachmentRepo;
     @Autowired private McpCatalogRepository mcpCatalogRepo;
+    @Autowired private RepoCatalogRepository repoCatalogRepo;
     @Value("${app.worker.api-key}") private String apiKey;
     @Value("${app.attachment.dir}") private String attachmentDir;
 
@@ -567,5 +570,36 @@ class QuestionApiIntegrationTest {
                 .andExpect(jsonPath("$.mcpCatalogIds", hasSize(0)));
         assertThat(attachmentRepo.count()).isZero();
         assertThat(Files.exists(Path.of(attachmentDir, "question-" + id))).isFalse();   // 파일 쓰기는 검증 뒤 — 고아 없음
+    }
+
+    // ── 참조 repo (스펙 2026-10-22 §4.1·§4.3) ──────────────────────────────────
+
+    /**
+     * 참조 repo를 고른 등록 → 상세 조회 왕복. V31 컬럼(ref_repos jsonb)과 List&lt;RefRepo&gt; JSONB 매핑을 실제 DB로 확인하는
+     * 자리다. 대상은 V14 시드(id 1), 참조는 이 테스트가 만든 활성 카탈로그 행이며 끝나면 지운다.
+     */
+    @Test
+    void 참조_repo를_고른_질문은_상세_응답의_refRepos로_돌아온다() throws Exception {
+        String alias = "ref-it-" + System.nanoTime();
+        Long refCatalogId = repoCatalogRepo.save(RepoCatalogEntry.create(alias,
+                "https://github.com/hamonsoft/" + alias + ".git", "github", "hamonsoft/" + alias,
+                "main", "참조 왕복 테스트", "admin1")).getId();
+        try {
+            String created = mvc.perform(post("/api/questions").with(userJwt("user1")).contentType(APPLICATION_JSON)
+                            .content("{\"repoCatalogId\":1,\"githubBranch\":\"main\",\"question\":\"Q?\","
+                                    + "\"refRepos\":[{\"repoCatalogId\":" + refCatalogId + ",\"branch\":\"release/6.5\"}]}"))
+                    .andExpect(status().isCreated())
+                    .andReturn().getResponse().getContentAsString(StandardCharsets.UTF_8);
+            long id = json.readTree(created).get("id").asLong();
+
+            mvc.perform(get("/api/questions/" + id).with(userJwt("user1")))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.refRepos", hasSize(1)))
+                    .andExpect(jsonPath("$.refRepos[0].catalogId").value(refCatalogId))
+                    .andExpect(jsonPath("$.refRepos[0].alias").value(alias))
+                    .andExpect(jsonPath("$.refRepos[0].branch").value("release/6.5"));
+        } finally {
+            repoCatalogRepo.deleteById(refCatalogId);
+        }
     }
 }

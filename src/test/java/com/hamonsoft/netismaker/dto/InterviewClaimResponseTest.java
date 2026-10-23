@@ -1,5 +1,7 @@
 package com.hamonsoft.netismaker.dto;
 
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.hamonsoft.netismaker.entity.InterviewSession;
 import org.junit.jupiter.api.Test;
 import org.springframework.test.util.ReflectionTestUtils;
@@ -143,5 +145,82 @@ class InterviewClaimResponseTest {
         ReflectionTestUtils.setField(i, "id", 8L);
         i.setDbConnectionIds(new java.util.ArrayList<>(java.util.List.of(7L)));
         assertThat(InterviewClaimResponse.of(i, java.util.List.of(), java.util.List.of()).dbConnectionIds()).containsExactly(7L);
+    }
+
+    // ── 질문 세션 참조 repo (스펙 2026-10-22 §4.4) ──────────────────────────────
+
+    private static final String SHA = "c".repeat(40);
+
+    private static InterviewClaimResponse.ClaimRefRepo claimRef(long catalogId, String sha) {
+        return new InterviewClaimResponse.ClaimRefRepo(catalogId, "참조" + catalogId, "acme/ref" + catalogId,
+                "https://github.com/acme/ref" + catalogId + ".git", "github", "main",
+                "/root/_refs/7/" + catalogId, sha);
+    }
+
+    @Test
+    void of_has_no_ref_repos_and_null_normalizes_to_empty() {
+        InterviewClaimResponse r = InterviewClaimResponse.of(session(), List.of(), List.of());
+
+        assertThat(r.refRepos()).isNotNull().isEmpty();
+        assertThat(r.withRefRepos(null).refRepos()).isNotNull().isEmpty();
+    }
+
+    @Test
+    void withRefRepos_fills_only_the_refs() {
+        InterviewClaimResponse base = InterviewClaimResponse.of(session(), List.of(), List.of());
+
+        InterviewClaimResponse filled = base.withRefRepos(List.of(claimRef(11L, null), claimRef(12L, SHA)));
+
+        assertThat(filled.refRepos()).containsExactly(claimRef(11L, null), claimRef(12L, SHA));
+        assertThat(filled).usingRecursiveComparison().ignoringFields("refRepos").isEqualTo(base);
+    }
+
+    @Test
+    void withDb_keeps_the_ref_repos_and_withRefRepos_keeps_the_db_parts() {
+        var dbRef = new InterviewClaimResponse.DbConnectionRef("db-7", "운영 (MySQL)", "MYSQL", "h", 3306, "app", "u", "Pw-9");
+        InterviewClaimResponse base = InterviewClaimResponse.of(session(), List.of(), List.of());
+
+        InterviewClaimResponse refsThenDb = base.withRefRepos(List.of(claimRef(11L, SHA)))
+                .withDb(List.of(dbRef), List.of("참고"));
+        InterviewClaimResponse dbThenRefs = base.withDb(List.of(dbRef), List.of("참고"))
+                .withRefRepos(List.of(claimRef(11L, SHA)));
+
+        for (InterviewClaimResponse r : List.of(refsThenDb, dbThenRefs)) {
+            assertThat(r.refRepos()).containsExactly(claimRef(11L, SHA));
+            assertThat(r.dbConnections()).containsExactly(dbRef);
+            assertThat(r.dbNotices()).containsExactly("참고");
+        }
+    }
+
+    @Test
+    void refRepos_serialize_as_an_array_with_the_worker_contract_field_names() {
+        InterviewClaimResponse r = InterviewClaimResponse.of(session(), List.of(), List.of())
+                .withRefRepos(List.of(claimRef(11L, null), claimRef(12L, SHA)));
+
+        JsonNode refs = new ObjectMapper().findAndRegisterModules().valueToTree(r).get("refRepos");
+
+        assertThat(refs.isArray()).isTrue();
+        assertThat(refs.size()).isEqualTo(2);
+        java.util.Set<String> names = new java.util.TreeSet<>();
+        refs.get(0).fieldNames().forEachRemaining(names::add);
+        // 인터뷰 서비스(TS)가 이 이름 그대로 읽는다 — 아직 안 받은 sha도 null로 필드는 있다
+        assertThat(names).containsExactlyInAnyOrder(
+                "catalogId", "alias", "githubRepo", "gitUrl", "repoHost", "branch", "dir", "sha");
+        assertThat(refs.get(0).get("sha").isNull()).isTrue();
+        assertThat(refs.get(1).get("catalogId").asLong()).isEqualTo(12L);
+        assertThat(refs.get(1).get("githubRepo").asText()).isEqualTo("acme/ref12");
+        assertThat(refs.get(1).get("repoHost").asText()).isEqualTo("github");
+        assertThat(refs.get(1).get("dir").asText()).isEqualTo("/root/_refs/7/12");
+        assertThat(refs.get(1).get("sha").asText()).isEqualTo(SHA);
+    }
+
+    @Test
+    void a_claim_without_refs_serializes_an_empty_refRepos_array() {
+        JsonNode json = new ObjectMapper().findAndRegisterModules()
+                .valueToTree(InterviewClaimResponse.of(session(), List.of(), List.of()));
+
+        assertThat(json.has("refRepos")).isTrue();
+        assertThat(json.get("refRepos").isArray()).isTrue();
+        assertThat(json.get("refRepos").size()).isZero();
     }
 }

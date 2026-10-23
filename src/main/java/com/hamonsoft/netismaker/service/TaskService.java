@@ -484,19 +484,9 @@ public class TaskService {
         String previousBranch = pushed ? t.getHeadBranch() : null;
         TaskStatus from = t.getStatus();
 
-        t.setImplementationAttempt(t.getImplementationAttempt() + 1);
+        t.prepareImplementationRequeue();
         t.setImplementationMode(after);
-        t.setStatus(TaskStatus.APPROVED);
-        t.setFailureReason(null);
-        t.setHeadBranch(null);
-        t.setHeadSha(null);
-        t.setPrUrl(null);
-        t.setPrNumber(null);
-        t.setImplementationLog(null);
-        t.setImplementationTimeoutMinutes(null);
-        t.setWorkerId(null);
-        t.setClaimedAt(null);
-        t.setUpdatedAt(OffsetDateTime.now());
+        t.setRestartRequeueCount(0);
 
         String modeText = before == after ? after.label() : before.label() + " → " + after.label();
         String reason = "구현 재시도 (" + t.getImplementationAttempt() + "회째, 구현 방식: " + modeText

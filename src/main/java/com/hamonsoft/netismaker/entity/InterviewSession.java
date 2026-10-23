@@ -165,6 +165,11 @@ public class InterviewSession {
     @Setter
     private String effort = "medium";
 
+    /** 인터뷰 서비스 재기동으로 중단돼 자동 재개한 횟수(턴 단위, 상한 2). 턴이 정상 끝나면 0으로 되돌린다. */
+    @Column(name = "restart_requeue_count", nullable = false)
+    @Setter
+    private int restartRequeueCount;
+
     @Column(name = "git_url", columnDefinition = "TEXT")
     @Setter
     private String gitUrl;

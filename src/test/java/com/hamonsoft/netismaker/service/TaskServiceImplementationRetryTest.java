@@ -82,6 +82,18 @@ class TaskServiceImplementationRetryTest {
     }
 
     @Test
+    void retry_resets_restart_requeue_count() {
+        Task t = failed(ImplementationMode.REVIEW);
+        t.setRestartRequeueCount(2);
+
+        service.retryImplementation(42L, "admin", null);
+
+        assertThat(t.getRestartRequeueCount()).isZero();
+        assertThat(t.getImplementationAttempt()).isEqualTo(2);
+        assertThat(t.getStatus()).isEqualTo(TaskStatus.APPROVED);
+    }
+
+    @Test
     void retry_can_switch_the_mode() {
         Task t = failed(ImplementationMode.SDD);
         t.setHeadBranch(null);

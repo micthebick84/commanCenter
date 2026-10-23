@@ -124,6 +124,11 @@ public class Task {
     @Setter
     private int implementationAttempt = 1;
 
+    /** 워커 재기동으로 중단돼 자동 재큐한 횟수(구현 단계만, 상한 2). 관리자 구현 재시도가 0으로 되돌린다. */
+    @Column(name = "restart_requeue_count", nullable = false)
+    @Setter
+    private int restartRequeueCount;
+
     /** 이번 시도의 구현 상한(분) — claim 때 방식별 설정값으로 기록, 화면 경과 표시용. 그 전에는 null. */
     @Column(name = "implementation_timeout_minutes")
     @Setter
@@ -279,6 +284,25 @@ public class Task {
         t.createdAt = now;
         t.updatedAt = now;
         return t;
+    }
+
+    /**
+     * 구현을 처음부터 다시 큐에 넣을 준비 — 시도 번호 +1, 구현대기(APPROVED), 이전 시도의 결과·점유 흔적 비움.
+     * 구현 방식과 재기동 재큐 횟수는 건드리지 않는다(호출자가 정한다).
+     */
+    public void prepareImplementationRequeue() {
+        this.implementationAttempt = this.implementationAttempt + 1;
+        this.status = TaskStatus.APPROVED;
+        this.failureReason = null;
+        this.headBranch = null;
+        this.headSha = null;
+        this.prUrl = null;
+        this.prNumber = null;
+        this.implementationLog = null;
+        this.implementationTimeoutMinutes = null;
+        this.workerId = null;
+        this.claimedAt = null;
+        this.updatedAt = OffsetDateTime.now();
     }
 
     public boolean isOwnedBy(String userId) {

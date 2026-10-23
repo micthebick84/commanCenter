@@ -30,7 +30,7 @@ import java.util.Optional;
  *   POST /worker/interviews/claim?workerId=…   ─► QUEUED 세션 1건 claim (SKIP LOCKED) 또는 204
  *                                                  (claim이 work_dir 할당/반환 — Phase 1)
  *   POST /worker/interviews/startup?workerId=… ─► 재기동으로 중단된 RUNNING 세션을 QUEUED로 되돌림(턴당 2회, 소진 시 FAILED)
- *   POST /worker/interviews/{id}/question       ─> assistant turn 저장 + SSE question|design/status + AWAITING_INPUT
+ *   POST /worker/interviews/{id}/question       ─► assistant turn 저장 + SSE question|design/status + AWAITING_INPUT
  *   POST /worker/interviews/{id}/plan           ─► interview_plan 저장 + SSE plan_ready(객체)/status + PLAN_READY
  *   POST /worker/interviews/{id}/activity?workerId=… ─► SSE activity fan-out (transient, DB 미접근)
  *   POST /worker/interviews/{id}/heartbeat?workerId=… ─► last_activity_at 갱신

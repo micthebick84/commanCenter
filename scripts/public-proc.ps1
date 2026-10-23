@@ -106,11 +106,18 @@ function Test-ServiceAlive([string]$RunDir, [string]$Name) {
     try {
         $rec = Read-ProcRecord $RunDir $Name
         $wp = Read-WrapperPidFile $RunDir $Name
-        if ($rec -and $null -ne $rec.appPid -and $null -ne $rec.appStart -and
-            $null -ne $wp -and $null -ne $rec.wrapperPid -and ([int]$rec.wrapperPid) -eq $wp) {
-            $ticks = Get-ProcStartTicks ([int]$rec.appPid)
-            return (($null -ne $ticks) -and ($ticks -eq [long]$rec.appStart))
+        # A bad json value (non-numeric pid/start) only voids the json branch: fall back to the pid file.
+        $jsonAlive = $null
+        try {
+            if ($rec -and $null -ne $rec.appPid -and $null -ne $rec.appStart -and
+                $null -ne $wp -and $null -ne $rec.wrapperPid -and ([int]$rec.wrapperPid) -eq $wp) {
+                $ticks = Get-ProcStartTicks ([int]$rec.appPid)
+                $jsonAlive = (($null -ne $ticks) -and ($ticks -eq [long]$rec.appStart))
+            }
+        } catch {
+            $jsonAlive = $null
         }
+        if ($null -ne $jsonAlive) { return $jsonAlive }
         if ($null -eq $wp) { return $false }
         return (Test-WrapperPid $RunDir $Name $wp)
     } catch {
@@ -210,10 +217,13 @@ function Stop-ServiceRecord([string]$RunDir, [string]$Name) {
     try {
         $rec = Read-ProcRecord $RunDir $Name
         $wrapperId = Read-WrapperPidFile $RunDir $Name
-        if ($rec -and $null -ne $rec.appPid -and $null -ne $rec.appStart) {
-            $ticks = Get-ProcStartTicks ([int]$rec.appPid)
-            if (($null -ne $ticks) -and ($ticks -eq [long]$rec.appStart)) { $appMatched = $true; $appId = [int]$rec.appPid }
-        }
+        # A bad json value only means "app not matched"; the wrapper step below still runs.
+        try {
+            if ($rec -and $null -ne $rec.appPid -and $null -ne $rec.appStart) {
+                $ticks = Get-ProcStartTicks ([int]$rec.appPid)
+                if (($null -ne $ticks) -and ($ticks -eq [long]$rec.appStart)) { $appMatched = $true; $appId = [int]$rec.appPid }
+            }
+        } catch { $appMatched = $false; $appId = $null }
         if ($null -ne $wrapperId -and (Test-WrapperPid $RunDir $Name $wrapperId)) { $wrapperMatched = $true }
     } catch { }
 

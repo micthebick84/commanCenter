@@ -71,7 +71,8 @@ Windows 라이브 스택의 정지는 전부 `taskkill /T /F`(강제 종료)다.
 
 ### 3.2 API — 워커 기동 알림
 
-- `POST /worker/startup`, 본문 `{ "workerId": "...", "pendingTaskIds": [ ... ] }`. 인증은 다른 `/worker/*`와 같은 워커 API 키다.
+- `POST /worker/startup`, 본문 `{ "pendingTaskIds": [ ... ] }`. 인증은 다른 `/worker/*`와 같은 워커 API 키다.
+  - `workerId`는 본문 필드가 아니라 쿼리 파라미터(`?workerId=`)다. 기존 워커 엔드포인트 관례를 따른다.
   - `pendingTaskIds`는 워커의 dead-letter 대기 보고(`SilentLossTracker.snapshotPending()`)의 taskId 목록이다. 없으면 빈 배열이다.
   - 이 작업들은 워커가 이미 끝냈는데 보고만 아직 닿지 않았을 수 있다. 재큐하면 끝난 구현을 처음부터 다시 하고, 앞의 PR이 고아가 된다(늦은 PR_CREATED는 시도 번호가 달라 무시됨). 그래서 **건드리지 않는다**.
   - 이 작업들은 `DeadLetterReplayJob`의 재전송이 서버의 늦은 보고 정합(`WorkerService.recordResult`)으로 마무리한다. 재전송마저 실패하면 기존 stale 잡이 처리한다.
@@ -96,7 +97,8 @@ Windows 라이브 스택의 정지는 전부 `taskkill /T /F`(강제 종료)다.
 
 ### 3.3 API — 인터뷰 서비스 기동 알림
 
-- `POST /worker/interviews/startup`, 본문 `{ "workerId": "..." }`. 인증은 `/worker/interviews/*`와 같다.
+- `POST /worker/interviews/startup?workerId=...`, 본문 없음. 인증은 `/worker/interviews/*`와 같다.
+  - `workerId`는 본문 필드가 아니라 쿼리 파라미터(`?workerId=`)다. 기존 워커 엔드포인트 관례를 따른다.
 - 응답 `200 { "released": [ids], "failed": [ids] }`.
 - `worker_id = :workerId`이고 RUNNING인 세션(질문 세션 포함)을 행 잠금으로 읽어 세션마다 처리한다. 상태 전이는 `InterviewService`가 맡는다(단일 진입점 원칙).
   - **재기동 재큐 횟수 < 2 → 새 전이 `release`**: RUNNING → QUEUED.

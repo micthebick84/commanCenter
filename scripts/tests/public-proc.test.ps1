@@ -20,7 +20,9 @@ function Assert-Equal($Expected, $Actual, [string]$Name) {
 
 $RunDir = Join-Path $env:TEMP ("public-proc-test-" + [guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Force $RunDir | Out-Null
-$spawned = New-Object System.Collections.ArrayList
+# pid -> start ticks recorded at spawn time. Stop-Spawned kills only while the start ticks still match,
+# so a pid that Windows reused for an unrelated process (maybe the live stack) is never touched.
+$spawned = @{}
 
 # Start a fake service exactly like start-public's Start-Service-Proc:
 # cmd wrapper -> ping child. Returns @{ Wrapper = <pid>; App = <pid> }.
@@ -32,7 +34,7 @@ function New-Fake([bool]$WritePidFile, [string]$ExtraLog = '') {
     $p = Start-Process -FilePath $env:ComSpec `
         -ArgumentList $cmdLine `
         -WindowStyle Hidden -PassThru
-    [void]$spawned.Add($p.Id)
+    $spawned[[int]$p.Id] = Get-ProcStartTicks ([int]$p.Id)
     $app = $null
     $deadline = (Get-Date).AddSeconds(10)
     while (-not $app -and (Get-Date) -lt $deadline) {
@@ -41,6 +43,7 @@ function New-Fake([bool]$WritePidFile, [string]$ExtraLog = '') {
         if (-not $app) { Start-Sleep -Milliseconds 200 }
     }
     if (-not $app) { throw "fake service: PING.EXE child did not appear" }
+    $spawned[[int]$app.ProcessId] = Get-ProcStartTicks ([int]$app.ProcessId)
     if ($WritePidFile) { Set-Content -Path (Join-Path $RunDir 'fake.pid') -Value $p.Id -Encoding ascii }
     return @{ Wrapper = [int]$p.Id; App = [int]$app.ProcessId }
 }
@@ -69,7 +72,10 @@ function Set-AppStartOffByOne {
 }
 
 function Stop-Spawned([int]$ProcessId) {
-    if (Test-Alive $ProcessId) { & taskkill.exe /PID $ProcessId /T /F *> $null }
+    $recorded = $spawned[$ProcessId]
+    if ($null -eq $recorded) { return }
+    $now = Get-ProcStartTicks $ProcessId
+    if (($null -ne $now) -and ($now -eq $recorded)) { & taskkill.exe /PID $ProcessId /T /F *> $null }
 }
 
 try {
@@ -236,6 +242,19 @@ try {
     Assert-True (Test-Alive $PID) 'stop: test process itself still alive (6)'
     Stop-Spawned $f.Wrapper; Stop-Spawned $f.App; Clear-Run
 
+    # ---- bad json value: alive falls back to the pid file, stop still does the wrapper step ----
+    $f = New-Fake $true
+    $bad = @{ name = 'fake'; wrapperPid = $f.Wrapper; wrapperStart = 1; appPid = 'abc'; appStart = 1; appImage = 'PING.EXE' }
+    Set-Content -Path (Join-Path $RunDir 'fake.json') -Value ($bad | ConvertTo-Json) -Encoding ascii
+    Assert-True (Test-ServiceAlive $RunDir 'fake') 'bad json value: alive falls back to the pid file wrapper'
+    $out = @(Stop-ServiceRecord $RunDir 'fake')
+    $wrapGone = Wait-Gone $f.Wrapper
+    $filesGone = (-not (Test-Path (Join-Path $RunDir 'fake.pid'))) -and (-not (Test-Path (Join-Path $RunDir 'fake.json')))
+    Assert-True ($wrapGone -and $filesGone -and ($out.Count -eq 1) -and ($out[0] -match '^\[stop\] fake \(wrapper \d+\)$')) `
+        'bad json value: stop treats app as unmatched but still stops the wrapper' "wrapper=$wrapGone files=$filesGone out=$($out -join '|')"
+    Assert-True (Test-Alive $PID) 'stop: test process itself still alive (7)'
+    Stop-Spawned $f.Wrapper; Stop-Spawned $f.App; Clear-Run
+
     # ---- Select-WorkerJvm --------------------------------------------------
     $root = 'C:\Users\x\commanCenter'
     $t0 = [datetime]'2026-10-23 10:00:00'
@@ -274,9 +293,9 @@ catch {
     Write-Host "FAIL unexpected error: $($_.Exception.Message) at line $($_.InvocationInfo.ScriptLineNumber)"
 }
 finally {
-    foreach ($id in $spawned) { Stop-Spawned ([int]$id) }
+    foreach ($id in @($spawned.Keys)) { Stop-Spawned ([int]$id) }
     Get-CimInstance Win32_Process -Filter "Name='PING.EXE'" -ErrorAction SilentlyContinue |
-        Where-Object { $_.CommandLine -like '*ping -n 120 127.0.0.1*' -and ($spawned -contains [int]$_.ParentProcessId) } |
+        Where-Object { $_.CommandLine -like '*ping -n 120 127.0.0.1*' -and $spawned.ContainsKey([int]$_.ParentProcessId) } |
         ForEach-Object { Stop-Spawned ([int]$_.ProcessId) }
     Start-Sleep -Milliseconds 300
     Remove-Item $RunDir -Recurse -Force -ErrorAction SilentlyContinue

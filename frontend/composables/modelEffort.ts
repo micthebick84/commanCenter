@@ -3,7 +3,7 @@
 // claude-opus-5-5를 2026-09-29 기본값으로 추가 — opus-5는 교체가 아니라 병행 유지. 첫 항목이 기본값이다.
 // claude-sonnet-5-5도 같은 날 추가(sonnet-5 병행 유지).
 export const DEFAULT_MODEL = 'claude-opus-5-5'
-export const DEFAULT_EFFORT = 'high'
+export const DEFAULT_EFFORT = 'medium'
 
 export const MODEL_OPTIONS = [
   { label: 'Opus 5.5 (기본)', value: 'claude-opus-5-5' },
@@ -31,7 +31,7 @@ export function effortsForModel(model: string): string[] {
   return MODEL_EFFORT_MAP[model] ?? FULL
 }
 
-/** 현재 effort가 모델에서 허용되면 유지, 아니면 기본값(high)으로 강등. */
+/** 현재 effort가 모델에서 허용되면 유지, 아니면 기본값(medium)으로 강등. */
 export function coerceEffort(model: string, effort: string): string {
   return effortsForModel(model).includes(effort) ? effort : DEFAULT_EFFORT
 }
@@ -49,8 +49,8 @@ const MODEL_DESCRIPTIONS: Record<string, string> = {
 
 const EFFORT_DESCRIPTIONS: Record<string, string> = {
   low: '빠른 답변 · 얕은 추론',
-  medium: '보통 깊이 · 빠른 편',
-  high: '기본값 · 깊은 추론',
+  medium: '기본값 · 보통 깊이 · 빠른 편',
+  high: '깊은 추론',
   xhigh: '더 깊은 추론 · 느림',
   max: '가장 깊은 추론 · 가장 느리고 한도 소모가 큼',
 }

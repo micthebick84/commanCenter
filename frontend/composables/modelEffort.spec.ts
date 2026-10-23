@@ -5,9 +5,9 @@ import {
 } from './modelEffort'
 
 describe('modelEffort', () => {
-  it('defaults are opus-5-5 / high', () => {
+  it('defaults are opus-5-5 / medium', () => {
     expect(DEFAULT_MODEL).toBe('claude-opus-5-5')
-    expect(DEFAULT_EFFORT).toBe('high')
+    expect(DEFAULT_EFFORT).toBe('medium')
   })
 
   it('exposes the five picker models, default first (Fable 제외 — 스펙 2026-09-05 §5.4)', () => {
@@ -27,12 +27,12 @@ describe('modelEffort', () => {
     expect(effortsForModel('claude-sonnet-5')).toEqual(['low', 'medium', 'high', 'xhigh', 'max'])
   })
 
-  it('coerceEffort keeps a valid effort, downgrades an invalid one to high', () => {
+  it('coerceEffort keeps a valid effort, downgrades an invalid one to medium', () => {
     expect(coerceEffort('claude-opus-5', 'max')).toBe('max')
-    expect(coerceEffort('claude-haiku-4-5', 'max')).toBe('high')
+    expect(coerceEffort('claude-haiku-4-5', 'max')).toBe('medium')
     expect(coerceEffort('claude-haiku-4-5', 'low')).toBe('low')
-    // ultracode는 목록에 없다(헤드리스에서 xhigh와 무차이) → 골라도 high로 강등
-    expect(coerceEffort('claude-opus-5', 'ultracode')).toBe('high')
+    // ultracode는 목록에 없다(헤드리스에서 xhigh와 무차이) → 골라도 기본값(medium)으로 강등
+    expect(coerceEffort('claude-opus-5', 'ultracode')).toBe('medium')
   })
 
   it('unknown model falls back to all five (server validates authoritatively)', () => {
@@ -49,11 +49,12 @@ describe('modelEffort descriptions (승인 다이얼로그)', () => {
     expect(describeModel('claude-haiku-4-5')).toContain('low')
   })
 
-  it('every effort level has a one-line description and high is marked as the default', () => {
+  it('every effort level has a one-line description and medium is marked as the default', () => {
     for (const e of effortsForModel('claude-opus-5')) {
       expect(describeEffort(e).length).toBeGreaterThan(0)
     }
-    expect(describeEffort('high')).toContain('기본')
+    expect(describeEffort('medium')).toContain('기본')
+    expect(describeEffort('high')).not.toContain('기본')
   })
 
   it('unknown values describe as empty string (no crash)', () => {

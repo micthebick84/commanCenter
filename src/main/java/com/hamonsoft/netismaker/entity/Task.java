@@ -91,7 +91,7 @@ public class Task {
     /** 추론 effort (low/medium/high/xhigh/max). 워커가 claude --effort에 사용. */
     @Column(name = "effort", nullable = false, length = 16)
     @Setter
-    private String effort = "high";
+    private String effort = "medium";
 
     /** 배포 시 컨테이너에 주입할 환경변수 (key/value/secret). 배포 다이얼로그에서 set. */
     @JdbcTypeCode(SqlTypes.JSON)

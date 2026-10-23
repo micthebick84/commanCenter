@@ -44,7 +44,7 @@ describe('QuestionComposer (스펙 2026-09-05 §3·§6)', () => {
     ;(w.findComponent(ModelEffortPicker).vm as any).pickModel('claude-haiku-4-5')
     await w.vm.$nextTick()
     expect(w.emitted('update:model')![0]).toEqual(['claude-haiku-4-5'])
-    expect(w.emitted('update:effort')![0]).toEqual(['high']) // Haiku는 max 미지원 → 강등
+    expect(w.emitted('update:effort')![0]).toEqual(['medium']) // Haiku는 max 미지원 → 기본값으로 강등
     w.unmount()
   })
 

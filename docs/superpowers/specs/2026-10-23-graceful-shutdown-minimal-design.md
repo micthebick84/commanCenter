@@ -1,7 +1,7 @@
 # 재기동 내성 최소안 — 기동 시 정합 · 고아 claude 방지 · Windows 스크립트 보강 설계
 
 - 날짜: 2026-10-23
-- 상태: 사용자 승인 대기 (brainstorming: graceful shutdown 검토 보고서 → 최소안 결정 질문 3개 → M1·M2·M3 설명 확인 → 검토자 점검 반영: 미전송 보고 제외 · API 기동 유예 · 인터뷰 상한은 턴 단위)
+- 상태: 사용자 승인됨 2026-10-23 · 구현됨 (brainstorming: graceful shutdown 검토 보고서 → 최소안 결정 질문 3개 → M1·M2·M3 설명 확인 → 검토자 점검 반영: 미전송 보고 제외 · API 기동 유예 · 인터뷰 상한은 턴 단위)
 - 범위: netisMaker 백엔드(API·워커 데몬, 같은 Spring Boot 앱) + 인터뷰 서비스(Node) + Windows 기동·정지 스크립트(`scripts/start-public.ps1`·`stop-public.ps1`). 프론트엔드와 맥 스크립트는 바꾸지 않는다.
 - 근거 보고서: 2026-10-23 "Symphony 라이브 스택 graceful shutdown 검토"(세션 공유 노트 `graceful-shutdown-review.md`). 이 문서는 그 보고서 §4.4의 **최소안 M1·M2·M3**만 다룬다.
 

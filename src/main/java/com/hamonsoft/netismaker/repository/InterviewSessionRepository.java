@@ -65,6 +65,15 @@ public interface InterviewSessionRepository extends JpaRepository<InterviewSessi
     """)
     List<InterviewSession> findInFlightClaimed();
 
+    /** 기동 정합: 이 워커가 잡고 있는(RUNNING) 세션 id들. */
+    @Query("""
+        SELECT s.id FROM InterviewSession s
+        WHERE s.status = com.hamonsoft.netismaker.entity.InterviewStatus.RUNNING
+          AND s.workerId = :workerId
+        ORDER BY s.id
+    """)
+    List<Long> findRunningIdsByWorker(@Param("workerId") String workerId);
+
     /** 본인/관리자 목록 조회 (status 필터 옵션). */
     @Query("""
         SELECT s FROM InterviewSession s

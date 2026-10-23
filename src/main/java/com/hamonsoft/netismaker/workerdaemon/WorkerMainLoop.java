@@ -2,6 +2,7 @@ package com.hamonsoft.netismaker.workerdaemon;
 
 import com.hamonsoft.netismaker.dto.WorkerHeartbeatRequest;
 import com.hamonsoft.netismaker.dto.WorkerResultRequest;
+import com.hamonsoft.netismaker.dto.WorkerStartupResponse;
 import com.hamonsoft.netismaker.dto.WorkerTaskResponse;
 import com.hamonsoft.netismaker.entity.EnvTemplateItem;
 import com.hamonsoft.netismaker.entity.ImplementationMode;
@@ -62,6 +63,9 @@ public class WorkerMainLoop {
     private final TaskCloser closer;
     private final SuperpowersPlugin superpowers;
 
+    /** 기동 알림이 성공(또는 구 API의 404)한 뒤에만 claim한다. 스케줄러 스레드와 테스트가 함께 읽는다. */
+    private volatile boolean startupReported;
+
     public WorkerMainLoop(WorkerProperties props,
                           WorkerHttpClient http,
                           GitRepoCache repos,
@@ -103,8 +107,37 @@ public class WorkerMainLoop {
         }
     }
 
+    /**
+     * 첫 claim 전에 "방금 기동했다"를 API에 알린다(스펙 2026-10-23 §3.5). 성공할 때까지 claim하지 않는다.
+     * dead-letter에 보고 대기 중인 작업 id는 함께 보내 API가 회수하지 않게 한다(곧 재전송된다).
+     */
+    boolean ensureStartupReported() {
+        if (startupReported) return true;
+        List<Long> pendingIds = silentLossTracker.snapshotPending().stream()
+                .map(SilentLossTracker.PendingEntry::taskId)
+                .distinct()
+                .toList();
+        try {
+            Optional<WorkerStartupResponse> res = http.startup(pendingIds);
+            if (res.isPresent()) {
+                WorkerStartupResponse body = res.get();
+                log.info("기동 정합 완료: 회수 {}, 건너뜀 {}",
+                        body.recovered() == null ? List.of() : body.recovered(),
+                        body.skipped() == null ? List.of() : body.skipped());
+            } else {
+                log.warn("API가 /worker/startup을 모른다 — 기동 정합 건너뜀");
+            }
+            startupReported = true;
+            return true;
+        } catch (RestClientException e) {
+            log.warn("기동 알림 실패(다음 주기에 재시도): {}", e.getMessage());
+            return false;
+        }
+    }
+
     @Scheduled(fixedRateString = "#{${netis-maker.worker.poll-interval-seconds:5} * 1000}")
     public void pollAndProcess() {
+        if (!ensureStartupReported()) return;
         Optional<WorkerTaskResponse> maybeTask;
         try {
             maybeTask = http.nextTask();

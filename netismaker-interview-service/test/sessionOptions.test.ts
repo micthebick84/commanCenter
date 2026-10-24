@@ -8,6 +8,26 @@ const base = {
 };
 
 describe('buildOptions', () => {
+  it('claude CLI에 넘기는 env에서 스택 비밀을 뺀다 (INTERVIEW·QUESTION 모두)', () => {
+    process.env.GITLAB_TOKEN = 'glpat-test';
+    process.env.WORKER_API_KEY = 'k';
+    process.env.SESSION_OPTIONS_TEST_KEEP = 'keep';
+    try {
+      for (const sessionKind of ['INTERVIEW', 'QUESTION'] as const) {
+        const env = buildOptions({ ...base, claudeSessionId: null, sessionKind }).env as Record<string, string>;
+        expect(env.GITLAB_TOKEN).toBeUndefined();
+        expect(env.WORKER_API_KEY).toBeUndefined();
+        expect(env.SESSION_OPTIONS_TEST_KEEP).toBe('keep');
+      }
+      // 인터뷰 서비스 자신의 env는 그대로 — clone·API 호출에 계속 쓴다
+      expect(process.env.GITLAB_TOKEN).toBe('glpat-test');
+    } finally {
+      delete process.env.GITLAB_TOKEN;
+      delete process.env.WORKER_API_KEY;
+      delete process.env.SESSION_OPTIONS_TEST_KEEP;
+    }
+  });
+
   it('INTERVIEW: DB 서버는 사전승인하지 않는다 — canUseTool(dbToolGate)을 거쳐야 한다', () => {
     const o = buildOptions({
       ...base,
@@ -53,7 +73,8 @@ describe('buildOptions', () => {
   it('uses subscription auth: pathToClaudeCodeExecutable set, no env.ANTHROPIC_API_KEY', () => {
     const o = buildOptions({ ...base, claudeSessionId: null });
     expect(o.pathToClaudeCodeExecutable).toBe('/home/me/.local/bin/claude');
-    expect(o.env).toBeUndefined();
+    // env는 서비스 env의 복사본(스택 비밀 제외) — API 키를 새로 넣지 않는다
+    expect((o.env as Record<string, string | undefined>).ANTHROPIC_API_KEY).toBe(process.env.ANTHROPIC_API_KEY);
   });
 
   it('pre-approves ONLY Skill + read/inspection tools; Write/Bash/Edit must fall through to canUseTool', () => {

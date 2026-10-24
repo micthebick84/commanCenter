@@ -1,4 +1,5 @@
 import { buildCanUseTool } from './permissions.js';
+import { childEnv } from './childEnv.js';
 import type { SessionKind } from '../types.js';
 import type { SqlDialect } from './sqlReadOnly.js';
 
@@ -141,6 +142,8 @@ export function buildOptions(input: SessionOptionsInput): Record<string, unknown
     // 질문은 턴 종료 텍스트 → postQuestion → UI 경로로만 오가야 하므로 목록에서 뺀다(canUseTool deny로는 시도를 못 막음).
     disallowedTools: ['AskUserQuestion'],
     cwd: input.workDir,
+    // 인터뷰 서비스 env에서 스택 비밀(GITLAB_TOKEN·WORKER_API_KEY·DB 비밀번호 등)을 뺀 복사본 — childEnv.ts 참고.
+    env: childEnv(),
     permissionMode: 'default',
     // 활동 스트림: stream_event(텍스트/thinking 델타)를 relay가 실시간 방출할 수 있게 켠다 (스펙 §5.1).
     includePartialMessages: true,

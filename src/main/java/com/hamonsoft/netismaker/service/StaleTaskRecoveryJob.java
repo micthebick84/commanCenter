@@ -2,11 +2,10 @@ package com.hamonsoft.netismaker.service;
 
 import com.hamonsoft.netismaker.entity.Task;
 import com.hamonsoft.netismaker.entity.TaskStatus;
-import com.hamonsoft.netismaker.entity.TaskStatusHistory;
 import com.hamonsoft.netismaker.entity.WorkerHeartbeat;
 import com.hamonsoft.netismaker.repository.TaskRepository;
-import com.hamonsoft.netismaker.repository.TaskStatusHistoryRepository;
 import com.hamonsoft.netismaker.repository.WorkerHeartbeatRepository;
+import com.hamonsoft.netismaker.service.TaskRecovery.RecoveryCause;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Profile;
@@ -28,9 +27,10 @@ import java.util.stream.Collectors;
  *  회수 조건(둘 중 하나):
  *    1. 워커 사망: claimed_at이 worker-dead-threshold-seconds보다 오래됐고(=워커가 등록할 시간 충분),
  *       소유 워커의 heartbeat.last_seen_at이 임계 이전이거나 heartbeat가 아예 없음.
+ *       단, API가 뜬 지 그 상태의 임계(deadSec)가 지나기 전에는 이 판정을 쉰다(재기동 중 heartbeat를 못 받았으므로).
  *    2. 행업 백스톱: claimed_at이 단계별 절대 임계(분석/구현/디자인/배포/종료)를 넘김 — 워커가 살아있어도 회수.
  *
- *  회수 전이: 분석중→PENDING(재시도)/FAILED, 디자인중→DESIGN_PENDING(idempotent 재큐잉), 구현중→IMPLEMENTATION_FAILED,
+ *  회수 전이(TaskRecovery): 분석중→PENDING(재시도)/FAILED, 디자인중→DESIGN_PENDING(idempotent 재큐잉), 구현중→IMPLEMENTATION_FAILED,
  *            배포중→DEPLOY_FAILED, 배포중지중→UNDEPLOY_PENDING(idempotent 재큐잉),
  *            종료중→CLOSE_PENDING(재큐잉 — close_progress가 남아 있어 재claim이 남은 단계부터 이어간다).
  */
@@ -40,9 +40,8 @@ import java.util.stream.Collectors;
 public class StaleTaskRecoveryJob {
 
     private final TaskRepository taskRepo;
-    private final TaskStatusHistoryRepository historyRepo;
     private final WorkerHeartbeatRepository heartbeatRepo;
-    private final DeployLogStreamService deployLogStream;
+    private final TaskRecovery taskRecovery;
 
     @Value("${app.task.stale-threshold-minutes:5}")
     private int analysisStaleThresholdMinutes;
@@ -70,22 +69,23 @@ public class StaleTaskRecoveryJob {
 
     private final ImplementationModePolicy implementationModePolicy;
 
+    // API 기동 시각 — InterviewStaleRecoveryJob.startedAt과 같은 방식. 테스트가 덮어쓴다.
+    private OffsetDateTime startedAt = OffsetDateTime.now();
+
     public StaleTaskRecoveryJob(TaskRepository taskRepo,
-                                TaskStatusHistoryRepository historyRepo,
                                 WorkerHeartbeatRepository heartbeatRepo,
-                                DeployLogStreamService deployLogStream,
+                                TaskRecovery taskRecovery,
                                 ImplementationModePolicy implementationModePolicy) {
         this.taskRepo = taskRepo;
-        this.historyRepo = historyRepo;
         this.heartbeatRepo = heartbeatRepo;
-        this.deployLogStream = deployLogStream;
+        this.taskRecovery = taskRecovery;
         this.implementationModePolicy = implementationModePolicy;
     }
 
     @Scheduled(fixedRateString = "${app.task.stale-check-interval-ms:60000}")
     @Transactional
     public void recoverStale() {
-        List<Task> inflight = taskRepo.findInFlightClaimed();
+        List<Task> inflight = taskRepo.findInFlightClaimedForUpdateSkipLocked();
         if (inflight.isEmpty()) return;
 
         OffsetDateTime now = OffsetDateTime.now();
@@ -111,7 +111,10 @@ public class StaleTaskRecoveryJob {
             // 갓 claim한 작업은 워커가 첫 heartbeat 보낼 시간을 준다 (오탐 방지).
             boolean claimedLongEnough = claimedAt != null && claimedAt.isBefore(workerDeadBefore);
             OffsetDateTime hb = workerId == null ? null : lastSeen.get(workerId);
-            boolean workerDead = claimedLongEnough && (hb == null || hb.isBefore(workerDeadBefore));
+            // API가 막 떴으면 그동안 heartbeat를 못 받았으니 워커 사망으로 판단하지 않는다(deadSec만큼 유예).
+            // 행업 백스톱(claimed_at 기준)은 이 유예와 무관하다.
+            boolean apiUpLongEnough = !startedAt.isAfter(workerDeadBefore);
+            boolean workerDead = apiUpLongEnough && claimedLongEnough && (hb == null || hb.isBefore(workerDeadBefore));
 
             int ceilingMin = switch (from) {
                 // 방식별 판정 — SDD는 몇 시간 돈다 (스펙 2026-10-15 §5.4)
@@ -125,62 +128,8 @@ public class StaleTaskRecoveryJob {
 
             if (!workerDead && !hungBackstop) continue;
 
-            t.setWorkerId(null);
-            t.setClaimedAt(null);
             String why = workerDead ? "워커 " + workerId + " 응답 없음(heartbeat)" : "처리 시간 초과(" + ceilingMin + "분)";
-
-            switch (from) {
-                case IMPLEMENTING -> {
-                    t.setStatus(TaskStatus.IMPLEMENTATION_FAILED);
-                    t.setFailureReason("Stale 회수: " + why + " (구현 중단)");
-                    logTransition(t, from, TaskStatus.IMPLEMENTATION_FAILED, "구현중 stale → 구현실패");
-                    log.error("Stale 회수: task={} {} → IMPLEMENTATION_FAILED", t.getId(), why);
-                }
-                case DEPLOYING -> {
-                    t.setStatus(TaskStatus.DEPLOY_FAILED);
-                    t.setFailureReason("Stale 회수: " + why + " (배포 중단)");
-                    deployLogStream.consolidate(t.getId()).ifPresent(t::setDeployLog); // 부분 로그 보존
-                    deployLogStream.finish(t.getId());
-                    logTransition(t, from, TaskStatus.DEPLOY_FAILED, "배포중 stale → 배포실패");
-                    log.error("Stale 회수: task={} {} → DEPLOY_FAILED", t.getId(), why);
-                }
-                case UNDEPLOYING -> {
-                    t.setStatus(TaskStatus.UNDEPLOY_PENDING);
-                    deployLogStream.finish(t.getId()); // 진행중 청크 정리(재큐잉되면 새로 스트리밍)
-                    logTransition(t, from, TaskStatus.UNDEPLOY_PENDING, "배포중지중 stale → 재큐잉(idempotent)");
-                    log.warn("Stale 회수: task={} {} → UNDEPLOY_PENDING(재큐잉)", t.getId(), why);
-                }
-                case CLOSING -> {
-                    // 단계가 멱등이고 진행(close_progress)이 남아 있어 실패로 돌리지 않고 재큐잉한다.
-                    t.setStatus(TaskStatus.CLOSE_PENDING);
-                    logTransition(t, from, TaskStatus.CLOSE_PENDING, "종료중 stale → 재큐잉(idempotent, 남은 단계부터)");
-                    log.warn("Stale 회수: task={} {} → CLOSE_PENDING(재큐잉)", t.getId(), why);
-                }
-                case DESIGNING -> {
-                    t.setStatus(TaskStatus.DESIGN_PENDING);
-                    logTransition(t, from, TaskStatus.DESIGN_PENDING, "디자인중 stale → 재큐잉(idempotent)");
-                    log.warn("Stale 회수: task={} {} → DESIGN_PENDING(재큐잉)", t.getId(), why);
-                }
-                default -> { // IN_PROGRESS
-                    if (t.getRetryCount() < t.getMaxRetry()) {
-                        t.setStatus(TaskStatus.PENDING);
-                        t.setRetryCount(t.getRetryCount() + 1);
-                        logTransition(t, from, TaskStatus.PENDING,
-                                "Stale 회수: " + why + " → 재시도 (" + t.getRetryCount() + "/" + t.getMaxRetry() + ")");
-                        log.warn("Stale 회수: task={} → PENDING (retry {}/{})", t.getId(), t.getRetryCount(), t.getMaxRetry());
-                    } else {
-                        t.setStatus(TaskStatus.FAILED);
-                        t.setFailureReason("Stale 회수 한도 초과: " + why);
-                        logTransition(t, from, TaskStatus.FAILED, "재시도 한도 도달, 실패 처리");
-                        log.error("Stale 회수 실패: task={} retry={} max={} → FAILED", t.getId(), t.getRetryCount(), t.getMaxRetry());
-                    }
-                }
-            }
+            taskRecovery.recover(t, RecoveryCause.stale(why));
         }
-    }
-
-    private void logTransition(Task t, TaskStatus from, TaskStatus to, String reason) {
-        t.setUpdatedAt(OffsetDateTime.now());
-        historyRepo.save(TaskStatusHistory.log(t.getId(), from, to, "system", "stale-recovery", reason));
     }
 }

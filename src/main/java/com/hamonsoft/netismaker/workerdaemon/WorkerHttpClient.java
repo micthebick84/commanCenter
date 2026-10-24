@@ -8,6 +8,8 @@ import com.hamonsoft.netismaker.dto.DeployedTaskSummary;
 import com.hamonsoft.netismaker.dto.WorkerHeartbeatRequest;
 import com.hamonsoft.netismaker.dto.WorkerResultRequest;
 import com.hamonsoft.netismaker.dto.WorkerRuntimeStatusRequest;
+import com.hamonsoft.netismaker.dto.WorkerStartupRequest;
+import com.hamonsoft.netismaker.dto.WorkerStartupResponse;
 import com.hamonsoft.netismaker.dto.WorkerTaskResponse;
 import org.springframework.context.annotation.Profile;
 import org.springframework.core.ParameterizedTypeReference;
@@ -55,6 +57,23 @@ public class WorkerHttpClient {
 
     public void heartbeat(WorkerHeartbeatRequest req) {
         http.post().uri("/worker/heartbeat").body(req).retrieve().toBodilessEntity();
+    }
+
+    /**
+     * 기동 알림 — 이전 프로세스가 들고 있던 진행 중 작업을 API가 회수하게 한다.
+     * 이 API가 엔드포인트를 모르면(404, 구버전) empty. 그 밖의 실패는 호출자가 재시도하도록 전파한다.
+     */
+    public Optional<WorkerStartupResponse> startup(List<Long> pendingTaskIds) {
+        try {
+            WorkerStartupResponse body = http.post()
+                    .uri(uri -> uri.path("/worker/startup").queryParam("workerId", props.id()).build())
+                    .body(new WorkerStartupRequest(pendingTaskIds))
+                    .retrieve()
+                    .body(WorkerStartupResponse.class);
+            return Optional.ofNullable(body);
+        } catch (HttpClientErrorException.NotFound e) {
+            return Optional.empty();
+        }
     }
 
     public Optional<WorkerTaskResponse> nextTask() {

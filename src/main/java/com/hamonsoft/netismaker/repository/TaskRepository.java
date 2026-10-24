@@ -129,9 +129,12 @@ public interface TaskRepository extends JpaRepository<Task, Long> {
     }
 
     /**
-     * Stale 회수 잡: 워커가 claim해 처리중인(in-flight) 모든 작업.
+     * Stale 회수 잡: 워커가 claim해 처리중인(in-flight) 모든 작업을 행 잠금(FOR UPDATE SKIP LOCKED)으로 읽는다.
      * 회수 여부(워커 사망/행업)는 StaleTaskRecoveryJob이 heartbeat + claimed_at로 판정한다.
+     * 다른 트랜잭션(결과 보고 등)이 쥔 행은 건너뛴다 — 이번 회차에 못 본 행은 다음 회차가 본다.
      */
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @QueryHints(@jakarta.persistence.QueryHint(name = "jakarta.persistence.lock.timeout", value = "-2"))
     @Query("""
         SELECT t FROM Task t
         WHERE t.status IN (com.hamonsoft.netismaker.entity.TaskStatus.IN_PROGRESS,
@@ -143,7 +146,26 @@ public interface TaskRepository extends JpaRepository<Task, Long> {
           AND t.workerId IS NOT NULL
           AND t.deletedAt IS NULL
     """)
-    List<Task> findInFlightClaimed();
+    List<Task> findInFlightClaimedForUpdateSkipLocked();
+
+    /**
+     * 워커 기동 정합: 그 워커가 claim해 처리중인(in-flight) 작업을 행 잠금(FOR UPDATE)으로 읽는다.
+     * SKIP LOCKED가 아니다 — 결과 보고 등이 쥔 행은 끝나길 기다렸다가 갱신된 상태로 재판정한다.
+     */
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("""
+        SELECT t FROM Task t
+        WHERE t.status IN (com.hamonsoft.netismaker.entity.TaskStatus.IN_PROGRESS,
+                           com.hamonsoft.netismaker.entity.TaskStatus.IMPLEMENTING,
+                           com.hamonsoft.netismaker.entity.TaskStatus.DESIGNING,
+                           com.hamonsoft.netismaker.entity.TaskStatus.DEPLOYING,
+                           com.hamonsoft.netismaker.entity.TaskStatus.UNDEPLOYING,
+                           com.hamonsoft.netismaker.entity.TaskStatus.CLOSING)
+          AND t.workerId = :workerId
+          AND t.deletedAt IS NULL
+        ORDER BY t.id ASC
+    """)
+    List<Task> findInFlightClaimedByWorkerForUpdate(@Param("workerId") String workerId);
 
     /**
      * 배포 계열 활성 task: reconcile 관측 + GC 보호 겸용.
@@ -174,7 +196,7 @@ public interface TaskRepository extends JpaRepository<Task, Long> {
      * worktree 정리 잡 보호 목록 — 워커가 claim해 worktree를 쓰는 중인 task(구현중·디자인중·배포중·배포중지중).
      * 대기 상태는 아직 worktree를 안 쓰고 재시도 때 새로 만든다.
      * soft-delete된 작업은 제외한다: 구현중·디자인중 중에 삭제된 작업은 결과 보고(findActiveByIdForUpdate)도
-     * StaleTaskRecoveryJob(findInFlightClaimed)도 deletedAt IS NULL만 다뤄 상태가 영영 안 바뀌므로,
+     * StaleTaskRecoveryJob(findInFlightClaimedForUpdateSkipLocked)도 deletedAt IS NULL만 다뤄 상태가 영영 안 바뀌므로,
      * 포함하면 그 worktree와 레포 캐시가 영구히 보호된다. 방금 삭제된 진행 중 작업의 worktree는
      * 정리 잡의 7일 나이 판정(TOO_NEW)이 그대로 보호하므로 제외해도 안전하다.
      * 삭제되지 않은 작업은 워커가 죽어도 StaleTaskRecoveryJob이 네 상태를 회수해 목록에 영구히 남지 않는다.

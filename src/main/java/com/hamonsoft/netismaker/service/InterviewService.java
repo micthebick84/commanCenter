@@ -36,6 +36,7 @@ import java.util.Optional;
  *   cancel        ─► QUEUED/RUNNING/AWAITING_INPUT/PLAN_READY → CANCELLED
  *   expire        ─► AWAITING_INPUT → EXPIRED (idle TTL) | QUEUED → EXPIRED (인터뷰 서비스 미처리 TTL)
  *   fail          ─► QUEUED/RUNNING/AWAITING_INPUT → FAILED
+ *   releaseForRestart ─► RUNNING → QUEUED (인터뷰 서비스 재기동 정합, 턴당 최대 2회; 소진 시 FAILED)
  *
  * task_id가 있는 세션은 각 전이마다 소유 task 상태도 함께 미러링한다:
  *   recordQuestion → INTERVIEW_INPUT, submitAnswer → INTERVIEWING, recordPlan → INTERVIEW_REVIEW,
@@ -95,6 +96,15 @@ public class InterviewService {
      * (프론트는 FAILED를 받는 즉시 스트림을 닫으므로, DB에만 남기면 사유가 라이브로 전달되지 않는다).
      */
     public record FailOutcome(InterviewSession session, InterviewTurn note) {}
+
+    /**
+     * 재기동 정합 결과. released=true면 QUEUED로 되돌렸고(note = 재개 안내), false면 상한 소진으로 FAILED(note = 실패 사유).
+     * 호출자는 note를 status보다 먼저 SSE로 밀어야 한다(FailOutcome과 같은 이유).
+     */
+    public record RestartOutcome(InterviewSession session, InterviewTurn note, boolean released) {}
+
+    /** 인터뷰 서비스 재기동으로 중단된 같은 턴을 자동으로 다시 돌리는 횟수 상한(턴당, D13). 소진되면 실패 처리. */
+    static final int MAX_RESTART_RELEASES = 2;
 
     /**
      * 관리자 승인 → 해당 task의 인터뷰 세션 생성(QUEUED).
@@ -252,6 +262,7 @@ public class InterviewService {
         if (req.contextTokens() != null) s.setContextTokens(req.contextTokens());
         if (req.contextWindow() != null) s.setContextWindow(req.contextWindow());
         applyRefStates(s, req.refStates());
+        s.setRestartRequeueCount(0); // 턴이 정상 종료 → 재기동 재개 횟수는 턴 단위(D13)
         String kind = req.kind() == null || req.kind().isBlank() ? "question" : req.kind();
         InterviewTurn turn = appendTurn(sessionId, "assistant", kind,
                 req.content() == null ? "" : req.content());
@@ -335,6 +346,7 @@ public class InterviewService {
         requireWorker(s, workerId);
         addUsage(s, req.costUsd(), req.inputTokens(), req.outputTokens(),
                 req.cacheCreationTokens(), req.cacheReadTokens());
+        s.setRestartRequeueCount(0); // 턴이 정상 종료 → 재기동 재개 횟수는 턴 단위(D13)
         InterviewPlan plan = planRepo.save(InterviewPlan.create(sessionId,
                 req.designMarkdown(), req.planMarkdown(), req.planJson(),
                 req.durationMs(), s.getTotalCostUsd()));
@@ -433,6 +445,40 @@ public class InterviewService {
         touch(s);
         mirrorTask(s, TaskStatus.INTERVIEWING, actorId, "관리자 답변 → 인터뷰 재개");
         return new AnswerOutcome(s, answer.getSeq());
+    }
+
+    /** 이 워커가 잡고 있는(RUNNING) 세션 id들 — 기동 정합 대상. */
+    @Transactional(readOnly = true)
+    public List<Long> runningSessionIdsOf(String workerId) {
+        return sessionRepo.findRunningIdsByWorker(workerId);
+    }
+
+    /**
+     * 인터뷰 서비스 재기동 정합 — 이 워커가 RUNNING으로 잡고 있던 세션 1건을 QUEUED로 되돌려 같은 답을 다시 돌린다.
+     * 횟수(restart_requeue_count)는 턴 단위다: recordQuestion/recordPlan(정상 종료)이 0으로 되돌린다.
+     * 상한({@value #MAX_RESTART_RELEASES}회) 소진이면 기존 doFail 경로로 FAILED.
+     * RUNNING이 아니거나 다른 워커 소유면 아무것도 바꾸지 않고 empty — 정합 호출과 경합한 정상 보고·회수를 건드리지 않는다.
+     */
+    @Transactional
+    public Optional<RestartOutcome> releaseForRestart(Long sessionId, String workerId) {
+        InterviewSession s = requireSessionForUpdate(sessionId);
+        if (s.getStatus() != InterviewStatus.RUNNING || !java.util.Objects.equals(s.getWorkerId(), workerId)) {
+            return Optional.empty();
+        }
+        if (s.getRestartRequeueCount() >= MAX_RESTART_RELEASES) {
+            FailOutcome f = doFail(s, "worker-restart",
+                    "인터뷰 서비스 재기동으로 중단(자동 재개 " + MAX_RESTART_RELEASES + "회 소진)");
+            return Optional.of(new RestartOutcome(f.session(), f.note(), false));
+        }
+        s.setStatus(InterviewStatus.QUEUED);
+        s.setWorkerId(null);
+        s.setClaimedAt(null);
+        s.setRestartRequeueCount(s.getRestartRequeueCount() + 1);
+        touch(s);
+        InterviewTurn note = appendTurn(sessionId, "system", "note",
+                "인터뷰 서비스가 다시 시작돼 이 단계를 다시 진행합니다.");
+        mirrorTask(s, TaskStatus.INTERVIEWING, "worker-restart", "인터뷰 서비스 재기동 → 인터뷰 재개");
+        return Optional.of(new RestartOutcome(s, note, true));
     }
 
     /** 사용자 취소 — QUEUED/RUNNING/AWAITING_INPUT/PLAN_READY에서만. */

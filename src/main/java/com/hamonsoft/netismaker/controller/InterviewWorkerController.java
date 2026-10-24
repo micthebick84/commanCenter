@@ -1,6 +1,7 @@
 package com.hamonsoft.netismaker.controller;
 
 import com.hamonsoft.netismaker.dto.InterviewClaimResponse;
+import com.hamonsoft.netismaker.dto.InterviewStartupResponse;
 import com.hamonsoft.netismaker.dto.WorkerActivityRequest;
 import com.hamonsoft.netismaker.dto.WorkerPlanRequest;
 import com.hamonsoft.netismaker.dto.WorkerQuestionRequest;
@@ -19,6 +20,7 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.*;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
 
@@ -27,6 +29,7 @@ import java.util.Optional;
  *
  *   POST /worker/interviews/claim?workerId=…   ─► QUEUED 세션 1건 claim (SKIP LOCKED) 또는 204
  *                                                  (claim이 work_dir 할당/반환 — Phase 1)
+ *   POST /worker/interviews/startup?workerId=… ─► 재기동으로 중단된 RUNNING 세션을 QUEUED로 되돌림(턴당 2회, 소진 시 FAILED)
  *   POST /worker/interviews/{id}/question       ─► assistant turn 저장 + SSE question|design/status + AWAITING_INPUT
  *   POST /worker/interviews/{id}/plan           ─► interview_plan 저장 + SSE plan_ready(객체)/status + PLAN_READY
  *   POST /worker/interviews/{id}/activity?workerId=… ─► SSE activity fan-out (transient, DB 미접근)
@@ -75,6 +78,40 @@ public class InterviewWorkerController {
                     : "DB 접속정보를 불러오지 못해 DB 도구 없이 진행합니다";
             return c.withDb(List.of(), List.of(notice));
         }
+    }
+
+    /**
+     * 인터뷰 서비스 기동 정합 — 첫 claim 전에 호출된다. 이 워커가 RUNNING으로 잡고 있던 세션(재기동으로 끊긴 턴)을
+     * 세션마다 별도 트랜잭션으로 QUEUED로 되돌리거나(자동 재개 2회 소진이면 FAILED) SSE로 알린다.
+     * 한 세션의 예외는 로그만 남기고 다음 세션으로 넘어간다(InterviewStaleRecoveryJob과 같은 독립 try/catch).
+     */
+    @PostMapping("/startup")
+    public InterviewStartupResponse startup(@RequestParam String workerId) {
+        List<Long> released = new ArrayList<>();
+        List<Long> failed = new ArrayList<>();
+        for (Long id : interviewService.runningSessionIdsOf(workerId)) {
+            try {
+                Optional<InterviewService.RestartOutcome> out = interviewService.releaseForRestart(id, workerId);
+                if (out.isEmpty()) continue;
+                InterviewTurn note = out.get().note();
+                // 노트가 먼저 — 프론트는 FAILED status를 받는 즉시 스트림을 닫는다.
+                interviewStream.pushNote(id, note.getSeq(), note.getContent());
+                if (out.get().released()) {
+                    interviewStream.pushStatus(id, InterviewStatus.QUEUED);
+                    released.add(id);
+                } else {
+                    interviewStream.pushStatus(id, InterviewStatus.FAILED);
+                    interviewStream.finish(id);
+                    failed.add(id);
+                }
+            } catch (Exception e) {
+                log.error("인터뷰 기동 정합 실패: interview={} worker={}", id, workerId, e);
+            }
+        }
+        if (!released.isEmpty() || !failed.isEmpty()) {
+            log.warn("인터뷰 기동 정합: worker={} 재개 {} 실패 {}", workerId, released, failed);
+        }
+        return new InterviewStartupResponse(released, failed);
     }
 
     @PostMapping("/{id}/question")

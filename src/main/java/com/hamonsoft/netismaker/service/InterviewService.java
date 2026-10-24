@@ -368,17 +368,11 @@ public class InterviewService {
     static final int REF_ERROR_MAX_LENGTH = 500;
 
     /**
-     * 러너가 보고한 참조 실패 사유를 저장 형태로 바꾼다 — 자격증명을 가리고({@link GitRemotes#mask}) 나서
-     * {@value #REF_ERROR_MAX_LENGTH}자로 자른다. 가린 뒤에 자르는 이유: 먼저 자르면 토큰이 반쪽으로 남고 mask(끝의 `@`까지 있어야
-     * 가린다)가 알아보지 못한다. 서로게이트 쌍의 앞 절반에서 잘렸으면 그 반쪽은 버린다 — 깨진 문자가 JSONB로 나가면 직렬화가 실패해
-     * 답변 보고 전체가 500이 된다.
+     * 러너가 보고한 참조 실패 사유를 저장 형태로 바꾼다 — 자격증명을 가리고 나서 {@value #REF_ERROR_MAX_LENGTH}자로 자른다
+     * ({@link GitRemotes#maskAndCut}). 서로게이트 쌍의 반쪽을 남기지 않으므로 JSONB 직렬화가 깨져 답변 보고 전체가 500이 되지 않는다.
      */
     private static String storedRefError(String error) {
-        String masked = GitRemotes.mask(error);
-        if (masked.length() <= REF_ERROR_MAX_LENGTH) return masked;
-        int end = REF_ERROR_MAX_LENGTH;
-        if (Character.isHighSurrogate(masked.charAt(end - 1))) end--;
-        return masked.substring(0, end);
+        return GitRemotes.maskAndCut(error, REF_ERROR_MAX_LENGTH);
     }
 
     /**

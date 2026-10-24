@@ -10,6 +10,7 @@ import com.hamonsoft.netismaker.dto.WorkerResultRequest;
 import com.hamonsoft.netismaker.dto.WorkerRuntimeStatusRequest;
 import com.hamonsoft.netismaker.dto.WorkerTaskResponse;
 import com.hamonsoft.netismaker.entity.*;
+import com.hamonsoft.netismaker.git.GitRemotes;
 import com.hamonsoft.netismaker.repository.InterviewPlanRepository;
 import com.hamonsoft.netismaker.repository.InterviewSessionRepository;
 import com.hamonsoft.netismaker.repository.RepoCatalogRepository;
@@ -66,6 +67,8 @@ public class WorkerService {
     /** task.merge_commit_sha / close_note_path 컬럼 길이 — 넘으면 500 대신 400으로 거절. */
     private static final int MAX_COMMIT_SHA_LENGTH = 40;
     private static final int MAX_NOTE_PATH_LENGTH = 500;
+    /** 참조 repo 변경 경고 이력 행의 글자 수 상한 (스펙 2026-10-24 §4.8 — DbMcpGrantService의 같은 상태 행과 같은 500자). */
+    private static final int REF_WARNING_ROW_MAX_LENGTH = 500;
 
     /** 메일·노트 링크 기준 주소 (스펙 2026-10-14 §4). 단위 테스트에서는 null. */
     @Value("${app.public-base-url:}")
@@ -147,7 +150,18 @@ public class WorkerService {
      */
     @Transactional
     public Optional<WorkerTaskResponse> claimNextTask(String workerId) {
-        List<Task> candidates = taskRepo.findClaimableForUpdateSkipLocked(PageRequest.of(0, 1));
+        return claimNextTask(workerId, true);
+    }
+
+    /**
+     * supportsRefRepos=false(구버전 워커 — next-task에 supports=refRepos 없음)면 참조 repo가 있는 구현대기를 건너뛴다
+     * (스펙 2026-10-24 §4.7) — 모르는 필드를 버리고 참조 없이 구현해 버리지 않게. 그 작업은 대기로 남는다.
+     */
+    @Transactional
+    public Optional<WorkerTaskResponse> claimNextTask(String workerId, boolean supportsRefRepos) {
+        List<Task> candidates = supportsRefRepos
+                ? taskRepo.findClaimableForUpdateSkipLocked(PageRequest.of(0, 1))
+                : taskRepo.findClaimableExcludingRefImplementationsForUpdateSkipLocked();
         if (candidates.isEmpty()) return Optional.empty();
         Task t = candidates.get(0);
         TaskStatus from = t.getStatus();
@@ -281,6 +295,7 @@ public class WorkerService {
             historyRepo.save(TaskStatusHistory.log(t.getId(),
                     TaskStatus.IMPLEMENTATION_FAILED, TaskStatus.PR_CREATED,
                     "worker", req.workerId(), "지각 보고 정합화: stale 회수 → PR_CREATED"));
+            logRefWarnings(t, req);
             accumulateUsage(t.getId(), TaskStageUsage.STAGE_IMPLEMENTATION, req);
             return;
         }
@@ -452,6 +467,25 @@ public class WorkerService {
             default -> "처리 완료";
         };
         historyRepo.save(TaskStatusHistory.log(t.getId(), from, t.getStatus(),
+                "worker", req.workerId(), reason));
+        if (t.getStatus() == TaskStatus.PR_CREATED) logRefWarnings(t, req);
+    }
+
+    /**
+     * 구현이 참조 repo를 바꿨다는 워커 경고를 PR생성 이력 다음에 같은 상태의 이력 행으로 남긴다 (스펙 2026-10-24 §4.8).
+     * 공백인 원소는 버리고 나머지는 앞뒤 공백을 지워 ", "로 잇는다. 워커가 이미 가리고 잘라 보내지만 API는 그 출력을 믿지 않고
+     * 행 전체를 한 번 더 가린 뒤 자른다. 경고가 없으면(null·빈 목록·공백뿐) 행을 남기지 않는다.
+     */
+    private void logRefWarnings(Task t, WorkerResultRequest req) {
+        if (req.refWarnings() == null) return;
+        List<String> warnings = req.refWarnings().stream()
+                .filter(w -> w != null && !w.isBlank())
+                .map(String::strip)
+                .toList();
+        if (warnings.isEmpty()) return;
+        String reason = GitRemotes.maskAndCut(
+                "참조 repo 변경 감지(PR에는 포함 안 됨): " + String.join(", ", warnings), REF_WARNING_ROW_MAX_LENGTH);
+        historyRepo.save(TaskStatusHistory.log(t.getId(), TaskStatus.PR_CREATED, TaskStatus.PR_CREATED,
                 "worker", req.workerId(), reason));
     }
 

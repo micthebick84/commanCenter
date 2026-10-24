@@ -39,7 +39,10 @@ import java.time.OffsetDateTime;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Optional;
+import java.util.Set;
+import java.util.stream.Collectors;
 
 /**
  * 작업 상태 전이의 단일 진입점. 모든 상태 변경은 여기서 + 히스토리 로깅.
@@ -548,12 +551,30 @@ public class TaskService {
      */
     @Transactional
     public Task retryImplementation(Long taskId, String adminId, String rawMode) {
+        return retryImplementation(taskId, adminId, rawMode, null);
+    }
+
+    /**
+     * 재시도 + 참조 repo 빼기 (스펙 2026-10-24 §4.10). removeRefCatalogIds(null 원소는 무시)가 비면 위와 같다.
+     * 고른 id는 모두 지금 작업 참조에 있어야 한다 — 아니면 아무것도 바꾸기 전에 400. 빼기만 하고 남은 참조는 같은 고정 커밋 그대로다.
+     * 뺀 것이 있으면 재시도 이력(문구 불변) 다음에 같은 상태의 별도 이력 행 {@code 참조 제외(구현 재시도): {별칭}({브랜치}), …}
+     * (작업 참조 순서)을 남긴다. 모두 빼면 참조 없는 구현이 된다(참조를 모르는 워커도 claim할 수 있다).
+     */
+    @Transactional
+    public Task retryImplementation(Long taskId, String adminId, String rawMode, List<Long> removeRefCatalogIds) {
         ImplementationMode requested = ImplementationModePolicy.parse(rawMode, null);
         // 비관적 락(FOR UPDATE) — 연타 재시도의 시도 번호 이중 증가와 claim 경합 방지.
         Task t = taskRepo.findActiveByIdForUpdate(taskId).orElseThrow(TaskException::notFound);
         if (t.getStatus() != TaskStatus.IMPLEMENTATION_FAILED) {
             throw TaskException.conflict("구현실패 상태에서만 구현을 재시도할 수 있습니다 (현재: "
                     + t.getStatus().dbValue() + ")");
+        }
+        Set<Long> removeIds = removeRefCatalogIds == null ? Set.of() : removeRefCatalogIds.stream()
+                .filter(Objects::nonNull).collect(Collectors.toSet());
+        List<RefRepo> refs = t.getRefRepos() == null ? List.of() : t.getRefRepos();
+        Set<Long> present = refs.stream().map(RefRepo::catalogId).collect(Collectors.toSet());
+        if (!present.containsAll(removeIds)) {
+            throw new TaskException(HttpStatus.BAD_REQUEST, "작업에 없는 참조는 뺄 수 없습니다");
         }
         ImplementationMode before = t.getImplementationMode();
         ImplementationMode after = requested == null ? before : requested;
@@ -569,6 +590,13 @@ public class TaskService {
         String reason = "구현 재시도 (" + t.getImplementationAttempt() + "회째, 구현 방식: " + modeText
                 + (previousBranch == null || previousBranch.isBlank() ? "" : ", 이전 브랜치: " + previousBranch) + ")";
         historyRepo.save(TaskStatusHistory.log(t.getId(), from, TaskStatus.APPROVED, "user", adminId, reason));
+
+        if (!removeIds.isEmpty()) {
+            List<RefRepo> removed = refs.stream().filter(r -> removeIds.contains(r.catalogId())).toList();
+            t.setRefRepos(new ArrayList<>(refs.stream().filter(r -> !removeIds.contains(r.catalogId())).toList()));
+            historyRepo.save(TaskStatusHistory.log(t.getId(), TaskStatus.APPROVED, TaskStatus.APPROVED, "user", adminId,
+                    "참조 제외(구현 재시도): " + removed.stream().map(RefRepo::label).collect(Collectors.joining(", "))));
+        }
         return t;
     }
 

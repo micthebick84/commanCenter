@@ -25,7 +25,7 @@ import java.util.Optional;
  *  워커 API (X-Worker-API-Key 인증).
  *
  *   POST /worker/heartbeat        ─► worker_heartbeat upsert
- *   GET  /worker/next-task         ─► PENDING/APPROVED 작업 1건 또는 204
+ *   GET  /worker/next-task         ─► PENDING/APPROVED 작업 1건 또는 204 (supports=refRepos 없으면 참조 있는 구현은 제외)
  *   POST /worker/tasks/{id}/result ─► 분석/구현 완료/실패 보고
  *   POST /worker/tasks/{id}/close-progress ─► 종료 단계(병합·배포 중지·노트·브랜치 정리) 완료 보고
  *   GET  /worker/deployed-tasks    ─► 배포 런타임 정합 대상(배포완료+배포중단됨) 목록
@@ -39,6 +39,9 @@ import java.util.Optional;
 public class WorkerController {
 
     private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(WorkerController.class);
+
+    /** next-task의 supports 토큰 — 참조 repo를 아는 새 워커가 보낸다. */
+    private static final String SUPPORTS_REF_REPOS = "refRepos";
 
     private final WorkerService workerService;
     private final DbMcpGrantService dbMcpGrantService;
@@ -54,11 +57,26 @@ public class WorkerController {
         workerService.heartbeat(req);
     }
 
+    /**
+     * supports: 워커가 아는 기능 목록(쉼표 구분). {@value #SUPPORTS_REF_REPOS}가 없으면(구버전 워커) 참조 repo가 있는
+     * 구현대기는 넘기지 않는다 (스펙 2026-10-24 §4.7).
+     */
     @GetMapping("/next-task")
-    public ResponseEntity<WorkerTaskResponse> nextTask(@RequestParam String workerId) {
-        Optional<WorkerTaskResponse> claimed = workerService.claimNextTask(workerId).map(this::withDbMcp);
+    public ResponseEntity<WorkerTaskResponse> nextTask(@RequestParam String workerId,
+                                                       @RequestParam(required = false) String supports) {
+        Optional<WorkerTaskResponse> claimed = workerService.claimNextTask(workerId, supportsRefRepos(supports))
+                .map(this::withDbMcp);
         return claimed.map(ResponseEntity::ok)
                       .orElseGet(() -> ResponseEntity.noContent().build());
+    }
+
+    /** supports를 쉼표로 나눠 앞뒤 공백을 지운 토큰 중 {@value #SUPPORTS_REF_REPOS}와 정확히 같은 것이 있는지. */
+    static boolean supportsRefRepos(String supports) {
+        if (supports == null) return false;
+        for (String token : supports.split(",")) {
+            if (SUPPORTS_REF_REPOS.equals(token.trim())) return true;
+        }
+        return false;
     }
 
     /**

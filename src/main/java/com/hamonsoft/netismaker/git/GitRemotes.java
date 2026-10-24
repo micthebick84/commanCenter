@@ -51,4 +51,17 @@ public final class GitRemotes {
     public static String mask(String text) {
         return text == null ? null : CREDENTIALS.matcher(text).replaceAll("***@");
     }
+
+    /**
+     * 자격증명을 가리고({@link #mask}) 나서 max자(UTF-16 단위)로 자른다 — 저장·이력·보고로 나가는 자유 텍스트의 상한.
+     * 가린 뒤에 자르는 이유: 먼저 자르면 토큰이 반쪽으로 남고 mask(끝의 `@`까지 있어야 가린다)가 알아보지 못한다.
+     * 서로게이트 쌍의 앞 절반에서 잘렸으면 그 반쪽은 버린다 — 깨진 문자가 JSONB로 나가면 직렬화가 실패한다. null은 null.
+     */
+    public static String maskAndCut(String text, int max) {
+        String masked = mask(text);
+        if (masked == null || masked.length() <= max) return masked;
+        int end = max;
+        if (end > 0 && Character.isHighSurrogate(masked.charAt(end - 1))) end--;
+        return masked.substring(0, end);
+    }
 }

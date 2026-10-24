@@ -216,14 +216,15 @@ public class TaskController {
         return forViewer(TaskResponse.of(t, null), isAdmin);
     }
 
-    /** 구현실패 → 구현대기, 방식 다시 고르기 (스펙 2026-10-15 §5.5). */
+    /** 구현실패 → 구현대기, 방식 다시 고르기 (스펙 2026-10-15 §5.5) + 참조 repo 빼기 (스펙 2026-10-24 §4.10). */
     @PostMapping("/{id}/implementation/retry")
     @PreAuthorize("hasAuthority('ROLE_ADMIN')")
     public TaskResponse retryImplementation(@PathVariable Long id,
                                             @RequestBody(required = false) ImplementationRetryRequest body,
                                             JwtAuthenticationToken auth) {
         String adminId = AuthContext.requireUserId(auth);
-        taskService.retryImplementation(id, adminId, body == null ? null : body.implementationMode());
+        taskService.retryImplementation(id, adminId, body == null ? null : body.implementationMode(),
+                body == null ? null : body.removeRefCatalogIds());
         Task t = taskService.getForView(id, adminId, true);
         return TaskResponse.of(t, taskService.getAnalysis(id).orElse(null));
     }

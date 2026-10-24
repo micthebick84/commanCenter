@@ -123,6 +123,44 @@ public interface TaskRepository extends JpaRepository<Task, Long> {
     """)
     List<Task> findClaimableForUpdateSkipLocked(Pageable pageable);
 
+    /**
+     * 워커 claim 후보 상태 — {@link #findClaimableForUpdateSkipLocked}의 JPQL 목록을 그대로 옮긴 것.
+     * 네이티브 쿼리({@link #findClaimableExcludingRefImplementationsForUpdateSkipLocked})가 이 목록을 쓴다.
+     * 두 목록이 어긋나지 않는지는 TaskRepositoryClaimableStatusesTest가 JPQL 문자열을 읽어 확인한다.
+     */
+    List<TaskStatus> CLAIMABLE_STATUSES = List.of(
+            TaskStatus.PENDING,
+            TaskStatus.APPROVED,
+            TaskStatus.DESIGN_PENDING,
+            TaskStatus.DEPLOY_PENDING,
+            TaskStatus.UNDEPLOY_PENDING,
+            TaskStatus.CLOSE_PENDING);
+
+    /**
+     * 참조 repo를 모르는 워커(구버전 — next-task에 supports=refRepos가 없음)용 claim (스펙 2026-10-24 §4.7).
+     * {@link #findClaimableForUpdateSkipLocked}와 같지만 참조(ref_repos)가 있는 구현대기는 건너뛴다 — 그 작업은 참조를 아는
+     * 워커가 올 때까지 대기로 남는다. 디자인·배포·종료 claim은 참조와 무관해 막지 않는다.
+     * JPQL로 jsonb를 비교하지 못하므로 네이티브 쿼리다(findRecentlyDeployedWithEnv와 같은 CAST 비교).
+     * 상태 값은 DB 저장 값(한글)이라 {@link #findClaimableExcludingRefImplementationsForUpdateSkipLocked}가 채운다.
+     */
+    @Query(value = """
+        SELECT t.* FROM com.task t
+        WHERE t.status IN (:claimable) AND t.deleted_at IS NULL
+          AND NOT (t.status = :approved AND t.ref_repos <> CAST('[]' AS jsonb))
+        ORDER BY t.created_at ASC
+        LIMIT 1
+        FOR UPDATE SKIP LOCKED
+        """, nativeQuery = true)
+    List<Task> findClaimableExcludingRefImplementations(@Param("claimable") Collection<String> claimable,
+                                                        @Param("approved") String approved);
+
+    /** 참조를 모르는 워커용 claim 1건 — 후보 상태({@link #CLAIMABLE_STATUSES})를 DB 값으로 바꿔 넘긴다. */
+    default List<Task> findClaimableExcludingRefImplementationsForUpdateSkipLocked() {
+        return findClaimableExcludingRefImplementations(
+                CLAIMABLE_STATUSES.stream().map(TaskStatus::dbValue).toList(),
+                TaskStatus.APPROVED.dbValue());
+    }
+
     /** 호환 alias. 기존 호출처 단계적 마이그레이션 위함. */
     default List<Task> findPendingForUpdateSkipLocked(Pageable pageable) {
         return findClaimableForUpdateSkipLocked(pageable);

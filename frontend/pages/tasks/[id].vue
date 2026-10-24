@@ -328,6 +328,9 @@ async function retryClose() {
   await closeAction('close/retry', '종료 재시도 큐 등록')
 }
 
+// 배포중단됨에서 관리자의 주 행동은 재배포라 종료 요청은 보조 버튼으로 — 관리자가 직접 등록한 작업은 이것 말고 종료할 길이 없다(API는 허용)
+const canAdminRequestCloseLost = computed(() => auth.isAdmin && task.value?.status === 'DEPLOY_LOST')
+
 // 병합 전(MERGED 없음) 종료실패만 취소할 수 있다 — 서버도 같은 규칙으로 409를 낸다
 const canCancelClose = computed(
   () => auth.isAdmin && task.value?.status === 'CLOSE_FAILED' && !(task.value.close?.progress ?? []).includes('MERGED'),
@@ -602,6 +605,7 @@ function onAction(kind: NextActionKind) {
             <TaskNextAction :action="action" variant="banner" :hide-primary="$q.screen.lt.md" @act="onAction">
               <template #extra>
                 <q-btn v-if="auth.isAdmin && task.implementation?.prUrl" outline color="primary" icon="open_in_new" :label="`${mrRef(task.implementation.prUrl, task.implementation.prNumber!)} 열기`" :href="task.implementation.prUrl" target="_blank" />
+                <q-btn v-if="!$q.screen.lt.md && canAdminRequestCloseLost" outline color="primary" icon="task_alt" label="종료 요청" data-test="close-request-secondary" @click="requestClose" />
               </template>
             </TaskNextAction>
           </div>
@@ -775,6 +779,10 @@ function onAction(kind: NextActionKind) {
                   <q-item v-if="auth.isAdmin && ['DEPLOYED','DEPLOY_LOST'].includes(task.status)" v-close-popup clickable class="text-negative" data-test="bar-more-undeploy" @click="undeploy">
                     <q-item-section avatar><q-icon name="stop" color="negative" /></q-item-section>
                     <q-item-section>중지</q-item-section>
+                  </q-item>
+                  <q-item v-if="canAdminRequestCloseLost" v-close-popup clickable data-test="bar-more-close-request" @click="requestClose">
+                    <q-item-section avatar><q-icon name="task_alt" /></q-item-section>
+                    <q-item-section>종료 요청</q-item-section>
                   </q-item>
                   <q-item v-if="auth.isAdmin && task.status === 'CLOSE_REVIEW'" v-close-popup clickable class="text-negative" data-test="bar-more-close-reject" @click="rejectClose">
                     <q-item-section avatar><q-icon name="block" color="negative" /></q-item-section>

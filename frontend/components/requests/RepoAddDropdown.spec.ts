@@ -1,5 +1,5 @@
 import { mount, flushPromises } from '@vue/test-utils'
-import { describe, it, expect, afterEach, beforeEach, vi } from 'vitest'
+import { describe, it, expect, afterEach, vi } from 'vitest'
 import RepoAddDropdown from './RepoAddDropdown.vue'
 import { useApiMock } from '../../test/mocks/nuxt'
 

@@ -287,6 +287,34 @@ try {
     Assert-True (-not ($ids -contains 202)) 'Select-OrphanClaude: live parent -> excluded' ($ids -join ',')
     Assert-True (-not ($ids -contains 203)) 'Select-OrphanClaude: other executable path -> excluded' ($ids -join ',')
     Assert-Equal 2 $ids.Count 'Select-OrphanClaude: exactly the two orphans'
+
+    # ---- Save-PreviousLog --------------------------------------------------
+    $logs = Join-Path $RunDir 'logs'
+    Assert-True ((Save-PreviousLog $RunDir 'svc.log') -eq $null) 'Save-PreviousLog: missing log -> null'
+    Set-Content -Path (Join-Path $RunDir 'svc.log') -Value '' -NoNewline -Encoding ascii
+    Assert-True (((Save-PreviousLog $RunDir 'svc.log') -eq $null) -and (Test-Path (Join-Path $RunDir 'svc.log'))) 'Save-PreviousLog: empty log stays, nothing archived'
+    Set-Content -Path (Join-Path $RunDir 'svc.log') -Value 'Started FakeApplication' -Encoding ascii
+    (Get-Item (Join-Path $RunDir 'svc.log')).LastWriteTime = [datetime]'2026-10-24 09:15:30.123'
+    $moved = Save-PreviousLog $RunDir 'svc.log'
+    Assert-True (($moved -eq (Join-Path $logs 'svc-20261024-091530-123.log')) -and (-not (Test-Path (Join-Path $RunDir 'svc.log'))) `
+        -and ((Get-Content $moved -Raw) -match 'Started FakeApplication')) 'Save-PreviousLog: moves the log, named by its last write time' "$moved"
+    # keep only the newest N of the same name; other names (svc-extra) are never pruned
+    Set-Content -Path (Join-Path $logs 'svc-extra-20200101-000000-000.log') -Value 'x' -Encoding ascii
+    foreach ($i in 1..4) {
+        Set-Content -Path (Join-Path $RunDir 'svc.log') -Value "run $i" -Encoding ascii
+        (Get-Item (Join-Path $RunDir 'svc.log')).LastWriteTime = ([datetime]'2026-10-25 00:00:00').AddMinutes($i)
+        $null = Save-PreviousLog $RunDir 'svc.log' 3
+    }
+    $kept = @(Get-ChildItem $logs -Filter 'svc-2*.log' | Sort-Object Name | ForEach-Object { $_.Name })
+    Assert-True (($kept.Count -eq 3) -and ($kept[0] -eq 'svc-20261025-000200-000.log') -and ($kept[2] -eq 'svc-20261025-000400-000.log')) `
+        'Save-PreviousLog: keeps the newest N archives of that log' ($kept -join ',')
+    Assert-True (Test-Path (Join-Path $logs 'svc-extra-20200101-000000-000.log')) 'Save-PreviousLog: another log name is not pruned'
+    # a log held open for writing cannot be moved -> null, file untouched
+    Set-Content -Path (Join-Path $RunDir 'busy.log') -Value 'in use' -Encoding ascii
+    $fs = [IO.File]::Open((Join-Path $RunDir 'busy.log'), 'Open', 'ReadWrite', 'None')
+    try {
+        Assert-True (((Save-PreviousLog $RunDir 'busy.log') -eq $null) -and (Test-Path (Join-Path $RunDir 'busy.log'))) 'Save-PreviousLog: log in use -> null, left in place'
+    } finally { $fs.Dispose() }
 }
 catch {
     $script:failures++

@@ -29,6 +29,35 @@ function Import-PublicEnv([string]$EnvFile) {
     }
 }
 
+# Before a run rewrites <RunDir>\<LogName>, moves the previous run's file (when it has content) to
+# <RunDir>\logs\<base>-<yyyyMMdd-HHmmss-fff><ext>, stamped with its last write time (= when that run
+# last wrote), and keeps only the newest $Keep archives of that log name. A restart thus keeps the
+# previous output, and a readiness check never reads the previous run's lines.
+# Answers the archive path, or $null when there was nothing to move or the move failed (file in use).
+function Save-PreviousLog([string]$RunDir, [string]$LogName, [int]$Keep = 20) {
+    try {
+        $src = Join-Path $RunDir $LogName
+        if (-not (Test-Path -LiteralPath $src -PathType Leaf)) { return $null }
+        $item = Get-Item -LiteralPath $src
+        if ($item.Length -eq 0) { return $null }
+        $archiveDir = Join-Path $RunDir 'logs'
+        New-Item -ItemType Directory -Force $archiveDir | Out-Null
+        $base = [IO.Path]::GetFileNameWithoutExtension($LogName)
+        $ext  = [IO.Path]::GetExtension($LogName)
+        $dest = Join-Path $archiveDir ('{0}-{1}{2}' -f $base, $item.LastWriteTime.ToString('yyyyMMdd-HHmmss-fff'), $ext)
+        if (Test-Path -LiteralPath $dest) { return $null }   # same log archived already within the same millisecond
+        Move-Item -LiteralPath $src -Destination $dest -ErrorAction Stop
+        # anchored on the stamp, so 'front' never prunes 'front-build' archives
+        $own = '^' + [regex]::Escape($base) + '-\d{8}-\d{6}-\d{3}' + [regex]::Escape($ext) + '$'
+        Get-ChildItem -LiteralPath $archiveDir -File -ErrorAction SilentlyContinue |
+            Where-Object { $_.Name -match $own } | Sort-Object Name -Descending |
+            Select-Object -Skip $Keep | Remove-Item -Force -ErrorAction SilentlyContinue
+        return $dest
+    } catch {
+        return $null
+    }
+}
+
 # <RunDir>\<Name>.json: wrapper (cmd) pid/start plus the app process pid/start/image.
 # $AppPid $null (or the process is already gone) writes the three app fields as null.
 function Write-ProcRecord([string]$RunDir, [string]$Name, [int]$WrapperPid, $AppPid) {

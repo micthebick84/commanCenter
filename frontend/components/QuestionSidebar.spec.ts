@@ -27,6 +27,7 @@ describe('QuestionSidebar (스펙 2026-09-05 §3)', () => {
   })
   afterEach(() => {
     authStub.isAdmin = false
+    localStorage.clear()
   })
 
   it('목록을 상태·레포 캡션과 함께 그리고, 활성 행을 강조하며, 선택/새 질문을 emit한다', async () => {
@@ -58,6 +59,43 @@ describe('QuestionSidebar (스펙 2026-09-05 §3)', () => {
     await flushPromises()
     expect(useApiMock).toHaveBeenCalledWith('/api/questions', { params: { all: 'true' } })
     expect(w.text()).toContain('· user1')
+    w.unmount()
+  })
+
+  it('관리자가 켠 전체 보기는 저장돼 다음 방문에도 켜진다 — 일반 사용자에게는 적용하지 않는다', async () => {
+    authStub.isAdmin = true
+    const first = mount(QuestionSidebar, { props: { activeId: null } })
+    await flushPromises()
+    await first.find('[data-test="all-toggle"]').trigger('click')
+    await flushPromises()
+    expect(localStorage.getItem('netis-maker:questions-all')).toBe('true')
+    first.unmount()
+
+    useApiMock.mockClear()
+    const again = mount(QuestionSidebar, { props: { activeId: null } })
+    await flushPromises()
+    expect(useApiMock).toHaveBeenCalledWith('/api/questions', { params: { all: 'true' } })
+    expect(again.text()).toContain('· user1')
+    again.unmount()
+
+    authStub.isAdmin = false
+    useApiMock.mockClear()
+    const user = mount(QuestionSidebar, { props: { activeId: null } })
+    await flushPromises()
+    expect(useApiMock).toHaveBeenCalledWith('/api/questions', { params: { all: 'false' } })
+    expect(useApiMock).not.toHaveBeenCalledWith('/api/questions', { params: { all: 'true' } })
+    user.unmount()
+  })
+
+  it('관리자가 전체 보기를 끄면 저장값을 지운다', async () => {
+    authStub.isAdmin = true
+    localStorage.setItem('netis-maker:questions-all', 'true')
+    const w = mount(QuestionSidebar, { props: { activeId: null } })
+    await flushPromises()
+    await w.find('[data-test="all-toggle"]').trigger('click')
+    await flushPromises()
+    expect(localStorage.getItem('netis-maker:questions-all')).toBeNull()
+    expect(useApiMock).toHaveBeenLastCalledWith('/api/questions', { params: { all: 'false' } })
     w.unmount()
   })
 

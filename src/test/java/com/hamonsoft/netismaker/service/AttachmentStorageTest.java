@@ -10,6 +10,7 @@ import org.springframework.mock.web.MockMultipartFile;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
+import java.nio.file.FileSystemException;
 import java.nio.file.Files;
 import java.nio.file.LinkOption;
 import java.nio.file.Path;
@@ -312,8 +313,23 @@ class AttachmentStorageTest {
         assertThat(tmp.resolve("sub/task-1")).isDirectory();
     }
 
+    /** 심볼릭 링크를 만들 권한이 없는 환경(개발자 모드가 꺼진 Windows)이면 건너뛴다 — CI(Linux)에서는 돈다. */
+    private void assumeSymlinkSupport() throws IOException {
+        Path probe = tmp.resolve("symlink-probe");
+        boolean ok;
+        try {
+            Files.createSymbolicLink(probe, tmp);
+            ok = true;
+        } catch (FileSystemException | UnsupportedOperationException e) {
+            ok = false;
+        }
+        assumeTrue(ok, "심볼릭 링크를 만들 수 없는 환경");
+        Files.delete(probe);
+    }
+
     @Test
     void deleteOwnerDirectory는_링크나_일반_파일이면_거부한다() throws Exception {
+        assumeSymlinkSupport();
         Path outside = Files.createDirectories(tmp.resolve("link-target"));   // 이름이 정규형이 아니라 스캔 대상 아님
         Files.writeString(outside.resolve("keep.txt"), "x");
         Files.createSymbolicLink(tmp.resolve("task-1"), outside);
@@ -348,6 +364,7 @@ class AttachmentStorageTest {
 
     @Test
     void scanOwnerDirectories는_정규형_실제_디렉터리만_돌려주고_나머지는_건너뜀으로_센다() throws Exception {
+        assumeSymlinkSupport();
         Files.createDirectories(tmp.resolve("task-3/sub"));
         Files.createDirectories(tmp.resolve("question-4"));
         Files.createDirectories(tmp.resolve("task-03"));

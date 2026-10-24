@@ -3,6 +3,8 @@ package com.hamonsoft.netismaker.controller;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.hamonsoft.netismaker.TestcontainersConfig;
 import com.hamonsoft.netismaker.dto.TaskCreateRequest;
+import com.hamonsoft.netismaker.entity.InterviewSession;
+import com.hamonsoft.netismaker.entity.InterviewStatus;
 import com.hamonsoft.netismaker.repository.TaskAttachmentRepository;
 import com.hamonsoft.netismaker.repository.TaskRepository;
 import org.junit.jupiter.api.BeforeEach;
@@ -329,5 +331,69 @@ class TaskAttachmentApiIntegrationTest {
         // taskId==null 단락(InterviewService.attachmentRefsFor)을 타지 않았다는 증거 —
         // claim된 세션이 실제로 이 task에 물려 있어야 findByTaskIdOrderByIdAsc가 진짜 실행된 것이다.
         assertThat(sessionRepo.findById(sessionId).orElseThrow().getTaskId()).isEqualTo(taskId);
+    }
+
+    // ── "이 대화로 작업 등록" (스펙 2026-10-24 §4.1) ─────────────────────────────
+
+    private long questionOf(String owner, InterviewStatus status) {
+        InterviewSession q = InterviewSession.createQuestion("micthebick84/netis7.0", "main", "결재선 비교",
+                "옛앱 결재선과 비교해 줘", owner, List.of(), null, null);
+        q.setRepoAlias("Netis7.0");
+        q.setStatus(status);
+        return sessionRepo.save(q).getId();
+    }
+
+    private MockMultipartFile metaFrom(long questionId) throws Exception {
+        return new MockMultipartFile("meta", "meta", "application/json",
+                json.writeValueAsBytes(new TaskCreateRequest(1L, "main", "결재선 이식", "설명", null, questionId)));
+    }
+
+    @Test
+    void 질문에서_이어진_등록은_대화_전문을_마지막_첨부로_남긴다() throws Exception {
+        long qid = questionOf("user1", InterviewStatus.AWAITING_INPUT);
+
+        String responseJson = mvc.perform(multipart("/api/tasks")
+                        .file(metaFrom(qid))
+                        .file(filePart("요구사항.txt", "내용"))
+                        .with(userJwt("user1")))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.sourceQuestionId").value(qid))
+                .andReturn().getResponse().getContentAsString(StandardCharsets.UTF_8);
+        long taskId = json.readTree(responseJson).get("id").asLong();
+
+        String transcriptName = "question-" + qid + "-대화.md";
+        mvc.perform(get("/api/tasks/" + taskId).with(userJwt("user1")))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.sourceQuestionId").value(qid))
+                .andExpect(jsonPath("$.attachments[0].fileName").value("요구사항.txt"))
+                .andExpect(jsonPath("$.attachments[1].fileName").value(transcriptName));
+        Path onDisk = Path.of(attachmentDir, "task-" + taskId + "/2-" + transcriptName);
+        assertThat(Files.readString(onDisk, StandardCharsets.UTF_8))
+                .startsWith("# 질문 #" + qid + " 대화 전문 — 결재선 비교\n")
+                .contains("## 첫 질문\n\n옛앱 결재선과 비교해 줘");
+        assertThat(attachmentRepo.findByTaskIdOrderByIdAsc(taskId).get(1).getContentType())
+                .isEqualTo("text/markdown");
+    }
+
+    @Test
+    void 남의_질문은_403_답변_중이면_409이고_작업이_생기지_않는다() throws Exception {
+        long others = questionOf("user1", InterviewStatus.AWAITING_INPUT);
+        mvc.perform(post("/api/tasks").with(userJwt("user2"))
+                        .contentType("application/json")
+                        .content(json.writeValueAsString(
+                                new TaskCreateRequest(1L, "main", "남의 질문", "설명", null, others))))
+                .andExpect(status().isForbidden());
+
+        long answering = questionOf("user1", InterviewStatus.QUEUED);
+        mvc.perform(multipart("/api/tasks")
+                        .file(metaFrom(answering))
+                        .file(filePart("요구사항.txt", "내용"))
+                        .with(userJwt("user1")))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.message").value("답변이 끝난 뒤에 작업으로 등록할 수 있습니다"));
+
+        assertThat(taskRepo.count()).isZero();
+        assertThat(attachmentRepo.count()).isZero();
+        assertThat(Files.exists(Path.of(attachmentDir))).isFalse();
     }
 }

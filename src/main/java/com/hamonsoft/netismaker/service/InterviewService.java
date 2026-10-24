@@ -669,6 +669,22 @@ public class InterviewService {
         }
     }
 
+    /**
+     * "이 대화로 작업 등록"이 첨부할 질문 대화 전문 (스펙 2026-10-24 §4.1). 등록자가 그 질문을 볼 수 있어야 한다 —
+     * 없거나 질문이 아니면 404, 소유자도 관리자도 아니면 403(QuestionService.requireViewable과 같은 규칙).
+     * 답변 중(QUEUED·RUNNING)이면 아직 대화가 끝나지 않았으므로 409. 끝난 질문(종료·만료·실패)도 등록할 수 있다.
+     */
+    @Transactional(readOnly = true)
+    public String questionTranscript(Long questionId, String viewerId, boolean isAdmin) {
+        InterviewSession q = requireKind(questionId, InterviewKind.QUESTION);
+        requireOwner(q, viewerId, isAdmin);
+        if (q.getStatus() == InterviewStatus.QUEUED || q.getStatus() == InterviewStatus.RUNNING) {
+            throw TaskException.conflict("답변이 끝난 뒤에 작업으로 등록할 수 있습니다");
+        }
+        return QuestionTranscript.render(q, turnRepo.findBySessionIdOrderBySeqAsc(questionId),
+                questionAttachmentRepo.findBySessionIdOrderByIdAsc(questionId));
+    }
+
     /** 질문 세션은 플랜/등록 경로 진입 불가 (스펙 §6-③). 상태와 무관하게 400. */
     private void requireNotQuestion(InterviewSession s, String action) {
         if (s.isQuestion()) {

@@ -8,6 +8,8 @@ import com.hamonsoft.netismaker.entity.*;
 import com.hamonsoft.netismaker.repository.*;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.EnumSource;
 import org.mockito.ArgumentCaptor;
 import org.springframework.http.HttpStatus;
 import org.springframework.test.util.ReflectionTestUtils;
@@ -1040,6 +1042,63 @@ class InterviewServiceTest {
         InterviewSession s = service.createForTask(t, "claude-opus-5-5", "high", List.of());
 
         assertThat(s.getRefRepos()).isNotNull().isEmpty();
+    }
+
+    // ── 질문 대화 전문 — "이 대화로 작업 등록" (스펙 2026-10-24 §4.1) ─────────────────
+
+    @Test
+    void questionTranscript_rejects_missing_or_interview_sessions_with_404() {
+        when(sessionRepo.findActiveById(1L)).thenReturn(Optional.empty());
+        when(sessionRepo.findActiveById(2L)).thenReturn(Optional.of(session(2L, InterviewStatus.AWAITING_INPUT)));
+
+        for (long id : new long[]{1L, 2L}) {
+            assertThatThrownBy(() -> service.questionTranscript(id, "u1", true))
+                    .isInstanceOfSatisfying(TaskException.class,
+                            e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.NOT_FOUND));
+        }
+        verify(turnRepo, never()).findBySessionIdOrderBySeqAsc(any());
+    }
+
+    @Test
+    void questionTranscript_rejects_other_users_with_403_but_admin_may_read() {
+        when(sessionRepo.findActiveById(5L)).thenReturn(Optional.of(questionSession(5L, InterviewStatus.AWAITING_INPUT)));
+        when(turnRepo.findBySessionIdOrderBySeqAsc(5L)).thenReturn(List.of());
+        when(questionAttachmentRepo.findBySessionIdOrderByIdAsc(5L)).thenReturn(List.of());
+
+        assertThatThrownBy(() -> service.questionTranscript(5L, "u2", false))
+                .isInstanceOfSatisfying(TaskException.class,
+                        e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.FORBIDDEN));
+        assertThat(service.questionTranscript(5L, "admin", true)).startsWith("# 질문 #5 대화 전문 — T\n");
+        assertThat(service.questionTranscript(5L, "u1", false)).startsWith("# 질문 #5 대화 전문 — T\n");
+    }
+
+    @ParameterizedTest
+    @EnumSource(value = InterviewStatus.class, names = {"QUEUED", "RUNNING"})
+    void questionTranscript_while_answering_is_409(InterviewStatus st) {
+        when(sessionRepo.findActiveById(5L)).thenReturn(Optional.of(questionSession(5L, st)));
+
+        assertThatThrownBy(() -> service.questionTranscript(5L, "u1", false))
+                .isInstanceOfSatisfying(TaskException.class,
+                        e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT))
+                .hasMessage("답변이 끝난 뒤에 작업으로 등록할 수 있습니다");
+        verify(turnRepo, never()).findBySessionIdOrderBySeqAsc(any());
+    }
+
+    @Test
+    void questionTranscript_of_an_answered_or_closed_question_renders() {
+        for (InterviewStatus st : List.of(InterviewStatus.AWAITING_INPUT, InterviewStatus.CANCELLED)) {
+            when(sessionRepo.findActiveById(5L)).thenReturn(Optional.of(questionSession(5L, st)));
+            when(turnRepo.findBySessionIdOrderBySeqAsc(5L)).thenReturn(List.of(
+                    InterviewTurn.of(5L, 0, "assistant", "question", "AuthController에서 처리합니다", null)));
+            when(questionAttachmentRepo.findBySessionIdOrderByIdAsc(5L)).thenReturn(List.of(
+                    QuestionAttachment.create(5L, null, "spec.pdf", "question-5/create/1-spec.pdf",
+                            "application/pdf", 3L, null, "u1")));
+
+            String md = service.questionTranscript(5L, "u1", false);
+
+            assertThat(md).contains("## 첫 질문\n\nq?\n\n첨부: spec.pdf\n")
+                    .contains("### 답변 (턴 0)\n\nAuthController에서 처리합니다\n");
+        }
     }
 
 }

@@ -83,8 +83,9 @@ public class TaskController {
     public ResponseEntity<TaskResponse> create(@RequestBody @Valid TaskCreateRequest req,
                                                JwtAuthenticationToken auth) {
         String userId = AuthContext.requireUserId(auth);
-        Task t = taskService.create(req, userId, AuthContext.email(auth));
-        TaskResponse body = forViewer(TaskResponse.of(t, null), AuthContext.isAdmin(auth));
+        boolean isAdmin = AuthContext.isAdmin(auth);
+        Task t = taskService.create(req, userId, AuthContext.email(auth), isAdmin);
+        TaskResponse body = forViewer(TaskResponse.of(t, null), isAdmin);
         return ResponseEntity.created(URI.create("/api/tasks/" + t.getId())).body(body);
     }
 
@@ -98,8 +99,9 @@ public class TaskController {
             @RequestPart(value = "files", required = false) List<MultipartFile> files,
             JwtAuthenticationToken auth) {
         String userId = AuthContext.requireUserId(auth);
-        Task t = taskService.create(req, files, userId, AuthContext.email(auth));
-        TaskResponse body = forViewer(TaskResponse.of(t, null), AuthContext.isAdmin(auth));
+        boolean isAdmin = AuthContext.isAdmin(auth);
+        Task t = taskService.create(req, files, userId, AuthContext.email(auth), isAdmin);
+        TaskResponse body = forViewer(TaskResponse.of(t, null), isAdmin);
         return ResponseEntity.created(URI.create("/api/tasks/" + t.getId())).body(body);
     }
 

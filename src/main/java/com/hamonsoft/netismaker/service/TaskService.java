@@ -33,6 +33,7 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.multipart.MultipartFile;
 
 import java.math.BigDecimal;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 import java.time.OffsetDateTime;
 import java.util.ArrayList;
@@ -115,32 +116,28 @@ public class TaskService {
     /** requesterEmail: JWT email — 종료 메일 수신 주소 (스펙 2026-10-14 §7). null이면 저장하지 않는다. */
     @Transactional
     public Task create(TaskCreateRequest req, String requesterId, String requesterEmail) {
-        long active = taskRepo.countActiveByRequester(requesterId);
-        if (active >= userConcurrentLimit) {
-            throw TaskException.tooManyRequests(
-                    "동시에 보유할 수 있는 미완료 작업 한도(" + userConcurrentLimit + ")를 초과했습니다");
-        }
-        RepoCatalogService.ResolvedRepo repo = repoCatalogService.resolveForRegistration(req.repoCatalogId());
-        // 읽기 전용 참조 repo (스펙 2026-10-24 §4.1) — 대상 기준 검증·스냅샷(400이면 저장 전에 끝난다)
-        List<RefRepo> refs = repoCatalogService.resolveReferences(repo.catalogId(), req.refRepos());
-        // 모델/effort/MCP는 승인 시점에 관리자가 결정 — 등록은 서버 기본값으로 시작한다.
-        Task t = Task.create(repo.ownerRepo(), req.githubBranch(), req.title(),
-                             req.description(), requesterId, maxRetry,
-                             new ArrayList<>(), null, null);
-        t.setStatus(TaskStatus.AWAITING_APPROVAL);
-        t.setGitUrl(repo.gitUrl());
-        t.setRepoAlias(repo.alias());
-        t.setRepoCatalogId(repo.catalogId());
-        t.setRequesterEmail(requesterEmail);
-        t.setRefRepos(new ArrayList<>(refs));
-        Task saved = taskRepo.save(t);
-        historyRepo.save(TaskStatusHistory.log(saved.getId(), null, TaskStatus.AWAITING_APPROVAL,
-                "user", requesterId, "작업 등록"));
-        return saved;
+        return create(req, requesterId, requesterEmail, false);
     }
 
     /**
-     * 파일 첨부 등록 (스펙 2026-08-16 §6.2). 검증 → 기존 create 재사용(같은 tx) →
+     * requesterIsAdmin: 등록자가 관리자인지 — sourceQuestionId가 있을 때 그 질문을 볼 수 있는지 판정한다 (스펙 2026-10-24 §4.1).
+     * 출처 질문이 있으면 대화 전문을 첨부 순번 1로 남긴다. 쓰기가 실패하면 쓴 파일을 지우고 예외를 그대로 던진다(tx 롤백).
+     */
+    @Transactional
+    public Task create(TaskCreateRequest req, String requesterId, String requesterEmail, boolean requesterIsAdmin) {
+        Registration reg = register(req, requesterId, requesterEmail, requesterIsAdmin);
+        List<String> written = new ArrayList<>();
+        try {
+            attachTranscript(reg, 1, requesterId, written);
+        } catch (RuntimeException e) {
+            written.forEach(attachmentStorage::deleteQuietly);
+            throw e;   // tx 롤백 → task/메타 행 전부 취소
+        }
+        return reg.task();
+    }
+
+    /**
+     * 파일 첨부 등록 (스펙 2026-08-16 §6.2). 검증 → 등록(같은 tx) →
      * 메타 행 + 디스크 쓰기. 실패 시 tx 롤백 + 이미 쓴 파일 best-effort 삭제 — 부분 상태 없음.
      * 경로의 ordinal은 업로드 순번(1..N) — IDENTITY라 INSERT 전 id를 못 쓴다.
      */
@@ -151,9 +148,20 @@ public class TaskService {
 
     @Transactional
     public Task create(TaskCreateRequest req, List<MultipartFile> files, String requesterId, String requesterEmail) {
+        return create(req, files, requesterId, requesterEmail, false);
+    }
+
+    /**
+     * 출처 질문이 있으면 대화 전문을 사용자 파일 1..N 다음 순번 N+1로 남긴다 (스펙 2026-10-24 §4.1) —
+     * 사용자 첨부 한도(validate)는 사용자 파일만 센다.
+     */
+    @Transactional
+    public Task create(TaskCreateRequest req, List<MultipartFile> files, String requesterId, String requesterEmail,
+                       boolean requesterIsAdmin) {
         List<MultipartFile> attached = files == null ? List.of() : files;
         attachmentStorage.validate(attached);
-        Task saved = create(req, requesterId, requesterEmail);   // 내부 호출 — 이미 @Transactional 안이라 같은 tx
+        Registration reg = register(req, requesterId, requesterEmail, requesterIsAdmin);
+        Task saved = reg.task();
         List<String> written = new ArrayList<>();
         try {
             int ordinal = 1;
@@ -166,11 +174,64 @@ public class TaskService {
                 attachmentStorage.write(rel, f);
                 ordinal++;
             }
+            attachTranscript(reg, ordinal, requesterId, written);
         } catch (RuntimeException e) {
             written.forEach(attachmentStorage::deleteQuietly);
             throw e;   // tx 롤백 → task/메타 행 전부 취소
         }
         return saved;
+    }
+
+    /** 등록 결과 — 저장한 작업과, 출처 질문이 있으면 첨부할 대화 전문(없으면 null). */
+    private record Registration(Task task, String transcript) {}
+
+    /**
+     * 작업 행 + 등록 이력. 거절(429 한도·400 카탈로그/참조·403/404/409 출처 질문)은 모두 저장 전에 난다.
+     * 출처 질문은 등록자가 볼 수 있고 답변이 끝난 것이어야 한다(InterviewService.questionTranscript).
+     */
+    private Registration register(TaskCreateRequest req, String requesterId, String requesterEmail,
+                                  boolean requesterIsAdmin) {
+        long active = taskRepo.countActiveByRequester(requesterId);
+        if (active >= userConcurrentLimit) {
+            throw TaskException.tooManyRequests(
+                    "동시에 보유할 수 있는 미완료 작업 한도(" + userConcurrentLimit + ")를 초과했습니다");
+        }
+        RepoCatalogService.ResolvedRepo repo = repoCatalogService.resolveForRegistration(req.repoCatalogId());
+        // 읽기 전용 참조 repo (스펙 2026-10-24 §4.1) — 대상 기준 검증·스냅샷(400이면 저장 전에 끝난다)
+        List<RefRepo> refs = repoCatalogService.resolveReferences(repo.catalogId(), req.refRepos());
+        String transcript = req.sourceQuestionId() == null ? null
+                : interviewService.questionTranscript(req.sourceQuestionId(), requesterId, requesterIsAdmin);
+        // 모델/effort/MCP는 승인 시점에 관리자가 결정 — 등록은 서버 기본값으로 시작한다.
+        Task t = Task.create(repo.ownerRepo(), req.githubBranch(), req.title(),
+                             req.description(), requesterId, maxRetry,
+                             new ArrayList<>(), null, null);
+        t.setStatus(TaskStatus.AWAITING_APPROVAL);
+        t.setGitUrl(repo.gitUrl());
+        t.setRepoAlias(repo.alias());
+        t.setRepoCatalogId(repo.catalogId());
+        t.setRequesterEmail(requesterEmail);
+        t.setRefRepos(new ArrayList<>(refs));
+        t.setSourceQuestionId(req.sourceQuestionId());
+        Task saved = taskRepo.save(t);
+        historyRepo.save(TaskStatusHistory.log(saved.getId(), null, TaskStatus.AWAITING_APPROVAL,
+                "user", requesterId, "작업 등록"));
+        return new Registration(saved, transcript);
+    }
+
+    /**
+     * 대화 전문을 작업 첨부로 남긴다 — 사용자 첨부와 같은 순서(경로 → 메타 행 → 정리 목록 → 쓰기).
+     * 정리 목록에 쓰기보다 먼저 넣어 반쯤 쓰인 파일도 롤백 때 지운다. 대화 전문이 없으면 아무것도 하지 않는다.
+     */
+    private void attachTranscript(Registration reg, int ordinal, String requesterId, List<String> written) {
+        if (reg.transcript() == null) return;
+        Task saved = reg.task();
+        String name = QuestionTranscript.fileName(saved.getSourceQuestionId());
+        String rel = attachmentStorage.relativePath(saved.getId(), ordinal, name);
+        attachmentRepo.save(TaskAttachment.create(saved.getId(), AttachmentStorage.sanitize(name), rel,
+                QuestionTranscript.CONTENT_TYPE, reg.transcript().getBytes(StandardCharsets.UTF_8).length,
+                requesterId));
+        written.add(rel);
+        attachmentStorage.writeText(rel, reg.transcript());
     }
 
     @Transactional(readOnly = true)

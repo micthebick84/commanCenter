@@ -187,6 +187,60 @@ describe('layouts/default — 요청 탭·관리자 배지', () => {
     w.unmount()
   })
 
+  describe('lt.md 하단 "작업" 배지 (확인 필요 건수)', () => {
+    const tasksPage = {
+      content: [
+        { status: 'INTERVIEW_INPUT' }, // 누구에게나 확인 필요
+        { status: 'AWAITING_APPROVAL' }, // 관리자에게만 확인 필요
+        { status: 'IMPLEMENTING' },
+        { status: 'DEPLOYED' },
+      ],
+    }
+    function routeApi(url: string) {
+      return Promise.resolve(url === '/api/tasks' ? tasksPage : { received: 0, attention: 0 })
+    }
+
+    it('관리자는 전체 작업에서 관리자 대기까지 센다', async () => {
+      authStub.isAdmin = true
+      useApiMock.mockImplementation(routeApi)
+      await setViewportWidth(390)
+      try {
+        const w = mountLayout()
+        await flushPromises()
+        expect(useApiMock).toHaveBeenCalledWith('/api/tasks', { params: { mine: 'false', size: 50 } })
+        expect(w.find('[data-test="tasks-badge"]').text()).toBe('2')
+        w.unmount()
+      } finally {
+        await setViewportWidth(1024)
+      }
+    })
+
+    it('일반 사용자는 내 작업에서 사람 입력·실패만 센다', async () => {
+      authStub.isAdmin = false
+      useApiMock.mockImplementation(routeApi)
+      await setViewportWidth(390)
+      try {
+        const w = mountLayout()
+        await flushPromises()
+        expect(useApiMock).toHaveBeenCalledWith('/api/tasks', { params: { mine: 'true', size: 50 } })
+        expect(w.find('[data-test="tasks-badge"]').text()).toBe('1')
+        w.unmount()
+      } finally {
+        await setViewportWidth(1024)
+      }
+    })
+
+    it('넓은 화면에서는 작업 목록을 조회하지 않는다', async () => {
+      authStub.isAdmin = true
+      useApiMock.mockImplementation(routeApi)
+      const w = mountLayout()
+      await flushPromises()
+      expect(useApiMock).not.toHaveBeenCalledWith('/api/tasks', expect.anything())
+      expect(w.find('[data-test="tasks-badge"]').exists()).toBe(false)
+      w.unmount()
+    })
+  })
+
   it('조회 실패는 무시하고 배지 없이 그린다', async () => {
     authStub.isAdmin = true
     useApiMock.mockRejectedValue(new Error('boom'))

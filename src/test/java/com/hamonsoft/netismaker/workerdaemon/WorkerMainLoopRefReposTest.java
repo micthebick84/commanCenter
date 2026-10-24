@@ -175,7 +175,7 @@ class WorkerMainLoopRefReposTest {
 
     @ParameterizedTest
     @EnumSource(value = ImplementationMode.class, names = {"DIRECT", "REVIEW"})
-    void refs_are_prepared_in_order_between_the_target_fetch_and_the_target_worktree(ImplementationMode mode)
+    void refs_are_prepared_in_order_before_the_target_fetch_and_the_target_worktree(ImplementationMode mode)
             throws Exception {
         String plan = "# 계획\n### 작업 1: A\n";
         claims(mode, 1, 80, plan, true);
@@ -183,10 +183,11 @@ class WorkerMainLoopRefReposTest {
 
         loop("").pollAndProcess();
 
+        // 대상 fetch → 대상 worktree 사이에는 아무것도 끼지 않는다 — worktree 기준(origin/main)과 baseSha가 같게
         InOrder order = inOrder(repos, worktrees, claude, reporter);
-        order.verify(repos).ensureFresh(any(), eq("main"));
         order.verify(worktrees).createRefWorktree(7L, ref12);
         order.verify(worktrees).createRefWorktree(7L, ref13);
+        order.verify(repos).ensureFresh(any(), eq("main"));
         order.verify(worktrees).create(any(), anyString(), eq("main"), eq(7L), anyString(), anyInt());
         order.verify(claude).exec(anyString(), any(), any(), anyList(), anyBoolean(), any(), any(), any());
         order.verify(reporter).reportTerminal(eq(7L), any());
@@ -229,12 +230,59 @@ class WorkerMainLoopRefReposTest {
                 "참조 repo 준비 실패: 둘째(release/9) — fatal: Remote branch release/9 not found in upstream origin");
         assertThat(r.implementationAttempt()).isEqualTo(2);
         assertThat(r.headBranch()).isNull();
+        verifyNoInteractions(repos);   // 대상은 fetch도 하지 않는다
         verify(worktrees, never()).create(any(), anyString(), anyString(), anyLong(), anyString(), anyInt());
         verifyNoInteractions(claude);
         verifyNoInteractions(gitOps);
         verifyRefsDiscarded();   // 실패한 참조의 남은 폴더까지
         verify(worktrees, never()).discard(anyString(), any(), anyLong());
         verify(worktrees, never()).refChangeWarning(any());
+    }
+
+    /** 참조를 다 준비한 뒤 대상 fetch가 실패하면 — 기존 사유 그대로 보고하고, 준비한 참조는 보고 전에 지운다. */
+    @Test
+    void a_target_fetch_failure_after_the_refs_are_ready_discards_them() throws Exception {
+        claims(ImplementationMode.REVIEW, 2, 80, "### 작업 1: A", true);
+        when(repos.ensureFresh(any(), eq("main")))
+                .thenThrow(new IOException("git failed (128): fatal: couldn't find remote ref main"));
+
+        loop("").pollAndProcess();
+
+        WorkerResultRequest r = reported();
+        assertThat(r.status()).isEqualTo(TaskStatus.IMPLEMENTATION_FAILED);
+        assertThat(r.failureReason()).isEqualTo("레포 fetch 실패: git failed (128): fatal: couldn't find remote ref main");
+        assertThat(r.implementationAttempt()).isEqualTo(2);
+        assertThat(r.headBranch()).isNull();
+        InOrder order = inOrder(worktrees, repos, reporter);
+        order.verify(worktrees).createRefWorktree(7L, ref12);
+        order.verify(worktrees).createRefWorktree(7L, ref13);
+        order.verify(repos).ensureFresh(any(), eq("main"));
+        order.verify(worktrees).discardRefWorktree(7L, ref12);
+        order.verify(worktrees).discardRefWorktree(7L, ref13);
+        order.verify(reporter).reportTerminal(eq(7L), any());
+        verifyRefsDiscarded();   // 한 번씩만 — 보고 뒤에 또 지우지 않는다
+        verify(worktrees, never()).create(any(), anyString(), anyString(), anyLong(), anyString(), anyInt());
+        verifyNoInteractions(claude);
+        verifyNoInteractions(gitOps);
+        verify(worktrees, never()).refChangeWarning(any());
+        verify(worktrees, never()).discard(anyString(), any(), anyLong());
+    }
+
+    /** 참조가 없는 작업의 대상 fetch 실패는 예전 그대로 — 참조 메서드를 부르지 않는다. */
+    @Test
+    void a_target_fetch_failure_without_refs_is_reported_as_before() throws Exception {
+        claims(ImplementationMode.DIRECT, 1, 45, null, false);
+        when(repos.ensureFresh(any(), eq("main"))).thenThrow(new IOException("network down"));
+
+        loop("").pollAndProcess();
+
+        WorkerResultRequest r = reported();
+        assertThat(r.status()).isEqualTo(TaskStatus.IMPLEMENTATION_FAILED);
+        assertThat(r.failureReason()).isEqualTo("레포 fetch 실패: network down");
+        verify(worktrees, never()).createRefWorktree(anyLong(), any());
+        verify(worktrees, never()).discardRefWorktree(anyLong(), any());
+        verify(worktrees, never()).create(any(), anyString(), anyString(), anyLong(), anyString(), anyInt());
+        verifyNoInteractions(claude);
     }
 
     /** claim의 참조 원소가 이상해(카탈로그 id 없음 등) 런타임 예외가 나도 준비 실패로 끝난다 — 잡히지 않은 예외가 아니다. */
@@ -251,6 +299,7 @@ class WorkerMainLoopRefReposTest {
         verify(worktrees, never()).createRefWorktree(7L, ref13);   // 하나라도 실패하면 거기서 멈춘다
         verify(worktrees).discardRefWorktree(7L, ref12);
         verify(worktrees, never()).discardRefWorktree(7L, ref13);
+        verifyNoInteractions(repos);
         verifyNoInteractions(claude);
     }
 
@@ -278,6 +327,7 @@ class WorkerMainLoopRefReposTest {
         assertThat(r.status()).isEqualTo(TaskStatus.IMPLEMENTATION_FAILED);
         assertThat(r.failureReason()).startsWith("시간 초과")
                 .isEqualTo("시간 초과: 참조 repo 준비에 " + prepMinutes * 60 + "초를 써 구현 상한(80분)이 남지 않았습니다");
+        verifyNoInteractions(repos);   // 남은 시간이 없으면 대상 fetch도 하지 않는다
         verifyNoInteractions(claude);
         verify(worktrees, never()).create(any(), anyString(), anyString(), anyLong(), anyString(), anyInt());
         verifyRefsDiscarded();

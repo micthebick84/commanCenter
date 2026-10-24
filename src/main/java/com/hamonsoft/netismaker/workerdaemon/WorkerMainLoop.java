@@ -36,9 +36,10 @@ import java.util.function.LongSupplier;
  *     3) 결과 파싱 → POST result (status=COMPLETED|FAILED)
  *
  *   IMPLEMENTATION 흐름 (구현 방식은 claim의 implementation 블록 — 스펙 2026-10-15, 참조 repo — 스펙 2026-10-24 §6):
- *     1) git fetch/clone (베이스 브랜치 최신화)
- *     2) 참조 repo가 있으면 입력 순서대로 고정 커밋의 참조 worktree(_refs/task-{id}/{카탈로그 id}, 대상 밖) — 하나라도
- *        실패하면 만든 참조를 지우고 구현실패(대상 worktree·claude 없음). 준비에 쓴 시간은 claude 상한에서 뺀다
+ *     1) 참조 repo가 있으면 입력 순서대로 고정 커밋의 참조 worktree(_refs/task-{id}/{카탈로그 id}, 대상 밖) — 하나라도
+ *        실패하면 만든 참조를 지우고 구현실패(대상 fetch·worktree·claude 없음). 준비에 쓴 시간은 claude 상한에서 뺀다.
+ *        대상 fetch보다 먼저 한다 — 대상 fetch와 worktree 생성 사이가 짧아야 worktree 기준과 baseSha가 같다
+ *     2) git fetch/clone (베이스 브랜치 최신화) — 실패하면 만든 참조를 지우고 구현실패
  *     3) WorktreeService.create → 새 브랜치 worktree (재시도는 -rN) + 워커 임시 파일 info/exclude
  *     4) 방식 준비(계획·설계 파일 — 계획 파일 머리에 참조 절, 대신 진행 판정) → 방식별 구현 prompt(끝에 참조 절)
  *        + claude -p exec (worktree에서, --add-dir 없음)
@@ -252,18 +253,10 @@ public class WorkerMainLoop {
         ImplementationMode requested = ImplementationMode.fromWireOrDirect(spec == null ? null : spec.mode());
         int attempt = implementationAttemptOf(task);
 
-        // 1. 베이스 브랜치 최신화 (worktree add 시 origin/{base} 참조)
-        GitRepoCache.CheckedOutRepo repo;
-        try {
-            repo = repos.ensureFresh(task.repoRef(), task.githubBranch());
-        } catch (Exception e) {
-            safePostImplementationFailure(task.id(), attempt,
-                    "레포 fetch 실패: " + e.getMessage(), null, null, null);
-            return;
-        }
-
-        // 2. 참조 repo 준비 — 입력 순서대로 하나씩, 대상 worktree보다 먼저 (스펙 2026-10-24 §6.1~§6.3).
-        //    참조가 없으면 아무것도 부르지 않고 claude 상한도 그대로다
+        // 1. 참조 repo 준비 — 입력 순서대로 하나씩(레포 락도 한 번에 하나), 대상 fetch보다 먼저 (스펙 2026-10-24 §6.1~§6.3).
+        //    대상 fetch와 대상 worktree 생성 사이에 두면 그 틈이 분 단위로 벌어진다 — worktree는 생성 시점의
+        //    origin/{base}에서 분기하고 프롬프트·리뷰·커밋 판정의 baseSha는 fetch 때의 commitSha라, 그 틈에 같은 PC의
+        //    다른 워커가 같은 브랜치를 최신화하면 둘이 어긋난다. 참조가 없으면 아무것도 부르지 않고 claude 상한도 그대로다
         List<WorkerTaskResponse.TaskRefRepo> refs = refsOf(task);
         List<WorkerTaskResponse.TaskRefRepo> attempted = new ArrayList<>();
         List<WorktreeService.RefWorktree> ready = new ArrayList<>();
@@ -277,7 +270,7 @@ public class WorkerMainLoop {
                 try {
                     ready.add(worktrees.createRefWorktree(task.id(), ref));
                 } catch (Exception e) {
-                    // 참조를 다 준비하지 못하면 claude를 실행하지 않는다 — 대상 worktree도 만들지 않는다
+                    // 참조를 다 준비하지 못하면 claude를 실행하지 않는다 — 대상은 fetch도 worktree도 하지 않는다
                     discardRefWorktrees(task.id(), attempted);
                     safePostImplementationFailure(task.id(), attempt,
                             RefRepoPrompts.prepFailureReason(ref, e), null, null, null);
@@ -296,6 +289,18 @@ public class WorkerMainLoop {
                         + "초를 써 구현 상한(" + limit.toMinutes() + "분)이 남지 않았습니다", null, null, null);
                 return;
             }
+        }
+
+        // 2. 베이스 브랜치 최신화 — 대상 worktree 생성 바로 앞 (worktree add 시 origin/{base} 참조).
+        //    실패하면 준비한 참조를 지우고 보고한다(참조가 없으면 아무것도 부르지 않는다)
+        GitRepoCache.CheckedOutRepo repo;
+        try {
+            repo = repos.ensureFresh(task.repoRef(), task.githubBranch());
+        } catch (Exception e) {
+            discardRefWorktrees(task.id(), attempted);
+            safePostImplementationFailure(task.id(), attempt,
+                    "레포 fetch 실패: " + e.getMessage(), null, null, null);
+            return;
         }
 
         // 3~7. 참조 폴더는 어떤 경로로 끝나든 지운다 — 예외도 바깥 catch의 보고보다 먼저 정리된다

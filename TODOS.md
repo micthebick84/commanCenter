@@ -12,16 +12,6 @@
 
 **우선순위**: 낮음. 패널의 "N분 전 갱신" 표기로 운영해 보고 불편이 확인되면 착수.
 
-### [ ] 태블릿(600–1023px) 다이얼로그 inline width
-
-**What**: 다이얼로그 공통 규칙(§4.3)이 `:maximized="$q.screen.lt.md"`라 1024px 미만은 폰이든 태블릿이든 전부 풀스크린이 된다. 태블릿 폭(600–1023px)에서는 화면이 넓어 굳이 풀스크린보다 `width: min(Npx, 100vw)` inline 다이얼로그가 나을 수 있다.
-
-**Why**: 태블릿에서 작업 등록·배포 환경변수 같은 짧은 폼까지 전체화면으로 뜨면 상하 여백이 과하게 남아 답답해 보일 수 있다.
-
-**Context**: `frontend/assets/css/main.css`의 `.q-dialog__inner--maximized` 규칙, 각 다이얼로그의 `:maximized="$q.screen.lt.md"` 바인딩. 별도 브레이크포인트(예: `$q.screen.lt.sm`)를 추가로 들여올지, 아니면 현행 단일 브레이크포인트 규칙(CLAUDE.md)을 유지할지부터 결정 필요. 스펙 §9 "유보(후속)" 항목.
-
-**우선순위**: 낮음.
-
 ### [ ] `QuestionService.ask` 커밋 실패 시 첨부 파일 잔재
 
 **What**: 추가 질문에서 파일을 쓴 뒤 트랜잭션 커밋이 실패하면 `question-{sid}/{seq}/`에 행 없는 파일이 남고, 다음 ask가 같은 turn seq를 다시 받아 같은 디렉터리에 겹쳐 쓴다.
@@ -96,7 +86,7 @@
 ## 완료
 
 ### [x] UI 잔손질 묶음 (2026-10-24, `fix/ui-polish`)
-모바일 사용량 strip 항목별 짧은 라벨(`LIMIT_SHORT_LABELS`) + 갱신 시각 툴팁 · 하단 내비 "작업" 확인 필요 배지(lt.md에서만 `/api/tasks` 50건을 `attentionGroup`으로 셈 — 관리자는 전체, 그 외 내 작업) · 모바일 목록 상세 필터 시트(받은 목록 안의 세부 상태, 그룹 칩과 함께 걸림) · ⋮ 시트가 id로 최신 작업을 그림(10-08 관찰: 배포 중지 직후 삭제가 회색으로 남음) · 모바일 "대화 열기" = maximized 시트(인라인 카드엔 열기 버튼만) · `InterviewHistoryDialog` 767px 쿼리 제거 · 관리자에게 배포중단됨 작업의 보조 "종료 요청" · 데스크톱 보드 카드 진행바가 작업종료를 전부 완료로 · `nextAction` fall-through 제거·테스트 제목·`RejectCloseRequest` 메시지·`forViewer` 중복·`TaskResponse` FQN · 질문 첨부 `expired`(종료된 질문 + 파일 없음) 비활성 칩 · `deriveTitle` 코드포인트 절단·마크다운 기호 제거.
+모바일 사용량 strip 항목별 짧은 라벨(`LIMIT_SHORT_LABELS`) + 갱신 시각 툴팁 · 하단 내비 "작업" 확인 필요 배지(lt.md에서만 `/api/tasks` 50건을 `attentionGroup`으로 셈 — 관리자는 전체, 그 외 내 작업) · 모바일 목록 상세 필터 시트(받은 목록 안의 세부 상태, 그룹 칩과 함께 걸림) · ⋮ 시트가 id로 최신 작업을 그림(10-08 관찰: 배포 중지 직후 삭제가 회색으로 남음) · 모바일 "대화 열기" = maximized 시트(인라인 카드엔 열기 버튼만) · `InterviewHistoryDialog` 767px 쿼리 제거 · 관리자에게 배포중단됨 작업의 보조 "종료 요청" · 데스크톱 보드 카드 진행바가 작업종료를 전부 완료로 · `nextAction` fall-through 제거·테스트 제목·`RejectCloseRequest` 메시지·`forViewer` 중복·`TaskResponse` FQN · 질문 첨부 `expired`(종료된 질문 + 파일 없음) 비활성 칩 · `deriveTitle` 코드포인트 절단·마크다운 기호 제거 · 다이얼로그는 폰(<600px)에서만 전체화면, 태블릿은 일반 너비(`useFullscreenDialog`, 사용자 결정).
 
 ### [x] 하이드레이션 회귀 스모크를 저장소/CI에 편입 (2026-10-08)
 

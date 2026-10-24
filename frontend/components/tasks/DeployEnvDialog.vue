@@ -14,6 +14,7 @@ import {
   type EnvRow,
   type EnvVar,
 } from '~/composables/deployEnvForm'
+import { useFullscreenDialog } from '~/composables/dialogLayout'
 
 const props = defineProps<{
   modelValue: boolean
@@ -104,12 +105,14 @@ async function submit() {
     submitting.value = false
   }
 }
+// 폰에서만 전체화면 — 태블릿은 일반 너비 (composables/dialogLayout.ts)
+const fullscreen = useFullscreenDialog()
 </script>
 
 <template>
   <q-dialog
     :model-value="modelValue"
-    :maximized="$q.screen.lt.md"
+    :maximized="fullscreen"
     @update:model-value="emit('update:modelValue', $event)"
   >
     <q-card style="width: min(560px, 100vw)" data-test="deploy-env-dialog">
@@ -144,11 +147,11 @@ async function submit() {
             >
               {{ row.description }}
             </div>
-            <div :class="$q.screen.lt.md ? 'column q-gutter-y-xs' : 'row items-center q-gutter-xs no-wrap'">
+            <div :class="fullscreen ? 'column q-gutter-y-xs' : 'row items-center q-gutter-xs no-wrap'">
               <q-input
                 v-if="!row.fixedKey"
                 v-model="row.key"
-                :dense="!$q.screen.lt.md"
+                :dense="!fullscreen"
                 outlined
                 placeholder="KEY"
                 style="flex: 1"
@@ -156,7 +159,7 @@ async function submit() {
               />
               <q-input
                 v-model="row.value"
-                :dense="!$q.screen.lt.md"
+                :dense="!fullscreen"
                 outlined
                 :placeholder="row.fixedKey ? '값' : 'value'"
                 style="flex: 2"

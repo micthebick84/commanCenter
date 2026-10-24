@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { useQuasar } from 'quasar'
 import { confirmDialog } from '~/composables/confirmDialog'
+import { useFullscreenDialog } from '~/composables/dialogLayout'
 
 interface MockupFile {
   path: string
@@ -88,6 +89,8 @@ async function submitReject() {
     submitting.value = false
   }
 }
+// 폰에서만 전체화면 — 태블릿은 일반 너비 (composables/dialogLayout.ts)
+const fullscreen = useFullscreenDialog()
 </script>
 
 <template>
@@ -186,7 +189,7 @@ async function submitReject() {
       </q-card-section>
     </template>
 
-    <q-dialog v-model="rejectDialog" persistent :maximized="$q.screen.lt.md">
+    <q-dialog v-model="rejectDialog" persistent :maximized="fullscreen">
       <q-card style="width: min(480px, 100vw)">
         <div class="dialog-body">
           <q-card-section class="text-h6">디자인 반려</q-card-section>

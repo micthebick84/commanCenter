@@ -133,10 +133,4 @@ function bubbleRole(role: string): 'assistant' | 'user' {
   font-family: 'Pretendard', sans-serif;
   font-size: 0.85rem;
 }
-@media (max-width: 767px) {
-  .history-dialog-card {
-    min-width: unset;
-    width: 100%;
-  }
-}
 </style>

@@ -240,10 +240,11 @@ async function cancelTask() {
 async function onApproved() {
   await refresh()
   await nextTick()
-  scrollTo('interview-card')
+  openInterview()
 }
 
 function onInterviewConfirmed() {
+  interviewSheetOpen.value = false
   refresh()
 }
 
@@ -518,6 +519,12 @@ const analysisHtml = computed(() => renderMarkdown(task.value?.analysis?.markdow
 function scrollTo(id: string) {
   document.getElementById(id)?.scrollIntoView({ behavior: 'smooth', block: 'start' })
 }
+// 좁은 화면은 대화를 전체화면 시트로 연다(인라인 카드엔 열기 버튼만) — 넓은 화면은 인라인 패널로 스크롤
+const interviewSheetOpen = ref(false)
+function openInterview() {
+  if ($q.screen.lt.md) interviewSheetOpen.value = true
+  else scrollTo('interview-card')
+}
 function onAction(kind: NextActionKind) {
   const t = task.value
   if (!t) return
@@ -529,7 +536,7 @@ function onAction(kind: NextActionKind) {
     case 'retry': return retry()
     case 'open-pr': return void window.open(t.implementation?.prUrl ?? '', '_blank', 'noopener')
     case 'open-url': return void window.open(t.deployment?.deployUrl ?? '', '_blank', 'noopener')
-    case 'open-interview': return scrollTo('interview-card')
+    case 'open-interview': return openInterview()
     case 'review-design': return scrollTo('design-card')
     case 'request-close': return requestClose()
     case 'withdraw-close': return closeAction('close-request/withdraw', '종료 요청 철회')
@@ -721,18 +728,32 @@ function onAction(kind: NextActionKind) {
             </div>
           </template>
         </TaskDetailMobile>
+        <!-- 좁은 화면: 인라인 패널은 하단 액션 바와 겹쳐 입력이 답답하다 → 카드에는 열기 버튼만, 대화는 전체화면 시트(스펙 §4.2) -->
         <q-card v-if="isInterviewPhase && task.interviewSessionId" id="interview-card" flat bordered class="q-mt-md">
-          <q-card-section class="text-h6">대화형 분석</q-card-section>
-          <q-separator />
-          <q-card-section class="q-pa-none">
+          <q-card-section class="row items-center no-wrap q-gutter-sm">
+            <div class="col">
+              <div class="text-subtitle1 text-weight-medium">대화형 분석</div>
+              <div class="text-caption text-grey-7">{{ task.statusLabel }}</div>
+            </div>
+            <q-btn unelevated color="primary" icon="forum" label="대화 열기" data-test="interview-open" @click="interviewSheetOpen = true" />
+          </q-card-section>
+        </q-card>
+        <q-dialog v-if="isInterviewPhase && task.interviewSessionId" v-model="interviewSheetOpen" maximized transition-show="slide-up" transition-hide="slide-down">
+          <div class="interview-sheet column no-wrap bg-white" data-test="interview-sheet">
+            <q-toolbar class="interview-sheet__bar">
+              <q-btn flat round dense icon="close" aria-label="닫기" data-test="interview-sheet-close" @click="interviewSheetOpen = false" />
+              <q-toolbar-title class="text-subtitle1">#{{ task.id }} 대화형 분석</q-toolbar-title>
+            </q-toolbar>
+            <q-separator />
             <InterviewPanel
               :session-id="task.interviewSessionId"
               :readonly="!auth.isAdmin"
+              fill
               @confirmed="onInterviewConfirmed"
               @close="refresh"
             />
-          </q-card-section>
-        </q-card>
+          </div>
+        </q-dialog>
         <TaskNextAction :action="action" variant="bar" @act="onAction">
           <template #extra>
             <q-btn outline color="grey-7" icon="more_vert" aria-label="더 보기" class="bar-more" data-test="bar-more">
@@ -1262,6 +1283,14 @@ function onAction(kind: NextActionKind) {
 .bar-more {
   min-width: 44px;
   min-height: 44px;
+}
+.interview-sheet {
+  height: 100%;
+  padding-bottom: env(safe-area-inset-bottom);
+}
+.interview-sheet__bar {
+  min-height: 52px;
+  padding-top: env(safe-area-inset-top);
 }
 .deploy-log {
   max-height: 240px;

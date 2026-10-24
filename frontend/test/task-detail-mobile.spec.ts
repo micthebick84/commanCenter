@@ -287,4 +287,51 @@ describe('pages/tasks/[id] — 모바일 (스펙 2026-09-06 §4.2)', () => {
     expect(w.find('[data-test="section-deploy"]').text()).toContain('포트 충돌')
     w.unmount()
   })
+
+  describe('대화 열기 = 전체화면 시트 (스펙 §4.2 원안, TODOS)', () => {
+    const interviewInput = {
+      ...baseTask, status: 'INTERVIEW_INPUT', statusLabel: '입력대기', interviewSessionId: 99, implementation: null,
+    }
+    // InterviewPanel(SSE)은 스텁 — 어디에 마운트되는지만 본다.
+    const opts = { ...mountOpts, global: { stubs: { ...mountOpts.global.stubs, InterviewPanel: true } } }
+    const panelsInBody = () => document.body.querySelectorAll('interview-panel-stub')
+
+    it('인라인 카드에는 패널 대신 열기 버튼만 있고, 하단 바 "답변하기"가 시트로 패널을 연다', async () => {
+      authStub.isAdmin = true
+      useApiMock.mockResolvedValue(interviewInput)
+      await setViewportWidth(390)
+      const w = mount(PageWrapper, opts)
+      await flushPromises()
+      const card = w.find('#interview-card')
+      expect(card.exists()).toBe(true)
+      expect(card.find('interview-panel-stub').exists()).toBe(false)
+      expect(card.find('[data-test="interview-open"]').exists()).toBe(true)
+      expect(panelsInBody()).toHaveLength(0)
+
+      await w.find('.next-action--bar [data-test="next-action-primary"]').trigger('click')
+      await flushPromises()
+      const sheet = document.body.querySelector('[data-test="interview-sheet"]')
+      expect(sheet).not.toBeNull()
+      expect(sheet!.querySelectorAll('interview-panel-stub')).toHaveLength(1)
+      expect(sheet!.querySelector('interview-panel-stub')!.getAttribute('fill')).toBe('true')
+
+      ;(document.body.querySelector('[data-test="interview-sheet-close"]') as HTMLElement).click()
+      await flushPromises()
+      await new Promise((r) => setTimeout(r, 400)) // 다이얼로그 닫힘 전환
+      expect(document.body.querySelector('[data-test="interview-sheet"]')).toBeNull()
+      w.unmount()
+    })
+
+    it('인라인 카드의 열기 버튼도 같은 시트를 연다', async () => {
+      authStub.isAdmin = false
+      useApiMock.mockResolvedValue(interviewInput)
+      await setViewportWidth(390)
+      const w = mount(PageWrapper, opts)
+      await flushPromises()
+      await w.find('[data-test="interview-open"]').trigger('click')
+      await flushPromises()
+      expect(document.body.querySelector('[data-test="interview-sheet"] interview-panel-stub')).not.toBeNull()
+      w.unmount()
+    })
+  })
 })

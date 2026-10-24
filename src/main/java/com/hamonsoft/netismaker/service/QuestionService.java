@@ -32,6 +32,7 @@ import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
+import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
@@ -416,9 +417,24 @@ public class QuestionService {
      */
     static String deriveTitle(String title, String question) {
         if (title != null && !title.isBlank()) return title.trim();
-        String firstLine = question.strip().lines().findFirst().orElse("")
+        // 첫 "글자 있는" 줄 — 코드 펜스(```·~~~)와 기호만 있는 줄(#, ---)은 건너뛴다. 없으면 예전처럼 첫 줄.
+        String firstLine = question.strip().lines()
+                .filter(l -> !CODE_FENCE.matcher(l).lookingAt())
+                .map(QuestionService::stripMarkdownMarkers)
+                .filter(l -> l.codePoints().anyMatch(Character::isLetterOrDigit))
+                .findFirst()
+                .orElseGet(() -> question.strip().lines().findFirst().orElse(""))
                 .replaceAll("\\s+", " ").trim();
-        if (firstLine.length() <= DERIVED_TITLE_MAX) return firstLine;
-        return firstLine.substring(0, DERIVED_TITLE_MAX) + "…";
+        if (firstLine.codePointCount(0, firstLine.length()) <= DERIVED_TITLE_MAX) return firstLine;
+        // 코드포인트 경계에서 자른다 — 이모지(서로게이트 쌍) 한가운데를 자르면 깨진 문자가 남는다
+        return firstLine.substring(0, firstLine.offsetByCodePoints(0, DERIVED_TITLE_MAX)) + "…";
+    }
+
+    private static final Pattern CODE_FENCE = Pattern.compile("\\s*(```|~~~)");
+    /** 줄 앞의 제목(#)·인용(>)·목록(- * + 1.) 기호 — 여러 겹(> > , > - )도 벗긴다. */
+    private static final Pattern LEADING_MARKERS = Pattern.compile("^\\s*(?:(?:#{1,6}|>|[-*+]|\\d+[.)])(?:\\s+|$))+");
+
+    private static String stripMarkdownMarkers(String line) {
+        return LEADING_MARKERS.matcher(line).replaceFirst("").replace("`", "");
     }
 }

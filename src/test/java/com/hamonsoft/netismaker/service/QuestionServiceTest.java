@@ -185,6 +185,26 @@ class QuestionServiceTest {
     }
 
     @Test
+    void deriveTitle_cuts_on_code_point_boundary_so_no_lone_surrogate_is_left() {
+        String title = QuestionService.deriveTitle(null, "가".repeat(59) + "😀😀 더");
+        assertThat(title).isEqualTo("가".repeat(59) + "😀…");
+        assertThat(title.chars().filter(c -> Character.isSurrogate((char) c)).count()).isEqualTo(2);   // 이모지 한 개 = 서로게이트 쌍
+    }
+
+    @Test
+    void deriveTitle_drops_markdown_markers_from_the_first_line() {
+        assertThat(QuestionService.deriveTitle(null, "## 로그인 흐름 질문")).isEqualTo("로그인 흐름 질문");
+        assertThat(QuestionService.deriveTitle(null, "> > 인용한 에러 원인?")).isEqualTo("인용한 에러 원인?");
+        assertThat(QuestionService.deriveTitle(null, "- `AuthFilter`는 어디서 등록돼?")).isEqualTo("AuthFilter는 어디서 등록돼?");
+        assertThat(QuestionService.deriveTitle(null, "1. 첫 번째 질문")).isEqualTo("첫 번째 질문");
+        // 코드 펜스·기호만 있는 줄은 건너뛰고 다음 줄을 쓴다
+        assertThat(QuestionService.deriveTitle(null, "```java\nfoo();\n```")).isEqualTo("foo();");
+        assertThat(QuestionService.deriveTitle(null, "#\n---\n실제 질문")).isEqualTo("실제 질문");
+        // 문장 중간의 기호는 그대로
+        assertThat(QuestionService.deriveTitle(null, "C# 코드 - 차이?")).isEqualTo("C# 코드 - 차이?");
+    }
+
+    @Test
     void create_keeps_explicit_title_trimmed() {
         when(sessionRepo.countActiveQuestionsByRequester("user1")).thenReturn(0L);
         InterviewSession s = service.create(reqWithTitle("  인증 흐름  ", "질문 본문"), "user1");

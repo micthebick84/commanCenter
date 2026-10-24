@@ -210,4 +210,66 @@ describe('pages/tasks — 모바일 리스트 (스펙 2026-09-06 §4.1)', () => 
     )
     w.unmount()
   })
+
+  describe('상세 필터 시트 (세부 상태)', () => {
+    const sheetOptions = () =>
+      Array.from(document.body.querySelectorAll('[data-test^="status-option-"]')).map((el) => el.getAttribute('data-test'))
+
+    it('목록에 있는 상태만 건수와 함께 고를 수 있고, 고르면 그 상태 카드만 남는다', async () => {
+      await setViewportWidth(390)
+      const w = mount(PageWrapper, { attachTo: document.body })
+      await flushPromises()
+      await w.find('[data-test="status-filter-chip"]').trigger('click')
+      await flushPromises()
+      expect(sheetOptions()).toEqual([
+        'status-option-all',
+        'status-option-AWAITING_APPROVAL',
+        'status-option-PR_CREATED',
+        'status-option-DEPLOYED',
+        'status-option-CANCELLED',
+      ])
+      expect(document.body.querySelector('[data-test="status-option-DEPLOYED"]')!.textContent).toContain('배포완료')
+      ;(document.body.querySelector('[data-test="status-option-PR_CREATED"]') as HTMLElement).click()
+      await flushPromises()
+      const cards = w.findAll('[data-test="task-card-compact"]')
+      expect(cards).toHaveLength(1)
+      expect(cards[0]!.text()).toContain('작업 18')
+      expect(w.find('[data-test="status-filter-chip"]').text()).toContain('PR생성')
+      // 요약 스트립은 전체 기준 그대로
+      expect(w.find('[data-test="summary-strip"]').text()).toContain('확인 필요 1')
+      w.unmount()
+    })
+
+    it('그룹 칩과 함께 걸리고, 결과가 없을 때 "전체 보기"는 둘 다 푼다', async () => {
+      await setViewportWidth(390)
+      const w = mount(PageWrapper, { attachTo: document.body })
+      await flushPromises()
+      await w.find('[data-test="status-filter-chip"]').trigger('click')
+      await flushPromises()
+      ;(document.body.querySelector('[data-test="status-option-DEPLOYED"]') as HTMLElement).click()
+      await flushPromises()
+      await w.find('[data-test="filter-attention"]').trigger('click')
+      expect(w.find('[data-test="empty-filter"]').exists()).toBe(true)
+      await w.find('[data-test="empty-reset"]').trigger('click')
+      expect(w.findAll('[data-test="task-card-compact"]')).toHaveLength(3)
+      expect(w.find('[data-test="status-filter-chip"]').text()).toContain('상세 필터')
+      w.unmount()
+    })
+
+    it('칩의 ×로 상태 필터만 푼다', async () => {
+      await setViewportWidth(390)
+      const w = mount(PageWrapper, { attachTo: document.body })
+      await flushPromises()
+      await w.find('[data-test="status-filter-chip"]').trigger('click')
+      await flushPromises()
+      ;(document.body.querySelector('[data-test="status-option-AWAITING_APPROVAL"]') as HTMLElement).click()
+      await flushPromises()
+      expect(w.findAll('[data-test="task-card-compact"]')).toHaveLength(1)
+      await w.find('[data-test="status-filter-chip"] .q-chip__icon--remove').trigger('click')
+      await flushPromises()
+      expect(w.findAll('[data-test="task-card-compact"]')).toHaveLength(3)
+      expect(document.body.querySelector('[data-test="status-sheet"]')).toBeNull() // ×가 시트를 열지 않는다
+      w.unmount()
+    })
+  })
 })

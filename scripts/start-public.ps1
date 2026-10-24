@@ -19,7 +19,8 @@
 #   .\scripts\start-public.ps1 -AuthOrigin https://auth.example.com -AppOrigin https://app.example.com
 #   .\scripts\start-public.ps1 -WithWorkers
 #   .\scripts\stop-public.ps1
-# Logs / pids: .run\{auth,api,front,worker,interview}.log|.pid|.json
+# Logs / pids: .run\{auth,api,front,worker,interview}.log|.pid
+# Previous runs' logs: .run\logs\<name>-<yyyyMMdd-HHmmss-fff>.log (newest 20 of each, see Save-PreviousLog)|.json
 #   .pid  = the cmd wrapper's pid (unchanged); .json = the real JVM / node process (scripts/public-proc.ps1)
 #
 # Settings come from (highest priority first): parameters, environment variables,
@@ -97,10 +98,24 @@ function Register-Service([string]$Name, [int]$WrapperPid, [string]$AppRoot) {
     Write-ProcRecord $RunDir $Name $WrapperPid $appPid
 }
 
+# Keep the previous run's log under .run\logs (Save-PreviousLog) and start the new run from an empty
+# file. Without this, right after Start-Process cmd may not have truncated the old file yet, and
+# Wait-Log reads the previous run's "Started ..." line and calls the new process ready too early
+# (then Register-Service looks for a JVM / node that does not exist yet).
+function Reset-Log([string]$LogName) {
+    $null = Save-PreviousLog $RunDir $LogName
+    $log = Join-Path $RunDir $LogName
+    if (Test-Path -LiteralPath $log) {
+        try { Clear-Content -LiteralPath $log -ErrorAction Stop }
+        catch { Write-Host "[warn] $LogName is still in use - its old lines may be read as this run's" }
+    }
+}
+
 # Start a command line detached, with extra env vars, stdout+stderr -> .run\<name>.log.
 # The child inherits this process' environment, so vars are set then restored.
 function Start-Service-Proc([string]$Name, [string]$WorkDir, [string]$CommandLine, [hashtable]$EnvVars) {
     $log = Join-Path $RunDir "$Name.log"
+    Reset-Log "$Name.log"
     $saved = @{}
     foreach ($k in $EnvVars.Keys) {
         $saved[$k] = [Environment]::GetEnvironmentVariable($k, 'Process')
@@ -124,6 +139,7 @@ function Start-Service-Proc([string]$Name, [string]$WorkDir, [string]$CommandLin
 # $ErrorActionPreference = 'Stop' on Windows PowerShell 5.1.)
 function Invoke-Logged([string]$WorkDir, [string]$CommandLine, [string]$LogName) {
     $log = Join-Path $RunDir $LogName
+    Reset-Log $LogName
     $p = Start-Process -FilePath $env:ComSpec -ArgumentList "/c `"$CommandLine > `"$log`" 2>&1`"" `
         -WorkingDirectory $WorkDir -WindowStyle Hidden -PassThru
     # Not -Wait: that also waits for descendants, and pg_ctl leaves postgres.exe running.

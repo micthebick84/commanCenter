@@ -8,7 +8,8 @@
     "generate": "nuxi generate",
     "preview": "nuxi preview",
     "postinstall": "nuxi prepare",
-    "lint": "eslint \"**/*.{ts,vue}\" --fix",
+    "lint": "eslint .",
+    "lint:fix": "eslint . --fix",
     "lint-prettier": "prettier --write \"**/*.{ts,vue,json}\"",
     "test": "vitest run",
     "test:watch": "vitest",
@@ -16,6 +17,7 @@
     "typecheck": "nuxi typecheck"
   },
   "devDependencies": {
+    "@nuxt/eslint-config": "^1.17.0",
     "@nuxt/test-utils": "^3.15.1",
     "@types/markdown-it": "^14.2.0",
     "@types/node": "^24.13.3",

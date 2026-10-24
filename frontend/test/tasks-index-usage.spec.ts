@@ -76,7 +76,7 @@ const taskList = [
 ]
 
 function stubApi() {
-  useApiMock.mockImplementation((url: string, opts?: { method?: string; params?: any }) => {
+  useApiMock.mockImplementation((url: string, _opts?: { method?: string; params?: any }) => {
     if (url === '/api/tasks') return Promise.resolve({ content: taskList, totalElements: 3, totalPages: 1 })
     if (url === '/api/repo-catalog') return Promise.resolve([])
     return Promise.resolve(null)

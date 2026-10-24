@@ -104,6 +104,8 @@
 
 **Context**: `@nuxt/test-utils/node_modules/h3-next`(h3@2 rc 별칭)가 optional peer로 `crossws ^0.4.1`을 선언하는데 호이스팅된 crossws는 0.3.5. lock을 만든 npm 11은 범위 밖 optional peer를 설치하지 않지만 npm 10 arborist는 중첩 0.4.12가 필요하다고 본다. 후보: `package.json` `engines.npm` + `.npmrc engine-strict`로 npm 11+ 명시, 또는 npm 11로 lock 재생성하는 별도 PR. 우회: `npx -y npm@11 ci`.
 
+**상태(2026-10-24)**: Windows 워커 PC는 Node 24.19 / npm 11.17로 올라가 `npm ci --dry-run`이 그대로 통과한다(이 PC에선 해당 없음). npm 10이 남은 머신(맥 스택 등)만 위 우회가 필요하다. `engine-strict`는 npm 10 머신에서 `start-public`의 `npm install`까지 막으니 넣지 않는다.
+
 **우선순위**: 낮음.
 
 ### [ ] worktree 삭제를 레포 락 밖으로

@@ -4,11 +4,13 @@ import com.hamonsoft.netismaker.entity.InterviewKind;
 import com.hamonsoft.netismaker.entity.InterviewStatus;
 import com.hamonsoft.netismaker.repository.InterviewSessionRepository;
 import com.hamonsoft.netismaker.repository.TaskRepository;
+import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 import java.io.IOException;
+import java.nio.file.FileSystemException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.attribute.FileTime;
@@ -142,8 +144,20 @@ class AttachmentCleanupJobTest {
         }
     }
 
+    /** 심볼릭 링크를 만들 권한이 없는 환경(개발자 모드가 꺼진 Windows)이면 건너뛴다 — CI(Linux)에서는 돈다. */
+    private void assumeSymlinkSupport() throws IOException {
+        Path probe = tmp.resolve("symlink-probe");
+        try {
+            Files.createSymbolicLink(probe, tmp);
+        } catch (FileSystemException | UnsupportedOperationException e) {
+            Assumptions.abort("심볼릭 링크를 만들 수 없는 환경: " + e.getMessage());
+        }
+        Files.delete(probe);
+    }
+
     @Test
     void 심볼릭_링크는_따라가지_않는다() throws Exception {
+        assumeSymlinkSupport();
         Path outside = Files.createDirectories(tmp.resolve("outside"));
         Path precious = Files.writeString(outside.resolve("precious.txt"), "keep me");
 

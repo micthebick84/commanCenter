@@ -15,6 +15,35 @@ const all = ref(false)
 const { data, refresh } = useTaskPolling<QuestionSummary[]>(() =>
   useApi('/api/questions', { params: { all: String(all.value) } }),
 )
+// 관리자의 "전체 보기"는 다음 방문에도 유지한다 — 이 브라우저(localStorage)에만 둔다. 관리자 여부가 확정된 뒤
+// (하이드레이션 이후)에 읽으므로 SSR 결과와 어긋나지 않는다. 저장소를 못 쓰는 환경(사생활 보호 모드 등)이면 꺼진 채로 둔다.
+const ALL_KEY = 'netis-maker:questions-all'
+watch(
+  isAdmin,
+  (admin) => {
+    if (!admin || all.value) return
+    let saved = false
+    try {
+      saved = localStorage.getItem(ALL_KEY) === 'true'
+    } catch {
+      // 못 읽으면 꺼진 채
+    }
+    if (saved) {
+      all.value = true
+      refresh()
+    }
+  },
+  { immediate: true },
+)
+function onAllToggle(on: boolean) {
+  try {
+    if (on) localStorage.setItem(ALL_KEY, 'true')
+    else localStorage.removeItem(ALL_KEY)
+  } catch {
+    // 저장하지 못하면 이번 방문에만 적용
+  }
+  refresh()
+}
 // 배열이 아닌 응답(프록시 오류 페이지 등)도 빈 목록으로 — 렌더 중 throw 방지
 const rows = computed(() => (Array.isArray(data.value) ? data.value : []))
 const groups = computed(() => groupByRecency(rows.value))
@@ -71,7 +100,7 @@ defineExpose({ refresh })
       label="전체 보기"
       data-test="all-toggle"
       class="q-mt-sm"
-      @update:model-value="refresh"
+      @update:model-value="onAllToggle"
     />
   </aside>
 </template>

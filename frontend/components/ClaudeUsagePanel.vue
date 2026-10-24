@@ -3,6 +3,7 @@
 // 5초 폴링(useTaskPolling) — 값은 SDK 턴이 돌 때만 갱신되므로 "N분 전 갱신"을 항상 함께 보여준다.
 import {
   LIMIT_LABELS,
+  LIMIT_SHORT_LABELS,
   LIMIT_ORDER,
   usageColor,
   usagePercent,
@@ -52,7 +53,7 @@ const rows = computed(() =>
       {
         type,
         label: LIMIT_LABELS[type] ?? type,
-        shortLabel: type === 'five_hour' ? '세션' : '이번 주',
+        shortLabel: LIMIT_SHORT_LABELS[type] ?? type,
         pct,
         color: usageColor(pct),
         reset: formatReset(l.resetsAt, now.value),
@@ -76,6 +77,8 @@ const updatedLabel = computed(() => {
     class="usage-strip row items-center no-wrap text-caption text-grey-7"
     data-test="usage-strip"
   >
+    <!-- 갱신 시각은 툴팁으로만(R8: strip에는 문구를 더하지 않는다). 터치 기기는 길게 누르면 뜬다. -->
+    <q-tooltip v-if="updatedLabel">{{ updatedLabel }}</q-tooltip>
     <span v-if="props.prefix" class="strip-prefix">{{ props.prefix }}</span>
     <div v-for="r in rows.slice(0, 2)" :key="r.type" class="row items-center no-wrap strip-item">
       <span>{{ r.shortLabel }}</span>

@@ -460,6 +460,20 @@ describe('pages/questions/[id] — 대화 중 MCP 변경 + 채팅 첨부 (스펙
     w.unmount()
   })
 
+  it('보존 기간이 지나 정리된(expired) 등록 첨부는 비활성 칩이라 눌러도 내려받지 않는다', async () => {
+    stubApi(detailWith({ attachments: [{ ...docx, expired: true }] }), new Blob(['x']))
+    const w = mount(QuestionDetail)
+    await flushPromises()
+    const chip = w.find('[data-test="session-attachments"] .q-chip')
+    expect(chip.classes()).not.toContain('q-chip--clickable')
+    expect(chip.attributes('data-test')).toBe('attachment-expired')
+    useApiMock.mockClear()
+    await chip.trigger('click')
+    await flushPromises()
+    expect(useApiMock).not.toHaveBeenCalledWith('/api/questions/3/attachments/7', expect.anything())
+    w.unmount()
+  })
+
   it('등록 첨부가 없으면 헤더 칩 줄을 그리지 않는다', async () => {
     const w = mount(QuestionDetail)
     await flushPromises()

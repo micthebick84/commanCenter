@@ -415,6 +415,34 @@ class InterviewServiceTest {
     }
 
     @Test
+    void getResponse_marks_attachments_expired_only_when_question_closed_and_file_gone(
+            @org.junit.jupiter.api.io.TempDir java.nio.file.Path dir) throws Exception {
+        java.nio.file.Path kept = java.nio.file.Files.writeString(dir.resolve("kept.txt"), "x");
+        java.nio.file.Path gone = dir.resolve("gone.txt");
+        when(attachmentStorage.resolve("question-1/create/kept.txt")).thenReturn(kept);
+        when(attachmentStorage.resolve("question-1/1/gone.txt")).thenReturn(gone);
+        when(questionAttachmentRepo.findBySessionIdOrderByIdAsc(1L)).thenReturn(List.of(
+                qAtt(11L, 1L, null, "kept.txt", "question-1/create/kept.txt", null),
+                qAtt(12L, 1L, 1, "gone.txt", "question-1/1/gone.txt", null)));
+        when(turnRepo.findBySessionIdOrderBySeqAsc(1L)).thenReturn(List.of(
+                com.hamonsoft.netismaker.entity.InterviewTurn.of(1L, 0, "assistant", "question", "답1", null),
+                com.hamonsoft.netismaker.entity.InterviewTurn.of(1L, 1, "user", "answer", "추가?", 0)));
+
+        // 종료된 질문: 지워진 파일만 만료
+        when(sessionRepo.findActiveById(1L)).thenReturn(Optional.of(questionSession(1L, InterviewStatus.CANCELLED)));
+        var closed = service.getResponse(1L, "u1", false);
+        assertThat(closed.attachments().get(0).expired()).isFalse();
+        assertThat(closed.turns().get(1).attachments().get(0).expired()).isTrue();
+
+        // 진행 중 질문: 파일이 없어도 만료로 표시하지 않는다(실제 유실은 다운로드가 404로 알린다) — 파일 검사도 하지 않는다
+        clearInvocations(attachmentStorage);
+        when(sessionRepo.findActiveById(1L)).thenReturn(Optional.of(questionSession(1L, InterviewStatus.AWAITING_INPUT)));
+        var open = service.getResponse(1L, "u1", false);
+        assertThat(open.turns().get(1).attachments().get(0).expired()).isFalse();
+        verify(attachmentStorage, never()).resolve(any());
+    }
+
+    @Test
     void claim_on_question_session_carries_attachment_root_kickoff_and_per_turn_attachments() {
         InterviewSession s = questionSession(1L, InterviewStatus.QUEUED);
         when(sessionRepo.findClaimableForUpdateSkipLocked(any())).thenReturn(List.of(s));

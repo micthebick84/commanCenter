@@ -26,7 +26,11 @@ export interface AttachmentView {
   fileName: string
   contentType: string | null
   sizeBytes: number
+  /** 종료된 질문의 첨부를 정리 잡이 보존 기간 뒤 지웠다 — 칩을 비활성으로 그린다(다운로드는 410). */
+  expired?: boolean
 }
+
+export const EXPIRED_ATTACHMENT_TIP = '보존 기간이 지나 정리된 파일입니다'
 
 /** GET /api/questions/{id} (InterviewResponse) 중 대화 화면이 쓰는 부분집합. */
 export interface QuestionDetail {

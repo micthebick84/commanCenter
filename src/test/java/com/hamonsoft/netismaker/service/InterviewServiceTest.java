@@ -8,6 +8,7 @@ import com.hamonsoft.netismaker.entity.*;
 import com.hamonsoft.netismaker.repository.*;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
 import org.springframework.http.HttpStatus;
 import org.springframework.test.util.ReflectionTestUtils;
 
@@ -1009,6 +1010,36 @@ class InterviewServiceTest {
         s.setRefRepos(null);
         assertThat(service.latestSessionRefRepos(5L)).contains(List.of());
         assertThat(service.latestSessionRefRepos(6L)).isEmpty();   // 세션 없음
+    }
+
+    @Test
+    void createForTask_copies_the_task_refs_to_the_new_session() {
+        Task t = Task.create("owner/repo", "main", "T", "d", "u1", 3, List.of(), null, null);
+        ReflectionTestUtils.setField(t, "id", 5L);
+        RefRepo pinned = ref(11L, "main", SHA_A, "2026-10-24T10:00+09:00", null);
+        RefRepo fresh = ref(12L, "dev", null, null, null);
+        t.setRefRepos(new ArrayList<>(List.of(pinned, fresh)));
+
+        service.createForTask(t, "claude-opus-5-5", "high", List.of());
+
+        ArgumentCaptor<InterviewSession> saved = ArgumentCaptor.forClass(InterviewSession.class);
+        verify(sessionRepo).save(saved.capture());
+        InterviewSession s = saved.getValue();
+        assertThat(s.getTaskId()).isEqualTo(5L);
+        assertThat(s.getRefRepos()).containsExactly(pinned, fresh);   // 같은 원소
+        assertThat(s.getRefRepos()).isNotSameAs(t.getRefRepos());     // 다른 리스트 인스턴스 — 세션 쪽 변경이 작업으로 번지지 않는다
+        s.getRefRepos().clear();
+        assertThat(t.getRefRepos()).containsExactly(pinned, fresh);
+    }
+
+    @Test
+    void createForTask_without_task_refs_gives_the_session_an_empty_list() {
+        Task t = Task.create("owner/repo", "main", "T", "d", "u1", 3, List.of(), null, null);
+        t.setRefRepos(null);
+
+        InterviewSession s = service.createForTask(t, "claude-opus-5-5", "high", List.of());
+
+        assertThat(s.getRefRepos()).isNotNull().isEmpty();
     }
 
 }

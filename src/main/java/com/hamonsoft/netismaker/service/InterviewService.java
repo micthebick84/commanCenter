@@ -123,6 +123,9 @@ public class InterviewService {
         s.setTaskId(t.getId());
         // 작업 DB 연결 선택(스펙 2026-10-14 §5) — 인터뷰 claim이 이 id로 접속정보를 싣는다
         s.setDbConnectionIds(new ArrayList<>(t.getDbConnectionIds() == null ? List.of() : t.getDbConnectionIds()));
+        // 작업 참조 repo(스펙 2026-10-24 §3.2) — 승인 때 조정한 결과를 복사. 리스트를 따로 두어 세션 쪽 변경(고정 커밋·
+        // 대화 중 추가·해제)이 작업 목록에 번지지 않게 한다
+        s.setRefRepos(new ArrayList<>(t.getRefRepos() == null ? List.of() : t.getRefRepos()));
         return sessionRepo.save(s);
     }
 

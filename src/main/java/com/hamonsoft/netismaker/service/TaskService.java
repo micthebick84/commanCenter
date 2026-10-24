@@ -6,6 +6,7 @@ import com.hamonsoft.netismaker.dto.DeployEnvSuggestionResponse;
 import com.hamonsoft.netismaker.dto.TaskCreateRequest;
 import com.hamonsoft.netismaker.entity.EnvVar;
 import com.hamonsoft.netismaker.entity.ImplementationMode;
+import com.hamonsoft.netismaker.entity.RefRepo;
 import com.hamonsoft.netismaker.entity.Task;
 import com.hamonsoft.netismaker.entity.TaskAnalysis;
 import com.hamonsoft.netismaker.entity.TaskAttachment;
@@ -120,6 +121,8 @@ public class TaskService {
                     "동시에 보유할 수 있는 미완료 작업 한도(" + userConcurrentLimit + ")를 초과했습니다");
         }
         RepoCatalogService.ResolvedRepo repo = repoCatalogService.resolveForRegistration(req.repoCatalogId());
+        // 읽기 전용 참조 repo (스펙 2026-10-24 §4.1) — 대상 기준 검증·스냅샷(400이면 저장 전에 끝난다)
+        List<RefRepo> refs = repoCatalogService.resolveReferences(repo.catalogId(), req.refRepos());
         // 모델/effort/MCP는 승인 시점에 관리자가 결정 — 등록은 서버 기본값으로 시작한다.
         Task t = Task.create(repo.ownerRepo(), req.githubBranch(), req.title(),
                              req.description(), requesterId, maxRetry,
@@ -129,6 +132,7 @@ public class TaskService {
         t.setRepoAlias(repo.alias());
         t.setRepoCatalogId(repo.catalogId());
         t.setRequesterEmail(requesterEmail);
+        t.setRefRepos(new ArrayList<>(refs));
         Task saved = taskRepo.save(t);
         historyRepo.save(TaskStatusHistory.log(saved.getId(), null, TaskStatus.AWAITING_APPROVAL,
                 "user", requesterId, "작업 등록"));
@@ -312,7 +316,12 @@ public class TaskService {
         approve(taskId, adminId, null);
     }
 
-    /** 승인대기 → 인터뷰중. 세션을 만들고 모델/effort/MCP/DB 선택을 task에도 박제한다. */
+    /**
+     * 승인대기 → 인터뷰중. 세션을 만들고 모델/effort/MCP/DB 선택을 task에도 박제한다.
+     * 참조 repo(스펙 2026-10-24 §4.2): null = 등록 값 유지, 같은 집합 = 검증 없는 no-op, 바뀌면 새로 들어온 것만 검증 —
+     * 등록 뒤 비활성된 기존 참조로 400이 나지 않게. 세션을 만들기 전에 task에 반영해 createForTask가 복사하고,
+     * 바뀌었으면 승인 이력 다음에 별도 이력 행을 남긴다(기존 승인 이력 문구는 그대로).
+     */
     private void startInterview(Task t, String adminId, ApproveRequest req) {
         List<TaskMcpSpec> extras = resolveMcpExtras(req == null ? null : req.mcpCatalogIds());
         String model = ModelEffortPolicy.resolveModel(req == null ? null : req.model());
@@ -321,11 +330,14 @@ public class TaskService {
         // DB 연결 검증도 세션 생성 전 — 기준은 작업 등록자 (스펙 2026-10-14 §4)
         List<Long> dbIds = dbConnectionService.validateSelection(t.getRepoCatalogId(), t.getRequesterId(),
                 req == null ? null : req.dbConnectionIds());
+        RefRepoChanges.Change refChange = RefRepoChanges.diff(t.getRepoCatalogId(), t.getRefRepos(),
+                req == null ? null : req.refRepos(), repoCatalogService);
 
         t.setModel(model);
         t.setEffort(effort);
         t.setMcpsExtra(new ArrayList<>(extras));
         t.setDbConnectionIds(new ArrayList<>(dbIds));
+        if (refChange != null) t.setRefRepos(new ArrayList<>(refChange.next()));
         t.setFailureReason(null);
         interviewService.createForTask(t, model, effort, extras);
 
@@ -334,6 +346,10 @@ public class TaskService {
         t.setUpdatedAt(OffsetDateTime.now());
         historyRepo.save(TaskStatusHistory.log(t.getId(), from, TaskStatus.INTERVIEWING,
                 "user", adminId, "관리자 승인 → 인터뷰 시작"));
+        if (refChange != null) {
+            historyRepo.save(TaskStatusHistory.log(t.getId(), TaskStatus.INTERVIEWING, TaskStatus.INTERVIEWING,
+                    "user", adminId, RefRepoChanges.approvalHistory(refChange)));
+        }
     }
 
     /** 레거시: 분석완료 + admin 승인 → 구현/디자인 큐. 기존 동작 그대로. */

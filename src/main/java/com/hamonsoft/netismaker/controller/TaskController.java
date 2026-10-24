@@ -176,7 +176,7 @@ public class TaskController {
     @PostMapping("/{id}/approve")
     @PreAuthorize("hasAuthority('ROLE_ADMIN')")
     public TaskResponse approve(@PathVariable Long id,
-                                @RequestBody(required = false) ApproveRequest body,
+                                @Valid @RequestBody(required = false) ApproveRequest body,
                                 JwtAuthenticationToken auth) {
         String adminId = AuthContext.requireUserId(auth);
         taskService.approve(id, adminId, body);

@@ -26,14 +26,11 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.HashSet;
-import java.util.Iterator;
-import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
 import java.util.stream.Collectors;
-import java.util.stream.Stream;
 
 /**
  * 질문 세션(Q&A) — 스펙 docs/superpowers/specs/2026-08-30-question-sessions-design.md.
@@ -277,57 +274,19 @@ public class QuestionService {
     }
 
     /**
-     * 대화 중 참조 repo 변경 (스펙 2026-10-22 §4.2) — applyMcpChange·applyDbChange와 같은 규칙. inputs == null → 유지.
-     * 입력마다 현재 원소 중 {@link RefRepo#matches}인 첫 원소를 찾아 있으면 유지, 없으면 새로 들어오는 짝으로 본다.
-     * 새 짝이 없고 현재 원소를 빠짐없이 가리키면 <b>같은 집합</b>(순서 무관)이라 <b>검증 없이</b> 무시한다 — 사후
-     * 비활성·삭제된 카탈로그 항목이 무관한 다음 질문을 막지 않게. 같은 현재 원소를 두 번 가리키는 입력(중복)은 같은 집합이
-     * 아니므로 no-op이 아니라 아래 모양 검사에서 400이다.
-     * 다르면 결과 집합을 {@link RepoCatalogService#checkRefShape}로 먼저 검사(상한은 결과 기준)한 뒤 <b>새로 들어오는
-     * 짝만</b> {@link RepoCatalogService#resolveReferences}로 검증·스냅샷한다. 이미 세션에 있던 짝은 카탈로그가 나중에
-     * 꺼지거나 지워져도 유지·해제할 수 있다(보이지 않는 낡은 항목 때문에 선택을 영영 못 고치는 일을 막는다).
-     * 유지되는 짝은 기존 원소(sha·fetchedAt·error 포함)를 그대로 둔다 — 대화 끝까지 처음 받은 커밋 기준(스펙 §3.2).
-     * 같은 카탈로그 id의 브랜치가 바뀌면 "빼고 다시 넣기"라 새 원소가 되어 sha·fetchedAt·error가 비워진다.
-     * 결과 목록은 입력 순서를 따른다. 입력 브랜치는 strip한 뒤 비교한다 — resolveReferences가 strip해 저장하므로
-     * {@code " main "}이 저장된 {@code main}과 같은 짝이어야 no-op이고 sha가 초기화되지 않는다.
+     * 대화 중 참조 repo 변경 (스펙 2026-10-22 §4.2) — applyMcpChange·applyDbChange와 같은 규칙. inputs == null → 유지,
+     * 같은 집합 → 검증 없는 no-op, 다르면 새로 들어오는 짝만 검증(400). 짝 맞춤·검증·문구는 {@link RefRepoChanges#diff}
+     * (작업 승인·인터뷰 답변과 공용). 유지되는 짝은 기존 원소(sha·fetchedAt·error 포함)를 그대로 둔다 — 대화 끝까지 처음
+     * 받은 커밋 기준(스펙 §3.2). 결과 목록은 입력 순서를 따른다.
      * 갱신 후 system note(추가 먼저, 해제 나중). 다음 claim이 현재 목록을 다시 읽으므로 러너는 턴마다 새 목록으로 받는다.
      * @return 노트 턴(변경 시) 또는 null
      */
     private InterviewTurn applyRefChange(InterviewSession s, List<RefRepoInput> inputs) {
-        if (inputs == null) return null;
-        List<RefRepo> current = s.getRefRepos() == null ? List.of() : s.getRefRepos();
-        List<RefRepoInput> wanted = inputs.stream().filter(Objects::nonNull)
-                .map(in -> new RefRepoInput(in.repoCatalogId(), in.branch() == null ? null : in.branch().strip()))
-                .toList();
-
-        // wanted[i]에 대응하는 현재 원소 — 없으면 null(= 새로 들어오는 짝)
-        List<RefRepo> slots = new ArrayList<>(wanted.size());
-        List<RefRepoInput> added = new ArrayList<>();
-        for (RefRepoInput in : wanted) {
-            RefRepo hit = current.stream().filter(r -> r.matches(in.repoCatalogId(), in.branch()))
-                    .findFirst().orElse(null);
-            slots.add(hit);
-            if (hit == null) added.add(in);
-        }
-        Set<RefRepo> kept = slots.stream().filter(Objects::nonNull)
-                .collect(Collectors.toCollection(LinkedHashSet::new));
-        // kept는 Set이라 같은 현재 원소를 두 번 가리키는 중복 입력이 하나로 합쳐진다 — slots와 크기를 비교해야 [A,A]가 "같은 집합" no-op으로 새지 않는다
-        if (added.isEmpty() && kept.size() == slots.size() && kept.size() == current.size()) return null;
-
-        RepoCatalogService.checkRefShape(s.getRepoCatalogId(), wanted);
-        List<RefRepo> resolved = repoCatalogService.resolveReferences(s.getRepoCatalogId(), added);
-        Iterator<RefRepo> fresh = resolved.iterator();
-        List<RefRepo> next = new ArrayList<>(slots.size());
-        for (RefRepo hit : slots) next.add(hit != null ? hit : fresh.next());
-        List<RefRepo> removed = current.stream().filter(r -> !kept.contains(r)).toList();
-        s.setRefRepos(next);
-
-        // ＋ = U+FF0B, − = U+2212 (스펙의 시스템 메모 문구 그대로)
-        String note = next.isEmpty()
-                ? "참조 repo 변경: 없음(전부 해제)"
-                : "참조 repo 변경: " + Stream.concat(
-                        resolved.stream().map(r -> "＋ " + r.label()),
-                        removed.stream().map(r -> "− " + r.label())).collect(Collectors.joining(", "));
-        return interviewService.appendSystemNote(s.getId(), note);
+        RefRepoChanges.Change change =
+                RefRepoChanges.diff(s.getRepoCatalogId(), s.getRefRepos(), inputs, repoCatalogService);
+        if (change == null) return null;
+        s.setRefRepos(new ArrayList<>(change.next()));
+        return interviewService.appendSystemNote(s.getId(), RefRepoChanges.systemNote(change));
     }
 
     /** jsonb 역직렬화 숫자 타입(Integer/Long)에 흔들리지 않는 집합 비교용. */

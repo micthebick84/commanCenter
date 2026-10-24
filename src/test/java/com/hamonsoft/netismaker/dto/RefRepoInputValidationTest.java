@@ -48,6 +48,33 @@ class RefRepoInputValidationTest {
         assertThat(validator.validate(new RefRepoInput(11L, tooLong))).isNotEmpty();
     }
 
+    // ── 작업 등록·승인 (스펙 2026-10-24 §4.1·§4.2) — 같은 255자 상한, 목록에 @Valid ──
+
+    private static TaskCreateRequest taskCreate(String branch) {
+        return new TaskCreateRequest(1L, "main", "t", "d", List.of(new RefRepoInput(11L, branch)), null);
+    }
+
+    private static ApproveRequest approve(String branch) {
+        return new ApproveRequest(null, null, null, null, List.of(new RefRepoInput(11L, branch)));
+    }
+
+    @Test
+    void a_256_char_branch_is_rejected_in_the_task_create_and_the_approve_request() {
+        String tooLong = "b".repeat(256);
+
+        assertThat(paths(validator.validate(taskCreate(tooLong)))).containsExactly("refRepos[0].branch");
+        assertThat(paths(validator.validate(approve(tooLong)))).containsExactly("refRepos[0].branch");
+    }
+
+    @Test
+    void task_requests_with_a_255_char_branch_or_without_references_stay_valid() {
+        assertThat(validator.validate(taskCreate("b".repeat(255)))).isEmpty();
+        assertThat(validator.validate(approve("b".repeat(255)))).isEmpty();
+        assertThat(validator.validate(new TaskCreateRequest(1L, "main", "t", "d"))).isEmpty();
+        assertThat(validator.validate(new ApproveRequest(null, null, null, null))).isEmpty();
+        assertThat(validator.validate(new ApproveRequest(null, null, null))).isEmpty();
+    }
+
     @Test
     void a_255_char_blank_or_missing_branch_passes_bean_validation() {
         // 빈 브랜치는 서비스가 카탈로그 기본 브랜치로 채우거나 400("참조 브랜치를 지정하세요")으로 거절한다 — 빈 검증의 일이 아니다

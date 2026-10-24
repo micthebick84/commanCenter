@@ -83,6 +83,36 @@ describe('ClaudeUsagePanel (스펙 2026-09-05 §3)', () => {
     w.unmount()
   })
 
+  it('strip: five_hour가 없으면 주간 항목마다 제 라벨을 쓴다 (세션으로 잘못 읽히지 않게)', async () => {
+    const weekly = [
+      { ...limits[0]!, limitType: 'seven_day', utilization: 0.3 },
+      { ...limits[0]!, limitType: 'seven_day_opus', utilization: 0.6 },
+    ]
+    useApiMock.mockResolvedValue({ limits: weekly })
+    const w = mount(ClaudeUsagePanel, { props: { variant: 'strip' } })
+    await flushPromises()
+    const items = w.findAll('[data-test="usage-strip"] .strip-item').map((i) => i.text())
+    expect(items).toEqual(['이번 주30%', '이번 주 Opus60%'])
+    w.unmount()
+  })
+
+  it('strip: 마우스를 올리면 갱신 시각 툴팁을 보여 준다 (줄에는 문구를 더하지 않는다)', async () => {
+    useApiMock.mockResolvedValue({ limits })
+    const w = mount(ClaudeUsagePanel, { props: { variant: 'strip' }, attachTo: document.body })
+    try {
+      await flushPromises()
+      const strip = w.find('[data-test="usage-strip"]')
+      expect(strip.text()).not.toContain('갱신')
+      await strip.trigger('mouseenter')
+      await new Promise((r) => setTimeout(r, 50))
+      const tips = document.querySelectorAll('.q-tooltip')
+      expect(tips).toHaveLength(1)
+      expect(tips[0]!.textContent).toContain('방금 갱신')
+    } finally {
+      w.unmount()
+    }
+  })
+
   it('strip: hideWhenEmpty여도 수집된 값이 있으면 그린다', async () => {
     useApiMock.mockResolvedValue({ limits })
     const w = mount(ClaudeUsagePanel, { props: { variant: 'strip', hideWhenEmpty: true } })

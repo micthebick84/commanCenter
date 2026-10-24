@@ -66,6 +66,15 @@ describe.each([
     w.unmount()
   })
 
+  it('태블릿(820)에서도 전체화면 없이 카드 제목으로 연다', async () => {
+    await setViewportWidth(820)
+    const w = await openCreate(page, open)
+    expect(document.body.querySelector('.q-dialog__inner--maximized')).toBeNull()
+    expect(document.body.querySelector('[data-test="form-topbar"]')).toBeNull()
+    expect(card().querySelector('.text-h6')?.textContent).toBe(open)
+    w.unmount()
+  })
+
   it('데스크톱(1024)에서는 maximized·상단 바 없이 카드 제목으로 연다', async () => {
     const w = await openCreate(page, open)
     expect(document.body.querySelector('.q-dialog__inner--maximized')).toBeNull()

@@ -34,6 +34,15 @@ describe('다이얼로그 모바일 전체화면 (스펙 2026-09-06 §4.3)', () 
     w.unmount()
   })
 
+  it('태블릿(820)에서는 전체화면이 아니라 일반 너비 카드 — 상단 닫기 바 없음', async () => {
+    await setViewportWidth(820)
+    const w = mountApprove()
+    await flushPromises()
+    expect(maximizedInner()).toBeNull()
+    expect(document.body.querySelector('[data-test="approve-topbar"]')).toBeNull()
+    w.unmount()
+  })
+
   it('데스크톱(1024)에서는 maximized가 아니고 상단 닫기 바도 없다', async () => {
     const w = mountApprove()
     await flushPromises()

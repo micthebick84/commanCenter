@@ -7,6 +7,7 @@
 import { renderMarkdown } from '~/composables/useMarkdown'
 import { formatSize } from '~/composables/attachmentLimits'
 import type { TurnAttachment } from '~/composables/useInterviewStream'
+import { EXPIRED_ATTACHMENT_TIP } from '~/composables/questions'
 
 const props = defineProps<{
   role: 'assistant' | 'user' | 'system'
@@ -18,8 +19,10 @@ const emit = defineEmits<{ (e: 'download', id: number): void }>()
 const userAttachments = computed(() =>
   props.role === 'user' && props.attachments?.length ? props.attachments : [],
 )
+// 보존 기간이 지나 정리된 첨부(expired)도 클릭 불가 — 눌러 봐야 410 알림뿐이다.
+const downloadable = (a: TurnAttachment) => a.id != null && !a.expired
 function onChipClick(a: TurnAttachment) {
-  if (a.id != null) emit('download', a.id)
+  if (downloadable(a)) emit('download', a.id!)
 }
 
 const avatarLabel = computed(() =>
@@ -52,14 +55,16 @@ const html = computed(() =>
           :key="a.id ?? `pending-${i}`"
           dense
           size="sm"
-          icon="attach_file"
-          color="blue-grey-1"
-          text-color="blue-grey-9"
-          :clickable="a.id != null"
+          :icon="a.expired ? 'history' : 'attach_file'"
+          :color="a.expired ? 'grey-3' : 'blue-grey-1'"
+          :text-color="a.expired ? 'grey-6' : 'blue-grey-9'"
+          :clickable="downloadable(a)"
           :label="`${a.fileName} (${formatSize(a.sizeBytes)})`"
+          :data-test="a.expired ? 'attachment-expired' : undefined"
           @click="onChipClick(a)"
         >
-          <q-tooltip v-if="a.id != null">클릭하여 다운로드</q-tooltip>
+          <q-tooltip v-if="a.expired">{{ EXPIRED_ATTACHMENT_TIP }}</q-tooltip>
+          <q-tooltip v-else-if="a.id != null">클릭하여 다운로드</q-tooltip>
         </q-chip>
       </div>
     </div>

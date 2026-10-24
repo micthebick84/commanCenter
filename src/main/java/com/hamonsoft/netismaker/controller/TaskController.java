@@ -65,8 +65,8 @@ public class TaskController {
         this.interviewService = interviewService;
     }
 
-    /** 관리자가 아니면 비밀 env 값을 비운다 (스펙 2026-10-07 §7). 관리자 전용 엔드포인트에는 쓰지 않는다. */
-    private static TaskResponse forViewer(TaskResponse r, boolean isAdmin) {
+    /** 관리자가 아니면 비밀 env 값을 비운다 (스펙 2026-10-07 §7). 관리자 전용 엔드포인트에는 쓰지 않는다. TaskCloseController도 쓴다. */
+    static TaskResponse forViewer(TaskResponse r, boolean isAdmin) {
         return isAdmin ? r : r.redactSecretValues();
     }
 

@@ -93,9 +93,8 @@ public class TaskCloseController {
         return Map.of("status", mail.resend(id));
     }
 
-    /** 관리자가 아니면 비밀 env 값을 비운다 — TaskController.forViewer와 같은 규칙. */
+    /** 관리자가 아니면 비밀 env 값을 비운다 — TaskController.forViewer 그대로. */
     private static TaskResponse view(Task t, boolean isAdmin) {
-        TaskResponse r = TaskResponse.of(t, null);
-        return isAdmin ? r : r.redactSecretValues();
+        return TaskController.forViewer(TaskResponse.of(t, null), isAdmin);
     }
 }

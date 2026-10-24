@@ -1,5 +1,6 @@
 package com.hamonsoft.netismaker.dto;
 
+import com.hamonsoft.netismaker.entity.CloseStep;
 import com.hamonsoft.netismaker.entity.EnvVar;
 import com.hamonsoft.netismaker.entity.ImplementationMode;
 import com.hamonsoft.netismaker.entity.Task;
@@ -7,11 +8,14 @@ import com.hamonsoft.netismaker.entity.TaskAnalysis;
 import com.hamonsoft.netismaker.entity.TaskAttachment;
 import com.hamonsoft.netismaker.entity.TaskDesign;
 import com.hamonsoft.netismaker.entity.TaskMcpSpec;
+import com.hamonsoft.netismaker.entity.TaskStageUsage;
 import com.hamonsoft.netismaker.entity.TaskStatus;
 
 import java.math.BigDecimal;
 import java.time.OffsetDateTime;
+import java.util.EnumSet;
 import java.util.List;
+import java.util.Set;
 
 public record TaskResponse(
         Long id,
@@ -137,7 +141,7 @@ public record TaskResponse(
 
     public record MailView(String status, OffsetDateTime at) {}
 
-    private static final java.util.Set<TaskStatus> CLOSE_PHASE = java.util.EnumSet.of(
+    private static final Set<TaskStatus> CLOSE_PHASE = EnumSet.of(
             TaskStatus.CLOSE_REVIEW, TaskStatus.CLOSE_PENDING, TaskStatus.CLOSING,
             TaskStatus.CLOSED, TaskStatus.CLOSE_FAILED);
 
@@ -146,7 +150,7 @@ public record TaskResponse(
                 || t.getArtifactName() != null;
         if (!recorded && !CLOSE_PHASE.contains(t.getStatus())) return null;
         return new CloseView(
-                com.hamonsoft.netismaker.entity.CloseStep.parse(t.getCloseProgress()).stream().map(Enum::name).toList(),
+                CloseStep.parse(t.getCloseProgress()).stream().map(Enum::name).toList(),
                 t.getMergeCommitSha(), t.getCloseNotePath(),
                 t.getCloseArtifactMode(),
                 t.getArtifactName() == null ? null : new ArtifactView(t.getArtifactName(),
@@ -176,7 +180,7 @@ public record TaskResponse(
     public static TaskResponse ofWithUsage(Task t, TaskAnalysis a, TaskDesign d,
                                            Long interviewSessionId,
                                            List<TaskAttachment> attachments,
-                                           List<com.hamonsoft.netismaker.entity.TaskStageUsage> usage) {
+                                           List<TaskStageUsage> usage) {
         List<StageUsageView> views = usage == null ? List.of()
                 : usage.stream().map(u -> new StageUsageView(u.getStage(), u.getCostUsd(),
                         u.getInputTokens(), u.getOutputTokens(),

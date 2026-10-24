@@ -4,7 +4,7 @@
 import TaskCardCompact, { type CardTask } from '~/components/tasks/TaskCardCompact.vue'
 import TaskActionSheet from '~/components/tasks/TaskActionSheet.vue'
 import QueueStatsBar from '~/components/QueueStatsBar.vue'
-import { sortForMobile, ATTENTION_GROUPS, type AttentionGroup, type MoveDef } from '~/composables/taskStages'
+import { sortForMobile, ATTENTION_GROUPS, CHIP, type AttentionGroup, type MoveDef } from '~/composables/taskStages'
 
 const props = defineProps<{ tasks: CardTask[]; isAdmin: boolean }>()
 const mine = defineModel<boolean>('mine', { default: true })
@@ -20,16 +20,50 @@ const filter = ref<AttentionGroup | 'all'>('all')
 const closedOpen = ref(false)
 const statsOpen = ref(false)
 
+// 상세 필터(세부 상태) — 그룹 칩보다 좁혀 볼 때. 받은 목록 안에서만 거른다(서버 조회는 그대로, 리뷰 파인딩 11).
+const statusPick = ref<string | null>(null)
+const statusSheetOpen = ref(false)
+const STATUS_ORDER = Object.keys(CHIP)
+const statusOptions = computed(() => {
+  const byStatus = new Map<string, { value: string; label: string; count: number }>()
+  for (const t of props.tasks) {
+    const o = byStatus.get(t.status)
+    if (o) o.count++
+    else byStatus.set(t.status, { value: t.status, label: t.statusLabel, count: 1 })
+  }
+  const rank = (s: string) => (STATUS_ORDER.includes(s) ? STATUS_ORDER.indexOf(s) : STATUS_ORDER.length)
+  return [...byStatus.values()].sort((a, b) => rank(a.value) - rank(b.value))
+})
+const statusPickLabel = computed(
+  () => props.tasks.find((t) => t.status === statusPick.value)?.statusLabel ?? statusPick.value,
+)
+function pickStatus(s: string | null) {
+  statusPick.value = s
+  statusSheetOpen.value = false
+}
+function resetFilters() {
+  filter.value = 'all'
+  statusPick.value = null
+}
+
 const groups = computed(() => sortForMobile(props.tasks, props.isAdmin))
 const counts = computed(() => Object.fromEntries(groups.value.map((g) => [g.key, g.items.length])) as Record<string, number>)
 const visibleGroups = computed(() =>
-  groups.value.filter((g) => filter.value === 'all' || g.key === filter.value),
+  (statusPick.value ? sortForMobile(props.tasks.filter((t) => t.status === statusPick.value), props.isAdmin) : groups.value)
+    .filter((g) => filter.value === 'all' || g.key === filter.value),
 )
 
-const sheetTask = ref<CardTask | null>(null)
+// 시트는 연 작업의 id만 들고, 내용은 매 폴링의 최신 목록에서 다시 찾는다 — 연 때의 객체를 들고 있으면
+// 배포 중지 직후처럼 상태가 바뀌어도 시트 버튼(삭제 등)이 예전 상태로 남는다. 목록에서 빠지면 마지막 값을 쓴다.
+const sheetTaskId = ref<number | null>(null)
+const sheetSnapshot = ref<CardTask | null>(null)
+const sheetTask = computed<CardTask | null>(
+  () => props.tasks.find((t) => t.id === sheetTaskId.value) ?? sheetSnapshot.value,
+)
 const sheetOpen = ref(false)
 function openSheet(task: CardTask) {
-  sheetTask.value = task
+  sheetTaskId.value = task.id
+  sheetSnapshot.value = task
   sheetOpen.value = true
 }
 </script>
@@ -87,7 +121,45 @@ function openSheet(task: CardTask) {
         data-test="mine-chip"
         @click="mine = !mine"
       >내 작업만</q-chip>
+      <q-chip
+        clickable
+        icon="tune"
+        :removable="!!statusPick"
+        :color="statusPick ? 'blue-1' : undefined"
+        :text-color="statusPick ? 'primary' : undefined"
+        :outline="!statusPick"
+        data-test="status-filter-chip"
+        @click="statusSheetOpen = true"
+        @remove="statusPick = null"
+      >{{ statusPick ? statusPickLabel : '상세 필터' }}</q-chip>
     </div>
+
+    <q-dialog v-model="statusSheetOpen" position="bottom">
+      <q-card class="status-sheet" data-test="status-sheet">
+        <div class="status-sheet__title">상태로 좁혀 보기</div>
+        <q-list>
+          <q-item clickable :active="!statusPick" data-test="status-option-all" @click="pickStatus(null)">
+            <q-item-section>전체 상태</q-item-section>
+            <q-item-section side>{{ tasks.length }}</q-item-section>
+          </q-item>
+          <q-item
+            v-for="o in statusOptions"
+            :key="o.value"
+            clickable
+            :active="statusPick === o.value"
+            :data-test="`status-option-${o.value}`"
+            @click="pickStatus(o.value)"
+          >
+            <q-item-section>
+              <span class="status-dot-label">
+                <span class="status-dot" :style="{ background: (CHIP[o.value] ?? ['#f5f5f5', '#616161'])[1] }" />{{ o.label }}
+              </span>
+            </q-item-section>
+            <q-item-section side>{{ o.count }}</q-item-section>
+          </q-item>
+        </q-list>
+      </q-card>
+    </q-dialog>
 
     <div v-if="tasks.length === 0" class="empty" data-test="empty-all">
       <q-icon name="inbox" size="28px" color="grey-5" />
@@ -102,7 +174,7 @@ function openSheet(task: CardTask) {
         color="primary"
         label="전체 보기"
         data-test="empty-reset"
-        @click="filter = 'all'"
+        @click="resetFilters"
       />
     </div>
 
@@ -164,5 +236,10 @@ function openSheet(task: CardTask) {
 .closed-head { display: flex; align-items: center; gap: 8px; min-height: 44px; padding: 8px 4px; font-size: 13px; color: #757575; cursor: pointer; }
 .cards { display: flex; flex-direction: column; gap: 8px; }
 .empty { display: flex; flex-direction: column; align-items: center; gap: 8px; padding: 48px 16px; color: #757575; font-size: 13px; text-align: center; }
+.status-sheet { width: 100%; border-radius: 16px 16px 0 0; padding: 12px 0 calc(12px + env(safe-area-inset-bottom)); }
+.status-sheet__title { padding: 4px 16px 8px; font-size: 13px; font-weight: 700; color: #616161; }
+.status-sheet :deep(.q-item) { min-height: 48px; }
+.status-dot-label { display: inline-flex; align-items: center; gap: 8px; }
+.status-dot { width: 8px; height: 8px; border-radius: 50%; }
 .fab { position: fixed; right: 16px; bottom: calc(var(--bottom-nav-height, 0px) + 16px); z-index: 5; }
 </style>

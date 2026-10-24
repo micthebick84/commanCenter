@@ -21,6 +21,14 @@ export const LIMIT_LABELS: Record<string, string> = {
   seven_day_sonnet: '이번 주 (Sonnet)',
 }
 
+/** 모바일 strip용 짧은 라벨 — 항목마다 따로 둔다(five_hour가 없을 때 주간 두 항목이 같은 라벨로 보이지 않게). */
+export const LIMIT_SHORT_LABELS: Record<string, string> = {
+  five_hour: '세션',
+  seven_day: '이번 주',
+  seven_day_opus: '이번 주 Opus',
+  seven_day_sonnet: '이번 주 Sonnet',
+}
+
 /** 표시 순서. overage는 패널에 그리지 않는다. */
 export const LIMIT_ORDER = ['five_hour', 'seven_day', 'seven_day_opus', 'seven_day_sonnet']
 

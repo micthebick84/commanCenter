@@ -23,10 +23,24 @@ export class HttpStatusError extends Error {
   }
 }
 
+/** 턴 결과 보고(question·plan·fail)의 재시도 설정. */
+export interface ReportRetry {
+  /** 재시도 전 대기(ms) — 길이가 최대 재시도 횟수다. */
+  delaysMs: number[];
+  sleep: (ms: number) => Promise<void>;
+}
+
+/** API 재기동(Windows bootRun 약 10–20초)을 넉넉히 넘기는 합계 약 60초. */
+const DEFAULT_REPORT_RETRY: ReportRetry = {
+  delaysMs: [1_000, 2_000, 4_000, 8_000, 15_000, 15_000, 15_000],
+  sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+};
+
 export class JavaApiClient {
   constructor(
     private readonly cfg: ClientConfig,
     private readonly fetchFn: FetchLike = fetch,
+    private readonly reportRetry: ReportRetry = DEFAULT_REPORT_RETRY,
   ) {}
 
   private headers(): Record<string, string> {
@@ -73,22 +87,54 @@ export class JavaApiClient {
     return (await res.json()) as InterviewClaimResponse;
   }
 
+  /**
+   * 턴 결과 보고(question·plan·fail). 턴이 끝난 순간 API가 재기동 중이면 결과를 잃지 않게 네트워크 오류·5xx는
+   * reportRetry 간격으로 다시 보낸다. 서버는 RUNNING이고 이 워커가 쥔 세션에만 기록하므로(아니면 409) 같은
+   * 보고가 두 번 반영되지는 않는다 — 그래서 재시도에서 받은 409는 "앞선 시도가 이미 반영됐는데 응답만 잃었다"로
+   * 보고 성공 처리한다(그사이 사용자가 세션을 끝냈어도 이 결과는 더 쓸 데가 없다). 첫 시도의 409와 그 밖의 4xx는
+   * 재시도 없이 HttpStatusError, 재시도를 다 써도 안 되면 마지막 원인으로 던진다.
+   */
+  private async report(path: string, init: RequestInit, label: string): Promise<void> {
+    const delays = this.reportRetry.delaysMs;
+    for (let attempt = 0; ; attempt++) {
+      let failure: Error;
+      try {
+        const res = await this.fetchFn(this.url(path), init);
+        if (res.ok) return;
+        if (res.status === 409 && attempt > 0) {
+          // eslint-disable-next-line no-console
+          console.warn(`[java-client] ${label}: 재시도에서 409 — 앞선 시도가 이미 반영된 것으로 본다`);
+          return;
+        }
+        failure = new HttpStatusError(res.status, `${label} failed: ${res.status}`);
+        if (res.status < 500) throw failure;
+      } catch (err) {
+        if (err instanceof HttpStatusError && err.status < 500) throw err;
+        failure = err as Error;
+      }
+      if (attempt >= delays.length) throw failure;
+      // eslint-disable-next-line no-console
+      console.warn(
+        `[java-client] ${label}: ${failure.message} — ${delays[attempt]}ms 뒤 재시도 (${attempt + 1}/${delays.length})`,
+      );
+      await this.reportRetry.sleep(delays[attempt]!);
+    }
+  }
+
   async postQuestion(id: number, body: WorkerQuestionRequest): Promise<void> {
-    const res = await this.fetchFn(this.url(`/worker/interviews/${id}/question?${this.wq()}`), {
-      method: 'POST',
-      headers: this.headers(),
-      body: JSON.stringify(body),
-    });
-    if (!res.ok) throw new Error(`question failed: ${res.status}`);
+    await this.report(
+      `/worker/interviews/${id}/question?${this.wq()}`,
+      { method: 'POST', headers: this.headers(), body: JSON.stringify(body) },
+      'question',
+    );
   }
 
   async postPlan(id: number, body: WorkerPlanRequest): Promise<void> {
-    const res = await this.fetchFn(this.url(`/worker/interviews/${id}/plan?${this.wq()}`), {
-      method: 'POST',
-      headers: this.headers(),
-      body: JSON.stringify(body),
-    });
-    if (!res.ok) throw new Error(`plan failed: ${res.status}`);
+    await this.report(
+      `/worker/interviews/${id}/plan?${this.wq()}`,
+      { method: 'POST', headers: this.headers(), body: JSON.stringify(body) },
+      'plan',
+    );
   }
 
   /** 활동 배치 전송 — 실패 처리(폐기/비활성화)는 호출자(ActivityPoster) 책임. */
@@ -119,12 +165,14 @@ export class JavaApiClient {
     });
   }
 
+  /** 끝내 실패하면 던진다 — 호출처(러너 safeFail·ClaimLoop)가 경고로만 남기고 계속 간다. */
   async fail(id: number, reason: string): Promise<void> {
     // workerId(필수) + reason(선택) 모두 쿼리파라미터(Java @RequestParam). 바디 없음.
     const reasonQs = reason ? `&reason=${encodeURIComponent(reason)}` : '';
-    await this.fetchFn(this.url(`/worker/interviews/${id}/fail?${this.wq()}${reasonQs}`), {
-      method: 'POST',
-      headers: this.headers(),
-    });
+    await this.report(
+      `/worker/interviews/${id}/fail?${this.wq()}${reasonQs}`,
+      { method: 'POST', headers: this.headers() },
+      'fail',
+    );
   }
 }

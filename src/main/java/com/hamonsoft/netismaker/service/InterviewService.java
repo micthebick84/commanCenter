@@ -625,6 +625,16 @@ public class InterviewService {
     }
 
     /**
+     * task 상세가 인터뷰 단계일 때 보여 줄 참조 — 최신 세션의 참조 사본(고정 커밋·실패 사유 포함, 스펙 2026-10-24 §4.9).
+     * 세션이 없으면 empty, 세션 값이 null이면 [].
+     */
+    @Transactional(readOnly = true)
+    public Optional<List<RefRepo>> latestSessionRefRepos(Long taskId) {
+        return sessionRepo.findTopByTaskIdOrderByCreatedAtDesc(taskId)
+                .map(s -> s.getRefRepos() == null ? List.of() : List.copyOf(s.getRefRepos()));
+    }
+
+    /**
      * task의 전체 세션 이력 (최신순, 경량 — turns/plan 미포함).
      * ACL은 세션이 아니라 task 소유자 기준으로 통일: TaskController.get과 동일 의미론
      * (소프트삭제된 task는 404, 비소유자·비관리자는 403).

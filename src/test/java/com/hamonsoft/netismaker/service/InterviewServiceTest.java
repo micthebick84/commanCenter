@@ -994,4 +994,21 @@ class InterviewServiceTest {
         assertThat(s.getRefRepos().get(0).sha()).isEqualTo(SHA_A);
     }
 
+    @Test
+    void latestSessionRefRepos_copies_the_latest_session_refs_and_treats_null_as_empty() {
+        InterviewSession s = session(1L, InterviewStatus.RUNNING);
+        RefRepo pinned = ref(11L, "main", SHA_A, "2026-10-24T10:00+09:00", null);
+        RefRepo failed = ref(12L, "main", null, null, "권한 없음");
+        s.setRefRepos(new ArrayList<>(List.of(pinned, failed)));
+        when(sessionRepo.findTopByTaskIdOrderByCreatedAtDesc(5L)).thenReturn(Optional.of(s));
+
+        List<RefRepo> refs = service.latestSessionRefRepos(5L).orElseThrow();
+        s.getRefRepos().clear();
+
+        assertThat(refs).containsExactly(pinned, failed);   // 세션 목록과 따로인 사본
+        s.setRefRepos(null);
+        assertThat(service.latestSessionRefRepos(5L)).contains(List.of());
+        assertThat(service.latestSessionRefRepos(6L)).isEmpty();   // 세션 없음
+    }
+
 }

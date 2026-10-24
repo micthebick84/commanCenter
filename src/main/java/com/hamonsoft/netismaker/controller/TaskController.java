@@ -39,8 +39,10 @@ import java.net.URI;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.EnumSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 /**
  *  사용자/관리자 작업 API. DESIGN §12 표면 그대로.
@@ -64,6 +66,13 @@ public class TaskController {
         this.deployLogStream = deployLogStream;
         this.interviewService = interviewService;
     }
+
+    /**
+     * 상세 응답의 참조 칩을 진행 중 인터뷰 세션 값(고정·실패 상태 포함)으로 싣는 단계 (스펙 2026-10-24 §4.9).
+     * 목록·다른 엔드포인트는 작업의 참조만 — 세션 조회를 늘리지 않는다.
+     */
+    private static final Set<TaskStatus> INTERVIEW_STAGE = EnumSet.of(
+            TaskStatus.INTERVIEWING, TaskStatus.INTERVIEW_INPUT, TaskStatus.INTERVIEW_REVIEW);
 
     /** 관리자가 아니면 비밀 env 값을 비운다 (스펙 2026-10-07 §7). 관리자 전용 엔드포인트에는 쓰지 않는다. */
     private static TaskResponse forViewer(TaskResponse r, boolean isAdmin) {
@@ -116,11 +125,15 @@ public class TaskController {
         String userId = AuthContext.requireUserId(auth);
         boolean isAdmin = AuthContext.isAdmin(auth);
         Task t = taskService.getForView(id, userId, isAdmin);
-        return forViewer(TaskResponse.ofWithUsage(t, taskService.getAnalysis(id).orElse(null),
+        TaskResponse r = TaskResponse.ofWithUsage(t, taskService.getAnalysis(id).orElse(null),
                 taskService.getDesign(id).orElse(null),
                 interviewService.latestSessionIdForTask(id).orElse(null),
                 taskService.getAttachments(id),
-                taskService.getStageUsage(id)), isAdmin);
+                taskService.getStageUsage(id));
+        if (INTERVIEW_STAGE.contains(t.getStatus())) {
+            r = interviewService.latestSessionRefRepos(id).map(r::withRefRepos).orElse(r);
+        }
+        return forViewer(r, isAdmin);
     }
 
     /**

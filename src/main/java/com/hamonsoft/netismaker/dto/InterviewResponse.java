@@ -121,7 +121,7 @@ public record InterviewResponse(
                 s.getRepoCatalogId(), s.getDbConnectionIds(), List.of(), refViews(s));
     }
 
-    /** 세션의 참조 repo → 칩 뷰. 세션 쪽 값이 null이어도 [] (INTERVIEW 세션은 항상 []). */
+    /** 세션의 참조 repo → 칩 뷰. 세션 쪽 값이 null이어도 []. */
     private static List<RefRepoView> refViews(InterviewSession s) {
         List<RefRepo> refs = s.getRefRepos();
         return refs == null ? List.of() : refs.stream().map(RefRepoView::of).toList();

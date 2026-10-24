@@ -75,6 +75,25 @@ class RefRepoInputValidationTest {
         assertThat(validator.validate(new ApproveRequest(null, null, null))).isEmpty();
     }
 
+    // ── 작업 인터뷰 답변 (스펙 2026-10-24 §4.3) — 같은 255자 상한, 목록에 @Valid ──
+
+    private static AnswerRequest answer(String branch) {
+        return new AnswerRequest("답", 3, List.of(new RefRepoInput(11L, branch)));
+    }
+
+    @Test
+    void a_256_char_branch_is_rejected_in_the_interview_answer() {
+        assertThat(paths(validator.validate(answer("b".repeat(256))))).containsExactly("refRepos[0].branch");
+    }
+
+    @Test
+    void interview_answers_with_a_255_char_branch_or_without_references_stay_valid() {
+        assertThat(validator.validate(answer("b".repeat(255)))).isEmpty();
+        assertThat(validator.validate(new AnswerRequest("답", 3))).isEmpty();
+        assertThat(validator.validate(new AnswerRequest("답", 3, List.of()))).isEmpty();
+        assertThat(paths(validator.validate(new AnswerRequest(" ", 3)))).containsExactly("answer");
+    }
+
     @Test
     void a_255_char_blank_or_missing_branch_passes_bean_validation() {
         // 빈 브랜치는 서비스가 카탈로그 기본 브랜치로 채우거나 400("참조 브랜치를 지정하세요")으로 거절한다 — 빈 검증의 일이 아니다

@@ -1,6 +1,8 @@
 package com.hamonsoft.netismaker.service;
 
+import com.hamonsoft.netismaker.dto.AnswerRequest;
 import com.hamonsoft.netismaker.dto.InterviewClaimResponse;
+import com.hamonsoft.netismaker.dto.RefRepoInput;
 import com.hamonsoft.netismaker.dto.WorkerPlanRequest;
 import com.hamonsoft.netismaker.dto.WorkerQuestionRequest;
 import com.hamonsoft.netismaker.dto.WorkerQuestionRequest.RefState;
@@ -22,6 +24,7 @@ import java.util.Optional;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.Mockito.*;
 
 class InterviewServiceTest {
@@ -36,6 +39,7 @@ class InterviewServiceTest {
     AttachmentStorage attachmentStorage;
     TaskStageUsageRepository stageUsageRepo;
     QuestionAttachmentRepository questionAttachmentRepo;
+    RepoCatalogService repoCatalog;
     InterviewService service;
 
     @BeforeEach
@@ -54,6 +58,8 @@ class InterviewServiceTest {
                 taskRepo, analysisRepo, historyRepo, attachmentRepo, attachmentStorage, stageUsageRepo,
                 questionAttachmentRepo,
                 new InterviewWorkPaths(System.getProperty("user.home") + "/netis-maker/interviews"));
+        repoCatalog = mock(RepoCatalogService.class);
+        service.setRepoCatalogService(repoCatalog);
         when(sessionRepo.save(any())).thenAnswer(i -> i.getArgument(0));
         when(turnRepo.save(any())).thenAnswer(i -> i.getArgument(0));
         when(planRepo.save(any())).thenAnswer(i -> i.getArgument(0));
@@ -710,9 +716,11 @@ class InterviewServiceTest {
         assertThat(service.claim("w1").orElseThrow().refRepos()).isNotNull().isEmpty();
     }
 
+    // ── 작업 인터뷰 참조 repo: claim·계획 보고·답변 중 변경 (스펙 2026-10-24 §4.3·§4.4·§4.5) ─────────────────
+
     @Test
-    void claim_interview_session_has_no_refs() {
-        // INTERVIEW 세션은 refRepos 컬럼에 값이 있어도(이 단계에선 항상 []) claim 페이로드는 비어 있다
+    void claim_interview_session_carries_reference_dirs() {
+        // 2단계: INTERVIEW 세션도 질문과 같은 규칙({루트}/_refs/{세션 id}/{카탈로그 id})으로 참조를 싣는다
         InterviewSession s = session(1L, InterviewStatus.QUEUED);
         s.setRefRepos(new ArrayList<>(List.of(ref(11L, "main", null, null, null))));
         when(sessionRepo.findClaimableForUpdateSkipLocked(any())).thenReturn(List.of(s));
@@ -720,8 +728,229 @@ class InterviewServiceTest {
 
         InterviewClaimResponse c = service.claim("w1").orElseThrow();
 
-        assertThat(c.refRepos()).isNotNull().isEmpty();
+        String root = System.getProperty("user.home") + "/netis-maker/interviews";
+        assertThat(c.refRepos()).extracting(InterviewClaimResponse.ClaimRefRepo::dir)
+                .containsExactly(root + "/_refs/1/11");
+        assertThat(c.refRepos().get(0).alias()).isEqualTo("참조11");
+        assertThat(c.refRepos().get(0).sha()).isNull();
+        assertThat(c.refsCleared()).isFalse();
     }
+
+    @Test
+    void claim_interview_session_without_refs_has_an_empty_list_and_is_not_cleared() {
+        InterviewSession s = session(1L, InterviewStatus.QUEUED);
+        when(sessionRepo.findClaimableForUpdateSkipLocked(any())).thenReturn(List.of(s));
+        when(turnRepo.findBySessionIdOrderBySeqAsc(1L)).thenReturn(List.of());
+
+        InterviewClaimResponse c = service.claim("w1").orElseThrow();
+
+        assertThat(c.refRepos()).isNotNull().isEmpty();
+        assertThat(c.refsCleared()).isFalse();
+    }
+
+    private static InterviewTurn note(int seq, String content) {
+        return InterviewTurn.of(1L, seq, "system", "note", content, null);
+    }
+
+    /** 세션 1을 주어진 턴과 함께 claim해서 refsCleared를 돌려준다 — claim은 QUEUED에서만 되므로 세션은 호출마다 새로 만든다. */
+    private boolean claimRefsCleared(InterviewSession s, InterviewTurn... turns) {
+        when(sessionRepo.findClaimableForUpdateSkipLocked(any())).thenReturn(List.of(s));
+        when(turnRepo.findBySessionIdOrderBySeqAsc(1L)).thenReturn(List.of(turns));
+        return service.claim("w1").orElseThrow().refsCleared();
+    }
+
+    @Test
+    void claim_interview_marks_refs_cleared_only_when_the_last_ref_note_cleared_them() {
+        InterviewTurn added = note(1, "참조 repo 변경: ＋ 옛앱(main)");
+        InterviewTurn cleared = note(3, "참조 repo 변경: 없음(전부 해제)");
+        InterviewTurn readded = note(5, "참조 repo 변경: ＋ 옛앱(main)");
+        InterviewTurn mcpNote = note(6, "MCP 도구 변경: ctx7");
+        InterviewTurn answerLookingLikeTheNote =
+                InterviewTurn.of(1L, 7, "user", "answer", "참조 repo 변경: 없음(전부 해제)", 6);
+
+        // 대화 중 모두 뺐다 — 참조 메모가 아닌 노트가 뒤에 와도 그대로
+        assertThat(claimRefsCleared(session(1L, InterviewStatus.QUEUED), added, cleared)).isTrue();
+        assertThat(claimRefsCleared(session(1L, InterviewStatus.QUEUED), added, cleared, mcpNote)).isTrue();
+        // 참조를 고른 적 없음(메모 없음) — 프롬프트가 그대로여야 한다
+        assertThat(claimRefsCleared(session(1L, InterviewStatus.QUEUED))).isFalse();
+        // 마지막 참조 메모가 추가 — 목록이 비어 있어도 '모두 뺐다'가 아니다
+        assertThat(claimRefsCleared(session(1L, InterviewStatus.QUEUED), added, cleared, readded)).isFalse();
+        // system note가 아닌 턴의 같은 문장은 메모가 아니다
+        assertThat(claimRefsCleared(session(1L, InterviewStatus.QUEUED), added, answerLookingLikeTheNote)).isFalse();
+        // 참조가 남아 있으면 메모와 상관없이 false
+        InterviewSession withRefs = session(1L, InterviewStatus.QUEUED);
+        withRefs.setRefRepos(new ArrayList<>(List.of(ref(11L, "main", null, null, null))));
+        assertThat(claimRefsCleared(withRefs, added, cleared)).isFalse();
+        // 질문 세션은 같은 턴이어도 false — 질문 프롬프트는 바뀌지 않는다
+        assertThat(claimRefsCleared(questionSession(1L, InterviewStatus.QUEUED), added, cleared)).isFalse();
+    }
+
+    private InterviewSession runningInterviewWithRefs(long id, RefRepo... refs) {
+        InterviewSession s = session(id, InterviewStatus.RUNNING);
+        s.setWorkerId("w1");
+        s.setRefRepos(new ArrayList<>(List.of(refs)));
+        when(sessionRepo.findByIdForUpdate(id)).thenReturn(Optional.of(s));
+        return s;
+    }
+
+    private static WorkerPlanRequest planWith(List<RefState> states) {
+        return new WorkerPlanRequest("# 설계", "# 플랜", "[]", BigDecimal.ZERO, null, null, null, null, 1000L, states);
+    }
+
+    @Test
+    void recordPlan_pins_reported_ref_states() {
+        // 마지막 답변에서 더한 참조가 계획 턴에 처음 받아져도 커밋이 고정돼야 한다 (스펙 §4.5)
+        InterviewSession s = runningInterviewWithRefs(3L,
+                ref(11L, "main", null, null, null),
+                ref(12L, "release/6.5", null, null, null));
+
+        service.recordPlan(3L, "w1", planWith(List.of(
+                new RefState(11L, "main", SHA_A, null),
+                new RefState(12L, "release/6.5", null, "권한 없음"))));
+
+        assertThat(s.getStatus()).isEqualTo(InterviewStatus.PLAN_READY);
+        assertThat(s.getRefRepos().get(0).sha()).isEqualTo(SHA_A);
+        assertThat(s.getRefRepos().get(0).fetchedAt()).isNotNull();
+        assertThat(s.getRefRepos().get(1).sha()).isNull();
+        assertThat(s.getRefRepos().get(1).error()).isEqualTo("권한 없음");
+    }
+
+    @Test
+    void recordPlan_without_ref_states_leaves_refs_untouched() {
+        // 구버전 러너 — 9인자 생성자(refStates = null)
+        InterviewSession s = runningInterviewWithRefs(3L, ref(11L, "main", null, null, "이전 오류"));
+        List<RefRepo> before = s.getRefRepos();
+
+        service.recordPlan(3L, "w1", new WorkerPlanRequest("# 설계", "# 플랜", "[]",
+                new BigDecimal("0.05"), null, null, null, null, 4321L));
+
+        assertThat(s.getStatus()).isEqualTo(InterviewStatus.PLAN_READY);
+        assertThat(s.getRefRepos()).isSameAs(before);
+        assertThat(s.getRefRepos().get(0).error()).isEqualTo("이전 오류");
+    }
+
+    @Test
+    void applyRefStates_pins_only_a_full_hex_sha() {
+        // 화면이 '고정'으로 보여 준 참조가 구현에서 형식 오류로 실패하지 않게 — 40자·64자 16진수만 고정한다(워커 isFullSha와 같은 정의)
+        for (String bad : List.of("abc", "--upload-pack=x", "a".repeat(39), "a".repeat(41), "g".repeat(40),
+                "a".repeat(40) + "\n", "a".repeat(63), "a".repeat(65))) {
+            InterviewSession q = runningQuestionWithRefs(5L, ref(11L, "main", null, null, "이전 오류"));
+            service.recordQuestion(5L, "w1", answerWith(new RefState(11L, "main", bad, null)));
+            assertThat(q.getRefRepos().get(0).sha()).as("question %s", bad).isNull();
+            assertThat(q.getRefRepos().get(0).error()).as("question %s", bad).isEqualTo("이전 오류");
+
+            InterviewSession i = runningInterviewWithRefs(3L, ref(11L, "main", null, null, "이전 오류"));
+            service.recordPlan(3L, "w1", planWith(List.of(new RefState(11L, "main", bad, null))));
+            assertThat(i.getRefRepos().get(0).sha()).as("plan %s", bad).isNull();
+            assertThat(i.getRefRepos().get(0).error()).as("plan %s", bad).isEqualTo("이전 오류");
+        }
+        for (String good : List.of("a".repeat(40), "0123456789ABCDEFabcd".repeat(2), "f".repeat(64))) {
+            InterviewSession q = runningQuestionWithRefs(5L, ref(11L, "main", null, null, "이전 오류"));
+            service.recordQuestion(5L, "w1", answerWith(new RefState(11L, "main", good, null)));
+            assertThat(q.getRefRepos().get(0).sha()).as("question %s", good).isEqualTo(good);
+            assertThat(q.getRefRepos().get(0).error()).as("question %s", good).isNull();
+
+            InterviewSession i = runningInterviewWithRefs(3L, ref(11L, "main", null, null, "이전 오류"));
+            service.recordPlan(3L, "w1", planWith(List.of(new RefState(11L, "main", good, null))));
+            assertThat(i.getRefRepos().get(0).sha()).as("plan %s", good).isEqualTo(good);
+            assertThat(i.getRefRepos().get(0).error()).as("plan %s", good).isNull();
+        }
+    }
+
+    private static RefRepoInput in(long catalogId, String branch) {
+        return new RefRepoInput(catalogId, branch);
+    }
+
+    /** 대상 카탈로그 1에 참조를 가진 입력대기 INTERVIEW 세션 — 답변 턴은 seq 3, 그 뒤 메모는 seq 4. */
+    private InterviewSession awaitingInterviewWithRefs(long id, RefRepo... refs) {
+        InterviewSession s = session(id, InterviewStatus.AWAITING_INPUT);
+        s.setRepoCatalogId(1L);
+        s.setRefRepos(new ArrayList<>(List.of(refs)));
+        when(sessionRepo.findByIdForUpdate(id)).thenReturn(Optional.of(s));
+        when(turnRepo.findMaxSeq(id)).thenReturn(2, 3);
+        return s;
+    }
+
+    @Test
+    void submitAnswerWithRefs_without_refs_is_a_plain_answer() {
+        InterviewSession s = awaitingInterviewWithRefs(1L, ref(11L, "main", SHA_A, "2026-10-24T10:00+09:00", null));
+        List<RefRepo> before = s.getRefRepos();
+
+        InterviewService.AnswerResult r = service.submitAnswerWithRefs(1L, "admin", new AnswerRequest("답", 2));
+
+        assertThat(r.refNote()).isNull();
+        assertThat(r.outcome().session()).isSameAs(s);
+        assertThat(r.outcome().turnSeq()).isEqualTo(3);
+        assertThat(s.getStatus()).isEqualTo(InterviewStatus.QUEUED);
+        assertThat(s.getRefRepos()).isSameAs(before);
+        verify(turnRepo, never()).save(argThat(t -> "system".equals(t.getRole())));
+        verifyNoInteractions(repoCatalog);
+    }
+
+    @Test
+    void submitAnswerWithRefs_with_the_same_set_is_a_plain_answer_without_validation() {
+        // 같은 (카탈로그 id + 브랜치) 집합 — 순서가 달라도 검증 없는 no-op (1단계 ask와 같은 규칙)
+        InterviewSession s = awaitingInterviewWithRefs(1L,
+                ref(11L, "main", SHA_A, "2026-10-24T10:00+09:00", null), ref(12L, "master", null, null, null));
+        List<RefRepo> before = s.getRefRepos();
+
+        InterviewService.AnswerResult r = service.submitAnswerWithRefs(1L, "admin",
+                new AnswerRequest("답", 2, List.of(in(12, "master"), in(11, "main"))));
+
+        assertThat(r.refNote()).isNull();
+        assertThat(s.getRefRepos()).isSameAs(before);
+        verifyNoInteractions(repoCatalog);
+    }
+
+    @Test
+    void submitAnswerWithRefs_changes_refs_and_appends_the_note() {
+        RefRepo oldApp = ref(11L, "main", SHA_A, "2026-10-24T10:00+09:00", null);
+        InterviewSession s = awaitingInterviewWithRefs(1L, oldApp);
+        RefRepo batch = new RefRepo(12L, "배치 서버", "acme/batch", "https://github.com/acme/batch.git",
+                "master", null, null, null);
+        when(repoCatalog.resolveReferences(1L, List.of(in(12, "master")))).thenReturn(List.of(batch));
+
+        InterviewService.AnswerResult r = service.submitAnswerWithRefs(1L, "admin",
+                new AnswerRequest("답", 3, List.of(in(11, "main"), in(12, "master"))));
+
+        assertThat(r.refNote().getContent()).isEqualTo("참조 repo 변경: ＋ 배치 서버(master)");
+        assertThat(r.refNote().getRole()).isEqualTo("system");
+        assertThat(r.refNote().getKind()).isEqualTo("note");
+        assertThat(r.refNote().getSeq()).isEqualTo(4);
+        assertThat(r.outcome().turnSeq()).isEqualTo(3);
+        assertThat(s.getRefRepos()).containsExactly(oldApp, batch);
+        assertThat(s.getRefRepos().get(0).sha()).isEqualTo(SHA_A);   // 유지되는 참조는 고정 커밋 그대로
+        assertThat(s.getStatus()).isEqualTo(InterviewStatus.QUEUED);
+    }
+
+    @Test
+    void submitAnswerWithRefs_clearing_every_ref_notes_it() {
+        InterviewSession s = awaitingInterviewWithRefs(1L, ref(11L, "main", SHA_A, "2026-10-24T10:00+09:00", null));
+
+        InterviewService.AnswerResult r = service.submitAnswerWithRefs(1L, "admin",
+                new AnswerRequest("답", 2, List.of()));
+
+        assertThat(r.refNote().getContent()).isEqualTo("참조 repo 변경: 없음(전부 해제)");
+        assertThat(s.getRefRepos()).isEmpty();
+    }
+
+    @Test
+    void submitAnswerWithRefs_rejection_propagates_and_adds_no_note() {
+        InterviewSession s = awaitingInterviewWithRefs(1L, ref(11L, "main", SHA_A, "2026-10-24T10:00+09:00", null));
+        List<RefRepo> before = s.getRefRepos();
+
+        assertThatThrownBy(() -> service.submitAnswerWithRefs(1L, "admin", new AnswerRequest("답", 2,
+                List.of(in(11, "main"), in(12, "main"), in(13, "main"), in(14, "main")))))
+                .isInstanceOfSatisfying(TaskException.class,
+                        e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.BAD_REQUEST))
+                .hasMessage("참조 repo는 최대 3개까지 고를 수 있습니다");
+
+        verify(turnRepo, never()).save(argThat(t -> "system".equals(t.getRole())));
+        assertThat(s.getRefRepos()).isSameAs(before);
+        verifyNoInteractions(repoCatalog);
+    }
+
+    // ── 질문 세션 참조 repo: 답변 보고 (스펙 2026-10-22 §4.5) ─────────────────
 
     @Test
     void recordQuestion_pins_sha_only_once() {

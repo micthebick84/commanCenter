@@ -55,10 +55,16 @@ public record InterviewClaimResponse(
         /** 사용할 수 없는 연결 등 프롬프트에 붙일 안내 (비밀번호 없음). */
         List<String> dbNotices,
         /**
-         * 질문 세션의 읽기 전용 참조 repo (스펙 2026-10-22 §4.4) — InterviewService.claim이 withRefRepos로 채운다.
-         * 항상 non-null, 참조가 없거나 INTERVIEW 세션이면 [].
+         * 질문·인터뷰 세션의 읽기 전용 참조 repo (스펙 2026-10-22 §4.4, 2026-10-24 §4.4) — InterviewService.claim이
+         * withRefRepos로 채운다. 항상 non-null, 참조가 없으면 [].
          */
-        List<ClaimRefRepo> refRepos
+        List<ClaimRefRepo> refRepos,
+        /**
+         * 작업 인터뷰에서 참조를 대화 중 모두 뺐는지 (스펙 2026-10-24 §4.4·§5.2) — 마지막 참조 변경 메모가
+         * '없음(전부 해제)'이고 지금 참조가 없을 때만 true. 그 밖(참조를 고른 적 없음·질문 세션 포함)은 false라
+         * 프롬프트가 그대로다. InterviewService.claim이 withRefsCleared로 채운다.
+         */
+        boolean refsCleared
 ) {
     /** 어느 경로로 생성돼도 non-null 계약 유지 (스펙 §5.4). */
     public InterviewClaimResponse {
@@ -108,7 +114,7 @@ public record InterviewClaimResponse(
     }
 
     /**
-     * 질문 세션 참조 repo 1개 (스펙 2026-10-22 §4.4) — 인터뷰 서비스(TS)가 이 필드 이름 그대로 읽는다.
+     * 질문·인터뷰 세션 참조 repo 1개 (스펙 2026-10-22 §4.4, 2026-10-24 §4.4) — 인터뷰 서비스(TS)가 이 필드 이름 그대로 읽는다.
      * githubRepo = GitHub owner/repo 또는 GitLab 프로젝트 전체 경로(RefRepo.path), repoHost = "github" | "gitlab",
      * dir = 체크아웃 절대경로({루트}/_refs/{세션 id}/{카탈로그 id} — 저장하지 않고 claim마다 같은 규칙으로 계산),
      * sha = 처음 받아 고정한 커밋(아직 안 받았으면 null).
@@ -151,20 +157,30 @@ public record InterviewClaimResponse(
                 attachmentRoot,
                 s.getGitUrl(), RepoRef.fromSnapshot(s.getGithubRepo(), s.getGitUrl()).host(),
                 s.getDbConnectionIds() == null ? List.of() : List.copyOf(s.getDbConnectionIds()), List.of(), List.of(),
-                List.of());
+                List.of(), false);
     }
 
-    /** DB 접속정보만 채운 사본 (스펙 §5.4). 참조 repo는 그대로 실어 나른다. */
+    /** DB 접속정보만 채운 사본 (스펙 §5.4). 참조 repo·refsCleared는 그대로 실어 나른다. */
     public InterviewClaimResponse withDb(List<DbConnectionRef> refs, List<String> notices) {
         return new InterviewClaimResponse(sessionId, githubRepo, githubBranch, title, description, claudeSessionId,
                 currentPhase, workDir, lastAnswer, replyToSeq, mcpsExtra, turns, model, effort, totalCostUsd,
-                attachments, kind, attachmentRoot, gitUrl, repoHost, dbConnectionIds, refs, notices, refRepos);
+                attachments, kind, attachmentRoot, gitUrl, repoHost, dbConnectionIds, refs, notices, refRepos,
+                refsCleared);
     }
 
-    /** 참조 repo만 채운 사본 (스펙 2026-10-22 §4.4). DB 접속정보는 그대로 실어 나른다. */
+    /** 참조 repo만 채운 사본 (스펙 2026-10-22 §4.4). DB 접속정보·refsCleared는 그대로 실어 나른다. */
     public InterviewClaimResponse withRefRepos(List<ClaimRefRepo> refs) {
         return new InterviewClaimResponse(sessionId, githubRepo, githubBranch, title, description, claudeSessionId,
                 currentPhase, workDir, lastAnswer, replyToSeq, mcpsExtra, turns, model, effort, totalCostUsd,
-                attachments, kind, attachmentRoot, gitUrl, repoHost, dbConnectionIds, dbConnections, dbNotices, refs);
+                attachments, kind, attachmentRoot, gitUrl, repoHost, dbConnectionIds, dbConnections, dbNotices, refs,
+                refsCleared);
+    }
+
+    /** refsCleared만 바꾼 사본 (스펙 2026-10-24 §4.4). 나머지는 그대로 실어 나른다. */
+    public InterviewClaimResponse withRefsCleared(boolean cleared) {
+        return new InterviewClaimResponse(sessionId, githubRepo, githubBranch, title, description, claudeSessionId,
+                currentPhase, workDir, lastAnswer, replyToSeq, mcpsExtra, turns, model, effort, totalCostUsd,
+                attachments, kind, attachmentRoot, gitUrl, repoHost, dbConnectionIds, dbConnections, dbNotices,
+                refRepos, cleared);
     }
 }

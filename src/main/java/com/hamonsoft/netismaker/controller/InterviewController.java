@@ -53,14 +53,21 @@ public class InterviewController {
         return interviewStream.subscribe(id);
     }
 
+    /**
+     * 관리자 답변 + 대화 중 참조 repo 변경(바디 refRepos, 스펙 2026-10-24 §4.3) — 둘을 한 트랜잭션으로 처리하는 서비스 래퍼에 맡긴다
+     * (참조 400이면 답변 턴까지 롤백). 참조가 바뀌었으면 status(QUEUED) 다음에 시스템 메모를 note 이벤트로 민다(질문 ask와 같은 순서).
+     */
     @PostMapping("/{id}/answer")
     @PreAuthorize("hasAuthority('ROLE_ADMIN')")
     public InterviewResponse answer(@PathVariable Long id, @RequestBody @Valid AnswerRequest req,
                                     JwtAuthenticationToken auth) {
         interviewService.requireKind(id, InterviewKind.INTERVIEW); // 질문 세션은 이 API로 조작 불가 (404)
         String adminId = AuthContext.requireUserId(auth);
-        interviewService.submitAnswer(id, adminId, true, req);
+        InterviewService.AnswerResult result = interviewService.submitAnswerWithRefs(id, adminId, req);
         interviewStream.pushStatus(id, InterviewStatus.QUEUED);
+        if (result.refNote() != null) {
+            interviewStream.pushNote(id, result.refNote().getSeq(), result.refNote().getContent());
+        }
         return interviewService.getResponse(id, adminId, true);
     }
 

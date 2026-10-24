@@ -93,6 +93,29 @@ class ImplementationPromptsTest {
                 .doesNotContain("태스크 리뷰 서브에이전트").doesNotContain("최종 리뷰 서브에이전트");
     }
 
+    /** SDD 지시서는 Task N 사이 줄만 뽑아 계획 파일 머리의 참조 절을 놓친다 — 참조가 있을 때만 넘기라고 한 줄 더한다 (스펙 2026-10-24 §6.5). */
+    @Test
+    void sdd_section_carries_the_ref_line_only_with_refs() {
+        String withRefs = ImplementationPrompts.planSection(task(PLAN), SDD, "abc1234", false, true);
+
+        assertThat(ImplementationPrompts.SDD_REF_LINE).isEqualTo(
+                "- 서브에이전트(구현·리뷰)에게 일을 맡길 때 계획 파일 머리의 \"참조 repo\" 절을 그대로 함께 넘긴다.\n");
+        assertThat(withRefs).endsWith(ImplementationPrompts.SDD_REF_LINE)
+                .isEqualTo(ImplementationPrompts.planSection(task(PLAN), SDD, "abc1234", false)
+                        + ImplementationPrompts.SDD_REF_LINE);
+        assertThat(ImplementationPrompts.planSection(task(PLAN), SDD, "abc1234", false))
+                .doesNotContain(ImplementationPrompts.SDD_REF_LINE);
+        assertThat(ImplementationPrompts.planSection(task(PLAN), SDD, "abc1234", false, false))
+                .isEqualTo(ImplementationPrompts.planSection(task(PLAN), SDD, "abc1234", false));
+        // 리뷰·직접 방식은 참조가 있어도 이 줄이 없다(참조 절은 프롬프트 끝과 계획 파일 머리에 있다)
+        assertThat(ImplementationPrompts.planSection(task(PLAN), REVIEW, "abc1234", false, true))
+                .doesNotContain(ImplementationPrompts.SDD_REF_LINE)
+                .isEqualTo(ImplementationPrompts.planSection(task(PLAN), REVIEW, "abc1234", false));
+        assertThat(ImplementationPrompts.planSection(task(PLAN), DIRECT, "abc1234", false, true))
+                .doesNotContain(ImplementationPrompts.SDD_REF_LINE)
+                .isEqualTo(ImplementationPrompts.planSection(task(PLAN), DIRECT, "abc1234", false));
+    }
+
     @Test
     void mode_line_names_attempt_and_fallback_with_korean_particles() {
         assertThat(ImplementationPrompts.modeLine(REVIEW, REVIEW, 1, null)).isEqualTo("- **구현 방식**: 리뷰\n");

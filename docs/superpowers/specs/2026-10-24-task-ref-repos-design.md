@@ -1,7 +1,7 @@
 # 작업(인터뷰·구현) — 읽기 전용 참조 repo 설계 (멀티 repo 2단계)
 
 - 날짜: 2026-10-24
-- 상태: 초안 — 사용자 결정 7개·흐름 정리·화면 목업 확인(2026-10-24), 검토자 점검(영역별 4명 + 교차 점검 1명) 반영, 사용자 질문 1건(고정 커밋을 끝내 못 받을 때의 탈출구) 대기
+- 상태: 사용자 승인 대기 — 사용자 결정 7개·흐름 정리·화면 목업 확인(2026-10-24), 검토자 점검(영역별 4명 + 교차 점검 1명) 반영, 검토 뒤 사용자 결정 1개(재시도 때 참조 빼기)
 - 기준: main `a5a36d1` (1단계 [PR #98](https://github.com/micthebick84/commanCenter/pull/98)·대상 clone 무프롬프트 [PR #99](https://github.com/micthebick84/commanCenter/pull/99) 라이브)
 - 범위: 백엔드(API) + 인터뷰 서비스(Node) + 워커 데몬(Java) + 프론트엔드(Nuxt)
 - 단계: "멀티 repo 참조"의 2단계. 1단계는 질문 세션(`2026-10-22-question-ref-repos-design.md`, 구현됨).
@@ -23,7 +23,7 @@
 
 - 디자인 단계(디자인대기 → 시안)·레거시 분석(`processAnalysis`)에 참조 붙이기 — 사용자 결정(디자인), 분석은 진입점 없음
 - 여러 repo에 쓰기(다중 PR/MR). 쓰기 대상은 지금처럼 1개
-- 계획 확정 뒤 참조 바꾸기(구현 재시도 때 포함). 확정 뒤에는 고정
+- 계획 확정 뒤 참조를 더하거나 브랜치·커밋을 바꾸기. 확정 뒤에는 고정이고, 구현 재시도 때 **빼는 것만** 된다(§4.10)
 - 질문이 고정한 커밋을 작업으로 넘기기 — 사용자 결정. 대화 전문에 적어 두기만 한다
 - 태그·특정 커밋 지정, 같은 repo의 다른 브랜치를 참조로, 하위 경로만 받기(sparse checkout) — 1단계와 같음
 - 워커의 **대상** repo git 호출의 프롬프트 차단(인터뷰 쪽은 PR #99로 됨) — 기존 동작, 후속
@@ -51,6 +51,7 @@
 | 인터뷰 중 변경 | 인터뷰 답변 때 참조를 더하거나 뺄 수 있다(1단계 질문 `ask`와 같은 규칙·시스템 메모). 계획 확정 때 그 시점의 참조·고정 커밋이 작업에 저장된다 | 사용자 |
 | 질문 → 작업 | 질문 대화 화면에 "이 대화로 작업 등록" 버튼. 등록 창을 대상·브랜치·참조·제목으로 채우고, 대화 전문 `.md`를 작업 첨부로, 출처 질문을 기록 | 사용자 |
 | 디자인 단계 | 참조 없음 | 사용자 |
+| 고정 커밋을 끝내 못 받을 때 | 구현 재시도 창에서 관리자가 문제 참조를 빼고 재시도한다(빼기만, 더하기·바꾸기 없음, 이력에 남김). 브랜치 최신으로 몰래 대신 받지 않는다 | 사용자(검토 뒤) |
 | 1단계에서 이어 쓰는 규칙 | 최대 3개, 대상과 다른 repo만(참조끼리도 중복 금지), 참조마다 브랜치(기본 = 카탈로그 기본 브랜치), 칩에 고정 커밋, 사내 GitLab 위주(비공개 GitHub는 PAT), git은 자격증명 도우미·askpass·프롬프트 없이 | 사용자(1단계) |
 | 계획 속 참조 표기 | 계획·설계 문서는 참조 파일을 절대 경로가 아니라 `별칭:경로:줄`로 적는다(인터뷰와 구현의 폴더 위치가 다름) | 설계 판단(사용자 확인) |
 | 확정 때 고정 커밋이 없는 참조 | 인터뷰에서 한 번도 받지 못한 참조(sha 없음)는 구현으로 넘기지 않는다. 확정 화면에 미리 보여 주고 이력에 남긴다(§4.6) | 설계 판단 |
@@ -85,6 +86,7 @@ ALTER TABLE com.task ADD COLUMN source_question_id BIGINT;
 | 인터뷰 | 세션 `ref_repos` | 턴마다 준비 결과로 고정(sha·fetchedAt)·실패(error). 답변 때 추가·해제 |
 | 계획 확정 | 세션 → `task.ref_repos` | **sha가 있는 원소만**, error는 비워서. sha 없는 원소는 빼고 이력에 남긴다 |
 | 구현·재시도·재기동 재큐 | `task.ref_repos` 그대로 | `prepareImplementationRequeue`가 건드리지 않으므로 같은 커밋 |
+| 구현 재시도에서 빼기 | `task.ref_repos`에서 지정한 원소 삭제 | 관리자가 고른 것만. 남은 원소는 같은 커밋 그대로 |
 | 인터뷰 취소·실패 뒤 재승인 | `task.ref_repos`(마지막 승인 때 값) | 인터뷰 중 바꾼 것은 버려진다(새 세션은 다시 복사·다시 고정) |
 
 ## 4. API
@@ -148,6 +150,13 @@ ALTER TABLE com.task ADD COLUMN source_question_id BIGINT;
 
 - `TaskResponse`에 `refRepos`(`InterviewResponse.RefRepoView`: catalogId, alias, branch, sha, fetchedAt, error)와 `sourceQuestionId`를 더한다. `build`·`withTotalCost`·`redactSecretValues` 세 곳 모두.
 - 상세 응답에서 작업이 인터뷰 단계(인터뷰중·입력대기·플랜승인대기)면 `refRepos`는 **진행 중 세션의** 참조(상태 포함)를, 그 밖에는 작업의 참조를 준다. 화면은 5초 폴링으로 고정·실패 상태를 따라간다. 목록 응답은 작업의 참조만(세션 조회를 늘리지 않음). 세부는 구현 판단.
+
+### 4.10 구현 재시도 — `POST /api/tasks/{id}/implementation/retry` (관리자)
+
+- 바디에 `removeRefCatalogIds`(카탈로그 id 목록, 선택)를 더한다. 비었거나 없으면 지금과 같다(바디 `{implementationMode}`만 보내는 기존 호출·테스트 그대로).
+- 목록의 id는 모두 지금 `task.ref_repos`에 있어야 한다(아니면 400 `작업에 없는 참조는 뺄 수 없습니다`). 빼기만 하고 남은 원소의 sha는 그대로.
+- 기존 재시도 이력 문구는 바꾸지 않고(테스트 고정), 뺀 것이 있으면 다음에 별도 이력 행: `참조 제외(구현 재시도): {별칭}({브랜치}), …`.
+- 모든 참조를 빼면 참조 없는 구현이 된다(프롬프트·PR 본문에 참조 절 없음).
 
 ## 5. 인터뷰 서비스 (INTERVIEW)
 
@@ -317,6 +326,12 @@ ALTER TABLE com.task ADD COLUMN source_question_id BIGINT;
 - 데이터는 작업 상세가 이미 폴링하는 `TaskResponse.refRepos`(인터뷰 단계 = 세션 참조)를 prop으로 넘겨 쓴다(패널은 폴링이 없음). 요청자에게도 보인다(읽기 전용).
 - 확정 바디는 그대로.
 
+### 7.5b 구현 재시도 창 (`components/tasks/ImplementationRetryDialog.vue`)
+
+- 작업에 참조가 있으면 구현 방식 아래에 `참조 repo` 목록을 보여 주고, 참조마다 `이 참조 빼고 재시도` 선택을 둔다(기본 해제). 실패 사유가 `참조 repo 준비 실패: {별칭}(…)`이면 그 참조를 미리 선택해 둔다.
+- 하나라도 고르면 바디에 `removeRefCatalogIds`를 싣는다(아니면 지금 바디 그대로).
+- 안내 문구: `뺀 참조는 이번 구현과 이후 재시도에서 쓰지 않습니다.`
+
 ### 7.6 질문 대화 화면 (`pages/questions/[id].vue`)
 
 - 헤더 `세션 종료` 앞에 `이 대화로 작업 등록` 버튼(아이콘 `add_task` — 작업 등록 버튼과 같은 것. 앱은 클래식 Material Icons만 실어서 `assignment_add`는 없다. 좁은 화면은 아이콘만 + `aria-label`). 끝난 질문에서도 보인다. 답변 중이거나 `repoCatalogId`가 없으면 막는다.
@@ -336,7 +351,8 @@ ALTER TABLE com.task ADD COLUMN source_question_id BIGINT;
 | 인터뷰에서 참조 받기 실패·5분 초과 | 칩 ⚠ + 사유, 그 참조 없이 턴 진행, 다음 턴에 다시 시도 |
 | 참조 지원을 알리지 않은 워커의 claim | 참조 있는 구현은 넘기지 않음(대기로 남음) |
 | 확정 때 sha 없는 참조 | 구현에서 빼고 이력·확정 화면에 표시 |
-| 구현에서 참조 준비 실패(clone·고정 커밋 받기·worktree) | claude 실행 전 `구현실패`, `참조 repo 준비 실패: …`, 재시도 가능 |
+| 구현에서 참조 준비 실패(clone·고정 커밋 받기·worktree) | claude 실행 전 `구현실패`, `참조 repo 준비 실패: …`. 일시적이면 그대로 재시도, 고정 커밋이 사라졌거나 권한이 없으면 재시도 창에서 그 참조를 빼고 재시도 |
+| 재시도 때 작업에 없는 참조를 빼려 함 | 400 `작업에 없는 참조는 뺄 수 없습니다` |
 | 구현이 참조 폴더를 바꿈 | PR 진행, PR 본문·이력에 경고 |
 | 참조 준비로 시간 여유 부족 | claude 상한에서 뺌, 남은 시간 없으면 시간 초과 실패 |
 
@@ -356,7 +372,8 @@ ALTER TABLE com.task ADD COLUMN source_question_id BIGINT;
 - API: 등록 참조 검증·출처 질문 권한·대화 전문 첨부(첫 질문이 `description`에서 옴), 승인의 null/[]/같은 집합/새 것만 검증, 답변 + 참조 400이면 답변 턴까지 롤백, INTERVIEW claim에 dir 포함, `recordPlan`의 `applyRefStates`, 확정 복사(sha 있는 것만, error 비움, 이력 행), 구현 claim의 `refRepos`, `refWarnings` 이력 행(지각 정합 포함), V33 JSONB 왕복(Testcontainers)
 - 인터뷰 서비스: INTERVIEW 참조 준비 순서, 참조당 5분 상한(넘으면 그 참조만 ⚠, 턴 계속 — 질문 세션 포함), kickoff/resume 접두 분리, INTERVIEW용 규칙 문구, `refsCleared` 한 줄, 질문용 `refSection` 바이트 그대로, refStates 키 생략, 중단 턴 미보고
 - 워커: 참조 준비(캐시 있음/없음, sha 있음/없음 → depth=1 fetch → 참조 전용 이름공간 대안(깊이 상한) → 실패, `origin/*`·캐시 HEAD 불변), worktree 전용 pushurl 무효화, 락 비중첩, 무프롬프트 인자·env, 준비 실패 시 claude 미실행·대상 worktree 미생성·참조 폴더 정리, 시간 차감, 프롬프트 절, plan scratch 머리(Task 줄 수 불변), SDD 한 줄, 기준선 대비 변경 검사(무시 파일 포함·처음부터 dirty인 repo에서 가짜 경고 없음), PR 본문 절(상한 계산 포함), 모든 경로의 참조 폴더 정리, 정리 잡의 `_refs` 판정(진행 중 보호·가짜 락 키 없음·원본 캐시를 못 찾을 때 폴더만 삭제), claim 요청의 참조 지원 표시
-- API 추가: 참조 지원을 알리지 않은 워커는 참조 있는 구현을 claim하지 못함(디자인·배포·종료는 그대로), 승인 컨트롤러 `@Valid`, INTERVIEW claim `refsCleared`
+- API 추가: 참조 지원을 알리지 않은 워커는 참조 있는 구현을 claim하지 못함(디자인·배포·종료는 그대로), 승인 컨트롤러 `@Valid`, INTERVIEW claim `refsCleared`, 구현 재시도의 `removeRefCatalogIds`(빼기만·없는 id 400·이력 행·바디 없으면 지금 그대로)
+- 프론트 추가: 재시도 창의 참조 빼기 선택(참조 준비 실패 사유면 미리 선택, 고를 때만 바디에 실음)
 - 프론트: 등록·승인 바디(참조 있을 때만), `fromQuestion` 프리필(브랜치 적용 순서·없는 브랜치 알림, 작업 상세 비움, 쿼리 제거, 카탈로그에 없는 대상·참조), 칩 맥락 문구(승인대기 포함), 작업 상세 칩 줄 표시 조건과 세션마다 초안 시드, INTERVIEW 답변 `refRepos`, 확정 화면 분류(sha+error·sha 없음), 질문 화면 버튼(아이콘 `add_task`, 상태별 막힘), 하이드레이션 스모크 경로·목
 
 **라이브 확인(병합 뒤)**

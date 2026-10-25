@@ -7,13 +7,21 @@ import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
+  DEFAULT_REF_TIMEOUT_MS,
   REF_PREPARE_FALLBACK_REASON,
   ensureRefRepos,
   ensureRepo,
   noPromptGitEnv,
+  refTimeoutReason,
   type RepoInput,
 } from '../src/runner/repoPrepare.js';
-import type { InterviewClaimResponse, RefRepoClaim, RefState, WorkerQuestionRequest } from '../src/types.js';
+import type {
+  InterviewClaimResponse,
+  RefRepoClaim,
+  RefState,
+  WorkerPlanRequest,
+  WorkerQuestionRequest,
+} from '../src/types.js';
 
 /** 대상·참조의 모든 git 호출이 하위 명령 앞에 달고 가는 인자 — 운영자 PC의 자격증명 도우미(GCM)와 askpass를 끈다. */
 const NO_PROMPT_GIT_PREFIX = ['-c', 'credential.helper=', '-c', 'core.askPass='];
@@ -858,6 +866,237 @@ describe('ensureRefRepos', () => {
     });
   });
 
+  // ── 참조 하나당 받기 상한 (스펙 2026-10-24 §5.1) ─────────────────────────────────────────
+  // 넘으면 그 참조의 git만 멈추고 .part를 지운 뒤 ⚠(시간 초과)로 돌린다 — 턴은 계속된다(작업 인터뷰가 참조 하나 때문에
+  // 턴 상한 30분까지 묶였다가 FAILED로 끝나 문답을 잃지 않게). 턴 상한의 중단 신호는 지금처럼 함께 따른다.
+  describe('per-reference time limit', () => {
+    const TIMEOUT_REASON = '참조 repo 받기 시간 초과(5분)';
+    const ref12 = (): RefRepoClaim => refClaim();
+    const ref13 = (): RefRepoClaim =>
+      refClaim({ catalogId: 13, alias: '공통 UI', githubRepo: 'acme/ui', branch: 'main', dir: '/r/_refs/5/13' });
+
+    /** execFile이 중단될 때 거부하는 오류 — 메시지도 같다. */
+    const abortError = (): Error =>
+      Object.assign(new Error('The operation was aborted'), { name: 'AbortError', code: 'ABORT_ERR' });
+
+    /**
+     * `ms` 뒤에 끝나는 git 호출(Infinity면 끝나지 않는다). execFile처럼 받은 signal이 abort되면 — 이미 abort된 채로 와도 —
+     * AbortError로 거부한다. 호출 때 signal이 이미 abort돼 있었는지를 `abortedAtCall`에 남긴다.
+     */
+    function slowGit(ms: number, abortedAtCall: boolean[] = []) {
+      return (_cmd: string, _args: string[], opts: GitCallOptionsLike): Promise<void> =>
+        new Promise<void>((resolve, reject) => {
+          const { signal } = opts;
+          abortedAtCall.push(signal?.aborted === true);
+          if (signal?.aborted) {
+            reject(abortError());
+            return;
+          }
+          let timer: ReturnType<typeof setTimeout> | undefined;
+          const onAbort = (): void => {
+            clearTimeout(timer);
+            reject(abortError());
+          };
+          signal?.addEventListener('abort', onAbort, { once: true });
+          if (Number.isFinite(ms)) {
+            timer = setTimeout(() => {
+              signal?.removeEventListener('abort', onAbort);
+              resolve();
+            }, ms);
+          }
+        });
+    }
+
+    /** clone만 느리게 — `msFor(받는 곳)`이 그 clone에 걸리는 시간(undefined면 바로 끝난다). 나머지 git은 바로 끝난다. */
+    function cloneTakes(ops: FakeRefOps, msFor: (dest: string) => number | undefined, abortedAtCall?: boolean[]): void {
+      ops.run.mockImplementation((cmd: string, args: string[], opts: GitCallOptionsLike) => {
+        const ms = args.includes('clone') ? msFor(args.at(-1)!) : undefined;
+        return ms === undefined ? Promise.resolve(undefined) : slowGit(ms, abortedAtCall)(cmd, args, opts);
+      });
+    }
+
+    beforeEach(() => {
+      vi.useFakeTimers();
+    });
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it('fails only the slow reference with the timeout reason, removes its .part, and goes on with the next', async () => {
+      const ops = fakeRefOps();
+      cloneTakes(ops, (dest) => (dest === '/r/_refs/5/12.part' ? Infinity : undefined));
+      const [first, second] = [ref12(), ref13()];
+
+      const pending = ensureRefRepos([first, second], { timeoutMs: 300_000 }, ops);
+      await vi.advanceTimersByTimeAsync(299_999);
+      expect(gitSubcommands(ops.run)).toEqual(['clone']); // 상한 전에는 아직 첫 참조를 받는 중이다
+      await vi.advanceTimersByTimeAsync(1);
+      const result = await pending;
+
+      expect(result).toEqual([
+        { ref: first, sha: null, error: TIMEOUT_REASON },
+        { ref: second, sha: SHA_A, error: null },
+      ]);
+      // 끊긴 clone은 중단 신호를 받았다(자식 프로세스 종료) — 다음 참조는 살아 있는 새 신호로 받는다
+      expect(optsOf(ops.run.mock.calls[0]!).signal?.aborted).toBe(true);
+      expect(optsOf(ops.run.mock.calls[1]!).signal?.aborted).toBe(false);
+      // 반쪽 .part는 끊긴 뒤에 지운다(앞의 두 번은 준비 단계) — 끊긴 참조는 제자리로 옮기지 않는다
+      expect(ops.rm.mock.calls).toEqual([
+        ['/r/_refs/5/12'],
+        ['/r/_refs/5/12.part'],
+        ['/r/_refs/5/12.part'],
+        ['/r/_refs/5/13'],
+        ['/r/_refs/5/13.part'],
+      ]);
+      expect(ops.rename.mock.calls).toEqual([['/r/_refs/5/13.part', '/r/_refs/5/13']]);
+    });
+
+    it('restarts the limit for each reference', async () => {
+      // 하나에 200초씩 — 합치면 상한(300초)을 넘지만 참조마다 따로 재므로 둘 다 받는다
+      const ops = fakeRefOps();
+      cloneTakes(ops, () => 200_000);
+      const [first, second] = [ref12(), ref13()];
+
+      const pending = ensureRefRepos([first, second], { timeoutMs: 300_000 }, ops);
+      await vi.advanceTimersByTimeAsync(400_000);
+      const result = await pending;
+
+      expect(result).toEqual([
+        { ref: first, sha: SHA_A, error: null },
+        { ref: second, sha: SHA_A, error: null },
+      ]);
+      expect(ops.rename).toHaveBeenCalledTimes(2);
+    });
+
+    it('a turn abort is not reported as a timeout', async () => {
+      const turn = new AbortController();
+      const ops = fakeRefOps();
+      const abortedAtCall: boolean[] = [];
+      cloneTakes(ops, () => Infinity, abortedAtCall);
+      const [first, second] = [ref12(), ref13()];
+
+      const pending = ensureRefRepos([first, second], { signal: turn.signal, timeoutMs: 300_000 }, ops);
+      await vi.advanceTimersByTimeAsync(60_000);
+      turn.abort(); // 첫 참조를 받는 도중에 턴 상한이 왔다
+      const result = await pending; // 참조 상한(5분)까지 기다리지 않는다
+
+      // 사유는 중단 그 자체다 — 시간 초과 문구가 아니다
+      expect(result).toEqual([
+        { ref: first, sha: null, error: 'The operation was aborted' },
+        { ref: second, sha: null, error: 'The operation was aborted' },
+      ]);
+      // 다음 참조의 git은 이미 중단된 신호를 받는다 — 턴이 끝난 뒤 참조마다 5분씩 뒤에서 받지 않는다
+      expect(gitSubcommands(ops.run)).toEqual(['clone', 'clone']);
+      expect(abortedAtCall).toEqual([false, true]);
+      expect(vi.getTimerCount()).toBe(0);
+    });
+
+    it('leaves no timer behind', async () => {
+      const turn = new AbortController();
+      const added = vi.spyOn(turn.signal, 'addEventListener');
+      const removed = vi.spyOn(turn.signal, 'removeEventListener');
+      const opts = { signal: turn.signal, timeoutMs: 300_000 };
+
+      // 성공
+      expect((await ensureRefRepos([ref12()], opts, fakeRefOps()))[0]).toMatchObject({ sha: SHA_A, error: null });
+      expect(vi.getTimerCount()).toBe(0);
+
+      // 실패(git 오류)
+      const failing = fakeRefOps();
+      failing.run.mockRejectedValue(new Error('fatal: Remote branch release/6.5 not found in upstream origin'));
+      expect((await ensureRefRepos([ref12()], opts, failing))[0]!.error).toContain('not found');
+      expect(vi.getTimerCount()).toBe(0);
+
+      // 시간 초과
+      const slow = fakeRefOps();
+      cloneTakes(slow, () => Infinity);
+      const pending = ensureRefRepos([ref12()], opts, slow);
+      await vi.advanceTimersByTimeAsync(300_000);
+      expect((await pending)[0]!.error).toBe(TIMEOUT_REASON);
+      expect(vi.getTimerCount()).toBe(0);
+
+      // 턴 신호에 단 리스너도 참조마다 떼어 낸다 — 턴이 길어도 쌓이지 않는다
+      expect(added).toHaveBeenCalledTimes(3);
+      expect(removed.mock.calls.map((c) => c[1])).toEqual(added.mock.calls.map((c) => c[1]));
+    });
+
+    it('the time limit also stops the rename retries', async () => {
+      const ops = fakeRefOps();
+      ops.sleep.mockImplementation((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
+      ops.rename.mockImplementation(() => {
+        throw Object.assign(new Error("EPERM: operation not permitted, rename '/r/_refs/5/12.part' -> '/r/_refs/5/12'"), {
+          code: 'EPERM',
+        });
+      });
+
+      const pending = ensureRefRepos([ref12()], { timeoutMs: 500 }, ops);
+      await vi.advanceTimersByTimeAsync(3_000);
+      const result = await pending;
+
+      // 200ms·400ms를 기다리는 사이에 상한(500ms)이 지났다 — 세 번째 시도 뒤로는 기다리지 않는다(상한이 없으면 다섯 번)
+      expect(ops.rename).toHaveBeenCalledTimes(3);
+      expect(result[0]).toMatchObject({ sha: null, error: refTimeoutReason(500) });
+      expect(ops.rm).toHaveBeenLastCalledWith('/r/_refs/5/12.part');
+    });
+
+    it('a reference cut by the time limit is fetched cleanly on the next turn', async () => {
+      // 가짜 디스크: clone은 받기 시작하자마자 받는 곳을 만들고, 받는 곳이 이미 있으면 진짜 git처럼 거부한다
+      const ref = ref12();
+      const dir = '/r/_refs/5/12';
+      const part = '/r/_refs/5/12.part';
+      const disk = new Set<string>();
+      let locked = true; // 끊긴 직후에는 백신·인덱서가 .part를 잡고 있어 지우지 못한다
+      let cloneMs = Infinity;
+      const ops = fakeRefOps();
+      ops.rm.mockImplementation((path: string) => {
+        if (path === part && locked && disk.has(path)) {
+          throw Object.assign(new Error(`EBUSY: resource busy or locked, rmdir '${path}'`), { code: 'EBUSY' });
+        }
+        disk.delete(path);
+      });
+      ops.rename.mockImplementation((from: string, to: string) => {
+        disk.delete(from);
+        disk.add(to);
+      });
+      ops.run.mockImplementation((cmd: string, args: string[], opts: GitCallOptionsLike) => {
+        if (!args.includes('clone')) return Promise.resolve(undefined);
+        const dest = args.at(-1)!;
+        if (disk.has(dest)) {
+          return Promise.reject(new Error(`fatal: destination path '${dest}' already exists and is not an empty directory.`));
+        }
+        disk.add(dest);
+        return slowGit(cloneMs)(cmd, args, opts);
+      });
+
+      // 이번 턴: 상한에 끊긴다 — .part를 지우지 못해도(EBUSY) 사유는 시간 초과다
+      const thisTurn = ensureRefRepos([ref], { timeoutMs: 300_000 }, ops);
+      await vi.advanceTimersByTimeAsync(300_000);
+      expect(await thisTurn).toEqual([{ ref, sha: null, error: TIMEOUT_REASON }]);
+      expect([...disk]).toEqual([part]); // 찌꺼기가 남았다
+
+      // 다음 턴: 잠금이 풀렸다 — 받기 전에 찌꺼기부터 지우고 깨끗이 받는다
+      locked = false;
+      cloneMs = 1_000;
+      ops.rm.mockClear();
+      ops.run.mockClear();
+      const nextTurn = ensureRefRepos([ref], { timeoutMs: 300_000 }, ops);
+      await vi.advanceTimersByTimeAsync(1_000);
+
+      expect(await nextTurn).toEqual([{ ref, sha: SHA_A, error: null }]);
+      expect(ops.rm.mock.calls).toEqual([[dir], [part]]);
+      expect(callOrder(ops.rm, 1)).toBeLessThan(callOrder(ops.run, 0));
+      expect([...disk]).toEqual([dir]);
+    });
+
+    it('formats the minutes from timeoutMs', () => {
+      expect(DEFAULT_REF_TIMEOUT_MS).toBe(300_000);
+      expect(refTimeoutReason(DEFAULT_REF_TIMEOUT_MS)).toBe('참조 repo 받기 시간 초과(5분)');
+      expect(refTimeoutReason(600_000)).toBe('참조 repo 받기 시간 초과(10분)');
+      expect(refTimeoutReason(90_000)).toBe('참조 repo 받기 시간 초과(2분)'); // 반올림
+      expect(refTimeoutReason(1_000)).toBe('참조 repo 받기 시간 초과(1분)'); // 1분보다 짧아도 0분이라 적지 않는다
+    });
+  });
+
   it('prepares refs one after another in the given order', async () => {
     const ops = fakeRefOps();
     let finishFirstClone!: () => void;
@@ -977,9 +1216,14 @@ describe('ensureRefRepos', () => {
     ];
     const state: RefState = { catalogId: 12, branch: 'release/6.5', sha: SHA_A, error: null };
     const refStates: WorkerQuestionRequest['refStates'] = [state];
+    // 작업 인터뷰(스펙 2026-10-24 §4.4·§4.5): claim의 refsCleared, 계획 보고의 refStates(질문 보고와 같은 원소 모양)
+    const refsCleared: InterviewClaimResponse['refsCleared'] = false;
+    const planRefStates: WorkerPlanRequest['refStates'] = [state];
 
     expect(refRepos?.[0]?.dir).toBe('/r/_refs/5/12');
     expect(refStates).toEqual([{ catalogId: 12, branch: 'release/6.5', sha: SHA_A, error: null }]);
+    expect(refsCleared).toBe(false);
+    expect(planRefStates).toEqual(refStates);
   });
 });
 

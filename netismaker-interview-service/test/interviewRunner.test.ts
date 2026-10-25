@@ -1,10 +1,25 @@
 import { describe, expect, it, vi } from 'vitest';
-import { InterviewRunner, refSection } from '../src/runner/interviewRunner.js';
+import {
+  InterviewRunner,
+  REFS_CLEARED_LINE,
+  dbSection,
+  interviewRefPrefix,
+  interviewRefSection,
+  refSection,
+} from '../src/runner/interviewRunner.js';
 import { REF_PREPARE_FALLBACK_REASON, type RefPrepared } from '../src/runner/repoPrepare.js';
 import type { InterviewClaimResponse, RefRepoClaim } from '../src/types.js';
-import { freshClaim, resumeClaim, freshClaimWithAttachments, questionClaim, questionClaimWithAttachments, questionClaimWithRefs } from './fixtures/claims.js';
+import {
+  freshClaim,
+  resumeClaim,
+  freshClaimWithAttachments,
+  interviewClaimWithRefs,
+  questionClaim,
+  questionClaimWithAttachments,
+  questionClaimWithRefs,
+} from './fixtures/claims.js';
 import { planCompleteStream, questionStream, streamingQuestionStream, usageAwareQuestionStream } from './fixtures/sdkMessages.js';
-import { detectHandoff } from '../src/runner/skillDispatch.js';
+import { buildPlanReformatSplice, detectHandoff } from '../src/runner/skillDispatch.js';
 
 function makeClient() {
   return {
@@ -848,8 +863,13 @@ describe('InterviewRunner kind=QUESTION (스펙 §6 — plan 경로 미진입, Q
       await runnerWith(client, fakeQuery, ensureRefRepos, { gitTokens }).run(questionClaimWithRefs);
 
       // claim의 참조 목록 그대로 + 서비스의 git 토큰 + 턴의 AbortSignal(SDK에 넘기는 abortController와 같은 것)
+      // + 참조 하나당 받기 상한(기본 5분 — 스펙 2026-10-24 §5.1, 질문 세션에도 적용)
       expect(ensureRefRepos).toHaveBeenCalledTimes(1);
-      expect(ensureRefRepos).toHaveBeenCalledWith(questionClaimWithRefs.refRepos, { tokens: gitTokens, signal: expect.any(AbortSignal) });
+      expect(ensureRefRepos).toHaveBeenCalledWith(questionClaimWithRefs.refRepos, {
+        tokens: gitTokens,
+        signal: expect.any(AbortSignal),
+        timeoutMs: 300_000,
+      });
       expect((ensureRefRepos.mock.calls[0]![1] as { signal: AbortSignal }).signal)
         .toBe((captured.options.abortController as AbortController).signal);
 
@@ -921,22 +941,22 @@ describe('InterviewRunner kind=QUESTION (스펙 §6 — plan 경로 미진입, Q
       }));
     });
 
-    it('interview (non-question) claims ignore refRepos', async () => {
-      // kind 없음(구버전 백엔드)과 명시적 INTERVIEW 모두 — 참조는 질문 세션 전용이다
-      for (const claim of [
-        { ...freshClaim, refRepos: questionClaimWithRefs.refRepos },
-        { ...freshClaim, kind: 'INTERVIEW' as const, refRepos: questionClaimWithRefs.refRepos },
-      ]) {
+    it('interview (non-question) claims prepare refRepos too and report refStates (스펙 2026-10-24 §5.1)', async () => {
+      // kind 없음(구버전 백엔드)과 명시적 INTERVIEW 모두 — 참조를 보낼지는 API(refsFor)가 정하고 러너는 kind로 거르지 않는다
+      for (const claim of [{ ...freshClaim, refRepos: interviewClaimWithRefs.refRepos }, interviewClaimWithRefs]) {
         const client = makeClient();
         const { fakeQuery, captured } = capturing(() => questionStream());
-        const ensureRefRepos = vi.fn();
+        const ref = interviewClaimWithRefs.refRepos![0]!;
+        const ensureRefRepos = preparer([{ ref, sha: REF_SHA, error: null }]);
         await runnerWith(client, fakeQuery, ensureRefRepos).run(claim);
 
-        expect(ensureRefRepos).not.toHaveBeenCalled();
-        expect(captured.prompt).not.toContain('참조 repo');
-        expect(captured.prompt).toContain('PLANNING-ONLY'); // 인터뷰 킥오프 그대로
+        expect(ensureRefRepos).toHaveBeenCalledTimes(1);
+        expect(ensureRefRepos.mock.calls[0]![0]).toEqual(interviewClaimWithRefs.refRepos);
+        expect(captured.prompt.startsWith('참조 repo (읽기 전용 — 비교·참고용, 수정 금지):\n')).toBe(true);
+        expect(captured.prompt).toContain('PLANNING-ONLY'); // 인터뷰 킥오프가 뒤따른다
         expect(client.postQuestion).toHaveBeenCalledTimes(1);
-        expect(reportedBody(client)).not.toHaveProperty('refStates');
+        expect(reportedBody(client).refStates).toEqual([{ catalogId: 12, branch: 'release/6.5', sha: REF_SHA, error: null }]);
+        expect(client.fail).not.toHaveBeenCalled();
       }
     });
 
@@ -1025,6 +1045,7 @@ describe('InterviewRunner kind=QUESTION (스펙 §6 — plan 경로 미진입, Q
     });
 
     it('"환경 준비" 활동의 detail에 참조 수(+ 참조 n)를 덧붙인다 — 참조 없는 질문·인터뷰는 대상만', async () => {
+      // 참조가 있는 작업 인터뷰도 질문처럼 참조 수를 붙인다(스펙 2026-10-24 §5.1)
       const detailOf = async (claim: InterviewClaimResponse): Promise<unknown> => {
         const client = makeClient();
         await runnerWith(client, vi.fn(() => questionStream()), preparer([refAvailable()])).run(claim);
@@ -1040,7 +1061,8 @@ describe('InterviewRunner kind=QUESTION (스펙 §6 — plan 경로 미진입, Q
       expect(await detailOf(three)).toBe('acme/widgets + 참조 3');
       expect(await detailOf(questionClaim)).toBe('acme/widgets');
       expect(await detailOf({ ...questionClaim, refRepos: [] })).toBe('acme/widgets');
-      expect(await detailOf({ ...freshClaim, refRepos: questionClaimWithRefs.refRepos })).toBe('acme/widgets'); // 인터뷰는 참조를 무시한다
+      expect(await detailOf({ ...freshClaim })).toBe('acme/widgets');
+      expect(await detailOf({ ...freshClaim, refRepos: questionClaimWithRefs.refRepos })).toBe('acme/widgets + 참조 1');
     });
 
     it('puts the ref section before the DB section', async () => {
@@ -1110,6 +1132,391 @@ describe('InterviewRunner kind=QUESTION (스펙 §6 — plan 경로 미진입, Q
         warn.mockRestore();
         vi.useRealTimers();
       }
+    });
+
+    it('a question preparer that throws (contract breach) does not fail the turn either (스펙 2026-10-24 §5.1)', async () => {
+      // 준비기는 던지지 않는 계약이지만 어겨도 참조 문제로 턴이 실패하지 않는다 — 모든 참조를 못 받은 것으로 돌려 답한다
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      const client = makeClient();
+      const { fakeQuery, captured } = capturing(() => questionStream());
+      const ensureRefRepos = vi.fn().mockRejectedValue(new Error('boom https://oauth2:glpat-SECRET@gitlab.hamon.vip/g/p.git'));
+      await runnerWith(client, fakeQuery, ensureRefRepos).run(questionClaimWithRefs);
+
+      const masked = 'boom https://***@gitlab.hamon.vip/g/p.git';
+      expect(client.fail).not.toHaveBeenCalled();
+      expect(fakeQuery).toHaveBeenCalledTimes(1);
+      expect(captured.prompt.startsWith(`사용할 수 없는 참조: 옛앱(release/6.5) — ${masked}\n규칙:\n`)).toBe(true);
+      const gate = captured.options.canUseTool as Gate;
+      expect((await gate('Read', { file_path: '/r/_refs/5/12/A.java' })).behavior).toBe('deny');
+      expect(reportedBody(client).refStates).toEqual([{ catalogId: 12, branch: 'release/6.5', sha: null, error: masked }]);
+      for (const text of [captured.prompt, JSON.stringify(reportedBody(client)), logged(warn)]) {
+        expect(text).not.toContain('glpat-SECRET');
+      }
+      warn.mockRestore();
+    });
+
+    // ── 작업 인터뷰(INTERVIEW)의 참조 repo ───────────────────────────────────────────────────
+    describe('작업 인터뷰 (스펙 2026-10-24 §5)', () => {
+      const IREF: RefRepoClaim = interviewClaimWithRefs.refRepos![0]!;
+      const ISTATE = { catalogId: 12, branch: 'release/6.5', sha: REF_SHA, error: null };
+      const iAvailable = (over: Partial<RefPrepared> = {}): RefPrepared => ({ ref: IREF, sha: REF_SHA, error: null, ...over });
+      const iFailed = (error: string, over: Partial<RefRepoClaim> = {}): RefPrepared => ({
+        ref: { ...IREF, ...over },
+        sha: null,
+        error,
+      });
+      /** 답변 턴(resume) — resumeClaim에 이 작업 인터뷰의 참조를 붙인 것. */
+      const interviewResume: InterviewClaimResponse = {
+        ...resumeClaim,
+        kind: 'INTERVIEW',
+        refRepos: interviewClaimWithRefs.refRepos,
+      };
+      const dbOf = (labels: { serverName: string; label: string }[]) => ({
+        servers: {},
+        tools: {},
+        dialects: {},
+        labels,
+        notices: [] as string[],
+        close: vi.fn().mockResolvedValue(undefined),
+      });
+      const noDb = () => dbOf([]);
+      const withDb = () => dbOf([{ serverName: 'db-7', label: '운영 DB (MySQL)' }]);
+      /**
+       * freshClaim의 kickoff 프롬프트 — promptFor를 고치기 전(a5a36d1) 코드의 출력을 그대로 옮겨 고정했다.
+       * 참조 없는 작업 인터뷰의 kickoff는 이 바이트를 지켜야 한다(스펙 §1.2).
+       */
+      const KICKOFF_GOLDEN =
+        'I want to add a feature to the repo at acme/widgets (branch main).\n' +
+        'Title: Add CSV export\nRequest: Users want to export the dashboard table as CSV.\n\n' +
+        'IMPORTANT — this is a PLANNING-ONLY interview. Your only deliverable is a written implementation PLAN ' +
+        '(via brainstorming → writing-plans), NOT code. Do NOT implement the feature: do not create or modify source files, ' +
+        'do not run builds/installs/tests, do not git commit or push. Reading the repo for context is fine. Stop once the plan ' +
+        'is written — a human reviews and approves it, and implementation happens later in a separate step.\n\n' +
+        '최종 plan은 반드시 다음 정규 형식으로 작성하세요(설명은 한국어): 최상위 헤딩 `# <기능> 구현 계획`, ' +
+        '그 아래 각 작업을 `### 작업 N: <제목>` 형식으로. 영문 `# <Feature> Implementation Plan` / `### Task N:` 도 허용됩니다. ' +
+        '이 정확한 구조라야 시스템이 완료를 인식하며, 없으면 인터뷰가 끝나지 않습니다.\n\n' +
+        'Use the brainstorming skill: read the project context, then ask me one clarifying question at a time.';
+
+      /** 한 턴의 SDK 질의마다 프롬프트를 따로 모은다 — handoff·near-miss처럼 한 턴에 질의가 여러 번일 때. */
+      function capturingEach(...streams: Array<() => AsyncIterable<unknown>>) {
+        const prompts: string[] = [];
+        const fakeQuery = vi.fn((args: { prompt: AsyncIterable<{ message?: { content?: string } }> }) => {
+          const i = prompts.push('') - 1;
+          (async () => {
+            for await (const p of args.prompt) prompts[i] += p.message?.content ?? '';
+          })();
+          return streams[i]!();
+        });
+        return { fakeQuery, prompts };
+      }
+
+      it('INTERVIEW claim with refs: ensureRepo → ensureRefRepos → createDbMcp → SDK, with tokens, the turn signal and timeoutMs', async () => {
+        ensureRepo.mockClear();
+        const client = makeClient();
+        const { fakeQuery, captured } = capturing(() => questionStream());
+        const ensureRefRepos = preparer([iAvailable()]);
+        const createDbMcp = vi.fn().mockReturnValue(noDb());
+        const gitTokens = { gitlabToken: 'glpat-X' };
+        await runnerWith(client, fakeQuery, ensureRefRepos, { gitTokens, createDbMcp }).run(interviewClaimWithRefs);
+
+        expect(ensureRefRepos).toHaveBeenCalledTimes(1);
+        expect(ensureRefRepos).toHaveBeenCalledWith(interviewClaimWithRefs.refRepos, {
+          tokens: gitTokens,
+          signal: expect.any(AbortSignal),
+          timeoutMs: 300_000,
+        });
+        expect((ensureRefRepos.mock.calls[0]![1] as { signal: AbortSignal }).signal)
+          .toBe((captured.options.abortController as AbortController).signal);
+        const firstCall = (fn: { mock: { invocationCallOrder: number[] } }) => fn.mock.invocationCallOrder[0]!;
+        expect(firstCall(ensureRepo)).toBeLessThan(firstCall(ensureRefRepos));
+        expect(firstCall(ensureRefRepos)).toBeLessThan(firstCall(createDbMcp));
+        expect(firstCall(createDbMcp)).toBeLessThan(firstCall(fakeQuery));
+        // 인터뷰 옵션·게이트는 그대로 — Read/Grep/Glob은 사전 승인, 참조 폴더 쓰기는 지금처럼 막힌다(docs/superpowers 밖)
+        expect(captured.options.allowedTools as string[]).toEqual(expect.arrayContaining(['Read', 'Grep', 'Glob']));
+        const gate = captured.options.canUseTool as Gate;
+        expect((await gate('Write', { file_path: '/r/_refs/42/12/A.java' })).behavior).toBe('deny');
+        expect(client.postQuestion).toHaveBeenCalledWith(42, expect.objectContaining({ refStates: [ISTATE] }));
+        expect(client.fail).not.toHaveBeenCalled();
+      });
+
+      it('kickoff: INTERVIEW ref section → DB section → existing kickoff', async () => {
+        const db = withDb();
+        const promptOf = async (claim: InterviewClaimResponse): Promise<string> => {
+          const { fakeQuery, captured } = capturing(() => questionStream());
+          await runnerWith(makeClient(), fakeQuery, preparer([iAvailable()]), { createDbMcp: vi.fn().mockReturnValue(db) }).run(claim);
+          return captured.prompt;
+        };
+        const { refRepos: _refs, ...withoutRefs } = interviewClaimWithRefs;
+
+        const baseline = await promptOf(withoutRefs);
+        const withRefs = await promptOf(interviewClaimWithRefs);
+
+        expect(baseline).toBe(dbSection(db) + KICKOFF_GOLDEN);
+        expect(withRefs).toBe(interviewRefSection([iAvailable()]) + baseline);
+        expect(withRefs).not.toContain('Read/Grep/Glob의 경로로 주어'); // 질문용 규칙이 아니다
+      });
+
+      it('resume: ref section + answer only — no DB section even with a DB attached', async () => {
+        const { fakeQuery, captured } = capturing(() => questionStream());
+        const prepared = [iAvailable()];
+        await runnerWith(makeClient(), fakeQuery, preparer(prepared), { createDbMcp: vi.fn().mockReturnValue(withDb()) })
+          .run(interviewResume);
+
+        expect(captured.options.resume).toBe('sess-abc-123');
+        expect(captured.prompt).toBe(interviewRefSection(prepared) + resumeClaim.lastAnswer);
+      });
+
+      it('no refs: kickoff/resume prompts and question/plan bodies are byte-identical', async () => {
+        // 필드 없음(구버전 API) · 빈 목록 · refsCleared=false — 셋 다 참조 없는 인터뷰이고 지금과 같아야 한다
+        const variantsOf = (claim: InterviewClaimResponse): InterviewClaimResponse[] => [
+          claim,
+          { ...claim, refRepos: [] },
+          { ...claim, refRepos: [], refsCleared: false },
+        ];
+        const turnOf = async (claim: InterviewClaimResponse, db: ReturnType<typeof dbOf>, stream: () => AsyncIterable<unknown>) => {
+          const client = makeClient();
+          const { fakeQuery, captured } = capturing(stream);
+          const ensureRefRepos = vi.fn();
+          await runnerWith(client, fakeQuery, ensureRefRepos, { createDbMcp: vi.fn().mockReturnValue(db) }).run(claim);
+          expect(ensureRefRepos).not.toHaveBeenCalled();
+          expect(client.fail).not.toHaveBeenCalled();
+          return { prompt: captured.prompt, client };
+        };
+        const bodies = { kickoff: new Set<string>(), resume: new Set<string>(), plan: new Set<string>() };
+
+        for (const fresh of variantsOf(freshClaim)) {
+          const plain = await turnOf(fresh, noDb(), () => questionStream());
+          expect(plain.prompt).toBe(KICKOFF_GOLDEN);
+          const db = withDb();
+          expect((await turnOf(fresh, db, () => questionStream())).prompt).toBe(dbSection(db) + KICKOFF_GOLDEN);
+          const body = plain.client.postQuestion.mock.calls[0]![1] as object;
+          expect(body).not.toHaveProperty('refStates');
+          bodies.kickoff.add(JSON.stringify(body));
+        }
+        for (const resume of variantsOf(resumeClaim)) {
+          for (const db of [noDb(), withDb()]) {
+            const { prompt, client } = await turnOf(resume, db, () => questionStream());
+            expect(prompt).toBe(resumeClaim.lastAnswer);
+            const body = client.postQuestion.mock.calls[0]![1] as object;
+            expect(body).not.toHaveProperty('refStates');
+            bodies.resume.add(JSON.stringify(body));
+          }
+          const { client } = await turnOf(resume, noDb(), () => planCompleteStream());
+          expect(client.postQuestion).not.toHaveBeenCalled();
+          const plan = client.postPlan.mock.calls[0]![1] as object;
+          expect(plan).not.toHaveProperty('refStates');
+          bodies.plan.add(JSON.stringify(plan));
+        }
+        // 세 가지 claim의 보고 바디가 바이트까지 같다
+        expect([bodies.kickoff.size, bodies.resume.size, bodies.plan.size]).toEqual([1, 1, 1]);
+      });
+
+      it('refsCleared: one line instead of the section on every turn, nothing prepared or reported', async () => {
+        const cleared = { kind: 'INTERVIEW' as const, refRepos: [], refsCleared: true };
+        const turnOf = async (claim: InterviewClaimResponse, db: ReturnType<typeof dbOf>, stream: () => AsyncIterable<unknown>) => {
+          const client = makeClient();
+          const { fakeQuery, captured } = capturing(stream);
+          const ensureRefRepos = vi.fn();
+          await runnerWith(client, fakeQuery, ensureRefRepos, { createDbMcp: vi.fn().mockReturnValue(db) }).run(claim);
+          expect(ensureRefRepos).not.toHaveBeenCalled();
+          expect(client.fail).not.toHaveBeenCalled();
+          return { prompt: captured.prompt, client };
+        };
+
+        // 답변 턴 — DB가 붙어 있어도 DB 절은 kickoff 전용이다
+        const resume = await turnOf({ ...resumeClaim, ...cleared }, withDb(), () => questionStream());
+        expect(resume.prompt).toBe(REFS_CLEARED_LINE + resumeClaim.lastAnswer);
+        expect(resume.client.postQuestion.mock.calls[0]![1]).not.toHaveProperty('refStates');
+
+        // 새 세션 + DB
+        const db = withDb();
+        const fresh = await turnOf({ ...freshClaim, ...cleared }, db, () => questionStream());
+        expect(fresh.prompt).toBe(REFS_CLEARED_LINE + dbSection(db) + KICKOFF_GOLDEN);
+
+        // 계획 턴도 보고에 refStates가 없다
+        const plan = await turnOf({ ...resumeClaim, ...cleared }, noDb(), () => planCompleteStream());
+        expect(plan.client.postPlan.mock.calls[0]![1]).not.toHaveProperty('refStates');
+      });
+
+      it('failed or timed-out reference: the turn goes on, unavailable line in the prompt, error in refStates, no fail', async () => {
+        const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+        const second = { catalogId: 13, alias: '공통 UI', branch: 'main', dir: '/r/_refs/42/13' };
+        const claim = { ...interviewClaimWithRefs, refRepos: [IREF, { ...IREF, ...second }] };
+        const client = makeClient();
+        const { fakeQuery, captured } = capturing(() => questionStream());
+        await runnerWith(
+          client,
+          fakeQuery,
+          preparer([iFailed('참조 repo 받기 시간 초과(5분)'), iFailed('fatal: Authentication failed for repo', second)]),
+        ).run(claim);
+
+        expect(client.fail).not.toHaveBeenCalled();
+        expect(fakeQuery).toHaveBeenCalledTimes(1);
+        expect(captured.prompt.startsWith(
+          '사용할 수 없는 참조: 옛앱(release/6.5) — 참조 repo 받기 시간 초과(5분)\n' +
+            '사용할 수 없는 참조: 공통 UI(main) — fatal: Authentication failed for repo\n' +
+            '규칙:\n',
+        )).toBe(true);
+        expect(captured.prompt).toContain('PLANNING-ONLY');
+        expect(reportedBody(client).refStates).toEqual([
+          { catalogId: 12, branch: 'release/6.5', sha: null, error: '참조 repo 받기 시간 초과(5분)' },
+          { catalogId: 13, branch: 'main', sha: null, error: 'fatal: Authentication failed for repo' },
+        ]);
+        expect(logged(warn)).toContain('session=42 옛앱(release/6.5)'); // 운영자 로그에 남는다
+        warn.mockRestore();
+      });
+
+      it('postPlan carries refStates when references were prepared', async () => {
+        const client = makeClient();
+        await runnerWith(client, vi.fn(() => planCompleteStream()), preparer([iAvailable()])).run(interviewResume);
+
+        expect(client.postQuestion).not.toHaveBeenCalled();
+        expect(client.postPlan).toHaveBeenCalledWith(42, expect.objectContaining({
+          planMarkdown: expect.stringContaining('## File Structure'),
+          refStates: [ISTATE],
+        }));
+      });
+
+      it('force-finish reformat and handoff splice prompts carry no ref section, but the report still has refStates', async () => {
+        const prepared = [iAvailable()];
+
+        // ① 강제 마무리 턴: 재형식 splice만 보낸다
+        {
+          const client = makeClient();
+          const { fakeQuery, prompts } = capturingEach(() => questionStream());
+          await runnerWith(client, fakeQuery, preparer(prepared)).run({ ...interviewResume, turns: turns(19) });
+          expect(prompts).toEqual([buildPlanReformatSplice()]);
+          expect(client.postQuestion).toHaveBeenCalledWith(42, expect.objectContaining({ refStates: [ISTATE] }));
+        }
+
+        // ② handoff shim: 첫 질의에만 참조 절, 두 번째(writing-plans splice)에는 없다
+        {
+          async function* handoff() {
+            yield { type: 'system', subtype: 'init', session_id: 'sess-h' };
+            yield { type: 'assistant', message: { content: [{ type: 'text', text: 'Spec approved. Invoke writing-plans skill now.' }] } };
+            yield { type: 'result', subtype: 'success', total_cost_usd: 0.05, usage: {}, duration_ms: 100 };
+          }
+          const client = makeClient();
+          const { fakeQuery, prompts } = capturingEach(() => handoff(), () => planCompleteStream());
+          const spliceRead = vi.fn().mockReturnValue('# Writing Plans\n\nbreak into tasks');
+          await runnerWith(client, fakeQuery, preparer(prepared), { spliceRead }).run(interviewResume);
+          expect(prompts).toHaveLength(2);
+          expect(prompts[0]).toBe(interviewRefSection(prepared) + resumeClaim.lastAnswer);
+          expect(prompts[1]).toContain('break into tasks');
+          expect(prompts[1]).not.toContain('참조 repo');
+          expect(client.postPlan).toHaveBeenCalledWith(42, expect.objectContaining({ refStates: [ISTATE] }));
+        }
+
+        // ③ near-miss 보정: 재형식 splice에도 참조 절이 없다
+        {
+          async function* intentNoStructure() {
+            yield { type: 'system', subtype: 'init', session_id: 'sess-n' };
+            yield { type: 'assistant', message: { content: [{ type: 'text', text: '# 구현 계획 (초안)\n\n1. 가' }] } };
+            yield { type: 'result', subtype: 'success', total_cost_usd: 0.1, usage: {}, duration_ms: 100 };
+          }
+          async function* reformattedPlan() {
+            yield { type: 'system', subtype: 'init', session_id: 'sess-n' };
+            yield { type: 'assistant', message: { content: [{ type: 'text', text: '# 구현 계획\n\n### 작업 1: 가' }] } };
+            yield { type: 'result', subtype: 'success', total_cost_usd: 0.15, usage: {}, duration_ms: 200 };
+          }
+          const client = makeClient();
+          const { fakeQuery, prompts } = capturingEach(() => intentNoStructure(), () => reformattedPlan());
+          await runnerWith(client, fakeQuery, preparer(prepared)).run({ ...interviewResume, currentPhase: 'writing-plans' });
+          expect(prompts).toEqual([interviewRefSection(prepared) + resumeClaim.lastAnswer, buildPlanReformatSplice()]);
+          expect(client.postPlan).toHaveBeenCalledWith(42, expect.objectContaining({ refStates: [ISTATE] }));
+        }
+      });
+
+      it('a preparer that throws (contract breach) does not fail the turn', async () => {
+        const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+        const second = { catalogId: 13, alias: '공통 UI', branch: 'main', dir: '/r/_refs/42/13' };
+        const claim = { ...interviewClaimWithRefs, refRepos: [IREF, { ...IREF, ...second }] };
+        const masked = 'boom https://***@gitlab.hamon.vip/g/p.git';
+        const client = makeClient();
+        const { fakeQuery, captured } = capturing(() => questionStream());
+        const ensureRefRepos = vi.fn().mockRejectedValue(new Error('boom https://oauth2:glpat-SECRET@gitlab.hamon.vip/g/p.git'));
+        await runnerWith(client, fakeQuery, ensureRefRepos).run(claim);
+
+        // 모든 참조를 못 받은 것으로 — 같은 사유로 — 돌리고 턴은 계속된다
+        expect(client.fail).not.toHaveBeenCalled();
+        expect(fakeQuery).toHaveBeenCalledTimes(1);
+        expect(captured.prompt.startsWith(
+          `사용할 수 없는 참조: 옛앱(release/6.5) — ${masked}\n사용할 수 없는 참조: 공통 UI(main) — ${masked}\n규칙:\n`,
+        )).toBe(true);
+        expect(reportedBody(client).refStates).toEqual([
+          { catalogId: 12, branch: 'release/6.5', sha: null, error: masked },
+          { catalogId: 13, branch: 'main', sha: null, error: masked },
+        ]);
+        for (const text of [captured.prompt, JSON.stringify(reportedBody(client)), logged(warn)]) {
+          expect(text).not.toContain('glpat-SECRET');
+        }
+
+        // 메시지 없이 던져도 사유는 비어 있지 않다(API는 빈 문자열도 그대로 저장한다)
+        const silent = makeClient();
+        await runnerWith(silent, vi.fn(() => questionStream()), vi.fn().mockRejectedValue(undefined)).run(interviewClaimWithRefs);
+        expect(silent.fail).not.toHaveBeenCalled();
+        expect(reportedBody(silent).refStates).toEqual([
+          { catalogId: 12, branch: 'release/6.5', sha: null, error: REF_PREPARE_FALLBACK_REASON },
+        ]);
+        warn.mockRestore();
+      });
+
+      it('a turn aborted while preparing references stops there for INTERVIEW too', async () => {
+        vi.useFakeTimers();
+        const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+        try {
+          // 실제 준비기처럼 abort를 "못 받은 참조"로 돌려주는 경우와, 계약을 어기고 AbortError로 던지는 경우
+          const onAbort: Array<(resolve: (r: RefPrepared[]) => void, reject: (e: unknown) => void) => void> = [
+            (resolve) => resolve([iFailed('This operation was aborted')]),
+            (_resolve, reject) => reject(Object.assign(new Error('This operation was aborted'), { name: 'AbortError' })),
+          ];
+          for (const settle of onAbort) {
+            const client = { ...makeClient(), heartbeat: vi.fn().mockResolvedValue(undefined) };
+            const fakeQuery = vi.fn(() => questionStream());
+            const ensureRefRepos = vi.fn((_refs: RefRepoClaim[], opts: { signal?: AbortSignal }) =>
+              new Promise<RefPrepared[]>((resolve, reject) => {
+                opts.signal!.addEventListener('abort', () => settle(resolve, reject));
+              }),
+            );
+            const runner = new InterviewRunner(client as never, fakeQuery as never, {
+              ...deps,
+              ensureRefRepos,
+              turnTimeoutMs: 60_000,
+            } as never);
+
+            const done = runner.run(interviewClaimWithRefs);
+            await vi.advanceTimersByTimeAsync(60_000);
+            await done;
+
+            expect(fakeQuery).not.toHaveBeenCalled();
+            expect(client.postQuestion).not.toHaveBeenCalled();
+            expect(client.postPlan).not.toHaveBeenCalled();
+            expect(client.fail).toHaveBeenCalledTimes(1);
+            expect(client.fail).toHaveBeenCalledWith(42, expect.stringContaining('wall-clock 타임아웃'));
+          }
+        } finally {
+          warn.mockRestore();
+          vi.useRealTimers();
+        }
+      });
+
+      it('per-reference limit comes from deps.refTimeoutMs; NaN/0 fall back to 300_000 (QUESTION too)', async () => {
+        const cases: Array<[Record<string, unknown>, number]> = [
+          [{ refTimeoutMs: 120_000 }, 120_000],
+          [{}, 300_000],
+          [{ refTimeoutMs: Number.NaN }, 300_000],
+          [{ refTimeoutMs: 0 }, 300_000],
+          [{ refTimeoutMs: -1 }, 300_000],
+          [{ refTimeoutMs: Number.POSITIVE_INFINITY }, 300_000],
+        ];
+        for (const claim of [interviewClaimWithRefs, questionClaimWithRefs]) {
+          for (const [extra, expected] of cases) {
+            const ensureRefRepos = preparer([iAvailable()]);
+            await runnerWith(makeClient(), vi.fn(() => questionStream()), ensureRefRepos, extra).run(claim);
+            expect((ensureRefRepos.mock.calls[0]![1] as { timeoutMs?: number }).timeoutMs).toBe(expected);
+          }
+        }
+      });
     });
   });
 });
@@ -1214,6 +1621,65 @@ describe('refSection (스펙 2026-10-22 §5.2)', () => {
     expect(refSection([refFailed('Command failed: git clone only the command line')])).toBe(
       unavailable(REF_PREPARE_FALLBACK_REASON) + RULES,
     );
+  });
+});
+
+describe('interviewRefSection (스펙 2026-10-24 §5.2)', () => {
+  // 헤더·참조 줄·사용 불가 줄은 질문용 refSection과 같고 규칙만 다르다 — 스펙 §5.2 코드 블록 그대로, 끝에 빈 줄 하나
+  const HEADER = '참조 repo (읽기 전용 — 비교·참고용, 수정 금지):\n';
+  const RULES =
+    '규칙:\n' +
+    '- 대상 repo는 현재 작업 디렉토리다. 참조 repo는 위 절대 경로에서 읽기만 한다.\n' +
+    '- 참조 폴더의 파일은 만들거나 고치거나 지우지 않는다(셸 명령 포함).\n' +
+    '- 위 목록에 없는 참조(앞 턴에 있던 것 포함)는 더 쓰지 않는다. 구현에는 이 목록의 참조만 넘어간다.\n' +
+    '- 설계·계획 문서에는 참조 파일을 절대 경로가 아니라 `별칭:경로:줄`(예: `옛앱:src/a/B.java:12`)로 적는다. 구현 단계에서는 참조 폴더 위치가 다르다.\n' +
+    '- 사용할 수 없는 참조의 내용은 추측하지 않는다.\n' +
+    '\n';
+  const OLD_APP = '- 옛앱 · release/6.5@aaaaaaa : /r/_refs/5/12\n';
+  const batch = refFailed('브랜치를 찾을 수 없음', { catalogId: 13, alias: '배치 서버', branch: 'master', dir: '/r/_refs/5/13' });
+
+  it('returns an empty string for no refs', () => {
+    expect(interviewRefSection([])).toBe('');
+  });
+
+  it('available references only: header and one line each, then the INTERVIEW rules and one blank line', () => {
+    expect(interviewRefSection([refAvailable()])).toBe(HEADER + OLD_APP + RULES);
+  });
+
+  it('unavailable only: the header and "- …" lines are dropped, the rules stay', () => {
+    expect(interviewRefSection([refFailed('참조 repo 받기 시간 초과(5분)')])).toBe(
+      '사용할 수 없는 참조: 옛앱(release/6.5) — 참조 repo 받기 시간 초과(5분)\n' + RULES,
+    );
+  });
+
+  it('mixed: the unavailable lines follow the list, with the same condensed reason as the question section', () => {
+    expect(interviewRefSection([refAvailable(), batch])).toBe(
+      HEADER + OLD_APP + '사용할 수 없는 참조: 배치 서버(master) — 브랜치를 찾을 수 없음\n' + RULES,
+    );
+    // 사유 줄이기·가리기는 질문용과 같은 규칙
+    expect(interviewRefSection([refFailed('Command failed: x\nfatal: y')])).toBe('사용할 수 없는 참조: 옛앱(release/6.5) — fatal: y\n' + RULES);
+  });
+
+  it('shares everything but the rules with the question section', () => {
+    const prepared = [refAvailable(), batch];
+    const rulesStart = (s: string): number => s.indexOf('규칙:\n');
+    expect(interviewRefSection(prepared).slice(0, rulesStart(interviewRefSection(prepared)))).toBe(
+      refSection(prepared).slice(0, rulesStart(refSection(prepared))),
+    );
+    expect(interviewRefSection(prepared)).not.toContain('Read/Grep/Glob의 경로로 주어');
+  });
+
+  it('REFS_CLEARED_LINE is the one line for a session whose references were all removed', () => {
+    expect(REFS_CLEARED_LINE).toBe(
+      '참조 repo: 없음(대화 중 모두 뺐다) — 앞서 본 참조는 더 쓰지 않는다. 계획은 대상 repo만으로 세운다.\n\n',
+    );
+  });
+
+  it('interviewRefPrefix: the section when references were prepared, the cleared line when all were removed, else nothing', () => {
+    expect(interviewRefPrefix([refAvailable()], false)).toBe(interviewRefSection([refAvailable()]));
+    expect(interviewRefPrefix([refAvailable()], true)).toBe(interviewRefSection([refAvailable()]));
+    expect(interviewRefPrefix([], true)).toBe(REFS_CLEARED_LINE);
+    expect(interviewRefPrefix([], false)).toBe('');
   });
 });
 

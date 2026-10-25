@@ -12,6 +12,7 @@ import { relay } from './messageRelay.js';
 import {
   ensureRepo as defaultEnsureRepo,
   ensureRefRepos as defaultEnsureRefRepos,
+  DEFAULT_REF_TIMEOUT_MS,
   REF_PREPARE_FALLBACK_REASON,
   type RefPrepared,
   type RepoInput,
@@ -37,10 +38,19 @@ export interface RunnerDeps {
   /** Injectable repo prepare (defaults to the real git clone/fetch). */
   ensureRepo?: (input: RepoInput) => Promise<void>;
   /**
-   * 테스트용 주입 — 기본 repoPrepare.ensureRefRepos (질문 세션의 읽기 전용 참조 repo 준비, 스펙 2026-10-22 §5.1).
-   * 참조 하나가 실패해도(abort 포함) 던지지 않고 `{ error }`로 돌려주는 계약이다.
+   * 테스트용 주입 — 기본 repoPrepare.ensureRefRepos (질문·작업 인터뷰의 읽기 전용 참조 repo 준비, 스펙 2026-10-22 §5.1,
+   * 2026-10-24 §5.1). 참조 하나가 실패해도(abort·시간 초과 포함) 던지지 않고 `{ error }`로 돌려주는 계약이다.
+   * `timeoutMs`는 참조 하나당 받기 상한이다.
    */
-  ensureRefRepos?: (refs: RefRepoClaim[], opts: { tokens?: GitTokens; signal?: AbortSignal }) => Promise<RefPrepared[]>;
+  ensureRefRepos?: (
+    refs: RefRepoClaim[],
+    opts: { tokens?: GitTokens; signal?: AbortSignal; timeoutMs?: number },
+  ) => Promise<RefPrepared[]>;
+  /**
+   * 참조 repo 하나당 받기 상한(ms, 스펙 2026-10-24 §5.1). 넘으면 그 참조만 시간 초과로 끝나고 턴은 계속된다.
+   * 기본 5분 — turnTimeoutMs처럼 유한한 양수만 받는다(NaN·0은 기본값).
+   */
+  refTimeoutMs?: number;
   /** Injectable SKILL.md reader for the writing-plans splice fallback (defaults to real fs read). */
   spliceRead?: (path: string, enc: 'utf8') => string;
   heartbeatIntervalMs?: number;
@@ -97,11 +107,21 @@ function attachmentSection(claim: InterviewClaimResponse): string {
   );
 }
 
-/** One async-iterable user prompt for the turn. Fresh => kickoff text; resume => the injected answer. */
-async function* promptFor(claim: InterviewClaimResponse, prefix = ''): AsyncIterable<UserTurn> {
+/**
+ * One async-iterable user prompt for the turn. Fresh => kickoff text; resume => the injected answer.
+ * 접두는 둘로 나뉜다 (스펙 2026-10-24 §5.2): `everyTurn`(참조 절 — 인터뷰 중 변경·실패를 알리려 매 턴 다시 싣는다)은 kickoff·resume
+ * 모두 맨 앞에, `kickoffOnly`(DB 절)는 kickoff에만 붙는다 — DB가 붙은 인터뷰의 resume 프롬프트가 지금과 같도록.
+ * 둘 다 비면 프롬프트는 지금과 바이트까지 같다.
+ */
+async function* promptFor(
+  claim: InterviewClaimResponse,
+  prefixes: { everyTurn?: string; kickoffOnly?: string } = {},
+): AsyncIterable<UserTurn> {
+  const everyTurn = prefixes.everyTurn ?? '';
   if (!claim.claudeSessionId) {
     yield userTurn(
-      prefix +
+      everyTurn +
+      (prefixes.kickoffOnly ?? '') +
       `I want to add a feature to the repo at ${claim.githubRepo} (branch ${claim.githubBranch}).\n` +
         `Title: ${claim.title}\nRequest: ${claim.description}\n\n` +
         attachmentSection(claim) +
@@ -117,7 +137,7 @@ async function* promptFor(claim: InterviewClaimResponse, prefix = ''): AsyncIter
         'Use the brainstorming skill: read the project context, then ask me one clarifying question at a time.',
     );
   } else {
-    yield userTurn(claim.lastAnswer ?? '');
+    yield userTurn(everyTurn + (claim.lastAnswer ?? ''));
   }
 }
 
@@ -197,14 +217,32 @@ function refReason(error: string): string {
   return cut.trim() || REF_PREPARE_FALLBACK_REASON;
 }
 
+/** 질문 세션 참조 절의 규칙 (스펙 2026-10-22 §5.2) — 질문 게이트는 Read/Grep/Glob만 참조 폴더까지 허용한다. */
+const QUESTION_REF_RULES: readonly string[] = [
+  '- 대상 repo는 현재 작업 디렉토리다. 참조 repo는 위 절대 경로를 Read/Grep/Glob의 경로로 주어 읽는다(셸 명령은 대상 안에서만 동작한다).',
+  '- 참조 파일 근거는 `별칭:경로:줄`(예: `옛앱:src/a/B.java:12`), 대상 파일은 `경로:줄`로 적는다.',
+  '- 사용할 수 없는 참조의 내용은 추측하지 말고 못 읽었다고 답한다.',
+];
+
 /**
- * 질문 세션 참조 repo 안내 (스펙 2026-10-22 §5.2) — 이번 턴 ensureRefRepos 결과로 만든다. 새 질문·추가 질문 모두 매 턴 접두로 붙는다
- * (대화 중 참조를 바꾸거나 한 참조가 못 받아질 수 있으니 resume 턴에도 현재 상태를 다시 알려 준다).
+ * 작업 인터뷰 참조 절의 규칙 (스펙 2026-10-24 §5.2) — 계획·설계 문서에 남는 참조 표기와 구현으로 넘어가는 참조의 범위를 정한다.
+ * 인터뷰 게이트는 Read/Grep/Glob을 사전 승인하므로 경로를 어떻게 주라는 말은 없다.
+ */
+const INTERVIEW_REF_RULES: readonly string[] = [
+  '- 대상 repo는 현재 작업 디렉토리다. 참조 repo는 위 절대 경로에서 읽기만 한다.',
+  '- 참조 폴더의 파일은 만들거나 고치거나 지우지 않는다(셸 명령 포함).',
+  '- 위 목록에 없는 참조(앞 턴에 있던 것 포함)는 더 쓰지 않는다. 구현에는 이 목록의 참조만 넘어간다.',
+  '- 설계·계획 문서에는 참조 파일을 절대 경로가 아니라 `별칭:경로:줄`(예: `옛앱:src/a/B.java:12`)로 적는다. 구현 단계에서는 참조 폴더 위치가 다르다.',
+  '- 사용할 수 없는 참조의 내용은 추측하지 않는다.',
+];
+
+/**
+ * 참조 절 — 이번 턴 ensureRefRepos 결과로 만든다. 질문·작업 인터뷰가 머리말·참조 줄·사용 불가 줄을 함께 쓰고 규칙만 다르다.
  * 사용 가능한 참조는 `별칭 · 브랜치@커밋 앞 7자 : 절대경로`, 못 받은 참조는 참조마다 한 줄(`별칭(브랜치) — 한 줄 사유`).
- * 빈 배열이면 빈 문자열이라 참조 없는 질문의 프롬프트는 지금과 같다. 사용 가능한 참조가 없으면 머리말과 `- …` 줄을,
+ * 빈 배열이면 빈 문자열이라 참조 없는 세션의 프롬프트는 지금과 같다. 사용 가능한 참조가 없으면 머리말과 `- …` 줄을,
  * 실패가 없으면 "사용할 수 없는 참조" 줄을 뺀다. 끝에 빈 줄 하나(dbSection과 같은 모양).
  */
-export function refSection(prepared: RefPrepared[]): string {
+function buildRefSection(prepared: RefPrepared[], rules: readonly string[]): string {
   if (prepared.length === 0) return '';
   const lines: string[] = [];
   const usable = prepared.filter((p) => p.error === null);
@@ -218,21 +256,45 @@ export function refSection(prepared: RefPrepared[]): string {
   for (const p of prepared) {
     if (p.error !== null) lines.push(`사용할 수 없는 참조: ${p.ref.alias}(${p.ref.branch}) — ${refReason(p.error)}`);
   }
-  lines.push(
-    '규칙:',
-    '- 대상 repo는 현재 작업 디렉토리다. 참조 repo는 위 절대 경로를 Read/Grep/Glob의 경로로 주어 읽는다(셸 명령은 대상 안에서만 동작한다).',
-    '- 참조 파일 근거는 `별칭:경로:줄`(예: `옛앱:src/a/B.java:12`), 대상 파일은 `경로:줄`로 적는다.',
-    '- 사용할 수 없는 참조의 내용은 추측하지 말고 못 읽었다고 답한다.',
-  );
+  lines.push('규칙:', ...rules);
   return lines.join('\n') + '\n\n';
 }
 
 /**
- * 질문 claim의 참조 repo 목록 (스펙 2026-10-22 §4.4). 구버전 백엔드 claim에는 필드가 없다 → Array.isArray 가드(dbConnections 선례).
- * 인터뷰(INTERVIEW) claim은 값이 있어도 무시한다 — 이 단계에서 참조는 질문 세션 전용이다.
+ * 질문 세션 참조 repo 안내 (스펙 2026-10-22 §5.2). 새 질문·추가 질문 모두 매 턴 접두로 붙는다
+ * (대화 중 참조를 바꾸거나 한 참조가 못 받아질 수 있으니 resume 턴에도 현재 상태를 다시 알려 준다).
+ */
+export function refSection(prepared: RefPrepared[]): string {
+  return buildRefSection(prepared, QUESTION_REF_RULES);
+}
+
+/** 작업 인터뷰 참조 repo 안내 (스펙 2026-10-24 §5.2) — 질문용과 규칙만 다르다. kickoff·답변 턴 모두 매 턴 맨 앞에 붙는다. */
+export function interviewRefSection(prepared: RefPrepared[]): string {
+  return buildRefSection(prepared, INTERVIEW_REF_RULES);
+}
+
+/**
+ * 작업 인터뷰에서 참조를 대화 중 모두 뺐을 때(claim.refsCleared) 참조 절 대신 매 턴 싣는 한 줄 (스펙 2026-10-24 §5.2) —
+ * 앞 턴에 읽은 참조를 계획에 계속 끌어오지 않게 한다.
+ */
+export const REFS_CLEARED_LINE =
+  '참조 repo: 없음(대화 중 모두 뺐다) — 앞서 본 참조는 더 쓰지 않는다. 계획은 대상 repo만으로 세운다.\n\n';
+
+/**
+ * 작업 인터뷰 프롬프트의 매 턴 접두 — 이번 턴에 준비한 참조가 있으면 참조 절, 없고 대화 중 모두 뺐으면 그 한 줄, 그 밖에는 ''
+ * (참조를 고른 적 없는 인터뷰의 프롬프트는 바이트까지 그대로).
+ */
+export function interviewRefPrefix(prepared: RefPrepared[], refsCleared: boolean): string {
+  if (prepared.length > 0) return interviewRefSection(prepared);
+  return refsCleared ? REFS_CLEARED_LINE : '';
+}
+
+/**
+ * claim의 참조 repo 목록 (스펙 2026-10-22 §4.4, 2026-10-24 §4.4·§5.1) — 질문·작업 인터뷰 공통이다. 보낼지는 API(refsFor)가 정하므로
+ * kind로 거르지 않는다. 구버전 백엔드 claim에는 필드가 없다 → Array.isArray 가드(dbConnections 선례).
  */
 function claimRefRepos(claim: InterviewClaimResponse): RefRepoClaim[] {
-  return claim.kind === 'QUESTION' && Array.isArray(claim.refRepos) ? claim.refRepos : [];
+  return Array.isArray(claim.refRepos) ? claim.refRepos : [];
 }
 
 /**
@@ -302,6 +364,8 @@ async function* questionPromptFor(claim: InterviewClaimResponse, prefix = ''): A
 export class InterviewRunner {
   private readonly ensureRepo: (input: RepoInput) => Promise<void>;
   private readonly ensureRefRepos: NonNullable<RunnerDeps['ensureRefRepos']>;
+  /** 참조 하나당 받기 상한(ms). NaN·0·음수·무한대는 기본 5분 — NaN이 타이머에 들어가면 1ms로 모든 참조가 끊긴다(turnTimeoutMs와 같은 방어). */
+  private readonly refTimeoutMs: number;
   private readonly harvestPlanFiles: (workDir: string) => Promise<HarvestResult>;
   /** 구독 한도 보고기 — 서비스 수명 동안 1개(404 비활성 상태가 세션을 넘어 유지된다). */
   private readonly rateLimits: RateLimitReporter;
@@ -315,6 +379,9 @@ export class InterviewRunner {
     this.query = withTurnInputGate(query);
     this.ensureRepo = deps.ensureRepo ?? defaultEnsureRepo;
     this.ensureRefRepos = deps.ensureRefRepos ?? defaultEnsureRefRepos;
+    const refTimeout = deps.refTimeoutMs;
+    this.refTimeoutMs =
+      typeof refTimeout === 'number' && Number.isFinite(refTimeout) && refTimeout > 0 ? refTimeout : DEFAULT_REF_TIMEOUT_MS;
     this.harvestPlanFiles = deps.harvestPlanFiles ?? harvestSessionPlanFiles;
     this.rateLimits = new RateLimitReporter(client);
   }
@@ -391,6 +458,34 @@ export class InterviewRunner {
     }
   }
 
+  /**
+   * claim의 읽기 전용 참조 repo를 준비한다 — 질문·작업 인터뷰 공통 (스펙 2026-10-22 §5.1, 2026-10-24 §5.1). 대상 ensureRepo 다음,
+   * DB MCP·SDK 진입 전에 부른다. 참조가 없으면 아무것도 하지 않고 []를 돌려준다(프롬프트·옵션·보고가 지금과 같다).
+   * 참조를 못 받아도 턴은 실패하지 않는다(스펙 2026-10-24 §1.2) — 그 참조 없이 진행하고 사유는 프롬프트·보고·로그로 알린다.
+   * 준비기가 계약을 어기고 던져도 마찬가지로 모든 참조를 못 받은 것으로 돌린다. 단 턴이 이미 중단됐으면(턴 상한) 여기서 멈춘다 —
+   * 준비기는 abort를 예외가 아니라 "못 받은 참조"로 돌려주므로 직접 확인해, 끝난 턴이 SDK에 들어가거나 refStates를 보고하지 않게 한다.
+   */
+  private async prepareRefs(claim: InterviewClaimResponse, controller: AbortController): Promise<RefPrepared[]> {
+    const refClaims = claimRefRepos(claim);
+    if (refClaims.length === 0) return [];
+    let refs: RefPrepared[];
+    try {
+      refs = await this.ensureRefRepos(refClaims, {
+        tokens: this.deps.gitTokens,
+        signal: controller.signal,
+        timeoutMs: this.refTimeoutMs,
+      });
+    } catch (e) {
+      if (controller.signal.aborted) throw e;
+      const raw = e instanceof Error ? e.message : typeof e === 'string' ? e : '';
+      const error = maskSecrets(raw).trim() || REF_PREPARE_FALLBACK_REASON;
+      refs = refClaims.map((ref) => ({ ref, sha: null, error }));
+    }
+    controller.signal.throwIfAborted();
+    logRefFailures(claim.sessionId, refs);
+    return refs;
+  }
+
   /** 한 claim의 실제 턴 본문. 타임아웃 취소는 controller.abort()가 SDK로 전파한다. */
   private async runTurn(
     claim: InterviewClaimResponse,
@@ -417,7 +512,7 @@ export class InterviewRunner {
 
       // CLONE: ensure the checkout exists at workDir before the (fresh OR resume) turn.
       // signal 전파: 타임아웃 abort가 git 자식 프로세스까지 종료해 좀비를 남기지 않는다.
-      // 질문 claim에 참조 repo가 있으면 대상 뒤에 ` + 참조 n`을 붙인다(받는 일은 runQuestionTurn — 스펙 2026-10-22 §5.2).
+      // claim에 참조 repo가 있으면(질문·작업 인터뷰) 대상 뒤에 ` + 참조 n`을 붙인다(받는 일은 아래 prepareRefs — 스펙 2026-10-22 §5.2).
       const refCount = claimRefRepos(claim).length;
       poster.push({
         type: 'tool',
@@ -437,16 +532,20 @@ export class InterviewRunner {
       // (signal을 무시하는 주입 ensureRepo 등) SDK에 진입하지 않고 즉시 중단한다.
       controller.signal.throwIfAborted();
 
+      // 읽기 전용 참조 repo — 대상 다음, DB MCP·SDK 전에 차례로 받는다(질문·작업 인터뷰 공통, 참조 하나당 받기 상한).
+      const refs = await this.prepareRefs(claim, controller);
+
       // 질문 세션: plan 기계장치(forceFinish 삼항식·handoff splice·near-miss reformat·harvest→postPlan)에
       // 진입하지 않는 조기 분기 — 스펙 §6 kind 가드 4곳을 한 번에 만족한다.
       if (isQuestion) {
-        await this.runQuestionTurn(claim, controller, meter, poster);
+        await this.runQuestionTurn(claim, controller, meter, poster, refs);
         return;
       }
 
       // 작업 DB MCP(스펙 2026-10-14 §5): 질문 세션과 같은 내장 서버. 턴마다 새로 만들고 finally에서 닫는다.
       const db = (this.deps.createDbMcp ?? createDbMcp)(claim);
       try {
+        // 참조 폴더는 refRoots로 넘기지 않는다 — 인터뷰는 Read/Grep/Glob이 사전 승인이라 게이트·옵션이 그대로다(스펙 2026-10-24 §5.1).
         const options = buildOptions({
           superpowersPluginPath: this.deps.superpowersPluginPath,
           workDir: claim.workDir,
@@ -466,9 +565,14 @@ export class InterviewRunner {
             // which requires a claudeSessionId (the session id is set on the FIRST assistant turn).
             // Therefore `forceFinish && !claudeSessionId` is unreachable in production; the else
             // branch (`promptFor`) only executes on the genuine fresh-start path (turns == 0).
+            // 참조 절은 매 턴 접두(kickoff·resume), DB 절은 kickoff 전용 (스펙 2026-10-24 §5.2). 강제 마무리·handoff·near-miss
+            // splice에는 참조 절을 붙이지 않는다 — 보고(refStates)는 그 경우에도 한다.
             forceFinish && claim.claudeSessionId
               ? (async function* () { yield userTurn(buildPlanReformatSplice()); })()
-              : promptFor(claim, dbSection(db)),
+              : promptFor(claim, {
+                  everyTurn: interviewRefPrefix(refs, claim.refsCleared === true),
+                  kickoffOnly: dbSection(db),
+                }),
           options,
         });
         const result = await relay(stream, { onActivity, onRateLimit, workDir: claim.workDir });
@@ -576,6 +680,9 @@ export class InterviewRunner {
         // trailing 배치가 question/plan보다 늦게 도착하지 않도록, 확정 POST 전에 활동 큐를 비운다.
         // (stop은 멱등 — finally의 stop은 에러 경로 안전망으로 유지)
         await poster.stop();
+        // 참조 준비 결과 (스펙 2026-10-24 §5.3) — 이번 턴에 참조를 준비했을 때만 싣는다. 참조 없는 인터뷰의 바디는 지금과 같다
+        // (키 자체를 생략). 턴이 실패해 fail로 끝나면 여기 닿지 않으므로 보고하지 않는다.
+        const refReport = refs.length > 0 ? { refStates: refStatesOf(refs) } : {};
         if (harvested.ok) {
           // planJson is sent as a JSON STRING — Java stores it as text/JSONB; frontend parses on use.
           await this.client.postPlan(claim.sessionId, {
@@ -588,6 +695,8 @@ export class InterviewRunner {
             cacheCreationTokens,
             cacheReadTokens,
             durationMs,
+            // 계획 턴에 처음 받은 참조도 커밋이 고정되도록 계획 보고에도 싣는다(API recordPlan → applyRefStates).
+            ...refReport,
           });
           return;
         }
@@ -603,6 +712,7 @@ export class InterviewRunner {
           cacheReadTokens,
           contextTokens,
           contextWindow,
+          ...refReport,
         });
       } finally {
         await db.close();
@@ -613,27 +723,18 @@ export class InterviewRunner {
   /**
    * 질문 세션(Q&A) 턴 — relay → postQuestion 직행. 모델이 plan 형식 텍스트를 내놔도 그냥 답변이다
    * (`postPlan` 호출 경로가 이 메서드에 없다). 옵션은 sessionKind:'QUESTION' (superpowers 미로드, default-deny).
+   * `refs`는 runTurn이 이번 턴에 준비한 읽기 전용 참조 repo(스펙 2026-10-22 §5.1, prepareRefs) — 참조가 없으면 빈 배열이라
+   * 프롬프트·옵션·보고가 지금과 같다.
    */
   private async runQuestionTurn(
     claim: InterviewClaimResponse,
     controller: AbortController,
     meter: SessionCostMeter,
     poster: ActivityPoster,
+    refs: RefPrepared[],
   ): Promise<void> {
     const onActivity = (e: ActivityInput) => poster.push(e);
     const onRateLimit = (info: RateLimitInfo) => this.rateLimits.report(info);
-    // 읽기 전용 참조 repo(스펙 2026-10-22 §5.1): 질문 claim에 참조가 있을 때만 준비한다 — 없으면 refs가 빈 배열이라
-    // 프롬프트·옵션·보고가 지금과 같다. 대상 ensureRepo(runTurn) 다음, SDK 진입 전에 순차로 받는다.
-    // 참조를 못 받아도 세션은 실패하지 않는다 — 그 참조 없이 답하고 사유는 프롬프트·보고·로그로 알린다.
-    let refs: RefPrepared[] = [];
-    const refClaims = claimRefRepos(claim);
-    if (refClaims.length > 0) {
-      refs = await this.ensureRefRepos(refClaims, { tokens: this.deps.gitTokens, signal: controller.signal });
-      // ensureRefRepos는 abort를 예외가 아니라 "못 받은 참조"로 돌려준다 — 타임아웃으로 이미 끝난 턴이 이어 가
-      // SDK에 들어가거나 refStates를 보고하지 않도록 여기서 직접 확인한다.
-      controller.signal.throwIfAborted();
-      logRefFailures(claim.sessionId, refs);
-    }
     // 이번 턴에 준비에 성공한 참조 폴더만 읽기 루트다 — 못 받은 참조·대화 중 빠진 참조는 게이트가 거부한다(§5.3).
     const refRoots = refs.filter((p) => p.error === null).map((p) => p.ref.dir);
     // 내장 DB MCP(스펙 2026-10-02 §6.4): 서버는 턴마다 새로 만들고(DB 접속은 첫 도구 호출 때),

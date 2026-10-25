@@ -111,3 +111,24 @@ export const questionClaimWithRefs: InterviewClaimResponse = {
     },
   ],
 };
+
+/**
+ * 작업 인터뷰(INTERVIEW) fresh claim + 읽기 전용 참조 repo 1개 (스펙 2026-10-24 §4.4·§5). 질문용 픽스처와 같은 참조지만
+ * `dir`은 이 세션(42)의 참조 폴더다. 러너는 이 목록으로 참조를 준비해 매 턴 프롬프트 접두와 보고(`refStates`)에 쓴다.
+ */
+export const interviewClaimWithRefs: InterviewClaimResponse = {
+  ...freshClaim,
+  kind: 'INTERVIEW',
+  refRepos: [
+    {
+      catalogId: 12,
+      alias: '옛앱',
+      githubRepo: 'acme/legacy',
+      gitUrl: 'https://github.com/acme/legacy.git',
+      repoHost: 'github',
+      branch: 'release/6.5',
+      dir: '/r/_refs/42/12',
+      sha: null,
+    },
+  ],
+};

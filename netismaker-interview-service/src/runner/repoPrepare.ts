@@ -224,8 +224,25 @@ async function renameWithRetry(ops: RefRepoOps, from: string, to: string, signal
  */
 export const REF_PREPARE_FALLBACK_REASON = '참조 repo를 받지 못했습니다';
 
+/** 참조 하나당 받기 상한 기본값(ms) — 5분 (스펙 2026-10-24 §5.1). 설정 `INTERVIEW_REF_TIMEOUT_MS`로 바꾼다. */
+export const DEFAULT_REF_TIMEOUT_MS = 300_000;
+
 /**
- * 질문 세션의 읽기 전용 참조 repo를 준비한다 (스펙 2026-10-22 §5.1). claim마다(새 질문·추가 질문 모두)
+ * 참조 하나를 받다가 상한에 끊겼을 때의 사유 — 칩 툴팁·프롬프트의 "사용할 수 없는 참조" 줄에 그대로 보인다.
+ * 분은 반올림하되 1분보다 짧아도 1분으로 적는다(기본값이면 `참조 repo 받기 시간 초과(5분)`).
+ */
+export function refTimeoutReason(timeoutMs: number): string {
+  return `참조 repo 받기 시간 초과(${Math.max(1, Math.round(timeoutMs / 60_000))}분)`;
+}
+
+/** 참조 하나를 준비할 때 받는 옵션 — 토큰과 그 참조의 git 호출에 넘길 중단 신호. */
+interface RefPrepareOptions {
+  tokens?: GitTokens;
+  signal?: AbortSignal;
+}
+
+/**
+ * 질문 세션과 작업 인터뷰의 읽기 전용 참조 repo를 준비한다 (스펙 2026-10-22 §5.1, 2026-10-24 §5.1). claim마다(새 세션·답변 턴 모두)
  * 대상 `ensureRepo` 다음에 부른다. 참조마다 입력 순서대로 하나씩 처리하고, 하나가 실패해도 나머지는 계속한다.
  * 예외를 던지지 않는다 — 실패한 참조는 `{ sha: null, error }`로 돌려주고 턴은 계속된다.
  *
@@ -246,24 +263,63 @@ export const REF_PREPARE_FALLBACK_REASON = '참조 repo를 받지 못했습니�
  *   하지 않고 `REF_DIR_INVALID_REASON`을 돌려준다 — API가 보낸 값을 그대로 지우지 않기 위한 방어다.
  * - 마지막 rename이 EPERM·EBUSY·EACCES로 막히면(백신·인덱서가 방금 받은 파일을 잡고 있을 때) 최대 5번까지 짧게 다시 시도한다.
  * - `signal`(턴 타임아웃)은 모든 git 자식 프로세스에 넘긴다.
+ * - `timeoutMs`가 있으면 참조마다 따로 받기 상한을 건다(스펙 2026-10-24 §5.1 — 러너는 설정값, 기본 5분을 준다). 참조마다 자체 중단 신호를
+ *   만들어 턴 신호에 묶고(턴이 이미 끝났으면 git을 부르기 전에 바로 중단) 그 신호를 git 호출과 rename 재시도에 넘긴다. 상한에 걸리면
+ *   그 참조의 git만 멈추고 위의 실패 경로대로 `.part`를 지운 뒤(지우지 못해도 다음 턴이 받기 전에 지운다) 사유를
+ *   `refTimeoutReason(timeoutMs)`로 돌려주고 다음 참조로 넘어간다 — 참조 하나 때문에 턴 상한(30분)까지 묶여 세션이 FAILED가 되지 않게.
+ *   턴 신호로 끊긴 것은 시간 초과로 적지 않는다(사유는 중단 그대로). 참조 하나가 끝나면 타이머와 턴 신호의 리스너를 떼어 낸다.
+ *   `timeoutMs`가 없으면 턴 신호를 그대로 넘긴다(상한 없음).
  */
 export async function ensureRefRepos(
   refs: RefRepoClaim[],
-  opts: { tokens?: GitTokens; signal?: AbortSignal },
+  opts: { tokens?: GitTokens; signal?: AbortSignal; timeoutMs?: number },
   ops: RefRepoOps = defaultRefOps,
 ): Promise<RefPrepared[]> {
   const results: RefPrepared[] = [];
   for (const ref of refs) {
-    results.push(await prepareRefRepo(ref, opts, ops));
+    results.push(
+      opts.timeoutMs === undefined
+        ? await prepareRefRepo(ref, opts, ops)
+        : await prepareRefRepoWithin(ref, opts, opts.timeoutMs, ops),
+    );
   }
   return results;
 }
 
-async function prepareRefRepo(
+/**
+ * 참조 하나를 `timeoutMs` 안에 준비한다. AbortSignal.any(Node 20.3+)는 engines(`>=20`)가 보장하지 않으므로 직접 묶는다 —
+ * 턴 신호가 이미 중단돼 있으면 리스너가 불리지 않으니(abort 이벤트는 한 번만 난다) 먼저 확인해 바로 중단한다.
+ */
+async function prepareRefRepoWithin(
   ref: RefRepoClaim,
-  opts: { tokens?: GitTokens; signal?: AbortSignal },
+  opts: RefPrepareOptions,
+  timeoutMs: number,
   ops: RefRepoOps,
 ): Promise<RefPrepared> {
+  const turnSignal = opts.signal;
+  const limit = new AbortController();
+  let timedOut = false;
+  const onTurnAbort = (): void => limit.abort(turnSignal?.reason);
+  if (turnSignal?.aborted) onTurnAbort();
+  else turnSignal?.addEventListener('abort', onTurnAbort, { once: true });
+  const timer = setTimeout(() => {
+    timedOut = true;
+    limit.abort(new Error(refTimeoutReason(timeoutMs)));
+  }, timeoutMs);
+  try {
+    const result = await prepareRefRepo(ref, { tokens: opts.tokens, signal: limit.signal }, ops);
+    // 상한이 끊었고 턴은 살아 있을 때만 시간 초과다 — 끊긴 git의 오류(AbortError)를 사유로 보이지 않는다
+    if (result.error !== null && timedOut && !turnSignal?.aborted) {
+      return { ref, sha: null, error: refTimeoutReason(timeoutMs) };
+    }
+    return result;
+  } finally {
+    clearTimeout(timer);
+    turnSignal?.removeEventListener('abort', onTurnAbort);
+  }
+}
+
+async function prepareRefRepo(ref: RefRepoClaim, opts: RefPrepareOptions, ops: RefRepoOps): Promise<RefPrepared> {
   // 어떤 디스크 작업·git 호출보다 먼저 — 아래에서 dir과 dir.part를 통째로 지우므로 API가 보낸 경로를 그대로 믿지 않는다.
   if (!isRefDir(ref)) {
     // 칩에는 고정 문구만 보이므로 API가 보낸 경로는 로그로만 남는다(경로에는 자격증명이 없다).

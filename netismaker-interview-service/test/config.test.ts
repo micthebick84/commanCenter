@@ -65,6 +65,19 @@ describe('loadConfig', () => {
     warnSpy.mockRestore();
   });
 
+  it('defaults refTimeoutMs=5min, honors INTERVIEW_REF_TIMEOUT_MS, falls back on 30m/0/-5 with a warning', () => {
+    // 참조 repo 하나당 받기 상한 (스펙 2026-10-24 §5.1) — 턴 상한과 같은 posNum 규칙(NaN이 타이머에 들어가면 1ms로 모든 참조가 끊긴다)
+    expect(loadConfig(base).refTimeoutMs).toBe(300_000);
+    expect(loadConfig({ ...base, INTERVIEW_REF_TIMEOUT_MS: '120000' }).refTimeoutMs).toBe(120_000);
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    for (const bad of ['30m', '0', '-5']) {
+      expect(loadConfig({ ...base, INTERVIEW_REF_TIMEOUT_MS: bad }).refTimeoutMs).toBe(300_000);
+    }
+    expect(warnSpy).toHaveBeenCalledTimes(3);
+    expect(String(warnSpy.mock.calls[0]![0])).toContain('INTERVIEW_REF_TIMEOUT_MS');
+    warnSpy.mockRestore();
+  });
+
   it('defaults concurrency=1 (serial) and honors INTERVIEW_CONCURRENCY', () => {
     expect(loadConfig(base).concurrency).toBe(1);
     expect(loadConfig({ ...base, INTERVIEW_CONCURRENCY: '3' }).concurrency).toBe(3);

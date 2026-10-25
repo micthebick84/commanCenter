@@ -57,7 +57,7 @@ export interface AttachmentRef {
 }
 
 /**
- * Java InterviewClaimResponse.ClaimRefRepo — 질문 세션의 읽기 전용 참조 repo 1개 (스펙 2026-10-22 §4.4).
+ * Java InterviewClaimResponse.ClaimRefRepo — 질문·작업 인터뷰의 읽기 전용 참조 repo 1개 (스펙 2026-10-22 §4.4, 2026-10-24 §4.4).
  * githubRepo = GitHub owner/repo 또는 GitLab 프로젝트 전체 경로(대상과 같은 규칙), dir = 체크아웃 절대경로
  * (API가 claim마다 `{루트}/_refs/{세션 id}/{카탈로그 id}`로 계산), sha = 처음 받아 고정한 커밋(아직 안 받았으면 null).
  * 필드 이름은 JSON 계약이다 — Java 쪽과 함께만 바꿀 것.
@@ -147,10 +147,16 @@ export interface InterviewClaimResponse {
   dbConnections?: DbConnectionRef[];
   dbNotices?: string[];
   /**
-   * 질문 세션의 읽기 전용 참조 repo (스펙 2026-10-22 §4.4) — QUESTION만 값이 있고 그 외는 []. 구버전 백엔드는
-   * 필드 자체가 없다 → 읽는 쪽은 Array.isArray 가드 (dbConnections 선례).
+   * 질문 세션·작업 인터뷰의 읽기 전용 참조 repo (스펙 2026-10-22 §4.4, 2026-10-24 §4.4) — 참조가 없으면 [].
+   * 보낼지는 API(refsFor)가 정하고 러너는 kind로 거르지 않는다. 구버전 백엔드는 필드 자체가 없다 → 읽는 쪽은
+   * Array.isArray 가드 (dbConnections 선례).
    */
   refRepos?: RefRepoClaim[];
+  /**
+   * 작업 인터뷰에서 참조를 대화 중 모두 뺐는지 (스펙 2026-10-24 §4.4·§5.2) — true면 참조 절 대신 한 줄 안내를 매 턴 싣는다.
+   * 참조를 고른 적 없는 세션·질문 세션은 false. 구버전 API는 필드가 없다 → `=== true`로만 판정한다.
+   */
+  refsCleared?: boolean;
 }
 
 /** SSE activity 와이어 계약의 활동 type (스펙 §4.1). */
@@ -193,8 +199,8 @@ export interface WorkerQuestionRequest {
   /** result.modelUsage 주 모델의 contextWindow. 없으면 null. */
   contextWindow: number | null;
   /**
-   * 이번 턴의 참조 repo 준비 결과 (스펙 2026-10-22 §4.5). 참조가 없으면 생략한다 — 구버전 API·참조 없는 질문의
-   * 바디는 지금과 같다. API는 catalogId+branch가 같은 원소에만 반영하고, sha는 처음 한 번만 고정한다.
+   * 이번 턴의 참조 repo 준비 결과 (스펙 2026-10-22 §4.5, 2026-10-24 §5.3 — 작업 인터뷰도 같다). 참조가 없으면 생략한다 —
+   * 구버전 API·참조 없는 질문·인터뷰의 바디는 지금과 같다. API는 catalogId+branch가 같은 원소에만 반영하고, sha는 처음 한 번만 고정한다.
    */
   refStates?: RefState[];
 }
@@ -216,6 +222,11 @@ export interface WorkerPlanRequest {
   cacheCreationTokens: number;
   cacheReadTokens: number;
   durationMs: number;
+  /**
+   * 계획 턴의 참조 repo 준비 결과 (스펙 2026-10-24 §4.5·§5.3, 질문 보고의 refStates와 같은 원소). 참조가 없으면 생략한다 —
+   * 참조 없는 인터뷰·구버전 API의 바디는 지금과 같다. 없으면 마지막 답변에서 더한 참조가 계획 턴에 처음 받아져도 커밋이 고정되지 않는다.
+   */
+  refStates?: RefState[];
 }
 
 /**

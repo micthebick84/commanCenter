@@ -10,7 +10,7 @@ import { FakeEventSource } from './mocks/eventsource'
 import { setViewportWidth } from './mocks/screen'
 import { baseTask } from './fixtures/task'
 
-// 작업 상세의 참조 repo (작업 스펙 2026-10-24 §7.4) — 칩 줄 표시 조건, 인터뷰 중 관리자의 "✎ 참조 변경"(세션마다 한 번 시드한 초안),
+// 작업 상세의 참조 repo (작업 스펙 2026-10-24 §7.4) — 칩 줄 표시 조건, 인터뷰 중 관리자의 "✎ 참조 변경"(세션마다 시드하고, 보내지 않은 변경이 없으면 서버를 따라가는 초안),
 // 바뀌었을 때만 답변 바디에 refRepos, 출처 질문 링크, 모바일 정보 영역·인터뷰 카드.
 ;(globalThis as any).useRoute = () => ({ params: { id: '42' } })
 

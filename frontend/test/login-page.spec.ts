@@ -7,7 +7,7 @@ import { resolve } from 'node:path'
 import LoginPage from '../pages/login.vue'
 import { authStub } from './mocks/nuxt'
 
-// useRoute/navigateTo는 Nuxt 자동 임포트 — setup.ts에 없어 전역 주입.
+// useRoute/navigateTo는 Nuxt 자동 임포트 — navigateTo는 setup.ts에 없어 전역 주입, useRoute는 setup.ts 기본값을 덮는다.
 Object.assign(globalThis, {
   useRoute: () => ({ path: '/login', query: {} }),
   navigateTo: vi.fn(),

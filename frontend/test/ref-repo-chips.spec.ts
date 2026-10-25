@@ -1,7 +1,7 @@
 import { mount } from '@vue/test-utils'
 import { describe, it, expect } from 'vitest'
 import RefRepoChips from '../components/RefRepoChips.vue'
-import type { RefRepoView } from '../composables/refRepos'
+import type { RefChipContext, RefRepoView } from '../composables/refRepos'
 
 // 세 상태 한 벌: 커밋 고정(pinned) · 아직 안 받음(pending) · 실패(failed)
 const PINNED: RefRepoView = {
@@ -32,9 +32,13 @@ const classNamesOf = (root: Element): string[] =>
 /**
  * 칩 하나를 그려 마우스를 올리고 툴팁 문구를 돌려준다(툴팁이 없으면 null). QTooltip은 마우스가 올라와야 body 포털에 그려진다 —
  * mouseenter를 보내고 한 틱 기다린다. 단언이 실패해도 finally에서 언마운트해 툴팁이 다음 테스트로 새지 않게 한다.
+ * context를 주지 않으면 prop을 넘기지 않는다(기본값 = 질문 맥락).
  */
-async function tooltipOf(item: RefRepoView): Promise<string | null> {
-  const w = mount(RefRepoChips, { props: { items: [item] }, attachTo: document.body })
+async function tooltipOf(item: RefRepoView, context?: RefChipContext): Promise<string | null> {
+  const w = mount(RefRepoChips, {
+    props: { items: [item], ...(context ? { context } : {}) },
+    attachTo: document.body,
+  })
   try {
     await chipsOf(w)[0]!.trigger('mouseenter')
     await new Promise((r) => setTimeout(r, 50))
@@ -200,5 +204,50 @@ describe('RefRepoChips — 참조 repo 칩 줄 (스펙 2026-10-22 §7.1)', () =>
     const w = mount(RefRepoChips, { props: { items: [PINNED, PENDING, FAILED], editable: true } })
     expect(classNamesOf(w.element).filter((c) => RESPONSIVE_HELPER.test(c))).toEqual([])
     w.unmount()
+  })
+})
+
+// 작업 맥락 문구 (스펙 2026-10-24 §7.1) — context prop을 주지 않으면 위의 질문 맥락 문구 그대로다
+describe('RefRepoChips — 작업 맥락 문구 (스펙 2026-10-24 §7.1)', () => {
+  it('task-setup 대기 칩 안내는 "인터뷰 때 받음"이고 "다음 답변"은 없다', () => {
+    const w = mount(RefRepoChips, { props: { items: [PENDING], context: 'task-setup' } })
+    const chip = w.find('[data-test="ref-chip"][data-state="pending"]')
+    expect(chip.find('.ref-chip-note').text()).toBe('인터뷰 때 받음')
+    expect(chip.text()).not.toContain('다음 답변')
+    w.unmount()
+  })
+
+  it('task-interview 대기 칩 안내는 "다음 답변 때 받음"', () => {
+    const w = mount(RefRepoChips, { props: { items: [PENDING], context: 'task-interview' } })
+    expect(w.find('[data-state="pending"] .ref-chip-note').text()).toBe('다음 답변 때 받음')
+    w.unmount()
+  })
+
+  it('task-interview 고정 칩 툴팁은 "— 구현까지 이 커밋 기준"으로 끝난다', async () => {
+    const tip = await tooltipOf(PINNED, 'task-interview')
+    expect(tip).toBe(`고정 커밋 a1b2c3d · ${new Date(PINNED.fetchedAt!).toLocaleString()} — 구현까지 이 커밋 기준`)
+    expect(tip).not.toContain('대화 끝까지')
+    // 받은 시각이 없으면 그 부분만 빠지는 규칙은 맥락과 무관하다
+    expect(await tooltipOf({ ...PINNED, fetchedAt: null }, 'task-fixed')).toBe('고정 커밋 a1b2c3d — 구현까지 이 커밋 기준')
+  })
+
+  it('task-interview 실패 칩 툴팁 마지막 줄은 "이 참조 없이 진행했습니다 — 다음 답변 때 다시 받아 봅니다"', async () => {
+    const tip = await tooltipOf(FAILED, 'task-interview')
+    expect(tip).toBe(`참조 받기 실패${FAILED.error}이 참조 없이 진행했습니다 — 다음 답변 때 다시 받아 봅니다`)
+    expect(tip).not.toContain('다음 질문')
+  })
+
+  it('task-fixed 대기 칩에는 안내가 없다', () => {
+    const w = mount(RefRepoChips, { props: { items: [PENDING], context: 'task-fixed' } })
+    const chip = w.find('[data-test="ref-chip"][data-state="pending"]')
+    expect(chip.exists()).toBe(true)
+    expect(chip.find('.ref-chip-note').exists()).toBe(false)
+    expect(chip.text()).toContain('📚 공통 UI · main')
+    w.unmount()
+  })
+
+  it('실패 줄이 없는 맥락(task-setup·task-fixed)의 실패 칩 툴팁은 사유에서 끝난다', async () => {
+    expect(await tooltipOf(FAILED, 'task-setup')).toBe(`참조 받기 실패${FAILED.error}`)
+    expect(await tooltipOf(FAILED, 'task-fixed')).toBe(`참조 받기 실패${FAILED.error}`)
   })
 })

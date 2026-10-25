@@ -47,6 +47,10 @@ Object.assign(globalThis as any, {
   useRuntimeConfig: useRuntimeConfigMock,
   // Nuxt page-only macro — no-op in Vitest (pages are tested without the router layer)
   definePageMeta: vi.fn(),
+  // 라우트 기본값 — 경로·파라미터·쿼리가 빈 홈. 작업 등록 화면(pages/tasks/index.vue)이 질문에서 넘어온 쿼리를 읽게 되는데
+  // (스펙 2026-10-24 §7.2) 그 화면을 마운트하는 여러 spec이 useRoute를 넣지 않는다. 특정 라우트가 필요한 spec은
+  // 모듈 단계에서 자기 useRoute를 넣어 이 값을 덮는다(setup 파일이 spec 모듈보다 먼저 돈다).
+  useRoute: () => ({ path: '/', params: {}, query: {} }),
   // useTaskPolling is a local composable (not a Nuxt auto-import) but pages/tasks/index.vue
   // calls it at setup-time. Provide a test-safe stub that still calls the fetcher on mount.
   useTaskPolling: useTaskPollingStub,

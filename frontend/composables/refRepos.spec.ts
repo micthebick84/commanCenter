@@ -1,10 +1,13 @@
 import { describe, it, expect } from 'vitest'
+import { computed, reactive, ref } from 'vue'
 import {
   MAX_REF_REPOS,
+  refChipCopy,
   refChipLabel,
   refState,
   sameRefSet,
   toInputs,
+  useRefDraft,
   type RefRepoInput,
   type RefRepoView,
 } from './refRepos'
@@ -130,5 +133,144 @@ describe('sameRefSet', () => {
     sameRefSet(a, b)
     expect(a).toEqual([input(2, 'b'), input(1, 'a')])
     expect(b).toEqual([input(1, 'a'), input(2, 'b')])
+  })
+})
+
+// 칩 맥락 문구 (스펙 2026-10-24 §7.1) — 표에서 '—'인 칸은 그 맥락에 그릴 일이 없어 null(그 줄을 그리지 않는다)
+describe('refChipCopy', () => {
+  it('question(기본)은 1단계 문구 그대로', () => {
+    expect(refChipCopy('question')).toEqual({
+      pendingNote: '다음 답변 때 받음',
+      pinnedBasis: '대화 끝까지 이 커밋 기준',
+      failedNote: '이 참조 없이 답했습니다 — 다음 질문을 보낼 때 다시 받아 봅니다',
+    })
+  })
+
+  it('task-setup: 대기 칩 "인터뷰 때 받음", 실패 줄 없음', () => {
+    expect(refChipCopy('task-setup')).toEqual({
+      pendingNote: '인터뷰 때 받음',
+      pinnedBasis: '구현까지 이 커밋 기준',
+      failedNote: null,
+    })
+  })
+
+  it('task-interview: 다음 답변 때 받음 · 구현까지 · 진행 문구', () => {
+    expect(refChipCopy('task-interview')).toEqual({
+      pendingNote: '다음 답변 때 받음',
+      pinnedBasis: '구현까지 이 커밋 기준',
+      failedNote: '이 참조 없이 진행했습니다 — 다음 답변 때 다시 받아 봅니다',
+    })
+  })
+
+  it('task-fixed: 대기 안내·실패 줄 없음', () => {
+    expect(refChipCopy('task-fixed')).toEqual({
+      pendingNote: null,
+      pinnedBasis: '구현까지 이 커밋 기준',
+      failedNote: null,
+    })
+  })
+
+  it('돌려준 값을 고쳐도 다음 호출은 원래 문구다', () => {
+    const copy = refChipCopy('question')
+    copy.pendingNote = '바뀜'
+    expect(refChipCopy('question').pendingNote).toBe('다음 답변 때 받음')
+  })
+})
+
+// 참조 편집 초안 — 칩 줄(편집)과 인라인 추가 폼을 잇는 상태 한 벌. 작업 등록 창·승인 다이얼로그·인터뷰 중 참조 변경 메뉴가 같이 쓴다.
+describe('useRefDraft', () => {
+  const OLD = view({ catalogId: 2, alias: '옛앱', branch: 'release/6.5' })
+  const UI = view({ catalogId: 3, alias: '공통 UI', branch: 'main' })
+
+  it('추가 폼에서 뺄 id = 대상 + 고른 참조 — 대상이 없으면 고른 참조만, 둘이 바뀌면 따라간다', () => {
+    const refs = ref<RefRepoView[]>([OLD])
+    const target = ref<number | null>(1)
+    const d = useRefDraft(refs, () => target.value)
+    expect(d.excludeIds.value).toEqual([1, 2])
+
+    target.value = null
+    expect(d.excludeIds.value).toEqual([2])
+
+    refs.value = [OLD, UI]
+    target.value = 7
+    expect(d.excludeIds.value).toEqual([7, 2, 3])
+  })
+
+  it('대상 id가 undefined여도 대상 없음으로 본다', () => {
+    const d = useRefDraft(ref<RefRepoView[]>([UI]), () => undefined)
+    expect(d.excludeIds.value).toEqual([3])
+  })
+
+  it('＋ 참조 추가는 폼을 펼치고 한 번 더 누르면 접는다 (처음엔 접혀 있다)', () => {
+    const d = useRefDraft(ref<RefRepoView[]>([]), () => 1)
+    expect(d.addOpen.value).toBe(false)
+    d.toggleAdd()
+    expect(d.addOpen.value).toBe(true)
+    d.toggleAdd()
+    expect(d.addOpen.value).toBe(false)
+  })
+
+  it('추가하면 끝에 붙인 새 배열로 바꾸고(원래 배열은 그대로) 폼을 접는다', () => {
+    const original = [OLD]
+    const refs = ref<RefRepoView[]>(original)
+    const d = useRefDraft(refs, () => 1)
+    d.toggleAdd()
+    d.add(UI)
+    expect(refs.value).toEqual([OLD, UI])
+    expect(original).toEqual([OLD]) // v-model 부모의 props 배열을 직접 고치지 않는다
+    expect(d.addOpen.value).toBe(false)
+  })
+
+  it('빼기는 그 catalogId만 뺀다 — 없는 id·null이면 목록을 다시 쓰지 않는다', () => {
+    const writes: RefRepoView[][] = []
+    const backing = ref<RefRepoView[]>([OLD, UI])
+    const refs = computed<RefRepoView[]>({
+      get: () => backing.value,
+      set: (v) => {
+        writes.push(v)
+        backing.value = v
+      },
+    })
+    const d = useRefDraft(refs, () => 1)
+
+    d.remove(9)
+    d.remove(null)
+    expect(writes).toEqual([]) // 대상 레포를 바꿀 때마다 부르므로, 뺄 것이 없으면 조용히 지나간다
+
+    d.remove(2)
+    expect(writes).toEqual([[UI]])
+    expect(backing.value).toEqual([UI])
+  })
+
+  it('reset은 주어진 목록의 사본으로 채우고(없으면 빈 목록) 폼을 접는다', () => {
+    const refs = ref<RefRepoView[]>([OLD])
+    const d = useRefDraft(refs, () => 1)
+    d.toggleAdd()
+    d.reset()
+    expect(refs.value).toEqual([])
+    expect(d.addOpen.value).toBe(false)
+
+    const server = [OLD, UI]
+    d.toggleAdd()
+    d.reset(server)
+    expect(refs.value).toEqual([OLD, UI])
+    expect(refs.value).not.toBe(server) // 초안을 고쳐도 서버 값(작업의 refRepos)이 따라 바뀌지 않는다
+    expect(d.addOpen.value).toBe(false)
+  })
+
+  it('reactive 초안의 필드에도 붙는다 (쓰기 computed)', () => {
+    const draft = reactive({ repoCatalogId: 1 as number | null, refRepos: [] as RefRepoView[] })
+    const d = useRefDraft(
+      computed<RefRepoView[]>({ get: () => draft.refRepos, set: (v) => (draft.refRepos = v) }),
+      () => draft.repoCatalogId,
+    )
+    d.add(OLD)
+    d.add(UI)
+    expect(draft.refRepos).toEqual([OLD, UI])
+    expect(d.excludeIds.value).toEqual([1, 2, 3])
+    d.remove(2)
+    expect(draft.refRepos).toEqual([UI])
+    draft.repoCatalogId = null
+    expect(d.excludeIds.value).toEqual([3])
   })
 })

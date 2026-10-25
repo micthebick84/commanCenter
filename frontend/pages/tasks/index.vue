@@ -9,6 +9,9 @@ import { elapsedLabel } from '~/composables/implementationMode'
 import { useNowTick } from '~/composables/useNowTick'
 import { MAX_FILES, MAX_FILE_MB, MAX_TOTAL_MB, validateFiles } from '~/composables/attachmentLimits'
 import { useHydrationSafeAuth } from '~/composables/useHydrationSafeAuth'
+import RefRepoChips from '~/components/RefRepoChips.vue'
+import RefRepoAddForm from '~/components/RefRepoAddForm.vue'
+import { toInputs, useRefDraft, type RefRepoView } from '~/composables/refRepos'
 
 definePageMeta({ layout: 'default' })
 
@@ -212,8 +215,29 @@ const draft = reactive({
   githubBranch: '',
   title: '',
   description: '',
+  // 참조 repo(스펙 2026-10-24 §7.2): 대상과 별개로 인터뷰·구현이 읽기만 하는 다른 레포 — 상한 3은 칩 줄(RefRepoChips)이 건다
+  refRepos: [] as RefRepoView[],
 })
 const submitting = ref(false)
+
+// 참조 repo 줄: 브랜치 선택 바로 아래 편집 칩 줄 + "＋ 참조 추가"가 그 아래에 펼치는 추가 폼(새 질문 화면 B안과 같은 모양).
+// 펼침·후보 제외(대상 + 이미 고른 참조)·추가(접힘)·빼기는 승인 다이얼로그·인터뷰 중 참조 변경과 같은 useRefDraft로.
+const {
+  addOpen: refAddOpen,
+  excludeIds: refExcludeIds,
+  toggleAdd: toggleRefAdd,
+  add: addRef,
+  remove: removeRef,
+  reset: resetRefs,
+} = useRefDraft(
+  computed<RefRepoView[]>({
+    get: () => draft.refRepos,
+    set: (v) => {
+      draft.refRepos = v
+    },
+  }),
+  () => draft.repoCatalogId,
+)
 
 // 첨부 (스펙 2026-08-16 §8.1) — 한도 상수·검증은 질문 채팅과 공유하는 composables/attachmentLimits.ts (스펙 2026-09-13 §7)
 const draftFiles = ref<File[]>([])
@@ -246,6 +270,7 @@ async function loadRepoCatalog() {
 
 // 별칭 선택 → catalogId로 브랜치 로드 + 기본 브랜치 프리필
 function onRepoSelected(catalogId: number | null) {
+  removeRef(catalogId) // 새 대상과 같은 레포를 참조로 두지 않는다 — 그 참조만 빠지고 나머지는 유지 (스펙 2026-10-24 §7.2)
   draft.githubBranch = ''
   resetBranchState()
   const entry = repoCatalog.value.find((r) => r.id === catalogId)
@@ -338,6 +363,7 @@ function openCreate() {
   draft.githubBranch = ''
   draft.title = ''
   draft.description = ''
+  resetRefs() // 참조를 비우고 추가 폼을 접는다
   draftFiles.value = []
   resetBranchState()
   showCreate.value = true
@@ -359,6 +385,8 @@ async function submit() {
     githubBranch: draft.githubBranch,
     title: draft.title,
     description: draft.description,
+    // 참조는 하나라도 골랐을 때만 싣는다 — 없으면 필드를 생략해 등록 바디가 예전과 같다 (스펙 2026-10-24 §7.2)
+    ...(draft.refRepos.length > 0 ? { refRepos: toInputs(draft.refRepos) } : {}),
   }
   if (draftFiles.value.length > 0) {
     const err = validateFiles(draftFiles.value)
@@ -669,6 +697,7 @@ function closeDialog() {
               input-debounce="0"
               emit-value
               map-options
+              data-test="branch-select"
               :hint="
                 repoStatus === 'ok'
                   ? '입력해서 검색할 수 있습니다'
@@ -684,6 +713,21 @@ function closeDialog() {
                 </q-item>
               </template>
             </q-select>
+
+            <!-- 참조 repo 줄 (스펙 2026-10-24 §7.2) — 레포·브랜치 선택 바로 아래. 등록 때는 아직 아무것도 받지 않으므로
+                 칩은 "인터뷰 때 받음"(task-setup 맥락). "＋ 참조 추가"를 누르면 추가 폼이 칩 줄 아래에 펼쳐진다. -->
+            <div data-test="task-form-refs">
+              <RefRepoChips
+                :items="draft.refRepos"
+                editable
+                context="task-setup"
+                @remove="removeRef"
+                @add="toggleRefAdd"
+              />
+              <div v-if="refAddOpen" class="ref-add-panel">
+                <RefRepoAddForm :catalog="repoCatalog" :exclude-ids="refExcludeIds" @add="addRef" />
+              </div>
+            </div>
 
             <q-input v-model="draft.title" label="작업 제목" outlined dense maxlength="500" />
             <q-input
@@ -922,5 +966,19 @@ function closeDialog() {
   padding: 14px 4px 0;
   font-size: 12px;
   color: #757575;
+}
+
+/* 등록 창 참조 추가 폼 — 새 질문 화면(pages/questions/index.vue)과 같은 모양. 폼 루트는 q-menu에 넣는 용도라
+   폭이 340px·여백 16px로 고정돼 있어, 칩 줄 아래 인라인에서는 줄 폭에 맞추고 윤곽선으로 다른 입력과 구분한다. */
+.ref-add-panel {
+  box-sizing: border-box;
+  max-width: 360px;
+  margin-top: 8px;
+  border: 1px solid rgba(0, 0, 0, 0.12);
+  border-radius: 8px;
+}
+.ref-add-panel :deep(.ref-add-form) {
+  width: auto;
+  padding: 12px;
 }
 </style>

@@ -9,7 +9,7 @@ import { authStub, useApiMock } from './mocks/nuxt'
 import { FakeEventSource } from './mocks/eventsource'
 import { setViewportWidth } from './mocks/screen'
 
-// useRoute/navigateTo는 Nuxt 자동 임포트 — setup.ts에 없어 전역 주입.
+// useRoute/navigateTo는 Nuxt 자동 임포트 — navigateTo는 setup.ts에 없어 전역 주입, useRoute는 setup.ts 기본값을 덮는다.
 const navigateToMock = vi.fn()
 Object.assign(globalThis, {
   navigateTo: navigateToMock,

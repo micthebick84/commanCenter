@@ -5,7 +5,7 @@ import DefaultLayout from '../layouts/default.vue'
 import { authStub, useApiMock } from './mocks/nuxt'
 import { setViewportWidth } from './mocks/screen'
 
-// useRoute는 Nuxt 자동 임포트 — setup.ts에 없어 전역 주입(관리 탭 활성 판정용).
+// useRoute는 Nuxt 자동 임포트 — setup.ts 기본값(경로 '/')을 이 경로로 덮는다(관리 탭 활성 판정용).
 Object.assign(globalThis, { useRoute: () => ({ path: '/tasks' }) })
 
 // Nuxt 전용 컴포넌트/라우터 의존 탭은 렌더 함수 스텁으로 대체 (문자열 템플릿은 런타임 컴파일러가 없어 못 쓴다).

@@ -189,6 +189,12 @@ function requestClose() {
 function onPanelClose() {
   refreshList()
 }
+
+// "이 대화로 작업 등록"(작업 스펙 2026-10-24 §7.6) — 작업 등록 창이 이 질문을 읽어 대상·브랜치·참조·제목을 채운다.
+// navigateTo는 템플릿에서 직접 부르지 않는다(pages/tasks/index.vue openTaskDetail 주석 — `_ctx.navigateTo`로 컴파일된다).
+function goToTask() {
+  navigateTo(`/tasks?fromQuestion=${sessionId.value}`)
+}
 </script>
 
 <template>
@@ -245,7 +251,20 @@ function onPanelClose() {
         <q-tooltip>{{ contextTip }}</q-tooltip>
       </q-chip>
       <q-space />
-      <!-- 좁은 화면(lt.md)에서는 라벨이 두 줄로 꺾여 헤더 밖으로 넘치므로 아이콘만 남기고 이름은 aria-label로 유지 (2026-09-06 모바일 QA) -->
+      <!-- 헤더 오른쪽 버튼들은 좁은 화면(lt.md)에서 라벨이 두 줄로 꺾여 헤더 밖으로 넘치므로 아이콘만 남기고 이름은 aria-label로 유지 (2026-09-06 모바일 QA) -->
+      <!-- 이 대화로 작업 등록 (작업 스펙 2026-10-24 §7.6) — 끝난 질문에도 보인다. 답변이 끝나지 않았거나(서버도 409) 대상 레포가 없으면 막는다. -->
+      <q-btn
+        outline
+        dense
+        no-caps
+        color="primary"
+        icon="add_task"
+        :label="$q.screen.lt.md ? undefined : '이 대화로 작업 등록'"
+        aria-label="이 대화로 작업 등록"
+        :disable="!detail?.repoCatalogId || ['QUEUED', 'RUNNING'].includes(statusName ?? '')"
+        data-test="to-task"
+        @click="goToTask"
+      />
       <q-btn
         v-if="!isTerminal"
         outline

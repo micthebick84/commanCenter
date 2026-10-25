@@ -12,6 +12,7 @@ import { useHydrationSafeAuth } from '~/composables/useHydrationSafeAuth'
 import RefRepoChips from '~/components/RefRepoChips.vue'
 import RefRepoAddForm from '~/components/RefRepoAddForm.vue'
 import { toInputs, useRefDraft, type RefRepoView } from '~/composables/refRepos'
+import { taskPrefillFromQuestion, type QuestionDetail } from '~/composables/questions'
 
 definePageMeta({ layout: 'default' })
 
@@ -51,6 +52,7 @@ interface PageResponse<T> {
 }
 
 const $q = useQuasar()
+const route = useRoute()
 // 관리자 분기는 SSR(비로그인)과 하이드레이션 결과가 같도록 게이트된 값으로 그린다
 const { isAdmin } = useHydrationSafeAuth()
 const mine = ref(true)
@@ -219,6 +221,9 @@ const draft = reactive({
   refRepos: [] as RefRepoView[],
 })
 const submitting = ref(false)
+// 출처 질문(스펙 2026-10-24 §7.2) — 질문 대화의 "이 대화로 작업 등록"으로 들어왔을 때만 있다. 있으면 등록 바디에 sourceQuestionId를 싣고
+// 서버가 대화 전문을 작업 첨부로 붙인다. 창 맨 위 안내 띠의 ✕로 뺄 수 있다(채운 값은 그대로).
+const source = ref<{ id: number; title: string } | null>(null)
 
 // 참조 repo 줄: 브랜치 선택 바로 아래 편집 칩 줄 + "＋ 참조 추가"가 그 아래에 펼치는 추가 폼(새 질문 화면 B안과 같은 모양).
 // 펼침·후보 제외(대상 + 이미 고른 참조)·추가(접힘)·빼기는 승인 다이얼로그·인터뷰 중 참조 변경과 같은 useRefDraft로.
@@ -268,8 +273,10 @@ async function loadRepoCatalog() {
   }
 }
 
-// 별칭 선택 → catalogId로 브랜치 로드 + 기본 브랜치 프리필
-function onRepoSelected(catalogId: number | null) {
+// 별칭 선택 → catalogId로 브랜치 로드 + 기본 브랜치 프리필.
+// preferredBranch(질문에서 넘어온 브랜치)가 있으면 기본 브랜치 대신 그 브랜치를 목록이 온 뒤에 고른다 — 목록에 없거나 조회가 실패하면
+// 기본 브랜치로 조용히 바꾸지 않고 비운 채 알린다 (스펙 2026-10-24 §7.2).
+function onRepoSelected(catalogId: number | null, preferredBranch?: string) {
   removeRef(catalogId) // 새 대상과 같은 레포를 참조로 두지 않는다 — 그 참조만 빠지고 나머지는 유지 (스펙 2026-10-24 §7.2)
   draft.githubBranch = ''
   resetBranchState()
@@ -282,7 +289,19 @@ function onRepoSelected(catalogId: number | null) {
   }
   loadBranches(entry.id).then(() => {
     if (inflightRepo !== entry.id) return
-    if (entry.defaultBranch) draft.githubBranch = entry.defaultBranch
+    if (preferredBranch === undefined) {
+      if (entry.defaultBranch) draft.githubBranch = entry.defaultBranch
+      return
+    }
+    if (repoStatus.value === 'ok' && branches.value.some((b) => b.name === preferredBranch)) {
+      draft.githubBranch = preferredBranch
+      return
+    }
+    draft.githubBranch = ''
+    $q.notify({
+      type: 'warning',
+      message: `질문의 브랜치 ${preferredBranch}를 찾을 수 없습니다 — 브랜치를 골라 주세요`,
+    })
   })
 }
 
@@ -358,17 +377,63 @@ function onBranchFilter(val: string, update: (cb: () => void) => void) {
   })
 }
 
-function openCreate() {
+// 창을 비우고 연다 — 카탈로그까지 받아야 끝난다(질문 프리필이 그 카탈로그로 대상·참조를 고른다).
+async function openCreate() {
   draft.repoCatalogId = null
   draft.githubBranch = ''
   draft.title = ''
   draft.description = ''
+  source.value = null
   resetRefs() // 참조를 비우고 추가 폼을 접는다
   draftFiles.value = []
   resetBranchState()
   showCreate.value = true
-  loadRepoCatalog()
+  await loadRepoCatalog()
 }
+
+// 질문 대화에서 넘어온 경우(`/tasks?fromQuestion={id}`, 스펙 2026-10-24 §7.2). 마운트 뒤에만 한다 — 토큰이 브라우저에만 있어
+// 서버 렌더는 질문을 읽을 수 없고, 창은 하이드레이션 뒤에 열려야 SSR 마크업과 어긋나지 않는다.
+// 질문을 읽어 창을 열고 대상·브랜치·참조·제목을 채운다. "작업 상세"는 비워 둔다(질문은 비교, 작업은 이식 — 대화 전문은 첨부로 간다).
+// 끝나면 성공·실패와 무관하게 주소에서 쿼리를 빼서 새로고침해도 다시 열리지 않게 한다.
+async function prefillFromQuestion() {
+  const raw = route.query?.fromQuestion // 쿼리 없는 라우트(일부 테스트 더블)도 있다
+  if (raw == null) return
+  try {
+    const id = Number(Array.isArray(raw) ? raw[0] : raw)
+    if (!Number.isInteger(id) || id <= 0) return
+    let q: QuestionDetail
+    try {
+      q = await useApi<QuestionDetail>(`/api/questions/${id}`)
+    } catch (e) {
+      $q.notify({
+        type: 'negative',
+        message: (e as { data?: { message?: string } })?.data?.message ?? '질문을 불러오지 못했습니다',
+      })
+      return
+    }
+    await openCreate()
+    const p = taskPrefillFromQuestion(q, repoCatalog.value)
+    draft.title = p.title
+    resetRefs(p.refRepos)
+    source.value = { id, title: q.title }
+    if (p.repoCatalogId != null) {
+      draft.repoCatalogId = p.repoCatalogId
+      onRepoSelected(p.repoCatalogId, p.branch) // 브랜치는 목록이 온 뒤 — 카탈로그 기본 브랜치보다 나중에 적용된다
+    }
+    if (p.targetMissing) {
+      $q.notify({ type: 'warning', message: '질문의 대상 레포를 카탈로그에서 찾을 수 없습니다 — 레포를 골라 주세요' })
+    }
+    if (p.droppedRefs.length > 0) {
+      const names = p.droppedRefs.map((r) => `${r.alias}(${r.branch})`).join(', ')
+      $q.notify({ type: 'warning', message: `카탈로그에 없는 참조는 뺐습니다: ${names}` })
+    }
+  } finally {
+    await navigateTo({ path: '/tasks', query: {} }, { replace: true })
+  }
+}
+onMounted(() => {
+  prefillFromQuestion()
+})
 
 const canSubmit = computed(
   () =>
@@ -387,6 +452,8 @@ async function submit() {
     description: draft.description,
     // 참조는 하나라도 골랐을 때만 싣는다 — 없으면 필드를 생략해 등록 바디가 예전과 같다 (스펙 2026-10-24 §7.2)
     ...(draft.refRepos.length > 0 ? { refRepos: toInputs(draft.refRepos) } : {}),
+    // 출처 질문도 있을 때만 — 서버가 그 질문의 대화 전문을 작업 첨부로 붙인다 (스펙 2026-10-24 §7.2)
+    ...(source.value ? { sourceQuestionId: source.value.id } : {}),
   }
   if (draftFiles.value.length > 0) {
     const err = validateFiles(draftFiles.value)
@@ -663,6 +730,26 @@ function closeDialog() {
         <div class="dialog-body">
           <q-card-section>
             <div class="text-h6">작업 등록</div>
+          </q-card-section>
+          <!-- 출처 질문 안내 (스펙 2026-10-24 §7.2) — ✕는 출처 연결(과 대화 전문 첨부)만 뺀다. 채운 값은 그대로. -->
+          <q-card-section v-if="source" class="q-py-none">
+            <q-banner dense rounded class="bg-deep-purple-1 text-deep-purple-10" data-test="source-question-banner">
+              <template #avatar>
+                <q-icon name="forum" color="deep-purple-7" />
+              </template>
+              질문 #{{ source.id }} "{{ source.title }}"에서 이어짐 — 대화 전문이 첨부됩니다
+              <template #action>
+                <q-btn
+                  flat
+                  dense
+                  round
+                  icon="close"
+                  aria-label="출처 연결 빼기"
+                  data-test="source-question-clear"
+                  @click="source = null"
+                />
+              </template>
+            </q-banner>
           </q-card-section>
           <q-card-section class="q-gutter-md">
             <q-select

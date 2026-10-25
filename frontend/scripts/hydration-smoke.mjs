@@ -34,6 +34,8 @@ const AUTH_PATHS = [
   '/',
   '/login',
   '/tasks',
+  // 질문 대화에서 이어서 등록 — 마운트 뒤 질문을 읽어 창을 열고 쿼리를 뺀다(서버 렌더는 쿼리를 보지 않는다)
+  '/tasks?fromQuestion=3',
   '/tasks/1',
   '/questions',
   '/questions/3',
@@ -69,6 +71,8 @@ const QUESTION = {
   requesterId: 'admin', status: '입력대기', statusName: 'AWAITING_INPUT', model: 'claude-sonnet-5-5', effort: 'medium',
   kind: 'QUESTION', totalCostUsd: 0.42, contextTokens: 76004, contextWindow: 200000, mcpCatalogIds: [],
   dbConnectionIds: [], attachments: [], createdAt: NOW, updatedAt: NOW,
+  // 대상 레포의 카탈로그 id — "이 대화로 작업 등록"이 열리고, 등록 창 프리필이 대상·브랜치를 채운다
+  repoCatalogId: 1,
   // 읽기 전용 참조 repo — 커밋 고정·아직 안 받음·실패 각 1개: 대화 화면 칩 줄이 세 상태(고정 칩의 툴팁·대기 안내·⚠)를 모두 그린다
   refRepos: [
     { catalogId: 2, alias: '옛앱', branch: 'release/6.5', sha: 'a1b2c3d4e5f60718293a4b5c6d7e8f9012345678', fetchedAt: NOW, error: null },
@@ -77,7 +81,12 @@ const QUESTION = {
   ],
   turns: [{ seq: 1, role: 'assistant', kind: 'question', content: '**AuthController**입니다' }], plan: null,
 }
-const REPOS = [{ id: 1, alias: 'Widgets', gitUrl: 'https://github.com/acme/widgets', host: 'github', ownerRepo: 'acme/widgets', defaultBranch: 'main', description: null, enabled: true, createdBy: 'admin', createdAt: NOW, updatedAt: NOW }]
+// 2·3은 질문의 참조 — 5(인증 서버)는 일부러 빼서 등록 창 프리필의 "카탈로그에 없는 참조" 알림 경로도 지난다
+const REPOS = [
+  { id: 1, alias: 'Widgets', gitUrl: 'https://github.com/acme/widgets', host: 'github', ownerRepo: 'acme/widgets', defaultBranch: 'main', description: null, enabled: true, createdBy: 'admin', createdAt: NOW, updatedAt: NOW },
+  { id: 2, alias: '옛앱', gitUrl: 'https://gitlab.example/legacy/app', host: 'gitlab', ownerRepo: null, defaultBranch: 'release/6.5', description: null, enabled: true, createdBy: 'admin', createdAt: NOW, updatedAt: NOW },
+  { id: 3, alias: '공통 UI', gitUrl: 'https://gitlab.example/shared/ui', host: 'gitlab', ownerRepo: null, defaultBranch: 'main', description: null, enabled: true, createdBy: 'admin', createdAt: NOW, updatedAt: NOW },
+]
 const MCPS = [{ id: 1, name: 'docs', displayName: 'Docs', url: 'https://mcp.example/sse', transport: 'sse', description: null, enabled: true, createdBy: 'admin', createdAt: NOW, updatedAt: NOW, lastCheckAt: null, lastCheckStatus: null, lastCheckError: null }]
 const REQUESTS = [{ id: 1, kind: 'REPO', kindLabel: 'REPO 추가', title: '스모크 요청', status: 'RECEIVED', statusLabel: '접수', requesterId: 'admin', unread: true, createdAt: NOW, updatedAt: NOW }]
 const REQUEST_DETAIL = {
@@ -102,6 +111,7 @@ function apiResponse(path) {
   if (path === '/api/usage/claude') return { limits: [] }
   if (path === '/api/queue/stats') return { avgDurationMs: null }
   if (path === '/api/repo-catalog' || path === '/api/admin/repo-catalog') return REPOS
+  if (path === '/api/repos/branches') return { repo: 'acme/widgets', defaultBranch: 'main', branches: [{ name: 'main', sha: 'abc123' }], fetchedAt: NOW }
   if (path === '/api/mcp-catalog' || path === '/api/admin/mcp-catalog') return MCPS
   if (path === '/api/workers/health') return WORKERS
   if (path === '/api/db-connections') return []

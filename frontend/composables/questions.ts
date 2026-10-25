@@ -1,6 +1,6 @@
 // 질문 세션 API 계약 미러 (Java QuestionSummaryResponse / InterviewResponse 부분집합) + 사이드바/헤더 순수 계산.
 import type { DbConnectionChip } from './dbConnections'
-import type { RefRepoView } from './refRepos'
+import type { RefRepoView, RepoCatalogOption } from './refRepos'
 
 export interface QuestionSummary {
   id: number
@@ -60,6 +60,46 @@ export interface QuestionDetail {
     /** 추가 질문(user 턴)에 붙인 첨부 — 사용자 말풍선 아래 칩 */
     attachments?: AttachmentView[]
   }>
+}
+
+/**
+ * 질문 대화 → 작업 등록 창에 채울 값 (작업 스펙 2026-10-24 §7.2). 대상·참조는 지금 카탈로그에서 고를 수 있는 것만 옮긴다 —
+ * 나머지는 비우거나(`targetMissing`) 빼서(`droppedRefs`) 등록 창이 알린다. `branch`는 질문의 브랜치 그대로이고,
+ * 그 브랜치가 지금 레포에 있는지는 등록 창이 브랜치 목록을 받은 뒤에 본다.
+ */
+export interface TaskPrefill {
+  repoCatalogId: number | null
+  branch: string
+  title: string
+  refRepos: RefRepoView[]
+  droppedRefs: RefRepoView[]
+  targetMissing: boolean
+}
+
+/**
+ * 질문 상세 → 작업 등록 창 프리필. 대상은 카탈로그에 있고 지원하는 호스트(`host !== 'other'`)일 때만 옮긴다.
+ * 참조도 같은 조건에 대상과 다른 레포만 옮기되 커밋·받은 시각·사유는 지운다 — 작업은 인터뷰에서 처음부터 다시 받으므로
+ * 등록 창에서는 아직 안 받은 대기 칩이다. 옮기지 못한 참조는 고른 순서대로 `droppedRefs`(알림에 쓰는 별칭·브랜치).
+ */
+export function taskPrefillFromQuestion(q: QuestionDetail, catalog: RepoCatalogOption[]): TaskPrefill {
+  const usable = (id: number | null | undefined): id is number =>
+    id != null && catalog.some((c) => c.id === id && c.host !== 'other')
+  const target = usable(q.repoCatalogId) ? q.repoCatalogId : null
+  const refRepos: RefRepoView[] = []
+  const droppedRefs: RefRepoView[] = []
+  for (const r of q.refRepos ?? []) {
+    const bare = { catalogId: r.catalogId, alias: r.alias, branch: r.branch }
+    if (usable(r.catalogId) && r.catalogId !== target) refRepos.push(bare)
+    else droppedRefs.push(bare)
+  }
+  return {
+    repoCatalogId: target,
+    branch: q.githubBranch,
+    title: q.title,
+    refRepos,
+    droppedRefs,
+    targetMissing: target == null,
+  }
 }
 
 export interface QuestionGroup {

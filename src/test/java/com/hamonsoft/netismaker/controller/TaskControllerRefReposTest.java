@@ -31,6 +31,7 @@ import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -73,33 +74,42 @@ class TaskControllerRefReposTest {
     @EnumSource(value = TaskStatus.class, names = {"INTERVIEWING", "INTERVIEW_INPUT", "INTERVIEW_REVIEW"})
     void detail_in_an_interview_stage_shows_the_running_session_refs(TaskStatus st) {
         task.setStatus(st);
-        when(interviewService.latestSessionRefRepos(5L))
-                .thenReturn(Optional.of(List.of(REF11.pinned(SHA, "2026-10-24T10:00+09:00"))));
+        when(interviewService.latestSessionForTask(5L)).thenReturn(Optional.of(
+                new InterviewService.LatestSession(42L, List.of(REF11.pinned(SHA, "2026-10-24T10:00+09:00")))));
 
         TaskResponse r = controller.get(5L, user);
 
         assertThat(r.refRepos()).extracting(InterviewResponse.RefRepoView::sha).containsExactly(SHA);
+        assertThat(r.interviewSessionId()).isEqualTo(42L);
         assertThat(r.envVars()).extracting(EnvVar::value).containsExactly("");   // 비관리자 가림은 그대로
+        // 최신 세션은 한 번만 읽는다 — id와 참조를 같은 조회에서
+        verify(interviewService, times(1)).latestSessionForTask(5L);
+        verify(interviewService, never()).latestSessionIdForTask(any());
     }
 
     @Test
     void detail_in_an_interview_stage_without_a_session_shows_task_refs() {
         task.setStatus(TaskStatus.INTERVIEWING);
-        when(interviewService.latestSessionRefRepos(5L)).thenReturn(Optional.empty());
+        when(interviewService.latestSessionForTask(5L)).thenReturn(Optional.empty());
 
-        assertThat(controller.get(5L, user).refRepos()).extracting(InterviewResponse.RefRepoView::catalogId)
-                .containsExactly(11L);
+        TaskResponse r = controller.get(5L, user);
+
+        assertThat(r.refRepos()).extracting(InterviewResponse.RefRepoView::catalogId).containsExactly(11L);
+        assertThat(r.interviewSessionId()).isNull();
     }
 
     @Test
-    void detail_outside_the_interview_stage_shows_task_refs_without_reading_sessions() {
+    void detail_outside_the_interview_stage_shows_task_refs_but_still_names_the_latest_session() {
         task.setStatus(TaskStatus.APPROVED);
+        when(interviewService.latestSessionForTask(5L)).thenReturn(Optional.of(
+                new InterviewService.LatestSession(42L, List.of(REF11.pinned(SHA, "2026-10-24T10:00+09:00")))));
 
         TaskResponse r = controller.get(5L, user);
 
         assertThat(r.refRepos()).hasSize(1);
-        assertThat(r.refRepos().get(0).sha()).isNull();
-        verify(interviewService, never()).latestSessionRefRepos(any());
+        assertThat(r.refRepos().get(0).sha()).isNull();   // 인터뷰 단계 밖에서는 세션 참조를 쓰지 않는다
+        assertThat(r.interviewSessionId()).isEqualTo(42L);
+        verify(interviewService, times(1)).latestSessionForTask(5L);
     }
 
     @Test
@@ -110,6 +120,6 @@ class TaskControllerRefReposTest {
 
         assertThat(r.refRepos()).extracting(InterviewResponse.RefRepoView::catalogId).containsExactly(11L);
         assertThat(r.refRepos().get(0).sha()).isNull();
-        verify(interviewService, never()).latestSessionRefRepos(any());
+        verify(interviewService, never()).latestSessionForTask(any());
     }
 }

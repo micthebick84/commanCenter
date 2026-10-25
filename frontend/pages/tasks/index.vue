@@ -394,41 +394,39 @@ async function openCreate() {
 // 질문 대화에서 넘어온 경우(`/tasks?fromQuestion={id}`, 스펙 2026-10-24 §7.2). 마운트 뒤에만 한다 — 토큰이 브라우저에만 있어
 // 서버 렌더는 질문을 읽을 수 없고, 창은 하이드레이션 뒤에 열려야 SSR 마크업과 어긋나지 않는다.
 // 질문을 읽어 창을 열고 대상·브랜치·참조·제목을 채운다. "작업 상세"는 비워 둔다(질문은 비교, 작업은 이식 — 대화 전문은 첨부로 간다).
-// 끝나면 성공·실패와 무관하게 주소에서 쿼리를 빼서 새로고침해도 다시 열리지 않게 한다.
+// 무엇보다 먼저(질문을 읽기 전에) 성공·실패와 무관하게 주소에서 쿼리를 빼서 새로고침해도 다시 열리지 않게 한다 — 읽고 난 뒤에 빼면
+// 그 사이 다른 화면으로 떠난 사용자를 /tasks로 끌고 온다(이 페이지의 useRoute는 떠난 뒤에도 /tasks를 가리켜 확인할 수 없다).
 async function prefillFromQuestion() {
   const raw = route.query?.fromQuestion // 쿼리 없는 라우트(일부 테스트 더블)도 있다
   if (raw == null) return
+  await navigateTo({ path: '/tasks', query: {} }, { replace: true })
+  const id = Number(Array.isArray(raw) ? raw[0] : raw)
+  if (!Number.isInteger(id) || id <= 0) return
+  let q: QuestionDetail
   try {
-    const id = Number(Array.isArray(raw) ? raw[0] : raw)
-    if (!Number.isInteger(id) || id <= 0) return
-    let q: QuestionDetail
-    try {
-      q = await useApi<QuestionDetail>(`/api/questions/${id}`)
-    } catch (e) {
-      $q.notify({
-        type: 'negative',
-        message: (e as { data?: { message?: string } })?.data?.message ?? '질문을 불러오지 못했습니다',
-      })
-      return
-    }
-    await openCreate()
-    const p = taskPrefillFromQuestion(q, repoCatalog.value)
-    draft.title = p.title
-    resetRefs(p.refRepos)
-    source.value = { id, title: q.title }
-    if (p.repoCatalogId != null) {
-      draft.repoCatalogId = p.repoCatalogId
-      onRepoSelected(p.repoCatalogId, p.branch) // 브랜치는 목록이 온 뒤 — 카탈로그 기본 브랜치보다 나중에 적용된다
-    }
-    if (p.targetMissing) {
-      $q.notify({ type: 'warning', message: '질문의 대상 레포를 카탈로그에서 찾을 수 없습니다 — 레포를 골라 주세요' })
-    }
-    if (p.droppedRefs.length > 0) {
-      const names = p.droppedRefs.map((r) => `${r.alias}(${r.branch})`).join(', ')
-      $q.notify({ type: 'warning', message: `카탈로그에 없는 참조는 뺐습니다: ${names}` })
-    }
-  } finally {
-    await navigateTo({ path: '/tasks', query: {} }, { replace: true })
+    q = await useApi<QuestionDetail>(`/api/questions/${id}`)
+  } catch (e) {
+    $q.notify({
+      type: 'negative',
+      message: (e as { data?: { message?: string } })?.data?.message ?? '질문을 불러오지 못했습니다',
+    })
+    return
+  }
+  await openCreate()
+  const p = taskPrefillFromQuestion(q, repoCatalog.value)
+  draft.title = p.title
+  resetRefs(p.refRepos)
+  source.value = { id, title: q.title }
+  if (p.repoCatalogId != null) {
+    draft.repoCatalogId = p.repoCatalogId
+    onRepoSelected(p.repoCatalogId, p.branch) // 브랜치는 목록이 온 뒤 — 카탈로그 기본 브랜치보다 나중에 적용된다
+  }
+  if (p.targetMissing) {
+    $q.notify({ type: 'warning', message: '질문의 대상 레포를 카탈로그에서 찾을 수 없습니다 — 레포를 골라 주세요' })
+  }
+  if (p.droppedRefs.length > 0) {
+    const names = p.droppedRefs.map((r) => `${r.alias}(${r.branch})`).join(', ')
+    $q.notify({ type: 'warning', message: `카탈로그에 없는 참조는 뺐습니다: ${names}` })
   }
 }
 onMounted(() => {

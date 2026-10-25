@@ -713,14 +713,19 @@ public class InterviewService {
     }
 
     /**
-     * task 상세가 인터뷰 단계일 때 보여 줄 참조 — 최신 세션의 참조 사본(고정 커밋·실패 사유 포함, 스펙 2026-10-24 §4.9).
-     * 세션이 없으면 empty, 세션 값이 null이면 [].
+     * task 상세가 열 세션(최신 1건)의 id와 참조 사본 — 상세 조회가 최신 세션을 한 번만 읽도록 둘을 함께 돌려준다.
+     * 참조는 인터뷰 단계일 때 보여 줄 값이다(고정 커밋·실패 사유 포함, 스펙 2026-10-24 §4.9). 세션이 없으면 empty,
+     * 세션 값이 null이면 [].
      */
     @Transactional(readOnly = true)
-    public Optional<List<RefRepo>> latestSessionRefRepos(Long taskId) {
+    public Optional<LatestSession> latestSessionForTask(Long taskId) {
         return sessionRepo.findTopByTaskIdOrderByCreatedAtDesc(taskId)
-                .map(s -> s.getRefRepos() == null ? List.of() : List.copyOf(s.getRefRepos()));
+                .map(s -> new LatestSession(s.getId(),
+                        s.getRefRepos() == null ? List.of() : List.copyOf(s.getRefRepos())));
     }
+
+    /** {@link #latestSessionForTask}의 결과 — 최신 세션 id와 그 참조 사본. */
+    public record LatestSession(Long id, List<RefRepo> refRepos) {}
 
     /**
      * task의 전체 세션 이력 (최신순, 경량 — turns/plan 미포함).

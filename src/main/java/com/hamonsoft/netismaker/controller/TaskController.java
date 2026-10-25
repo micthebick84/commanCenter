@@ -42,6 +42,7 @@ import java.nio.file.Path;
 import java.util.EnumSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 
 /**
@@ -127,13 +128,15 @@ public class TaskController {
         String userId = AuthContext.requireUserId(auth);
         boolean isAdmin = AuthContext.isAdmin(auth);
         Task t = taskService.getForView(id, userId, isAdmin);
+        // 최신 세션은 한 번만 읽는다 — 상세가 열 세션 id와, 인터뷰 단계면 보여 줄 그 세션의 참조
+        Optional<InterviewService.LatestSession> latest = interviewService.latestSessionForTask(id);
         TaskResponse r = TaskResponse.ofWithUsage(t, taskService.getAnalysis(id).orElse(null),
                 taskService.getDesign(id).orElse(null),
-                interviewService.latestSessionIdForTask(id).orElse(null),
+                latest.map(InterviewService.LatestSession::id).orElse(null),
                 taskService.getAttachments(id),
                 taskService.getStageUsage(id));
-        if (INTERVIEW_STAGE.contains(t.getStatus())) {
-            r = interviewService.latestSessionRefRepos(id).map(r::withRefRepos).orElse(r);
+        if (INTERVIEW_STAGE.contains(t.getStatus()) && latest.isPresent()) {
+            r = r.withRefRepos(latest.get().refRepos());
         }
         return forViewer(r, isAdmin);
     }

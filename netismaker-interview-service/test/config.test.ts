@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { loadConfig } from '../src/config.js';
+import { MAX_TIMER_MS, loadConfig } from '../src/config.js';
 
 const base = {
   API_BASE_URL: 'http://localhost:8090',
@@ -75,6 +75,21 @@ describe('loadConfig', () => {
     }
     expect(warnSpy).toHaveBeenCalledTimes(3);
     expect(String(warnSpy.mock.calls[0]![0])).toContain('INTERVIEW_REF_TIMEOUT_MS');
+    warnSpy.mockRestore();
+  });
+
+  it('caps INTERVIEW_TURN_TIMEOUT_MS and INTERVIEW_REF_TIMEOUT_MS at the timer limit 2147483647 with a warning', () => {
+    // setTimeout은 2^31-1ms보다 긴 지연을 1ms로 바꾼다 — 그대로 두면 모든 턴·참조가 바로 끊긴다
+    expect(MAX_TIMER_MS).toBe(2_147_483_647);
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    expect(loadConfig({ ...base, INTERVIEW_TURN_TIMEOUT_MS: '3000000000' }).turnTimeoutMs).toBe(2_147_483_647);
+    expect(loadConfig({ ...base, INTERVIEW_REF_TIMEOUT_MS: '1e12' }).refTimeoutMs).toBe(2_147_483_647);
+    expect(warnSpy).toHaveBeenCalledTimes(2);
+    expect(String(warnSpy.mock.calls[1]![0])).toContain('INTERVIEW_REF_TIMEOUT_MS');
+    // 한도 자체와 그 아래 값은 그대로(경고 없음)
+    expect(loadConfig({ ...base, INTERVIEW_REF_TIMEOUT_MS: '2147483647' }).refTimeoutMs).toBe(2_147_483_647);
+    expect(loadConfig({ ...base, INTERVIEW_TURN_TIMEOUT_MS: '2147483646' }).turnTimeoutMs).toBe(2_147_483_646);
+    expect(warnSpy).toHaveBeenCalledTimes(2);
     warnSpy.mockRestore();
   });
 

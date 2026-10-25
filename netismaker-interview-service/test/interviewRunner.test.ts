@@ -1500,7 +1500,7 @@ describe('InterviewRunner kind=QUESTION (스펙 §6 — plan 경로 미진입, Q
         }
       });
 
-      it('per-reference limit comes from deps.refTimeoutMs; NaN/0 fall back to 300_000 (QUESTION too)', async () => {
+      it('per-reference limit comes from deps.refTimeoutMs; NaN/0 fall back to 300_000, above the timer limit is capped (QUESTION too)', async () => {
         const cases: Array<[Record<string, unknown>, number]> = [
           [{ refTimeoutMs: 120_000 }, 120_000],
           [{}, 300_000],
@@ -1508,6 +1508,9 @@ describe('InterviewRunner kind=QUESTION (스펙 §6 — plan 경로 미진입, Q
           [{ refTimeoutMs: 0 }, 300_000],
           [{ refTimeoutMs: -1 }, 300_000],
           [{ refTimeoutMs: Number.POSITIVE_INFINITY }, 300_000],
+          // setTimeout은 2^31-1ms보다 긴 지연을 1ms로 바꾼다 — 그대로 넘기면 모든 참조가 바로 끊긴다
+          [{ refTimeoutMs: 3_000_000_000 }, 2_147_483_647],
+          [{ refTimeoutMs: 2_147_483_647 }, 2_147_483_647],
         ];
         for (const claim of [interviewClaimWithRefs, questionClaimWithRefs]) {
           for (const [extra, expected] of cases) {
@@ -1933,6 +1936,29 @@ describe('InterviewRunner wall-clock timeout', () => {
 
     expect(client.postQuestion).toHaveBeenCalled();
     expect(client.fail).not.toHaveBeenCalled();
+  });
+
+  it('turnTimeoutMs가 타이머 한도(2^31-1ms)를 넘으면 한도로 줄여 턴이 바로 abort되지 않는다', async () => {
+    // 그대로 setTimeout에 넣으면 Node가 1ms로 바꿔 모든 턴이 즉시 abort+FAILED된다
+    const timeoutSpy = vi.spyOn(globalThis, 'setTimeout');
+    try {
+      const client = makeClientWithHeartbeat();
+      const fakeQuery = vi.fn(() => questionStream());
+      const runner = new InterviewRunner(client as never, fakeQuery as never, {
+        ...deps,
+        turnTimeoutMs: 3_000_000_000,
+      } as never);
+
+      await runner.run(freshClaim);
+
+      expect(client.postQuestion).toHaveBeenCalled();
+      expect(client.fail).not.toHaveBeenCalled();
+      const delays = timeoutSpy.mock.calls.map((c) => c[1]);
+      expect(delays).toContain(2_147_483_647);
+      expect(delays.some((d) => typeof d === 'number' && d > 2_147_483_647)).toBe(false);
+    } finally {
+      timeoutSpy.mockRestore();
+    }
   });
 
   it('정상 완료 턴은 타임아웃과 무관하게 기존 계약 그대로 동작한다', async () => {

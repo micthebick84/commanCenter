@@ -81,4 +81,13 @@ class GitRemotesTest {
         assertThat(GitRemotes.maskAndCut("x".repeat(499) + "😀tail", 500)).isEqualTo("x".repeat(499));
         assertThat(GitRemotes.maskAndCut("x".repeat(498) + "😀tail", 500)).isEqualTo("x".repeat(498) + "😀");
     }
+
+    @Test
+    void maskAndCut_treats_a_negative_or_zero_max_as_zero_instead_of_throwing() {
+        assertThat(GitRemotes.maskAndCut("https://oauth2:glpat-SECRET@gitlab.hamon.vip/g/p.git", -1)).isEmpty();
+        assertThat(GitRemotes.maskAndCut("abc", Integer.MIN_VALUE)).isEmpty();
+        assertThat(GitRemotes.maskAndCut("abc", 0)).isEmpty();
+        assertThat(GitRemotes.maskAndCut("", -5)).isEmpty();
+        assertThat(GitRemotes.maskAndCut(null, -1)).isNull();
+    }
 }

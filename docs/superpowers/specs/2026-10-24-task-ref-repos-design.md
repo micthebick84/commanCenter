@@ -167,6 +167,7 @@ ALTER TABLE com.task ADD COLUMN source_question_id BIGINT;
 - `claimRefRepos`의 `kind === 'QUESTION'` 조건을 뺀다(보낼지는 API `refsFor`가 정함). `types.ts`의 "QUESTION만" 주석도 고친다.
 - `runTurn`에서 `ensureRepo` → `throwIfAborted` 다음, DB MCP 만들기 전에: `ensureRefRepos` → `throwIfAborted` → `logRefFailures`. 질문 분기(`runQuestionTurn`)와 공통 도우미로 묶는다. 실패한 참조는 턴을 실패시키지 않는다. 준비기 자체가 예외를 던져도 모든 참조를 못 받은 것(⚠, 사유는 가린 예외 메시지 — 비면 `참조 repo를 받지 못했습니다`)으로 돌리고 턴을 계속한다 — 질문 세션도 같다(1단계에서는 턴 실패였다). 턴이 이미 중단됐으면(턴 상한) 그대로 중단한다.
 - **참조 하나당 받기 시간 상한 5분**(설정값, 기본 300000ms). 넘으면 그 참조의 git을 멈추고 `.part`를 지운 뒤 실패로 돌린다(사유 `참조 repo 받기 시간 초과(5분)`). 턴 전체 상한(30분)의 중단 신호는 지금처럼 함께 따른다. 질문 세션도 같은 도우미라 함께 적용된다 — 참조 문제로 턴이 실패하지 않게 하는 §1.2를 지키기 위해서다(1단계는 "참조 받는 중 턴 타임아웃 = 턴 실패"를 받아들였으나, 작업 인터뷰는 실패하면 승인대기로 돌아가 문답을 잃는다).
+- Windows에서는 git을 멈출 때 `taskkill /PID <pid> /T /F`로 git 프로세스 트리째 끝낸다(구현 중 결정, 최종 리뷰 F1) — `git`은 `cmd\git.exe` 런처라 Node의 중단은 런처만 끝내고, 실제 git·git-remote-http가 뒤에서 `.part`에 계속 받았다. 대상 `ensureRepo`와 턴 상한의 중단도 같은 git 호출을 쓴다.
 - INTERVIEW는 Read/Grep/Glob이 사전 승인이라 `refRoots`·게이트·`sessionOptions`는 바꾸지 않는다(`permissions.test.ts`·`sessionOptions.test.ts`의 "INTERVIEW 그대로" 테스트 유지). 쓰기는 지금처럼 대상 `docs/superpowers/**`만.
 
 ### 5.2 프롬프트
@@ -225,7 +226,7 @@ ALTER TABLE com.task ADD COLUMN source_question_id BIGINT;
   2. 없으면 `git fetch --depth=1 {인증 URL} {40자 sha}` — GitHub과 GitLab 13.2+(Gitaly가 `uploadpack.allowAnySHA1InWant`를 켬)는 허용한다. 사내 GitLab 버전은 미확인(§10 라이브 확인 1)
   3. 거부되면 대안: 그 브랜치를 **참조 전용 이름공간**(예: `refs/netis-refs/{브랜치}`)으로 깊이를 늘려 가며 받는다(`--depth=50` → `--depth=500`, 그 이상은 하지 않음). 매번 1로 다시 확인하고, 끝까지 없으면 실패. 브랜치 받기 자체가 실패하면(권한·네트워크·없는 브랜치) 더 깊이 받아도 소용없으므로 거기서 그 git 오류로 실패한다(구현 중 결정 — 일시적 실패는 관리자 재시도로). `refs/remotes/origin/*`·캐시 HEAD는 건드리지 않고, 깊이 제한 없는 fetch는 하지 않는다(공유 캐시에 수 GB를 받으며 락을 오래 쥐면 다른 작업이 60초 락 대기로 실패한다)
   4. 같은 폴더가 있으면 지우고 `git worktree add --force --detach {폴더} {sha}`
-  5. 실수 push 막기: 그 worktree에만 `remote.origin.pushurl`을 쓸 수 없는 값으로 둔다(worktree 전용 설정 — 공유 캐시에 `extensions.worktreeConfig`를 켠다. 다른 worktree·대상 작업에는 영향 없음). detached HEAD라 그냥 `git push`도 실패한다
+  5. 실수 push 막기: 그 worktree에만 `remote.origin.pushurl`을 쓸 수 없는 값으로 둔다(worktree 전용 설정 — 공유 캐시에 `extensions.worktreeConfig`를 켠다. 다른 worktree·대상 작업에는 영향 없음). `git config --worktree`라 워커 PC의 git은 2.20 이상이어야 한다(더 낮으면 준비 실패). detached HEAD라 그냥 `git push`도 실패한다
 - **`ensureFresh`는 참조에 쓰지 않는다** — 공유 캐시의 HEAD와 `origin/<브랜치>`를 옮겨, 같은 repo를 대상으로 쓰는 다른 작업의 기준 커밋을 흔든다.
 - **락은 한 번에 하나만** 잡는다(참조1 → 참조2 → 대상 fetch → 대상 worktree 순차, 중첩 금지 — 순서는 §6.1). 같은 키를 중첩하면 60초 뒤 "repo lock timeout"이 되고, 다른 키를 중첩하면 프로세스 사이 교착이 생길 수 있다.
 - **git은 자격증명 도우미·askpass·프롬프트 없이**: `-c credential.helper= -c core.askPass=`, env `GIT_TERMINAL_PROMPT=0`, `GCM_INTERACTIVE=never`, `GIT_ASKPASS`·`SSH_ASKPASS` 제거(지금 `ProcessRunner`는 env를 지우지 못하므로 넓힌다). 참조 git 호출에만 적용한다.
@@ -234,7 +235,7 @@ ALTER TABLE com.task ADD COLUMN source_question_id BIGINT;
   - `고정 커밋 정보가 없거나 올바르지 않습니다` — sha가 없거나 위 모양이 아님
   - `참조 브랜치 정보가 없습니다` — 브랜치가 비었음
   - `고정 커밋 {sha7}을(를) 찾지 못했습니다 — 브랜치 {브랜치}의 최근 500개 커밋 안에 없음` — 3의 대안까지 받았는데 없음
-  - 그 밖(clone·fetch·worktree add 실패)은 git 출력의 마지막 `fatal:`/`error:` 줄
+  - 그 밖(clone·fetch·worktree add 실패)은 git 출력의 마지막 `fatal:`/`error:` 줄(없으면 §6.1 규칙)
 
 ### 6.3 시간
 

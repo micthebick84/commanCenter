@@ -1227,20 +1227,23 @@ class InterviewServiceTest {
     }
 
     @Test
-    void latestSessionRefRepos_copies_the_latest_session_refs_and_treats_null_as_empty() {
+    void latestSessionForTask_reads_the_latest_session_once_for_its_id_and_a_copy_of_its_refs() {
         InterviewSession s = session(1L, InterviewStatus.RUNNING);
         RefRepo pinned = ref(11L, "main", SHA_A, "2026-10-24T10:00+09:00", null);
         RefRepo failed = ref(12L, "main", null, null, "권한 없음");
         s.setRefRepos(new ArrayList<>(List.of(pinned, failed)));
         when(sessionRepo.findTopByTaskIdOrderByCreatedAtDesc(5L)).thenReturn(Optional.of(s));
 
-        List<RefRepo> refs = service.latestSessionRefRepos(5L).orElseThrow();
+        InterviewService.LatestSession latest = service.latestSessionForTask(5L).orElseThrow();
         s.getRefRepos().clear();
 
-        assertThat(refs).containsExactly(pinned, failed);   // 세션 목록과 따로인 사본
+        assertThat(latest.id()).isEqualTo(s.getId());
+        assertThat(latest.refRepos()).containsExactly(pinned, failed);   // 세션 목록과 따로인 사본
+        verify(sessionRepo, times(1)).findTopByTaskIdOrderByCreatedAtDesc(5L);   // 한 번만 읽는다
         s.setRefRepos(null);
-        assertThat(service.latestSessionRefRepos(5L)).contains(List.of());
-        assertThat(service.latestSessionRefRepos(6L)).isEmpty();   // 세션 없음
+        assertThat(service.latestSessionForTask(5L)).get()
+                .extracting(InterviewService.LatestSession::refRepos).isEqualTo(List.of());
+        assertThat(service.latestSessionForTask(6L)).isEmpty();   // 세션 없음
     }
 
     @Test

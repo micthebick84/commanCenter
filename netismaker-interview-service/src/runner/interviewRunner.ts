@@ -21,6 +21,7 @@ import { maskSecrets, type GitTokens } from '../sdk/gitRemote.js';
 import { buildWritingPlansSplice, buildPlanReformatSplice, detectHandoff, detectPlanIntent } from './skillDispatch.js';
 import { HeartbeatTicker } from './heartbeat.js';
 import { createDbMcp, type PreparedDbMcp } from '../sdk/dbMcp.js';
+import { MAX_TIMER_MS } from '../config.js';
 
 export interface RunnerDeps {
   superpowersPluginPath: string;
@@ -364,7 +365,10 @@ async function* questionPromptFor(claim: InterviewClaimResponse, prefix = ''): A
 export class InterviewRunner {
   private readonly ensureRepo: (input: RepoInput) => Promise<void>;
   private readonly ensureRefRepos: NonNullable<RunnerDeps['ensureRefRepos']>;
-  /** 참조 하나당 받기 상한(ms). NaN·0·음수·무한대는 기본 5분 — NaN이 타이머에 들어가면 1ms로 모든 참조가 끊긴다(turnTimeoutMs와 같은 방어). */
+  /**
+   * 참조 하나당 받기 상한(ms). NaN·0·음수·무한대는 기본 5분 — NaN이 타이머에 들어가면 1ms로 모든 참조가 끊긴다(turnTimeoutMs와 같은 방어).
+   * 타이머 한도(`MAX_TIMER_MS`)를 넘는 값은 그 한도로 줄인다 — 넘으면 Node가 1ms로 바꿔 같은 일이 난다.
+   */
   private readonly refTimeoutMs: number;
   private readonly harvestPlanFiles: (workDir: string) => Promise<HarvestResult>;
   /** 구독 한도 보고기 — 서비스 수명 동안 1개(404 비활성 상태가 세션을 넘어 유지된다). */
@@ -381,7 +385,9 @@ export class InterviewRunner {
     this.ensureRefRepos = deps.ensureRefRepos ?? defaultEnsureRefRepos;
     const refTimeout = deps.refTimeoutMs;
     this.refTimeoutMs =
-      typeof refTimeout === 'number' && Number.isFinite(refTimeout) && refTimeout > 0 ? refTimeout : DEFAULT_REF_TIMEOUT_MS;
+      typeof refTimeout === 'number' && Number.isFinite(refTimeout) && refTimeout > 0
+        ? Math.min(refTimeout, MAX_TIMER_MS)
+        : DEFAULT_REF_TIMEOUT_MS;
     this.harvestPlanFiles = deps.harvestPlanFiles ?? harvestSessionPlanFiles;
     this.rateLimits = new RateLimitReporter(client);
   }
@@ -400,11 +406,11 @@ export class InterviewRunner {
     // HeartbeatTicker는 계속 돌므로 서버 스윕만으로는 이 워커 슬롯이 풀리지 않는다(ClaimLoop 자리 1개).
     // 턴 전체를 하나의 데드라인으로 묶고, 초과 시 SDK abort + FAILED 보고로 슬롯을 회수한다.
     // ??는 NaN/0을 통과시킨다 — NaN은 setTimeout에서 1ms로 클램프돼 전 턴 즉시 abort가 되므로
-    // 여기서도 방어한다 (config posNum과 이중 방어).
+    // 여기서도 방어한다 (config posNum과 이중 방어). 타이머 한도를 넘는 값도 1ms가 되므로 한도로 줄인다.
     const rawTimeout = this.deps.turnTimeoutMs;
     const timeoutMs =
       typeof rawTimeout === 'number' && Number.isFinite(rawTimeout) && rawTimeout > 0
-        ? rawTimeout
+        ? Math.min(rawTimeout, MAX_TIMER_MS)
         : 1_800_000;
     const controller = new AbortController();
     let timer: ReturnType<typeof setTimeout> | null = null;
@@ -511,7 +517,8 @@ export class InterviewRunner {
       const forceFinish = assistantTurns >= this.deps.forceFinishTurns;
 
       // CLONE: ensure the checkout exists at workDir before the (fresh OR resume) turn.
-      // signal 전파: 타임아웃 abort가 git 자식 프로세스까지 종료해 좀비를 남기지 않는다.
+      // signal 전파: 타임아웃 abort가 git 자식 프로세스까지 종료한다 — Windows는 런처(cmd\git.exe) 밑의 실제 git·git-remote-http까지
+      // `taskkill /T /F`로 끝낸다(repoPrepare `execFileWithTreeKill`). 런처만 끝내면 실제 clone이 뒤에서 계속 받는다.
       // claim에 참조 repo가 있으면(질문·작업 인터뷰) 대상 뒤에 ` + 참조 n`을 붙인다(받는 일은 아래 prepareRefs — 스펙 2026-10-22 §5.2).
       const refCount = claimRefRepos(claim).length;
       poster.push({

@@ -139,6 +139,63 @@ class WorktreeServiceRefTest {
         assertThat(keys).containsExactly(refKey);
     }
 
+    /**
+     * 기준선(git status)은 레포 락을 놓은 뒤에 잡는다 — 큰 옛 레포의 첫 status가 공유 락을 붙들면 같은 레포를 쓰는 다른 워커 프로세스가
+     * 60초 락 대기로 실패한다. 락을 놓은 직후(기준선 전)에 만든 파일이 기준선에 들어 있으면 기준선이 락 밖에서 잡힌 것이다.
+     */
+    @Test
+    void takes_the_baseline_after_releasing_the_repo_lock() throws Exception {
+        Path marker = worktrees.refWorktreeDir(7, 12).resolve("after-lock.txt");
+        AtomicInteger depth = new AtomicInteger();
+        GitRepoCache markAfterLock = new GitRepoCache(props) {
+            @Override
+            public <T> T withRepoLock(String repoKey, RepoOp<T> op) throws IOException, InterruptedException {
+                depth.incrementAndGet();
+                T result;
+                try {
+                    result = super.withRepoLock(repoKey, op);
+                } finally {
+                    depth.decrementAndGet();
+                }
+                if (Files.isDirectory(marker.getParent())) Files.writeString(marker, "x");   // 락을 놓은 뒤, 기준선 전
+                return result;
+            }
+        };
+
+        WorktreeService.RefWorktree rw = new WorktreeService(props, markAfterLock).createRefWorktree(7, ref);
+
+        assertThat(rw.baseline()).containsExactly("?? after-lock.txt");
+        assertThat(depth.get()).isZero();
+        assertThat(worktrees.refChangeWarning(rw)).as("기준선에 있던 파일은 변경으로 세지 않는다").isEmpty();
+    }
+
+    /** 기준선을 못 잡으면 그 참조를 평소 정리 경로로 지우고 같은 예외를 던진다 — 준비 실패 경로(WorkerMainLoop)는 그대로. */
+    @Test
+    void a_failed_baseline_discards_the_ref_and_rethrows() throws Exception {
+        Path dir = worktrees.refWorktreeDir(7, 12);
+        GitRepoCache breakAfterLock = new GitRepoCache(props) {
+            @Override
+            public <T> T withRepoLock(String repoKey, RepoOp<T> op) throws IOException, InterruptedException {
+                T result = super.withRepoLock(repoKey, op);
+                Path gitFile = dir.resolve(".git");
+                // 만든 직후에만 — 정리(discardRefWorktree)도 같은 락을 다시 잡는다
+                if (Files.isRegularFile(gitFile) && !Files.readString(gitFile).contains("missing-meta")) {
+                    Files.writeString(gitFile, "gitdir: " + tmp.resolve("missing-meta").toString().replace('\\', '/'));
+                }
+                return result;
+            }
+        };
+        WorktreeService broken = new WorktreeService(props, breakAfterLock);
+
+        assertThatThrownBy(() -> broken.createRefWorktree(7, ref)).isInstanceOf(IOException.class);
+
+        assertThat(dir).doesNotExist();
+        assertThat(tmp.resolve("worktrees").resolve("_refs").resolve("task-7")).doesNotExist();
+        assertThat(gitOut(cacheDir.toFile(), "worktree", "list", "--porcelain")).doesNotContain("task-7");
+        // 같은 참조를 다시 만들 수 있다
+        assertThat(gitOut(worktrees.createRefWorktree(7, ref).dir(), "rev-parse", "HEAD")).isEqualTo(sha);
+    }
+
     @Test
     void recreates_over_a_leftover_folder() throws Exception {
         Path dir = worktrees.refWorktreeDir(7, 12);

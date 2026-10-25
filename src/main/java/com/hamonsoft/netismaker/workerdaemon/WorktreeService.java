@@ -347,7 +347,10 @@ public class WorktreeService {
 
     /**
      * 참조 worktree를 고정 커밋에 detached로 만든다(스펙 2026-10-24 §6.2). 그 참조의 레포 락을 **한 번만** 잡고 그 안에서
-     * 고정 커밋 준비 → 남은 폴더 정리 → {@code worktree add --force --detach} → 이 worktree에만 push URL 무효화 → 기준선.
+     * 고정 커밋 준비 → 남은 폴더 정리 → {@code worktree add --force --detach} → 이 worktree에만 push URL 무효화. 기준선은 락을
+     * 놓은 뒤에 잡는다 — 그 worktree 전용 index만 건드리고({@link #refChangeWarning}도 락 없이 같은 명령을 쓴다), 큰 옛 레포의 첫
+     * status는 수십 초가 걸려 그동안 같은 레포를 쓰는 다른 워커 프로세스가 60초 락 대기로 실패할 수 있어서다. 기준선을 못 잡으면 그
+     * 참조를 평소 정리 경로({@link #discardRefWorktree})로 지우고 같은 예외를 던진다(준비 실패 경로는 그대로).
      * sha·브랜치 모양은 락 전에 본다. 대상 {@code ensureFresh}는 쓰지 않는다(공유 캐시의 HEAD·origin/*를 옮기지 않게).
      * git은 전부 무프롬프트 참조 git(체크아웃 필터의 자격증명 요청도 묻지 않게). 실패는 가린 출력의 IOException.
      */
@@ -357,7 +360,7 @@ public class WorktreeService {
         RepoRef repo = repoRefOf(ref);
         String refKey = GitRemotes.localKey(repo);
         Path dir = refWorktreeDir(taskId, ref.catalogId());
-        return repos.withRepoLock(refKey, () -> {
+        repos.withRepoLock(refKey, () -> {
             File cacheDir = repos.prepareRefCommitUnderLock(repo, ref.branch(), sha);
             Files.createDirectories(dir.getParent());
             if (Files.exists(dir, LinkOption.NOFOLLOW_LINKS)) {
@@ -373,11 +376,18 @@ public class WorktreeService {
             GitRepoCache.requireRefGit(dir.toFile(),
                     GitRepoCache.refGit("config", "--worktree", "remote.origin.pushurl", REF_PUSH_URL_BLOCKED),
                     LOCAL_GIT_TIMEOUT_SECONDS);
-            List<String> baseline = refStatus(dir.toFile());
-            log.info("참조 worktree 생성: task={} {}({})@{} dir={}", taskId, ref.alias(), ref.branch(),
-                    sha.substring(0, 7), dir);
-            return new RefWorktree(ref.catalogId(), ref.alias(), ref.branch(), sha, refKey, dir.toFile(), baseline);
+            return null;
         });
+        List<String> baseline;
+        try {
+            baseline = refStatus(dir.toFile());
+        } catch (IOException | InterruptedException | RuntimeException e) {
+            discardRefWorktree(taskId, ref);
+            throw e;
+        }
+        log.info("참조 worktree 생성: task={} {}({})@{} dir={}", taskId, ref.alias(), ref.branch(),
+                sha.substring(0, 7), dir);
+        return new RefWorktree(ref.catalogId(), ref.alias(), ref.branch(), sha, refKey, dir.toFile(), baseline);
     }
 
     /**

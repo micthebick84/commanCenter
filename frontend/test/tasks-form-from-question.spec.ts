@@ -199,6 +199,25 @@ describe('작업 등록 창 — 질문 대화에서 이어서 (스펙 2026-10-24
     expect(notifySpy).not.toHaveBeenCalled()
   })
 
+  it('질문을 읽는 사이 다른 화면으로 떠나도 /tasks로 끌고 오지 않는다 — 쿼리는 질문을 읽기 전에 뺀다', async () => {
+    let answerQuestion: (v: unknown) => void = () => {}
+    const w = await mountPage(
+      { fromQuestion: '3' },
+      { question: () => new Promise((resolve) => (answerQuestion = resolve)) },
+    )
+    // 질문 응답이 오기 전에 이미 쿼리를 뺐다(한 번)
+    expect(apiCalls('/api/questions/3')).toHaveLength(1)
+    expect(navigateToMock).toHaveBeenCalledTimes(1)
+    expect(navigateToMock).toHaveBeenCalledWith({ path: '/tasks', query: {} }, { replace: true })
+
+    // 사용자가 다른 화면으로 떠났다(페이지가 내려간다) — 그 뒤에 질문 응답이 와도 다시 이동하지 않는다
+    w.unmount()
+    current = null
+    answerQuestion({ ...QUESTION })
+    await flushPromises()
+    expect(navigateToMock).toHaveBeenCalledTimes(1)
+  })
+
   it('브랜치는 목록이 온 뒤 질문 브랜치로 — 카탈로그 기본(main)이 덮지 않는다', async () => {
     let answerBranches: (v: unknown) => void = () => {}
     const w = await mountPage(

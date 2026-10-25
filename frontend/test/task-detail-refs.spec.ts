@@ -266,7 +266,7 @@ describe('pages/tasks/[id] — 참조 repo (작업 스펙 2026-10-24 §7.4)', ()
     w.unmount()
   })
 
-  it('초안은 세션마다 한 번 — 폴링(refresh)에도 유지, interviewSessionId가 바뀌면 다시 시드', async () => {
+  it('보내지 않은 초안 변경은 폴링(refresh)에도 유지, interviewSessionId가 바뀌면 다시 시드', async () => {
     authStub.isAdmin = true
     routeApi(interviewing({ refRepos: [PINNED, PENDING] }))
     const w = await mountPage()
@@ -290,6 +290,83 @@ describe('pages/tasks/[id] — 참조 repo (작업 스펙 2026-10-24 §7.4)', ()
     await answer(w, '새 세션 첫 답변')
     expect(answerCalls(100)).toHaveLength(1)
     expect(answerCalls(100)[0]![1].body).not.toHaveProperty('refRepos')
+    w.unmount()
+  })
+
+  // 같은 세션에서 다른 화면(휴대폰·다른 탭·다른 관리자)이 참조를 바꿨을 때 — 이 화면의 초안이 낡은 집합으로 남으면 다음 답변이 그 변경을 되돌린다
+  it('보내지 않은 변경이 없으면 같은 세션의 폴링에서 서버 집합을 따라간다 — 다음 답변이 다른 화면의 변경을 되돌리지 않는다', async () => {
+    authStub.isAdmin = true
+    routeApi(interviewing({ refRepos: [PINNED, PENDING] }))
+    const w = await mountPage()
+    expect(draftIds(w)).toEqual([2, 3])
+
+    // 다른 화면에서 공통 UI를 뺐다 — 이 화면은 초안을 건드리지 않았으므로 서버 집합을 따른다
+    await poll(interviewing({ refRepos: [PINNED] }))
+    expect(draftIds(w)).toEqual([2])
+    await answer(w, '옛앱만 보면 됩니다')
+    expect(answerCalls()).toHaveLength(1)
+    expect(answerCalls()[0]![1].body).not.toHaveProperty('refRepos') // 공통 UI를 되살리지 않는다
+
+    // 다른 화면에서 인증 서버를 더했다 — 더한 것도 따라간다
+    await poll(interviewing({ refRepos: [PINNED, FAILED] }))
+    expect(draftIds(w)).toEqual([2, 5])
+    w.unmount()
+  })
+
+  it('보내지 않은 변경이 있으면 폴링이 서버 집합을 바꿔도 초안을 두고, 보낸 변경이 반영된 뒤로는 다시 서버를 따라간다', async () => {
+    authStub.isAdmin = true
+    routeApi(interviewing({ refRepos: [PINNED, PENDING] }))
+    const w = await mountPage()
+    await toggleRefMenu(w)
+    await removeInMenu(0) // 옛앱 빼기 — 아직 보내지 않았다
+    await toggleRefMenu(w)
+    expect(draftIds(w)).toEqual([3])
+
+    // 다른 화면에서 인증 서버를 더했다 — 보내지 않은 변경을 지우지 않는다
+    await poll(interviewing({ refRepos: [PINNED, PENDING, FAILED] }))
+    expect(draftIds(w)).toEqual([3])
+    await answer(w, '공통 UI만')
+    expect(answerCalls()[0]![1].body.refRepos).toEqual([{ repoCatalogId: 3, branch: 'main' }])
+
+    // 보낸 변경이 서버에 반영됐다(초안 = 서버) — 맞춘 기준을 옮기므로, 그 뒤 다른 화면의 변경은 다시 따라간다
+    await poll(interviewing({ refRepos: [PENDING] }))
+    expect(draftIds(w)).toEqual([3])
+    await poll(interviewing({ refRepos: [PENDING, FAILED] }))
+    expect(draftIds(w)).toEqual([3, 5])
+    w.unmount()
+  })
+
+  it('패널 상태가 입력대기·계획 완료로 바뀌면 작업을 바로 다시 읽는다 — 계획 턴이 고정한 참조가 확정 화면에 바로 고정으로 보인다', async () => {
+    authStub.isAdmin = true
+    routeApi(interviewing({ refRepos: [PINNED, PENDING] }))
+    const w = await mountPage()
+    const taskReads = () => useApiMock.mock.calls.filter((c) => c[0] === '/api/tasks/42').length
+    expect(taskReads()).toBe(1) // 처음 연결(스냅샷 = 입력대기)에는 다시 읽지 않는다
+    const es = FakeEventSource.last()
+
+    es.emit('status', 'RUNNING')
+    await flushPromises()
+    expect(taskReads()).toBe(1)
+    es.emit('question', { seq: 2, content: '다음 질문' }) // → 입력대기
+    await flushPromises()
+    expect(taskReads()).toBe(2)
+
+    // 계획 턴: 서버는 계획 보고와 같은 요청으로 공통 UI를 고정했다 — 5초 폴링은 아직 오지 않았다
+    current = interviewing({
+      status: 'INTERVIEW_REVIEW',
+      statusLabel: '플랜승인대기',
+      refRepos: [PINNED, { ...PENDING, sha: NEW_SHA, fetchedAt: '2026-10-24T02:00:00Z' }],
+    })
+    es.emit('status', 'RUNNING')
+    await flushPromises()
+    es.emit('plan_ready', { designMarkdown: 'd', planMarkdown: 'p', planJson: JSON.stringify([]) })
+    await flushPromises()
+
+    expect(taskReads()).toBe(3)
+    const box = w.find('[data-test="confirm-refs"]')
+    expect(box.exists()).toBe(true)
+    expect(box.findAll('[data-test="confirm-ref-dropped"]')).toHaveLength(0) // "인터뷰에서 받지 못해 …"가 잠깐도 보이지 않는다
+    expect(box.findAll('[data-test="ref-chip"]').map((c) => c.attributes('data-state'))).toEqual(['pinned', 'pinned'])
     w.unmount()
   })
 
@@ -447,6 +524,28 @@ describe('pages/tasks/[id] — 참조 repo (작업 스펙 2026-10-24 §7.4)', ()
       await w.find('[data-test="section-info"] .q-item').trigger('click')
       await flushPromises()
       expect(w.find('[data-test="info-refs"]').exists()).toBe(true)
+      w.unmount()
+    })
+
+    it('모바일 인터뷰 패널도 입력대기·계획 완료로 바뀌면 작업을 바로 다시 읽는다', async () => {
+      authStub.isAdmin = true
+      routeApi(interviewing())
+      await setViewportWidth(390)
+      const w = await mountPage()
+      expect(w.find('[data-test="mobile-interview-refs"]').exists()).toBe(true) // 모바일 인터뷰 카드의 패널이다
+      const taskReads = () => useApiMock.mock.calls.filter((c) => c[0] === '/api/tasks/42').length
+      expect(taskReads()).toBe(1)
+      const es = FakeEventSource.last()
+      es.emit('status', 'RUNNING')
+      await flushPromises()
+      es.emit('question', { seq: 2, content: '다음 질문' })
+      await flushPromises()
+      expect(taskReads()).toBe(2)
+      es.emit('status', 'RUNNING')
+      await flushPromises()
+      es.emit('plan_ready', { designMarkdown: 'd', planMarkdown: 'p', planJson: JSON.stringify([]) })
+      await flushPromises()
+      expect(taskReads()).toBe(3)
       w.unmount()
     })
 

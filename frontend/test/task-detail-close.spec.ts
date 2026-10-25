@@ -456,4 +456,53 @@ describe('pages/tasks/[id] — 작업 종료 (스펙 2026-10-13 §6)', () => {
       await setViewportWidth(1024)
     }
   })
+
+  describe('관리자의 배포중단됨 작업 종료 요청 (주 행동은 재배포 그대로)', () => {
+    const lost = { ...baseTask, status: 'DEPLOY_LOST', statusLabel: '배포중단됨', requesterId: 'admin', deployment }
+
+    async function confirmAndExpectPost() {
+      await flushPromises()
+      expect(document.body.textContent).toContain('배포 결과를 확인했나요?')
+      ;(document.body.querySelector('[data-test="confirm-dialog-ok"]') as HTMLElement).click()
+      await flushPromises()
+      expect(useApiMock).toHaveBeenCalledWith('/api/tasks/42/close-request', { method: 'POST', body: undefined })
+    }
+
+    it('데스크톱: 진행 카드에 보조 버튼 "종료 요청"이 있고 확인 뒤 close-request를 POST한다', async () => {
+      authStub.isAdmin = true
+      setMe('admin')
+      const w = await mountWith(lost)
+      expect(w.find('[data-test="next-action-primary"]').text()).toContain('재배포')
+      useApiMock.mockClear()
+      await w.find('[data-test="close-request-secondary"]').trigger('click')
+      await confirmAndExpectPost()
+      w.unmount()
+    })
+
+    it('모바일: 하단 더 보기 메뉴에 "종료 요청"이 있다', async () => {
+      authStub.isAdmin = true
+      setMe('admin')
+      await setViewportWidth(390)
+      try {
+        const w = await mountWith(lost)
+        expect(w.find('[data-test="close-request-secondary"]').exists()).toBe(false)
+        await w.find('[data-test="bar-more"]').trigger('click')
+        await flushPromises()
+        useApiMock.mockClear()
+        ;(document.body.querySelector('[data-test="bar-more-close-request"]') as HTMLElement).click()
+        await confirmAndExpectPost()
+        w.unmount()
+      } finally {
+        await setViewportWidth(1024)
+      }
+    })
+
+    it('비관리자 등록자는 주 행동이 종료 요청이라 보조 버튼이 없다', async () => {
+      setMe('alice')
+      const w = await mountWith({ ...lost, requesterId: 'alice' })
+      expect(w.find('[data-test="next-action-primary"]').text()).toContain('종료 요청')
+      expect(w.find('[data-test="close-request-secondary"]').exists()).toBe(false)
+      w.unmount()
+    })
+  })
 })

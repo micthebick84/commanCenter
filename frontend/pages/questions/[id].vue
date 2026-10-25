@@ -8,7 +8,7 @@ import DbConnectionPicker from '~/components/DbConnectionPicker.vue'
 import RefRepoChips from '~/components/RefRepoChips.vue'
 import RefRepoAddForm from '~/components/RefRepoAddForm.vue'
 import { interviewStatusLabel, interviewStatusChip } from '~/composables/interviewLabels'
-import { contextPercent, type QuestionDetail, type AttachmentView } from '~/composables/questions'
+import { contextPercent, EXPIRED_ATTACHMENT_TIP, type QuestionDetail, type AttachmentView } from '~/composables/questions'
 import { dbTypeLabel, fetchDbConnections, type DbConnectionView } from '~/composables/dbConnections'
 import { sameRefSet, toInputs, type RefRepoInput, type RefRepoView, type RepoCatalogOption } from '~/composables/refRepos'
 import { usageColor } from '~/composables/claudeUsage'
@@ -330,16 +330,17 @@ function goToTask() {
       <q-chip
         v-for="a in detail.attachments"
         :key="a.id"
-        clickable
+        :clickable="!a.expired"
         dense
         size="sm"
-        icon="attach_file"
-        color="blue-grey-1"
-        text-color="blue-grey-9"
+        :icon="a.expired ? 'history' : 'attach_file'"
+        :color="a.expired ? 'grey-3' : 'blue-grey-1'"
+        :text-color="a.expired ? 'grey-6' : 'blue-grey-9'"
         :label="`${a.fileName} (${formatSize(a.sizeBytes)})`"
-        @click="downloadSessionAttachment(a)"
+        :data-test="a.expired ? 'attachment-expired' : undefined"
+        @click="!a.expired && downloadSessionAttachment(a)"
       >
-        <q-tooltip>클릭하여 다운로드</q-tooltip>
+        <q-tooltip>{{ a.expired ? EXPIRED_ATTACHMENT_TIP : '클릭하여 다운로드' }}</q-tooltip>
       </q-chip>
     </div>
 

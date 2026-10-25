@@ -254,7 +254,10 @@ export function buildStages<T extends StageCardTask>(
 
     const toCard = (t: T): StageCard<T> => {
       const chip = CHIP[t.status] ?? ['#f5f5f5', '#616161']
-      const stageIdx = pipelineStages.findIndex((x) => x.statuses.includes(t.status))
+      // 작업종료는 파이프라인 밖이지만 전 단계를 완료로 채운다(stageSteps와 같은 규칙). 취소됨은 -1 그대로(전부 회색).
+      const stageIdx = t.status === 'CLOSED'
+        ? pipelineStages.length
+        : pipelineStages.findIndex((x) => x.statuses.includes(t.status))
       return {
         task: t,
         bg: chip[0],
@@ -504,10 +507,12 @@ export function nextAction(
       if (!isAdmin && isOwner) {
         return { text: '배포 컨테이너 중단 — 결과 확인이 끝났다면 종료를 요청할 수 있습니다', primary: { label: '확인 완료 — 종료 요청', icon: 'task_alt', kind: 'request-close' } }
       }
-    // falls through
+      return isAdmin
+        ? { text: '배포 컨테이너 중단 — 재배포 필요', primary: { label: '재배포', icon: 'refresh', kind: 'redeploy' } }
+        : { text: '배포 실패 — 관리자 확인이 필요합니다' }
     case 'DEPLOY_FAILED':
       return isAdmin
-        ? { text: s === 'DEPLOY_LOST' ? '배포 컨테이너 중단 — 재배포 필요' : '배포 실패 — 사유 확인 후 재배포', primary: { label: '재배포', icon: 'refresh', kind: 'redeploy' } }
+        ? { text: '배포 실패 — 사유 확인 후 재배포', primary: { label: '재배포', icon: 'refresh', kind: 'redeploy' } }
         : { text: '배포 실패 — 관리자 확인이 필요합니다' }
     default:
       return { text: RUNNING_TEXT }

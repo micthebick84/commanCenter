@@ -5,13 +5,14 @@ import { QLayout, QPageContainer } from 'quasar'
 import TaskDetail from '../pages/tasks/[id].vue'
 import TaskRefChangeMenu from '../components/tasks/TaskRefChangeMenu.vue'
 import RefRepoAddForm from '../components/RefRepoAddForm.vue'
+import InterviewPanel from '../components/InterviewPanel.vue'
 import { authStub, useApiMock } from './mocks/nuxt'
 import { FakeEventSource } from './mocks/eventsource'
 import { setViewportWidth } from './mocks/screen'
 import { baseTask } from './fixtures/task'
 
 // 작업 상세의 참조 repo (작업 스펙 2026-10-24 §7.4) — 칩 줄 표시 조건, 인터뷰 중 관리자의 "✎ 참조 변경"(세션마다 시드하고, 보내지 않은 변경이 없으면 서버를 따라가는 초안),
-// 바뀌었을 때만 답변 바디에 refRepos, 출처 질문 링크, 모바일 정보 영역·인터뷰 카드.
+// 바뀌었을 때만 답변 바디에 refRepos, 출처 질문 링크, 모바일 정보 영역·대화 시트.
 ;(globalThis as any).useRoute = () => ({ params: { id: '42' } })
 
 // 폴링 한 번을 흉내 내려고 전역 useTaskPolling 스텁(setup.ts)을 감싸 refresh 핸들을 잡는다 — 마운트마다 새 핸들
@@ -120,8 +121,8 @@ const precedes = (a: Element, b: Element) => !!(a.compareDocumentPosition(b) & N
 
 // QMenu는 열린 뒤 transition-duration(기본 300ms)이 지나야 show 이벤트를 내고, 닫을 때 포털을 지우는 것도 같다
 const menuTransition = () => new Promise((r) => setTimeout(r, 350))
-/** 같은 버튼을 누르면 열리고, 다시 누르면 닫힌다(QMenu의 앵커 토글) */
-async function toggleRefMenu(w: Wrapper) {
+/** 같은 버튼을 누르면 열리고, 다시 누르면 닫힌다(QMenu의 앵커 토글). 모바일 대화 시트 안이면 TaskRefChangeMenu 래퍼를 넘긴다. */
+async function toggleRefMenu(w: Pick<Wrapper, 'find'>) {
   await w.find('[data-test="ref-change"]').trigger('click')
   await menuTransition()
   await flushPromises()
@@ -136,8 +137,8 @@ async function removeInMenu(n: number) {
 const draftIds = (w: Wrapper) =>
   (w.findComponent(TaskRefChangeMenu).props('modelValue') as Array<{ catalogId: number }>).map((r) => r.catalogId)
 
-/** 기본 입력창으로 답한다(작업 상세는 composer 슬롯을 쓰지 않는다) */
-async function answer(w: Wrapper, text: string) {
+/** 기본 입력창으로 답한다(작업 상세는 composer 슬롯을 쓰지 않는다). 모바일 대화 시트 안이면 InterviewPanel 래퍼를 넘긴다. */
+async function answer(w: Pick<Wrapper, 'find'>, text: string) {
   await w.find('textarea').setValue(text)
   await w.find('[data-test="send-answer"]').trigger('click')
   await flushPromises()
@@ -479,20 +480,25 @@ describe('pages/tasks/[id] — 참조 repo (작업 스펙 2026-10-24 §7.4)', ()
       await setViewportWidth(1024)
     })
 
-    it('모바일: 정보 영역 읽기 전용 칩 줄·출처, 관리자 인터뷰 카드에 ✎', async () => {
+    // 좁은 화면의 대화는 인터뷰 카드의 "대화 열기"로 여는 전체화면 시트다(main 2026-10-24) — 패널과 ✎는 시트 안에 있고,
+    // 시트는 body로 텔레포트되므로 DOM에서 찾는다(래퍼의 find는 텔레포트 너머를 못 본다 — findComponent는 본다).
+    async function openSheet(w: Wrapper) {
+      await w.find('[data-test="interview-open"]').trigger('click')
+      await flushPromises()
+      const sheets = document.body.querySelectorAll<HTMLElement>('[data-test="interview-sheet"]')
+      expect(sheets).toHaveLength(1)
+      return sheets[0]!
+    }
+
+    it('모바일: 정보 영역 읽기 전용 칩 줄·출처, 관리자 대화 시트에 ✎', async () => {
       authStub.isAdmin = true
       routeApi(interviewing({ sourceQuestionId: 3 }))
       await setViewportWidth(390)
       let w = await mountPage()
-      // 데스크톱 줄은 없고, ✎는 모바일 인터뷰 카드 안에 하나뿐
+      // 데스크톱 줄은 없고, 인터뷰 카드에는 "대화 열기"만 — ✎는 시트를 열어야 보인다
       expect(w.find('[data-test="task-ref-chips"]').exists()).toBe(false)
-      expect(w.findAll('[data-test="ref-change"]')).toHaveLength(1)
-      const card = w.find('[data-test="mobile-interview-refs"]')
-      expect(card.exists()).toBe(true)
-      expect(card.find('[data-test="ref-change"]').exists()).toBe(true)
-      expect(card.findAll('[data-test="ref-chip"]').map((c) => c.attributes('data-state'))).toEqual(['pinned', 'pending'])
-      expect(card.find('[data-state="pending"] .ref-chip-note').text()).toBe('다음 답변 때 받음')
-      expect(w.find('#interview-card').element.contains(card.element)).toBe(true)
+      expect(document.body.querySelector('[data-test="ref-change"]')).toBeNull()
+      expect(document.body.querySelector('[data-test="mobile-interview-refs"]')).toBeNull()
 
       // 정보 영역은 눌러야 펼쳐진다(v-if)
       expect(w.find('[data-test="info-refs"]').exists()).toBe(false)
@@ -508,31 +514,47 @@ describe('pages/tasks/[id] — 참조 repo (작업 스펙 2026-10-24 §7.4)', ()
       expect(src.text()).toBe('↩ 질문 #3에서 이어짐')
       expect(src.attributes('href')).toBe('/questions/3')
 
-      // 모바일 인터뷰 패널도 바꾼 참조를 답변에 싣는다
-      await toggleRefMenu(w)
+      // 대화 시트: ✎는 시트 안 참조 줄에 하나뿐이고, 줄은 대화 패널보다 위
+      const sheet = await openSheet(w)
+      expect(document.body.querySelectorAll('[data-test="ref-change"]')).toHaveLength(1)
+      const row = sheet.querySelector('[data-test="mobile-interview-refs"]')!
+      expect(row).not.toBeNull()
+      expect(row.querySelector('[data-test="ref-change"]')).not.toBeNull()
+      expect(Array.from(row.querySelectorAll('[data-test="ref-chip"]')).map((c) => c.getAttribute('data-state'))).toEqual([
+        'pinned',
+        'pending',
+      ])
+      expect(row.querySelector('[data-state="pending"] .ref-chip-note')!.textContent!.trim()).toBe('다음 답변 때 받음')
+      expect(precedes(row, sheet.querySelector('.interview-panel')!)).toBe(true)
+
+      // 시트의 대화 패널도 바꾼 참조를 답변에 싣는다
+      const menu = w.findComponent(TaskRefChangeMenu)
+      await toggleRefMenu(menu)
       await removeInMenu(0) // 옛앱 빼기
-      await toggleRefMenu(w)
-      await answer(w, '공통 UI만')
+      await toggleRefMenu(menu)
+      await answer(w.findComponent(InterviewPanel), '공통 UI만')
       expect(answerCalls()[0]![1].body.refRepos).toEqual([{ repoCatalogId: 3, branch: 'main' }])
       w.unmount()
 
-      // 요청자: 인터뷰 카드에 ✎가 없다(정보 영역 칩 줄은 있다)
+      // 요청자: 대화 시트에 ✎가 없다(정보 영역 칩 줄은 있다)
       authStub.isAdmin = false
       w = await mountPage()
-      expect(w.find('[data-test="mobile-interview-refs"]').exists()).toBe(false)
-      expect(w.find('[data-test="ref-change"]').exists()).toBe(false)
       await w.find('[data-test="section-info"] .q-item').trigger('click')
       await flushPromises()
       expect(w.find('[data-test="info-refs"]').exists()).toBe(true)
+      const readonlySheet = await openSheet(w)
+      expect(readonlySheet.querySelector('[data-test="mobile-interview-refs"]')).toBeNull()
+      expect(document.body.querySelector('[data-test="ref-change"]')).toBeNull()
       w.unmount()
     })
 
-    it('모바일 인터뷰 패널도 입력대기·계획 완료로 바뀌면 작업을 바로 다시 읽는다', async () => {
+    it('모바일 대화 시트의 패널도 입력대기·계획 완료로 바뀌면 작업을 바로 다시 읽는다', async () => {
       authStub.isAdmin = true
       routeApi(interviewing())
       await setViewportWidth(390)
       const w = await mountPage()
-      expect(w.find('[data-test="mobile-interview-refs"]').exists()).toBe(true) // 모바일 인터뷰 카드의 패널이다
+      const sheet = await openSheet(w)
+      expect(sheet.querySelector('[data-test="mobile-interview-refs"]')).not.toBeNull() // 대화 시트의 패널이다
       const taskReads = () => useApiMock.mock.calls.filter((c) => c[0] === '/api/tasks/42').length
       expect(taskReads()).toBe(1)
       const es = FakeEventSource.last()

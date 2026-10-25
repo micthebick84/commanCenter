@@ -1,8 +1,8 @@
 <script setup lang="ts">
-// 관리 카탈로그(레포·MCP) 등록/수정 다이얼로그 셸. 데스크톱은 가운데 카드, 모바일(lt.md)은 ApproveDialog와 같은
+// 관리 카탈로그(레포·MCP) 등록/수정 다이얼로그 셸. 데스크톱은 가운데 카드, 폰(lt.sm)은 ApproveDialog와 같은
 // 전체화면 구성: 상단 고정 바(닫기+제목) / 스크롤 본문(.dialog-body, assets/css/main.css) / 하단 액션 바.
 // 입력 필드는 기본 슬롯으로 받고, 슬롯에 `mobile`을 넘겨 필드 밀도(dense)·placeholder를 화면에 맞춘다.
-import { useQuasar } from 'quasar'
+import { useFullscreenDialog } from '~/composables/dialogLayout'
 
 const props = defineProps<{
   modelValue: boolean
@@ -19,8 +19,8 @@ const emit = defineEmits<{
   submit: []
 }>()
 
-const $q = useQuasar()
-const mobile = computed(() => $q.screen.lt.md)
+// 폰에서만 전체화면 — 태블릿은 일반 너비 (composables/dialogLayout.ts)
+const mobile = useFullscreenDialog()
 const show = computed({
   get: () => props.modelValue,
   set: (v: boolean) => emit('update:modelValue', v),

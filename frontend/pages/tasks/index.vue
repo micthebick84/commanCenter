@@ -9,6 +9,7 @@ import { elapsedLabel } from '~/composables/implementationMode'
 import { useNowTick } from '~/composables/useNowTick'
 import { MAX_FILES, MAX_FILE_MB, MAX_TOTAL_MB, validateFiles } from '~/composables/attachmentLimits'
 import { useHydrationSafeAuth } from '~/composables/useHydrationSafeAuth'
+import { useFullscreenDialog } from '~/composables/dialogLayout'
 import RefRepoChips from '~/components/RefRepoChips.vue'
 import RefRepoAddForm from '~/components/RefRepoAddForm.vue'
 import { toInputs, useRefDraft, type RefRepoView } from '~/composables/refRepos'
@@ -485,6 +486,8 @@ async function submit() {
 function closeDialog() {
   showCreate.value = false
 }
+// 폰에서만 전체화면 — 태블릿은 일반 너비 (composables/dialogLayout.ts)
+const fullscreen = useFullscreenDialog()
 </script>
 
 <template>
@@ -723,7 +726,7 @@ function closeDialog() {
     <q-inner-loading :showing="moving" />
 
     <!-- 등록 다이얼로그 -->
-    <q-dialog v-model="showCreate" persistent :maximized="$q.screen.lt.md">
+    <q-dialog v-model="showCreate" persistent :maximized="fullscreen">
       <q-card style="width: min(520px, 100vw)">
         <div class="dialog-body">
           <q-card-section>

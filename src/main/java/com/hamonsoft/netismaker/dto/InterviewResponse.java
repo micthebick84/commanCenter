@@ -82,8 +82,15 @@ public record InterviewResponse(
     public record PlanView(String designMarkdown, String planMarkdown, String planJson,
                            Long durationMs, OffsetDateTime completedAt) {}
 
-    /** 브라우저용 첨부 메타 — 경로 없음(다운로드는 GET /api/questions/{id}/attachments/{attId}). */
-    public record AttachmentView(long id, String fileName, String contentType, long sizeBytes) {}
+    /**
+     * 브라우저용 첨부 메타 — 경로 없음(다운로드는 GET /api/questions/{id}/attachments/{attId}).
+     * expired = 종료된 질문의 첨부를 정리 잡이 보존 기간 뒤 지웠다(다운로드하면 410) — 화면은 칩을 비활성으로 그린다.
+     */
+    public record AttachmentView(long id, String fileName, String contentType, long sizeBytes, boolean expired) {
+        public AttachmentView(long id, String fileName, String contentType, long sizeBytes) {
+            this(id, fileName, contentType, sizeBytes, false);
+        }
+    }
 
     /**
      * 참조 repo 칩 한 개 (스펙 2026-10-22 §4.3) — 화면에 필요한 것만 싣는다(path·gitUrl은 내보내지 않는다).

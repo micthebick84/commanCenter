@@ -255,10 +255,11 @@ async function cancelTask() {
 async function onApproved() {
   await refresh()
   await nextTick()
-  scrollTo('interview-card')
+  openInterview()
 }
 
 function onInterviewConfirmed() {
+  interviewSheetOpen.value = false
   refresh()
 }
 
@@ -305,7 +306,8 @@ const answerRefs = computed<RefRepoInput[] | null>(() => {
   const picked = toInputs(pickedRefs.value)
   return sameRefSet(picked, toInputs(t.refRepos ?? [])) ? null : picked
 })
-// 패널의 실시간 상태(SSE, immediate emit) — "✎ 참조 변경"은 입력 대기일 때만 연다. 패널은 한 번에 하나만 마운트된다($q.screen.lt.md 분기).
+// 패널의 실시간 상태(SSE, immediate emit) — "✎ 참조 변경"은 입력 대기일 때만 연다. 패널은 한 번에 하나만 마운트된다($q.screen.lt.md 분기 —
+// 모바일은 대화 시트가 열려 있는 동안만이고, 그때 "✎"도 시트 안에 있다. 시트를 다시 열면 패널이 null부터 다시 알린다).
 const interviewLive = ref<InterviewStatus | null>(null)
 // 턴이 끝나 입력대기·계획 완료로 바뀌면 작업을 바로 다시 읽는다 — 그 턴이 고정한(또는 못 받은) 참조 상태는 같은 보고로 저장되지만
 // task.refRepos는 5초 폴링 때에야 바뀌어, 계획이 SSE로 먼저 보이는 동안 확정 화면이 방금 고정된 참조를 "인터뷰에서 받지 못해 구현에
@@ -395,6 +397,9 @@ async function retryClose() {
   if (!(await confirmDialog($q, '남은 종료 단계(병합 포함 가능)를 다시 실행합니다. 병합은 되돌릴 수 없습니다.', { title: '종료 재시도' }))) return
   await closeAction('close/retry', '종료 재시도 큐 등록')
 }
+
+// 배포중단됨에서 관리자의 주 행동은 재배포라 종료 요청은 보조 버튼으로 — 관리자가 직접 등록한 작업은 이것 말고 종료할 길이 없다(API는 허용)
+const canAdminRequestCloseLost = computed(() => auth.isAdmin && task.value?.status === 'DEPLOY_LOST')
 
 // 병합 전(MERGED 없음) 종료실패만 취소할 수 있다 — 서버도 같은 규칙으로 409를 낸다
 const canCancelClose = computed(
@@ -587,6 +592,12 @@ const analysisHtml = computed(() => renderMarkdown(task.value?.analysis?.markdow
 function scrollTo(id: string) {
   document.getElementById(id)?.scrollIntoView({ behavior: 'smooth', block: 'start' })
 }
+// 좁은 화면은 대화를 전체화면 시트로 연다(인라인 카드엔 열기 버튼만) — 넓은 화면은 인라인 패널로 스크롤
+const interviewSheetOpen = ref(false)
+function openInterview() {
+  if ($q.screen.lt.md) interviewSheetOpen.value = true
+  else scrollTo('interview-card')
+}
 function onAction(kind: NextActionKind) {
   const t = task.value
   if (!t) return
@@ -598,7 +609,7 @@ function onAction(kind: NextActionKind) {
     case 'retry': return retry()
     case 'open-pr': return void window.open(t.implementation?.prUrl ?? '', '_blank', 'noopener')
     case 'open-url': return void window.open(t.deployment?.deployUrl ?? '', '_blank', 'noopener')
-    case 'open-interview': return scrollTo('interview-card')
+    case 'open-interview': return openInterview()
     case 'review-design': return scrollTo('design-card')
     case 'request-close': return requestClose()
     case 'withdraw-close': return closeAction('close-request/withdraw', '종료 요청 철회')
@@ -664,6 +675,7 @@ function onAction(kind: NextActionKind) {
             <TaskNextAction :action="action" variant="banner" :hide-primary="$q.screen.lt.md" @act="onAction">
               <template #extra>
                 <q-btn v-if="auth.isAdmin && task.implementation?.prUrl" outline color="primary" icon="open_in_new" :label="`${mrRef(task.implementation.prUrl, task.implementation.prNumber!)} 열기`" :href="task.implementation.prUrl" target="_blank" />
+                <q-btn v-if="!$q.screen.lt.md && canAdminRequestCloseLost" outline color="primary" icon="task_alt" label="종료 요청" data-test="close-request-secondary" @click="requestClose" />
               </template>
             </TaskNextAction>
           </div>
@@ -790,31 +802,48 @@ function onAction(kind: NextActionKind) {
             </div>
           </template>
         </TaskDetailMobile>
+        <!-- 좁은 화면: 인라인 패널은 하단 액션 바와 겹쳐 입력이 답답하다 → 카드에는 열기 버튼만, 대화는 전체화면 시트(스펙 §4.2) -->
         <q-card v-if="isInterviewPhase && task.interviewSessionId" id="interview-card" flat bordered class="q-mt-md">
-          <q-card-section class="text-h6">대화형 분석</q-card-section>
-          <!-- 관리자의 인터뷰 중 참조 변경 — 모바일은 정보 영역 칩 줄이 읽기 전용이라 답하는 자리(이 카드)에 같은 줄을 둔다 -->
-          <q-card-section v-if="canChangeRefs" class="row items-end no-wrap task-refs q-pt-none" data-test="mobile-interview-refs">
-            <RefRepoChips :items="task.refRepos ?? []" :context="taskRefContext(task.status)" class="task-refs-chips" />
-            <TaskRefChangeMenu
-              v-model="pickedRefs"
-              :server-refs="task.refRepos ?? []"
-              :target-catalog-id="task.repoCatalogId ?? null"
-              :disable="interviewLive !== 'AWAITING_INPUT'"
-            />
+          <q-card-section class="row items-center no-wrap q-gutter-sm">
+            <div class="col">
+              <div class="text-subtitle1 text-weight-medium">대화형 분석</div>
+              <div class="text-caption text-grey-7">{{ task.statusLabel }}</div>
+            </div>
+            <q-btn unelevated color="primary" icon="forum" label="대화 열기" data-test="interview-open" @click="interviewSheetOpen = true" />
           </q-card-section>
-          <q-separator />
-          <q-card-section class="q-pa-none">
+        </q-card>
+        <q-dialog v-if="isInterviewPhase && task.interviewSessionId" v-model="interviewSheetOpen" maximized transition-show="slide-up" transition-hide="slide-down">
+          <div class="interview-sheet column no-wrap bg-white" data-test="interview-sheet">
+            <q-toolbar class="interview-sheet__bar">
+              <q-btn flat round dense icon="close" aria-label="닫기" data-test="interview-sheet-close" @click="interviewSheetOpen = false" />
+              <q-toolbar-title class="text-subtitle1">#{{ task.id }} 대화형 분석</q-toolbar-title>
+            </q-toolbar>
+            <q-separator />
+            <!-- 관리자의 인터뷰 중 참조 변경 — 모바일은 정보 영역 칩 줄이 읽기 전용이라 답하는 자리(이 시트)에 같은 줄을 둔다 -->
+            <template v-if="canChangeRefs">
+              <div class="row items-end no-wrap task-refs interview-sheet__refs" data-test="mobile-interview-refs">
+                <RefRepoChips :items="task.refRepos ?? []" :context="taskRefContext(task.status)" class="task-refs-chips" />
+                <TaskRefChangeMenu
+                  v-model="pickedRefs"
+                  :server-refs="task.refRepos ?? []"
+                  :target-catalog-id="task.repoCatalogId ?? null"
+                  :disable="interviewLive !== 'AWAITING_INPUT'"
+                />
+              </div>
+              <q-separator />
+            </template>
             <InterviewPanel
               :session-id="task.interviewSessionId"
               :readonly="!auth.isAdmin"
+              fill
               :answer-ref-repos="answerRefs"
               :session-ref-repos="task.refRepos ?? []"
               @status="onInterviewStatus"
               @confirmed="onInterviewConfirmed"
               @close="refresh"
             />
-          </q-card-section>
-        </q-card>
+          </div>
+        </q-dialog>
         <TaskNextAction :action="action" variant="bar" @act="onAction">
           <template #extra>
             <q-btn outline color="grey-7" icon="more_vert" aria-label="더 보기" class="bar-more" data-test="bar-more">
@@ -836,6 +865,10 @@ function onAction(kind: NextActionKind) {
                   <q-item v-if="auth.isAdmin && ['DEPLOYED','DEPLOY_LOST'].includes(task.status)" v-close-popup clickable class="text-negative" data-test="bar-more-undeploy" @click="undeploy">
                     <q-item-section avatar><q-icon name="stop" color="negative" /></q-item-section>
                     <q-item-section>중지</q-item-section>
+                  </q-item>
+                  <q-item v-if="canAdminRequestCloseLost" v-close-popup clickable data-test="bar-more-close-request" @click="requestClose">
+                    <q-item-section avatar><q-icon name="task_alt" /></q-item-section>
+                    <q-item-section>종료 요청</q-item-section>
                   </q-item>
                   <q-item v-if="auth.isAdmin && task.status === 'CLOSE_REVIEW'" v-close-popup clickable class="text-negative" data-test="bar-more-close-reject" @click="rejectClose">
                     <q-item-section avatar><q-icon name="block" color="negative" /></q-item-section>
@@ -1368,6 +1401,19 @@ function onAction(kind: NextActionKind) {
 .bar-more {
   min-width: 44px;
   min-height: 44px;
+}
+.interview-sheet {
+  height: 100%;
+  padding-bottom: env(safe-area-inset-bottom);
+}
+.interview-sheet__bar {
+  min-height: 52px;
+  padding-top: env(safe-area-inset-top);
+}
+/* 시트의 참조 줄은 내용 높이만 — 남는 높이는 아래 대화 패널(fill)이 쓴다 */
+.interview-sheet__refs {
+  flex: none;
+  padding: 8px 16px;
 }
 .deploy-log {
   max-height: 240px;

@@ -36,7 +36,7 @@ export interface DetailTask {
   design: { designMarkdown: string } | null
   implementation: { prUrl: string | null; prNumber: number | null; headBranch: string | null; headSha: string | null } | null
   deployment: { deployUrl: string | null; deployHostPort: number | null; deployImage: string | null; deployedAt: string | null; deployLog: string | null } | null
-  /** 읽기 전용 참조 repo (작업 스펙 2026-10-24 §4.9·§7.4) — 정보 영역 칩 줄. 바꾸는 "✎"은 부모의 모바일 인터뷰 카드에 있다. */
+  /** 읽기 전용 참조 repo (작업 스펙 2026-10-24 §4.9·§7.4) — 정보 영역 칩 줄. 바꾸는 "✎"은 부모의 모바일 대화 시트에 있다. */
   refRepos?: RefRepoView[]
   /** 질문 대화에서 이어 등록했으면 그 질문 id — 정보 영역 출처 링크 */
   sourceQuestionId?: number | null

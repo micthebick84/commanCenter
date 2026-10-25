@@ -100,6 +100,18 @@ describe('taskStages — buildStages', () => {
     expect(stages.find((s) => s.key === 'deploy')!.bottleneck).toBe(false)
   })
 
+  it('카드 미니 진행바: 작업종료는 전 단계 완료(모바일 stageSteps와 같게), 취소됨은 전부 회색', () => {
+    const stages = buildStages(
+      [task({ id: 1, status: 'CLOSED', statusLabel: '작업종료' }), task({ id: 2, status: 'CANCELLED', statusLabel: '취소됨' })],
+      { now: NOW },
+    )
+    const doneCard = stages.find((s) => s.key === 'done')!.groups[0].cards[0]
+    expect(doneCard.steps.map((x) => x.bg)).toEqual(Array(5).fill('#a5d6a7'))
+    expect(stageSteps({ status: 'CLOSED' }).every((x) => x.state === 'done')).toBe(true)
+    const cancelledCard = stages.find((s) => s.key === 'closed')!.groups[0].cards[0]
+    expect(cancelledCard.steps.map((x) => x.bg)).toEqual(Array(5).fill('#eeeeee'))
+  })
+
   it('비관리자에게는 드래그 전이를 주지 않는다', () => {
     const asUser = buildStages([task()], { now: NOW })
     const asAdmin = buildStages([task()], { now: NOW, isAdmin: true })
@@ -258,7 +270,7 @@ describe('종료 단계 (스펙 2026-10-13)', () => {
     expect(moveFor({ status: 'CLOSE_FAILED' })).toMatchObject({ to: 'CLOSE_PENDING', path: 'close/retry', confirm: true })
     expect(stageAccepts('close', moveFor({ status: 'CLOSE_REVIEW' }))).toBe(true)
   })
-  it('배포완료: 등록자·관리자는 종료 요청, 남은 문구만', () => {
+  it('배포완료: 등록자·관리자는 종료 요청, 그 외에는 접속 URL 열기', () => {
     const t = { status: 'DEPLOYED', deployment: { deployUrl: 'https://t' } }
     expect(nextAction(t, false, true)?.primary?.kind).toBe('request-close')
     expect(nextAction(t, true, false)?.primary?.kind).toBe('request-close')

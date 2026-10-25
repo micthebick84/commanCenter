@@ -139,6 +139,22 @@ describe('ChatBubble', () => {
       expect(w.emitted('download')).toBeUndefined()
     })
 
+    it('보존 기간이 지나 정리된(expired) 첨부는 비활성 칩이고 download를 내지 않는다', async () => {
+      const w = mount(ChatBubble, {
+        props: {
+          role: 'user',
+          content: '예전 질문',
+          attachments: [{ id: 9, fileName: '로그.txt', contentType: null, sizeBytes: 3, expired: true }],
+        },
+      })
+      const chip = w.find('.bubble-attachments .q-chip')
+      expect(chip.text()).toContain('로그.txt')
+      expect(chip.attributes('data-test')).toBe('attachment-expired')
+      expect(chip.classes()).not.toContain('q-chip--clickable')
+      await chip.trigger('click')
+      expect(w.emitted('download')).toBeUndefined()
+    })
+
     it('첨부 칩 줄의 클래스명도 Quasar 반응형 표시 헬퍼와 겹치지 않는다', () => {
       const w = mount(ChatBubble, { props: { role: 'user', content: 'x', attachments } })
       const els = [w.element, ...Array.from(w.element.querySelectorAll('*'))]

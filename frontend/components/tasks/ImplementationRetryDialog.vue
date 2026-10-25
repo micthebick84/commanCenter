@@ -5,6 +5,7 @@
 import { useQuasar } from 'quasar'
 import ImplementationModePicker from '~/components/ImplementationModePicker.vue'
 import type { ImplementationMode } from '~/composables/implementationMode'
+import { useFullscreenDialog } from '~/composables/dialogLayout'
 import { prepFailedRefIds, refChipLabel } from '~/composables/refRepos'
 // defineProps 타입이므로 상대 경로 — vitest는 .nuxt 없이 돌아 SFC 매크로 타입의 `~/` import를 못 푼다.
 import type { RefRepoView } from '../../composables/refRepos'
@@ -63,12 +64,14 @@ async function submit() {
     submitting.value = false
   }
 }
+// 폰에서만 전체화면 — 태블릿은 일반 너비 (composables/dialogLayout.ts)
+const fullscreen = useFullscreenDialog()
 </script>
 
 <template>
   <q-dialog
     :model-value="modelValue"
-    :maximized="$q.screen.lt.md"
+    :maximized="fullscreen"
     @update:model-value="(v) => emit('update:modelValue', v)"
   >
     <q-card style="width: min(480px, 100vw)" data-test="impl-retry-dialog">

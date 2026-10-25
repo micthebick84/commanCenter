@@ -5,6 +5,7 @@
 import { useQuasar } from 'quasar'
 import ChatBubble from '~/components/chat/ChatBubble.vue'
 import { interviewStatusLabel, interviewStatusChip } from '~/composables/interviewLabels'
+import { useFullscreenDialog } from '~/composables/dialogLayout'
 
 interface HistoryTurn {
   seq: number
@@ -63,10 +64,12 @@ const chip = computed(() => interviewStatusChip(detail.value?.statusName))
 function bubbleRole(role: string): 'assistant' | 'user' {
   return role === 'user' ? 'user' : 'assistant'
 }
+// 폰에서만 전체화면 — 태블릿은 일반 너비 (composables/dialogLayout.ts)
+const fullscreen = useFullscreenDialog()
 </script>
 
 <template>
-  <q-dialog v-model="show" :maximized="$q.screen.lt.md">
+  <q-dialog v-model="show" :maximized="fullscreen">
     <q-card data-test="history-dialog" class="history-dialog-card">
       <q-card-section class="row items-center q-pb-sm">
         <div class="text-h6" data-test="history-title">
@@ -132,11 +135,5 @@ function bubbleRole(role: string): 'assistant' | 'user' {
   white-space: pre-wrap;
   font-family: 'Pretendard', sans-serif;
   font-size: 0.85rem;
-}
-@media (max-width: 767px) {
-  .history-dialog-card {
-    min-width: unset;
-    width: 100%;
-  }
 }
 </style>

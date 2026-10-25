@@ -1,7 +1,7 @@
 <script setup lang="ts">
 // 승인 — 인터뷰 시작 다이얼로그 (2026-09-06 UI/UX 개선).
 // 위→아래: 작업 요약(어떤 작업인지) → 지난 인터뷰 안내(재승인 맥락) → 인터뷰 설정(모델 라디오 + 추론 단계 세그먼트,
-// MCP 칩, DB 연결, 참조 repo, 구독 사용량 strip) → 승인 후 다음 단계 안내 → 액션. 모바일(lt.md)은 전체화면: 상단 고정 바(닫기) /
+// MCP 칩, DB 연결, 참조 repo, 구독 사용량 strip) → 승인 후 다음 단계 안내 → 액션. 폰(lt.sm)은 전체화면: 상단 고정 바(닫기) /
 // 스크롤 본문(.dialog-body, assets/css/main.css) / 하단 액션 바. 데이터는 부모([id].vue)가 가진 task를 그대로 받는다.
 import { useQuasar } from 'quasar'
 import {
@@ -36,6 +36,7 @@ import {
 import ApproveTaskSummary, {
   type SummaryTask,
 } from '~/components/tasks/ApproveTaskSummary.vue'
+import { useFullscreenDialog } from '~/composables/dialogLayout'
 
 // 지난 인터뷰 목록 행 — 백엔드 InterviewSummaryResponse (InterviewHistoryCard와 동일 계약)
 interface SessionSummary {
@@ -236,15 +237,17 @@ async function approve() {
 }
 
 defineExpose({ approve })
+// 폰에서만 전체화면 — 태블릿은 일반 너비 (composables/dialogLayout.ts)
+const fullscreen = useFullscreenDialog()
 </script>
 
 <template>
   <!-- 승인 요청 중엔 ESC/바깥 클릭으로도 닫히지 않게(persistent) — 결과 토스트와 후속 스크롤을 놓치지 않도록 -->
-  <q-dialog v-model="show" :maximized="$q.screen.lt.md" :persistent="approving">
+  <q-dialog v-model="show" :maximized="fullscreen" :persistent="approving">
     <q-card class="approve-card" style="width: min(560px, 100vw)">
       <!-- 모바일: 상단 고정 바 — 전체화면이라 뒤 페이지가 안 보이므로 닫기와 제목을 항상 노출 -->
       <q-toolbar
-        v-if="$q.screen.lt.md"
+        v-if="fullscreen"
         class="approve-topbar"
         data-test="approve-topbar"
       >
@@ -264,11 +267,11 @@ defineExpose({ approve })
       </q-toolbar>
 
       <div class="dialog-body">
-        <q-card-section v-if="!$q.screen.lt.md" class="text-h6 q-pb-sm"
+        <q-card-section v-if="!fullscreen" class="text-h6 q-pb-sm"
           >인터뷰 시작 승인</q-card-section
         >
 
-        <q-card-section :class="$q.screen.lt.md ? '' : 'q-pt-none'">
+        <q-card-section :class="fullscreen ? '' : 'q-pt-none'">
           <ApproveTaskSummary :task="task" />
         </q-card-section>
 

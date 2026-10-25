@@ -6,6 +6,7 @@ import DbConnectionDialog from '~/components/DbConnectionDialog.vue'
 import {
   deleteDbConnection, dbTypeLabel, fetchDbConnections, saveDbConnection, type DbConnectionView,
 } from '~/composables/dbConnections'
+import { useFullscreenDialog } from '~/composables/dialogLayout'
 
 const props = defineProps<{ modelValue: boolean; repo: { id: number; alias: string } | null }>()
 const emit = defineEmits<{ 'update:modelValue': [value: boolean] }>()
@@ -58,10 +59,12 @@ function remove(r: DbConnectionView) {
 }
 
 defineExpose({ rows, featureEnabled, toggleEnabled, load })
+// 폰에서만 전체화면 — 태블릿은 일반 너비 (composables/dialogLayout.ts)
+const fullscreen = useFullscreenDialog()
 </script>
 
 <template>
-  <q-dialog :model-value="modelValue" :maximized="$q.screen.lt.md" @update:model-value="emit('update:modelValue', $event)">
+  <q-dialog :model-value="modelValue" :maximized="fullscreen" @update:model-value="emit('update:modelValue', $event)">
     <div class="db-admin-card">
       <q-card flat>
         <q-card-section class="row items-center no-wrap">

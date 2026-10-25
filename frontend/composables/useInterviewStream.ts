@@ -17,7 +17,7 @@ export type ConnState = 'idle' | 'connecting' | 'open' | 'reconnecting' | 'close
 
 /** 턴에 붙는 첨부. 서버 확정분은 AttachmentView 그대로, 전송 직후의 낙관적 턴은 id 없이 fileName/sizeBytes만 (스펙 2026-09-13 §7). */
 export type TurnAttachment = Pick<AttachmentView, 'fileName' | 'sizeBytes'> &
-  Partial<Pick<AttachmentView, 'id' | 'contentType'>>
+  Partial<Pick<AttachmentView, 'id' | 'contentType' | 'expired'>>
 
 export interface Turn {
   seq: number

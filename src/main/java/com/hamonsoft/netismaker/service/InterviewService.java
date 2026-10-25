@@ -18,6 +18,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
+import java.nio.file.Files;
 import java.time.OffsetDateTime;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -697,9 +698,12 @@ public class InterviewService {
         if (!s.isQuestion()) return InterviewResponse.of(s, turns, plan);
         List<InterviewResponse.AttachmentView> kickoff = new ArrayList<>();
         Map<Integer, List<InterviewResponse.AttachmentView>> byTurn = new LinkedHashMap<>();
+        // 정리 잡은 종료된 질문의 첨부만 지운다 — 진행 중이면 파일 검사 없이 false(없으면 실제 유실, 다운로드가 404로 알린다)
+        boolean closed = AttachmentCleanupPlanner.QUESTION_CLOSED.contains(s.getStatus());
         for (QuestionAttachment a : questionAttachmentRepo.findBySessionIdOrderByIdAsc(id)) {
+            boolean expired = closed && !Files.exists(attachmentStorage.resolve(a.getStoredPath()));
             InterviewResponse.AttachmentView v = new InterviewResponse.AttachmentView(
-                    a.getId(), a.getOriginalFilename(), a.getContentType(), a.getSizeBytes());
+                    a.getId(), a.getOriginalFilename(), a.getContentType(), a.getSizeBytes(), expired);
             if (a.getTurnSeq() == null) kickoff.add(v);
             else byTurn.computeIfAbsent(a.getTurnSeq(), k -> new ArrayList<>()).add(v);
         }

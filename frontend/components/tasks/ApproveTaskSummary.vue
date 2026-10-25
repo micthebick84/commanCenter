@@ -1,7 +1,10 @@
 <script setup lang="ts">
 // 승인 다이얼로그 상단의 작업 요약(2026-09-06 UI/UX 개선): 팝업이 "어떤 작업을 승인하는지" 스스로 설명한다.
 // 모바일은 전체화면 다이얼로그라 뒤 페이지가 안 보이므로 특히 필요. 표시 전용 — 데이터는 부모가 준다.
+// 참조 repo는 여기 그리지 않는다 — 다이얼로그가 바로 아래에 편집 칩 줄을 둔다(작업 스펙 2026-10-24 §7.3).
 import { ageOf } from '~/composables/taskStages'
+// defineProps 타입이므로 상대 경로 — vitest는 .nuxt 없이 돌아 SFC 매크로 타입의 `~/` import를 못 푼다.
+import type { RefRepoView } from '../../composables/refRepos'
 
 // [id].vue의 TaskResponse 중 이 컴포넌트가 읽는 부분집합
 export interface SummaryTask {
@@ -17,6 +20,8 @@ export interface SummaryTask {
   /** 레포 카탈로그 id — DB 피커 목록 조회용 (스펙 2026-10-14 §7). 레거시 작업은 null/없음. */
   repoCatalogId?: number | null
   dbConnectionIds?: number[]
+  /** 읽기 전용 참조 repo — 승인 다이얼로그가 편집 초안을 이 값으로 채운다 (스펙 2026-10-24 §7.3). 없으면 참조 없음. */
+  refRepos?: RefRepoView[]
 }
 
 const props = defineProps<{ task: SummaryTask }>()

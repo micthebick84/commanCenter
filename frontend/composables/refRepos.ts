@@ -1,6 +1,7 @@
 // 읽기 전용 참조 repo (질문 스펙 2026-10-22 §7.1, 작업 스펙 2026-10-24 §7) — API 계약 미러 + 칩 라벨·상태·집합 비교 순수 함수,
-// 맥락별 칩 문구(refChipCopy), 편집 초안(useRefDraft). 화면 쪽 조각(RefRepoChips·RefRepoAddForm)이 공유하고,
-// 질문 화면·작업 등록 창 등이 등록·ask·승인 바디를 만들 때 쓴다.
+// 맥락별 칩 문구(refChipCopy), 편집 초안(useRefDraft), 후보 카탈로그 지연 로더(useRefCatalog), 재시도 창의 준비 실패 참조
+// 판정(prepFailedRefIds). 화면 쪽 조각(RefRepoChips·RefRepoAddForm)이 공유하고, 질문 화면·작업 등록 창·승인 다이얼로그 등이
+// 등록·ask·승인·재시도 바디를 만들 때 쓴다.
 import type { Ref } from 'vue'
 
 /** 참조 repo 상한 — API `RepoCatalogService.MAX_REF_REPOS`와 같은 값이어야 한다. */
@@ -169,4 +170,49 @@ export function useRefDraft(refs: Ref<RefRepoView[]>, targetCatalogId: () => num
   }
 
   return { addOpen, excludeIds, toggleAdd, add, remove, reset }
+}
+
+/** 카탈로그를 못 받았을 때 서버 문구가 없으면 쓰는 알림. */
+const CATALOG_LOAD_FAILED = '레포 목록을 불러오지 못했습니다'
+
+/**
+ * 참조 추가 후보 카탈로그(`GET /api/repo-catalog`) — 처음 필요할 때(승인 다이얼로그의 "＋ 참조 추가",
+ * 인터뷰 중 참조 변경 메뉴의 @show) 한 번만 받는다. 창·화면을 여는 시점의 API 호출을 늘리지 않으려는 것
+ * (질문 대화 화면 `loadRepoCatalogOnce`와 같은 동작). 받는 중에 다시 불러도 요청은 하나이고,
+ * 실패하면 `onError`로 알린 뒤(서버 문구, 없으면 기본 문구) 다음에 부를 때 다시 시도한다.
+ * 지원하지 않는 호스트(other)는 추가 폼이 스스로 뺀다.
+ */
+export function useRefCatalog(onError: (message: string) => void) {
+  const catalog = ref<RepoCatalogOption[]>([])
+  let loaded = false
+  let loading = false
+
+  async function loadOnce() {
+    if (loaded || loading) return
+    loading = true
+    try {
+      const res = await useApi<RepoCatalogOption[]>('/api/repo-catalog')
+      catalog.value = Array.isArray(res) ? res : []
+      loaded = true
+    } catch (e) {
+      onError((e as { data?: { message?: string } })?.data?.message ?? CATALOG_LOAD_FAILED)
+    } finally {
+      loading = false
+    }
+  }
+
+  return { catalog, loadOnce }
+}
+
+/**
+ * 구현 재시도 창이 미리 고를 참조 (작업 스펙 2026-10-24 §7.5b) — 실패 사유가 워커의 참조 준비 실패
+ * `참조 repo 준비 실패: {별칭}({브랜치}) — {사유}`(RefRepoPrompts)이면 그 참조의 catalogId.
+ * 별칭·브랜치 뒤의 ` — `까지 맞춰야 이름 앞부분만 같은 다른 참조(옛앱 / 옛앱2)를 고르지 않는다.
+ * 사유가 없거나 다른 실패면 빈 목록.
+ */
+export function prepFailedRefIds(reason: string | null | undefined, refs: RefRepoView[]): number[] {
+  if (!reason) return []
+  return refs
+    .filter((r) => reason.startsWith(`참조 repo 준비 실패: ${r.alias}(${r.branch}) — `))
+    .map((r) => r.catalogId)
 }

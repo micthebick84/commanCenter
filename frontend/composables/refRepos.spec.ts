@@ -2,15 +2,19 @@ import { describe, it, expect } from 'vitest'
 import { computed, reactive, ref } from 'vue'
 import {
   MAX_REF_REPOS,
+  prepFailedRefIds,
   refChipCopy,
   refChipLabel,
   refState,
   sameRefSet,
   toInputs,
+  useRefCatalog,
   useRefDraft,
   type RefRepoInput,
   type RefRepoView,
+  type RepoCatalogOption,
 } from './refRepos'
+import { useApiMock } from '../test/mocks/nuxt'
 
 const view = (over: Partial<RefRepoView> = {}): RefRepoView => ({
   catalogId: 1,
@@ -272,5 +276,92 @@ describe('useRefDraft', () => {
     expect(draft.refRepos).toEqual([UI])
     draft.repoCatalogId = null
     expect(d.excludeIds.value).toEqual([3])
+  })
+})
+
+// 구현 재시도 창이 미리 고를 참조 (작업 스펙 2026-10-24 §7.5b) — 워커의 준비 실패 사유는
+// `참조 repo 준비 실패: {별칭}({브랜치}) — {사유}`(RefRepoPrompts)라 별칭·브랜치 뒤의 ` — `까지 맞아야 그 참조다.
+describe('prepFailedRefIds', () => {
+  const OLD = view({ catalogId: 2, alias: '옛앱', branch: 'release/6.5', sha: 'a'.repeat(40) })
+  const UI = view({ catalogId: 3, alias: '공통 UI', branch: 'main', sha: 'b'.repeat(40) })
+
+  it('prepFailedRefIds: 사유의 별칭(브랜치)와 맞는 참조만', () => {
+    const reason = '참조 repo 준비 실패: 옛앱(release/6.5) — fatal: could not read Username for \'https://gitlab.example\''
+    expect(prepFailedRefIds(reason, [OLD, UI])).toEqual([2])
+    expect(prepFailedRefIds('참조 repo 준비 실패: 공통 UI(main) — 시간 초과', [OLD, UI])).toEqual([3])
+  })
+
+  it('prepFailedRefIds: 브랜치가 다르거나 다른 사유·null이면 []', () => {
+    // 같은 별칭이라도 브랜치가 다르면 다른 참조다
+    expect(prepFailedRefIds('참조 repo 준비 실패: 옛앱(main) — fatal: x', [OLD, UI])).toEqual([])
+    // 별칭이 앞부분만 같은 다른 레포(옛앱2)는 고르지 않는다 — 괄호·` — `까지 맞춘다
+    expect(prepFailedRefIds('참조 repo 준비 실패: 옛앱2(release/6.5) — fatal: x', [OLD, UI])).toEqual([])
+    // 사유 앞머리가 다르면(구현 실패·시간 초과 등) 아무것도 고르지 않는다
+    expect(prepFailedRefIds('claude exec 실패: 옛앱(release/6.5) — fatal: x', [OLD, UI])).toEqual([])
+    expect(prepFailedRefIds('시간 초과: 참조 repo 준비에 2700초를 써 구현 상한(45분)이 남지 않았습니다', [OLD, UI])).toEqual([])
+    expect(prepFailedRefIds(null, [OLD, UI])).toEqual([])
+    expect(prepFailedRefIds(undefined, [OLD, UI])).toEqual([])
+    expect(prepFailedRefIds('', [OLD, UI])).toEqual([])
+    expect(prepFailedRefIds('참조 repo 준비 실패: 옛앱(release/6.5) — fatal: x', [])).toEqual([])
+  })
+})
+
+// 참조 추가 후보 카탈로그 — 승인 다이얼로그(＋ 참조 추가)·인터뷰 중 참조 변경 메뉴(@show)가 처음 필요할 때 한 번만 받는다.
+describe('useRefCatalog', () => {
+  const CATALOG: RepoCatalogOption[] = [
+    { id: 1, alias: 'Netis7.0', host: 'github', defaultBranch: 'main' },
+    { id: 2, alias: '옛앱', host: 'gitlab', defaultBranch: 'release/6.5' },
+  ]
+  const catalogCalls = () => useApiMock.mock.calls.filter((c) => c[0] === '/api/repo-catalog').length
+
+  it('만들 때는 부르지 않고, 처음 loadOnce에서만 /api/repo-catalog를 부른다', async () => {
+    useApiMock.mockResolvedValue(CATALOG)
+    const errors: string[] = []
+    const c = useRefCatalog((m) => errors.push(m))
+    expect(c.catalog.value).toEqual([])
+    expect(catalogCalls()).toBe(0)
+
+    await c.loadOnce()
+    await c.loadOnce()
+    expect(catalogCalls()).toBe(1)
+    expect(c.catalog.value).toEqual(CATALOG)
+    expect(errors).toEqual([])
+  })
+
+  it('받는 중에 다시 불러도 요청은 하나다', async () => {
+    let resolve!: (v: unknown) => void
+    useApiMock.mockReturnValue(new Promise((r) => (resolve = r)))
+    const c = useRefCatalog(() => {})
+    const first = c.loadOnce()
+    const second = c.loadOnce()
+    resolve(CATALOG)
+    await Promise.all([first, second])
+    expect(catalogCalls()).toBe(1)
+    expect(c.catalog.value).toEqual(CATALOG)
+  })
+
+  it('실패하면 서버 문구(없으면 기본 문구)로 알리고, 다음에 부르면 다시 시도한다', async () => {
+    const errors: string[] = []
+    const c = useRefCatalog((m) => errors.push(m))
+
+    useApiMock.mockRejectedValueOnce({ data: { message: '권한이 없습니다' } })
+    await c.loadOnce()
+    useApiMock.mockRejectedValueOnce(new Error('network'))
+    await c.loadOnce()
+    expect(errors).toEqual(['권한이 없습니다', '레포 목록을 불러오지 못했습니다'])
+    expect(c.catalog.value).toEqual([])
+
+    useApiMock.mockResolvedValueOnce(CATALOG)
+    await c.loadOnce()
+    expect(c.catalog.value).toEqual(CATALOG)
+    await c.loadOnce()
+    expect(catalogCalls()).toBe(3) // 성공한 뒤로는 더 부르지 않는다
+  })
+
+  it('배열이 아닌 응답은 빈 목록으로 본다', async () => {
+    useApiMock.mockResolvedValue({})
+    const c = useRefCatalog(() => {})
+    await c.loadOnce()
+    expect(c.catalog.value).toEqual([])
   })
 })

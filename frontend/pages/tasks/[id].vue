@@ -27,6 +27,8 @@ import {
   MAIL_STATUS_LABEL,
   type CloseView,
 } from '~/composables/taskClose'
+// 참조 repo 타입 — 이 값을 받는 자식들(ApproveTaskSummary·ImplementationRetryDialog)이 defineProps 타입 규칙으로 쓰는 상대 경로와 맞춘다.
+import type { RefRepoView } from '../../composables/refRepos'
 
 definePageMeta({ layout: 'default' })
 
@@ -134,6 +136,8 @@ interface TaskResponse {
   implementationAttempt?: number
   claimedAt?: string | null
   implementationTimeoutMinutes?: number | null
+  /** 읽기 전용 참조 repo (스펙 2026-10-24 §4.9) — 인터뷰 단계면 진행 중 세션의 참조(상태 포함), 그 밖에는 작업의 참조. */
+  refRepos?: RefRepoView[]
 }
 
 const route = useRoute()
@@ -1243,6 +1247,8 @@ function onAction(kind: NextActionKind) {
         v-model="showImplRetry"
         :task-id="String(task.id)"
         :current-mode="task.implementationMode ?? 'DIRECT'"
+        :ref-repos="task.refRepos ?? []"
+        :failure-reason="task.failureReason"
         @submitted="refresh"
       />
 

@@ -10,7 +10,9 @@ import TypingIndicator from '~/components/chat/TypingIndicator.vue'
 import PendingBubble from '~/components/chat/PendingBubble.vue'
 import ImplementationModePicker from '~/components/ImplementationModePicker.vue'
 import { DEFAULT_IMPLEMENTATION_MODE, type ImplementationMode } from '~/composables/implementationMode'
-import type { RefRepoInput } from '../composables/refRepos'
+import RefRepoChips from '~/components/RefRepoChips.vue'
+// defineProps 타입이므로 상대 경로 — vitest는 .nuxt 없이 돌아 SFC 매크로 타입의 `~/` import를 못 푼다.
+import { splitConfirmRefs, type RefRepoInput, type RefRepoView } from '../composables/refRepos'
 
 const props = defineProps<{
   sessionId: number
@@ -23,6 +25,13 @@ const props = defineProps<{
   hideStatusBar?: boolean
   /** 부모 column을 채운다(70vh 고정 높이 대신). 질문 채팅 셸 전용. */
   fill?: boolean
+  /**
+   * INTERVIEW 전용 — 기본 입력창(슬롯 없음) 전송에 실을 참조 repo (작업 스펙 2026-10-24 §7.4). 작업 상세가 "✎ 참조 변경"으로 초안을
+   * 바꿨을 때만 배열을 넘긴다: 배열이면 그대로(`[]` = 전부 해제), null·생략이면 키 없음(= 유지). 슬롯 send(extra)의 refRepos가 우선한다.
+   */
+  answerRefRepos?: RefRepoInput[] | null
+  /** 확정 화면 분류용 세션 참조(커밋·사유 포함) — 패널은 폴링이 없어 작업 상세가 폴링하는 값을 받는다 (작업 스펙 2026-10-24 §7.5). */
+  sessionRefRepos?: RefRepoView[]
 }>()
 const emit = defineEmits<{
   (e: 'confirmed', taskId: number): void
@@ -96,6 +105,8 @@ const statusLabel = computed(() =>
 
 const confirming = ref(false)
 const designRequested = ref(false)
+// 확정 화면의 "구현에 쓸 참조" (작업 스펙 2026-10-24 §7.5) — 세션 참조가 없으면 null(줄을 그리지 않는다, 확정 바디는 어느 쪽이든 그대로)
+const confirmRefs = computed(() => (props.sessionRefRepos?.length ? splitConfirmRefs(props.sessionRefRepos) : null))
 // 구현 방식 — 화면 기본은 리뷰, API는 값이 없으면 직접 (스펙 2026-10-15 §3)
 const implementationMode = ref<ImplementationMode>(DEFAULT_IMPLEMENTATION_MODE)
 
@@ -183,6 +194,7 @@ watch(
  * composer 슬롯의 send(extra) — 질문 세션은 다음 턴에 쓸 모델·effort·MCP 집합을 ask 바디에 싣고(스펙 2026-09-05 §2 개정,
  * 2026-09-13 §7), 파일이 있으면 multipart(meta JSON + files)로 보낸다. 성공 여부를 돌려줘 페이지가 대기 파일을 비운다.
  * 참조 repo(`refRepos`)는 페이지가 바꿨을 때만 넘긴다 — 있으면 그대로 싣고(JSON·multipart meta 같다), 없으면 필드 자체를 생략한다.
+ * 작업 인터뷰(INTERVIEW)의 answer 바디는 참조만 같은 규칙으로 싣는다(작업 스펙 2026-10-24 §4.3) — 슬롯이 넘긴 값, 없으면 answerRefRepos prop.
  */
 type AskExtra = { model?: string; effort?: string; mcpCatalogIds?: number[]; dbConnectionIds?: number[]; refRepos?: RefRepoInput[]; files?: File[] }
 
@@ -192,7 +204,7 @@ async function sendAnswer(extra?: AskExtra): Promise<boolean> {
   const replyToSeq = lastQuestionSeq.value
   const body: Record<string, unknown> = { answer: text, replyToSeq }
   const files = isQuestion.value ? (extra?.files ?? []) : []
-  // 질문 세션만: 서버가 검증 후 세션 값을 갱신해 다음 claim부터 적용한다. 인터뷰 answer 바디는 그대로.
+  // 질문 세션만: 서버가 검증 후 세션 값을 갱신해 다음 claim부터 적용한다. 인터뷰 answer 바디는 참조만(아래 else).
   if (isQuestion.value) {
     if (typeof extra?.model === 'string') body.model = extra.model
     if (typeof extra?.effort === 'string') body.effort = extra.effort
@@ -202,6 +214,11 @@ async function sendAnswer(extra?: AskExtra): Promise<boolean> {
     if (Array.isArray(extra?.dbConnectionIds)) body.dbConnectionIds = extra.dbConnectionIds
     // 참조 repo는 같은 규칙에 "바뀌었을 때만"을 더한다 — []는 "전부 해제", 생략은 "유지" (스펙 2026-10-22 §7.3, 서버 QuestionAskRequest)
     if (Array.isArray(extra?.refRepos)) body.refRepos = extra.refRepos
+  } else {
+    // 작업 인터뷰: 모델·effort·MCP·DB는 승인 때 정한 값 그대로이고 참조만 답변 때 바꿀 수 있다(서버 AnswerRequest, 관리자) —
+    // 작업 상세는 기본 입력창을 쓰므로 바뀐 참조를 prop으로 받는다. 참조를 안 건드린 답변 바디는 예전과 같다.
+    const refRepos = extra?.refRepos ?? props.answerRefRepos
+    if (Array.isArray(refRepos)) body.refRepos = refRepos
   }
   sending.value = true
   try {
@@ -514,6 +531,25 @@ defineExpose({
           <div v-if="plan" class="q-mt-md">
             <div class="text-subtitle2 q-mb-sm">구현 플랜</div>
             <pre class="plan-md">{{ plan.planMarkdown }}</pre>
+          </div>
+
+          <!-- 구현에 쓸 참조 (작업 스펙 2026-10-24 §7.5) — 확정 때 서버가 세션 참조 중 커밋이 있는 것만 작업으로 옮긴다(§4.6).
+               "구현 진행" 위에 미리 보여 주고, 요청자(readonly)에게도 보인다. -->
+          <div v-if="plan && confirmRefs" class="q-mt-md" data-test="confirm-refs">
+            <div class="text-subtitle2 q-mb-sm">구현에 쓸 참조 (이 커밋으로 고정)</div>
+            <RefRepoChips v-if="confirmRefs.pinned.length" :items="confirmRefs.pinned" context="task-fixed" />
+            <div
+              v-for="r in confirmRefs.stale"
+              :key="`stale-${r.catalogId}`"
+              class="text-caption text-orange-10 q-mt-xs"
+              data-test="confirm-ref-stale"
+            >⚠ {{ r.alias }}: 마지막 턴에는 받지 못했습니다 — 고정 커밋으로 구현합니다</div>
+            <div
+              v-for="r in confirmRefs.dropped"
+              :key="`dropped-${r.catalogId}`"
+              class="text-caption text-orange-10 q-mt-xs"
+              data-test="confirm-ref-dropped"
+            >⚠ {{ r.alias }}({{ r.branch }}) — 인터뷰에서 받지 못해 구현에 넘기지 않습니다</div>
           </div>
 
           <div v-if="!readonly" class="q-mt-md">

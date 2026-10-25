@@ -7,6 +7,8 @@ import {
   refChipLabel,
   refState,
   sameRefSet,
+  splitConfirmRefs,
+  taskRefContext,
   toInputs,
   useRefCatalog,
   useRefDraft,
@@ -363,5 +365,40 @@ describe('useRefCatalog', () => {
     const c = useRefCatalog(() => {})
     await c.loadOnce()
     expect(c.catalog.value).toEqual([])
+  })
+})
+
+// 작업 상세의 칩 맥락 (작업 스펙 2026-10-24 §7.1·§7.4) — 상세 응답의 상태 이름(영문 enum)으로 고른다
+describe('taskRefContext', () => {
+  it('taskRefContext: 승인대기 task-setup · 인터뷰 3상태 task-interview · 그 밖 task-fixed', () => {
+    expect(taskRefContext('AWAITING_APPROVAL')).toBe('task-setup')
+    for (const s of ['INTERVIEWING', 'INTERVIEW_INPUT', 'INTERVIEW_REVIEW']) expect(taskRefContext(s)).toBe('task-interview')
+    for (const s of ['APPROVED', 'IMPLEMENTING', 'PR_CREATED', 'IMPLEMENTATION_FAILED', 'DESIGN_PENDING', 'CLOSED', 'CANCELLED', '']) {
+      expect(taskRefContext(s)).toBe('task-fixed')
+    }
+  })
+})
+
+// 확정 화면 분류 (작업 스펙 2026-10-24 §7.5) — 서버가 확정 때 세션 참조를 작업으로 옮기는 규칙(§4.6)과 같다:
+// 커밋이 있는 것만 넘어가고(사유는 비운다) 커밋이 없는 것은 빠진다
+describe('splitConfirmRefs', () => {
+  const PINNED = view({ catalogId: 2, alias: '옛앱', branch: 'release/6.5', sha: 'a'.repeat(40), fetchedAt: '2026-10-24T01:00:00Z', error: null })
+  const STALE = view({ catalogId: 4, alias: '옛앱2', branch: 'main', sha: 'b'.repeat(40), fetchedAt: '2026-10-24T01:00:00Z', error: 'x' })
+  const PENDING = view({ catalogId: 3, alias: '공통 UI', branch: 'main', sha: null, fetchedAt: null, error: null })
+  const FAILED = view({ catalogId: 5, alias: '인증 서버', branch: 'develop', sha: null, fetchedAt: null, error: 'fatal: y' })
+
+  it('splitConfirmRefs: sha+error는 pinned(error null)와 stale 양쪽, sha 없음은 dropped', () => {
+    const before = JSON.stringify([PINNED, STALE, PENDING, FAILED])
+    const { pinned, stale, dropped } = splitConfirmRefs([PINNED, STALE, PENDING, FAILED])
+    expect(pinned).toEqual([PINNED, { ...STALE, error: null }])
+    expect(stale).toEqual([STALE])
+    expect(dropped).toEqual([PENDING, FAILED])
+    expect(JSON.stringify([PINNED, STALE, PENDING, FAILED])).toBe(before) // 입력은 그대로
+  })
+
+  it('splitConfirmRefs: 빈 목록은 셋 다 빈 목록, 빈 문자열 sha는 없는 값', () => {
+    expect(splitConfirmRefs([])).toEqual({ pinned: [], stale: [], dropped: [] })
+    const blank = view({ catalogId: 6, sha: '', error: '' })
+    expect(splitConfirmRefs([blank])).toEqual({ pinned: [], stale: [], dropped: [blank] })
   })
 })

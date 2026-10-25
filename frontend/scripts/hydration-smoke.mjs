@@ -56,10 +56,19 @@ const task = (id, status, statusLabel, extra = {}) => ({
   interviewSessionId: null, attachments: [], stageUsage: [], totalCostUsd: null, totalTokens: null,
   implementationMode: 'DIRECT', implementationAttempt: 1, claimedAt: null, implementationTimeoutMinutes: null, ...extra,
 })
+// 읽기 전용 참조 repo — 커밋 고정·아직 안 받음·실패 각 1개: 질문 대화 화면과 작업 상세의 칩 줄이 세 상태(고정 칩의 툴팁·대기 안내·⚠)를 모두 그린다
+const REF_REPOS = [
+  { catalogId: 2, alias: '옛앱', branch: 'release/6.5', sha: 'a1b2c3d4e5f60718293a4b5c6d7e8f9012345678', fetchedAt: NOW, error: null },
+  { catalogId: 3, alias: '공통 UI', branch: 'main', sha: null, fetchedAt: null, error: null },
+  { catalogId: 5, alias: '인증 서버', branch: 'develop', sha: null, fetchedAt: null, error: 'fatal: Remote branch develop not found in upstream origin' },
+]
 const TASKS = [
   task(1, 'PR_CREATED', 'PR생성', {
     implementation: { prUrl: 'https://github.com/acme/widgets/pull/1', prNumber: 1, headBranch: 'netismaker/task-1', headSha: 'abc123', implementationLog: '완료' },
     totalCostUsd: 1.23,
+    // 작업 상세의 참조 칩 줄(DB 칩 다음)과 "레포" 옆 출처 질문 링크(/questions/3)
+    refRepos: REF_REPOS,
+    sourceQuestionId: 3,
   }),
   task(2, 'AWAITING_APPROVAL', '승인대기'),
   task(3, 'CANCELLED', '취소됨'),
@@ -73,12 +82,8 @@ const QUESTION = {
   dbConnectionIds: [], attachments: [], createdAt: NOW, updatedAt: NOW,
   // 대상 레포의 카탈로그 id — "이 대화로 작업 등록"이 열리고, 등록 창 프리필이 대상·브랜치를 채운다
   repoCatalogId: 1,
-  // 읽기 전용 참조 repo — 커밋 고정·아직 안 받음·실패 각 1개: 대화 화면 칩 줄이 세 상태(고정 칩의 툴팁·대기 안내·⚠)를 모두 그린다
-  refRepos: [
-    { catalogId: 2, alias: '옛앱', branch: 'release/6.5', sha: 'a1b2c3d4e5f60718293a4b5c6d7e8f9012345678', fetchedAt: NOW, error: null },
-    { catalogId: 3, alias: '공통 UI', branch: 'main', sha: null, fetchedAt: null, error: null },
-    { catalogId: 5, alias: '인증 서버', branch: 'develop', sha: null, fetchedAt: null, error: 'fatal: Remote branch develop not found in upstream origin' },
-  ],
+  // 읽기 전용 참조 repo — 대화 화면 칩 줄 (위 REF_REPOS, 작업 1과 같은 값)
+  refRepos: REF_REPOS,
   turns: [{ seq: 1, role: 'assistant', kind: 'question', content: '**AuthController**입니다' }], plan: null,
 }
 // 2·3은 질문의 참조 — 5(인증 서버)는 일부러 빼서 등록 창 프리필의 "카탈로그에 없는 참조" 알림 경로도 지난다

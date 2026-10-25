@@ -77,6 +77,10 @@ config.global.plugins = [
   ],
 ]
 config.global.components = quasarComponents
+// NuxtLink는 Nuxt 자동 임포트 컴포넌트라 vitest에서 해석되지 않는다 — 기본 스텁(주소는 href로)을 둬 페이지를 마운트하는 spec마다
+// "Failed to resolve component: NuxtLink" 경고가 나지 않게 한다(작업 상세의 출처 질문 링크, 스펙 2026-10-24 §7.4). 자기 스텁을 주는 spec은 그것이 우선한다.
+// 기본 스텁(transition·transition-group)은 그대로 두고 키만 더한다 — 통째로 바꾸면 트랜지션이 실제로 돌아 다른 spec의 문구 검사가 깨진다.
+config.global.stubs = { ...config.global.stubs, NuxtLink: { props: ['to'], template: '<a :href="to"><slot /></a>' } }
 
 beforeEach(() => {
   resetNuxtMocks()

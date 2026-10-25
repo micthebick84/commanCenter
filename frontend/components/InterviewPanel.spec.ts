@@ -430,6 +430,92 @@ describe('InterviewPanel — 확정 / 읽기 전용', () => {
   })
 })
 
+// 확정 화면의 구현 참조 (작업 스펙 2026-10-24 §7.5) — 작업 상세가 폴링하는 세션 참조(sessionRefRepos)를 서버의 확정 복사 규칙(§4.6)으로 나눈다
+describe('InterviewPanel — 확정 화면 참조', () => {
+  const PLAN_READY = {
+    statusName: 'PLAN_READY',
+    turns: [],
+    plan: { designMarkdown: '# 설계', planMarkdown: '# 플랜', planJson: '[]' },
+  }
+  const PINNED = { catalogId: 2, alias: '옛앱', branch: 'release/6.5', sha: 'a1b2c3d4e5f60718293a4b5c6d7e8f9012345678', fetchedAt: '2026-10-24T01:00:00Z', error: null }
+  const PINNED2 = { catalogId: 4, alias: '옛앱2', branch: 'main', sha: 'f0e1d2c3b4a5968778695a4b3c2d1e0f12345678', fetchedAt: '2026-10-24T01:00:00Z', error: null }
+  const NO_SHA = { catalogId: 5, alias: '인증 서버', branch: 'develop', sha: null, fetchedAt: null, error: 'fatal: Remote branch develop not found' }
+  /** a가 b보다 문서에서 앞에 있는가 */
+  const precedes = (a: Element, b: Element) => !!(a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING)
+
+  it.each([false, true])(
+    '확정 화면: 구현에 쓸 참조 (이 커밋으로 고정) — 고정 칩 2개 · stale/dropped 경고 줄, readonly에도 보인다 (readonly=%s)',
+    async (readonly) => {
+      const w = await mountPanel(9, PLAN_READY, { readonly, sessionRefRepos: [PINNED, { ...PINNED2, error: 'x' }, NO_SHA] })
+      const box = w.find('[data-test="confirm-refs"]')
+      expect(box.exists()).toBe(true)
+      expect(box.text()).toContain('구현에 쓸 참조 (이 커밋으로 고정)')
+      const chips = box.findAll('[data-test="ref-chip"]')
+      expect(chips.map((c) => c.attributes('data-state'))).toEqual(['pinned', 'pinned']) // 마지막 턴 실패도 고정 커밋으로 넘어간다
+      expect(chips[0]!.text()).toContain('📚 옛앱 · release/6.5@a1b2c3d')
+      expect(chips[1]!.text()).toContain('📚 옛앱2 · main@f0e1d2c')
+      expect(box.findAll('.q-chip__icon--remove')).toHaveLength(0) // 읽기 전용
+      expect(box.findAll('[data-test="confirm-ref-stale"]').map((n) => n.text())).toEqual([
+        '⚠ 옛앱2: 마지막 턴에는 받지 못했습니다 — 고정 커밋으로 구현합니다',
+      ])
+      expect(box.findAll('[data-test="confirm-ref-dropped"]').map((n) => n.text())).toEqual([
+        '⚠ 인증 서버(develop) — 인터뷰에서 받지 못해 구현에 넘기지 않습니다',
+      ])
+      if (readonly) {
+        expect(w.find('[data-test="confirm"]').exists()).toBe(false)
+      } else {
+        expect(precedes(box.element, w.find('[data-test="confirm"]').element)).toBe(true) // "구현 진행" 위
+        // 확정 바디는 그대로 — 참조는 서버가 세션에서 옮긴다
+        useApiMock.mockResolvedValueOnce({ taskId: 42 })
+        await w.find('[data-test="confirm"]').trigger('click')
+        await flushPromises()
+        expect(useApiMock).toHaveBeenCalledWith('/api/interviews/9/confirm', {
+          method: 'POST',
+          body: { designRequested: false, implementationMode: 'REVIEW' },
+        })
+      }
+      w.unmount()
+    },
+  )
+
+  it('고정된 참조가 하나도 없으면 칩 없이 경고 줄만', async () => {
+    const w = await mountPanel(9, PLAN_READY, { sessionRefRepos: [NO_SHA] })
+    const box = w.find('[data-test="confirm-refs"]')
+    expect(box.exists()).toBe(true)
+    expect(box.findAll('[data-test="ref-chip"]')).toHaveLength(0)
+    expect(box.find('[data-test="ref-repo-chips"]').exists()).toBe(false)
+    expect(box.findAll('[data-test="confirm-ref-dropped"]')).toHaveLength(1)
+    expect(box.find('[data-test="confirm-ref-stale"]').exists()).toBe(false)
+    w.unmount()
+  })
+
+  it('sessionRefRepos가 비면 confirm-refs가 없고 /confirm 바디는 그대로', async () => {
+    for (const sessionRefRepos of [[], undefined]) {
+      useApiMock.mockReset()
+      const w = await mountPanel(9, PLAN_READY, { sessionRefRepos })
+      expect(w.find('[data-test="confirm-refs"]').exists()).toBe(false)
+      useApiMock.mockResolvedValueOnce({ taskId: 42 })
+      await w.find('[data-test="confirm"]').trigger('click')
+      await flushPromises()
+      expect(useApiMock).toHaveBeenCalledWith('/api/interviews/9/confirm', {
+        method: 'POST',
+        body: { designRequested: false, implementationMode: 'REVIEW' },
+      })
+      w.unmount()
+    }
+  })
+
+  it('플랜이 오기 전에는 참조가 있어도 확정 참조 줄을 그리지 않는다', async () => {
+    const w = await mountPanel(
+      9,
+      { statusName: 'AWAITING_INPUT', turns: [{ seq: 1, role: 'assistant', kind: 'question', content: '범위는?' }], plan: null },
+      { sessionRefRepos: [PINNED] },
+    )
+    expect(w.find('[data-test="confirm-refs"]').exists()).toBe(false)
+    w.unmount()
+  })
+})
+
 describe('InterviewPanel — 진행 활동(pending) 버블', () => {
   it('activity 수신 시 PendingBubble을 표시하고 TypingIndicator는 숨긴다', async () => {
     const w = await mountPanel()
@@ -602,7 +688,8 @@ describe('InterviewPanel — kind=QUESTION (스펙 2026-08-30 §7)', () => {
     w.unmount()
   })
 
-  it('INTERVIEW 세션의 answer 바디는 send({refRepos})가 와도 refRepos를 싣지 않는다', async () => {
+  // 작업 인터뷰 중 참조 변경 (작업 스펙 2026-10-24 §4.3·§7.4) — INTERVIEW answer도 참조만은 싣는다. 모델·effort는 인터뷰에서 바꾸지 않는다.
+  it('INTERVIEW answer 바디도 send({refRepos})를 싣는다 — model/effort는 여전히 안 싣는다', async () => {
     authStub.accessToken = 'jwt'
     useApiMock.mockResolvedValueOnce({
       statusName: 'AWAITING_INPUT',
@@ -617,7 +704,7 @@ describe('InterviewPanel — kind=QUESTION (스펙 2026-08-30 §7)', () => {
             'data-test': 'slot-send',
             onClick: () => {
               setAnswer('PostgreSQL')
-              send({ refRepos: [{ repoCatalogId: 2, branch: 'release/6.5' }] })
+              send({ model: 'claude-haiku-4-5', effort: 'low', refRepos: [{ repoCatalogId: 2, branch: 'release/6.5' }] })
             },
           }),
       },
@@ -627,8 +714,54 @@ describe('InterviewPanel — kind=QUESTION (스펙 2026-08-30 §7)', () => {
     await flushPromises()
     expect(useApiMock).toHaveBeenCalledWith('/api/interviews/9/answer', {
       method: 'POST',
-      body: { answer: 'PostgreSQL', replyToSeq: 1 },
+      body: { answer: 'PostgreSQL', replyToSeq: 1, refRepos: [{ repoCatalogId: 2, branch: 'release/6.5' }] },
     })
+    w.unmount()
+  })
+
+  // 작업 상세는 슬롯 없이 기본 입력창을 쓴다 — 바뀐 참조는 prop(answerRefRepos)으로 받아 싣는다(null = 유지라 키 없음, [] = 전부 해제)
+  it.each([
+    ['배열이면 그 목록', [{ repoCatalogId: 2, branch: 'release/6.5' }]],
+    ['빈 배열은 빈 배열(전부 해제)', []],
+  ])('answerRefRepos가 배열이면 기본 입력창 전송에 싣는다 — %s', async (_label, refRepos) => {
+    const w = await mountPanel(
+      9,
+      { statusName: 'AWAITING_INPUT', turns: [{ seq: 1, role: 'assistant', kind: 'question', content: '범위는?' }], plan: null },
+      { answerRefRepos: refRepos },
+    )
+    await w.find('textarea').setValue('옛앱 기준으로')
+    await w.find('[data-test="send-answer"]').trigger('click')
+    await flushPromises()
+    expect(useApiMock).toHaveBeenCalledWith('/api/interviews/9/answer', {
+      method: 'POST',
+      body: { answer: '옛앱 기준으로', replyToSeq: 1, refRepos },
+    })
+    w.unmount()
+  })
+
+  it.each([null, undefined])('answerRefRepos가 %s면 바디는 { answer, replyToSeq } 그대로 — refRepos 키가 없다', async (answerRefRepos) => {
+    const w = await mountPanel(
+      9,
+      { statusName: 'AWAITING_INPUT', turns: [{ seq: 1, role: 'assistant', kind: 'question', content: '범위는?' }], plan: null },
+      { answerRefRepos },
+    )
+    await w.find('textarea').setValue('그대로')
+    await w.find('[data-test="send-answer"]').trigger('click')
+    await flushPromises()
+    const call = useApiMock.mock.calls.find((c) => c[0] === '/api/interviews/9/answer')
+    expect(call![1]).toEqual({ method: 'POST', body: { answer: '그대로', replyToSeq: 1 } })
+    expect(call![1].body).not.toHaveProperty('refRepos') // toEqual은 undefined 필드를 못 거른다
+    w.unmount()
+  })
+
+  it('QUESTION ask는 answerRefRepos prop을 쓰지 않는다 — 슬롯 send가 넘긴 것만', async () => {
+    const w = await mountPanel(9, answered, { kind: 'QUESTION', answerRefRepos: [{ repoCatalogId: 2, branch: 'release/6.5' }] })
+    await w.find('textarea').setValue('토큰 검증은요?')
+    await w.find('[data-test="send-answer"]').trigger('click')
+    await flushPromises()
+    const call = useApiMock.mock.calls.find((c) => c[0] === '/api/questions/9/ask')
+    expect(call![1].body).toEqual({ answer: '토큰 검증은요?', replyToSeq: 1 })
+    expect(call![1].body).not.toHaveProperty('refRepos')
     w.unmount()
   })
 

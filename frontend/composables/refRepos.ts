@@ -1,7 +1,7 @@
 // 읽기 전용 참조 repo (질문 스펙 2026-10-22 §7.1, 작업 스펙 2026-10-24 §7) — API 계약 미러 + 칩 라벨·상태·집합 비교 순수 함수,
-// 맥락별 칩 문구(refChipCopy), 편집 초안(useRefDraft), 후보 카탈로그 지연 로더(useRefCatalog), 재시도 창의 준비 실패 참조
-// 판정(prepFailedRefIds). 화면 쪽 조각(RefRepoChips·RefRepoAddForm)이 공유하고, 질문 화면·작업 등록 창·승인 다이얼로그 등이
-// 등록·ask·승인·재시도 바디를 만들 때 쓴다.
+// 맥락별 칩 문구(refChipCopy)와 작업 상세의 맥락 고르기(taskRefContext), 편집 초안(useRefDraft), 후보 카탈로그 지연 로더(useRefCatalog),
+// 확정 화면 분류(splitConfirmRefs), 재시도 창의 준비 실패 참조 판정(prepFailedRefIds). 화면 쪽 조각(RefRepoChips·RefRepoAddForm)이
+// 공유하고, 질문 화면·작업 등록 창·승인 다이얼로그·작업 상세 등이 등록·ask·승인·답변·재시도 바디를 만들 때 쓴다.
 import type { Ref } from 'vue'
 
 /** 참조 repo 상한 — API `RepoCatalogService.MAX_REF_REPOS`와 같은 값이어야 한다. */
@@ -125,6 +125,35 @@ const REF_CHIP_COPY: Record<RefChipContext, RefChipCopy> = {
 /** 맥락의 칩 문구 — 사본을 돌려준다(받은 쪽이 고쳐도 표는 그대로). */
 export function refChipCopy(context: RefChipContext): RefChipCopy {
   return { ...REF_CHIP_COPY[context] }
+}
+
+// 작업 상세가 진행 중 세션의 참조를 보여 주는 상태 — 인터뷰중·입력대기·플랜승인대기 (API 상세 응답 §4.9와 같은 범위)
+const TASK_INTERVIEW_STATUSES = ['INTERVIEWING', 'INTERVIEW_INPUT', 'INTERVIEW_REVIEW']
+
+/**
+ * 작업 상세 칩 줄의 맥락 (작업 스펙 2026-10-24 §7.1·§7.4) — 상태 이름(영문 enum)으로 고른다.
+ * 승인대기는 아직 아무것도 받지 않았고(task-setup), 인터뷰 단계는 답변마다 다시 받으며(task-interview),
+ * 그 밖(확정 뒤·취소 등)은 저장된 고정 커밋을 그대로 쓴다(task-fixed).
+ */
+export function taskRefContext(status: string): RefChipContext {
+  if (status === 'AWAITING_APPROVAL') return 'task-setup'
+  if (TASK_INTERVIEW_STATUSES.includes(status)) return 'task-interview'
+  return 'task-fixed'
+}
+
+/**
+ * 계획 확정 화면의 참조 분류 (작업 스펙 2026-10-24 §7.5) — 서버가 확정 때 세션 참조를 작업으로 옮기는 규칙(§4.6)과 같다.
+ *  - pinned: 커밋이 있는 것 — 구현이 그 커밋을 쓴다. 서버가 사유를 비워 옮기므로 사유를 비운 사본(고정 칩으로 그린다)
+ *  - stale: 커밋이 있지만 마지막 턴에 받지 못한 것(사유 있음) — pinned에도 들어 있고, 경고 줄을 하나 더 그린다
+ *  - dropped: 커밋이 없는 것 — 인터뷰에서 한 번도 받지 못해 구현에 넘어가지 않는다
+ * 빈 문자열 커밋·사유는 없는 값으로 본다(refState와 같다). 입력은 고치지 않는다.
+ */
+export function splitConfirmRefs(refs: RefRepoView[]): { pinned: RefRepoView[]; stale: RefRepoView[]; dropped: RefRepoView[] } {
+  return {
+    pinned: refs.filter((r) => r.sha).map((r) => ({ ...r, error: null })),
+    stale: refs.filter((r) => r.sha && r.error),
+    dropped: refs.filter((r) => !r.sha),
+  }
 }
 
 /**

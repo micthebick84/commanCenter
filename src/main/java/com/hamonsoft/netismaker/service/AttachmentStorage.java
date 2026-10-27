@@ -222,6 +222,11 @@ public class AttachmentStorage {
         }
     }
 
+    /** 슬라이드 렌더링 작업 폴더의 부모 — {첨부 루트}/.render-work (스펙 2026-10-27 §6). 변환마다 하위에 uuid 폴더를 만들고 지운다. */
+    public Path renderWorkRoot() {
+        return root.resolve(".render-work");
+    }
+
     /** 루트 하위임을 재확인(디렉터리 탈출 이중 방어, 스펙 §5.3). */
     public Path resolve(String relativePath) {
         Path p = root.resolve(relativePath).normalize();

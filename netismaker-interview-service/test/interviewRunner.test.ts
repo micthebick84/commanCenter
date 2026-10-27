@@ -234,6 +234,7 @@ describe('InterviewRunner', () => {
     expect(seenPrompt).toContain('첨부 자료');
     expect(seenPrompt).toContain('/Users/micthebick/netis-maker/attachments/task-7/1-요구사항.pdf');
     expect(seenPrompt).toContain('Read');
+    expect(seenPrompt).toContain('파일이 없으면 건너뛰고');
     // contentType null은 리터럴 'null'로 렌더링되지 않는다 (스펙 §7)
     expect(seenPrompt).not.toContain('(null');
   });

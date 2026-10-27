@@ -18,7 +18,7 @@ import java.util.Optional;
 
 /**
  * 렌더링 큐 = 두 첨부 테이블의 render_* 칸 (스펙 2026-10-27 §5.2·§6 — 별도 큐 테이블 없음). 메서드마다 짧은 트랜잭션이고
- * 변환 자체는 호출자(AttachmentRenderJob)가 트랜잭션 밖에서 한다. claim은 작업 첨부 먼저, 없으면 질문 첨부.
+ * 변환 자체는 호출자(AttachmentRenderJob)가 트랜잭션 밖에서 한다. claim은 질문 첨부 먼저(질문 세션은 등록 즉시 시작해 렌더링을 최대 claim-wait만 기다리고 작업 인터뷰는 승인 뒤에야 시작한다), 없으면 작업 첨부.
  */
 @Slf4j
 @Component
@@ -40,21 +40,21 @@ public class AttachmentRenderQueue {
     @Transactional
     public Optional<RenderJobRef> claimNext() {
         OffsetDateTime now = OffsetDateTime.now();
-        Optional<Long> taskId = taskAttachments.findFirstPendingIdForUpdateSkipLocked();
-        if (taskId.isPresent()) {
-            Optional<TaskAttachment> a = taskAttachments.findById(taskId.get());
-            if (a.isPresent()) {
-                a.get().getRendition().markRunning(now);
-                return Optional.of(new RenderJobRef(Kind.TASK, taskId.get(),
-                        a.get().getStoredPath(), a.get().getOriginalFilename()));
-            }
-        }
         Optional<Long> questionId = questionAttachments.findFirstPendingIdForUpdateSkipLocked();
         if (questionId.isPresent()) {
             Optional<QuestionAttachment> a = questionAttachments.findById(questionId.get());
             if (a.isPresent()) {
                 a.get().getRendition().markRunning(now);
                 return Optional.of(new RenderJobRef(Kind.QUESTION, questionId.get(),
+                        a.get().getStoredPath(), a.get().getOriginalFilename()));
+            }
+        }
+        Optional<Long> taskId = taskAttachments.findFirstPendingIdForUpdateSkipLocked();
+        if (taskId.isPresent()) {
+            Optional<TaskAttachment> a = taskAttachments.findById(taskId.get());
+            if (a.isPresent()) {
+                a.get().getRendition().markRunning(now);
+                return Optional.of(new RenderJobRef(Kind.TASK, taskId.get(),
                         a.get().getStoredPath(), a.get().getOriginalFilename()));
             }
         }

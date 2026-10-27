@@ -344,7 +344,7 @@ public class TaskService {
     /**
      * 렌더링 상태 승계 (스펙 2026-10-27 §7.5): DONE이고 .render 폴더가 있으면 폴더를 복사하고 칸 값을 새 경로로 옮긴다.
      * 질문 쪽이 PENDING·RUNNING이거나 DONE인데 폴더가 없으면 새 첨부처럼 정책 초기값(대상이면 PENDING) — 작업 쪽을 따로
-     * 렌더링한다. FAILED·SKIPPED·NONE은 칸 값(사유 포함)을 그대로 옮긴다.
+     * 렌더링한다. SKIPPED(질문 업로드 때 렌더링이 꺼져 있었음)도 정책 초기값 — 지금 켜져 있으면 렌더링한다. FAILED·NONE은 칸 값(사유 포함)을 그대로 옮긴다.
      */
     private AttachmentRendition inheritRendition(QuestionAttachment q, String name, String rel, List<String> written) {
         AttachmentRendition src = q.getRendition();
@@ -357,7 +357,7 @@ public class TaskService {
                 attachmentStorage.copyTree(src.getDir(), renderRel);
                 return src.copyWithDir(renderRel);
             }
-            case PENDING, RUNNING -> {
+            case PENDING, RUNNING, SKIPPED -> {   // SKIPPED = 질문 업로드 때 렌더링이 꺼져 있었음 — 지금 켜져 있으면 렌더링한다
                 return renderPolicy.initial(name);
             }
             default -> {

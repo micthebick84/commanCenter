@@ -242,22 +242,40 @@ class TaskServiceInheritAttachmentsUnitTest {
     }
 
     @Test
-    void FAILED_SKIPPED_NONE은_그대로_옮긴다() throws Exception {
+    void FAILED_NONE은_그대로_옮긴다() throws Exception {
         AttachmentRendition failed = AttachmentRendition.of(RenderStatus.PENDING, null);
         failed.markFailed("soffice 시간 초과");
         questionAtt(null, "덱.pptx", 10, true, false, failed);
-        questionAtt(null, "덱2.pptx", 10, true, false, AttachmentRendition.of(RenderStatus.SKIPPED, "렌더링 꺼짐"));
         questionAtt(null, "a.txt", 10, true, false, AttachmentRendition.of(RenderStatus.NONE, null));
 
         service(200).create(req(QID), "user1", null, false);
 
-        List<TaskAttachment> atts = savedAttachments(4);
+        List<TaskAttachment> atts = savedAttachments(3);
         assertThat(atts.get(1).getRendition().getStatus()).isEqualTo(RenderStatus.FAILED);
         assertThat(atts.get(1).getRendition().getError()).isEqualTo("soffice 시간 초과");
-        assertThat(atts.get(2).getRendition().getStatus()).isEqualTo(RenderStatus.SKIPPED);
-        assertThat(atts.get(2).getRendition().getError()).isEqualTo("렌더링 꺼짐");
-        assertThat(atts.get(3).getRendition().getStatus()).isEqualTo(RenderStatus.NONE);
+        assertThat(atts.get(2).getRendition().getStatus()).isEqualTo(RenderStatus.NONE);
         verify(policy, never()).initial(any());
+    }
+
+    @Test
+    void 질문쪽_SKIPPED는_정책이_켜져_있으면_PENDING으로_다시_렌더링() throws Exception {
+        questionAtt(null, "덱.pptx", 10, true, false, AttachmentRendition.of(RenderStatus.SKIPPED, "렌더링 꺼짐"));
+
+        service(200).create(req(QID), "user1", null, false);
+
+        assertThat(savedAttachments(2).get(1).getRendition().getStatus()).isEqualTo(RenderStatus.PENDING);
+        verify(events, times(1)).publishEvent(any(AttachmentRenderRequested.class));
+    }
+
+    @Test
+    void 질문쪽_SKIPPED는_정책이_꺼져_있으면_SKIPPED_그대로() throws Exception {
+        doReturn(AttachmentRendition.of(RenderStatus.SKIPPED, "렌더링 꺼짐")).when(policy).initial(any());
+        questionAtt(null, "덱.pptx", 10, true, false, AttachmentRendition.of(RenderStatus.SKIPPED, "렌더링 꺼짐"));
+
+        service(200).create(req(QID), "user1", null, false);
+
+        assertThat(savedAttachments(2).get(1).getRendition().getStatus()).isEqualTo(RenderStatus.SKIPPED);
+        verify(events, never()).publishEvent(any(AttachmentRenderRequested.class));
     }
 
     @Test

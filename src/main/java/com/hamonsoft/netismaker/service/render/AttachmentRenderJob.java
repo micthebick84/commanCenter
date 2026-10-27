@@ -22,6 +22,7 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
  * 슬라이드 렌더링 잡 (스펙 2026-10-27 §6). 전용 단일 스레드({@value #THREAD_NAME})에서 한 번에 1건 — API의 공유 스케줄러
@@ -45,6 +46,7 @@ public class AttachmentRenderJob {
     private final RenderTargetPolicy policy;
     private final RenderProperties props;
     private final ScheduledExecutorService executor;
+    private final AtomicBoolean firstRecovery = new AtomicBoolean(true);
 
     public AttachmentRenderJob(AttachmentRenderQueue queue, SlideRenderer renderer, AttachmentStorage storage,
                                RenderTargetPolicy policy, RenderProperties props) {
@@ -172,9 +174,13 @@ public class AttachmentRenderJob {
         drain();
     }
 
-    /** 상한의 2배보다 오래된 RUNNING — 단일 스레드라 회수 시점에 이 프로세스가 처리 중인 건은 없다. */
-    private void recoverStale() {
-        queue.recoverStale(OffsetDateTime.now().minusSeconds(2L * props.timeoutSeconds()));
+    /**
+     * 멈춘 RUNNING 회수. 기동 뒤 첫 회수는 cutoff = 지금 — 단일 스레드라 이 프로세스는 아직 아무것도 렌더링하지 않았으므로
+     * 남은 RUNNING은 전부 이전 프로세스의 것이다. 이후 주기 회수는 상한의 2배보다 오래된 것만.
+     */
+    void recoverStale() {
+        OffsetDateTime now = OffsetDateTime.now();
+        queue.recoverStale(firstRecovery.getAndSet(false) ? now : now.minusSeconds(2L * props.timeoutSeconds()));
     }
 
     /** 이전 프로세스가 남긴 .render-work/* 를 지운다(스펙 §6). 실패는 경고만 — 렌더러는 실행마다 새 uuid 폴더를 쓴다. */

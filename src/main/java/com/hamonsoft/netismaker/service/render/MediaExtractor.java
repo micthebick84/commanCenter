@@ -49,12 +49,17 @@ public final class MediaExtractor {
         }
     }
 
+    /** Windows 예약 장치 이름(확장자가 붙어도 장치로 열린다) — 건너뛴다. */
+    private static final java.util.regex.Pattern RESERVED_DEVICE_NAMES =
+            java.util.regex.Pattern.compile("(?i)(CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])");
+
     /** 마지막 구분자 뒤 파일명 — 허용 확장자가 아니거나 쓸 수 없는 이름이면 null. */
     static String fileNameOf(String entryName) {
         String name = entryName.substring(Math.max(entryName.lastIndexOf('/'), entryName.lastIndexOf('\\')) + 1);
         if (name.isBlank() || name.startsWith(".")) return null;
         int dot = name.lastIndexOf('.');
         if (dot < 0 || !RASTER_EXTENSIONS.contains(name.substring(dot + 1).toLowerCase(Locale.ROOT))) return null;
+        if (RESERVED_DEVICE_NAMES.matcher(name.substring(0, dot)).matches()) return null;
         return name;
     }
 

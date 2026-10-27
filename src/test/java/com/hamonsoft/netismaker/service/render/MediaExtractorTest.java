@@ -34,6 +34,11 @@ class MediaExtractorTest {
             put(zip, "ppt/media/../../evil.png", noise(20 * 1024, 2));
             put(zip, "ppt/media/icon.png", noise(2 * 1024, 3));
             put(zip, "ppt/media/v.emf", noise(20 * 1024, 4));
+            put(zip, "ppt/media/CON.png", noise(20 * 1024, 5));
+            put(zip, "ppt/media/nul.png", noise(20 * 1024, 6));
+            put(zip, "ppt/media/Com1.png", noise(20 * 1024, 7));
+            put(zip, "ppt/media/lpt9.png", noise(20 * 1024, 8));
+            put(zip, "ppt/media/console.png", noise(20 * 1024, 9));
         }
         return out;
     }
@@ -57,8 +62,8 @@ class MediaExtractorTest {
 
         int n = MediaExtractor.extract(deck, mediaDir, 20);
 
-        assertThat(n).isEqualTo(2);
-        assertThat(names(mediaDir)).containsExactly("evil.png", "image1.png");
+        assertThat(n).isEqualTo(3);   // 예약 장치 이름(CON·nul·Com1·lpt9)은 건너뛴다
+        assertThat(names(mediaDir)).containsExactly("console.png", "evil.png", "image1.png");
         // 상위 폴더로 새어 나간 파일이 없다
         assertThat(names(tmp.resolve("out"))).containsExactly("media");
         assertThat(names(tmp)).containsExactly("deck.pptx", "out");
@@ -70,7 +75,7 @@ class MediaExtractorTest {
         Path mediaDir = tmp.resolve("m");
 
         assertThat(MediaExtractor.extract(deck, mediaDir, 1)).isEqualTo(1);
-        // 이름순 — evil.png가 먼저
-        assertThat(names(mediaDir)).containsExactly("evil.png");
+        // 이름순 — console.png가 먼저
+        assertThat(names(mediaDir)).containsExactly("console.png");
     }
 }

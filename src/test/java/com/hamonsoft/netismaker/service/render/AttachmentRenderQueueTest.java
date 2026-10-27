@@ -20,7 +20,7 @@ import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
-/** SQL 없이 도는 큐 판단(TASK 먼저·회수 분기). SKIP LOCKED 자체는 AttachmentRenderQueueIntegrationTest(CI). */
+/** SQL 없이 도는 큐 판단(QUESTION 먼저·회수 분기). SKIP LOCKED 자체는 AttachmentRenderQueueIntegrationTest(CI). */
 class AttachmentRenderQueueTest {
 
     private final TaskAttachmentRepository taskRepo = mock(TaskAttachmentRepository.class);
@@ -38,24 +38,8 @@ class AttachmentRenderQueueTest {
     }
 
     @Test
-    void claimNext는_작업_첨부를_먼저_잡고_RUNNING으로_바꾼다() {
-        TaskAttachment t = task("task-1/1-a.pptx", "a.pptx");
-        when(taskRepo.findFirstPendingIdForUpdateSkipLocked()).thenReturn(Optional.of(10L));
-        when(taskRepo.findById(10L)).thenReturn(Optional.of(t));
-
-        Optional<RenderJobRef> ref = queue.claimNext();
-
-        assertThat(ref).contains(new RenderJobRef(Kind.TASK, 10L, "task-1/1-a.pptx", "a.pptx"));
-        assertThat(t.getRendition().getStatus()).isEqualTo(RenderStatus.RUNNING);
-        assertThat(t.getRendition().getAttempts()).isEqualTo(1);
-        assertThat(t.getRendition().getStartedAt()).isNotNull();
-        verify(questionRepo, never()).findFirstPendingIdForUpdateSkipLocked();
-    }
-
-    @Test
-    void claimNext는_작업_첨부가_없으면_질문_첨부를_잡는다() {
+    void claimNext는_질문_첨부를_먼저_잡고_RUNNING으로_바꾼다() {
         QuestionAttachment q = question("question-2/create/1-b.pptx", "b.pptx");
-        when(taskRepo.findFirstPendingIdForUpdateSkipLocked()).thenReturn(Optional.empty());
         when(questionRepo.findFirstPendingIdForUpdateSkipLocked()).thenReturn(Optional.of(20L));
         when(questionRepo.findById(20L)).thenReturn(Optional.of(q));
 
@@ -63,6 +47,22 @@ class AttachmentRenderQueueTest {
 
         assertThat(ref).contains(new RenderJobRef(Kind.QUESTION, 20L, "question-2/create/1-b.pptx", "b.pptx"));
         assertThat(q.getRendition().getStatus()).isEqualTo(RenderStatus.RUNNING);
+        assertThat(q.getRendition().getAttempts()).isEqualTo(1);
+        assertThat(q.getRendition().getStartedAt()).isNotNull();
+        verify(taskRepo, never()).findFirstPendingIdForUpdateSkipLocked();
+    }
+
+    @Test
+    void claimNext는_질문_첨부가_없으면_작업_첨부를_잡는다() {
+        TaskAttachment t = task("task-1/1-a.pptx", "a.pptx");
+        when(questionRepo.findFirstPendingIdForUpdateSkipLocked()).thenReturn(Optional.empty());
+        when(taskRepo.findFirstPendingIdForUpdateSkipLocked()).thenReturn(Optional.of(10L));
+        when(taskRepo.findById(10L)).thenReturn(Optional.of(t));
+
+        Optional<RenderJobRef> ref = queue.claimNext();
+
+        assertThat(ref).contains(new RenderJobRef(Kind.TASK, 10L, "task-1/1-a.pptx", "a.pptx"));
+        assertThat(t.getRendition().getStatus()).isEqualTo(RenderStatus.RUNNING);
     }
 
     @Test

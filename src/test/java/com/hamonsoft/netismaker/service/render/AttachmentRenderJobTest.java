@@ -190,19 +190,32 @@ class AttachmentRenderJobTest {
     }
 
     @Test
-    void 기동하면_작업_폴더를_비우고_상한_2배보다_오래된_RUNNING을_회수한다() throws Exception {
+    void 기동하면_작업_폴더를_비우고_지금_이전에_시작한_RUNNING을_모두_회수한다() throws Exception {
         Path leftover = Files.createDirectories(storage.renderWorkRoot().resolve("old-uuid"));
         Files.writeString(leftover.resolve("input.pptx"), "x");
         when(queue.claimNext()).thenReturn(Optional.empty());
-        OffsetDateTime before = OffsetDateTime.now().minusSeconds(240);
+        OffsetDateTime before = OffsetDateTime.now();
 
         job.start();
 
         var cutoff = org.mockito.ArgumentCaptor.forClass(OffsetDateTime.class);
         verify(queue, timeout(5000)).recoverStale(cutoff.capture());
-        assertThat(cutoff.getValue()).isBetween(before.minusSeconds(5), OffsetDateTime.now().minusSeconds(239));
+        // 첫 회수 = 이 프로세스는 아직 아무것도 렌더링하지 않았으니 cutoff는 기동 시각(지금)
+        assertThat(cutoff.getValue()).isBetween(before.minusSeconds(1), OffsetDateTime.now().plusSeconds(1));
         verify(queue, timeout(5000)).claimNext();
         assertThat(Files.exists(leftover)).isFalse();
+    }
+
+    @Test
+    void 이후_주기_회수는_상한_2배보다_오래된_것만() {
+        job.recoverStale();   // 기동 첫 회수
+        job.recoverStale();   // 주기 회수
+        OffsetDateTime after = OffsetDateTime.now();
+
+        var cutoff = org.mockito.ArgumentCaptor.forClass(OffsetDateTime.class);
+        verify(queue, org.mockito.Mockito.times(2)).recoverStale(cutoff.capture());
+        assertThat(cutoff.getAllValues().get(0)).isAfter(after.minusSeconds(5));
+        assertThat(cutoff.getAllValues().get(1)).isBetween(after.minusSeconds(245), after.minusSeconds(235));
     }
 
     @Test

@@ -79,8 +79,8 @@ class AttachmentRenderQueueIntegrationTest {
         Optional<RenderJobRef> second = queue.claimNext();
         Optional<RenderJobRef> none = queue.claimNext();
 
-        assertThat(first).contains(new RenderJobRef(Kind.TASK, a.getId(), a.getStoredPath(), "1.pptx"));
-        assertThat(second).contains(new RenderJobRef(Kind.QUESTION, q.getId(), q.getStoredPath(), "q.pptx"));
+        assertThat(first).contains(new RenderJobRef(Kind.QUESTION, q.getId(), q.getStoredPath(), "q.pptx"));
+        assertThat(second).contains(new RenderJobRef(Kind.TASK, a.getId(), a.getStoredPath(), "1.pptx"));
         assertThat(none).isEmpty();
         AttachmentRendition r = taskAttachments.findById(a.getId()).orElseThrow().getRendition();
         assertThat(r.getStatus()).isEqualTo(RenderStatus.RUNNING);
@@ -89,8 +89,8 @@ class AttachmentRenderQueueIntegrationTest {
         assertThat(questionAttachments.findById(q.getId()).orElseThrow().getRendition().getStatus())
                 .isEqualTo(RenderStatus.RUNNING);
 
-        queue.complete(first.get(), a.getStoredPath() + ".render", new RenderResult(2, 5, 1));
-        queue.fail(second.get(), "PDF 변환 실패");
+        queue.complete(second.get(), a.getStoredPath() + ".render", new RenderResult(2, 5, 1));
+        queue.fail(first.get(), "PDF 변환 실패");
         AttachmentRendition done = taskAttachments.findById(a.getId()).orElseThrow().getRendition();
         assertThat(done.getStatus()).isEqualTo(RenderStatus.DONE);
         assertThat(done.getTotalPages()).isEqualTo(5);

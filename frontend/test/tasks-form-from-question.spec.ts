@@ -404,4 +404,40 @@ describe('작업 등록 창 — 질문 대화에서 이어서 (스펙 2026-10-24
     await flushPromises()
     expect(postedBody()).not.toHaveProperty('sourceQuestionId')
   })
+
+  describe('질문 첨부 승계 안내', () => {
+    const att = (id: number, fileName: string) => ({ id, fileName, contentType: 'text/plain', sizeBytes: 10 })
+    const notice = () => document.querySelector('[data-test="inherited-attachments"]')
+    const toggle = () => document.querySelector('[data-test="inherited-attachments-toggle"]') as HTMLElement | null
+    const names = () =>
+      Array.from(document.querySelectorAll('[data-test="inherited-attachment-name"]')).map((n) => n.textContent?.trim())
+
+    it('첨부 3개(등록 1 + 턴 2)면 안내 한 줄이 보이고 목록은 접혀 있다가 펼치면 이름 3개가 순서대로', async () => {
+      await mountPage(
+        { fromQuestion: '3' },
+        {
+          question: questionWith({
+            attachments: [att(1, '요구.txt')],
+            turns: [
+              { seq: 1, role: 'user', kind: 'question', content: 'a', attachments: [att(2, '화면.png')] },
+              { seq: 2, role: 'assistant', kind: 'answer', content: 'b' },
+              { seq: 3, role: 'user', kind: 'question', content: 'c', attachments: [att(3, '로그.txt')] },
+            ],
+          }),
+        },
+      )
+      expect(notice()!.textContent).toContain('질문 첨부 3개가 함께 등록됩니다')
+      expect(names()).toEqual([])
+      toggle()!.click()
+      await flushPromises()
+      expect(names()).toEqual(['요구.txt', '화면.png', '로그.txt'])
+      // 출처 안내 띠 바로 아래
+      expect(banner()!.compareDocumentPosition(notice()!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    })
+
+    it('첨부가 없으면 안내가 없다', async () => {
+      await mountPage({ fromQuestion: '3' })
+      expect(notice()).toBeNull()
+    })
+  })
 })

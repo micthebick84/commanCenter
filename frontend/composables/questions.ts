@@ -78,6 +78,8 @@ export interface TaskPrefill {
   refRepos: RefRepoView[]
   droppedRefs: RefRepoView[]
   targetMissing: boolean
+  /** 등록 때 함께 승계되는 질문 첨부 이름 — 등록 첨부 먼저, 이어서 턴 순서대로 (스펙 2026-10-27). */
+  attachmentNames: string[]
 }
 
 /**
@@ -103,6 +105,10 @@ export function taskPrefillFromQuestion(q: QuestionDetail, catalog: RepoCatalogO
     refRepos,
     droppedRefs,
     targetMissing: target == null,
+    attachmentNames: [
+      ...(q.attachments ?? []).map((a) => a.fileName),
+      ...(q.turns ?? []).flatMap((t) => (t.attachments ?? []).map((a) => a.fileName)),
+    ],
   }
 }
 

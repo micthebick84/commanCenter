@@ -25,6 +25,7 @@ async function main(): Promise<void> {
     forceFinishTurns: cfg.forceFinishTurns,
     heartbeatIntervalMs: cfg.heartbeatIntervalMs,
     turnTimeoutMs: cfg.turnTimeoutMs,
+    refTimeoutMs: cfg.refTimeoutMs,
     gitTokens: { githubPat: cfg.githubPat, gitlabToken: cfg.gitlabToken },
   });
   const loop = new ClaimLoop(client, runner, {

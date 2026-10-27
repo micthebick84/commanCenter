@@ -614,6 +614,31 @@ class WorkerMainLoopImplementationModeTest {
                 .endsWith("리뷰 후 Draft 표시를 해제하세요.\n");
     }
 
+    /** 참조 절은 머리 다음의 잘리지 않는 고정 절이고 상한 계산에 들어간다 (스펙 2026-10-24 §6.6). */
+    @Test
+    void the_pr_body_puts_the_ref_section_after_the_header_and_inside_the_cap() {
+        WorkerTaskResponse.TaskRefRepo ref = new WorkerTaskResponse.TaskRefRepo(12L, "옛앱", "apps/old-app",
+                "https://gitlab.example/apps/old-app.git", "gitlab", "release/6.5", "a".repeat(40));
+        WorkerTaskResponse task = new WorkerTaskResponse(7L, "acme/widgets", "main", "Add login", "desc",
+                WorkerTaskResponse.Kind.IMPLEMENTATION, List.of(), "가".repeat(100_000), "[]", null, null, List.of(),
+                null, null, null, null, null, null, null, null, null, null, null,
+                null, null, null, null, null, null, null, List.of(ref));
+
+        String body = WorkerMainLoop.renderPrBody(task, 12_000, "abcdef1234567", "- **구현 방식**: 리뷰\n", null,
+                List.of("옛앱: 파일 2개"));
+
+        assertThat(body.length()).isLessThanOrEqualTo(60_000).isGreaterThan(59_000);
+        assertThat(body).contains("- **소요시간**: 12초\n\n## 참조 repo (읽기 전용)\n- 옛앱 · release/6.5@aaaaaaa\n"
+                        + "> ⚠ 참조 repo 변경 감지(이 PR에는 포함 안 됨): 옛앱: 파일 2개\n\n## 사전 분석\n")
+                .contains("…(이하 생략)\n\n---\n")
+                .endsWith("리뷰 후 Ready for review로 전환하세요.\n");
+        // 참조가 없으면 5인자와 바이트 그대로(경고가 와도 절을 만들지 않는다)
+        WorkerTaskResponse noRefs = taskWithAnalysis(null, "분석");
+        assertThat(WorkerMainLoop.renderPrBody(noRefs, 12_000, "abcdef1234567", null, null, List.of("옛앱: 파일 2개")))
+                .isEqualTo(WorkerMainLoop.renderPrBody(noRefs, 12_000, "abcdef1234567", null, null))
+                .doesNotContain("## 참조 repo");
+    }
+
     @Test
     void cutting_never_splits_a_surrogate_pair() {
         for (int pad = 0; pad < 2; pad++) {   // 자르는 자리가 짝수·홀수 어느 쪽이든

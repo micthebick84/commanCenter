@@ -145,9 +145,10 @@ public class InterviewSession {
     private List<Long> dbConnectionIds = new ArrayList<>();
 
     /**
-     * 질문 세션의 읽기 전용 참조 repo — 선택 당시 스냅샷 + 러너가 보고한 고정 커밋·실패 사유 (스펙 2026-10-22 §3).
+     * 읽기 전용 참조 repo — 선택 당시 스냅샷 + 러너가 보고한 고정 커밋·실패 사유 (스펙 2026-10-22 §3).
      * 대상 repo 박제(git_url·repo_alias·repo_catalog_id)·mcps_extra와 같은 방식이라 카탈로그를 고치거나 지워도 그대로다.
-     * 인터뷰 세션은 이 단계에서 항상 [].
+     * 질문 세션은 등록·대화 중 변경으로, 작업 인터뷰 세션은 승인 때 작업의 참조를 복사해 갖는다
+     * (InterviewService.createForTask, 스펙 2026-10-24 §3.2).
      */
     @JdbcTypeCode(SqlTypes.JSON)
     @Column(name = "ref_repos", nullable = false, columnDefinition = "jsonb")

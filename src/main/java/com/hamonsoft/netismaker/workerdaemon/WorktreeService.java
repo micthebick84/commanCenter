@@ -1,18 +1,27 @@
 package com.hamonsoft.netismaker.workerdaemon;
 
+import com.hamonsoft.netismaker.dto.WorkerTaskResponse;
+import com.hamonsoft.netismaker.git.GitRemotes;
+import com.hamonsoft.netismaker.git.RepoRef;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.annotation.Profile;
 import org.springframework.stereotype.Component;
 
 import java.io.File;
 import java.io.IOException;
+import java.nio.file.DirectoryNotEmptyException;
 import java.nio.file.Files;
 import java.nio.file.LinkOption;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.nio.file.StandardOpenOption;
+import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
+import java.util.Optional;
+import java.util.Set;
+import java.util.regex.Pattern;
 
 /**
  * 구현 단계의 worktree 라이프사이클.
@@ -20,6 +29,8 @@ import java.util.Locale;
  *  레이아웃:
  *    ~/netis-maker/repos/{owner}/{repo}        ← GitRepoCache (분석 + 베이스 fetch)
  *    ~/netis-maker/worktrees/{owner}/{repo}/{slug}  ← 본 서비스
+ *    ~/netis-maker/worktrees/_refs/task-{id}/{카탈로그 id}  ← 구현용 읽기 전용 참조 repo(고정 커밋 detached,
+ *        대상 worktree 밖 — 스펙 2026-10-24 §6.2). 원본은 그 참조 repo의 레포 캐시(대상과 같은 캐시·락).
  *
  *  브랜치 컨벤션:
  *    netismaker/task-{id}-{slug-of-title}[-r{시도 번호}]  (2회째부터, 스펙 2026-10-15 §6.1)
@@ -34,6 +45,32 @@ import java.util.Locale;
 public class WorktreeService {
 
     private static final long GIT_TIMEOUT_SECONDS = 600;
+    /** 네트워크를 쓰지 않는 참조 git(config·status·rev-parse)의 상한. */
+    private static final long LOCAL_GIT_TIMEOUT_SECONDS = 120;
+
+    /**
+     * 참조 worktree의 맨 위 폴더 이름 — {worktree-root}/_refs. GitHub 사용자명은 '_'로 시작할 수 없고 GitLab은
+     * _gitlab 아래라 대상 {localKey} 폴더와 겹치지 않는다.
+     */
+    static final String REFS_DIR = "_refs";
+    /** 참조 worktree 전용 push URL — 헬퍼가 없는 스킴이라 실수 push가 실패한다(공유 캐시·대상 worktree에는 쓰지 않는다). */
+    static final String REF_PUSH_URL_BLOCKED = "netis-read-only-ref://push-disabled";
+    /** porcelain v1 상태 줄("XY 경로") — 합쳐 받은 stderr 경고 줄은 변경으로 세지 않는다. */
+    private static final Pattern STATUS_LINE = Pattern.compile("[ MTADRCU?!]{2} .+");
+
+    /** worktree를 떼고 지울 때의 git 호출 — 대상은 평소 git, 참조는 무프롬프트 참조 git. */
+    @FunctionalInterface
+    private interface WorktreeGit {
+        ProcessRunner.Result run(File dir, String... args) throws IOException, InterruptedException;
+    }
+
+    private static final WorktreeGit TARGET_GIT = (dir, args) -> {
+        List<String> cmd = new ArrayList<>(List.of("git"));
+        cmd.addAll(List.of(args));
+        return ProcessRunner.run(dir, cmd, GIT_TIMEOUT_SECONDS);
+    };
+    private static final WorktreeGit REF_GIT =
+            (dir, args) -> GitRepoCache.runRefGit(dir, GitRepoCache.refGit(args), GIT_TIMEOUT_SECONDS);
 
     /**
      * 워커 임시 파일 — 에이전트 커밋(SDD 태스크 커밋 포함)에 섞이지 않게 info/exclude에 둔다 (스펙 2026-10-15 §6.1).
@@ -98,15 +135,9 @@ public class WorktreeService {
         Files.createDirectories(worktreeDir.getParent());
 
         // 멱등성: 같은 task를 재시도하는 경우 기존 worktree/브랜치 정리
-        if (Files.exists(worktreeDir)) {
+        if (Files.exists(worktreeDir, LinkOption.NOFOLLOW_LINKS)) {
             log.warn("기존 worktree 발견, 강제 제거: {}", worktreeDir);
-            try {
-                ProcessRunner.run(repoCacheDir, List.of("git", "worktree", "remove", "--force",
-                        worktreeDir.toString()), GIT_TIMEOUT_SECONDS);
-            } catch (Exception e) {
-                log.warn("worktree remove 실패 (계속): {}", e.getMessage());
-            }
-            deleteLeftover(worktreeDir);
+            removeWorktree(TARGET_GIT, repoCacheDir, worktreeDir, false);
         }
         // 같은 이름 브랜치가 캐시에 남아있으면 제거 (워크트리 없는 dangling 브랜치)
         try {
@@ -177,15 +208,9 @@ public class WorktreeService {
         Path worktreeDir = worktreeDir(repoKey, WorktreeKind.DEPLOY, taskId);
         Files.createDirectories(worktreeDir.getParent());
 
-        if (Files.exists(worktreeDir)) {
+        if (Files.exists(worktreeDir, LinkOption.NOFOLLOW_LINKS)) {
             log.warn("기존 deploy worktree 발견, 강제 제거: {}", worktreeDir);
-            try {
-                ProcessRunner.run(repoCacheDir, List.of("git", "worktree", "remove", "--force",
-                        worktreeDir.toString()), GIT_TIMEOUT_SECONDS);
-            } catch (Exception e) {
-                log.warn("worktree remove 실패 (계속): {}", e.getMessage());
-            }
-            deleteLeftover(worktreeDir);
+            removeWorktree(TARGET_GIT, repoCacheDir, worktreeDir, false);
         }
 
         ProcessRunner.requireSuccess(repoCacheDir,
@@ -213,15 +238,9 @@ public class WorktreeService {
             throws IOException, InterruptedException {
         Path worktreeDir = worktreeDir(repoKey, WorktreeKind.DESIGN, taskId);
         Files.createDirectories(worktreeDir.getParent());
-        if (Files.exists(worktreeDir)) {
+        if (Files.exists(worktreeDir, LinkOption.NOFOLLOW_LINKS)) {
             log.warn("기존 design worktree 발견, 강제 제거: {}", worktreeDir);
-            try {
-                ProcessRunner.run(repoCacheDir, List.of("git", "worktree", "remove", "--force",
-                        worktreeDir.toString()), GIT_TIMEOUT_SECONDS);
-            } catch (Exception e) {
-                log.warn("worktree remove 실패 (계속): {}", e.getMessage());
-            }
-            deleteLeftover(worktreeDir);
+            removeWorktree(TARGET_GIT, repoCacheDir, worktreeDir, false);
         }
         ProcessRunner.requireSuccess(repoCacheDir,
                 List.of("git", "worktree", "add", "--force", "--detach",
@@ -233,6 +252,27 @@ public class WorktreeService {
 
     public Path worktreeDir(String repoKey, WorktreeKind kind, long taskId) {
         return Paths.get(props.worktreeRoot(), repoKey, kind.dirName(taskId));
+    }
+
+    /**
+     * 구현용 참조 worktree 폴더 — {worktree-root}/_refs/task-{id}/{카탈로그 id}. 대상 worktree 밖 짧은 경로다:
+     * 안에 두면 {@code git add -A}가 쓸어 담고 그 안의 CLAUDE.md·.claude/rules가 로드되며, Windows 260자 한도에도 걸린다.
+     */
+    public Path refWorktreeDir(long taskId, long catalogId) {
+        return Paths.get(props.worktreeRoot(), REFS_DIR, WorktreeKind.TASK.dirName(taskId),
+                String.valueOf(catalogId));
+    }
+
+    /**
+     * claim의 참조 → RepoRef. repoHost가 "github"·"gitlab"이면 그대로, 비었거나 모르는 값이면 대상 스냅샷과 같은 규칙
+     * (API도 repoHost를 같은 fromSnapshot으로 채우므로 운영 동작은 같다). 캐시 키는 항상 GitRemotes.localKey(이 값).
+     */
+    public static RepoRef repoRefOf(WorkerTaskResponse.TaskRefRepo ref) {
+        String host = ref.repoHost();
+        if ("github".equals(host) || "gitlab".equals(host)) {
+            return new RepoRef(host, ref.githubRepo(), ref.gitUrl());
+        }
+        return RepoRef.fromSnapshot(ref.githubRepo(), ref.gitUrl());
     }
 
     public enum DiscardResult { REMOVED, ABSENT, GIT_LOCKED }
@@ -271,23 +311,182 @@ public class WorktreeService {
         boolean present = Files.exists(dir, LinkOption.NOFOLLOW_LINKS);
 
         if (present && isGitLocked(dir)) return DiscardResult.GIT_LOCKED;
-        if (present && hasCache) {
-            ProcessRunner.Result r = ProcessRunner.run(cache.toFile(),
-                    List.of("git", "worktree", "remove", "--force", dir.toString()), GIT_TIMEOUT_SECONDS);
-            if (r.exitCode() != 0) log.debug("git worktree remove 실패(폴더 직접 삭제로 진행): {}", r.stdout());
+        removeWorktree(TARGET_GIT, hasCache ? cache.toFile() : null, dir, true);
+        if (hasCache && kind == WorktreeKind.TASK) deleteTaskBranches(cache.toFile(), taskId);
+        if (present) log.info("worktree 정리: {}", dir);
+        return present ? DiscardResult.REMOVED : DiscardResult.ABSENT;
+    }
+
+    /**
+     * dir의 worktree를 캐시에서 떼고(git worktree remove --force — 실패는 무시) 남은 폴더를 지운다. 대상·참조의
+     * 재생성 전 정리와 작업 끝 정리가 모두 이 절차를 쓴다. 폴더 삭제는 심볼릭 링크·Windows 정션을 따라가지 않고 링크만
+     * 지운다(git worktree remove --force가 정션을 남겨 둠 — 따라가면 worktree 밖이 지워진다).
+     *  - discard=false(재생성 전): 폴더 삭제 실패는 경고만 — 이어지는 worktree add가 실패로 드러낸다
+     *  - discard=true(작업 끝 정리): 폴더 삭제 실패면 IOException, 캐시가 있으면 끝에 git worktree prune
+     * cacheDir가 null이면 git 없이 폴더만 지운다.
+     */
+    private static void removeWorktree(WorktreeGit git, File cacheDir, Path dir, boolean discard)
+            throws IOException, InterruptedException {
+        if (cacheDir != null && Files.exists(dir, LinkOption.NOFOLLOW_LINKS)) {
+            try {
+                ProcessRunner.Result r = git.run(cacheDir, "worktree", "remove", "--force", dir.toString());
+                if (r.exitCode() != 0) log.debug("git worktree remove 실패(폴더 직접 삭제로 진행): {}", r.stdout());
+            } catch (IOException e) {
+                log.warn("worktree remove 실패 (계속): {}", e.getMessage());
+            }
         }
         if (Files.exists(dir, LinkOption.NOFOLLOW_LINKS)) {
             RepoCacheCleanupJob.DeleteResult d = RepoCacheCleanupJob.deleteTree(dir);
             if (d.failures() > 0) {
-                throw new IOException("worktree 폴더 삭제 실패 " + d.failures() + "건: " + dir);
+                if (discard) throw new IOException("worktree 폴더 삭제 실패 " + d.failures() + "건: " + dir);
+                log.warn("기존 worktree 폴더 삭제 미완료: {} ({}개 항목 실패)", dir, d.failures());
             }
         }
-        if (hasCache) {
-            ProcessRunner.run(cache.toFile(), List.of("git", "worktree", "prune"), GIT_TIMEOUT_SECONDS);
-            if (kind == WorktreeKind.TASK) deleteTaskBranches(cache.toFile(), taskId);
+        if (discard && cacheDir != null) git.run(cacheDir, "worktree", "prune");
+    }
+
+    /**
+     * 참조 worktree를 고정 커밋에 detached로 만든다(스펙 2026-10-24 §6.2). 그 참조의 레포 락을 **한 번만** 잡고 그 안에서
+     * 고정 커밋 준비 → 남은 폴더 정리 → {@code worktree add --force --detach} → 이 worktree에만 push URL 무효화. 기준선은 락을
+     * 놓은 뒤에 잡는다 — 그 worktree 전용 index만 건드리고({@link #refChangeWarning}도 락 없이 같은 명령을 쓴다), 큰 옛 레포의 첫
+     * status는 수십 초가 걸려 그동안 같은 레포를 쓰는 다른 워커 프로세스가 60초 락 대기로 실패할 수 있어서다. 기준선을 못 잡으면 그
+     * 참조를 평소 정리 경로({@link #discardRefWorktree})로 지우고 같은 예외를 던진다(준비 실패 경로는 그대로).
+     * sha·브랜치 모양은 락 전에 본다. 대상 {@code ensureFresh}는 쓰지 않는다(공유 캐시의 HEAD·origin/*를 옮기지 않게).
+     * git은 전부 무프롬프트 참조 git(체크아웃 필터의 자격증명 요청도 묻지 않게). 실패는 가린 출력의 IOException.
+     */
+    public RefWorktree createRefWorktree(long taskId, WorkerTaskResponse.TaskRefRepo ref)
+            throws IOException, InterruptedException {
+        String sha = GitRepoCache.checkRefTarget(ref.branch(), ref.sha());
+        RepoRef repo = repoRefOf(ref);
+        String refKey = GitRemotes.localKey(repo);
+        Path dir = refWorktreeDir(taskId, ref.catalogId());
+        repos.withRepoLock(refKey, () -> {
+            File cacheDir = repos.prepareRefCommitUnderLock(repo, ref.branch(), sha);
+            Files.createDirectories(dir.getParent());
+            if (Files.exists(dir, LinkOption.NOFOLLOW_LINKS)) {
+                log.warn("기존 참조 worktree 발견, 강제 제거: {}", dir);
+                removeWorktree(REF_GIT, cacheDir, dir, false);
+            }
+            GitRepoCache.requireRefGit(cacheDir,
+                    GitRepoCache.refGit("worktree", "add", "--force", "--detach", dir.toString(), sha),
+                    GIT_TIMEOUT_SECONDS);
+            // 실수 push 막기 — worktree 전용 설정이라 공유 캐시 본체·다른 worktree(대상 작업)에는 걸리지 않는다
+            GitRepoCache.requireRefGit(cacheDir,
+                    GitRepoCache.refGit("config", "extensions.worktreeConfig", "true"), LOCAL_GIT_TIMEOUT_SECONDS);
+            GitRepoCache.requireRefGit(dir.toFile(),
+                    GitRepoCache.refGit("config", "--worktree", "remote.origin.pushurl", REF_PUSH_URL_BLOCKED),
+                    LOCAL_GIT_TIMEOUT_SECONDS);
+            return null;
+        });
+        List<String> baseline;
+        try {
+            baseline = refStatus(dir.toFile());
+        } catch (IOException | InterruptedException | RuntimeException e) {
+            discardRefWorktree(taskId, ref);
+            throw e;
         }
-        if (present) log.info("worktree 정리: {}", dir);
+        log.info("참조 worktree 생성: task={} {}({})@{} dir={}", taskId, ref.alias(), ref.branch(),
+                sha.substring(0, 7), dir);
+        return new RefWorktree(ref.catalogId(), ref.alias(), ref.branch(), sha, refKey, dir.toFile(), baseline);
+    }
+
+    /**
+     * claude가 끝난 뒤 참조 폴더가 바뀌었는지 — 만든 직후 기준선과 비교(스펙 §6.6). 락 없이 본다(그 worktree 전용 index만 건드림).
+     * 예외를 던지지 않는다: 폴더가 없으면 "참조 폴더가 지워짐", git을 못 돌리면 "변경 확인 실패".
+     */
+    public Optional<String> refChangeWarning(RefWorktree ref) {
+        Path dir = ref.dir().toPath();
+        if (!Files.exists(dir, LinkOption.NOFOLLOW_LINKS)) return Optional.of(ref.alias() + ": 참조 폴더가 지워짐");
+        try {
+            // .git 파일이 없으면 git이 위쪽 폴더의 다른 repo를 볼 수 있다 — 확인할 수 없음으로 친다
+            if (!Files.isRegularFile(dir.resolve(".git"), LinkOption.NOFOLLOW_LINKS)) {
+                throw new IOException(".git 파일 없음");
+            }
+            List<String> now = refStatus(dir.toFile());
+            String head = GitRepoCache.requireRefGit(dir.toFile(), GitRepoCache.refGit("rev-parse", "HEAD"),
+                            LOCAL_GIT_TIMEOUT_SECONDS)
+                    .lines().map(String::strip).filter(GitRepoCache::isFullSha).reduce((a, b) -> b)
+                    .orElseThrow(() -> new IOException("HEAD를 읽지 못했습니다"));
+            return changeWarning(ref.alias(), ref.baseline(), now, ref.sha(), head);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            return Optional.of(ref.alias() + ": 변경 확인 실패");
+        } catch (Exception e) {
+            log.warn("참조 변경 확인 실패: {} ({})", dir, e.getMessage());
+            return Optional.of(ref.alias() + ": 변경 확인 실패");
+        }
+    }
+
+    /**
+     * HEAD가 고정 커밋이 아니면 "{별칭}: HEAD가 고정 커밋과 다름"(파일 수보다 우선), 아니면 기준선에 없던 상태 줄이 N개면
+     * "{별칭}: 파일 {N}개". 기준선과 비교하므로 checkout 직후부터 dirty로 보이는 repo(CRLF·.gitattributes)는 경고하지 않는다.
+     */
+    static Optional<String> changeWarning(String alias, List<String> baseline, List<String> now,
+                                          String pinnedSha, String head) {
+        if (head == null || !head.equalsIgnoreCase(pinnedSha)) {
+            return Optional.of(alias + ": HEAD가 고정 커밋과 다름");
+        }
+        Set<String> before = new HashSet<>(baseline);
+        long added = now.stream().filter(line -> !before.contains(line)).count();
+        return added > 0 ? Optional.of(alias + ": 파일 " + added + "개") : Optional.empty();
+    }
+
+    /** 무시 파일까지 포함한 상태 줄 — 참조 폴더에서 빌드·설치한 흔적도 잡는다. */
+    private static List<String> refStatus(File dir) throws IOException, InterruptedException {
+        String out = GitRepoCache.requireRefGit(dir,
+                GitRepoCache.refGit("status", "--porcelain", "--untracked-files=all", "--ignored=matching"),
+                LOCAL_GIT_TIMEOUT_SECONDS);
+        return out.lines().filter(line -> STATUS_LINE.matcher(line).matches()).toList();
+    }
+
+    /**
+     * 작업이 끝난 참조 worktree 정리(best-effort, 성공·실패 모든 경로) — 대상용 discard와 별개(스펙 §6.8).
+     * 폴더가 없으면 락을 잡지 않는다. 있으면 원본 캐시의 레포 락 안에서 discardRefUnderLock, 락 밖에서 비게 된
+     * _refs/task-{id}를 지운다. 실패는 경고만 — 남은 폴더는 WorktreeCleanupJob이 다시 시도한다.
+     */
+    public void discardRefWorktree(long taskId, WorkerTaskResponse.TaskRefRepo ref) {
+        Path dir = null;
+        try {
+            dir = refWorktreeDir(taskId, ref.catalogId());
+            if (Files.exists(dir, LinkOption.NOFOLLOW_LINKS)) {
+                String refKey = GitRemotes.localKey(repoRefOf(ref));
+                Path refDir = dir;
+                Path cacheDir = Paths.get(props.reposDir(), refKey);
+                DiscardResult r = repos.withRepoLock(refKey, () -> discardRefUnderLock(refDir, cacheDir));
+                if (r == DiscardResult.GIT_LOCKED) log.info("참조 worktree 정리 건너뜀(git worktree lock): {}", dir);
+            }
+            deleteIfEmpty(dir.getParent());
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        } catch (Exception e) {
+            log.warn("참조 worktree 정리 실패(주기 정리가 다시 시도): {} ({})", dir, e.getMessage());
+        }
+    }
+
+    /**
+     * 참조 worktree 제거 절차. cacheDir가 있으면 호출자가 그 캐시의 레포 락을 쥐고 있어야 한다.
+     *  - cacheDir에 .git 디렉터리가 있으면: git worktree lock이면 손대지 않음 → worktree remove --force(실패 무시)
+     *    → 남은 트리 삭제(링크를 따라가지 않음, 실패면 IOException) → worktree prune. detached라 지울 브랜치는 없다.
+     *  - cacheDir가 null이거나 .git이 없으면(원본 캐시를 모름 — 정리 잡): 잠금 검사·git 없이 폴더만 지운다.
+     */
+    public DiscardResult discardRefUnderLock(Path refDir, Path cacheDir) throws IOException, InterruptedException {
+        boolean hasCache = cacheDir != null && Files.isDirectory(cacheDir.resolve(".git"), LinkOption.NOFOLLOW_LINKS);
+        boolean present = Files.exists(refDir, LinkOption.NOFOLLOW_LINKS);
+        if (present && hasCache && isGitLocked(refDir)) return DiscardResult.GIT_LOCKED;
+        removeWorktree(REF_GIT, hasCache ? cacheDir.toFile() : null, refDir, true);
+        if (present) log.info("참조 worktree 정리: {}", refDir);
         return present ? DiscardResult.REMOVED : DiscardResult.ABSENT;
+    }
+
+    /** 비었을 때만 지운다 — 같은 작업의 다른 참조가 남아 있으면 그대로 둔다. */
+    private static void deleteIfEmpty(Path dir) {
+        try {
+            Files.deleteIfExists(dir);
+        } catch (DirectoryNotEmptyException ignore) {
+            // 같은 작업의 다른 참조 폴더가 아직 있다
+        } catch (IOException e) {
+            log.debug("빈 참조 작업 폴더 삭제 실패(계속): {} ({})", dir, e.getMessage());
+        }
     }
 
     /**
@@ -356,17 +555,12 @@ public class WorktreeService {
         return out.toString();
     }
 
-    /**
-     * 재생성 전 남은 worktree 폴더 제거. 심볼릭 링크·Windows 정션은 따라가지 않고 링크만 지운다
-     * (git worktree remove --force가 정션을 남겨 둠 — 따라가면 worktree 밖이 지워진다).
-     * 실패해도 예외 없이 경고만 — 남은 폴더는 이어지는 worktree add가 실패로 드러낸다.
-     */
-    private static void deleteLeftover(Path dir) {
-        RepoCacheCleanupJob.DeleteResult d = RepoCacheCleanupJob.deleteTree(dir);
-        if (d.failures() > 0) {
-            log.warn("기존 worktree 폴더 삭제 미완료: {} ({}개 항목 실패)", dir, d.failures());
-        }
-    }
-
     public record CreatedWorktree(File dir, String branchName) {}
+
+    /**
+     * 구현용 참조 worktree 하나. sha는 소문자 고정 커밋, repoKey는 원본 레포 캐시의 localKey,
+     * baseline은 만든 직후의 상태 줄(무시 파일 포함) — refChangeWarning이 이것과 비교한다.
+     */
+    public record RefWorktree(long catalogId, String alias, String branch, String sha, String repoKey, File dir,
+                              List<String> baseline) {}
 }

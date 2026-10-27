@@ -17,10 +17,12 @@ import org.springframework.stereotype.Component;
 import java.io.File;
 import java.nio.file.Path;
 import java.time.Duration;
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.function.LongSupplier;
 
 /**
  *  워커 메인 루프.
@@ -33,15 +35,21 @@ import java.util.Optional;
  *     2) 분석 prompt 치환 + claude -p exec
  *     3) 결과 파싱 → POST result (status=COMPLETED|FAILED)
  *
- *   IMPLEMENTATION 흐름 (구현 방식은 claim의 implementation 블록 — 스펙 2026-10-15):
- *     1) git fetch/clone (베이스 브랜치 최신화)
- *     2) WorktreeService.create → 새 브랜치 worktree (재시도는 -rN) + 워커 임시 파일 info/exclude
- *     3) 방식 준비(계획·설계 파일, 대신 진행 판정) → 방식별 구현 prompt + claude -p exec (worktree에서)
+ *   IMPLEMENTATION 흐름 (구현 방식은 claim의 implementation 블록 — 스펙 2026-10-15, 참조 repo — 스펙 2026-10-24 §6):
+ *     1) 참조 repo가 있으면 입력 순서대로 고정 커밋의 참조 worktree(_refs/task-{id}/{카탈로그 id}, 대상 밖) — 하나라도
+ *        실패하면 만든 참조를 지우고 구현실패(대상 fetch·worktree·claude 없음). 준비에 쓴 시간은 claude 상한에서 뺀다.
+ *        대상 fetch보다 먼저 한다 — 대상 fetch와 worktree 생성 사이가 짧아야 worktree 기준과 baseSha가 같다
+ *     2) git fetch/clone (베이스 브랜치 최신화) — 실패하면 만든 참조를 지우고 구현실패
+ *     3) WorktreeService.create → 새 브랜치 worktree (재시도는 -rN) + 워커 임시 파일 info/exclude
+ *     4) 방식 준비(계획·설계 파일 — 계획 파일 머리에 참조 절, 대신 진행 판정) → 방식별 구현 prompt(끝에 참조 절)
+ *        + claude -p exec (worktree에서, --add-dir 없음)
+ *        → claude가 어떻게 끝나든 참조 폴더 변경 검사(경고는 PR 본문·결과 보고, 실패면 사유 끝)
  *        → 실패하면 남은 변경을 WIP 커밋으로 push(부분 작업 보존)
  *        → 성공하면 리뷰 메모 회수, .netis/·목업 삭제, 배포 env 목록(.netis-deploy-env.json) 회수·삭제
- *     4) GitOpsService.commitAndPush(에이전트 커밋 수용) → headSha
- *     5) GitOpsService.createDraftPr → prUrl/prNumber (본문에 방식 줄·리뷰 메모)
- *     6) POST result (status=PR_CREATED 또는 IMPLEMENTATION_FAILED, 시도 번호 포함)
+ *     5) GitOpsService.commitAndPush(에이전트 커밋 수용, 대상만) → headSha
+ *     6) GitOpsService.createDraftPr → prUrl/prNumber (본문에 방식 줄·참조 절·리뷰 메모)
+ *     7) POST result (status=PR_CREATED 또는 IMPLEMENTATION_FAILED, 시도 번호·참조 경고 포함)
+ *     8) 참조 worktree는 모든 경로에서 지운다(대상 worktree는 지금처럼 성공이면 지우고 실패면 남긴다)
  */
 @Component
 @Profile("worker")
@@ -65,6 +73,9 @@ public class WorkerMainLoop {
 
     /** 기동 알림이 성공(또는 구 API의 404)한 뒤에만 claim한다. 스케줄러 스레드와 테스트가 함께 읽는다. */
     private volatile boolean startupReported;
+
+    /** 참조 repo 준비 시간을 재는 시계(나노초) — 테스트가 바꾼다. */
+    LongSupplier nanoClock = System::nanoTime;
 
     public WorkerMainLoop(WorkerProperties props,
                           WorkerHttpClient http,
@@ -242,17 +253,69 @@ public class WorkerMainLoop {
         ImplementationMode requested = ImplementationMode.fromWireOrDirect(spec == null ? null : spec.mode());
         int attempt = implementationAttemptOf(task);
 
-        // 1. 베이스 브랜치 최신화 (worktree add 시 origin/{base} 참조)
+        // 1. 참조 repo 준비 — 입력 순서대로 하나씩(레포 락도 한 번에 하나), 대상 fetch보다 먼저 (스펙 2026-10-24 §6.1~§6.3).
+        //    대상 fetch와 대상 worktree 생성 사이에 두면 그 틈이 분 단위로 벌어진다 — worktree는 생성 시점의
+        //    origin/{base}에서 분기하고 프롬프트·리뷰·커밋 판정의 baseSha는 fetch 때의 commitSha라, 그 틈에 같은 PC의
+        //    다른 워커가 같은 브랜치를 최신화하면 둘이 어긋난다. 참조가 없으면 아무것도 부르지 않고 claude 상한도 그대로다
+        List<WorkerTaskResponse.TaskRefRepo> refs = refsOf(task);
+        List<WorkerTaskResponse.TaskRefRepo> attempted = new ArrayList<>();
+        List<WorktreeService.RefWorktree> ready = new ArrayList<>();
+        Duration limit = implementationTimeoutOf(task, props.implementationTimeout());
+        Duration claudeLimit = limit;
+        if (!refs.isEmpty()) {
+            long started = nanoClock.getAsLong();
+            long last = started;
+            for (WorkerTaskResponse.TaskRefRepo ref : refs) {
+                attempted.add(ref);   // 실패한 참조도 남은 폴더를 지운다
+                try {
+                    ready.add(worktrees.createRefWorktree(task.id(), ref));
+                } catch (Exception e) {
+                    // 참조를 다 준비하지 못하면 claude를 실행하지 않는다 — 대상은 fetch도 worktree도 하지 않는다
+                    discardRefWorktrees(task.id(), attempted);
+                    safePostImplementationFailure(task.id(), attempt,
+                            RefRepoPrompts.prepFailureReason(ref, e), null, null, null);
+                    return;
+                }
+                long now = nanoClock.getAsLong();
+                log.info("참조 repo 준비: task={} {}({})@{} {}ms", task.id(), ref.alias(), ref.branch(),
+                        RefRepoPrompts.sha7(ref.sha()), (now - last) / 1_000_000);
+                last = now;
+            }
+            Duration prep = Duration.ofNanos(last - started);
+            claudeLimit = limit.minus(prep);
+            if (claudeLimit.isZero() || claudeLimit.isNegative()) {
+                discardRefWorktrees(task.id(), attempted);
+                safePostImplementationFailure(task.id(), attempt, "시간 초과: 참조 repo 준비에 " + prep.toSeconds()
+                        + "초를 써 구현 상한(" + limit.toMinutes() + "분)이 남지 않았습니다", null, null, null);
+                return;
+            }
+        }
+
+        // 2. 베이스 브랜치 최신화 — 대상 worktree 생성 바로 앞 (worktree add 시 origin/{base} 참조).
+        //    실패하면 준비한 참조를 지우고 보고한다(참조가 없으면 아무것도 부르지 않는다)
         GitRepoCache.CheckedOutRepo repo;
         try {
             repo = repos.ensureFresh(task.repoRef(), task.githubBranch());
         } catch (Exception e) {
+            discardRefWorktrees(task.id(), attempted);
             safePostImplementationFailure(task.id(), attempt,
                     "레포 fetch 실패: " + e.getMessage(), null, null, null);
             return;
         }
 
-        // 2. worktree + 새 브랜치 생성 — 재시도(2회째부터)는 -rN 브랜치 (스펙 2026-10-15 §6.1)
+        // 3~7. 참조 폴더는 어떤 경로로 끝나든 지운다 — 예외도 바깥 catch의 보고보다 먼저 정리된다
+        try {
+            implementInWorktree(task, requested, attempt, repo, ready, claudeLimit);
+        } finally {
+            discardRefWorktrees(task.id(), attempted);
+        }
+    }
+
+    /** 대상 worktree에서 구현 → 커밋·push → PR → 결과 보고. ready는 준비된 참조(없으면 빈 목록), claudeLimit은 claude 상한. */
+    private void implementInWorktree(WorkerTaskResponse task, ImplementationMode requested, int attempt,
+                                     GitRepoCache.CheckedOutRepo repo, List<WorktreeService.RefWorktree> ready,
+                                     Duration claudeLimit) throws Exception {
+        // 3. worktree + 새 브랜치 생성 — 재시도(2회째부터)는 -rN 브랜치 (스펙 2026-10-15 §6.1)
         WorktreeService.CreatedWorktree wt;
         try {
             wt = worktrees.create(repo.dir(), GitRemotes.localKey(task.repoRef()),
@@ -278,7 +341,7 @@ public class WorkerMainLoop {
             }
         }
 
-        // 3. 구현 방식 준비 — 임시 파일 exclude, 계획·설계 파일, 대신 진행 판정 (스펙 2026-10-15 §6.1·§6.5)
+        // 4. 구현 방식 준비 — 임시 파일 exclude, 계획·설계 파일, 대신 진행 판정 (스펙 2026-10-15 §6.1·§6.5)
         boolean excludesReady = worktrees.ensureWorkerExcludes(wt.dir());
         boolean hasPlan = task.planMarkdown() != null && !task.planMarkdown().isBlank();
         String planText = requested == ImplementationMode.SDD && hasPlan
@@ -287,7 +350,9 @@ public class WorkerMainLoop {
         boolean planWritten = false;
         boolean designWritten = false;
         if (requested != ImplementationMode.DIRECT && hasPlan) {
-            planWritten = writeScratch(wtPath, ImplementationScratch.planPath(task.id()), planText);
+            // 참조 절은 파일 머리에만 — 태스크 수 판정(countTaskHeadings)에는 계획 본문만 넘긴다 (스펙 2026-10-24 §6.5)
+            planWritten = writeScratch(wtPath, ImplementationScratch.planPath(task.id()),
+                    RefRepoPrompts.planFileHeader(ready) + planText);
             if (requested == ImplementationMode.SDD
                     && task.analysisMarkdown() != null && !task.analysisMarkdown().isBlank()) {
                 designWritten = writeScratch(wtPath, ImplementationScratch.designPath(task.id()),
@@ -312,33 +377,41 @@ public class WorkerMainLoop {
         // 4. 구현 prompt + claude exec (worktree 디렉토리에서)
         //    비대화식 모드에서 Write/Edit/Bash 차단 회피 위해 권한 우회 활성.
         //    worktree는 격리 환경이라 워커 머신 다른 곳에 영향 없음.
+        //    참조 절은 템플릿 밖 DB 절 뒤에 붙는다(운영자 템플릿을 바꿔도 빠지지 않게). 참조 폴더는 절대 경로로 읽으므로
+        //    --add-dir를 주지 않는다 — 참조 repo의 .claude 설정이 이 세션에 붙으면 안 된다 (스펙 2026-10-24 §6.4·§6.7)
         String prompt = renderImplementationPrompt(task, repo.commitSha(), wt.branchName(),
-                ImplementationPrompts.planSection(task, mode.effective(), repo.commitSha(), designWritten),
+                ImplementationPrompts.planSection(task, mode.effective(), repo.commitSha(), designWritten,
+                        !ready.isEmpty()),
                 ImplementationPrompts.commitRule(mode.effective()))
-                + DbMcpWorkerSupport.promptSection(task.dbMcp());
+                + DbMcpWorkerSupport.promptSection(task.dbMcp())
+                + RefRepoPrompts.promptSection(ready);
         List<String> extraArgs = mode.effective() == ImplementationMode.SDD
                 ? List.of("--plugin-dir", sddPlugin.orElseThrow().toString())   // SDD는 sddPlugin이 있을 때만 나온다
                 : List.of();
         ClaudeExecAdapter.ExecResult exec;
         try {
-            exec = claude.exec(prompt, wt.dir(), implementationTimeoutOf(task, props.implementationTimeout()),
+            exec = claude.exec(prompt, wt.dir(), claudeLimit,
                     DbMcpWorkerSupport.withDbServers(task.mcpsExtra(), task.dbMcp(), props.apiBaseUrl()),
                     true, task.model(), task.effort(),
                     new ClaudeExecAdapter.ExecOptions(extraArgs,
                             gitAuthorEnv(props.gitUserName(), props.gitUserEmail())));
         } catch (Exception e) {
+            String refNote = RefRepoPrompts.failureSuffix(refChangeWarnings(task.id(), ready));
             String why = e.getMessage() != null && e.getMessage().startsWith("claude timeout") ? "시간 초과" : "실행 오류";
             PartialOutcome kept = preservePartialWork(task, wt, repo.commitSha(), why);
             safePostImplementationFailure(task.id(), attempt,
-                    "claude exec 실패: " + e.getMessage() + kept.reasonSuffix() + fallbackNote,
+                    "claude exec 실패: " + e.getMessage() + kept.reasonSuffix() + fallbackNote + refNote,
                     wt.branchName(), kept.headSha(), null);
             return;
         }
+        // 참조 변경 검사 — claude가 끝나면 한 번(위 실패 경로도 같다). 경고는 PR 본문·결과 보고, 실패면 사유 끝 (스펙 §6.6)
+        List<String> refWarnings = refChangeWarnings(task.id(), ready);
+        String refNote = RefRepoPrompts.failureSuffix(refWarnings);
         if (exec.exitCode() != 0) {
             PartialOutcome kept = preservePartialWork(task, wt, repo.commitSha(), "비정상 종료");
             String tail = tail(exec.stdout(), 4000);
             safePostImplementationFailure(task.id(), attempt,
-                    "claude exit=" + exec.exitCode() + "\n" + tail + kept.reasonSuffix() + fallbackNote,
+                    "claude exit=" + exec.exitCode() + "\n" + tail + kept.reasonSuffix() + fallbackNote + refNote,
                     wt.branchName(), kept.headSha(), exec.stdout(), usageOf(exec));
             return;
         }
@@ -353,7 +426,7 @@ public class WorkerMainLoop {
         // 배포 env 목록(.netis-deploy-env.json)도 커밋 전에 회수·삭제 — 없거나 틀려도 구현은 계속 (스펙 2026-10-07 §4.3)
         List<EnvTemplateItem> envTemplate = DeployEnvManifest.harvest(wtPath);
 
-        // 5. 변경 commit + push — 에이전트가 만든 커밋(SDD 태스크 커밋)도 받아들인다
+        // 5. 변경 commit + push(대상만) — 에이전트가 만든 커밋(SDD 태스크 커밋)도 받아들인다
         String headSha;
         try {
             String commitMsg = "feat: " + task.title()
@@ -362,7 +435,7 @@ public class WorkerMainLoop {
             headSha = gitOps.commitAndPush(wt.dir(), task.repoRef(), wt.branchName(), commitMsg, repo.commitSha());
         } catch (Exception e) {
             safePostImplementationFailure(task.id(), attempt,
-                    "commit/push 실패: " + e.getMessage() + fallbackNote,
+                    "commit/push 실패: " + e.getMessage() + fallbackNote + refNote,
                     wt.branchName(), null, exec.stdout(), usageOf(exec));
             return;
         }
@@ -370,18 +443,20 @@ public class WorkerMainLoop {
         // 6. Draft PR/MR
         GitOpsService.PrInfo pr;
         try {
-            String body = renderPrBody(task, exec.durationMs(), headSha, modeLine, reviewNotes.orElse(null));
+            String body = renderPrBody(task, exec.durationMs(), headSha, modeLine, reviewNotes.orElse(null),
+                    refWarnings);
             pr = gitOps.createDraftPr(wt.dir(), task.repoRef(),
                     task.githubBranch(), wt.branchName(),
                     task.title(), body);
         } catch (Exception e) {
             safePostImplementationFailure(task.id(), attempt,
-                    "PR/MR 생성 실패: " + e.getMessage() + fallbackNote,
+                    "PR/MR 생성 실패: " + e.getMessage() + fallbackNote + refNote,
                     wt.branchName(), headSha, exec.stdout(), usageOf(exec));
             return;
         }
 
-        // 7. 성공 보고 — 시도 번호로 이전 시도의 늦은 보고와 구분 (스펙 2026-10-15 §5.6)
+        // 7. 성공 보고 — 시도 번호로 이전 시도의 늦은 보고와 구분 (스펙 2026-10-15 §5.6), 참조 변경 경고는 이력 행으로
+        //    (스펙 2026-10-24 §4.8 — 가림·원소당 상한은 ResultReporter가 보내기 직전 masked()가 맡는다)
         reporter.reportTerminal(task.id(), new WorkerResultRequest(
                 props.id(),
                 TaskStatus.PR_CREATED,
@@ -390,8 +465,9 @@ public class WorkerMainLoop {
                 null, null, null, null, null,
                 null, null, null, null,
                 usageOf(exec),
-                envTemplate
-        ).withImplementationAttempt(attempt));
+                envTemplate,
+                attempt,
+                refWarnings.isEmpty() ? null : refWarnings));
         log.info("구현 완료 + PR 생성: task={} pr=#{} {} (방식 {}, {}회째, 배포 env 템플릿 {}개)",
                 task.id(), pr.number(), pr.url(), mode.effective(), attempt, envTemplate.size());
         // 산출물은 원격 브랜치·PR에 있다 — worktree는 더 쓰지 않으므로 바로 정리(실패해도 결과 무관, 주기 정리가 재시도)
@@ -410,6 +486,28 @@ public class WorkerMainLoop {
         return s != null && s.timeoutMinutes() != null && s.timeoutMinutes() > 0
                 ? Duration.ofMinutes(s.timeoutMinutes())
                 : fallback;
+    }
+
+    /** claim의 참조 repo — 없으면(구버전 API·다른 kind) 빈 목록. */
+    static List<WorkerTaskResponse.TaskRefRepo> refsOf(WorkerTaskResponse task) {
+        return task.refRepos() == null ? List.of() : task.refRepos();
+    }
+
+    /** 준비된 참조 폴더마다 변경 경고(없는 것은 건너뜀). 참조가 없으면 아무것도 부르지 않고 빈 목록. */
+    private List<String> refChangeWarnings(long taskId, List<WorktreeService.RefWorktree> ready) {
+        List<String> warnings = new ArrayList<>();
+        for (WorktreeService.RefWorktree rw : ready) {
+            worktrees.refChangeWarning(rw).ifPresent(warnings::add);
+        }
+        if (!warnings.isEmpty()) log.warn("참조 repo 변경 감지(PR에는 포함 안 됨): task={} {}", taskId, warnings);
+        return List.copyOf(warnings);
+    }
+
+    /** 참조 폴더 정리(best-effort — discardRefWorktree는 실패를 경고로만 남긴다). */
+    private void discardRefWorktrees(long taskId, List<WorkerTaskResponse.TaskRefRepo> refs) {
+        for (WorkerTaskResponse.TaskRefRepo ref : refs) {
+            worktrees.discardRefWorktree(taskId, ref);
+        }
     }
 
     /**
@@ -738,13 +836,20 @@ public class WorkerMainLoop {
     /** 줄인 절의 끝 표시 — 리뷰 메모 상한(ImplementationScratch.readReviewNotes)과 같은 문구. */
     static final String PR_BODY_CUT_MARK = "\n\n…(이하 생략)";
 
-    /**
-     * PR/MR 본문. 전체가 PR_BODY_MAX_CHARS를 넘으면 사전 분석(설계 문서)을 먼저 줄이고, 그래도 넘으면 리뷰 메모를 줄인다 —
-     * 줄인 절은 끝에 `…(이하 생략)`. 머리 줄(방식 줄 포함)과 꼬리는 그대로 둔다. 본문이 길면 이미 push한 구현이
-     * "PR/MR 생성 실패"로 끝나기 때문이다(GitHub 65,536자 한도).
-     */
+    /** 참조 변경 경고 없는 PR/MR 본문 — 기존 호출부·테스트용. */
     static String renderPrBody(WorkerTaskResponse task, long durationMs, String headSha,
                                String modeLine, String reviewNotes) {
+        return renderPrBody(task, durationMs, headSha, modeLine, reviewNotes, List.of());
+    }
+
+    /**
+     * PR/MR 본문. 전체가 PR_BODY_MAX_CHARS를 넘으면 사전 분석(설계 문서)을 먼저 줄이고, 그래도 넘으면 리뷰 메모를 줄인다 —
+     * 줄인 절은 끝에 `…(이하 생략)`. 머리 줄(방식 줄 포함)·참조 절과 꼬리는 그대로 둔다. 본문이 길면 이미 push한 구현이
+     * "PR/MR 생성 실패"로 끝나기 때문이다(GitHub 65,536자 한도). 참조 절(고정 커밋·변경 경고, 스펙 2026-10-24 §6.6)은
+     * 머리 다음에 오고, 참조가 없으면 비어 본문이 예전과 같다.
+     */
+    static String renderPrBody(WorkerTaskResponse task, long durationMs, String headSha,
+                               String modeLine, String reviewNotes, List<String> refWarnings) {
         boolean gitlab = task.repoRef().isGitlab();
         boolean hasDesign = task.designMarkdown() != null && !task.designMarkdown().isBlank();
         // 마크다운 링크를 깨는 값(공백, ')', 개행 등) 방어 — 형태가 이상하면 링크만 생략
@@ -764,13 +869,15 @@ public class WorkerMainLoop {
         String tail = "---\n"
                 + "🤖 Generated with netisMaker by Claude Code.\n"
                 + (gitlab ? "리뷰 후 Draft 표시를 해제하세요.\n" : "리뷰 후 Ready for review로 전환하세요.\n");
+        String refSection = RefRepoPrompts.prSection(refsOf(task), refWarnings);
         String analysisTitle = "## 사전 분석\n";
         String notesTitle = "## 리뷰 메모\n";
 
         String analysis = task.analysisMarkdown() == null ? "" : task.analysisMarkdown();
         String notes = reviewNotes;
-        // 절 제목·구분 줄바꿈·머리·꼬리를 뺀, 분석과 메모가 나눠 쓸 수 있는 글자 수
-        int room = PR_BODY_MAX_CHARS - head.length() - tail.length() - analysisTitle.length() - 2
+        // 절 제목·구분 줄바꿈·머리·참조 절·꼬리를 뺀, 분석과 메모가 나눠 쓸 수 있는 글자 수
+        int room = PR_BODY_MAX_CHARS - head.length() - refSection.length() - tail.length()
+                - analysisTitle.length() - 2
                 - (notes == null ? 0 : notesTitle.length() + 2);
         int notesLength = notes == null ? 0 : notes.length();
         if (analysis.length() + notesLength > room) {
@@ -780,6 +887,7 @@ public class WorkerMainLoop {
             }
         }
         return head
+                + refSection
                 + analysisTitle + analysis + "\n\n"
                 + (notes == null ? "" : notesTitle + notes + "\n\n")
                 + tail;

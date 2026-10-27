@@ -17,8 +17,14 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.nio.file.StandardOpenOption;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Locale;
+import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.locks.ReentrantLock;
+import java.util.regex.Pattern;
 
 /**
  *  레포 영구 캐시.
@@ -45,6 +51,9 @@ import java.util.concurrent.locks.ReentrantLock;
  *   - ensureFresh + worktree add 둘 다 같은 락 안에서 직렬화
  *     → WorktreeService도 withRepoLock(repoKey, ...)을 통해 호출
  *
+ *  참조 repo(구현용 읽기 전용, 스펙 2026-10-24 §6.2): prepareRefCommitUnderLock이 같은 캐시에 고정 커밋만 들여놓는다 —
+ *   HEAD·refs/remotes/origin/*는 옮기지 않고(대안 fetch는 refs/netis-refs/*), git은 자격증명 도우미·askpass·프롬프트 없이.
+ *
  *  마지막 사용 시각: withRepoLock을 잡을 때마다 `{localKey}.last-used`(락 파일 옆 형제)를 갱신한다.
  *   캐시를 쓰는 경로(ensureFresh·fetchOnly·worktree 생성)가 전부 이 락을 거치므로 한 곳에서 기록된다.
  *   RepoCacheCleanupJob이 이 mtime으로 미사용 기간을 판단하고, 삭제는 tryWithRepoLock(비차단, 마커 미갱신)으로 한다.
@@ -55,6 +64,8 @@ import java.util.concurrent.locks.ReentrantLock;
 public class GitRepoCache {
 
     private static final long GIT_TIMEOUT_SECONDS = 600;
+    /** 네트워크를 쓰지 않는 참조 git(origin 씻기·커밋 확인)의 상한. */
+    private static final long LOCAL_GIT_TIMEOUT_SECONDS = 120;
     /** 락 파일 접미사: {localKey}.lock */
     static final String LOCK_SUFFIX = ".lock";
     /** 마지막 사용 시각 마커 접미사: {localKey}.last-used (판단은 mtime, 내용은 사람이 보는 용도) */
@@ -134,6 +145,65 @@ public class GitRepoCache {
     }
 
     /**
+     * 참조 repo의 고정 커밋을 캐시에 들여놓는다(스펙 2026-10-24 §6.2). 호출자가 이 캐시의 레포 락
+     * ({@code withRepoLock(localKey)})을 쥐고 있어야 한다 — 참조 worktree 생성과 같은 락 한 번 안에서 부르기 위해 스스로 잡지 않는다.
+     *
+     *  1. sha·브랜치 모양 검사(git을 부르기 전 — 이상한 값이 git 인자로 가지 않게)
+     *  2. 캐시가 없으면 clone(기존 경로와 같은 단일 브랜치 shallow), 있든 없든 origin을 평문으로 씻는다
+     *  3. 이미 있으면 끝, 없으면 sha 하나만 {@code --depth=1}로 받는다(GitHub·GitLab 13.2+는 허용)
+     *  4. 거부되면 그 브랜치를 참조 전용 이름공간({@link #REF_NAMESPACE})으로 깊이를 늘려 가며 받는다(50 → 500, 그 이상은 없음)
+     *
+     * {@code refs/remotes/origin/*}·캐시 HEAD는 건드리지 않는다 — 같은 repo를 대상으로 쓰는 다른 작업의 기준 커밋이 흔들린다.
+     * 깊이 제한 없는 fetch·unshallow도 하지 않는다 — 공유 캐시에 수 GB를 받으며 락을 오래 쥐면 다른 작업이 60초 락 대기로 실패한다.
+     * git 호출은 전부 {@link #runRefGit}(자격증명 도우미·askpass·프롬프트 없음).
+     *
+     * @return 캐시 디렉터리
+     */
+    public File prepareRefCommitUnderLock(RepoRef ref, String branch, String sha)
+            throws IOException, InterruptedException {
+        String commit = checkRefTarget(branch, sha);
+        Path target = Paths.get(props.reposDir(), GitRemotes.localKey(ref));
+        Files.createDirectories(target.getParent());
+        String authUrl = remotes.authenticatedUrl(ref);
+        if (!Files.exists(target.resolve(".git"))) {
+            requireRefGit(target.getParent().toFile(),
+                    refCloneArgs(authUrl, branch, target.getFileName().toString()), GIT_TIMEOUT_SECONDS);
+        }
+        requireRefGit(target.toFile(), refScrubArgs(ref), LOCAL_GIT_TIMEOUT_SECONDS);
+
+        File dir = target.toFile();
+        if (hasCommit(dir, commit)) return dir;
+        ProcessRunner.Result last = runRefGit(dir, refFetchShaArgs(authUrl, commit), GIT_TIMEOUT_SECONDS);
+        if (hasCommit(dir, commit)) return dir;
+        for (int depth : REF_FALLBACK_DEPTHS) {
+            last = runRefGit(dir, refFetchBranchArgs(authUrl, branch, depth), GIT_TIMEOUT_SECONDS);
+            // 브랜치 받기 자체가 실패(권한·네트워크·없는 브랜치)하면 더 깊이 받아도 소용없다
+            if (last.exitCode() != 0) break;
+            if (hasCommit(dir, commit)) return dir;
+        }
+        if (last.exitCode() != 0) {
+            throw new IOException("git failed (" + last.exitCode() + "): " + GitRemotes.mask(last.stdout()));
+        }
+        throw new IOException("고정 커밋 " + commit.substring(0, 7) + "을(를) 찾지 못했습니다 — 브랜치 " + branch
+                + "의 최근 " + REF_FALLBACK_DEPTHS.get(REF_FALLBACK_DEPTHS.size() - 1) + "개 커밋 안에 없음");
+    }
+
+    private static boolean hasCommit(File dir, String commit) throws IOException, InterruptedException {
+        return runRefGit(dir, refGit("cat-file", "-e", commit + "^{commit}"), LOCAL_GIT_TIMEOUT_SECONDS)
+                .exitCode() == 0;
+    }
+
+    /**
+     * 참조의 고정 커밋·브랜치 모양 검사. 고정 커밋은 40자·64자 16진수만(API applyRefStates와 같은 정의) —
+     * 소문자로 바꿔 돌려준다. git을 부르거나 락을 잡기 전에 쓴다(WorktreeService.createRefWorktree도).
+     */
+    static String checkRefTarget(String branch, String sha) throws IOException {
+        if (!isFullSha(sha)) throw new IOException("고정 커밋 정보가 없거나 올바르지 않습니다");
+        if (branch == null || branch.isBlank()) throw new IOException("참조 브랜치 정보가 없습니다");
+        return sha.toLowerCase(Locale.ROOT);
+    }
+
+    /**
      * origin을 토큰 없는 평문 gitUrl로 맞춘다. 캐시 config(=worktree 공유 config)에 자격증명을
      * 남기지 않기 위한 단일 지점 — 취약 버전이 남긴 인증 URL도 여기서 씻긴다.
      */
@@ -185,6 +255,81 @@ public class GitRepoCache {
     static java.util.List<String> fetchTrackingArgs(String authUrl, String headBranch) {
         return git("fetch", "--force", authUrl,
                 headBranch + ":refs/remotes/origin/" + headBranch);
+    }
+
+    // ── 참조 repo git (스펙 2026-10-24 §6.2) — 자격증명 도우미·askpass·터미널 프롬프트 없이 ──
+
+    /**
+     * 참조 git 명령의 앞 인자. {@code credential.helper=}(빈 값)은 운영자 PC의 도우미(GCM 등) 목록을 비우고
+     * {@code core.askPass=}는 askpass를 끈다 — 토큰 없는 비공개 repo의 401에 대화상자를 띄운 채 멈추지 않게
+     * (인터뷰 서비스 noPromptGit과 같은 규칙).
+     */
+    static final List<String> REF_GIT_PREFIX = List.of("git", "-c", "credential.helper=", "-c", "core.askPass=");
+    /** 참조 git에 얹는 env — 터미널 프롬프트와 GCM 대화상자를 끈다. */
+    static final Map<String, String> REF_GIT_ENV = Map.of("GIT_TERMINAL_PROMPT", "0", "GCM_INTERACTIVE", "never");
+    /** 참조 git에서 지우는 env(대소문자 무시) — 운영자 셸·IDE가 넣어 둔 askpass를 물려받지 않게. */
+    static final Set<String> REF_GIT_ENV_REMOVED = Set.of("GIT_ASKPASS", "SSH_ASKPASS");
+    /** sha 받기가 거부될 때 브랜치를 받아 둘 참조 전용 이름공간 — refs/remotes/origin/*을 건드리지 않는다. */
+    static final String REF_NAMESPACE = "refs/netis-refs/";
+    /** 참조 전용 이름공간 대안 fetch 깊이. 이보다 깊이(제한 없이) 받지 않는다. */
+    static final List<Integer> REF_FALLBACK_DEPTHS = List.of(50, 500);
+    private static final Pattern FULL_SHA = Pattern.compile("[0-9a-fA-F]{40}|[0-9a-fA-F]{64}");
+
+    static List<String> refGit(String... args) {
+        var cmd = new ArrayList<>(REF_GIT_PREFIX);
+        cmd.addAll(List.of(args));
+        return List.copyOf(cmd);
+    }
+
+    /**
+     * 참조 git 호출의 단일 통로 — {@link #refGit}/ref*Args로 조립한 명령에 {@link #REF_GIT_ENV}를 얹고
+     * {@link #REF_GIT_ENV_REMOVED}를 지워 실행한다(앞 인자는 다시 붙이지 않는다). 그렇게 조립하지 않은 명령은 받지 않는다.
+     */
+    static ProcessRunner.Result runRefGit(File dir, List<String> command, long timeoutSeconds)
+            throws IOException, InterruptedException {
+        if (command.size() < REF_GIT_PREFIX.size()
+                || !command.subList(0, REF_GIT_PREFIX.size()).equals(REF_GIT_PREFIX)) {
+            throw new IllegalArgumentException("참조 git 명령은 refGit으로 조립해야 합니다: "
+                    + ProcessRunner.describe(command));
+        }
+        return ProcessRunner.run(dir, command, REF_GIT_ENV, REF_GIT_ENV_REMOVED, timeoutSeconds);
+    }
+
+    /** runRefGit + 실패면 가린 출력의 IOException. 출력(stdout·stderr 합본)을 돌려준다. */
+    static String requireRefGit(File dir, List<String> command, long timeoutSeconds)
+            throws IOException, InterruptedException {
+        ProcessRunner.Result r = runRefGit(dir, command, timeoutSeconds);
+        if (r.exitCode() != 0) {
+            throw new IOException("git failed (" + r.exitCode() + "): " + GitRemotes.mask(r.stdout()));
+        }
+        return r.stdout();
+    }
+
+    /** 참조 캐시가 없을 때의 clone — 대상 cloneArgs와 같은 단일 브랜치 shallow clone(뒤에 origin을 씻는다). */
+    static List<String> refCloneArgs(String authUrl, String branch, String dirName) {
+        return refGit("clone", "--depth=1", "--branch", branch, authUrl, dirName);
+    }
+
+    /** 참조 캐시의 origin 씻기 — 평문 URL 선택은 {@link #scrubArgs} 한 곳에 두고 앞 인자만 참조 git으로 바꾼다. */
+    static List<String> refScrubArgs(RepoRef ref) {
+        List<String> scrub = scrubArgs(ref);
+        return refGit(scrub.subList(1, scrub.size()).toArray(String[]::new));
+    }
+
+    /** 고정 커밋 하나만 받는다. refspec이 없어 ref는 아무것도 옮기지 않는다(FETCH_HEAD만). */
+    static List<String> refFetchShaArgs(String authUrl, String sha) {
+        return refGit("fetch", "--no-tags", "--depth=1", authUrl, sha);
+    }
+
+    /** sha 받기가 거부될 때의 대안 — 브랜치를 참조 전용 이름공간으로 depth만큼 받는다. */
+    static List<String> refFetchBranchArgs(String authUrl, String branch, int depth) {
+        return refGit("fetch", "--no-tags", "--depth=" + depth, authUrl,
+                "+refs/heads/" + branch + ":" + REF_NAMESPACE + branch);
+    }
+
+    /** 고정 커밋으로 인정하는 모양 — 40자(SHA-1) 또는 64자(SHA-256) 16진수만. */
+    static boolean isFullSha(String s) {
+        return s != null && FULL_SHA.matcher(s).matches();
     }
 
     /**

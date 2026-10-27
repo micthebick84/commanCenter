@@ -1,7 +1,11 @@
 import { mount, flushPromises } from '@vue/test-utils'
-import { describe, it, expect, afterEach, beforeEach } from 'vitest'
+import { describe, it, expect, afterEach, beforeEach, vi } from 'vitest'
+import { QSelect } from 'quasar'
 import ApproveDialog from './ApproveDialog.vue'
+import RefRepoChips from './RefRepoChips.vue'
+import RefRepoAddForm from './RefRepoAddForm.vue'
 import { useApiMock, authStub } from '../test/mocks/nuxt'
+import { setViewportWidth } from '../test/mocks/screen'
 import { baseTask } from '../test/fixtures/task'
 
 // 승인대기 작업 픽스처 — 다이얼로그는 부모([id].vue)가 이미 가진 task 객체를 받는다.
@@ -62,18 +66,31 @@ const usage = {
   ],
 }
 
-// 다이얼로그가 부르는 4개 엔드포인트를 URL로 분기 — 카탈로그(McpPicker)·지난 인터뷰·사용량(strip)·승인
+// 다이얼로그가 부르는 엔드포인트를 URL로 분기 — 카탈로그(McpPicker)·지난 인터뷰·DB 연결·사용량(strip)·승인,
+// 그리고 "＋ 참조 추가"를 눌렀을 때만 부르는 레포 카탈로그·브랜치(RefRepoAddForm)
 function routeApi(
   opts: {
     catalog?: unknown[]
     interviews?: unknown[] | Error
     usage?: unknown
     db?: unknown
+    repoCatalog?: unknown[] | (() => Promise<unknown>)
     approve?: () => Promise<unknown>
   } = {},
 ) {
   useApiMock.mockImplementation((url: string) => {
     if (url === '/api/mcp-catalog') return Promise.resolve(opts.catalog ?? [])
+    if (url === '/api/repo-catalog') {
+      return typeof opts.repoCatalog === 'function'
+        ? opts.repoCatalog()
+        : Promise.resolve(opts.repoCatalog ?? [])
+    }
+    if (url === '/api/repos/branches') {
+      return Promise.resolve({
+        defaultBranch: 'main',
+        branches: [{ name: 'main', sha: 'a' }, { name: 'release/6.5', sha: 'b' }],
+      })
+    }
     if (url === '/api/tasks/7/interviews') {
       return opts.interviews instanceof Error
         ? Promise.reject(opts.interviews)
@@ -538,6 +555,239 @@ describe('ApproveDialog DB 연결 — 승인자 ≠ 등록자 (F1)', () => {
     const box = document.body.querySelector('[data-test="approve-db"]')!
     expect(box.textContent).toContain('관리자 개발')
     expect(box.querySelector('[data-test="db-add"]')).not.toBeNull()
+    w.unmount()
+  })
+})
+
+// 참조 repo 조정 (작업 스펙 2026-10-24 §7.3) — 열 때마다 작업의 참조로 채운 편집 칩 줄 + 인라인 추가 폼.
+// 바디에는 작업 값과 다를 때만 refRepos(전부 빼면 []), 레포 카탈로그는 "＋ 참조 추가"를 처음 누를 때 한 번 받는다.
+describe('ApproveDialog 참조 repo (스펙 2026-10-24 §7.3)', () => {
+  const OLD = { catalogId: 2, alias: '옛앱', branch: 'release/6.5', sha: null, fetchedAt: null, error: null }
+  const UI = { catalogId: 3, alias: '공통 UI', branch: 'main', sha: null, fetchedAt: null, error: null }
+  // 1=대상 · 2=옛앱 · 3=공통 UI · 4=지원하지 않는 호스트(추가 폼이 스스로 뺀다)
+  const REPO_CATALOG = [
+    { id: 1, alias: 'Netis7.0', host: 'github', defaultBranch: 'main' },
+    { id: 2, alias: '옛앱', host: 'gitlab', defaultBranch: 'release/6.5' },
+    { id: 3, alias: '공통 UI', host: 'gitlab', defaultBranch: 'main' },
+    { id: 4, alias: '외부', host: 'other', defaultBranch: null },
+  ]
+  const dbOn = {
+    enabled: true,
+    items: [
+      { id: 3, repoCatalogId: 1, scope: 'REPO', name: '운영', dbType: 'MYSQL', host: 'h', port: 3306, databaseName: 'app', username: 'ro', enabled: true, mine: false },
+    ],
+  }
+  const BODY_WITHOUT_REFS = { model: 'claude-opus-5-5', effort: 'medium', mcpCatalogIds: [] }
+
+  const refsBox = () => document.body.querySelector('[data-test="approve-refs"]')
+  const refChips = () => Array.from(document.body.querySelectorAll('[data-test="approve-refs"] [data-test="ref-chip"]'))
+  const addForm = () => document.body.querySelector('[data-test="approve-refs"] [data-test="ref-add-form"]')
+  const catalogCalls = () => useApiMock.mock.calls.filter((c) => c[0] === '/api/repo-catalog').length
+  type Wrapper = ReturnType<typeof mountDialog>
+  async function clickAdd(w: Wrapper) {
+    await w.findComponent(RefRepoChips).find('[data-test="ref-add"]').trigger('click')
+    await flushPromises()
+  }
+  async function removeFirstChip(w: Wrapper) {
+    await w.findComponent(RefRepoChips).find('.q-chip__icon--remove').trigger('click')
+    await flushPromises()
+  }
+
+  beforeEach(() => {
+    ;(authStub as any).me = { user_id: 1, username: 'admin', email: null, authorities: ['ROLE_ADMIN'] }
+  })
+  afterEach(() => {
+    delete (authStub as any).me
+  })
+
+  it('작업 참조로 칩 줄을 채우고("인터뷰 때 받음") DB 아래·사용량 위에 둔다', async () => {
+    routeApi({ db: dbOn })
+    const w = mountDialog({ repoCatalogId: 1, refRepos: [OLD] })
+    await flushPromises()
+    const box = refsBox()!
+    expect(box).not.toBeNull()
+    expect(document.body.querySelector('[data-test="approve-db"]')!.nextElementSibling).toBe(box)
+    expect(box.nextElementSibling!.classList.contains('usage-slot')).toBe(true)
+
+    expect(box.textContent).toContain('참조 repo · 읽기 전용 · 최대 3개')
+    expect(refChips()).toHaveLength(1)
+    expect(refChips()[0]!.getAttribute('data-state')).toBe('pending')
+    expect(refChips()[0]!.textContent).toContain('📚 옛앱 · release/6.5')
+    expect(refChips()[0]!.textContent).toContain('인터뷰 때 받음')
+    expect(box.querySelector('[data-test="ref-add"]')).not.toBeNull()
+    // 승인 요약에는 읽기 전용 칩 줄을 넣지 않는다 — 편집 줄 하나뿐
+    expect(document.body.querySelector('[data-test="approve-summary"] [data-test="ref-repo-chips"]')).toBeNull()
+    expect(document.body.querySelectorAll('[data-test="ref-repo-chips"]')).toHaveLength(1)
+    w.unmount()
+  })
+
+  it('모바일 전체화면에서도 같은 순서다', async () => {
+    await setViewportWidth(390)
+    try {
+      routeApi({ db: dbOn })
+      const w = mountDialog({ repoCatalogId: 1, refRepos: [OLD] })
+      await flushPromises()
+      expect(document.body.querySelector('[data-test="approve-topbar"]')).not.toBeNull()
+      const box = refsBox()!
+      expect(document.body.querySelector('[data-test="approve-db"]')!.nextElementSibling).toBe(box)
+      expect(box.nextElementSibling!.classList.contains('usage-slot')).toBe(true)
+      w.unmount()
+    } finally {
+      await setViewportWidth(1024)
+    }
+  })
+
+  it('참조를 안 바꾸면 승인 바디는 지금과 같다', async () => {
+    routeApi()
+    const w = mountDialog({ repoCatalogId: 1, refRepos: [OLD, UI] })
+    await flushPromises()
+    expect(refChips()).toHaveLength(2)
+    await (w.vm as any).approve()
+    await flushPromises()
+    expect(approveCall()?.[1]).toEqual({ method: 'POST', body: BODY_WITHOUT_REFS })
+    w.unmount()
+  })
+
+  it('빼면 남은 목록, 전부 빼면 []를 싣는다', async () => {
+    routeApi()
+    const w = mountDialog({ repoCatalogId: 1, refRepos: [OLD, UI] })
+    await flushPromises()
+    await removeFirstChip(w)
+    expect(refChips()).toHaveLength(1)
+    await (w.vm as any).approve()
+    await flushPromises()
+    expect(approveCall()?.[1]).toEqual({
+      method: 'POST',
+      body: { ...BODY_WITHOUT_REFS, refRepos: [{ repoCatalogId: 3, branch: 'main' }] },
+    })
+    w.unmount()
+    document.body.innerHTML = ''
+
+    useApiMock.mockClear()
+    const w2 = mountDialog({ repoCatalogId: 1, refRepos: [OLD, UI] })
+    await flushPromises()
+    await removeFirstChip(w2)
+    await removeFirstChip(w2)
+    expect(refChips()).toHaveLength(0)
+    expect(refsBox()!.textContent).toContain('참조 repo 없음')
+    await (w2.vm as any).approve()
+    await flushPromises()
+    // 생략(= 작업 값 유지)이 아니라 빈 목록(= 전부 해제)이다
+    expect(approveCall()?.[1]).toEqual({ method: 'POST', body: { ...BODY_WITHOUT_REFS, refRepos: [] } })
+    w2.unmount()
+  })
+
+  it('＋ 참조 추가를 처음 누를 때만 /api/repo-catalog를 부른다 — 열 때는 0회, 두 번째 토글도 1회', async () => {
+    routeApi({ repoCatalog: REPO_CATALOG })
+    const w = mountDialog({ repoCatalogId: 1, refRepos: [OLD] })
+    await flushPromises()
+    expect(catalogCalls()).toBe(0)
+    expect(addForm()).toBeNull()
+
+    await clickAdd(w)
+    expect(catalogCalls()).toBe(1)
+    expect(addForm()).not.toBeNull()
+    await clickAdd(w) // 접기
+    expect(addForm()).toBeNull()
+    await clickAdd(w) // 다시 펼치기
+    expect(addForm()).not.toBeNull()
+    expect(catalogCalls()).toBe(1)
+    w.unmount()
+  })
+
+  it('레포 목록을 못 받으면 알리고, 다음에 펼칠 때 다시 부른다', async () => {
+    let fail = true
+    routeApi({
+      repoCatalog: () =>
+        fail ? Promise.reject({ data: { message: '레포 카탈로그 조회 실패' } }) : Promise.resolve(REPO_CATALOG),
+    })
+    const w = mountDialog({ repoCatalogId: 1, refRepos: [OLD] })
+    await flushPromises()
+    const notify = vi.spyOn((w.vm as any).$q, 'notify')
+
+    await clickAdd(w)
+    expect(notify).toHaveBeenCalledWith({ type: 'negative', message: '레포 카탈로그 조회 실패' })
+    await clickAdd(w) // 접기
+    fail = false
+    await clickAdd(w)
+    expect(catalogCalls()).toBe(2)
+    expect(w.findComponent(RefRepoAddForm).props('catalog')).toEqual(REPO_CATALOG)
+    w.unmount()
+  })
+
+  it('추가 폼 후보는 대상·이미 고른 참조를 뺀다, 추가하면 바디에 실린다', async () => {
+    routeApi({ repoCatalog: REPO_CATALOG })
+    const w = mountDialog({ repoCatalogId: 1, refRepos: [OLD] })
+    await flushPromises()
+    await clickAdd(w)
+
+    const form = w.findComponent(RefRepoAddForm)
+    // 칩 줄 아래, 같은 참조 줄 안의 윤곽선 패널에 펼친다
+    expect(form.element.parentElement!.classList.contains('ref-add-panel')).toBe(true)
+    expect(refsBox()!.contains(form.element)).toBe(true)
+    expect(form.props('excludeIds')).toEqual([1, 2])
+    const repoSelect = form
+      .findAllComponents(QSelect)
+      .find((c) => (c.vm.$attrs as Record<string, unknown>)['data-test'] === 'ref-add-repo')!
+    expect((repoSelect.props('options') as Array<{ value: unknown }>).map((o) => o.value)).toEqual([3])
+
+    repoSelect.vm.$emit('update:modelValue', 3)
+    await flushPromises()
+    await form.find('[data-test="ref-add-submit"]').trigger('click')
+    await flushPromises()
+    expect(addForm()).toBeNull() // 추가하면 접힌다
+    expect(refChips()).toHaveLength(2)
+    expect(refChips()[1]!.textContent).toContain('📚 공통 UI · main')
+
+    await (w.vm as any).approve()
+    await flushPromises()
+    expect(approveCall()?.[1]).toEqual({
+      method: 'POST',
+      body: {
+        ...BODY_WITHOUT_REFS,
+        refRepos: [
+          { repoCatalogId: 2, branch: 'release/6.5' },
+          { repoCatalogId: 3, branch: 'main' },
+        ],
+      },
+    })
+    w.unmount()
+  })
+
+  it('닫았다 다시 열면 작업 참조로 다시 채운다', async () => {
+    routeApi({ repoCatalog: REPO_CATALOG })
+    const w = mountDialog({ repoCatalogId: 1, refRepos: [OLD, UI] })
+    await flushPromises()
+    await removeFirstChip(w)
+    await clickAdd(w)
+    expect(refChips()).toHaveLength(1)
+    expect(addForm()).not.toBeNull()
+
+    await w.setProps({ modelValue: false })
+    await flushPromises()
+    await w.setProps({ modelValue: true })
+    await flushPromises()
+
+    expect(refChips().map((c) => c.textContent)).toEqual([
+      expect.stringContaining('📚 옛앱 · release/6.5'),
+      expect.stringContaining('📚 공통 UI · main'),
+    ])
+    expect(addForm()).toBeNull()
+    await (w.vm as any).approve()
+    await flushPromises()
+    expect(approveCall()?.[1]).toEqual({ method: 'POST', body: BODY_WITHOUT_REFS })
+    w.unmount()
+  })
+
+  it('repoCatalogId 없는 작업은 참조 줄이 없다', async () => {
+    routeApi()
+    const w = mountDialog({ repoCatalogId: null })
+    await flushPromises()
+    expect(document.body.querySelector('[data-test="approve-summary"]')).not.toBeNull()
+    expect(refsBox()).toBeNull()
+    await (w.vm as any).approve()
+    await flushPromises()
+    expect(approveCall()?.[1]).toEqual({ method: 'POST', body: BODY_WITHOUT_REFS })
     w.unmount()
   })
 })

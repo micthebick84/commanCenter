@@ -1,8 +1,11 @@
 package com.hamonsoft.netismaker.dto;
 
+import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Size;
+
+import java.util.List;
 
 /**
  * 작업 등록 요청. 모델/effort/MCP/디자인 여부는 등록에서 받지 않는다 —
@@ -21,5 +24,20 @@ public record TaskCreateRequest(
         String title,
 
         @NotBlank
-        String description
-) {}
+        String description,
+
+        /**
+         * 읽기 전용 참조 repo (스펙 2026-10-24 §4.1) — 카탈로그 id + 브랜치, 최대 3개, 대상과 다른 repo만.
+         * null/빈 = 없음. @Valid가 있어야 원소의 @Size(branch 255자)가 적용된다.
+         */
+        @Valid
+        List<RefRepoInput> refRepos,
+
+        /** "이 대화로 작업 등록"의 출처 질문 세션 id (스펙 2026-10-24 §4.1). null = 없음. */
+        Long sourceQuestionId
+) {
+    /** 참조·출처 질문 없는 등록 — 기존 호출처/테스트 호환. */
+    public TaskCreateRequest(Long repoCatalogId, String githubBranch, String title, String description) {
+        this(repoCatalogId, githubBranch, title, description, null, null);
+    }
+}

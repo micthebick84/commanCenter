@@ -6,6 +6,9 @@ import { renderMarkdown } from '~/composables/useMarkdown'
 import type { StageStep } from '~/composables/taskStages'
 import { mrNoun, mrRef } from '~/composables/mergeRequestLabel'
 import { implementationModeText } from '~/composables/implementationMode'
+import RefRepoChips from '~/components/RefRepoChips.vue'
+// DetailTask는 defineProps 타입에 쓰이므로 상대 경로 — vitest는 .nuxt 없이 돌아 SFC 매크로 타입의 `~/` import를 못 푼다.
+import { taskRefContext, type RefRepoView } from '../../composables/refRepos'
 
 // [id].vue의 TaskResponse 중 이 컴포넌트가 읽는 부분집합
 export interface DetailTask {
@@ -33,6 +36,10 @@ export interface DetailTask {
   design: { designMarkdown: string } | null
   implementation: { prUrl: string | null; prNumber: number | null; headBranch: string | null; headSha: string | null } | null
   deployment: { deployUrl: string | null; deployHostPort: number | null; deployImage: string | null; deployedAt: string | null; deployLog: string | null } | null
+  /** 읽기 전용 참조 repo (작업 스펙 2026-10-24 §4.9·§7.4) — 정보 영역 칩 줄. 바꾸는 "✎"은 부모의 모바일 대화 시트에 있다. */
+  refRepos?: RefRepoView[]
+  /** 질문 대화에서 이어 등록했으면 그 질문 id — 정보 영역 출처 링크 */
+  sourceQuestionId?: number | null
 }
 
 const props = defineProps<{
@@ -235,6 +242,8 @@ const deployCaption = computed(() => {
               <div v-if="task.totalCostUsd != null"><span class="k">사용량</span>{{ fmtTokens(task.totalTokens ?? 0) }} 토큰 · ${{ Number(task.totalCostUsd).toFixed(2) }}</div>
               <div v-if="task.mcpsExtra.length"><span class="k">MCP</span>{{ task.mcpsExtra.map((m) => m.name).join(', ') }}</div>
               <div v-if="task.dbConnectionIds?.length"><span class="k">DB</span>{{ task.dbConnectionIds.length }}개 연결 (읽기 전용)</div>
+              <div v-if="task.refRepos?.length" data-test="info-refs"><RefRepoChips :items="task.refRepos" :context="taskRefContext(task.status)" /></div>
+              <div v-if="task.sourceQuestionId"><span class="k">출처</span><NuxtLink :to="`/questions/${task.sourceQuestionId}`" data-test="info-source-question">↩ 질문 #{{ task.sourceQuestionId }}에서 이어짐</NuxtLink></div>
               <div v-if="task.attachments.length" class="column" style="gap: 4px">
                 <span class="k">첨부</span>
                 <q-chip v-for="a in task.attachments" :key="a.id" clickable dense icon="attach_file" :label="`${a.fileName} (${fmtSize(a.sizeBytes)})`" @click="emit('download', a)" />

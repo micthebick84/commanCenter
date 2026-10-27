@@ -36,13 +36,29 @@ final class ImplementationPrompts {
         return effective == ImplementationMode.SDD ? SDD_COMMIT_RULE : DIRECT_COMMIT_RULE;
     }
 
-    /** {plan_section}. designWritten = SDD에 설계 파일을 알릴지(실제로 썼을 때만). */
+    /**
+     * SDD 계획 절의 참조 줄 (스펙 2026-10-24 §6.5) — SDD 지시서(task-brief)는 `Task N` 사이 줄만 뽑아 계획 파일 머리의
+     * 참조 절을 놓치므로, 서브에이전트에게 그 절을 넘기라고 한다. 참조가 있을 때만.
+     */
+    static final String SDD_REF_LINE =
+            "- 서브에이전트(구현·리뷰)에게 일을 맡길 때 계획 파일 머리의 \"참조 repo\" 절을 그대로 함께 넘긴다.\n";
+
+    /** {plan_section} — 참조 없는 구현. */
     static String planSection(WorkerTaskResponse task, ImplementationMode effective, String baseSha,
                               boolean designWritten) {
+        return planSection(task, effective, baseSha, designWritten, false);
+    }
+
+    /**
+     * {plan_section}. designWritten = SDD에 설계 파일을 알릴지(실제로 썼을 때만), refsInPlanFile = 계획 파일 머리에 참조 절을
+     * 넣었는지(SDD만 참조 줄을 더한다).
+     */
+    static String planSection(WorkerTaskResponse task, ImplementationMode effective, String baseSha,
+                              boolean designWritten, boolean refsInPlanFile) {
         return switch (effective) {
             case DIRECT -> WorkerMainLoop.renderPlanSection(task);
             case REVIEW -> reviewPlanSection(task, baseSha);
-            case SDD -> sddPlanSection(task, designWritten);
+            case SDD -> sddPlanSection(task, designWritten, refsInPlanFile);
         };
     }
 
@@ -58,7 +74,7 @@ final class ImplementationPrompts {
         return planBlock + REVIEW_SECTION.replace("__REVIEWER__", reviewer);
     }
 
-    private static String sddPlanSection(WorkerTaskResponse task, boolean designWritten) {
+    private static String sddPlanSection(WorkerTaskResponse task, boolean designWritten, boolean refsInPlanFile) {
         String design = designWritten
                 ? " 설계 문서(스펙)는 `" + ImplementationScratch.designPath(task.id()) + "`입니다."
                 : "";
@@ -74,7 +90,8 @@ final class ImplementationPrompts {
                 - 이 세션은 비대화식이라 질문에 답할 사람이 없습니다. 사람에게 묻지 말고, 판단이 필요하면 SDD 규칙대로 원장에 Ruling으로 남기고 계속하세요.
                 - 리뷰 지적은 Critical·Important 가운데 계획 범위 안의 결함(깨짐·조용한 오작동·계획 미이행)만 고치세요. 계획에 없는 동작 규칙 변경(입력 검증 강화, 정규화 추가 등)은 하지 마세요.
                 - 끝내기 전에 원장의 Ruling·보류(parked) 항목과 고치지 않은 지적을 이유와 함께 `.netis/review-notes.md`에 한국어로 정리하세요. 이 파일은 워커가 PR/MR 본문에 붙인 뒤 지우며 커밋되지 않습니다.
-                """.formatted(ImplementationScratch.planPath(task.id()), design);
+                """.formatted(ImplementationScratch.planPath(task.id()), design)
+                + (refsInPlanFile ? SDD_REF_LINE : "");
     }
 
     /** PR/MR 본문 방식 줄 (스펙 §6.7) — 2회째부터 회차, 낮춰서 진행했으면 요청 방식과 이유. 마크다운 목록 항목이다. */

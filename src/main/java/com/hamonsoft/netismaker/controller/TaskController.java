@@ -39,8 +39,11 @@ import java.net.URI;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.EnumSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
+import java.util.Set;
 
 /**
  *  사용자/관리자 작업 API. DESIGN §12 표면 그대로.
@@ -65,6 +68,13 @@ public class TaskController {
         this.interviewService = interviewService;
     }
 
+    /**
+     * 상세 응답의 참조 칩을 진행 중 인터뷰 세션 값(고정·실패 상태 포함)으로 싣는 단계 (스펙 2026-10-24 §4.9).
+     * 목록·다른 엔드포인트는 작업의 참조만 — 세션 조회를 늘리지 않는다.
+     */
+    private static final Set<TaskStatus> INTERVIEW_STAGE = EnumSet.of(
+            TaskStatus.INTERVIEWING, TaskStatus.INTERVIEW_INPUT, TaskStatus.INTERVIEW_REVIEW);
+
     /** 관리자가 아니면 비밀 env 값을 비운다 (스펙 2026-10-07 §7). 관리자 전용 엔드포인트에는 쓰지 않는다. TaskCloseController도 쓴다. */
     static TaskResponse forViewer(TaskResponse r, boolean isAdmin) {
         return isAdmin ? r : r.redactSecretValues();
@@ -74,8 +84,9 @@ public class TaskController {
     public ResponseEntity<TaskResponse> create(@RequestBody @Valid TaskCreateRequest req,
                                                JwtAuthenticationToken auth) {
         String userId = AuthContext.requireUserId(auth);
-        Task t = taskService.create(req, userId, AuthContext.email(auth));
-        TaskResponse body = forViewer(TaskResponse.of(t, null), AuthContext.isAdmin(auth));
+        boolean isAdmin = AuthContext.isAdmin(auth);
+        Task t = taskService.create(req, userId, AuthContext.email(auth), isAdmin);
+        TaskResponse body = forViewer(TaskResponse.of(t, null), isAdmin);
         return ResponseEntity.created(URI.create("/api/tasks/" + t.getId())).body(body);
     }
 
@@ -89,8 +100,9 @@ public class TaskController {
             @RequestPart(value = "files", required = false) List<MultipartFile> files,
             JwtAuthenticationToken auth) {
         String userId = AuthContext.requireUserId(auth);
-        Task t = taskService.create(req, files, userId, AuthContext.email(auth));
-        TaskResponse body = forViewer(TaskResponse.of(t, null), AuthContext.isAdmin(auth));
+        boolean isAdmin = AuthContext.isAdmin(auth);
+        Task t = taskService.create(req, files, userId, AuthContext.email(auth), isAdmin);
+        TaskResponse body = forViewer(TaskResponse.of(t, null), isAdmin);
         return ResponseEntity.created(URI.create("/api/tasks/" + t.getId())).body(body);
     }
 
@@ -116,11 +128,17 @@ public class TaskController {
         String userId = AuthContext.requireUserId(auth);
         boolean isAdmin = AuthContext.isAdmin(auth);
         Task t = taskService.getForView(id, userId, isAdmin);
-        return forViewer(TaskResponse.ofWithUsage(t, taskService.getAnalysis(id).orElse(null),
+        // 최신 세션은 한 번만 읽는다 — 상세가 열 세션 id와, 인터뷰 단계면 보여 줄 그 세션의 참조
+        Optional<InterviewService.LatestSession> latest = interviewService.latestSessionForTask(id);
+        TaskResponse r = TaskResponse.ofWithUsage(t, taskService.getAnalysis(id).orElse(null),
                 taskService.getDesign(id).orElse(null),
-                interviewService.latestSessionIdForTask(id).orElse(null),
+                latest.map(InterviewService.LatestSession::id).orElse(null),
                 taskService.getAttachments(id),
-                taskService.getStageUsage(id)), isAdmin);
+                taskService.getStageUsage(id));
+        if (INTERVIEW_STAGE.contains(t.getStatus()) && latest.isPresent()) {
+            r = r.withRefRepos(latest.get().refRepos());
+        }
+        return forViewer(r, isAdmin);
     }
 
     /**
@@ -163,7 +181,7 @@ public class TaskController {
     @PostMapping("/{id}/approve")
     @PreAuthorize("hasAuthority('ROLE_ADMIN')")
     public TaskResponse approve(@PathVariable Long id,
-                                @RequestBody(required = false) ApproveRequest body,
+                                @Valid @RequestBody(required = false) ApproveRequest body,
                                 JwtAuthenticationToken auth) {
         String adminId = AuthContext.requireUserId(auth);
         taskService.approve(id, adminId, body);
@@ -201,14 +219,15 @@ public class TaskController {
         return forViewer(TaskResponse.of(t, null), isAdmin);
     }
 
-    /** 구현실패 → 구현대기, 방식 다시 고르기 (스펙 2026-10-15 §5.5). */
+    /** 구현실패 → 구현대기, 방식 다시 고르기 (스펙 2026-10-15 §5.5) + 참조 repo 빼기 (스펙 2026-10-24 §4.10). */
     @PostMapping("/{id}/implementation/retry")
     @PreAuthorize("hasAuthority('ROLE_ADMIN')")
     public TaskResponse retryImplementation(@PathVariable Long id,
                                             @RequestBody(required = false) ImplementationRetryRequest body,
                                             JwtAuthenticationToken auth) {
         String adminId = AuthContext.requireUserId(auth);
-        taskService.retryImplementation(id, adminId, body == null ? null : body.implementationMode());
+        taskService.retryImplementation(id, adminId, body == null ? null : body.implementationMode(),
+                body == null ? null : body.removeRefCatalogIds());
         Task t = taskService.getForView(id, adminId, true);
         return TaskResponse.of(t, taskService.getAnalysis(id).orElse(null));
     }

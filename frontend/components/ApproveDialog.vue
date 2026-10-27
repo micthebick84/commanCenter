@@ -1,7 +1,7 @@
 <script setup lang="ts">
 // 승인 — 인터뷰 시작 다이얼로그 (2026-09-06 UI/UX 개선).
 // 위→아래: 작업 요약(어떤 작업인지) → 지난 인터뷰 안내(재승인 맥락) → 인터뷰 설정(모델 라디오 + 추론 단계 세그먼트,
-// MCP 칩, 구독 사용량 strip) → 승인 후 다음 단계 안내 → 액션. 폰(lt.sm)은 전체화면: 상단 고정 바(닫기) /
+// MCP 칩, DB 연결, 참조 repo, 구독 사용량 strip) → 승인 후 다음 단계 안내 → 액션. 폰(lt.sm)은 전체화면: 상단 고정 바(닫기) /
 // 스크롤 본문(.dialog-body, assets/css/main.css) / 하단 액션 바. 데이터는 부모([id].vue)가 가진 task를 그대로 받는다.
 import { useQuasar } from 'quasar'
 import {
@@ -24,6 +24,15 @@ import {
 } from '~/composables/dbConnections'
 import ModelEffortFields from '~/components/ModelEffortFields.vue'
 import ClaudeUsagePanel from '~/components/ClaudeUsagePanel.vue'
+import RefRepoChips from '~/components/RefRepoChips.vue'
+import RefRepoAddForm from '~/components/RefRepoAddForm.vue'
+import {
+  sameRefSet,
+  toInputs,
+  useRefCatalog,
+  useRefDraft,
+  type RefRepoView,
+} from '~/composables/refRepos'
 import ApproveTaskSummary, {
   type SummaryTask,
 } from '~/components/tasks/ApproveTaskSummary.vue'
@@ -63,6 +72,31 @@ const isRegistrant = computed(() => {
 })
 /** 목록에 안 보이지만 유지하는 등록자 개인 연결 id(승인자 ≠ 등록자일 때만) */
 const registrantDbIds = ref<number[]>([])
+
+// 참조 repo(작업 스펙 2026-10-24 §7.3): 열 때마다 작업의 참조로 채운 편집 초안. 재승인 때도 작업의 값(마지막 승인 때 값)으로
+// 채우고 지난 인터뷰 세션의 참조로 프리필하지 않는다. 추가 폼 후보에서는 대상 레포와 이미 고른 참조를 뺀다(useRefDraft).
+const refs = ref<RefRepoView[]>([])
+const {
+  addOpen: refAddOpen,
+  excludeIds: refExcludeIds,
+  toggleAdd: toggleRefAdd,
+  add: addRef,
+  remove: removeRef,
+  reset: resetRefs,
+} = useRefDraft(refs, () => props.task.repoCatalogId)
+// 후보 카탈로그는 "＋ 참조 추가"를 처음 펼칠 때 받는다 — 다이얼로그를 여는 시점의 API 호출을 늘리지 않는다.
+// 실패하면 알리고 다음에 펼칠 때 다시 시도한다.
+const { catalog: refCatalog, loadOnce: loadRefCatalogOnce } = useRefCatalog((message) =>
+  $q.notify({ type: 'negative', message }),
+)
+function onRefAdd() {
+  toggleRefAdd()
+  if (refAddOpen.value) loadRefCatalogOnce()
+}
+/** 초안이 작업의 참조와 다른 집합인가 — 같으면 승인 바디에서 빼 서버가 등록 값을 그대로 쓴다(전부 빼면 []를 싣는다). */
+const refsChanged = computed(
+  () => !sameRefSet(toInputs(refs.value), toInputs(props.task.refRepos ?? [])),
+)
 
 /** 로드 순번 — init/reload마다 증가. 늦게 도착한 이전 응답이 선택·목록을 덮어쓰지 않게 한다. */
 let loadSeq = 0
@@ -134,6 +168,7 @@ async function init() {
   mcpCatalogIds.value = []
   dbConnectionIds.value = []
   registrantDbIds.value = []
+  resetRefs(props.task.refRepos ?? [])
   let lastDbIds: number[] = []
   previous.value = []
   prefilled.value = false
@@ -185,6 +220,7 @@ async function approve() {
         effort: effort.value,
         mcpCatalogIds: mcpCatalogIds.value,
         ...(db.enabled ? { dbConnectionIds: dbConnectionIds.value } : {}),
+        ...(refsChanged.value ? { refRepos: toInputs(refs.value) } : {}),
       },
     })
     $q.notify({
@@ -277,6 +313,20 @@ const fullscreen = useFullscreenDialog()
               @reload="reloadDb"
             />
           </div>
+          <!-- 참조 repo (스펙 2026-10-24 §7.3) — DB 연결 아래·사용량 위. 인터뷰가 아직 받지 않았으므로 칩은 "인터뷰 때 받음"
+               (task-setup 맥락). "＋ 참조 추가"를 누르면 추가 폼이 칩 줄 아래에 펼쳐진다. 레거시 작업(카탈로그 없음)은 그리지 않는다. -->
+          <div v-if="task.repoCatalogId" class="q-mt-md" data-test="approve-refs">
+            <RefRepoChips
+              :items="refs"
+              editable
+              context="task-setup"
+              @remove="removeRef"
+              @add="onRefAdd"
+            />
+            <div v-if="refAddOpen" class="ref-add-panel">
+              <RefRepoAddForm :catalog="refCatalog" :exclude-ids="refExcludeIds" @add="addRef" />
+            </div>
+          </div>
           <!-- 첫 폴링 뒤에 strip이 나타나며 아래 섹션이 밀리지 않도록 높이를 미리 확보한다 -->
           <div class="usage-slot q-mt-sm">
             <ClaudeUsagePanel
@@ -353,5 +403,17 @@ const fullscreen = useFullscreenDialog()
 }
 .next-step-icon {
   margin-top: 1px;
+}
+/* 참조 추가 폼 — 칩 줄 아래 윤곽선 패널 (작업 등록 창 pages/tasks/index.vue와 같은 모양) */
+.ref-add-panel {
+  box-sizing: border-box;
+  max-width: 360px;
+  margin-top: 8px;
+  border: 1px solid rgba(0, 0, 0, 0.12);
+  border-radius: 8px;
+}
+.ref-add-panel :deep(.ref-add-form) {
+  width: auto;
+  padding: 12px;
 }
 </style>

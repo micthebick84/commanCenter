@@ -82,6 +82,20 @@ public class Task {
     @Setter
     private List<Long> dbConnectionIds = new ArrayList<>();
 
+    /**
+     * 읽기 전용 참조 repo (스펙 2026-10-24 §3.2) — 등록·승인 때 고른 스냅샷, 계획 확정 뒤에는 인터뷰가 고정한 커밋(sha)까지.
+     * 원소는 질문 세션과 같은 RefRepo. 구현(재시도·재기동 재큐 포함)은 이 값을 그대로 쓴다.
+     */
+    @JdbcTypeCode(SqlTypes.JSON)
+    @Column(name = "ref_repos", nullable = false, columnDefinition = "jsonb")
+    @Setter
+    private List<RefRepo> refRepos = new ArrayList<>();
+
+    /** 이 작업을 등록한 질문 세션 id ("이 대화로 작업 등록", 스펙 2026-10-24 §2). 기록용이라 FK가 없다. */
+    @Column(name = "source_question_id")
+    @Setter
+    private Long sourceQuestionId;
+
     /** 작업 등록 시 선택된 Claude 모델. 워커가 claude --model에 사용.
      *  기본값은 ModelEffortPolicy.DEFAULT_MODEL과 반드시 일치해야 한다(둘 다 바꿀 것). */
     @Column(name = "model", nullable = false, length = 64)

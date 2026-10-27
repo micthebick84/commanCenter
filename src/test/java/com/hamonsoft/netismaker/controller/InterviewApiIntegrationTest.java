@@ -3,8 +3,12 @@ package com.hamonsoft.netismaker.controller;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.hamonsoft.netismaker.TestcontainersConfig;
 import com.hamonsoft.netismaker.dto.TaskCreateRequest;
+import com.hamonsoft.netismaker.entity.InterviewSession;
+import com.hamonsoft.netismaker.entity.InterviewStatus;
 import com.hamonsoft.netismaker.entity.Task;
+import com.hamonsoft.netismaker.entity.TaskStatus;
 import com.hamonsoft.netismaker.repository.InterviewSessionRepository;
+import com.hamonsoft.netismaker.repository.InterviewTurnRepository;
 import com.hamonsoft.netismaker.repository.TaskRepository;
 import com.hamonsoft.netismaker.service.TaskService;
 import org.junit.jupiter.api.BeforeEach;
@@ -39,6 +43,7 @@ class InterviewApiIntegrationTest {
     @Autowired private MockMvc mvc;
     @Autowired private ObjectMapper json;
     @Autowired private InterviewSessionRepository sessionRepo;
+    @Autowired private InterviewTurnRepository turnRepo;
     @Autowired private TaskRepository taskRepo;
     @Autowired private TaskService taskService;
     @Value("${app.worker.api-key}") private String apiKey;
@@ -175,6 +180,44 @@ class InterviewApiIntegrationTest {
 
         assertThat(taskRepo.findById(taskId).orElseThrow().getImplementationMode())
                 .isEqualTo(com.hamonsoft.netismaker.entity.ImplementationMode.SDD);
+    }
+
+    /**
+     * 답변과 참조 변경은 한 트랜잭션이다 (스펙 2026-10-24 §4.3) — 참조가 거절(400)되면 방금 붙인 답변 턴·재큐·작업 상태
+     * 미러링까지 함께 롤백돼 관리자가 같은 질문에 다시 답할 수 있다(1단계 질문 ask와 같음).
+     */
+    @Test
+    void 답변의_참조가_거절되면_답변_턴까지_롤백된다() throws Exception {
+        long sid = startSession("user1", "참조 거절");
+        mvc.perform(post("/worker/interviews/claim").header("X-Worker-API-Key", apiKey).param("workerId", "iw-1"))
+                .andExpect(status().isOk());
+        mvc.perform(post("/worker/interviews/" + sid + "/question").header("X-Worker-API-Key", apiKey)
+                        .param("workerId", "iw-1")
+                        .contentType(APPLICATION_JSON)
+                        .content("{\"content\":\"어느 화면에 추가하나요?\",\"kind\":\"question\"}"))
+                .andExpect(status().isNoContent());                           // seq 0 — assistant/question
+
+        // 대상과 같은 카탈로그(1)를 참조로 고르면 400
+        mvc.perform(post("/api/interviews/" + sid + "/answer").with(adminJwt("admin"))
+                        .contentType(APPLICATION_JSON)
+                        .content("{\"answer\":\"좌측 패널\",\"replyToSeq\":0,"
+                                + "\"refRepos\":[{\"repoCatalogId\":1,\"branch\":\"main\"}]}"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.message").value("대상 레포는 참조로 고를 수 없습니다"));
+
+        InterviewSession s = sessionRepo.findById(sid).orElseThrow();
+        assertThat(s.getStatus()).isEqualTo(InterviewStatus.AWAITING_INPUT);
+        assertThat(s.getRefRepos()).isEmpty();
+        assertThat(turnRepo.findBySessionIdOrderBySeqAsc(sid))
+                .hasSize(1)
+                .noneMatch(t -> "user".equals(t.getRole()) || "system".equals(t.getRole()));
+        assertThat(taskRepo.findById(s.getTaskId()).orElseThrow().getStatus()).isEqualTo(TaskStatus.INTERVIEW_INPUT);
+
+        // 롤백됐으므로 같은 질문에 다시 답할 수 있다
+        mvc.perform(post("/api/interviews/" + sid + "/answer").with(adminJwt("admin"))
+                        .contentType(APPLICATION_JSON).content("{\"answer\":\"좌측 패널\",\"replyToSeq\":0}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("인터뷰대기"));
     }
 
     @Test

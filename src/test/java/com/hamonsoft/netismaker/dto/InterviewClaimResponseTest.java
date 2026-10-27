@@ -214,6 +214,41 @@ class InterviewClaimResponseTest {
         assertThat(refs.get(1).get("sha").asText()).isEqualTo(SHA);
     }
 
+    // ── 작업 인터뷰에서 참조를 모두 뺐는지 (스펙 2026-10-24 §4.4·§5.2) ──────────────────────
+
+    @Test
+    void refsCleared_is_false_by_default_and_withRefsCleared_changes_only_it() {
+        InterviewClaimResponse base = InterviewClaimResponse.of(session(), List.of(), List.of());
+
+        InterviewClaimResponse cleared = base.withRefsCleared(true);
+
+        assertThat(base.refsCleared()).isFalse();
+        assertThat(cleared.refsCleared()).isTrue();
+        assertThat(cleared).usingRecursiveComparison().ignoringFields("refsCleared").isEqualTo(base);
+        assertThat(cleared.withRefsCleared(false)).isEqualTo(base);
+    }
+
+    @Test
+    void withDb_and_withRefRepos_keep_refsCleared() {
+        var dbRef = new InterviewClaimResponse.DbConnectionRef("db-7", "운영 (MySQL)", "MYSQL", "h", 3306, "app", "u", "Pw-9");
+        InterviewClaimResponse cleared = InterviewClaimResponse.of(session(), List.of(), List.of()).withRefsCleared(true);
+
+        assertThat(cleared.withDb(List.of(dbRef), List.of("참고")).refsCleared()).isTrue();
+        assertThat(cleared.withRefRepos(List.of()).refsCleared()).isTrue();
+        assertThat(cleared.withRefRepos(List.of(claimRef(11L, SHA))).withDb(List.of(), List.of()).refsCleared()).isTrue();
+    }
+
+    @Test
+    void refsCleared_is_always_serialized_as_a_boolean() throws Exception {
+        ObjectMapper mapper = new ObjectMapper().findAndRegisterModules();
+        InterviewClaimResponse base = InterviewClaimResponse.of(session(), List.of(), List.of());
+
+        assertThat(mapper.writeValueAsString(base.withRefsCleared(true))).contains("\"refsCleared\":true");
+        JsonNode plain = mapper.valueToTree(base);
+        assertThat(plain.get("refsCleared").isBoolean()).isTrue();
+        assertThat(plain.get("refsCleared").asBoolean()).isFalse();
+    }
+
     @Test
     void a_claim_without_refs_serializes_an_empty_refRepos_array() {
         JsonNode json = new ObjectMapper().findAndRegisterModules()

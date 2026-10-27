@@ -6,6 +6,7 @@ import com.hamonsoft.netismaker.dto.DeployEnvSuggestionResponse;
 import com.hamonsoft.netismaker.dto.TaskCreateRequest;
 import com.hamonsoft.netismaker.entity.EnvVar;
 import com.hamonsoft.netismaker.entity.ImplementationMode;
+import com.hamonsoft.netismaker.entity.RefRepo;
 import com.hamonsoft.netismaker.entity.Task;
 import com.hamonsoft.netismaker.entity.TaskAnalysis;
 import com.hamonsoft.netismaker.entity.TaskAttachment;
@@ -32,12 +33,16 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.multipart.MultipartFile;
 
 import java.math.BigDecimal;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 import java.time.OffsetDateTime;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Optional;
+import java.util.Set;
+import java.util.stream.Collectors;
 
 /**
  * 작업 상태 전이의 단일 진입점. 모든 상태 변경은 여기서 + 히스토리 로깅.
@@ -114,29 +119,28 @@ public class TaskService {
     /** requesterEmail: JWT email — 종료 메일 수신 주소 (스펙 2026-10-14 §7). null이면 저장하지 않는다. */
     @Transactional
     public Task create(TaskCreateRequest req, String requesterId, String requesterEmail) {
-        long active = taskRepo.countActiveByRequester(requesterId);
-        if (active >= userConcurrentLimit) {
-            throw TaskException.tooManyRequests(
-                    "동시에 보유할 수 있는 미완료 작업 한도(" + userConcurrentLimit + ")를 초과했습니다");
-        }
-        RepoCatalogService.ResolvedRepo repo = repoCatalogService.resolveForRegistration(req.repoCatalogId());
-        // 모델/effort/MCP는 승인 시점에 관리자가 결정 — 등록은 서버 기본값으로 시작한다.
-        Task t = Task.create(repo.ownerRepo(), req.githubBranch(), req.title(),
-                             req.description(), requesterId, maxRetry,
-                             new ArrayList<>(), null, null);
-        t.setStatus(TaskStatus.AWAITING_APPROVAL);
-        t.setGitUrl(repo.gitUrl());
-        t.setRepoAlias(repo.alias());
-        t.setRepoCatalogId(repo.catalogId());
-        t.setRequesterEmail(requesterEmail);
-        Task saved = taskRepo.save(t);
-        historyRepo.save(TaskStatusHistory.log(saved.getId(), null, TaskStatus.AWAITING_APPROVAL,
-                "user", requesterId, "작업 등록"));
-        return saved;
+        return create(req, requesterId, requesterEmail, false);
     }
 
     /**
-     * 파일 첨부 등록 (스펙 2026-08-16 §6.2). 검증 → 기존 create 재사용(같은 tx) →
+     * requesterIsAdmin: 등록자가 관리자인지 — sourceQuestionId가 있을 때 그 질문을 볼 수 있는지 판정한다 (스펙 2026-10-24 §4.1).
+     * 출처 질문이 있으면 대화 전문을 첨부 순번 1로 남긴다. 쓰기가 실패하면 쓴 파일을 지우고 예외를 그대로 던진다(tx 롤백).
+     */
+    @Transactional
+    public Task create(TaskCreateRequest req, String requesterId, String requesterEmail, boolean requesterIsAdmin) {
+        Registration reg = register(req, requesterId, requesterEmail, requesterIsAdmin);
+        List<String> written = new ArrayList<>();
+        try {
+            attachTranscript(reg, 1, requesterId, written);
+        } catch (RuntimeException e) {
+            written.forEach(attachmentStorage::deleteQuietly);
+            throw e;   // tx 롤백 → task/메타 행 전부 취소
+        }
+        return reg.task();
+    }
+
+    /**
+     * 파일 첨부 등록 (스펙 2026-08-16 §6.2). 검증 → 등록(같은 tx) →
      * 메타 행 + 디스크 쓰기. 실패 시 tx 롤백 + 이미 쓴 파일 best-effort 삭제 — 부분 상태 없음.
      * 경로의 ordinal은 업로드 순번(1..N) — IDENTITY라 INSERT 전 id를 못 쓴다.
      */
@@ -147,9 +151,20 @@ public class TaskService {
 
     @Transactional
     public Task create(TaskCreateRequest req, List<MultipartFile> files, String requesterId, String requesterEmail) {
+        return create(req, files, requesterId, requesterEmail, false);
+    }
+
+    /**
+     * 출처 질문이 있으면 대화 전문을 사용자 파일 1..N 다음 순번 N+1로 남긴다 (스펙 2026-10-24 §4.1) —
+     * 사용자 첨부 한도(validate)는 사용자 파일만 센다.
+     */
+    @Transactional
+    public Task create(TaskCreateRequest req, List<MultipartFile> files, String requesterId, String requesterEmail,
+                       boolean requesterIsAdmin) {
         List<MultipartFile> attached = files == null ? List.of() : files;
         attachmentStorage.validate(attached);
-        Task saved = create(req, requesterId, requesterEmail);   // 내부 호출 — 이미 @Transactional 안이라 같은 tx
+        Registration reg = register(req, requesterId, requesterEmail, requesterIsAdmin);
+        Task saved = reg.task();
         List<String> written = new ArrayList<>();
         try {
             int ordinal = 1;
@@ -162,11 +177,64 @@ public class TaskService {
                 attachmentStorage.write(rel, f);
                 ordinal++;
             }
+            attachTranscript(reg, ordinal, requesterId, written);
         } catch (RuntimeException e) {
             written.forEach(attachmentStorage::deleteQuietly);
             throw e;   // tx 롤백 → task/메타 행 전부 취소
         }
         return saved;
+    }
+
+    /** 등록 결과 — 저장한 작업과, 출처 질문이 있으면 첨부할 대화 전문(없으면 null). */
+    private record Registration(Task task, String transcript) {}
+
+    /**
+     * 작업 행 + 등록 이력. 거절(429 한도·400 카탈로그/참조·403/404/409 출처 질문)은 모두 저장 전에 난다.
+     * 출처 질문은 등록자가 볼 수 있고 답변이 끝난 것이어야 한다(InterviewService.questionTranscript).
+     */
+    private Registration register(TaskCreateRequest req, String requesterId, String requesterEmail,
+                                  boolean requesterIsAdmin) {
+        long active = taskRepo.countActiveByRequester(requesterId);
+        if (active >= userConcurrentLimit) {
+            throw TaskException.tooManyRequests(
+                    "동시에 보유할 수 있는 미완료 작업 한도(" + userConcurrentLimit + ")를 초과했습니다");
+        }
+        RepoCatalogService.ResolvedRepo repo = repoCatalogService.resolveForRegistration(req.repoCatalogId());
+        // 읽기 전용 참조 repo (스펙 2026-10-24 §4.1) — 대상 기준 검증·스냅샷(400이면 저장 전에 끝난다)
+        List<RefRepo> refs = repoCatalogService.resolveReferences(repo.catalogId(), req.refRepos());
+        String transcript = req.sourceQuestionId() == null ? null
+                : interviewService.questionTranscript(req.sourceQuestionId(), requesterId, requesterIsAdmin);
+        // 모델/effort/MCP는 승인 시점에 관리자가 결정 — 등록은 서버 기본값으로 시작한다.
+        Task t = Task.create(repo.ownerRepo(), req.githubBranch(), req.title(),
+                             req.description(), requesterId, maxRetry,
+                             new ArrayList<>(), null, null);
+        t.setStatus(TaskStatus.AWAITING_APPROVAL);
+        t.setGitUrl(repo.gitUrl());
+        t.setRepoAlias(repo.alias());
+        t.setRepoCatalogId(repo.catalogId());
+        t.setRequesterEmail(requesterEmail);
+        t.setRefRepos(new ArrayList<>(refs));
+        t.setSourceQuestionId(req.sourceQuestionId());
+        Task saved = taskRepo.save(t);
+        historyRepo.save(TaskStatusHistory.log(saved.getId(), null, TaskStatus.AWAITING_APPROVAL,
+                "user", requesterId, "작업 등록"));
+        return new Registration(saved, transcript);
+    }
+
+    /**
+     * 대화 전문을 작업 첨부로 남긴다 — 사용자 첨부와 같은 순서(경로 → 메타 행 → 정리 목록 → 쓰기).
+     * 정리 목록에 쓰기보다 먼저 넣어 반쯤 쓰인 파일도 롤백 때 지운다. 대화 전문이 없으면 아무것도 하지 않는다.
+     */
+    private void attachTranscript(Registration reg, int ordinal, String requesterId, List<String> written) {
+        if (reg.transcript() == null) return;
+        Task saved = reg.task();
+        String name = QuestionTranscript.fileName(saved.getSourceQuestionId());
+        String rel = attachmentStorage.relativePath(saved.getId(), ordinal, name);
+        attachmentRepo.save(TaskAttachment.create(saved.getId(), AttachmentStorage.sanitize(name), rel,
+                QuestionTranscript.CONTENT_TYPE, reg.transcript().getBytes(StandardCharsets.UTF_8).length,
+                requesterId));
+        written.add(rel);
+        attachmentStorage.writeText(rel, reg.transcript());
     }
 
     @Transactional(readOnly = true)
@@ -312,7 +380,12 @@ public class TaskService {
         approve(taskId, adminId, null);
     }
 
-    /** 승인대기 → 인터뷰중. 세션을 만들고 모델/effort/MCP/DB 선택을 task에도 박제한다. */
+    /**
+     * 승인대기 → 인터뷰중. 세션을 만들고 모델/effort/MCP/DB 선택을 task에도 박제한다.
+     * 참조 repo(스펙 2026-10-24 §4.2): null = 등록 값 유지, 같은 집합 = 검증 없는 no-op, 바뀌면 새로 들어온 것만 검증 —
+     * 등록 뒤 비활성된 기존 참조로 400이 나지 않게. 세션을 만들기 전에 task에 반영해 createForTask가 복사하고,
+     * 바뀌었으면 승인 이력 다음에 별도 이력 행을 남긴다(기존 승인 이력 문구는 그대로).
+     */
     private void startInterview(Task t, String adminId, ApproveRequest req) {
         List<TaskMcpSpec> extras = resolveMcpExtras(req == null ? null : req.mcpCatalogIds());
         String model = ModelEffortPolicy.resolveModel(req == null ? null : req.model());
@@ -321,11 +394,14 @@ public class TaskService {
         // DB 연결 검증도 세션 생성 전 — 기준은 작업 등록자 (스펙 2026-10-14 §4)
         List<Long> dbIds = dbConnectionService.validateSelection(t.getRepoCatalogId(), t.getRequesterId(),
                 req == null ? null : req.dbConnectionIds());
+        RefRepoChanges.Change refChange = RefRepoChanges.diff(t.getRepoCatalogId(), t.getRefRepos(),
+                req == null ? null : req.refRepos(), repoCatalogService);
 
         t.setModel(model);
         t.setEffort(effort);
         t.setMcpsExtra(new ArrayList<>(extras));
         t.setDbConnectionIds(new ArrayList<>(dbIds));
+        if (refChange != null) t.setRefRepos(new ArrayList<>(refChange.next()));
         t.setFailureReason(null);
         interviewService.createForTask(t, model, effort, extras);
 
@@ -334,6 +410,10 @@ public class TaskService {
         t.setUpdatedAt(OffsetDateTime.now());
         historyRepo.save(TaskStatusHistory.log(t.getId(), from, TaskStatus.INTERVIEWING,
                 "user", adminId, "관리자 승인 → 인터뷰 시작"));
+        if (refChange != null) {
+            historyRepo.save(TaskStatusHistory.log(t.getId(), TaskStatus.INTERVIEWING, TaskStatus.INTERVIEWING,
+                    "user", adminId, RefRepoChanges.approvalHistory(refChange)));
+        }
     }
 
     /** 레거시: 분석완료 + admin 승인 → 구현/디자인 큐. 기존 동작 그대로. */
@@ -471,12 +551,30 @@ public class TaskService {
      */
     @Transactional
     public Task retryImplementation(Long taskId, String adminId, String rawMode) {
+        return retryImplementation(taskId, adminId, rawMode, null);
+    }
+
+    /**
+     * 재시도 + 참조 repo 빼기 (스펙 2026-10-24 §4.10). removeRefCatalogIds(null 원소는 무시)가 비면 위와 같다.
+     * 고른 id는 모두 지금 작업 참조에 있어야 한다 — 아니면 아무것도 바꾸기 전에 400. 빼기만 하고 남은 참조는 같은 고정 커밋 그대로다.
+     * 뺀 것이 있으면 재시도 이력(문구 불변) 다음에 같은 상태의 별도 이력 행 {@code 참조 제외(구현 재시도): {별칭}({브랜치}), …}
+     * (작업 참조 순서)을 남긴다. 모두 빼면 참조 없는 구현이 된다(참조를 모르는 워커도 claim할 수 있다).
+     */
+    @Transactional
+    public Task retryImplementation(Long taskId, String adminId, String rawMode, List<Long> removeRefCatalogIds) {
         ImplementationMode requested = ImplementationModePolicy.parse(rawMode, null);
         // 비관적 락(FOR UPDATE) — 연타 재시도의 시도 번호 이중 증가와 claim 경합 방지.
         Task t = taskRepo.findActiveByIdForUpdate(taskId).orElseThrow(TaskException::notFound);
         if (t.getStatus() != TaskStatus.IMPLEMENTATION_FAILED) {
             throw TaskException.conflict("구현실패 상태에서만 구현을 재시도할 수 있습니다 (현재: "
                     + t.getStatus().dbValue() + ")");
+        }
+        Set<Long> removeIds = removeRefCatalogIds == null ? Set.of() : removeRefCatalogIds.stream()
+                .filter(Objects::nonNull).collect(Collectors.toSet());
+        List<RefRepo> refs = t.getRefRepos() == null ? List.of() : t.getRefRepos();
+        Set<Long> present = refs.stream().map(RefRepo::catalogId).collect(Collectors.toSet());
+        if (!present.containsAll(removeIds)) {
+            throw new TaskException(HttpStatus.BAD_REQUEST, "작업에 없는 참조는 뺄 수 없습니다");
         }
         ImplementationMode before = t.getImplementationMode();
         ImplementationMode after = requested == null ? before : requested;
@@ -492,6 +590,13 @@ public class TaskService {
         String reason = "구현 재시도 (" + t.getImplementationAttempt() + "회째, 구현 방식: " + modeText
                 + (previousBranch == null || previousBranch.isBlank() ? "" : ", 이전 브랜치: " + previousBranch) + ")";
         historyRepo.save(TaskStatusHistory.log(t.getId(), from, TaskStatus.APPROVED, "user", adminId, reason));
+
+        if (!removeIds.isEmpty()) {
+            List<RefRepo> removed = refs.stream().filter(r -> removeIds.contains(r.catalogId())).toList();
+            t.setRefRepos(new ArrayList<>(refs.stream().filter(r -> !removeIds.contains(r.catalogId())).toList()));
+            historyRepo.save(TaskStatusHistory.log(t.getId(), TaskStatus.APPROVED, TaskStatus.APPROVED, "user", adminId,
+                    "참조 제외(구현 재시도): " + removed.stream().map(RefRepo::label).collect(Collectors.joining(", "))));
+        }
         return t;
     }
 

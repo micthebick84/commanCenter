@@ -2,6 +2,7 @@ package com.hamonsoft.netismaker.service;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.hamonsoft.netismaker.entity.ImplementationMode;
+import com.hamonsoft.netismaker.entity.RefRepo;
 import com.hamonsoft.netismaker.entity.Task;
 import com.hamonsoft.netismaker.entity.TaskStatus;
 import com.hamonsoft.netismaker.entity.TaskStatusHistory;
@@ -13,6 +14,8 @@ import org.springframework.http.HttpStatus;
 import org.springframework.test.util.ReflectionTestUtils;
 
 import java.time.OffsetDateTime;
+import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 import java.util.Optional;
 
@@ -143,5 +146,90 @@ class TaskServiceImplementationRetryTest {
         assertThatThrownBy(() -> service.retryImplementation(43L, "admin", null))
                 .isInstanceOf(TaskException.class)
                 .satisfies(e -> assertThat(((TaskException) e).getStatus()).isEqualTo(HttpStatus.NOT_FOUND));
+    }
+
+    // ── 재시도 때 참조 빼기 (스펙 2026-10-24 §4.10) ──
+
+    private Task failedWithRefs() {
+        Task t = failed(ImplementationMode.REVIEW);
+        t.setRefRepos(new ArrayList<>(List.of(
+                new RefRepo(11L, "옛앱", "g/old", "https://gitlab.hamon.vip/g/old.git", "release/6.5",
+                        "a".repeat(40), "t1", null),
+                new RefRepo(12L, "공통 UI", "g/ui", "https://gitlab.hamon.vip/g/ui.git", "main",
+                        "b".repeat(40), "t2", null))));
+        return t;
+    }
+
+    private List<String> reasons() {
+        ArgumentCaptor<TaskStatusHistory> cap = ArgumentCaptor.forClass(TaskStatusHistory.class);
+        verify(historyRepo, atLeastOnce()).save(cap.capture());
+        return cap.getAllValues().stream().map(TaskStatusHistory::getReason).toList();
+    }
+
+    @Test
+    void retry_removes_the_chosen_refs_keeps_the_rest_pinned_and_logs_them() {
+        Task t = failedWithRefs();
+
+        service.retryImplementation(42L, "admin", null, List.of(11L));
+
+        assertThat(t.getStatus()).isEqualTo(TaskStatus.APPROVED);
+        assertThat(t.getRefRepos()).extracting(RefRepo::sha).containsExactly("b".repeat(40));
+        assertThat(t.getRefRepos()).extracting(RefRepo::catalogId).containsExactly(12L);
+        assertThat(reasons()).containsExactly("구현 재시도 (2회째, 구현 방식: 리뷰, 이전 브랜치: netismaker/task-42-t)",
+                "참조 제외(구현 재시도): 옛앱(release/6.5)");
+        ArgumentCaptor<TaskStatusHistory> cap = ArgumentCaptor.forClass(TaskStatusHistory.class);
+        verify(historyRepo, times(2)).save(cap.capture());
+        TaskStatusHistory removal = cap.getAllValues().get(1);
+        assertThat(removal.getFromStatus()).isEqualTo(TaskStatus.APPROVED.dbValue());
+        assertThat(removal.getToStatus()).isEqualTo(TaskStatus.APPROVED.dbValue());
+        assertThat(removal.getActorType()).isEqualTo("user");
+        assertThat(removal.getActorId()).isEqualTo("admin");
+    }
+
+    @Test
+    void removing_every_ref_lists_them_in_task_order() {
+        Task t = failedWithRefs();
+
+        service.retryImplementation(42L, "admin", "DIRECT", List.of(12L, 11L, 12L));
+
+        assertThat(t.getRefRepos()).isEmpty();
+        assertThat(reasons()).containsExactly("구현 재시도 (2회째, 구현 방식: 리뷰 → 직접, 이전 브랜치: netismaker/task-42-t)",
+                "참조 제외(구현 재시도): 옛앱(release/6.5), 공통 UI(main)");
+    }
+
+    @Test
+    void removing_a_ref_the_task_does_not_have_is_400_before_any_change() {
+        Task t = failedWithRefs();
+        List<RefRepo> before = List.copyOf(t.getRefRepos());
+
+        assertThatThrownBy(() -> service.retryImplementation(42L, "admin", null, List.of(11L, 99L)))
+                .isInstanceOf(TaskException.class)
+                .hasMessage("작업에 없는 참조는 뺄 수 없습니다")
+                .satisfies(e -> assertThat(((TaskException) e).getStatus()).isEqualTo(HttpStatus.BAD_REQUEST));
+
+        assertThat(t.getImplementationAttempt()).isEqualTo(1);
+        assertThat(t.getStatus()).isEqualTo(TaskStatus.IMPLEMENTATION_FAILED);
+        assertThat(t.getRefRepos()).isEqualTo(before);
+        verify(historyRepo, never()).save(any());
+    }
+
+    @Test
+    void a_null_or_empty_removal_list_is_the_plain_retry() {
+        Task t = failedWithRefs();
+        service.retryImplementation(42L, "admin", null, null);
+        assertThat(t.getRefRepos()).hasSize(2);
+        assertThat(historyReason()).isEqualTo("구현 재시도 (2회째, 구현 방식: 리뷰, 이전 브랜치: netismaker/task-42-t)");
+
+        Task u = failedWithRefs();
+        clearInvocations(historyRepo);
+        service.retryImplementation(42L, "admin", null, Arrays.asList(null, null));
+        assertThat(u.getRefRepos()).hasSize(2);
+        assertThat(historyReason()).isEqualTo("구현 재시도 (2회째, 구현 방식: 리뷰, 이전 브랜치: netismaker/task-42-t)");
+
+        Task w = failedWithRefs();
+        clearInvocations(historyRepo);
+        service.retryImplementation(42L, "admin", null, List.of());
+        assertThat(w.getRefRepos()).hasSize(2);
+        assertThat(historyReason()).isEqualTo("구현 재시도 (2회째, 구현 방식: 리뷰, 이전 브랜치: netismaker/task-42-t)");
     }
 }

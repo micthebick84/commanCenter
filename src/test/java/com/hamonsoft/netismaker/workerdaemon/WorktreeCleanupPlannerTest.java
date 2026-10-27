@@ -76,4 +76,89 @@ class WorktreeCleanupPlannerTest {
         assertThat(WorktreeCleanupPlanner.lastActivity(wt)).isEqualTo(dirTime);
         assertThat(WorktreeCleanupPlanner.lastActivity(tmp.resolve("nope"))).isNull();
     }
+
+    /** {repos}/{a}/{b}에 .git 디렉터리를 만든 캐시 흉내. */
+    private static Path fakeCache(Path repos, String key) throws Exception {
+        Path cache = repos.resolve(key);
+        Files.createDirectories(cache.resolve(".git").resolve("worktrees"));
+        return cache;
+    }
+
+    /** 참조 폴더와 그 .git 파일(내용 그대로). */
+    private Path refWithGitFile(String name, String content) throws Exception {
+        Path ref = Files.createDirectories(tmp.resolve("worktrees/_refs/task-5").resolve(name));
+        Files.writeString(ref.resolve(".git"), content);
+        return ref;
+    }
+
+    private static String gitdirLine(Path meta) {
+        return "gitdir: " + meta.toString().replace('\\', '/') + "\n";
+    }
+
+    @Test
+    void ref_source_key_follows_the_gitdir_into_the_repos_dir() throws Exception {
+        Path repos = Files.createDirectories(tmp.resolve("repos"));
+        Path reposReal = repos.toRealPath();
+        Path cache = fakeCache(repos, "acme/widgets");
+        Path meta = cache.resolve(".git/worktrees/12");
+
+        Path absolute = refWithGitFile("12", gitdirLine(meta));
+        assertThat(WorktreeCleanupPlanner.refSourceKey(absolute, reposReal)).contains("acme/widgets");
+
+        // git 2.48+ relative 모드 — 참조 폴더 기준 상대 경로
+        Path relative = Files.createDirectories(tmp.resolve("worktrees/_refs/task-6/12"));
+        Files.writeString(relative.resolve(".git"),
+                "gitdir: " + relative.relativize(meta).toString().replace('\\', '/') + "\n");
+        assertThat(WorktreeCleanupPlanner.refSourceKey(relative, reposReal)).contains("acme/widgets");
+
+        // 같은 캐시의 두 번째 worktree는 메타 이름에 번호가 붙는다(12 → 121) — 폴더 이름으로 메타를 짐작하지 않는다
+        Path numbered = refWithGitFile("13", gitdirLine(cache.resolve(".git/worktrees/121")));
+        assertThat(WorktreeCleanupPlanner.refSourceKey(numbered, reposReal)).contains("acme/widgets");
+
+        // GitLab 캐시 키도 2단계(_gitlab/{경로의 '/'→'+'})
+        Path gitlab = fakeCache(repos, "_gitlab/team+app");
+        Path gl = refWithGitFile("14", gitdirLine(gitlab.resolve(".git/worktrees/14")));
+        assertThat(WorktreeCleanupPlanner.refSourceKey(gl, reposReal)).contains("_gitlab/team+app");
+    }
+
+    @Test
+    void ref_source_key_is_empty_when_it_cannot_be_trusted() throws Exception {
+        Path repos = Files.createDirectories(tmp.resolve("repos"));
+        Path reposReal = repos.toRealPath();
+        Path cache = fakeCache(repos, "acme/widgets");
+        Path elsewhere = fakeCache(Files.createDirectories(tmp.resolve("elsewhere")), "acme/widgets");
+        Path deep = fakeCache(repos, "a/b/c");
+        Path noGit = Files.createDirectories(repos.resolve("acme/gone"));
+        Path trashed = fakeCache(repos, ".trash/acme+widgets-1");
+
+        Path missing = Files.createDirectories(tmp.resolve("worktrees/_refs/task-5/1"));
+        assertThat(WorktreeCleanupPlanner.refSourceKey(missing, reposReal)).as(".git 없음").isEmpty();
+
+        Path garbage = refWithGitFile("2", "garbage");
+        assertThat(WorktreeCleanupPlanner.refSourceKey(garbage, reposReal)).as("형식 이상").isEmpty();
+
+        Path outside = refWithGitFile("3", gitdirLine(elsewhere.resolve(".git/worktrees/3")));
+        assertThat(WorktreeCleanupPlanner.refSourceKey(outside, reposReal)).as("repos 밖").isEmpty();
+
+        Path reclaimed = refWithGitFile("4", gitdirLine(noGit.resolve(".git/worktrees/4")));
+        assertThat(WorktreeCleanupPlanner.refSourceKey(reclaimed, reposReal)).as("캐시에 .git 디렉터리 없음").isEmpty();
+
+        Path notWorktrees = refWithGitFile("5", gitdirLine(cache.resolve(".git/modules/5")));
+        assertThat(WorktreeCleanupPlanner.refSourceKey(notWorktrees, reposReal)).as(".git/worktrees 아래 아님").isEmpty();
+        Path notDotGit = refWithGitFile("6", gitdirLine(cache.resolve("worktrees/6")));
+        assertThat(WorktreeCleanupPlanner.refSourceKey(notDotGit, reposReal)).as(".git 아래 아님").isEmpty();
+
+        Path threeLevels = refWithGitFile("7", gitdirLine(deep.resolve(".git/worktrees/7")));
+        assertThat(WorktreeCleanupPlanner.refSourceKey(threeLevels, reposReal)).as("3단계 경로").isEmpty();
+
+        // repos-dir 내부용(.trash 등) 아래 캐시는 레포 키가 아니다 — 가짜 키로 락 파일을 만들지 않게
+        Path inTrash = refWithGitFile("8", gitdirLine(trashed.resolve(".git/worktrees/8")));
+        assertThat(WorktreeCleanupPlanner.refSourceKey(inTrash, reposReal)).as("repos-dir 내부용 폴더").isEmpty();
+
+        Path dotGitDir = Files.createDirectories(tmp.resolve("worktrees/_refs/task-5/9/.git"));
+        assertThat(WorktreeCleanupPlanner.refSourceKey(dotGitDir.getParent(), reposReal)).as(".git이 파일 아님").isEmpty();
+
+        Path good = refWithGitFile("10", gitdirLine(cache.resolve(".git/worktrees/10")));
+        assertThat(WorktreeCleanupPlanner.refSourceKey(good, null)).as("repos-dir 모름").isEmpty();
+    }
 }

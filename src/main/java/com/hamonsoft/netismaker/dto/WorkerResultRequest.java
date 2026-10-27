@@ -51,9 +51,33 @@ public record WorkerResultRequest(
         // 구현 성공 시 추출한 배포 env 템플릿 (스펙 2026-10-07 §5 — null이면 미보고/구버전 워커)
         List<EnvTemplateItem> envTemplate,
         // 구현 결과(PR생성·구현실패)의 시도 번호 (스펙 2026-10-15 §5.6 — null이면 구버전 워커·다른 단계)
-        Integer implementationAttempt
+        Integer implementationAttempt,
+        // 구현 성공 시 참조 repo 변경 경고 (스펙 2026-10-24 §4.8 — 원소마다 masked()가 가리고 500자로 자른다.
+        // null이면 경고 없음·구버전 워커·다른 단계)
+        List<String> refWarnings
 ) {
-    /** 시도 번호 도입 전 23개 인자 정규 생성자 — 기존 호출부·테스트 호환. Jackson은 정규 생성자(24개)로 읽는다. */
+    /** 참조 repo 변경 경고 한 줄의 글자 수 상한(UTF-16 단위) — masked()가 가린 뒤 자른다. */
+    public static final int REF_WARNING_MAX_LENGTH = 500;
+
+    /** 참조 경고 도입 전 24개 인자 정규 생성자 — 기존 호출부·테스트 호환. Jackson은 정규 생성자(25개)로 읽는다. */
+    public WorkerResultRequest(String workerId, TaskStatus status,
+                               String markdownResult, String subtasksJson, String claudeLog,
+                               Long durationMs, String failureReason,
+                               String prUrl, Integer prNumber, String headBranch, String headSha,
+                               String implementationLog,
+                               String deployUrl, String deployContainerId, Integer deployHostPort,
+                               String deployImage, String deployLog,
+                               String designMarkdown, String mockupFilesJson, String designProjectId,
+                               String designUrl,
+                               UsageReport usage, List<EnvTemplateItem> envTemplate, Integer implementationAttempt) {
+        this(workerId, status, markdownResult, subtasksJson, claudeLog, durationMs, failureReason,
+                prUrl, prNumber, headBranch, headSha, implementationLog,
+                deployUrl, deployContainerId, deployHostPort, deployImage, deployLog,
+                designMarkdown, mockupFilesJson, designProjectId, designUrl, usage, envTemplate,
+                implementationAttempt, null);
+    }
+
+    /** 시도 번호 도입 전 23개 인자 생성자 — 기존 호출부·테스트 호환. */
     public WorkerResultRequest(String workerId, TaskStatus status,
                                String markdownResult, String subtasksJson, String claudeLog,
                                Long durationMs, String failureReason,
@@ -75,12 +99,22 @@ public record WorkerResultRequest(
         return new WorkerResultRequest(workerId, status, markdownResult, subtasksJson, claudeLog, durationMs,
                 failureReason, prUrl, prNumber, headBranch, headSha, implementationLog,
                 deployUrl, deployContainerId, deployHostPort, deployImage, deployLog,
-                designMarkdown, mockupFilesJson, designProjectId, designUrl, usage, envTemplate, attempt);
+                designMarkdown, mockupFilesJson, designProjectId, designUrl, usage, envTemplate, attempt,
+                refWarnings);
+    }
+
+    /** 참조 repo 변경 경고만 바꾼 사본. */
+    public WorkerResultRequest withRefWarnings(List<String> warnings) {
+        return new WorkerResultRequest(workerId, status, markdownResult, subtasksJson, claudeLog, durationMs,
+                failureReason, prUrl, prNumber, headBranch, headSha, implementationLog,
+                deployUrl, deployContainerId, deployHostPort, deployImage, deployLog,
+                designMarkdown, mockupFilesJson, designProjectId, designUrl, usage, envTemplate,
+                implementationAttempt, warnings);
     }
 
     /**
      * envTemplate 도입 전 22개 인자 생성자 — 구현 성공 보고 외에는 템플릿이 없다.
-     * Jackson은 레코드의 정규 생성자(24개)를 쓰므로 역직렬화와 무관하다(WorkerResultRequestJsonTest).
+     * Jackson은 레코드의 정규 생성자(25개)를 쓰므로 역직렬화와 무관하다(WorkerResultRequestJsonTest).
      */
     public WorkerResultRequest(String workerId, TaskStatus status,
                                String markdownResult, String subtasksJson, String claudeLog,
@@ -104,6 +138,7 @@ public record WorkerResultRequest(
      * 워커가 API로 올리는 텍스트(claude 로그·배포 로그·분석/디자인 마크다운·실패 사유·env 템플릿 설명)는
      * 작업 상세 화면에 그대로 렌더되므로, 그 안에 섞여 들어온 인증 URL을 여기서 한 번에 가린다.
      * 식별자·열거형·숫자·결과 URL(prUrl/deployUrl/designUrl 등)은 자유 텍스트가 아니라 그대로 둔다.
+     * 참조 repo 변경 경고는 원소마다 가린 뒤 {@value #REF_WARNING_MAX_LENGTH}자로 자른다 — 원소당 상한은 여기 한 곳이 맡는다.
      * 적용 지점은 {@code ResultReporter.reportTerminal} 한 곳(전송 + dead-letter 기록 공통).
      */
     public WorkerResultRequest masked() {
@@ -113,7 +148,14 @@ public record WorkerResultRequest(
                 prUrl, prNumber, headBranch, headSha, m(implementationLog),
                 deployUrl, deployContainerId, deployHostPort, deployImage, m(deployLog),
                 m(designMarkdown), m(mockupFilesJson), designProjectId, designUrl,
-                usage, maskTemplate(envTemplate), implementationAttempt);
+                usage, maskTemplate(envTemplate), implementationAttempt, maskWarnings(refWarnings));
+    }
+
+    private static List<String> maskWarnings(List<String> warnings) {
+        if (warnings == null) return null;
+        return warnings.stream()
+                .map(w -> com.hamonsoft.netismaker.git.GitRemotes.maskAndCut(w, REF_WARNING_MAX_LENGTH))
+                .toList();
     }
 
     /** 템플릿 설명은 Claude가 쓴 자유 텍스트 — 다른 자유 텍스트와 같이 가린다. KEY·플래그는 그대로. */

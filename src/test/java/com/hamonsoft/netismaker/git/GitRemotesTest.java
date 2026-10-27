@@ -67,4 +67,27 @@ class GitRemotesTest {
         assertThat(GitRemotes.mask("no creds https://github.com/a/b.git")).isEqualTo("no creds https://github.com/a/b.git");
         assertThat(GitRemotes.mask(null)).isNull();
     }
+
+    @Test
+    void maskAndCut_masks_before_cutting_and_drops_a_trailing_surrogate_half() {
+        assertThat(GitRemotes.maskAndCut(null, 500)).isNull();
+        assertThat(GitRemotes.maskAndCut("짧은 문구", 500)).isEqualTo("짧은 문구");
+        // 토큰이 잘림 경계에 걸쳐도 먼저 가리므로 남지 않는다
+        String dirty = "x".repeat(490) + " https://oauth2:glpat-SECRET@gitlab.hamon.vip/g/p.git";
+        assertThat(GitRemotes.maskAndCut(dirty, 500))
+                .isEqualTo(("x".repeat(490) + " https://***@gitlab.hamon.vip/g/p.git").substring(0, 500))
+                .doesNotContain("SECRET");
+        // 서로게이트 쌍의 앞 절반에서 잘리면 그 반쪽은 버린다, 쌍이 경계에서 끝나면 그대로 둔다
+        assertThat(GitRemotes.maskAndCut("x".repeat(499) + "😀tail", 500)).isEqualTo("x".repeat(499));
+        assertThat(GitRemotes.maskAndCut("x".repeat(498) + "😀tail", 500)).isEqualTo("x".repeat(498) + "😀");
+    }
+
+    @Test
+    void maskAndCut_treats_a_negative_or_zero_max_as_zero_instead_of_throwing() {
+        assertThat(GitRemotes.maskAndCut("https://oauth2:glpat-SECRET@gitlab.hamon.vip/g/p.git", -1)).isEmpty();
+        assertThat(GitRemotes.maskAndCut("abc", Integer.MIN_VALUE)).isEmpty();
+        assertThat(GitRemotes.maskAndCut("abc", 0)).isEmpty();
+        assertThat(GitRemotes.maskAndCut("", -5)).isEmpty();
+        assertThat(GitRemotes.maskAndCut(null, -1)).isNull();
+    }
 }

@@ -1,5 +1,6 @@
 import { execFile } from 'node:child_process';
-import { existsSync, mkdirSync, renameSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, renameSync } from 'node:fs';
+import { rm } from 'node:fs/promises';
 import { isAbsolute, join } from 'node:path';
 import { promisify } from 'node:util';
 import { buildCloneUrl, maskSecrets, type GitTokens } from '../sdk/gitRemote.js';
@@ -16,7 +17,10 @@ export interface RepoInput {
   repoHost?: string | null;
   /** clone/fetch 인증 토큰. 없으면 익명(공개 레포만). */
   tokens?: GitTokens;
-  /** 턴 wall-clock 타임아웃 전파용 — abort 시 git 자식 프로세스를 종료해 좀비를 남기지 않는다. */
+  /**
+   * 턴 wall-clock 타임아웃 전파용 — abort 시 git 자식 프로세스를 끝낸다. Windows는 `taskkill /T /F`로 런처 밑의 실제 git과
+   * git-remote-http까지 끝낸다(`execFileWithTreeKill`) — 런처만 끝내면 실제 clone이 뒤에서 계속 받는다.
+   */
   signal?: AbortSignal;
 }
 
@@ -34,8 +38,77 @@ export interface RepoOps {
   mkdir?: (path: string) => void;
 }
 
+/** git 자식의 출력 — promisify한 execFile과 같은 모양(utf8 문자열). */
+export interface GitOutput {
+  stdout: string;
+  stderr: string;
+}
+
+/** 중단 때 프로세스 트리를 끝내는 함수 — 받는 것은 띄운 자식(런처)의 pid. 끝낼 때까지 기다린다. 테스트가 갈아 끼운다. */
+export type KillTree = (pid: number) => Promise<void>;
+
+/** `taskkill`이 끝나기를 기다리는 상한(ms) — 넘으면 기다리지 않고 중단 오류로 넘어간다. */
+const TASKKILL_TIMEOUT_MS = 10_000;
+
+/** `taskkill /PID <pid> /T /F` — 트리를 따라 손자까지 강제로 끝낸다. 실패(이미 끝남 등)는 무시한다. */
+export const taskkillTree: KillTree = (pid) =>
+  new Promise<void>((resolve) => {
+    try {
+      execFile('taskkill', ['/PID', String(pid), '/T', '/F'], { windowsHide: true, timeout: TASKKILL_TIMEOUT_MS }, () => resolve());
+    } catch {
+      resolve();
+    }
+  });
+
+/** Node가 중단된 execFile을 거부할 때와 같은 모양(name `AbortError`, code `ABORT_ERR`, 같은 문구) — 부르는 쪽의 판정이 그대로 돈다. */
+function abortError(signal: AbortSignal): Error {
+  return Object.assign(new Error('The operation was aborted', { cause: signal.reason }), {
+    name: 'AbortError',
+    code: 'ABORT_ERR',
+  });
+}
+
+/**
+ * git을 띄우는 execFile — 중단 신호에 프로세스 트리째 멈춘다. Windows의 `git`은 보통 `C:\Program Files\Git\cmd\git.exe` 런처이고
+ * 실제 git과 그 밑의 git-remote-http는 그 자식·손자다. Node의 `signal`은 띄운 자식(런처) 하나만 끝내므로, 실제 clone이 뒤에서
+ * `.part`에 계속 받고 연결을 붙든다(2026-10-25 실측 — `mingw64\bin\git.exe`를 바로 불러도 git-remote-http가 남는다).
+ * 그래서 win32에서는 Node에 `signal`을 넘기지 않고, 중단되면 런처가 아직 살아 있을 때 `killTree(pid)`(기본 `taskkill /T /F`)로
+ * 트리를 끝낸 뒤 Node와 같은 모양의 AbortError로 거부한다(이미 중단된 신호면 띄우지 않고 바로 거부). 출력·오류 모양(utf8
+ * stdout/stderr, 실패 오류의 `code`·`cmd`·`stdout`·`stderr`)·환경·cwd는 promisify한 execFile과 같다. 그 밖의 OS는 Node의
+ * `signal` 그대로다. 대상(`ensureRepo`)·참조(`ensureRefRepos`)의 모든 git 호출이 이것을 쓴다.
+ */
+export function execFileWithTreeKill(
+  deps: { platform?: NodeJS.Platform; killTree?: KillTree } = {},
+): (cmd: string, args: string[], opts: GitCallOptions) => Promise<GitOutput> {
+  const platform = deps.platform ?? process.platform;
+  const killTree = deps.killTree ?? taskkillTree;
+  return (cmd, args, opts) => {
+    const { signal, ...rest } = opts;
+    if (platform !== 'win32' || signal === undefined) return execFileAsync(cmd, args, opts);
+    if (signal.aborted) return Promise.reject(abortError(signal));
+    return new Promise<GitOutput>((resolve, reject) => {
+      let aborting = false;
+      const onAbort = (): void => {
+        aborting = true;
+        const fail = (): void => reject(abortError(signal));
+        if (child.pid === undefined) fail(); // 띄우지 못했다 — 끝낼 트리가 없다
+        else killTree(child.pid).then(fail, fail);
+      };
+      const child = execFile(cmd, args, rest, (error, stdout, stderr) => {
+        signal.removeEventListener('abort', onAbort);
+        if (aborting) return; // 트리를 끝내는 중 — onAbort가 AbortError로 거부한다
+        if (error) reject(Object.assign(error, { stdout, stderr }));
+        else resolve({ stdout, stderr });
+      });
+      signal.addEventListener('abort', onAbort, { once: true });
+    });
+  };
+}
+
+const runGit = execFileWithTreeKill();
+
 const defaultOps: RepoOps = {
-  run: (cmd, args, opts) => execFileAsync(cmd, args, opts),
+  run: (cmd, args, opts) => runGit(cmd, args, opts),
   exists: existsSync,
   mkdir: (path) => {
     mkdirSync(path, { recursive: true });
@@ -144,20 +217,24 @@ export interface RefPrepared {
 export interface RefRepoOps extends RepoOps {
   /** git 출력(stdout)을 돌려준다 — rev-parse용. 끝의 줄바꿈은 부르는 쪽이 다듬는다. */
   output: (cmd: string, args: string[], opts: GitCallOptions) => Promise<string>;
-  /** 폴더를 통째로 지운다. 없으면 아무 일도 하지 않는다. */
-  rm: (path: string) => void;
+  /**
+   * 폴더를 통째로 지운다. 없으면 아무 일도 하지 않는다. 비동기다 — 큰 체크아웃·`.part`를 동기로 지우면(Windows+백신에서 수십 초)
+   * `INTERVIEW_CONCURRENCY>1`일 때 같은 프로세스의 다른 세션 턴(중계·heartbeat·참조 타이머)이 함께 멈춘다.
+   */
+  rm: (path: string) => Promise<void>;
   /** 받은 임시 폴더를 최종 이름으로 옮긴다. 동기든 비동기든 기다린다. 일시적 잠금 오류는 부르는 쪽(`renameWithRetry`)이 다시 시도한다. */
   rename: (from: string, to: string) => void | Promise<void>;
   /** rename 재시도 사이의 대기(ms). 없으면 실제로 기다린다 — 테스트가 갈아 끼워 느려지지 않게 한다. */
   sleep?: (ms: number) => Promise<void>;
 }
 
+/** 참조 폴더 삭제가 EBUSY·EPERM 등에 걸릴 때 Node가 다시 시도하는 횟수(대기는 100ms씩 늘어 합쳐 1.5초) — 백신·인덱서의 짧은 잠금. */
+const REF_RM_MAX_RETRIES = 5;
+
 const defaultRefOps: RefRepoOps = {
   ...defaultOps,
-  output: async (cmd, args, opts) => (await execFileAsync(cmd, args, opts)).stdout,
-  rm: (path) => {
-    rmSync(path, { recursive: true, force: true });
-  },
+  output: async (cmd, args, opts) => (await runGit(cmd, args, opts)).stdout,
+  rm: (path) => rm(path, { recursive: true, force: true, maxRetries: REF_RM_MAX_RETRIES }),
   rename: renameSync,
 };
 
@@ -224,8 +301,25 @@ async function renameWithRetry(ops: RefRepoOps, from: string, to: string, signal
  */
 export const REF_PREPARE_FALLBACK_REASON = '참조 repo를 받지 못했습니다';
 
+/** 참조 하나당 받기 상한 기본값(ms) — 5분 (스펙 2026-10-24 §5.1). 설정 `INTERVIEW_REF_TIMEOUT_MS`로 바꾼다. */
+export const DEFAULT_REF_TIMEOUT_MS = 300_000;
+
 /**
- * 질문 세션의 읽기 전용 참조 repo를 준비한다 (스펙 2026-10-22 §5.1). claim마다(새 질문·추가 질문 모두)
+ * 참조 하나를 받다가 상한에 끊겼을 때의 사유 — 칩 툴팁·프롬프트의 "사용할 수 없는 참조" 줄에 그대로 보인다.
+ * 분은 반올림하되 1분보다 짧아도 1분으로 적는다(기본값이면 `참조 repo 받기 시간 초과(5분)`).
+ */
+export function refTimeoutReason(timeoutMs: number): string {
+  return `참조 repo 받기 시간 초과(${Math.max(1, Math.round(timeoutMs / 60_000))}분)`;
+}
+
+/** 참조 하나를 준비할 때 받는 옵션 — 토큰과 그 참조의 git 호출에 넘길 중단 신호. */
+interface RefPrepareOptions {
+  tokens?: GitTokens;
+  signal?: AbortSignal;
+}
+
+/**
+ * 질문 세션과 작업 인터뷰의 읽기 전용 참조 repo를 준비한다 (스펙 2026-10-22 §5.1, 2026-10-24 §5.1). claim마다(새 세션·답변 턴 모두)
  * 대상 `ensureRepo` 다음에 부른다. 참조마다 입력 순서대로 하나씩 처리하고, 하나가 실패해도 나머지는 계속한다.
  * 예외를 던지지 않는다 — 실패한 참조는 `{ sha: null, error }`로 돌려주고 턴은 계속된다.
  *
@@ -245,25 +339,65 @@ export const REF_PREPARE_FALLBACK_REASON = '참조 repo를 받지 못했습니�
  * - 지우기 전에 `dir`이 절대경로이고 `_refs/<숫자>/<catalogId>`로 끝나는지 본다(`isRefDir`). 아니면 어떤 디스크 작업·git 호출도
  *   하지 않고 `REF_DIR_INVALID_REASON`을 돌려준다 — API가 보낸 값을 그대로 지우지 않기 위한 방어다.
  * - 마지막 rename이 EPERM·EBUSY·EACCES로 막히면(백신·인덱서가 방금 받은 파일을 잡고 있을 때) 최대 5번까지 짧게 다시 시도한다.
- * - `signal`(턴 타임아웃)은 모든 git 자식 프로세스에 넘긴다.
+ * - `signal`(턴 타임아웃)은 모든 git 자식 프로세스에 넘긴다. 중단되면 git 프로세스 트리를 끝낸다(Windows는 `taskkill /T /F` —
+ *   `execFileWithTreeKill`). 그래야 끊긴 clone이 뒤에서 `.part`에 계속 받지 않는다.
+ * - `timeoutMs`가 있으면 참조마다 따로 받기 상한을 건다(스펙 2026-10-24 §5.1 — 러너는 설정값, 기본 5분을 준다). 참조마다 자체 중단 신호를
+ *   만들어 턴 신호에 묶고(턴이 이미 끝났으면 git을 부르기 전에 바로 중단) 그 신호를 git 호출과 rename 재시도에 넘긴다. 상한에 걸리면
+ *   그 참조의 git만 멈추고 위의 실패 경로대로 `.part`를 지운 뒤(지우지 못해도 다음 턴이 받기 전에 지운다) 사유를
+ *   `refTimeoutReason(timeoutMs)`로 돌려주고 다음 참조로 넘어간다 — 참조 하나 때문에 턴 상한(30분)까지 묶여 세션이 FAILED가 되지 않게.
+ *   턴 신호로 끊긴 것은 시간 초과로 적지 않는다(사유는 중단 그대로). 참조 하나가 끝나면 타이머와 턴 신호의 리스너를 떼어 낸다.
+ *   `timeoutMs`가 없으면 턴 신호를 그대로 넘긴다(상한 없음).
  */
 export async function ensureRefRepos(
   refs: RefRepoClaim[],
-  opts: { tokens?: GitTokens; signal?: AbortSignal },
+  opts: { tokens?: GitTokens; signal?: AbortSignal; timeoutMs?: number },
   ops: RefRepoOps = defaultRefOps,
 ): Promise<RefPrepared[]> {
   const results: RefPrepared[] = [];
   for (const ref of refs) {
-    results.push(await prepareRefRepo(ref, opts, ops));
+    results.push(
+      opts.timeoutMs === undefined
+        ? await prepareRefRepo(ref, opts, ops)
+        : await prepareRefRepoWithin(ref, opts, opts.timeoutMs, ops),
+    );
   }
   return results;
 }
 
-async function prepareRefRepo(
+/**
+ * 참조 하나를 `timeoutMs` 안에 준비한다. AbortSignal.any(Node 20.3+)는 engines(`>=20`)가 보장하지 않으므로 직접 묶는다 —
+ * 턴 신호가 이미 중단돼 있으면 리스너가 불리지 않으니(abort 이벤트는 한 번만 난다) 먼저 확인해 바로 중단한다.
+ */
+async function prepareRefRepoWithin(
   ref: RefRepoClaim,
-  opts: { tokens?: GitTokens; signal?: AbortSignal },
+  opts: RefPrepareOptions,
+  timeoutMs: number,
   ops: RefRepoOps,
 ): Promise<RefPrepared> {
+  const turnSignal = opts.signal;
+  const limit = new AbortController();
+  let timedOut = false;
+  const onTurnAbort = (): void => limit.abort(turnSignal?.reason);
+  if (turnSignal?.aborted) onTurnAbort();
+  else turnSignal?.addEventListener('abort', onTurnAbort, { once: true });
+  const timer = setTimeout(() => {
+    timedOut = true;
+    limit.abort(new Error(refTimeoutReason(timeoutMs)));
+  }, timeoutMs);
+  try {
+    const result = await prepareRefRepo(ref, { tokens: opts.tokens, signal: limit.signal }, ops);
+    // 상한이 끊었고 턴은 살아 있을 때만 시간 초과다 — 끊긴 git의 오류(AbortError)를 사유로 보이지 않는다
+    if (result.error !== null && timedOut && !turnSignal?.aborted) {
+      return { ref, sha: null, error: refTimeoutReason(timeoutMs) };
+    }
+    return result;
+  } finally {
+    clearTimeout(timer);
+    turnSignal?.removeEventListener('abort', onTurnAbort);
+  }
+}
+
+async function prepareRefRepo(ref: RefRepoClaim, opts: RefPrepareOptions, ops: RefRepoOps): Promise<RefPrepared> {
   // 어떤 디스크 작업·git 호출보다 먼저 — 아래에서 dir과 dir.part를 통째로 지우므로 API가 보낸 경로를 그대로 믿지 않는다.
   if (!isRefDir(ref)) {
     // 칩에는 고정 문구만 보이므로 API가 보낸 경로는 로그로만 남는다(경로에는 자격증명이 없다).
@@ -285,8 +419,8 @@ async function prepareRefRepo(
       if (head === `refs/heads/${branch}`) return prepared(ref, await headSha());
     }
     // 체크아웃이 없거나(.git 없음) 다른 브랜치다 — 낡은 폴더와 지난 시도의 찌꺼기를 지우고 .part에 새로 받는다.
-    ops.rm(dir);
-    ops.rm(part);
+    await ops.rm(dir);
+    await ops.rm(part);
     const plainUrl = buildCloneUrl(ref, {});
     const authUrl = buildCloneUrl(ref, opts.tokens ?? {});
     await ops.run(...git(['clone', '--depth', '1', '--branch', branch, authUrl, part]));
@@ -295,7 +429,7 @@ async function prepareRefRepo(
     return prepared(ref, await headSha());
   } catch (e) {
     try {
-      ops.rm(part);
+      await ops.rm(part);
     } catch {
       // best effort — 지우지 못해도 원래 실패 사유를 돌려주는 것이 먼저다
     }

@@ -10,7 +10,7 @@ import java.util.List;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * 결과 보고 JSON — 레코드에 생성자가 셋(정규 24개 + 호환 23개·22개)이어도 Jackson은 정규 생성자로 읽는다.
+ * 결과 보고 JSON — 레코드에 생성자가 넷(정규 25개 + 호환 24개·23개·22개)이어도 Jackson은 정규 생성자로 읽는다.
  * 워커 전송·API 수신·dead-letter 재전송이 모두 이 경로다 (스펙 2026-10-07 §5, §9).
  */
 class WorkerResultRequestJsonTest {
@@ -81,5 +81,49 @@ class WorkerResultRequestJsonTest {
         assertThat(req.masked().implementationAttempt()).isEqualTo(3);
         assertThat(json.readValue("{\"workerId\":\"w1\",\"status\":\"PR_CREATED\"}", WorkerResultRequest.class)
                 .implementationAttempt()).isNull();
+    }
+
+    /** 참조 repo 변경 경고 (스펙 2026-10-24 §4.8) — 시도 번호 사본·JSON·가림을 지나도 남고, 옛 보고는 null이다. */
+    @Test
+    void ref_warnings_survive_json_masking_and_the_attempt_copy() throws Exception {
+        var lenient = json.copy().configure(
+                com.fasterxml.jackson.databind.DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false);
+        WorkerResultRequest req = new WorkerResultRequest("w1", TaskStatus.PR_CREATED,
+                null, null, null, 10L, null,
+                "https://github.com/acme/widgets/pull/7", 7, "netismaker/task-1", "abc123", "log",
+                null, null, null, null, null,
+                null, null, null, null, null)
+                .withRefWarnings(List.of("옛앱: 파일 3개", "공통 UI: https://oauth2:glpat-SECRET@gitlab.hamon.vip/g/ui.git"))
+                .withImplementationAttempt(2);
+
+        assertThat(req.refWarnings()).hasSize(2);
+        assertThat(req.implementationAttempt()).isEqualTo(2);
+        WorkerResultRequest back = lenient.readValue(json.writeValueAsString(req), WorkerResultRequest.class);
+        assertThat(back).isEqualTo(req);
+        assertThat(req.masked().refWarnings())
+                .containsExactly("옛앱: 파일 3개", "공통 UI: https://***@gitlab.hamon.vip/g/ui.git");
+        assertThat(req.masked().implementationAttempt()).isEqualTo(2);
+        // 경고를 붙여도 다른 필드는 그대로
+        assertThat(req.withRefWarnings(null).refWarnings()).isNull();
+        assertThat(req.withRefWarnings(null).prUrl()).isEqualTo("https://github.com/acme/widgets/pull/7");
+
+        WorkerResultRequest old = json.readValue("{\"workerId\":\"w1\",\"status\":\"PR_CREATED\"}", WorkerResultRequest.class);
+        assertThat(old.refWarnings()).isNull();
+        assertThat(old.masked().refWarnings()).isNull();
+    }
+
+    @Test
+    void masked_cuts_each_warning_to_500_after_masking() {
+        String longWarning = "옛앱: " + "x".repeat(495) + "😀" + "y".repeat(100);   // 600자 남짓, 500번째에 서로게이트 앞 절반
+        // 원문에서는 토큰 끝의 '@'가 500자 밖이라 먼저 자르면 mask가 알아보지 못해 토큰이 남는다
+        String tokenAtTheEdge = "x".repeat(480) + " https://oauth2:glpat-SECRET@gitlab.hamon.vip/g/p.git" + "z".repeat(60);
+        WorkerResultRequest req = WorkerResultRequest.closed("w1", null)
+                .withRefWarnings(List.of(longWarning, tokenAtTheEdge, "짧은 경고"));
+
+        List<String> masked = req.masked().refWarnings();
+
+        assertThat(masked.get(0)).isEqualTo("옛앱: " + "x".repeat(495)).hasSize(499);
+        assertThat(masked.get(1)).isEqualTo("x".repeat(480) + " https://***@gitlab.").hasSize(500);
+        assertThat(masked.get(2)).isEqualTo("짧은 경고");
     }
 }

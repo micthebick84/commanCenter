@@ -2,6 +2,7 @@ package com.hamonsoft.netismaker.controller;
 
 import com.hamonsoft.netismaker.TestcontainersConfig;
 import com.hamonsoft.netismaker.dto.TaskCreateRequest;
+import com.hamonsoft.netismaker.entity.RefRepo;
 import com.hamonsoft.netismaker.entity.Task;
 import com.hamonsoft.netismaker.entity.TaskStatus;
 import com.hamonsoft.netismaker.repository.InterviewSessionRepository;
@@ -18,8 +19,10 @@ import org.springframework.test.context.ContextConfiguration;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.request.RequestPostProcessor;
 
+import java.util.ArrayList;
 import java.util.List;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.springframework.http.MediaType.APPLICATION_JSON;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.jwt;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
@@ -77,6 +80,26 @@ class TaskImplementationRetryApiIntegrationTest {
                 .andExpect(jsonPath("$.status").value("APPROVED"))
                 .andExpect(jsonPath("$.implementationMode").value("SDD"))
                 .andExpect(jsonPath("$.implementationAttempt").value(2));
+    }
+
+    @Test
+    void admin_retry_removes_the_chosen_refs() throws Exception {
+        long id = failedTask();
+        Task t = taskRepo.findById(id).orElseThrow();
+        t.setRefRepos(new ArrayList<>(List.of(
+                new RefRepo(11L, "옛앱", "g/old", "https://x/g/old.git", "release/6.5", "a".repeat(40), "t", null),
+                new RefRepo(12L, "공통 UI", "g/ui", "https://x/g/ui.git", "main", "b".repeat(40), "t", null))));
+        taskRepo.save(t);
+
+        mvc.perform(post("/api/tasks/" + id + "/implementation/retry").with(adminJwt("admin"))
+                        .contentType(APPLICATION_JSON).content("{\"removeRefCatalogIds\":[99]}"))
+                .andExpect(status().isBadRequest());
+        mvc.perform(post("/api/tasks/" + id + "/implementation/retry").with(adminJwt("admin"))
+                        .contentType(APPLICATION_JSON).content("{\"removeRefCatalogIds\":[11]}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("APPROVED"));
+
+        assertThat(taskRepo.findById(id).orElseThrow().getRefRepos()).extracting(RefRepo::catalogId).containsExactly(12L);
     }
 
     @Test

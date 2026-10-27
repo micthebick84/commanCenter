@@ -65,10 +65,42 @@ public record WorkerTaskResponse(
          * IMPLEMENTATION 전용: 구현 방식·시도 번호·상한 (스펙 2026-10-15 §5.3). 다른 kind·구버전 API는 null —
          * 워커는 직접·1회째·자기 설정 상한으로 돈다.
          */
-        ImplementationSpec implementation
+        ImplementationSpec implementation,
+        /**
+         * IMPLEMENTATION 전용: 읽기 전용 참조 repo와 인터뷰가 고정한 커밋 (스펙 2026-10-24 §4.7). 다른 kind는 빈 목록,
+         * 구버전 API의 null도 빈 목록으로 읽는다 — 워커는 null을 보지 않는다.
+         */
+        List<TaskRefRepo> refRepos
 ) {
+    public WorkerTaskResponse {
+        if (refRepos == null) refRepos = List.of();
+    }
+
     /** 구현 지시 블록. mode는 ImplementationMode 이름, timeoutMinutes는 claim 때 작업에 기록한 상한. */
     public record ImplementationSpec(String mode, Integer attempt, Integer timeoutMinutes) {}
+
+    /**
+     * 구현 claim의 참조 repo 1개 — task.ref_repos 원소(RefRepo)의 스냅샷. githubRepo는 경로(GitHub owner/repo, GitLab 전체 경로),
+     * repoHost는 gitUrl에서 판정한 "github" | "gitlab", sha는 인터뷰가 고정한 커밋. 폴더 경로는 싣지 않는다 —
+     * worktree-root가 워커 설정이라 워커가 계산한다.
+     */
+    public record TaskRefRepo(Long catalogId, String alias, String githubRepo, String gitUrl, String repoHost,
+                              String branch, String sha) {}
+
+    /** 참조 repo(refRepos) 도입 전 30개 인자 정규 생성자 — 기존 팩토리·테스트 호환. */
+    public WorkerTaskResponse(Long id, String githubRepo, String githubBranch, String title, String description,
+                              Kind kind, List<TaskMcpSpec> mcpsExtra, String analysisMarkdown, String subtasksJson,
+                              String headBranch, String headSha, List<EnvVar> envVars, String model, String effort,
+                              String designMarkdown, String mockupFilesJson, String feedbackHistoryJson,
+                              String designUrl, String designSystemProjectId, String designOutputProjectId,
+                              String gitUrl, String repoHost, String planMarkdown,
+                              Integer prNumber, String prUrl, String closeProgress, CloseContext closeContext,
+                              CloseArtifactSpec closeArtifact, DbMcpGrant dbMcp, ImplementationSpec implementation) {
+        this(id, githubRepo, githubBranch, title, description, kind, mcpsExtra, analysisMarkdown, subtasksJson,
+                headBranch, headSha, envVars, model, effort, designMarkdown, mockupFilesJson, feedbackHistoryJson,
+                designUrl, designSystemProjectId, designOutputProjectId, gitUrl, repoHost, planMarkdown,
+                prNumber, prUrl, closeProgress, closeContext, closeArtifact, dbMcp, implementation, List.of());
+    }
 
     /** 구현 지시(implementation) 도입 전 29개 인자 정규 생성자 — 기존 팩토리·테스트 호환. */
     public WorkerTaskResponse(Long id, String githubRepo, String githubBranch, String title, String description,
@@ -87,7 +119,7 @@ public record WorkerTaskResponse(
 
     /**
      * CLOSE 필드 도입 전 23개 인자 생성자 — 종료 외 kind·기존 팩토리·테스트가 그대로 쓴다.
-     * Jackson은 레코드의 정규 생성자(30개)를 쓰므로 역직렬화와 무관하다(WorkerResultRequest와 같은 방식).
+     * Jackson은 레코드의 정규 생성자(31개)를 쓰므로 역직렬화와 무관하다(WorkerResultRequest와 같은 방식).
      */
     public WorkerTaskResponse(Long id, String githubRepo, String githubBranch, String title, String description,
                               Kind kind, List<TaskMcpSpec> mcpsExtra, String analysisMarkdown, String subtasksJson,
@@ -136,7 +168,7 @@ public record WorkerTaskResponse(
                 analysisMarkdown, subtasksJson, headBranch, headSha, envVars, model, effort, designMarkdown,
                 mockupFilesJson, feedbackHistoryJson, designUrl, designSystemProjectId, designOutputProjectId,
                 gitUrl, repoHost, planMarkdown, prNumber, prUrl, closeProgress, closeContext, closeArtifact, grant,
-                implementation);
+                implementation, refRepos);
     }
 
     /** 워커가 clone/폴더/MR에 쓰는 저장소 참조. 새 필드가 없는 페이로드는 GitHub로 복원된다. */
@@ -174,12 +206,21 @@ public record WorkerTaskResponse(
                 d == null ? null : d.getDesignUrl(),
                 null, null, t.getGitUrl(), hostOf(t), planMarkdown,
                 null, null, null, null, null, null,
-                implementationSpecOf(t));
+                implementationSpecOf(t), refReposOf(t));
     }
 
     private static ImplementationSpec implementationSpecOf(Task t) {
         ImplementationMode mode = t.getImplementationMode() == null ? ImplementationMode.DIRECT : t.getImplementationMode();
         return new ImplementationSpec(mode.name(), t.getImplementationAttempt(), t.getImplementationTimeoutMinutes());
+    }
+
+    /** 작업 참조(task.ref_repos)를 그대로 싣는다 — 고정 커밋이 없거나 틀린 원소는 워커가 claude 실행 전에 구현실패로 끝낸다. */
+    private static List<TaskRefRepo> refReposOf(Task t) {
+        if (t.getRefRepos() == null) return List.of();
+        return t.getRefRepos().stream()
+                .map(r -> new TaskRefRepo(r.catalogId(), r.alias(), r.path(), r.gitUrl(),
+                        RepoRef.fromSnapshot(r.path(), r.gitUrl()).host(), r.branch(), r.sha()))
+                .toList();
     }
 
     public static WorkerTaskResponse forDeploy(Task t) {

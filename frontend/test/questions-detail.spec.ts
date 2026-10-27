@@ -9,7 +9,7 @@ import { authStub, useApiMock } from './mocks/nuxt'
 import { FakeEventSource } from './mocks/eventsource'
 import { setViewportWidth } from './mocks/screen'
 
-// useRoute/navigateTo는 Nuxt 자동 임포트 — setup.ts에 없어 전역 주입.
+// useRoute/navigateTo는 Nuxt 자동 임포트 — navigateTo는 setup.ts에 없어 전역 주입, useRoute는 setup.ts 기본값을 덮는다.
 const navigateToMock = vi.fn()
 Object.assign(globalThis, {
   navigateTo: navigateToMock,
@@ -1011,6 +1011,87 @@ describe('pages/questions/[id] — 대화 중 MCP 변경 + 채팅 첨부 (스펙
         { repoCatalogId: 4, branch: 'master' },
       ])
       w.unmount()
+    })
+  })
+
+  // 작업 스펙 2026-10-24 §7.6 — stubApi·detailWith를 쓰려고 이 describe 안에 둔다
+  describe('이 대화로 작업 등록', () => {
+    const toTask = (w: ReturnType<typeof mount>) => w.find('[data-test="to-task"]')
+
+    it('이 대화로 작업 등록은 세션 종료 앞, 아이콘 add_task, 누르면 /tasks?fromQuestion=3', async () => {
+      stubApi(detailWith({ repoCatalogId: 1 }))
+      const w = mount(QuestionDetail)
+      await flushPromises()
+      const btn = toTask(w)
+      expect(btn.exists()).toBe(true)
+      expect(btn.text()).toContain('이 대화로 작업 등록')
+      expect(btn.find('.q-icon').text()).toBe('add_task')
+      expect(btn.attributes('disabled')).toBeUndefined()
+      // 헤더 오른쪽 끝 — 세션 종료 바로 앞
+      expect(btn.element.nextElementSibling).toBe(w.find('[data-test="close-session"]').element)
+
+      await btn.trigger('click')
+      expect(navigateToMock).toHaveBeenCalledWith('/tasks?fromQuestion=3')
+      w.unmount()
+    })
+
+    it('답변 중(RUNNING)이거나 repoCatalogId가 없으면 막힌다', async () => {
+      // 답변 대기(QUEUED)·답변 중(RUNNING) — 대화가 아직 끝나지 않은 턴은 서버도 409로 거절한다
+      for (const status of ['QUEUED', 'RUNNING']) {
+        stubApi(detailWith({ repoCatalogId: 1 }))
+        const w = mount(QuestionDetail)
+        await flushPromises()
+        expect(toTask(w).attributes('disabled')).toBeUndefined()
+        FakeEventSource.last().emit('status', status)
+        await flushPromises()
+        expect(toTask(w).attributes('disabled')).toBeDefined()
+        // 답변이 끝나면 다시 열린다
+        FakeEventSource.last().emit('status', 'AWAITING_INPUT')
+        await flushPromises()
+        expect(toTask(w).attributes('disabled')).toBeUndefined()
+        w.unmount()
+      }
+
+      // 대상 레포가 없는 구버전 세션 — 등록 창이 채울 대상이 없다
+      for (const repoCatalogId of [null, undefined]) {
+        stubApi(detailWith({ repoCatalogId }))
+        const w = mount(QuestionDetail)
+        await flushPromises()
+        expect(toTask(w).exists()).toBe(true)
+        expect(toTask(w).attributes('disabled')).toBeDefined()
+        await toTask(w).trigger('click')
+        expect(navigateToMock).not.toHaveBeenCalled()
+        w.unmount()
+      }
+    })
+
+    it('끝난 질문(CANCELLED)에도 보인다', async () => {
+      stubApi(detailWith({ repoCatalogId: 1, statusName: 'CANCELLED', status: '종료됨' }))
+      const w = mount(QuestionDetail)
+      await flushPromises()
+      expect(w.find('[data-test="close-session"]').exists()).toBe(false) // 끝난 질문에는 세션 종료가 없다
+      expect(toTask(w).exists()).toBe(true)
+      expect(toTask(w).attributes('disabled')).toBeUndefined()
+      await toTask(w).trigger('click')
+      expect(navigateToMock).toHaveBeenCalledWith('/tasks?fromQuestion=3')
+      w.unmount()
+    })
+
+    it('좁은 화면은 라벨 없이 아이콘 + aria-label "이 대화로 작업 등록"', async () => {
+      await setViewportWidth(390)
+      try {
+        stubApi(detailWith({ repoCatalogId: 1 }))
+        const w = mount(QuestionDetail)
+        await flushPromises()
+        expect(w.find('[data-test="open-drawer"]').exists()).toBe(true) // 좁은 화면 분기 진입 확인
+        const btn = toTask(w)
+        expect(btn.text()).not.toContain('이 대화로 작업 등록')
+        expect(btn.find('.q-icon').text()).toBe('add_task')
+        expect(btn.attributes('aria-label')).toBe('이 대화로 작업 등록')
+        w.unmount()
+      } finally {
+        await setViewportWidth(1024)
+      }
     })
   })
 })

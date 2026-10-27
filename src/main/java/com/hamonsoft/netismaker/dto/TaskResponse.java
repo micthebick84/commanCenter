@@ -3,6 +3,7 @@ package com.hamonsoft.netismaker.dto;
 import com.hamonsoft.netismaker.entity.CloseStep;
 import com.hamonsoft.netismaker.entity.EnvVar;
 import com.hamonsoft.netismaker.entity.ImplementationMode;
+import com.hamonsoft.netismaker.entity.RefRepo;
 import com.hamonsoft.netismaker.entity.Task;
 import com.hamonsoft.netismaker.entity.TaskAnalysis;
 import com.hamonsoft.netismaker.entity.TaskAttachment;
@@ -63,7 +64,14 @@ public record TaskResponse(
         /** 워커가 마지막으로 가져간 시각 — 결과 보고 뒤에도 남으므로 화면은 구현중일 때만 쓴다. */
         OffsetDateTime claimedAt,
         /** 이번 시도의 구현 상한(분) — claim 때 기록, 그 전에는 null. */
-        Integer implementationTimeoutMinutes
+        Integer implementationTimeoutMinutes,
+        /**
+         * 읽기 전용 참조 repo 칩 (스펙 2026-10-24 §4.9). 항상 non-null. 작업의 참조 — 단 인터뷰 단계 상세 응답은
+         * 진행 중 세션의 참조(고정·실패 상태 포함)로 바꿔 싣는다(TaskController.get).
+         */
+        List<InterviewResponse.RefRepoView> refRepos,
+        /** 이 작업을 등록한 질문 세션 id. 질문에서 등록하지 않았으면 null. */
+        Long sourceQuestionId
 ) {
     public record AnalysisView(
             String markdownResult,
@@ -230,8 +238,24 @@ public record TaskResponse(
                 r.implementationMode(),
                 r.implementationAttempt(),
                 r.claimedAt(),
-                r.implementationTimeoutMinutes()
+                r.implementationTimeoutMinutes(),
+                r.refRepos(),
+                r.sourceQuestionId()
         );
+    }
+
+    /** 참조 칩만 바꾼 사본 — 인터뷰 단계 상세가 진행 중 세션의 참조를 싣는다(스펙 §4.9). null이면 []. */
+    public TaskResponse withRefRepos(List<RefRepo> refs) {
+        return new TaskResponse(id, githubRepo, repoAlias, githubBranch, title, description, status, statusLabel,
+                requesterId, retryCount, maxRetry, failureReason, mcpsExtra, envVars, createdAt, updatedAt,
+                model, effort, designRequested, analysis, design, implementation, deployment, interviewSessionId,
+                attachments, stageUsage, totalCostUsd, totalTokens, close, repoCatalogId, dbConnectionIds,
+                implementationMode, implementationAttempt, claimedAt, implementationTimeoutMinutes,
+                refViews(refs), sourceQuestionId);
+    }
+
+    private static List<InterviewResponse.RefRepoView> refViews(List<RefRepo> refs) {
+        return refs == null ? List.of() : refs.stream().map(InterviewResponse.RefRepoView::of).toList();
     }
 
     /**
@@ -246,7 +270,8 @@ public record TaskResponse(
                 requesterId, retryCount, maxRetry, failureReason, mcpsExtra, redacted, createdAt, updatedAt,
                 model, effort, designRequested, analysis, design, implementation, deployment, interviewSessionId,
                 attachments, stageUsage, totalCostUsd, totalTokens, close, repoCatalogId, dbConnectionIds,
-                implementationMode, implementationAttempt, claimedAt, implementationTimeoutMinutes);
+                implementationMode, implementationAttempt, claimedAt, implementationTimeoutMinutes,
+                refRepos, sourceQuestionId);
     }
 
     private static TaskResponse build(Task t, TaskAnalysis a, TaskDesign d, Long interviewSessionId,
@@ -323,7 +348,9 @@ public record TaskResponse(
                 (t.getImplementationMode() == null ? ImplementationMode.DIRECT : t.getImplementationMode()).name(),
                 t.getImplementationAttempt(),
                 t.getClaimedAt(),
-                t.getImplementationTimeoutMinutes()
+                t.getImplementationTimeoutMinutes(),
+                refViews(t.getRefRepos()),
+                t.getSourceQuestionId()
         );
     }
 }

@@ -27,6 +27,17 @@ import {
   MAIL_STATUS_LABEL,
   type CloseView,
 } from '~/composables/taskClose'
+import RefRepoChips from '~/components/RefRepoChips.vue'
+import TaskRefChangeMenu from '~/components/tasks/TaskRefChangeMenu.vue'
+import type { InterviewStatus } from '~/composables/useInterviewStream'
+// 참조 repo — 이 값을 받는 자식들(ApproveTaskSummary·ImplementationRetryDialog·TaskRefChangeMenu)이 defineProps 타입 규칙으로 쓰는 상대 경로와 맞춘다.
+import {
+  sameRefSet,
+  taskRefContext,
+  toInputs,
+  type RefRepoInput,
+  type RefRepoView,
+} from '../../composables/refRepos'
 
 definePageMeta({ layout: 'default' })
 
@@ -134,6 +145,10 @@ interface TaskResponse {
   implementationAttempt?: number
   claimedAt?: string | null
   implementationTimeoutMinutes?: number | null
+  /** 읽기 전용 참조 repo (스펙 2026-10-24 §4.9) — 인터뷰 단계면 진행 중 세션의 참조(상태 포함), 그 밖에는 작업의 참조. */
+  refRepos?: RefRepoView[]
+  /** 질문 대화에서 이어 등록했으면 그 질문 id (스펙 2026-10-24 §4.1) — "레포" 옆 출처 링크. */
+  sourceQuestionId?: number | null
 }
 
 const route = useRoute()
@@ -251,6 +266,61 @@ function onInterviewConfirmed() {
 const isInterviewPhase = computed(() =>
   ['INTERVIEWING', 'INTERVIEW_INPUT', 'INTERVIEW_REVIEW'].includes(task.value?.status ?? ''),
 )
+
+// 인터뷰 중 참조 변경 (작업 스펙 2026-10-24 §7.4) — 질문 대화 화면(1단계)과 같은 원리: "✎ 참조 변경" 메뉴가 고치는 것은
+// "다음 답변에 쓸 초안"(pickedRefs)이고, 칩 줄은 서버 값(task.refRepos — 인터뷰 단계면 진행 중 세션의 참조·상태)을 그대로 따른다.
+// 초안은 인터뷰 세션마다 시드한다 — 같은 페이지에서 취소·재승인으로 새 세션이 생겼는데 시드를 안 하면 낡은 초안이 재승인 때 뺀
+// 참조를 되살린다. 같은 세션의 폴링(5초)에서는 보내지 않은 변경이 없을 때만(초안 = 마지막으로 맞춘 서버 집합) 새 서버 집합을 따라간다 —
+// 무조건 서버 값으로 되돌리면 보내기 전의 변경이 지워지고, 한 번 시드하고 끝이면 다른 화면(휴대폰·다른 탭·다른 관리자)에서 바꾼 참조를
+// 이 화면의 다음 답변이 낡은 초안으로 되돌린다. 보내지 않은 변경이 있으면(초안 ≠ 맞춘 집합) 그대로 둔다.
+const pickedRefs = ref<RefRepoView[]>([])
+const refsSeededFor = ref<number | null>(null)
+let refsSyncedTo: RefRepoInput[] = [] // 초안을 마지막으로 맞춘 서버 집합(카탈로그 id·브랜치) — 화면에 쓰지 않으므로 반응형이 아니다
+watch(
+  task,
+  (t) => {
+    if (!t || !isInterviewPhase.value || t.interviewSessionId == null) return
+    const server = t.refRepos ?? []
+    const serverSet = toInputs(server)
+    if (t.interviewSessionId !== refsSeededFor.value) {
+      pickedRefs.value = [...server]
+      refsSyncedTo = serverSet
+      refsSeededFor.value = t.interviewSessionId
+      return
+    }
+    const draftSet = toInputs(pickedRefs.value)
+    if (sameRefSet(draftSet, serverSet)) {
+      refsSyncedTo = serverSet // 초안이 이미 서버와 같다(보낸 변경이 반영됨) — 기준만 옮긴다
+    } else if (sameRefSet(draftSet, refsSyncedTo)) {
+      pickedRefs.value = [...server] // 보내지 않은 변경 없음 — 다른 화면에서 바뀐 서버 집합을 따라간다
+      refsSyncedTo = serverSet
+    }
+  },
+  { immediate: true },
+)
+// 답변 바디에 실을 참조 — 시드된 세션에서 초안이 서버 값과 다른 집합일 때만(전부 해제면 []), 아니면 null(키 없음 = 유지).
+// 참조를 안 건드린 답변 바디는 예전과 같다. 두 InterviewPanel(모바일·데스크톱)에 같이 넘긴다.
+const answerRefs = computed<RefRepoInput[] | null>(() => {
+  const t = task.value
+  if (!t || t.interviewSessionId == null || t.interviewSessionId !== refsSeededFor.value) return null
+  const picked = toInputs(pickedRefs.value)
+  return sameRefSet(picked, toInputs(t.refRepos ?? [])) ? null : picked
+})
+// 패널의 실시간 상태(SSE, immediate emit) — "✎ 참조 변경"은 입력 대기일 때만 연다. 패널은 한 번에 하나만 마운트된다($q.screen.lt.md 분기 —
+// 모바일은 대화 시트가 열려 있는 동안만이고, 그때 "✎"도 시트 안에 있다. 시트를 다시 열면 패널이 null부터 다시 알린다).
+const interviewLive = ref<InterviewStatus | null>(null)
+// 턴이 끝나 입력대기·계획 완료로 바뀌면 작업을 바로 다시 읽는다 — 그 턴이 고정한(또는 못 받은) 참조 상태는 같은 보고로 저장되지만
+// task.refRepos는 5초 폴링 때에야 바뀌어, 계획이 SSE로 먼저 보이는 동안 확정 화면이 방금 고정된 참조를 "인터뷰에서 받지 못해 구현에
+// 넘기지 않습니다"로 보였다. 처음 연결(null → 상태)은 방금 읽은 작업과 같은 시점이라 건너뛴다. refresh는 진행 중 폴링과 합쳐진다.
+function onInterviewStatus(s: InterviewStatus | null) {
+  const prev = interviewLive.value
+  interviewLive.value = s
+  if (prev !== null && s !== prev && (s === 'PLAN_READY' || s === 'AWAITING_INPUT')) refresh()
+}
+// 바꿀 수 있는 사람은 관리자뿐(답변 API가 관리자 전용), 인터뷰 단계에서만. 칩 줄은 참조가 있거나 바꿀 수 있을 때만 그린다 —
+// 참조 없는 작업 상세는 지금 그대로이고, 인터뷰 중 관리자는 참조 없이 등록된 작업에도 더할 수 있다("참조 repo 없음" + ✎).
+const canChangeRefs = computed(() => auth.isAdmin && isInterviewPhase.value && !!task.value?.interviewSessionId)
+const showRefRow = computed(() => (task.value?.refRepos?.length ?? 0) > 0 || canChangeRefs.value)
 
 // 배포/재배포 환경변수 다이얼로그 (스펙 2026-10-07) — 추천 불러오기·전송은 DeployEnvDialog가 맡는다.
 const envDialog = ref(false)
@@ -749,10 +819,26 @@ function onAction(kind: NextActionKind) {
               <q-toolbar-title class="text-subtitle1">#{{ task.id }} 대화형 분석</q-toolbar-title>
             </q-toolbar>
             <q-separator />
+            <!-- 관리자의 인터뷰 중 참조 변경 — 모바일은 정보 영역 칩 줄이 읽기 전용이라 답하는 자리(이 시트)에 같은 줄을 둔다 -->
+            <template v-if="canChangeRefs">
+              <div class="row items-end no-wrap task-refs interview-sheet__refs" data-test="mobile-interview-refs">
+                <RefRepoChips :items="task.refRepos ?? []" :context="taskRefContext(task.status)" class="task-refs-chips" />
+                <TaskRefChangeMenu
+                  v-model="pickedRefs"
+                  :server-refs="task.refRepos ?? []"
+                  :target-catalog-id="task.repoCatalogId ?? null"
+                  :disable="interviewLive !== 'AWAITING_INPUT'"
+                />
+              </div>
+              <q-separator />
+            </template>
             <InterviewPanel
               :session-id="task.interviewSessionId"
               :readonly="!auth.isAdmin"
               fill
+              :answer-ref-repos="answerRefs"
+              :session-ref-repos="task.refRepos ?? []"
+              @status="onInterviewStatus"
               @confirmed="onInterviewConfirmed"
               @close="refresh"
             />
@@ -821,6 +907,13 @@ function onAction(kind: NextActionKind) {
           <div>
             {{ task.repoAlias ?? task.githubRepo }}
             <q-chip dense size="sm" :label="task.githubBranch" />
+            <!-- 질문 대화에서 이어 등록한 작업 (스펙 2026-10-24 §7.4) — 볼 권한이 없으면 질문 화면이 안내한다 -->
+            <NuxtLink
+              v-if="task.sourceQuestionId"
+              :to="`/questions/${task.sourceQuestionId}`"
+              class="text-caption q-ml-xs"
+              data-test="source-question-link"
+            >↩ 질문 #{{ task.sourceQuestionId }}에서 이어짐</NuxtLink>
           </div>
         </q-card-section>
         <q-separator />
@@ -862,6 +955,18 @@ function onAction(kind: NextActionKind) {
             dense
             :label="label"
             class="q-mr-xs q-mb-xs"
+          />
+        </q-card-section>
+        <!-- 참조 repo (스펙 2026-10-24 §7.4) — DB 칩 줄 다음. 칩 줄은 서버 값(맥락 문구는 상태로), "✎ 참조 변경"은 인터뷰 단계의 관리자에게만 -->
+        <q-separator v-if="showRefRow" />
+        <q-card-section v-if="showRefRow" class="row items-end no-wrap task-refs" data-test="task-ref-chips">
+          <RefRepoChips :items="task.refRepos ?? []" :context="taskRefContext(task.status)" class="task-refs-chips" />
+          <TaskRefChangeMenu
+            v-if="canChangeRefs"
+            v-model="pickedRefs"
+            :server-refs="task.refRepos ?? []"
+            :target-catalog-id="task.repoCatalogId ?? null"
+            :disable="interviewLive !== 'AWAITING_INPUT'"
           />
         </q-card-section>
         <q-separator v-if="task.attachments && task.attachments.length" />
@@ -948,6 +1053,9 @@ function onAction(kind: NextActionKind) {
           <InterviewPanel
             :session-id="task.interviewSessionId"
             :readonly="!auth.isAdmin"
+            :answer-ref-repos="answerRefs"
+            :session-ref-repos="task.refRepos ?? []"
+            @status="onInterviewStatus"
             @confirmed="onInterviewConfirmed"
             @close="refresh"
           />
@@ -1272,6 +1380,8 @@ function onAction(kind: NextActionKind) {
         v-model="showImplRetry"
         :task-id="String(task.id)"
         :current-mode="task.implementationMode ?? 'DIRECT'"
+        :ref-repos="task.refRepos ?? []"
+        :failure-reason="task.failureReason"
         @submitted="refresh"
       />
 
@@ -1300,6 +1410,11 @@ function onAction(kind: NextActionKind) {
   min-height: 52px;
   padding-top: env(safe-area-inset-top);
 }
+/* 시트의 참조 줄은 내용 높이만 — 남는 높이는 아래 대화 패널(fill)이 쓴다 */
+.interview-sheet__refs {
+  flex: none;
+  padding: 8px 16px;
+}
 .deploy-log {
   max-height: 240px;
   overflow: auto;
@@ -1316,5 +1431,13 @@ function onAction(kind: NextActionKind) {
 .impl-elapsed--warn {
   color: #ef6c00;
   font-weight: 600;
+}
+/* 참조 repo 줄: 칩 줄은 내용 폭만큼만 차지하고("✎ 참조 변경"이 칩 바로 옆에 붙는다), 좁으면 남는 폭까지 줄어 칩이 줄바꿈한다 */
+.task-refs {
+  gap: 8px;
+}
+.task-refs-chips {
+  flex: 0 1 auto;
+  min-width: 0;
 }
 </style>

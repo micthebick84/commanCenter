@@ -10,9 +10,12 @@ import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.nio.charset.StandardCharsets;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Consumer;
+import java.util.stream.Collectors;
 
 /**
  * 워커가 사용하는 외부 프로세스 실행 공통 헬퍼. 워커의 docker·git·gh 호출이 모두 여기를 지난다
@@ -50,8 +53,35 @@ public final class ProcessRunner {
     public static Result run(File workingDir, List<String> command,
                              Map<String, String> extraEnv, long timeoutSeconds)
             throws IOException, InterruptedException {
+        return run(workingDir, command, extraEnv, Set.of(), timeoutSeconds);
+    }
+
+    /**
+     * 부모 env에서 removeEnv 이름(대소문자 무시)을 뺀 뒤 extraEnv를 얹어 실행한다 — 참조 repo git이 운영자 PC의
+     * askpass를 물려받지 않게(스펙 2026-10-24 §6.2).
+     */
+    public static Result run(File workingDir, List<String> command, Map<String, String> extraEnv,
+                             Set<String> removeEnv, long timeoutSeconds)
+            throws IOException, InterruptedException {
         log.debug("exec ({}): {}", workingDir, describe(command));
-        return execute(workingDir, command, extraEnv, timeoutSeconds, null);
+        return execute(workingDir, command, extraEnv, removeEnv, timeoutSeconds, null);
+    }
+
+    /**
+     * env에서 removeEnv의 이름을 대소문자 무시로 지우고 extraEnv를 넣는다 — 지우기 먼저, 넣기 나중
+     * (인터뷰 서비스 noPromptGitEnv와 같은 규칙). Windows env 이름은 대소문자를 가리지 않아 표기가 달라도 같은 변수다.
+     */
+    static void applyEnv(Map<String, String> env, Map<String, String> extraEnv, Set<String> removeEnv) {
+        if (!removeEnv.isEmpty()) {
+            Set<String> names = removeEnv.stream()
+                    .map(n -> n.toUpperCase(Locale.ROOT))
+                    .collect(Collectors.toSet());
+            List<String> doomed = env.keySet().stream()
+                    .filter(k -> names.contains(k.toUpperCase(Locale.ROOT)))
+                    .toList();
+            doomed.forEach(env::remove);
+        }
+        env.putAll(extraEnv);
     }
 
     /**
@@ -63,7 +93,7 @@ public final class ProcessRunner {
                                       long timeoutSeconds, Consumer<String> onLine)
             throws IOException, InterruptedException {
         log.debug("exec-stream ({}): {}", workingDir, describe(command));
-        return execute(workingDir, command, Map.of(), timeoutSeconds, onLine);
+        return execute(workingDir, command, Map.of(), Set.of(), timeoutSeconds, onLine);
     }
 
     public static String requireSuccess(File workingDir, List<String> command, long timeoutSeconds)
@@ -83,12 +113,12 @@ public final class ProcessRunner {
      * 시간 초과·인터럽트면 자식과 하위 프로세스를 죽이고 그때까지의 출력은 버린다.
      */
     private static Result execute(File workingDir, List<String> command, Map<String, String> extraEnv,
-                                  long timeoutSeconds, Consumer<String> onLine)
+                                  Set<String> removeEnv, long timeoutSeconds, Consumer<String> onLine)
             throws IOException, InterruptedException {
         ProcessBuilder pb = new ProcessBuilder(command)
                 .directory(workingDir)
                 .redirectErrorStream(true);
-        if (!extraEnv.isEmpty()) pb.environment().putAll(extraEnv);
+        if (!extraEnv.isEmpty() || !removeEnv.isEmpty()) applyEnv(pb.environment(), extraEnv, removeEnv);
 
         long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(timeoutSeconds);
         Process p = pb.start();

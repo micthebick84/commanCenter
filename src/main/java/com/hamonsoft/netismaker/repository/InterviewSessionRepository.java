@@ -44,15 +44,33 @@ public interface InterviewSessionRepository extends JpaRepository<InterviewSessi
      * last_activity_at이 갱신되어 자연히 뒤로 가므로 신규/오래된 세션이 굶지 않는다.
      * claim 후보 = QUEUED (신규 또는 답변 후 재큐). claude_session_id null이면 신규,
      * 있으면 resume. TaskRepository.findClaimableForUpdateSkipLocked와 동일 패턴.
+     *
+     * 렌더링 대기(스펙 2026-10-27 §7.2): 세션의 첨부(INTERVIEW = 소유 task 첨부, QUESTION = 세션 첨부) 중
+     * 슬라이드 렌더링이 PENDING·RUNNING이고 renderWaitCutoff보다 나중에 올린 것이 있으면 이번 claim에서 건너뛴다 —
+     * 대기 상한(claim-wait-seconds)이 지나면 렌더링이 안 끝나도 claim된다. 하위 쿼리는 WHERE에만 있어
+     * FOR UPDATE SKIP LOCKED는 세션 행에만 걸린다.
      */
     @Lock(LockModeType.PESSIMISTIC_WRITE)
     @QueryHints(@jakarta.persistence.QueryHint(name = "jakarta.persistence.lock.timeout", value = "-2"))
     @Query("""
         SELECT s FROM InterviewSession s
         WHERE s.status = com.hamonsoft.netismaker.entity.InterviewStatus.QUEUED
+          AND NOT EXISTS (
+            SELECT ta.id FROM TaskAttachment ta
+            WHERE s.taskId IS NOT NULL AND ta.taskId = s.taskId
+              AND ta.rendition.status IN (com.hamonsoft.netismaker.entity.RenderStatus.PENDING,
+                                          com.hamonsoft.netismaker.entity.RenderStatus.RUNNING)
+              AND ta.createdAt > :renderWaitCutoff)
+          AND NOT EXISTS (
+            SELECT qa.id FROM QuestionAttachment qa
+            WHERE qa.sessionId = s.id
+              AND qa.rendition.status IN (com.hamonsoft.netismaker.entity.RenderStatus.PENDING,
+                                          com.hamonsoft.netismaker.entity.RenderStatus.RUNNING)
+              AND qa.createdAt > :renderWaitCutoff)
         ORDER BY s.lastActivityAt ASC
     """)
-    List<InterviewSession> findClaimableForUpdateSkipLocked(Pageable pageable);
+    List<InterviewSession> findClaimableForUpdateSkipLocked(@Param("renderWaitCutoff") OffsetDateTime renderWaitCutoff,
+                                                            Pageable pageable);
 
     /**
      * Stale 회수 잡: 워커가 claim해 처리중인(in-flight = RUNNING) 모든 세션.

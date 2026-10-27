@@ -98,6 +98,18 @@ public class InterviewService {
         this.repoCatalogService = repoCatalogService;
     }
 
+    /** claim이 첨부 슬라이드 렌더링을 기다리는 최대 시간(초, 스펙 2026-10-27 §7.2). 0이면 기다리지 않는다. 생성자를 바꾸지 않으려고 setter 주입. */
+    private int claimWaitSeconds = 180;
+
+    @Autowired
+    void setRenderProperties(com.hamonsoft.netismaker.config.RenderProperties props) {
+        this.claimWaitSeconds = Math.max(0, props.claimWaitSeconds());
+    }
+
+    static final String RENDER_NOTE_PENDING = "슬라이드 그림 준비 중(대기 시간 초과)";
+    static final String RENDER_NOTE_MISSING_PREFIX = "슬라이드 그림 없음: ";
+    static final String RENDER_NOTE_CLEANED = RENDER_NOTE_MISSING_PREFIX + "파일이 정리됨";
+
     /**
      * submitAnswer 결과 (스펙 2026-09-13 §5.2). turnSeq = 방금 붙인 user answer 턴의 seq —
      * 질문 첨부를 이 턴에 링크하는 키. 중복 제출 no-op이면 null(첨부는 조용히 버려진다).
@@ -184,8 +196,10 @@ public class InterviewService {
      */
     @Transactional
     public Optional<InterviewClaimResponse> claim(String workerId) {
+        // 렌더링 중인 첨부가 있는 세션은 그 첨부를 올린 지 claimWaitSeconds가 지날 때까지 건너뛴다 (스펙 2026-10-27 §7.2)
+        OffsetDateTime renderWaitCutoff = OffsetDateTime.now().minusSeconds(claimWaitSeconds);
         List<InterviewSession> candidates =
-                sessionRepo.findClaimableForUpdateSkipLocked(PageRequest.of(0, 1));
+                sessionRepo.findClaimableForUpdateSkipLocked(renderWaitCutoff, PageRequest.of(0, 1));
         if (candidates.isEmpty()) return Optional.empty();
         InterviewSession s = candidates.get(0);
         if (s.getStatus() != InterviewStatus.QUEUED) {
@@ -250,12 +264,12 @@ public class InterviewService {
                     .toList();
         }
         if (s.getTaskId() == null) return List.of();
-        return attachmentRepo.findByTaskIdOrderByIdAsc(s.getTaskId()).stream()
-                .map(a -> new InterviewClaimResponse.AttachmentRef(
-                        a.getId(), a.getOriginalFilename(),
-                        attachmentStorage.absolutePathOf(a.getStoredPath()),
-                        a.getContentType(), a.getSizeBytes()))
-                .toList();
+        List<TaskAttachment> rows = attachmentRepo.findByTaskIdOrderByIdAsc(s.getTaskId());
+        // 질문에서 이어받은 첨부가 있을 때만 task를 읽는다 (스펙 2026-10-27 §7.1)
+        Long sourceQuestionId = rows.stream().anyMatch(a -> a.getSourceQuestionAttachmentId() != null)
+                ? taskRepo.findActiveById(s.getTaskId()).map(Task::getSourceQuestionId).orElse(null)
+                : null;
+        return rows.stream().map(a -> toRef(a, sourceQuestionId)).toList();
     }
 
     /** QUESTION: 추가 질문 첨부를 답변 turn seq별로 묶는다 (id 순 유지). INTERVIEW는 빈 맵. */
@@ -275,11 +289,68 @@ public class InterviewService {
     }
 
     private InterviewClaimResponse.AttachmentRef toRef(QuestionAttachment a) {
-        return new InterviewClaimResponse.AttachmentRef(
-                a.getId(), a.getOriginalFilename(),
-                attachmentStorage.absolutePathOf(a.getStoredPath()),
-                a.getContentType(), a.getSizeBytes(),
-                a.getExtractedTextPath() == null ? null : attachmentStorage.absolutePathOf(a.getExtractedTextPath()));
+        return toRef(a.getId(), a.getOriginalFilename(), a.getStoredPath(), a.getContentType(), a.getSizeBytes(),
+                a.getExtractedTextPath(), a.getRendition(), null);
+    }
+
+    /** 작업 첨부 — 추출본도 싣고, 질문에서 이어받았으면 그 질문 id (스펙 2026-10-27 §7.1). */
+    private InterviewClaimResponse.AttachmentRef toRef(TaskAttachment a, Long sourceQuestionId) {
+        return toRef(a.getId(), a.getOriginalFilename(), a.getStoredPath(), a.getContentType(), a.getSizeBytes(),
+                a.getExtractedTextPath(), a.getRendition(),
+                a.getSourceQuestionAttachmentId() != null ? sourceQuestionId : null);
+    }
+
+    private InterviewClaimResponse.AttachmentRef toRef(long id, String fileName, String storedPath, String contentType,
+                                                       long sizeBytes, String extractedTextPath,
+                                                       AttachmentRendition r, Long inheritedFromQuestionId) {
+        String abs = attachmentStorage.absolutePathOf(storedPath);
+        String txt = extractedTextPath == null ? null : attachmentStorage.absolutePathOf(extractedTextPath);
+        RenderStatus status = r == null || r.getStatus() == null ? RenderStatus.NONE : r.getStatus();
+        List<String> slides = List.of();
+        List<String> media = List.of();
+        Integer totalPages = null;
+        String note = null;
+        switch (status) {
+            case DONE -> {
+                String dir = r.getDir() != null ? r.getDir() : attachmentStorage.renderDirRelativePath(storedPath);
+                java.nio.file.Path renderDir = attachmentStorage.resolve(dir);
+                slides = slidePaths(renderDir, r.getPageCount() == null ? 0 : r.getPageCount());
+                if (slides.isEmpty()) note = RENDER_NOTE_CLEANED;
+                totalPages = r.getTotalPages();
+                media = mediaPaths(renderDir);
+            }
+            case FAILED, SKIPPED -> note = RENDER_NOTE_MISSING_PREFIX + (r.getError() == null ? "" : r.getError());
+            case PENDING, RUNNING -> note = RENDER_NOTE_PENDING;
+            case NONE -> { }
+        }
+        return new InterviewClaimResponse.AttachmentRef(id, fileName, abs, contentType, sizeBytes, txt,
+                slides, totalPages, media, note, inheritedFromQuestionId);
+    }
+
+    /** slide-001.png..slide-{pageCount}.png 절대경로. 첫 파일이 없으면(정리됨) 빈 목록 (스펙 2026-10-27 §7.1). */
+    static List<String> slidePaths(java.nio.file.Path renderDir, int pageCount) {
+        if (pageCount <= 0 || !Files.isRegularFile(renderDir.resolve(slideName(1)))) return List.of();
+        List<String> out = new ArrayList<>(pageCount);
+        for (int i = 1; i <= pageCount; i++) out.add(renderDir.resolve(slideName(i)).toString());
+        return out;
+    }
+
+    private static String slideName(int page) {
+        return String.format("slide-%03d.png", page);
+    }
+
+    /** {renderDir}/media 아래 일반 파일 절대경로(이름순). 폴더가 없거나 못 읽으면 빈 목록. */
+    static List<String> mediaPaths(java.nio.file.Path renderDir) {
+        java.nio.file.Path mediaDir = renderDir.resolve("media");
+        if (!Files.isDirectory(mediaDir)) return List.of();
+        try (java.util.stream.Stream<java.nio.file.Path> files = Files.list(mediaDir)) {
+            return files.filter(Files::isRegularFile)
+                    .sorted(java.util.Comparator.comparing(p -> p.getFileName().toString()))
+                    .map(java.nio.file.Path::toString)
+                    .toList();
+        } catch (java.io.IOException | java.io.UncheckedIOException e) {
+            return List.of();
+        }
     }
 
     /**

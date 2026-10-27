@@ -91,7 +91,7 @@ class InterviewServiceTest {
     @Test
     void claim_moves_queued_to_running_and_sets_worker_and_assigns_work_dir() {
         InterviewSession s = session(1L, InterviewStatus.QUEUED);
-        when(sessionRepo.findClaimableForUpdateSkipLocked(any())).thenReturn(List.of(s));
+        when(sessionRepo.findClaimableForUpdateSkipLocked(any(), any())).thenReturn(List.of(s));
         when(turnRepo.findBySessionIdOrderBySeqAsc(1L)).thenReturn(List.of());
         Optional<com.hamonsoft.netismaker.dto.InterviewClaimResponse> resp = service.claim("w1");
         assertThat(resp).isPresent();
@@ -109,7 +109,7 @@ class InterviewServiceTest {
         InterviewSession s = session(1L, InterviewStatus.QUEUED);
         ReflectionTestUtils.setField(s, "githubRepo", "product/netis/web/package/netis-v7.0");
         s.setGitUrl("https://gitlab.hamon.vip/product/netis/web/package/netis-v7.0.git");
-        when(sessionRepo.findClaimableForUpdateSkipLocked(any())).thenReturn(List.of(s));
+        when(sessionRepo.findClaimableForUpdateSkipLocked(any(), any())).thenReturn(List.of(s));
         when(turnRepo.findBySessionIdOrderBySeqAsc(1L)).thenReturn(List.of());
 
         Optional<com.hamonsoft.netismaker.dto.InterviewClaimResponse> resp = service.claim("w1");
@@ -127,7 +127,7 @@ class InterviewServiceTest {
                 taskRepo, analysisRepo, historyRepo, attachmentRepo, attachmentStorage, stageUsageRepo,
                 questionAttachmentRepo, new InterviewWorkPaths("/data/interviews"));
         InterviewSession s = session(1L, InterviewStatus.QUEUED);
-        when(sessionRepo.findClaimableForUpdateSkipLocked(any())).thenReturn(List.of(s));
+        when(sessionRepo.findClaimableForUpdateSkipLocked(any(), any())).thenReturn(List.of(s));
         when(turnRepo.findBySessionIdOrderBySeqAsc(1L)).thenReturn(List.of());
 
         Optional<com.hamonsoft.netismaker.dto.InterviewClaimResponse> resp = custom.claim("w1");
@@ -140,7 +140,7 @@ class InterviewServiceTest {
     void claim_resume_keeps_existing_work_dir() {
         InterviewSession s = session(1L, InterviewStatus.QUEUED);
         s.setWorkDir("/preset/path/session-1");
-        when(sessionRepo.findClaimableForUpdateSkipLocked(any())).thenReturn(List.of(s));
+        when(sessionRepo.findClaimableForUpdateSkipLocked(any(), any())).thenReturn(List.of(s));
         when(turnRepo.findBySessionIdOrderBySeqAsc(1L)).thenReturn(List.of());
         Optional<com.hamonsoft.netismaker.dto.InterviewClaimResponse> resp = service.claim("w2");
         assertThat(s.getWorkDir()).isEqualTo("/preset/path/session-1");   // resume → 불변
@@ -149,7 +149,7 @@ class InterviewServiceTest {
 
     @Test
     void claim_empty_queue_returns_empty() {
-        when(sessionRepo.findClaimableForUpdateSkipLocked(any())).thenReturn(List.of());
+        when(sessionRepo.findClaimableForUpdateSkipLocked(any(), any())).thenReturn(List.of());
         assertThat(service.claim("w1")).isEmpty();
     }
 
@@ -454,7 +454,7 @@ class InterviewServiceTest {
     @Test
     void claim_on_question_session_carries_attachment_root_kickoff_and_per_turn_attachments() {
         InterviewSession s = questionSession(1L, InterviewStatus.QUEUED);
-        when(sessionRepo.findClaimableForUpdateSkipLocked(any())).thenReturn(List.of(s));
+        when(sessionRepo.findClaimableForUpdateSkipLocked(any(), any())).thenReturn(List.of(s));
         when(turnRepo.findBySessionIdOrderBySeqAsc(1L)).thenReturn(List.of(
                 com.hamonsoft.netismaker.entity.InterviewTurn.of(1L, 0, "assistant", "question", "답1", null),
                 com.hamonsoft.netismaker.entity.InterviewTurn.of(1L, 1, "user", "answer", "추가?", 0)));
@@ -484,7 +484,7 @@ class InterviewServiceTest {
     void claim_on_interview_session_keeps_task_attachment_path_and_null_attachment_root() {
         InterviewSession s = session(1L, InterviewStatus.QUEUED);
         s.setTaskId(77L);
-        when(sessionRepo.findClaimableForUpdateSkipLocked(any())).thenReturn(List.of(s));
+        when(sessionRepo.findClaimableForUpdateSkipLocked(any(), any())).thenReturn(List.of(s));
         when(turnRepo.findBySessionIdOrderBySeqAsc(1L)).thenReturn(List.of(
                 com.hamonsoft.netismaker.entity.InterviewTurn.of(1L, 0, "assistant", "question", "q", null)));
         when(attachmentRepo.findByTaskIdOrderByIdAsc(77L)).thenReturn(List.of());
@@ -704,7 +704,7 @@ class InterviewServiceTest {
                         "release/6.5", null, null, null),
                 new RefRepo(12L, "공통 UI", "acme/ui", "https://github.com/acme/ui.git", "main",
                         "c".repeat(40), "2026-10-22T10:00:00+09:00", null))));
-        when(sessionRepo.findClaimableForUpdateSkipLocked(any())).thenReturn(List.of(s));
+        when(sessionRepo.findClaimableForUpdateSkipLocked(any(), any())).thenReturn(List.of(s));
         when(turnRepo.findBySessionIdOrderBySeqAsc(1L)).thenReturn(List.of());
 
         InterviewClaimResponse c = service.claim("w1").orElseThrow();
@@ -722,7 +722,7 @@ class InterviewServiceTest {
         s.setRefRepos(new ArrayList<>(List.of(
                 ref(12L, "main", SHA_A, "2026-10-22T10:00:00+09:00", null),
                 ref(11L, "release/6.5", null, null, "브랜치를 찾을 수 없음"))));
-        when(sessionRepo.findClaimableForUpdateSkipLocked(any())).thenReturn(List.of(s));
+        when(sessionRepo.findClaimableForUpdateSkipLocked(any(), any())).thenReturn(List.of(s));
         when(turnRepo.findBySessionIdOrderBySeqAsc(1L)).thenReturn(List.of());
 
         InterviewClaimResponse c = service.claim("w1").orElseThrow();
@@ -738,7 +738,7 @@ class InterviewServiceTest {
     @Test
     void claim_question_session_without_refs_has_an_empty_list() {
         InterviewSession s = questionSession(1L, InterviewStatus.QUEUED);
-        when(sessionRepo.findClaimableForUpdateSkipLocked(any())).thenReturn(List.of(s));
+        when(sessionRepo.findClaimableForUpdateSkipLocked(any(), any())).thenReturn(List.of(s));
         when(turnRepo.findBySessionIdOrderBySeqAsc(1L)).thenReturn(List.of());
 
         assertThat(service.claim("w1").orElseThrow().refRepos()).isNotNull().isEmpty();
@@ -751,7 +751,7 @@ class InterviewServiceTest {
         // 2단계: INTERVIEW 세션도 질문과 같은 규칙({루트}/_refs/{세션 id}/{카탈로그 id})으로 참조를 싣는다
         InterviewSession s = session(1L, InterviewStatus.QUEUED);
         s.setRefRepos(new ArrayList<>(List.of(ref(11L, "main", null, null, null))));
-        when(sessionRepo.findClaimableForUpdateSkipLocked(any())).thenReturn(List.of(s));
+        when(sessionRepo.findClaimableForUpdateSkipLocked(any(), any())).thenReturn(List.of(s));
         when(turnRepo.findBySessionIdOrderBySeqAsc(1L)).thenReturn(List.of());
 
         InterviewClaimResponse c = service.claim("w1").orElseThrow();
@@ -767,7 +767,7 @@ class InterviewServiceTest {
     @Test
     void claim_interview_session_without_refs_has_an_empty_list_and_is_not_cleared() {
         InterviewSession s = session(1L, InterviewStatus.QUEUED);
-        when(sessionRepo.findClaimableForUpdateSkipLocked(any())).thenReturn(List.of(s));
+        when(sessionRepo.findClaimableForUpdateSkipLocked(any(), any())).thenReturn(List.of(s));
         when(turnRepo.findBySessionIdOrderBySeqAsc(1L)).thenReturn(List.of());
 
         InterviewClaimResponse c = service.claim("w1").orElseThrow();
@@ -782,7 +782,7 @@ class InterviewServiceTest {
 
     /** 세션 1을 주어진 턴과 함께 claim해서 refsCleared를 돌려준다 — claim은 QUEUED에서만 되므로 세션은 호출마다 새로 만든다. */
     private boolean claimRefsCleared(InterviewSession s, InterviewTurn... turns) {
-        when(sessionRepo.findClaimableForUpdateSkipLocked(any())).thenReturn(List.of(s));
+        when(sessionRepo.findClaimableForUpdateSkipLocked(any(), any())).thenReturn(List.of(s));
         when(turnRepo.findBySessionIdOrderBySeqAsc(1L)).thenReturn(List.of(turns));
         return service.claim("w1").orElseThrow().refsCleared();
     }
@@ -1359,6 +1359,140 @@ class InterviewServiceTest {
             assertThat(md).contains("## 첫 질문\n\nq?\n\n첨부: spec.pdf\n")
                     .contains("### 답변 (턴 0)\n\nAuthController에서 처리합니다\n");
         }
+    }
+
+    // ── 렌더링 대기 claim · 슬라이드 그림 경로 (스펙 2026-10-27 §7) ─────────────────
+
+    private static final String PPTX = "question-1/create/1-발표.pptx";
+
+    /** 첨부 루트를 임시 폴더로 — resolve/absolutePathOf가 실제 경로를 돌려준다(목록·존재 확인용). */
+    private void storageAt(java.nio.file.Path root) {
+        when(attachmentStorage.resolve(any())).thenAnswer(i -> root.resolve((String) i.getArgument(0)));
+        when(attachmentStorage.absolutePathOf(any()))
+                .thenAnswer(i -> root.resolve((String) i.getArgument(0)).toString());
+        when(attachmentStorage.renderDirRelativePath(any())).thenAnswer(i -> i.getArgument(0) + ".render");
+        when(attachmentStorage.questionRootRelative(1L)).thenReturn("question-1");
+    }
+
+    private QuestionAttachment pptxAtt(AttachmentRendition r) {
+        QuestionAttachment a = QuestionAttachment.create(1L, null, "발표.pptx", PPTX, null, 10L,
+                PPTX + ".txt", "u1", r);
+        ReflectionTestUtils.setField(a, "id", 11L);
+        return a;
+    }
+
+    private InterviewClaimResponse.AttachmentRef claimSingleQuestionAttachment(AttachmentRendition r) {
+        InterviewSession s = questionSession(1L, InterviewStatus.QUEUED);
+        when(sessionRepo.findClaimableForUpdateSkipLocked(any(), any())).thenReturn(List.of(s));
+        when(turnRepo.findBySessionIdOrderBySeqAsc(1L)).thenReturn(List.of());
+        when(questionAttachmentRepo.findBySessionIdAndTurnSeqIsNullOrderByIdAsc(1L)).thenReturn(List.of(pptxAtt(r)));
+        return service.claim("w1").orElseThrow().attachments().get(0);
+    }
+
+    private static AttachmentRendition done(String dir, int pages, int total, int media) {
+        AttachmentRendition r = AttachmentRendition.of(RenderStatus.PENDING, null);
+        r.markDone(dir, pages, total, media);
+        return r;
+    }
+
+    @Test
+    void DONE_첨부_경로(@org.junit.jupiter.api.io.TempDir java.nio.file.Path root) throws Exception {
+        storageAt(root);
+        java.nio.file.Path render = java.nio.file.Files.createDirectories(root.resolve(PPTX + ".render"));
+        java.nio.file.Files.writeString(render.resolve("slide-001.png"), "1");
+        java.nio.file.Files.writeString(render.resolve("slide-002.png"), "2");
+        java.nio.file.Path media = java.nio.file.Files.createDirectories(render.resolve("media"));
+        java.nio.file.Files.writeString(media.resolve("image2.png"), "b");
+        java.nio.file.Files.writeString(media.resolve("image1.jpeg"), "a");
+
+        var ref = claimSingleQuestionAttachment(done(PPTX + ".render", 2, 5, 2));
+
+        assertThat(ref.slideImagePaths()).containsExactly(
+                render.resolve("slide-001.png").toString(), render.resolve("slide-002.png").toString());
+        assertThat(ref.slideTotalPages()).isEqualTo(5);
+        assertThat(ref.mediaImagePaths()).containsExactly(
+                media.resolve("image1.jpeg").toString(), media.resolve("image2.png").toString());
+        assertThat(ref.renderNote()).isNull();
+        assertThat(ref.extractedTextPath()).isEqualTo(root.resolve(PPTX + ".txt").toString());
+        assertThat(ref.inheritedFromQuestionId()).isNull();
+    }
+
+    @Test
+    void DONE인데_첫_슬라이드가_없으면_목록을_비우고_정리됨_안내(
+            @org.junit.jupiter.api.io.TempDir java.nio.file.Path root) {
+        storageAt(root);   // 폴더 자체가 없다(첨부 정리 잡이 지움)
+
+        var ref = claimSingleQuestionAttachment(done(PPTX + ".render", 3, 3, 0));
+
+        assertThat(ref.slideImagePaths()).isEmpty();
+        assertThat(ref.mediaImagePaths()).isEmpty();
+        assertThat(ref.renderNote()).isEqualTo("슬라이드 그림 없음: 파일이 정리됨");
+    }
+
+    @Test
+    void 실패_건너뜀_대기_없음_상태별_안내(@org.junit.jupiter.api.io.TempDir java.nio.file.Path root) {
+        storageAt(root);
+
+        assertThat(claimSingleQuestionAttachment(AttachmentRendition.of(RenderStatus.FAILED, "변환 시간 초과(120초)"))
+                .renderNote()).isEqualTo("슬라이드 그림 없음: 변환 시간 초과(120초)");
+        assertThat(claimSingleQuestionAttachment(AttachmentRendition.of(RenderStatus.SKIPPED, "LibreOffice 없음"))
+                .renderNote()).isEqualTo("슬라이드 그림 없음: LibreOffice 없음");
+        for (RenderStatus st : List.of(RenderStatus.PENDING, RenderStatus.RUNNING)) {
+            var ref = claimSingleQuestionAttachment(AttachmentRendition.of(st, null));
+            assertThat(ref.renderNote()).isEqualTo("슬라이드 그림 준비 중(대기 시간 초과)");
+            assertThat(ref.slideImagePaths()).isEmpty();
+        }
+        var none = claimSingleQuestionAttachment(AttachmentRendition.of(RenderStatus.NONE, null));
+        assertThat(none.renderNote()).isNull();
+        assertThat(none.slideImagePaths()).isEmpty();
+        assertThat(none.mediaImagePaths()).isEmpty();
+        assertThat(none.slideTotalPages()).isNull();
+    }
+
+    @Test
+    void 작업_첨부는_추출본과_승계한_질문_id를_싣는다(@org.junit.jupiter.api.io.TempDir java.nio.file.Path root) {
+        storageAt(root);
+        InterviewSession s = session(1L, InterviewStatus.QUEUED);
+        s.setTaskId(77L);
+        Task t = Task.create("owner/repo", "main", "T", "d", "u1", 3, List.of(), null, null);
+        ReflectionTestUtils.setField(t, "id", 77L);
+        ReflectionTestUtils.setField(t, "sourceQuestionId", 42L);
+        when(taskRepo.findActiveById(77L)).thenReturn(Optional.of(t));
+        TaskAttachment inherited = TaskAttachment.create(77L, "발표.pptx", "task-77/1-발표.pptx", null, 10L, "u1",
+                "task-77/1-발표.pptx.txt", AttachmentRendition.of(RenderStatus.FAILED, "변환 실패"), 11L);
+        ReflectionTestUtils.setField(inherited, "id", 21L);
+        TaskAttachment own = TaskAttachment.create(77L, "a.txt", "task-77/2-a.txt", "text/plain", 1L, "u1");
+        ReflectionTestUtils.setField(own, "id", 22L);
+        when(sessionRepo.findClaimableForUpdateSkipLocked(any(), any())).thenReturn(List.of(s));
+        when(turnRepo.findBySessionIdOrderBySeqAsc(1L)).thenReturn(List.of());
+        when(attachmentRepo.findByTaskIdOrderByIdAsc(77L)).thenReturn(List.of(inherited, own));
+
+        var refs = service.claim("w1").orElseThrow().attachments();
+
+        assertThat(refs.get(0).extractedTextPath()).isEqualTo(root.resolve("task-77/1-발표.pptx.txt").toString());
+        assertThat(refs.get(0).inheritedFromQuestionId()).isEqualTo(42L);
+        assertThat(refs.get(0).renderNote()).isEqualTo("슬라이드 그림 없음: 변환 실패");
+        assertThat(refs.get(1).extractedTextPath()).isNull();
+        assertThat(refs.get(1).inheritedFromQuestionId()).isNull();
+        assertThat(refs.get(1).renderNote()).isNull();
+    }
+
+    @Test
+    void claim은_대기_상한만큼_이전_시각을_cutoff로_넘기고_0이면_지금() {
+        when(sessionRepo.findClaimableForUpdateSkipLocked(any(), any())).thenReturn(List.of());
+        ArgumentCaptor<java.time.OffsetDateTime> cutoff = ArgumentCaptor.forClass(java.time.OffsetDateTime.class);
+
+        java.time.OffsetDateTime before = java.time.OffsetDateTime.now();
+        service.claim("w1");   // 기본 180초
+        service.setRenderProperties(new com.hamonsoft.netismaker.config.RenderProperties(
+                true, "", List.of("pptx"), 120, 30, 1600, 20, 0));
+        service.claim("w1");
+        java.time.OffsetDateTime after = java.time.OffsetDateTime.now();
+
+        verify(sessionRepo, times(2)).findClaimableForUpdateSkipLocked(cutoff.capture(), any());
+        assertThat(cutoff.getAllValues().get(0))
+                .isBetween(before.minusSeconds(180), after.minusSeconds(180));
+        assertThat(cutoff.getAllValues().get(1)).isBetween(before, after);
     }
 
 }

@@ -40,7 +40,8 @@ class TaskServiceDeployEnvTest {
                 mock(TaskStatusHistoryRepository.class), mock(McpCatalogService.class),
                 mock(RepoCatalogService.class), new ObjectMapper(), mock(InterviewService.class),
                 mock(TaskAttachmentRepository.class), mock(AttachmentStorage.class),
-                mock(TaskStageUsageRepository.class), mock(DbConnectionService.class));
+                mock(TaskStageUsageRepository.class), mock(DbConnectionService.class),
+                mock(TikaExtractionService.class), mock(com.hamonsoft.netismaker.service.render.RenderTargetPolicy.class), mock(org.springframework.context.ApplicationEventPublisher.class));
     }
 
     private static Task task(long id, String repo, String gitUrl) {

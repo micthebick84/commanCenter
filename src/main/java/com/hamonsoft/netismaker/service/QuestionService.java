@@ -9,13 +9,18 @@ import com.hamonsoft.netismaker.dto.RefRepoInput;
 import com.hamonsoft.netismaker.entity.InterviewKind;
 import com.hamonsoft.netismaker.entity.InterviewSession;
 import com.hamonsoft.netismaker.entity.InterviewTurn;
+import com.hamonsoft.netismaker.entity.AttachmentRendition;
 import com.hamonsoft.netismaker.entity.QuestionAttachment;
+import com.hamonsoft.netismaker.entity.RenderStatus;
 import com.hamonsoft.netismaker.entity.RefRepo;
 import com.hamonsoft.netismaker.entity.TaskMcpSpec;
 import com.hamonsoft.netismaker.repository.InterviewSessionRepository;
 import com.hamonsoft.netismaker.repository.InterviewTurnRepository;
 import com.hamonsoft.netismaker.repository.QuestionAttachmentRepository;
 import org.springframework.beans.factory.annotation.Value;
+import com.hamonsoft.netismaker.service.render.AttachmentRenderRequested;
+import com.hamonsoft.netismaker.service.render.RenderTargetPolicy;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.context.annotation.Profile;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
@@ -56,6 +61,8 @@ public class QuestionService {
     private final TikaExtractionService tika;
     private final QuestionAttachmentRepository attachmentRepo;
     private final DbConnectionService dbConnectionService;
+    private final RenderTargetPolicy renderPolicy;
+    private final ApplicationEventPublisher events;
     private final int maxActivePerUser;
     private final int maxQaTurns;
 
@@ -68,6 +75,8 @@ public class QuestionService {
                            TikaExtractionService tika,
                            QuestionAttachmentRepository attachmentRepo,
                            DbConnectionService dbConnectionService,
+                           RenderTargetPolicy renderPolicy,
+                           ApplicationEventPublisher events,
                            @Value("${app.question.max-active-per-user:3}") int maxActivePerUser,
                            @Value("${app.question.max-qa-turns:10}") int maxQaTurns) {
         this.interviewService = interviewService;
@@ -79,6 +88,8 @@ public class QuestionService {
         this.tika = tika;
         this.attachmentRepo = attachmentRepo;
         this.dbConnectionService = dbConnectionService;
+        this.renderPolicy = renderPolicy;
+        this.events = events;
         this.maxActivePerUser = maxActivePerUser;
         this.maxQaTurns = maxQaTurns;
     }
@@ -308,6 +319,7 @@ public class QuestionService {
         List<String> written = new ArrayList<>();
         try {
             int ordinal = 1;
+            boolean pendingRender = false;
             for (MultipartFile f : files) {
                 String name = f.getOriginalFilename();
                 String rel = attachmentStorage.relativePathForQuestion(sessionId, turnSeq, ordinal, name);
@@ -320,11 +332,15 @@ public class QuestionService {
                     written.add(extractedRel);
                     attachmentStorage.writeText(extractedRel, text.get());
                 }
+                AttachmentRendition rendition = renderPolicy.initial(name);
+                pendingRender |= rendition != null && rendition.getStatus() == RenderStatus.PENDING;
                 attachmentRepo.save(QuestionAttachment.create(sessionId, turnSeq,
                         AttachmentStorage.sanitize(name), rel, f.getContentType(), f.getSize(),
-                        extractedRel, uploadedBy));
+                        extractedRel, uploadedBy, rendition));
                 ordinal++;
             }
+            // 렌더링 대기 첨부가 있으면 업로드당 한 번 깨운다(리스너는 커밋 뒤에 받는다)
+            if (pendingRender) events.publishEvent(new AttachmentRenderRequested());
         } catch (RuntimeException e) {
             written.forEach(attachmentStorage::deleteQuietly);
             throw e;   // tx 롤백 → 답변 턴/재큐/메타 행 전부 취소

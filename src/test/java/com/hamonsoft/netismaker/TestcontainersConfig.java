@@ -41,7 +41,9 @@ public class TestcontainersConfig implements ApplicationContextInitializer<Confi
                 "app.attachment.cleanup.enabled=false",
                 // 체크아웃 정리 cron 차단 — app.interview.work-root 기본값은 운영자 실제 ~/netis-maker/interviews다.
                 // 03:50에 컨텍스트가 살아 있으면 테스트 DB 기준으로 실제 체크아웃을 고아로 오판해 지울 수 있다. 위와 같은 이유.
-                "app.interview.checkout-cleanup.enabled=false"
+                "app.interview.checkout-cleanup.enabled=false",
+                // 슬라이드 렌더링 잡 차단 — 통합 테스트가 실제 soffice를 띄우지 않게 한다(켜짐 여부는 soffice 유무에 달림)
+                "app.attachment.render.enabled=false"
         ).applyTo(ctx.getEnvironment());
     }
 }

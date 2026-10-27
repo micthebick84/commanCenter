@@ -5,12 +5,16 @@ import com.hamonsoft.netismaker.dto.DbConnectionDto;
 import com.hamonsoft.netismaker.dto.QuestionAskRequest;
 import com.hamonsoft.netismaker.dto.QuestionCreateRequest;
 import com.hamonsoft.netismaker.dto.RefRepoInput;
+import com.hamonsoft.netismaker.entity.AttachmentRendition;
 import com.hamonsoft.netismaker.entity.InterviewKind;
 import com.hamonsoft.netismaker.entity.InterviewSession;
 import com.hamonsoft.netismaker.entity.InterviewStatus;
 import com.hamonsoft.netismaker.entity.InterviewTurn;
 import com.hamonsoft.netismaker.entity.QuestionAttachment;
 import com.hamonsoft.netismaker.entity.RefRepo;
+import com.hamonsoft.netismaker.entity.RenderStatus;
+import com.hamonsoft.netismaker.service.render.AttachmentRenderRequested;
+import com.hamonsoft.netismaker.service.render.RenderTargetPolicy;
 import com.hamonsoft.netismaker.entity.TaskMcpSpec;
 import com.hamonsoft.netismaker.repository.InterviewSessionRepository;
 import com.hamonsoft.netismaker.repository.InterviewTurnRepository;
@@ -19,6 +23,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 import org.mockito.InOrder;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.http.HttpStatus;
 import org.springframework.mock.web.MockMultipartFile;
 import org.springframework.test.util.ReflectionTestUtils;
@@ -61,6 +66,8 @@ class QuestionServiceTest {
     private TikaExtractionService tika;
     private QuestionAttachmentRepository attachmentRepo;
     private DbConnectionService dbConnections;
+    private RenderTargetPolicy renderPolicy;
+    private ApplicationEventPublisher events;
     private QuestionService service;
 
     @BeforeEach
@@ -74,12 +81,14 @@ class QuestionServiceTest {
         tika = mock(TikaExtractionService.class);
         attachmentRepo = mock(QuestionAttachmentRepository.class);
         dbConnections = mock(DbConnectionService.class);
+        renderPolicy = mock(RenderTargetPolicy.class);
+        events = mock(ApplicationEventPublisher.class);
         when(dbConnections.validateSelection(any(), any(), any())).thenAnswer(i -> {
             List<Long> ids = i.getArgument(2);
             return ids == null ? new ArrayList<Long>() : new ArrayList<>(ids);
         });
         service = new QuestionService(interviewService, sessionRepo, turnRepo, repoCatalog, mcpCatalog,
-                attachmentStorage, tika, attachmentRepo, dbConnections, 3, 10);
+                attachmentStorage, tika, attachmentRepo, dbConnections, renderPolicy, events, 3, 10);
         when(sessionRepo.save(any())).thenAnswer(i -> {
             InterviewSession s = i.getArgument(0);
             if (s.getId() == null) ReflectionTestUtils.setField(s, "id", 5L);   // IDENTITY 흉내 — 첨부 경로에 id 필요
@@ -471,6 +480,34 @@ class QuestionServiceTest {
         ArgumentCaptor<QuestionAttachment> cap = ArgumentCaptor.forClass(QuestionAttachment.class);
         verify(attachmentRepo).save(cap.capture());
         assertThat(cap.getValue().getExtractedTextPath()).isEqualTo("question-5/create/1-설계.docx.txt");
+    }
+
+    @Test
+    void pptx_첨부는_PENDING이고_깨우기_이벤트는_업로드당_한_번() {
+        when(sessionRepo.countActiveQuestionsByRequester("user1")).thenReturn(0L);
+        when(renderPolicy.initial("덱.pptx")).thenReturn(AttachmentRendition.of(RenderStatus.PENDING, null));
+        when(renderPolicy.initial("덱2.pptx")).thenReturn(AttachmentRendition.of(RenderStatus.PENDING, null));
+        when(renderPolicy.initial("메모.txt")).thenReturn(AttachmentRendition.of(RenderStatus.NONE, null));
+
+        service.create(req(null, null, null), List.of(file("덱.pptx", "x"), file("덱2.pptx", "y"),
+                file("메모.txt", "z")), "user1");
+
+        ArgumentCaptor<QuestionAttachment> cap = ArgumentCaptor.forClass(QuestionAttachment.class);
+        verify(attachmentRepo, times(3)).save(cap.capture());
+        assertThat(cap.getAllValues().get(0).getRendition().getStatus()).isEqualTo(RenderStatus.PENDING);
+        assertThat(cap.getAllValues().get(1).getRendition().getStatus()).isEqualTo(RenderStatus.PENDING);
+        assertThat(cap.getAllValues().get(2).getRendition().getStatus()).isEqualTo(RenderStatus.NONE);
+        verify(events, times(1)).publishEvent(any(AttachmentRenderRequested.class));
+    }
+
+    @Test
+    void PENDING이_없으면_깨우기_이벤트를_내지_않는다() {
+        when(sessionRepo.countActiveQuestionsByRequester("user1")).thenReturn(0L);
+        when(renderPolicy.initial(any())).thenReturn(AttachmentRendition.of(RenderStatus.NONE, null));
+
+        service.create(req(null, null, null), List.of(file("a.txt", "x")), "user1");
+
+        verify(events, never()).publishEvent(any(AttachmentRenderRequested.class));
     }
 
     @Test

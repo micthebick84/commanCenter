@@ -2,10 +2,15 @@ package com.hamonsoft.netismaker.service;
 
 import com.hamonsoft.netismaker.TestcontainersConfig;
 import com.hamonsoft.netismaker.dto.TaskCreateRequest;
+import com.hamonsoft.netismaker.entity.AttachmentRendition;
+import com.hamonsoft.netismaker.entity.RenderStatus;
 import com.hamonsoft.netismaker.entity.Task;
 import com.hamonsoft.netismaker.entity.TaskAttachment;
 import com.hamonsoft.netismaker.repository.TaskAttachmentRepository;
 import com.hamonsoft.netismaker.repository.TaskRepository;
+import com.hamonsoft.netismaker.service.render.AttachmentRenderRequested;
+import com.hamonsoft.netismaker.service.render.PptxFixtures;
+import com.hamonsoft.netismaker.service.render.RenderTargetPolicy;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
@@ -17,6 +22,8 @@ import org.springframework.http.HttpStatus;
 import org.springframework.mock.web.MockMultipartFile;
 import org.springframework.test.context.ContextConfiguration;
 import org.springframework.test.context.TestPropertySource;
+import org.springframework.test.context.event.ApplicationEvents;
+import org.springframework.test.context.event.RecordApplicationEvents;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.util.FileSystemUtils;
 import org.springframework.web.multipart.MultipartFile;
@@ -104,6 +111,45 @@ class TaskServiceAttachmentTest {
                 .isInstanceOf(TaskException.class);
         assertThat(taskService.getAttachment(t.getId(), attId).getOriginalFilename())
                 .isEqualTo("a.txt");
+    }
+
+    /**
+     * 렌더링은 테스트 initializer에서 꺼져 있어(SKIPPED) PENDING을 보려면 정책을 목으로 바꾼다.
+     * ⚠️ @MockitoBean은 컨텍스트 키를 바꾸므로 위 테스트들과 격리하려고 @Nested에 둔다.
+     */
+    @Nested
+    @RecordApplicationEvents
+    class 렌더링_대상_표시 {
+
+        @MockitoBean RenderTargetPolicy policy;
+
+        @Autowired private TaskService taskService;
+        @Autowired private TaskRepository taskRepo;
+        @Autowired private TaskAttachmentRepository attachmentRepo;
+        @Autowired private ApplicationEvents applicationEvents;
+
+        @Test
+        void pptx_첨부는_sidecar와_PENDING() throws Exception {
+            when(policy.initial(any())).thenAnswer(inv ->
+                    ((String) inv.getArgument(0)).endsWith(".pptx")
+                            ? AttachmentRendition.of(RenderStatus.PENDING, null)
+                            : AttachmentRendition.of(RenderStatus.NONE, null));
+            Path pptx = PptxFixtures.twoSlides(Files.createTempDirectory("pptx-fixture"));
+            MockMultipartFile deck = new MockMultipartFile("files", "deck.pptx",
+                    "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+                    Files.readAllBytes(pptx));
+
+            Task t = taskService.create(req(), List.of(deck), "user1");
+
+            TaskAttachment att = attachmentRepo.findByTaskIdOrderByIdAsc(t.getId()).get(0);
+            String rel = "task-" + t.getId() + "/1-deck.pptx";
+            assertThat(att.getStoredPath()).isEqualTo(rel);
+            assertThat(att.getExtractedTextPath()).isEqualTo(rel + ".txt");
+            assertThat(Files.readString(Path.of(attachmentDir).resolve(att.getExtractedTextPath())))
+                    .contains("첫째 슬라이드").contains("둘째 슬라이드");
+            assertThat(att.getRendition().getStatus()).isEqualTo(RenderStatus.PENDING);
+            assertThat(applicationEvents.stream(AttachmentRenderRequested.class).count()).isEqualTo(1);
+        }
     }
 
     /**

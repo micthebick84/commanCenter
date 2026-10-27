@@ -143,6 +143,16 @@ app:
     max-files: 10
     max-file-size-mb: 20
     max-total-size-mb: 50
+    inherit-max-total-mb: 200             # 질문 → 작업 첨부 승계 총량 상한 (스펙 2026-10-27 §7.5)
+    render:                               # 첨부 pptx 슬라이드 PNG 렌더링 (스펙 2026-10-27). soffice(LibreOffice)가 없으면 꺼진다
+      enabled: true
+      soffice-path: ${SOFFICE_PATH:}      # 비우면 Windows 기본 설치 위치 → PATH 순으로 찾는다
+      extensions: pptx,ppt
+      timeout-seconds: 120                # 첨부 한 건 변환 상한 — 넘으면 soffice 프로세스 트리째 종료
+      max-pages: 30
+      width-px: 1600
+      max-media: 20                       # 원본 그림(ppt/media) 추출 상한
+      claim-wait-seconds: 180             # claim이 렌더링 완료를 기다리는 최대 시간
     cleanup:                              # AttachmentCleanupJob — 디렉터리만 지우고 DB 첨부 행은 남긴다(감사용)
       enabled: true
       cron: "0 30 3 * * *"                # 매일 03:30 (서버 로컬 시각)

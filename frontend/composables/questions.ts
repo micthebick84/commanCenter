@@ -106,8 +106,9 @@ export function taskPrefillFromQuestion(q: QuestionDetail, catalog: RepoCatalogO
     droppedRefs,
     targetMissing: target == null,
     attachmentNames: [
-      ...(q.attachments ?? []).map((a) => a.fileName),
-      ...(q.turns ?? []).flatMap((t) => (t.attachments ?? []).map((a) => a.fileName)),
+      // 정리 잡이 파일을 지운 첨부(expired)는 서버가 복사하지 않으므로 안내에서도 뺀다
+      ...(q.attachments ?? []).filter((a) => !a.expired).map((a) => a.fileName),
+      ...(q.turns ?? []).flatMap((t) => (t.attachments ?? []).filter((a) => !a.expired).map((a) => a.fileName)),
     ],
   }
 }

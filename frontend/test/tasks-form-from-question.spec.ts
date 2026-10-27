@@ -435,6 +435,37 @@ describe('작업 등록 창 — 질문 대화에서 이어서 (스펙 2026-10-24
       expect(banner()!.compareDocumentPosition(notice()!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
     })
 
+    it('만료된 첨부(등록·턴)는 개수에도 목록에도 넣지 않는다', async () => {
+      await mountPage(
+        { fromQuestion: '3' },
+        {
+          question: questionWith({
+            attachments: [att(1, '요구.txt'), { ...att(2, '지워짐.txt'), expired: true }],
+            turns: [
+              { seq: 1, role: 'user', kind: 'question', content: 'a', attachments: [{ ...att(3, '옛로그.txt'), expired: true }, att(4, '화면.png')] },
+            ],
+          }),
+        },
+      )
+      expect(notice()!.textContent).toContain('질문 첨부 2개가 함께 등록됩니다')
+      toggle()!.click()
+      await flushPromises()
+      expect(names()).toEqual(['요구.txt', '화면.png'])
+    })
+
+    it('첨부가 전부 만료됐으면 안내가 없다', async () => {
+      await mountPage(
+        { fromQuestion: '3' },
+        {
+          question: questionWith({
+            attachments: [{ ...att(1, '지워짐.txt'), expired: true }],
+            turns: [{ seq: 1, role: 'user', kind: 'question', content: 'a', attachments: [{ ...att(2, '옛로그.txt'), expired: true }] }],
+          }),
+        },
+      )
+      expect(notice()).toBeNull()
+    })
+
     it('첨부가 없으면 안내가 없다', async () => {
       await mountPage({ fromQuestion: '3' })
       expect(notice()).toBeNull()

@@ -57,7 +57,8 @@ class TaskServiceRenderTest {
         service = new TaskService(taskRepo, mock(TaskAnalysisRepository.class), mock(TaskDesignRepository.class),
                 historyRepo, mock(McpCatalogService.class), repoCatalogService, new ObjectMapper(),
                 mock(InterviewService.class), attachmentRepo, attachmentStorage,
-                mock(TaskStageUsageRepository.class), mock(DbConnectionService.class), tika, policy, events);
+                mock(TaskStageUsageRepository.class), mock(DbConnectionService.class), tika, policy, events,
+                mock(com.hamonsoft.netismaker.repository.QuestionAttachmentRepository.class), 200);
         ReflectionTestUtils.setField(service, "userConcurrentLimit", 5);
         ReflectionTestUtils.setField(service, "maxRetry", 3);
         when(taskRepo.save(any())).thenAnswer(i -> {

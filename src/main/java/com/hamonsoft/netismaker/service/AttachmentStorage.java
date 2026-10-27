@@ -233,6 +233,86 @@ public class AttachmentStorage {
         return root.resolve(".render-work");
     }
 
+    /**
+     * 링크가 아닌 일반 파일이나 폴더가 있는지 (질문 → 작업 승계의 원본·sidecar·.render 확인, 스펙 2026-10-27 §7.5).
+     * 심볼릭 링크·정션이면 거짓 — 따라가서 복사하지 않는다. 루트를 벗어나는 경로도 거짓.
+     */
+    public boolean exists(String relativePath) {
+        Path p;
+        try {
+            p = resolve(relativePath);
+        } catch (TaskException e) {
+            return false;
+        }
+        try {
+            BasicFileAttributes a = Files.readAttributes(p, BasicFileAttributes.class, LinkOption.NOFOLLOW_LINKS);
+            return a.isRegularFile() || isPlainDirectory(a);
+        } catch (IOException e) {
+            return false;
+        }
+    }
+
+    /**
+     * 파일 또는 폴더를 새 경로로 복사한다 (질문 → 작업 승계, 스펙 2026-10-27 §7.5). 대상은 아직 없어야 하고(덮어쓰지 않음),
+     * 링크·정션은 따라가지 않고 건너뛴다(일반 파일·폴더만 복사). 실패하면 500 — 반쯤 복사된 대상은 호출자가
+     * 정리 목록으로 지운다(deleteQuietly는 폴더도 트리째 지운다).
+     */
+    public void copyTree(String fromRelativePath, String toRelativePath) {
+        Path from = resolve(fromRelativePath);
+        Path to = resolve(toRelativePath);
+        try {
+            Files.createDirectories(to.getParent());
+            BasicFileAttributes rootAttrs = Files.readAttributes(from, BasicFileAttributes.class, LinkOption.NOFOLLOW_LINKS);
+            if (rootAttrs.isRegularFile()) {
+                Files.copy(from, to, LinkOption.NOFOLLOW_LINKS);
+                return;
+            }
+            if (!isPlainDirectory(rootAttrs)) {
+                throw new IOException("일반 파일·폴더가 아님(심볼릭 링크·정션 등): " + fromRelativePath);
+            }
+            Files.walkFileTree(from, new SimpleFileVisitor<>() {
+                @Override
+                public FileVisitResult preVisitDirectory(Path d, BasicFileAttributes a) throws IOException {
+                    if (a.isOther() || a.isSymbolicLink()) {
+                        log.warn("첨부 복사: 링크·정션은 건너뜀: {}", d);
+                        return FileVisitResult.SKIP_SUBTREE;
+                    }
+                    Files.createDirectory(to.resolve(from.relativize(d).toString()));   // 대상이 이미 있으면 실패
+                    return FileVisitResult.CONTINUE;
+                }
+
+                @Override
+                public FileVisitResult visitFile(Path file, BasicFileAttributes a) throws IOException {
+                    if (a.isRegularFile()) {
+                        Files.copy(file, to.resolve(from.relativize(file).toString()), LinkOption.NOFOLLOW_LINKS);
+                    } else {
+                        log.warn("첨부 복사: 일반 파일이 아니라 건너뜀(링크 등): {}", file);
+                    }
+                    return FileVisitResult.CONTINUE;
+                }
+
+                @Override
+                public FileVisitResult visitFileFailed(Path file, IOException exc) throws IOException {
+                    // 대상이 없는 정션은 walker가 대상 쪽 폴더를 열다 실패해 여기로 온다(FileTrees.deleteTree 주석) — 링크면 건너뛴다
+                    BasicFileAttributes a;
+                    try {
+                        a = Files.readAttributes(file, BasicFileAttributes.class, LinkOption.NOFOLLOW_LINKS);
+                    } catch (IOException e) {
+                        throw exc;
+                    }
+                    if (a.isSymbolicLink() || a.isOther()) {
+                        log.warn("첨부 복사: 링크·정션은 건너뜀: {}", file);
+                        return FileVisitResult.CONTINUE;
+                    }
+                    throw exc;
+                }
+            });
+        } catch (IOException e) {
+            throw new TaskException(HttpStatus.INTERNAL_SERVER_ERROR,
+                    "첨부 파일 복사에 실패했습니다: " + e.getMessage());
+        }
+    }
+
     /** 루트 하위임을 재확인(디렉터리 탈출 이중 방어, 스펙 §5.3). */
     public Path resolve(String relativePath) {
         Path p = root.resolve(relativePath).normalize();

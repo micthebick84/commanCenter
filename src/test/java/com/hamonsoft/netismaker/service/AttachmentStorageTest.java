@@ -458,4 +458,112 @@ class AttachmentStorageTest {
             Files.deleteIfExists(link);
         }
     }
+
+    // ── 승계 복사 copyTree·exists (스펙 2026-10-27 §7.5) ──────────────────────────
+
+    @Test
+    void copyTree는_파일을_새_경로로_복사한다() throws Exception {
+        Files.createDirectories(tmp.resolve("question-1/create"));
+        Files.writeString(tmp.resolve("question-1/create/1-a.txt"), "내용");
+
+        storage().copyTree("question-1/create/1-a.txt", "task-2/3-a.txt");
+
+        assertThat(Files.readString(tmp.resolve("task-2/3-a.txt"))).isEqualTo("내용");
+        assertThat(Files.readString(tmp.resolve("question-1/create/1-a.txt"))).isEqualTo("내용");
+    }
+
+    @Test
+    void copyTree는_폴더를_하위까지_복사한다() throws Exception {
+        Path src = Files.createDirectories(tmp.resolve("question-1/create/1-d.pptx.render/media"));
+        Files.write(src.getParent().resolve("slide-001.png"), new byte[]{1, 2, 3});
+        Files.write(src.resolve("img.png"), new byte[]{4});
+
+        storage().copyTree("question-1/create/1-d.pptx.render", "task-2/3-d.pptx.render");
+
+        assertThat(Files.readAllBytes(tmp.resolve("task-2/3-d.pptx.render/slide-001.png"))).containsExactly(1, 2, 3);
+        assertThat(Files.readAllBytes(tmp.resolve("task-2/3-d.pptx.render/media/img.png"))).containsExactly(4);
+    }
+
+    @Test
+    void copyTree는_이미_있는_대상을_덮어쓰지_않는다() throws Exception {
+        Files.createDirectories(tmp.resolve("question-1/create"));
+        Files.writeString(tmp.resolve("question-1/create/1-a.txt"), "새것");
+        Files.createDirectories(tmp.resolve("task-2"));
+        Files.writeString(tmp.resolve("task-2/3-a.txt"), "기존");
+
+        assertThatThrownBy(() -> storage().copyTree("question-1/create/1-a.txt", "task-2/3-a.txt"))
+                .isInstanceOfSatisfying(TaskException.class,
+                        e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.INTERNAL_SERVER_ERROR));
+        assertThat(Files.readString(tmp.resolve("task-2/3-a.txt"))).isEqualTo("기존");
+    }
+
+    @Test
+    void copyTree는_루트_밖으로_나가지_않는다() {
+        assertThatThrownBy(() -> storage().copyTree("../outside.txt", "task-2/1-a.txt"))
+                .isInstanceOf(TaskException.class);
+        assertThatThrownBy(() -> storage().copyTree("task-2/1-a.txt", "../outside.txt"))
+                .isInstanceOf(TaskException.class);
+    }
+
+    @Test
+    void copyTree는_하위_심볼릭_링크를_따라가지_않는다() throws Exception {
+        assumeSymlinkSupport();
+        Path src = Files.createDirectories(tmp.resolve("question-1/create/1-d.pptx.render"));
+        Files.write(src.resolve("slide-001.png"), new byte[]{1});
+        Path outside = Files.createDirectories(tmp.resolve("outside"));
+        Files.writeString(outside.resolve("secret.txt"), "비밀");
+        Files.createSymbolicLink(src.resolve("link-dir"), outside);
+        Files.createSymbolicLink(src.resolve("link-file.txt"), outside.resolve("secret.txt"));
+
+        storage().copyTree("question-1/create/1-d.pptx.render", "task-2/3-d.pptx.render");
+
+        Path dst = tmp.resolve("task-2/3-d.pptx.render");
+        assertThat(dst.resolve("slide-001.png")).exists();
+        assertThat(dst.resolve("link-dir")).doesNotExist();
+        assertThat(dst.resolve("link-file.txt")).doesNotExist();
+    }
+
+    @Test
+    @EnabledOnOs(OS.WINDOWS)
+    void copyTree는_하위_정션을_따라가지_않는다() throws Exception {
+        Path src = Files.createDirectories(tmp.resolve("question-1/create/1-d.pptx.render"));
+        Files.write(src.resolve("slide-001.png"), new byte[]{1});
+        Path outside = Files.createDirectories(tmp.resolve("outside"));
+        Files.writeString(outside.resolve("secret.txt"), "비밀");
+        junction(src.resolve("link"), outside);
+        try {
+            storage().copyTree("question-1/create/1-d.pptx.render", "task-2/3-d.pptx.render");
+
+            Path dst = tmp.resolve("task-2/3-d.pptx.render");
+            assertThat(dst.resolve("slide-001.png")).exists();
+            assertThat(dst.resolve("link")).doesNotExist();
+        } finally {
+            Files.deleteIfExists(src.resolve("link"));
+        }
+    }
+
+    @Test
+    void exists는_일반_파일과_폴더만_참이다() throws Exception {
+        Files.createDirectories(tmp.resolve("question-1/create/1-d.pptx.render"));
+        Files.writeString(tmp.resolve("question-1/create/1-a.txt"), "x");
+
+        assertThat(storage().exists("question-1/create/1-a.txt")).isTrue();
+        assertThat(storage().exists("question-1/create/1-d.pptx.render")).isTrue();
+        assertThat(storage().exists("question-1/create/없음.txt")).isFalse();
+        assertThat(storage().exists("../밖.txt")).isFalse();
+    }
+
+    @Test
+    @EnabledOnOs(OS.WINDOWS)
+    void exists는_정션이면_거짓이다() throws Exception {
+        Path outside = Files.createDirectories(tmp.resolve("outside"));
+        Files.createDirectories(tmp.resolve("question-1/create"));
+        Path link = tmp.resolve("question-1/create/1-d.pptx.render");
+        junction(link, outside);
+        try {
+            assertThat(storage().exists("question-1/create/1-d.pptx.render")).isFalse();
+        } finally {
+            Files.deleteIfExists(link);
+        }
+    }
 }

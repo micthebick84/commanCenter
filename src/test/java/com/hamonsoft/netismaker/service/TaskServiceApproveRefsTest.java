@@ -65,7 +65,8 @@ class TaskServiceApproveRefsTest {
                 historyRepo, mcpCatalog, repoCatalog,
                 new ObjectMapper(), interviewService, mock(TaskAttachmentRepository.class),
                 mock(AttachmentStorage.class), mock(TaskStageUsageRepository.class), db,
-                mock(TikaExtractionService.class), mock(com.hamonsoft.netismaker.service.render.RenderTargetPolicy.class), mock(org.springframework.context.ApplicationEventPublisher.class));
+                mock(TikaExtractionService.class), mock(com.hamonsoft.netismaker.service.render.RenderTargetPolicy.class), mock(org.springframework.context.ApplicationEventPublisher.class),
+                mock(com.hamonsoft.netismaker.repository.QuestionAttachmentRepository.class), 200);
         task = Task.create("a/b", "main", "t", "d", "user1", 3, List.of(), null, null);
         ReflectionTestUtils.setField(task, "id", 5L);
         task.setStatus(TaskStatus.AWAITING_APPROVAL);

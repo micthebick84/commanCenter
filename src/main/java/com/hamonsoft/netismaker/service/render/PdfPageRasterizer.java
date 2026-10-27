@@ -47,14 +47,26 @@ public final class PdfPageRasterizer {
     }
 
     /**
-     * 그려진 폭이 widthPx가 되는 배율. PDFRenderer는 floor(폭×배율)로 픽셀 폭을 정하므로 0.5px를 더해 부동소수 오차로
-     * 1px 모자라는 것을 막는다. 90·270도 회전 페이지는 세로 길이가 그려진 폭이다.
+     * 그려진 높이 상한 = 폭의 {@value #MAX_HEIGHT_RATIO}배. 폭 기준 배율만 쓰면 아주 긴 페이지(OOXML은 1:56까지, ppt는 제한 없음)가
+     * 1600×89,600px RGB ≈ 570MB를 API 힙에 잡아 OutOfMemoryError로 프로세스를 흔든다.
+     */
+    static final int MAX_HEIGHT_RATIO = 4;
+
+    /**
+     * 그려진 폭이 widthPx가 되는 배율 — 그러면 높이가 widthPx×{@value #MAX_HEIGHT_RATIO}를 넘는 페이지는 높이 기준 배율로
+     * 줄인다(긴 페이지는 더 좁게 그려진다). PDFRenderer는 floor(길이×배율)로 픽셀 수를 정하므로 0.5px를 더해 부동소수
+     * 오차로 1px 모자라는 것을 막는다(floor라 상한은 넘지 않는다). 90·270도 회전 페이지는 가로·세로가 바뀐다.
      */
     private static float scaleFor(PDPage page, int widthPx) {
         PDRectangle crop = page.getCropBox();
         int rotation = ((page.getRotation() % 360) + 360) % 360;
-        float drawnWidth = (rotation == 90 || rotation == 270) ? crop.getHeight() : crop.getWidth();
+        boolean swapped = rotation == 90 || rotation == 270;
+        float drawnWidth = swapped ? crop.getHeight() : crop.getWidth();
+        float drawnHeight = swapped ? crop.getWidth() : crop.getHeight();
         if (drawnWidth <= 0) drawnWidth = PDRectangle.LETTER.getWidth();
-        return (widthPx + 0.5f) / drawnWidth;
+        if (drawnHeight <= 0) drawnHeight = PDRectangle.LETTER.getHeight();
+        float byWidth = (widthPx + 0.5f) / drawnWidth;
+        float byHeight = ((float) widthPx * MAX_HEIGHT_RATIO + 0.5f) / drawnHeight;
+        return Math.min(byWidth, byHeight);
     }
 }

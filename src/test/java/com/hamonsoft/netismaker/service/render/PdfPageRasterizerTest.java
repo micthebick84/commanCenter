@@ -44,6 +44,22 @@ class PdfPageRasterizerTest {
     }
 
     @Test
+    void 아주_긴_페이지는_높이를_폭의_4배로_묶고_좁게_그린다() throws IOException {
+        Path in = tmp.resolve("tall.pdf");
+        try (PDDocument doc = new PDDocument()) {
+            doc.addPage(new PDPage(new PDRectangle(100, 5600)));
+            doc.save(in.toFile());
+        }
+        Path out = tmp.resolve("tall");
+
+        assertThat(PdfPageRasterizer.rasterize(in, out, 1600, 30)).isEqualTo(new RenderResult(1, 1, 0));
+
+        BufferedImage img = ImageIO.read(out.resolve("slide-001.png").toFile());
+        assertThat(img.getHeight()).isLessThanOrEqualTo(4 * 1600);
+        assertThat(img.getWidth()).isLessThan(1600);
+    }
+
+    @Test
     void 깨진_PDF는_IOException() throws IOException {
         Path bad = tmp.resolve("bad.pdf");
         Files.writeString(bad, "not a pdf");

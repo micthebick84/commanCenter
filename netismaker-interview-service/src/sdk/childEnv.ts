@@ -3,7 +3,7 @@
  * 인터뷰 서비스 자신은 쓰지만(GITLAB_TOKEN으로 clone, WORKER_API_KEY로 API 호출) 세션 안의 에이전트나
  * 대상 레포의 코드가 볼 이유는 없다. claude 로그인(CLAUDE_*)과 빌드 도구 자체의 토큰은 건드리지 않도록 패턴이
  * 아니라 이 스택이 정의한 이름만 뺀다.
- * 워커 쪽 같은 목록: ClaudeExecAdapter.STACK_SECRET_ENV — 바꿀 때 같이 바꿀 것.
+ * 워커·API 쪽 같은 목록: src/main/java/com/hamonsoft/netismaker/util/StackSecretEnv.java(NAMES) — 바꿀 때 같이 바꿀 것.
  */
 export const STACK_SECRET_ENV: readonly string[] = [
   'WORKER_API_KEY',

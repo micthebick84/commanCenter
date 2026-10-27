@@ -12,6 +12,7 @@ import org.springframework.stereotype.Component;
 import org.springframework.transaction.event.TransactionPhase;
 import org.springframework.transaction.event.TransactionalEventListener;
 
+import java.nio.channels.ClosedByInterruptException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.OffsetDateTime;
@@ -85,8 +86,8 @@ public class AttachmentRenderJob {
     /** 대기 건이 없을 때까지 처리한다. 큐(DB) 오류는 로그만 남기고 이번 회차를 끝낸다 — 예외를 executor로 내보내지 않는다. */
     void drain() {
         try {
-            while (drainOnce()) {
-                // 한 건씩 계속
+            while (!stopping() && drainOnce()) {
+                // 한 건씩 계속 — 종료(인터럽트·executor shutdown)면 다음 claim 전에 멈춘다
             }
         } catch (Throwable t) {
             log.warn("슬라이드 렌더링: 큐 처리 중단 — 다음 회차에 재시도 ({})", t.toString());
@@ -96,9 +97,11 @@ public class AttachmentRenderJob {
     /**
      * 한 건 처리 — 없으면(또는 꺼짐이면) false. 렌더러가 던진 것은 무엇이든(Error 포함) 그 건의 실패로 기록하고 true를
      * 돌려 다음 건으로 넘어간다. 큐 호출(claim·complete·fail)의 예외만 밖으로 나간다(행은 RUNNING으로 남아 회수 대상).
+     * 예외: 종료 인터럽트로 끊긴 렌더는 실패로 기록하지 않고 RUNNING으로 남긴 채 false — 다음 기동의 회수가
+     * PENDING으로 되돌린다(재기동 한 번에 대기 첨부가 FAILED로 굳지 않게). 종료 중이면 claim도 하지 않는다.
      */
     boolean drainOnce() {
-        if (!policy.active()) return false;
+        if (!policy.active() || stopping()) return false;
         Optional<RenderJobRef> claimed = queue.claimNext();
         if (claimed.isEmpty()) return false;
         RenderJobRef ref = claimed.get();
@@ -114,11 +117,17 @@ public class AttachmentRenderJob {
             }
             renderDirRel = storage.renderDirRelativePath(ref.storedPath());
             result = renderer.render(source, extensionOf(ref.originalFilename()), storage.resolve(renderDirRel));
-        } catch (RenderException e) {
-            log.info("슬라이드 렌더링 실패: {} #{} — {}", ref.kind(), ref.attachmentId(), e.getMessage());
-            queue.fail(ref, e.getMessage());
-            return true;
         } catch (Throwable t) {
+            if (interrupted(t)) {
+                log.info("슬라이드 렌더링: 종료로 중단 — RUNNING으로 남김(다음 기동 때 회수): {} #{}",
+                        ref.kind(), ref.attachmentId());
+                return false;
+            }
+            if (t instanceof RenderException e) {
+                log.info("슬라이드 렌더링 실패: {} #{} — {}", ref.kind(), ref.attachmentId(), e.getMessage());
+                queue.fail(ref, e.getMessage());
+                return true;
+            }
             log.error("슬라이드 렌더링: 예상 밖 오류 — {} #{}", ref.kind(), ref.attachmentId(), t);
             queue.fail(ref, UNEXPECTED_FAILURE);
             return true;
@@ -137,6 +146,20 @@ public class AttachmentRenderJob {
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
         }
+    }
+
+    /** 종료 중 — 이 스레드가 인터럽트됐거나(shutdownNow) executor가 닫혔다. */
+    private boolean stopping() {
+        return Thread.currentThread().isInterrupted() || executor.isShutdown();
+    }
+
+    /** 인터럽트로 끊긴 실패인지 — 스레드 플래그 또는 원인 사슬의 InterruptedException·ClosedByInterruptException. */
+    static boolean interrupted(Throwable t) {
+        if (Thread.currentThread().isInterrupted()) return true;
+        for (Throwable c = t; c != null; c = c.getCause() == c ? null : c.getCause()) {
+            if (c instanceof InterruptedException || c instanceof ClosedByInterruptException) return true;
+        }
+        return false;
     }
 
     /** 폴링 회차 — 회수 + drain. 예외가 새면 scheduleWithFixedDelay가 이후 회차를 끊으므로 모두 여기서 막는다. */

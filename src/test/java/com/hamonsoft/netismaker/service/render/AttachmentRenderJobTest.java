@@ -21,6 +21,7 @@ import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.timeout;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -70,6 +71,60 @@ class AttachmentRenderJobTest {
         verify(queue).fail(first, "PDF 변환 실패");
         verify(queue).complete(second, "question-2/create/1-b.ppt.render", ok);
         verify(queue, never()).complete(eq(first), anyString(), any());
+    }
+
+    @Test
+    void 종료_인터럽트로_끊긴_렌더는_실패로_기록하지_않고_다음_건도_잡지_않는다() throws Exception {
+        RenderJobRef first = source(Kind.TASK, 1, "task-1/1-a.pptx", "a.pptx");
+        RenderJobRef second = source(Kind.TASK, 2, "task-1/2-b.pptx", "b.pptx");
+        when(queue.claimNext()).thenReturn(Optional.of(first), Optional.of(second), Optional.empty());
+        // SlideRenderer처럼: InterruptedException을 받으면 플래그를 다시 세우고 RenderException("렌더링 중단")
+        when(renderer.render(any(), any(), any())).thenAnswer(inv -> {
+            Thread.currentThread().interrupt();
+            throw new RenderException("렌더링 중단", new InterruptedException());
+        });
+        try {
+            job.drain();
+        } finally {
+            Thread.interrupted();   // 다른 테스트에 플래그가 새지 않게
+        }
+
+        verify(queue, times(1)).claimNext();
+        verify(queue, never()).fail(any(), any());
+        verify(queue, never()).complete(any(), any(), any());
+    }
+
+    @Test
+    void 원인_사슬이_인터럽트면_플래그가_없어도_실패로_기록하지_않는다() throws Exception {
+        RenderJobRef ref = source(Kind.TASK, 1, "task-1/1-a.pptx", "a.pptx");
+        when(queue.claimNext()).thenReturn(Optional.of(ref));
+        when(renderer.render(any(), any(), any()))
+                .thenThrow(new RenderException("렌더링 중단", new InterruptedException()));
+
+        assertThat(job.drainOnce()).isFalse();
+
+        verify(queue, never()).fail(any(), any());
+    }
+
+    @Test
+    void executor가_닫혔으면_drain은_claim하지_않는다() {
+        job.shutdown();
+
+        job.drain();
+
+        assertThat(job.drainOnce()).isFalse();
+        verify(queue, never()).claimNext();
+    }
+
+    @Test
+    void 스레드가_인터럽트됐으면_drain은_claim하지_않는다() {
+        Thread.currentThread().interrupt();
+        try {
+            job.drain();
+        } finally {
+            Thread.interrupted();
+        }
+        verify(queue, never()).claimNext();
     }
 
     @Test

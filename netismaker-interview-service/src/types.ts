@@ -54,6 +54,16 @@ export interface AttachmentRef {
    * (스펙 2026-09-13 §5.1). 구버전 Java는 필드 자체가 없다 — optional (attachments 선례).
    */
   extractedTextPath?: string | null;
+  /** pptx 슬라이드 그림 절대경로(순서대로, 최대 30장) — 없으면 빈 배열/필드 없음 (스펙 2026-10-27 §7). */
+  slideImagePaths?: string[];
+  /** 슬라이드 전체 쪽수 — 그림 수보다 크면 잘린 것. */
+  slideTotalPages?: number | null;
+  /** pptx 안에 든 원본 그림 절대경로. */
+  mediaImagePaths?: string[];
+  /** 렌더 실패·생략 사유 한 줄. */
+  renderNote?: string | null;
+  /** 질문에서 넘어온 첨부면 그 질문 세션 id. */
+  inheritedFromQuestionId?: number | null;
 }
 
 /**

@@ -660,9 +660,9 @@ describe('InterviewRunner kind=QUESTION (스펙 §6 — plan 경로 미진입, Q
 
       const p = captured.prompt;
       expect(p).toContain('질문에 첨부된 파일:');
-      expect(p).toContain(`- 요구사항.docx: ${DOCX} (텍스트 추출본: ${DOCX_TXT} — 이 경로를 Read하세요)`);
+      expect(p).toContain(`- 요구사항.docx: ${DOCX}\n  - 텍스트 추출본: ${DOCX_TXT}`);
       expect(p).toContain(`- 화면.pdf: ${PDF}`);
-      expect(p).not.toContain(`${PDF} (텍스트 추출본`);
+      expect(p).not.toContain(`${PDF}\n  - 텍스트 추출본`);
       expect(p).toContain('Read 도구로 위 파일을 읽고 답변에 반영');
       // 순서: 질문 → 첨부 섹션 → 규칙
       expect(p.indexOf('로그인은 어디서 처리되나요?')).toBeLessThan(p.indexOf('질문에 첨부된 파일:'));
@@ -724,7 +724,7 @@ describe('InterviewRunner kind=QUESTION (스펙 §6 — plan 경로 미진입, Q
       const p = captured.prompt;
       expect(p.startsWith('이 표 기준으로 다시 설명해줘')).toBe(true);
       expect(p).toContain('이 메시지에 첨부된 파일:');
-      expect(p).toContain(`- 표.xlsx: ${ATT_ROOT}/4/1-표.xlsx (텍스트 추출본: ${ATT_ROOT}/4/1-표.xlsx.txt — 이 경로를 Read하세요)`);
+      expect(p).toContain(`- 표.xlsx: ${ATT_ROOT}/4/1-표.xlsx\n  - 텍스트 추출본: ${ATT_ROOT}/4/1-표.xlsx.txt`);
       expect(p).toContain('Read 도구로 위 파일을 읽고 답변에 반영');
       expect(p).not.toContain('옛날.txt');
       // 등록 시 첨부(claim.attachments)는 resume에서 다시 나열하지 않는다
@@ -2029,5 +2029,87 @@ describe('InterviewRunner rate limit reporting + context snapshot (스펙 2026-0
     await runner2.run(freshClaim);
     expect(legacy.postQuestion).toHaveBeenCalledWith(42, expect.objectContaining({ contextTokens: null, contextWindow: null }));
     expect(legacy.postRateLimit).not.toHaveBeenCalled();
+  });
+});
+
+describe('슬라이드 그림 첨부 프롬프트 (스펙 2026-10-27 §7.3)', () => {
+  const D = '/data/attachments/task-9/1';
+  const pptx = {
+    id: 31,
+    fileName: '대시보드 "업그레이드" 안.pptx',
+    absolutePath: `${D}/1-대시보드 "업그레이드" 안.pptx`,
+    contentType: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+    sizeBytes: 2048,
+    extractedTextPath: `${D}/1-대시보드 "업그레이드" 안.pptx.txt`,
+    slideImagePaths: [`${D}/slides/1.png`, `${D}/slides/2.png`],
+    slideTotalPages: 2,
+    mediaImagePaths: [`${D}/media/image1.png`],
+    renderNote: null as string | null,
+    inheritedFromQuestionId: null as number | null,
+  };
+
+  async function runPrompt(claim: InterviewClaimResponse): Promise<string> {
+    const client = makeClient();
+    let seen = '';
+    let drained: Promise<void> = Promise.resolve();
+    const fakeQuery = vi.fn((args: { prompt: AsyncIterable<{ message?: { content?: string } }> }) => {
+      drained = (async () => { for await (const p of args.prompt) seen += p.message?.content ?? ''; })();
+      return questionStream();
+    });
+    await new InterviewRunner(client as never, fakeQuery as never, deps as never).run(claim);
+    await drained;
+    return seen;
+  }
+
+  it('kickoff: 그림·추출본·원본 그림 하위 줄과 슬라이드 번호 안내, 예전 문구는 없다', async () => {
+    const p = await runPrompt({ ...freshClaimWithAttachments, attachments: [pptx] });
+    expect(p).toContain(`  - 슬라이드 그림(2장, 순서대로): ${D}/slides/1.png, ${D}/slides/2.png`);
+    expect(p).toContain(`  - 텍스트 추출본: ${pptx.extractedTextPath}`);
+    expect(p).toContain(`  - 원본 그림(작은 글씨를 크게 볼 때): ${D}/media/image1.png`);
+    expect(p).toContain('슬라이드 번호');
+    expect(p).not.toContain('읽을 수 없는 포맷(docx/xlsx 등 오피스 문서)');
+    expect(p).toContain('대시보드 "업그레이드" 안.pptx');
+    expect(p).not.toContain('전체 2장 중');
+  });
+
+  it('잘림: 전체 쪽수가 그림 수보다 많으면 안내를 붙인다', async () => {
+    const slides = Array.from({ length: 30 }, (_, i) => `${D}/slides/${i + 1}.png`);
+    const p = await runPrompt({ ...freshClaimWithAttachments, attachments: [{ ...pptx, slideImagePaths: slides, slideTotalPages: 45 }] });
+    expect(p).toContain('슬라이드 그림(30장, 순서대로): ');
+    expect(p).toContain(' (전체 45장 중 30장만 그림 — 나머지는 텍스트 추출본 참고)');
+  });
+
+  it('renderNote 줄과 승계 표시', async () => {
+    const p = await runPrompt({
+      ...freshClaimWithAttachments,
+      attachments: [{ ...pptx, renderNote: '슬라이드 그림을 만들지 못했습니다 — 텍스트 추출본만 있습니다', inheritedFromQuestionId: 12 }],
+    });
+    expect(p).toContain('\n  - 슬라이드 그림을 만들지 못했습니다 — 텍스트 추출본만 있습니다');
+    expect(p).toContain('(질문 #12에서 넘어옴)');
+  });
+
+  it('구버전 claim(새 필드 없음)은 하위 줄이 없다', async () => {
+    const old = { id: 1, fileName: 'a.pdf', absolutePath: '/x/a.pdf', contentType: 'application/pdf', sizeBytes: 10 };
+    const p = await runPrompt({ ...freshClaimWithAttachments, attachments: [old] });
+    expect(p).toContain('- /x/a.pdf (application/pdf, 10B)\n\n');
+    expect(p).not.toContain('\n  - ');
+    expect(p).not.toContain('넘어옴');
+  });
+
+  it('질문 세션: 신규 첨부와 resume 첨부 모두 같은 하위 줄', async () => {
+    const q = await runPrompt({ ...questionClaimWithAttachments, attachments: [{ ...pptx, inheritedFromQuestionId: 12 }] });
+    expect(q).toContain(`- ${pptx.fileName}: ${pptx.absolutePath} (질문 #12에서 넘어옴)\n  - 텍스트 추출본: ${pptx.extractedTextPath}`);
+    expect(q).toContain(`  - 슬라이드 그림(2장, 순서대로): ${D}/slides/1.png, ${D}/slides/2.png`);
+    expect(q).toContain(`  - 원본 그림(작은 글씨를 크게 볼 때): ${D}/media/image1.png`);
+    const r = await runPrompt({
+      ...questionClaimWithAttachments,
+      claudeSessionId: 'sess-q-1',
+      lastAnswer: '이 안 기준으로',
+      turns: [
+        { seq: 1, role: 'assistant', kind: 'question', content: 'a', replyToSeq: null },
+        { seq: 2, role: 'user', kind: 'answer', content: '이 안 기준으로', replyToSeq: 1, attachments: [pptx] },
+      ],
+    });
+    expect(r).toContain(`  - 슬라이드 그림(2장, 순서대로): ${D}/slides/1.png, ${D}/slides/2.png`);
   });
 });

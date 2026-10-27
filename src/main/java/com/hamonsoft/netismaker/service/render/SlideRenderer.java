@@ -17,6 +17,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.UUID;
 import java.util.concurrent.TimeUnit;
+import java.util.function.Supplier;
 import java.util.regex.Pattern;
 
 /**
@@ -37,19 +38,25 @@ public class SlideRenderer {
     private final RenderProperties props;
     private final RenderTargetPolicy policy;
     private final ProcessStarter starter;
-    private final Path workRoot;
+    /** 작업 폴더 루트 — 생성 시점이 아니라 렌더링 때 구한다(목 AttachmentStorage가 걸린 테스트 컨텍스트에서도 빈 생성이 깨지지 않게). */
+    private final Supplier<Path> workRoot;
 
     @Autowired
     public SlideRenderer(RenderProperties props, RenderTargetPolicy policy, ProcessStarter starter,
                          AttachmentStorage storage) {
-        this(props, policy, starter, storage.renderWorkRoot());
+        this(props, policy, starter, storage::renderWorkRoot);
     }
 
     SlideRenderer(RenderProperties props, RenderTargetPolicy policy, ProcessStarter starter, Path workRoot) {
+        this(props, policy, starter, () -> workRoot);
+    }
+
+    private SlideRenderer(RenderProperties props, RenderTargetPolicy policy, ProcessStarter starter,
+                          Supplier<Path> workRoot) {
         this.props = props;
         this.policy = policy;
         this.starter = starter;
-        this.workRoot = workRoot.toAbsolutePath().normalize();
+        this.workRoot = workRoot;
     }
 
     public RenderResult render(Path source, String extension, Path outDir) throws RenderException {
@@ -57,7 +64,7 @@ public class SlideRenderer {
         String ext = extension == null ? "" : extension.toLowerCase(Locale.ROOT);
         if (!SAFE_EXT.matcher(ext).matches()) throw new RenderException("지원하지 않는 형식");
 
-        Path work = workRoot.resolve(UUID.randomUUID().toString());
+        Path work = workRoot.get().toAbsolutePath().normalize().resolve(UUID.randomUUID().toString());
         boolean ok = false;
         try {
             try {

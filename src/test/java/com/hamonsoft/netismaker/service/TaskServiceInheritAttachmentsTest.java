@@ -92,7 +92,7 @@ class TaskServiceInheritAttachmentsTest {
             Files.writeString(root.resolve(sidecar), "텍스트:" + name);
         }
         return questionAttachmentRepo.save(QuestionAttachment.create(qid, turnSeq, name, rel,
-                "application/octet-stream", sizeBytes, sidecar, "asker", rendition));
+                "application/octet-stream", sizeBytes, sidecar, "user2", rendition));
     }
 
     private static AttachmentRendition none() {
@@ -128,7 +128,7 @@ class TaskServiceInheritAttachmentsTest {
         assertThat(Files.readString(root.resolve(p + "3-덱.pptx"))).isEqualTo("원본:덱.pptx");
         assertThat(Files.readString(root.resolve(p + "3-덱.pptx.txt"))).isEqualTo("텍스트:덱.pptx");
         assertThat(Files.readString(root.resolve(p + "4-표.csv"))).isEqualTo("원본:표.csv");
-        assertThat(atts.get(2).getUploadedBy()).isEqualTo("asker");
+        assertThat(atts.get(2).getUploadedBy()).isEqualTo("user2");
         assertThat(atts.get(2).getSourceQuestionAttachmentId()).isNotNull();
         assertThat(reasons(t.getId())).contains("질문 #" + qid + " 첨부 승계: 2개");
     }

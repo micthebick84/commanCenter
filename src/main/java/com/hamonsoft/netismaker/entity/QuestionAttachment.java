@@ -52,9 +52,20 @@ public class QuestionAttachment {
     @Column(name = "created_at", nullable = false, updatable = false)
     private OffsetDateTime createdAt;
 
+    @Embedded
+    private AttachmentRendition rendition = AttachmentRendition.of(RenderStatus.NONE, null);
+
     public static QuestionAttachment create(Long sessionId, Integer turnSeq, String originalFilename,
                                             String storedPath, String contentType, long sizeBytes,
                                             String extractedTextPath, String uploadedBy) {
+        return create(sessionId, turnSeq, originalFilename, storedPath, contentType, sizeBytes,
+                extractedTextPath, uploadedBy, AttachmentRendition.of(RenderStatus.NONE, null));
+    }
+
+    public static QuestionAttachment create(Long sessionId, Integer turnSeq, String originalFilename,
+                                            String storedPath, String contentType, long sizeBytes,
+                                            String extractedTextPath, String uploadedBy,
+                                            AttachmentRendition rendition) {
         QuestionAttachment a = new QuestionAttachment();
         a.sessionId = sessionId;
         a.turnSeq = turnSeq;
@@ -65,6 +76,7 @@ public class QuestionAttachment {
         a.extractedTextPath = extractedTextPath;
         a.uploadedBy = uploadedBy;
         a.createdAt = OffsetDateTime.now();
+        a.rendition = rendition != null ? rendition : AttachmentRendition.of(RenderStatus.NONE, null);
         return a;
     }
 }

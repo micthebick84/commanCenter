@@ -267,6 +267,25 @@ class AttachmentStorageTest {
                 .doesNotThrowAnyException();
     }
 
+    @Test
+    void deleteQuietly는_폴더면_트리째_지운다() throws Exception {
+        AttachmentStorage s = storage();
+        Path dir = Files.createDirectories(tmp.resolve("task-9/1-a.pptx.render/media"));
+        Files.writeString(dir.resolve("x.png"), "x");
+        Files.writeString(tmp.resolve("task-9/1-a.pptx.render/slide-001.png"), "y");
+
+        s.deleteQuietly("task-9/1-a.pptx.render");
+
+        assertThat(Files.exists(tmp.resolve("task-9/1-a.pptx.render"))).isFalse();
+        assertThat(Files.isDirectory(tmp.resolve("task-9"))).isTrue();
+    }
+
+    @Test
+    void renderDirRelativePath는_원본_경로에_render를_붙인다() {
+        assertThat(storage().renderDirRelativePath("task-1/1-a.pptx")).isEqualTo("task-1/1-a.pptx.render");
+        assertThat(storage().renderWorkRoot()).isEqualTo(tmp.toAbsolutePath().normalize().resolve(".render-work"));
+    }
+
     // ── 질문 세션 첨부 경로 (스펙 2026-09-13 §5.2) ─────────────────────────────
 
     @Test

@@ -42,6 +42,18 @@ class AttachmentRenditionTest {
     }
 
     @Test
+    void resetToPending은_시작시각과_이전_사유를_비우고_시도는_둔다() {
+        AttachmentRendition r = AttachmentRendition.of(RenderStatus.PENDING, null);
+        r.markRunning(OffsetDateTime.now());
+        r.markFailed("이전 사유");
+        r.resetToPending();
+        assertThat(r.getStatus()).isEqualTo(RenderStatus.PENDING);
+        assertThat(r.getStartedAt()).isNull();
+        assertThat(r.getError()).isNull();
+        assertThat(r.getAttempts()).isEqualTo(1);
+    }
+
+    @Test
     void of는_사유를_기록() {
         assertThat(AttachmentRendition.of(RenderStatus.SKIPPED, "렌더링 꺼짐").getError()).isEqualTo("렌더링 꺼짐");
     }

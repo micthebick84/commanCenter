@@ -1,6 +1,7 @@
 package com.hamonsoft.netismaker.service;
 
 import com.hamonsoft.netismaker.util.FileDeletion;
+import com.hamonsoft.netismaker.util.FileTrees;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Profile;
@@ -222,6 +223,11 @@ public class AttachmentStorage {
         }
     }
 
+    /** 슬라이드 그림 폴더 상대경로 = 원본 상대경로 + ".render" (원본 옆 — 소유자 폴더 정리 때 함께 지워진다, 스펙 2026-10-27 §5.1). */
+    public String renderDirRelativePath(String relativePath) {
+        return relativePath + ".render";
+    }
+
     /** 슬라이드 렌더링 작업 폴더의 부모 — {첨부 루트}/.render-work (스펙 2026-10-27 §6). 변환마다 하위에 uuid 폴더를 만들고 지운다. */
     public Path renderWorkRoot() {
         return root.resolve(".render-work");
@@ -241,11 +247,20 @@ public class AttachmentStorage {
     /**
      * 롤백 시 best-effort 정리 — 실패는 무시하되 원인은 남긴다 (tx는 이미 롤백 경로).
      * 파일만 지우고 상위 디렉터리는 남긴다 — 소유 행까지 롤백된 task-{id}/·question-{sid}/는
-     * AttachmentCleanupJob이 고아로 회수한다.
+     * AttachmentCleanupJob이 고아로 회수한다. 대상이 폴더(슬라이드 그림 ….render 등)면 트리째 지운다 — 링크·정션은
+     * 따라가지 않는다(FileTrees.deleteTree).
      */
     public void deleteQuietly(String relativePath) {
         try {
-            Files.deleteIfExists(resolve(relativePath));
+            Path target = resolve(relativePath);
+            if (Files.isDirectory(target, LinkOption.NOFOLLOW_LINKS)) {
+                FileTrees.DeleteResult r = FileTrees.deleteTree(target);
+                if (r.failures() > 0) {
+                    log.warn("첨부 폴더 일부 삭제 실패(무시): relativePath={}, 실패 {}개", relativePath, r.failures());
+                }
+                return;
+            }
+            Files.deleteIfExists(target);
         } catch (IOException | RuntimeException e) {
             // best-effort: 잔존 파일은 무해(메타가 롤백되어 참조 불가)하지만, 운영자가
             // 고아 파일을 추적할 수 있도록 원인은 로그로 남긴다.

@@ -73,9 +73,11 @@ public class AttachmentRendition {
         this.error = cut(error);
     }
 
+    /** 멈춘 RUNNING 회수 — 다시 대기로. 시도 횟수는 두고(회수 "1회까지" 판정), 이전 사유는 지운다. */
     public void resetToPending() {
         this.status = RenderStatus.PENDING;
         this.startedAt = null;
+        this.error = null;
     }
 
     /** 승계용 복사 — 상태·숫자·사유는 옮기고 dir만 교체, 시작 시각 null·시도 0. */

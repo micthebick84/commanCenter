@@ -92,8 +92,15 @@ public final class ProcessRunner {
     public static Result runStreaming(File workingDir, List<String> command,
                                       long timeoutSeconds, Consumer<String> onLine)
             throws IOException, InterruptedException {
+        return runStreaming(workingDir, command, Map.of(), Set.of(), timeoutSeconds, onLine);
+    }
+
+    /** runStreaming + env 조정(규칙은 {@link #applyEnv}) — 배포 전 미리 빌드가 스택 비밀을 빼고 툴체인을 얹을 때. */
+    public static Result runStreaming(File workingDir, List<String> command, Map<String, String> extraEnv,
+                                      Set<String> removeEnv, long timeoutSeconds, Consumer<String> onLine)
+            throws IOException, InterruptedException {
         log.debug("exec-stream ({}): {}", workingDir, describe(command));
-        return execute(workingDir, command, Map.of(), Set.of(), timeoutSeconds, onLine);
+        return execute(workingDir, command, extraEnv, removeEnv, timeoutSeconds, onLine);
     }
 
     public static String requireSuccess(File workingDir, List<String> command, long timeoutSeconds)

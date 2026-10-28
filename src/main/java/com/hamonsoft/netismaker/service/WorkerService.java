@@ -238,13 +238,17 @@ public class WorkerService {
 
     /**
      * 배포 claim에 싣는 미리 빌드 지시 (스펙 2026-10-28 §3). 카탈로그 enabled(등록 허용)와 무관하게 prebuildEnabled만 본다 —
-     * 이미 승인된 작업의 배포가 카탈로그 비활성으로 달라지지 않게. 카탈로그 연결이 없거나 삭제됐으면 끄고(예전 동작) 경고만 남긴다.
+     * 이미 승인된 작업의 배포가 카탈로그 비활성으로 달라지지 않게. 카탈로그는 closeArtifactSpec과 같이 id 우선, 없으면 git_url로
+     * 찾는다(FK가 ON DELETE SET NULL이라 삭제 뒤 id가 비고, 다시 등록한 항목은 git_url로 찾힌다). 못 찾으면 끄고(예전 동작) —
+     * 카탈로그 id·git_url이 둘 다 없는 레거시 작업이 아니면 경고만 남긴다.
      */
     private WorkerTaskResponse.PrebuildSpec prebuildFor(Task t) {
-        if (t.getRepoCatalogId() == null) return null;
-        RepoCatalogEntry cat = repoCatalogRepo.findById(t.getRepoCatalogId()).orElse(null);
+        RepoCatalogEntry cat = RepoCatalogRepository.findForTask(repoCatalogRepo, t.getRepoCatalogId(), t.getGitUrl())
+                .orElse(null);
         if (cat == null) {
-            log.warn("배포 claim: 카탈로그 항목 없음(id={}) — 미리 빌드 끔", t.getRepoCatalogId());
+            if (t.getRepoCatalogId() != null || t.getGitUrl() != null) {
+                log.warn("배포 claim: 카탈로그 항목 없음(id={}, gitUrl={}) — 미리 빌드 끔", t.getRepoCatalogId(), t.getGitUrl());
+            }
             return null;
         }
         if (!cat.isPrebuildEnabled()) return null;

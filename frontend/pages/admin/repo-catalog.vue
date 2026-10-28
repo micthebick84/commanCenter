@@ -442,7 +442,7 @@ const canSubmit = computed(
           data-test="form-prebuild-enabled"
         />
         <div class="text-caption text-grey-7">
-          사내 라이브러리처럼 원격 Docker 안에서 받을 수 없는 의존성이 있을 때. 명령은 워커 PC에서 운영자 계정으로 실행됩니다.
+          사내 라이브러리처럼 원격 Docker 안에서 받을 수 없는 의존성이 있을 때. 명령은 워커 PC에서 운영자 계정으로 실행됩니다. 명령에 비밀번호·토큰을 넣지 마세요 — 배포 로그에 그대로 보입니다.
         </div>
         <template v-if="form.prebuildEnabled">
           <q-input

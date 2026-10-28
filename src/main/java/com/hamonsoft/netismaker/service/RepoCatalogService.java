@@ -261,9 +261,11 @@ public class RepoCatalogService {
     }
 
     private static final Pattern PREBUILD_TOOLCHAIN = Pattern.compile("^[A-Za-z0-9._-]{1,50}$");
+    private static final Pattern PREBUILD_ARTIFACT_FORBIDDEN = Pattern.compile("[?<>|\":]");
 
     /**
-     * 미리 빌드를 켤 때의 입력 검증. 위반이면 400. 순서: 명령 필수 → 한 줄 → 산출물 필수 → 상대 경로 → * 위치 → 도구 이름.
+     * 미리 빌드를 켤 때의 입력 검증. 위반이면 400. 순서: 명령 필수 → 한 줄 → 산출물 필수 → 상대 경로(빈 조각 포함)
+     * → 쓸 수 없는 문자 → * 위치 → 도구 이름.
      * 경로는 {@code /}·{@code \} 둘 다 구분자로 본다(워커가 Windows일 수 있다).
      */
     static void validatePrebuild(String command, String artifact, String toolchain) {
@@ -276,11 +278,17 @@ public class RepoCatalogService {
         String[] parts = art.split("[/\\\\]", -1);
         boolean drive = art.length() >= 2 && art.charAt(1) == ':' && Character.isLetter(art.charAt(0));
         boolean dotdot = false;
+        boolean emptyPart = false;   // 끝 구분자(hm-dash/target/)·a//b — 워커가 산출물 이름을 못 찾는다
         for (String part : parts) {
             if (part.equals("..")) dotdot = true;
+            if (part.isEmpty()) emptyPart = true;
         }
-        if (art.startsWith("/") || art.startsWith("\\") || drive || dotdot) {
+        if (art.startsWith("/") || art.startsWith("\\") || drive || dotdot || emptyPart) {
             throw badRequest("미리 빌드 산출물 경로는 레포 안 상대 경로여야 합니다");
+        }
+        // Windows 워커에서 경로가 될 수 없는 문자(드라이브 C:는 위에서 걸렀다 — 여기의 :는 어디에 있든)
+        if (PREBUILD_ARTIFACT_FORBIDDEN.matcher(art).find()) {
+            throw badRequest("미리 빌드 산출물 경로에 쓸 수 없는 문자가 있습니다");
         }
         for (int i = 0; i < parts.length - 1; i++) {
             if (parts[i].indexOf('*') >= 0) {

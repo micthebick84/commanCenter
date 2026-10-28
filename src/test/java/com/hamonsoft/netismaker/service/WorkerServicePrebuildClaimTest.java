@@ -104,11 +104,32 @@ class WorkerServicePrebuildClaimTest {
 
     @Test
     void 카탈로그_id없음_또는_삭제면_null() {
-        deployPending(null);
+        deployPending(null);   // 레거시: id·gitUrl 둘 다 없음
         assertThat(claim().prebuild()).isNull();
 
         deployPending(9L);
         when(repoCatalogRepo.findById(9L)).thenReturn(Optional.empty());
         assertThat(claim().prebuild()).isNull();
+
+        // 삭제 뒤(id null) gitUrl로도 못 찾으면 끈다
+        Task t = deployPending(null);
+        t.setGitUrl("https://github.com/owner/gone.git");
+        when(repoCatalogRepo.findByGitUrl("https://github.com/owner/gone.git")).thenReturn(Optional.empty());
+        assertThat(claim().prebuild()).isNull();
+    }
+
+    @Test
+    void 카탈로그_id가_비면_gitUrl로_다시_등록된_항목을_찾는다() {
+        // repo_catalog_id FK는 ON DELETE SET NULL — 삭제 후 같은 URL로 다시 등록하면 git_url로 찾힌다
+        Task t = deployPending(null);
+        t.setGitUrl("https://github.com/owner/repo.git");
+        when(repoCatalogRepo.findByGitUrl("https://github.com/owner/repo.git")).thenReturn(Optional.of(catalog(true, true)));
+
+        var spec = claim().prebuild();
+
+        assertThat(spec).isNotNull();
+        assertThat(spec.command()).isEqualTo("mvn -o package");
+        assertThat(spec.artifact()).isEqualTo("t/*.war");
+        assertThat(spec.toolchain()).isEqualTo("jdk8-maven");
     }
 }

@@ -12,6 +12,7 @@ import java.io.IOException;
 import java.nio.file.DirectoryStream;
 import java.nio.file.FileSystems;
 import java.nio.file.Files;
+import java.nio.file.InvalidPathException;
 import java.nio.file.LinkOption;
 import java.nio.file.Path;
 import java.nio.file.PathMatcher;
@@ -106,7 +107,8 @@ public class DeployPrebuilder {
             }
             sink.accept(line);
         };
-        both.accept("[미리 빌드] $ " + spec.command() + " (도구=" + (toolName == null ? "워커 env" : toolName) + ")");
+        // 머리줄은 화면(sink)으로만 — DeployService가 "[미리 빌드" 줄을 deploy_log에 남기므로 꼬리에도 넣으면 두 번 적힌다.
+        sink.accept("[미리 빌드] $ " + spec.command() + " (도구=" + (toolName == null ? "워커 env" : toolName) + ")");
 
         Duration timeout = props.timeout();
         ProcessRunner.Result result;
@@ -149,9 +151,13 @@ public class DeployPrebuilder {
         return new Staged(fileName, size, sourceRelative);
     }
 
-    /** 관리자 명령을 워커 OS 셸로. /d: AutoRun 끔, /s: 따옴표 규칙 고정(명령 앞뒤 따옴표만 벗긴다). */
+    /**
+     * 관리자 명령을 워커 OS 셸로. /d: AutoRun 끔, /s: 따옴표 규칙 고정(명령 앞뒤 따옴표만 벗긴다).
+     * Windows는 명령을 따옴표 한 쌍으로 직접 감싼다 — cmd /s가 벗길 바깥 쌍. 감싸지 않으면 앞뒤가 모두 {@code "}인 명령
+     * ({@code "C:\x\where.exe" "cmd.exe"})을 Java가 이미 따옴표 친 인자로 보고 그대로 넘겨, cmd가 명령 자체의 따옴표를 벗긴다.
+     */
     static List<String> shellCommand(String command, boolean windows) {
-        return windows ? List.of("cmd.exe", "/d", "/s", "/c", command) : List.of("sh", "-c", command);
+        return windows ? List.of("cmd.exe", "/d", "/s", "/c", "\"" + command + "\"") : List.of("sh", "-c", command);
     }
 
     /** 명령 env에서 뺄 이름 — 스택 비밀(대소문자 무시, ProcessRunner.applyEnv). */
@@ -195,7 +201,12 @@ public class DeployPrebuilder {
         if (name.isEmpty()) throw new PrebuildException("미리 빌드 산출물 없음: " + normalized);
 
         Path base = root.toAbsolutePath().normalize();
-        Path dir = (parent.isEmpty() ? base : base.resolve(parent)).normalize();
+        Path dir;
+        try {
+            dir = (parent.isEmpty() ? base : base.resolve(parent)).normalize();
+        } catch (InvalidPathException e) {   // Windows에서 상위 조각에 ?<>|" 등
+            throw new PrebuildException("미리 빌드 산출물 없음: " + normalized);
+        }
         if (!dir.startsWith(base) || !Files.isDirectory(dir, LinkOption.NOFOLLOW_LINKS)) {
             throw new PrebuildException("미리 빌드 산출물 없음: " + normalized);
         }
@@ -231,6 +242,7 @@ public class DeployPrebuilder {
     /** Dockerfile 생성 프롬프트 덧붙임(스펙 §5.3 본문 그대로) — 미리 빌드가 켜졌을 때만 DeployService가 붙인다. */
     static String promptSection(String stagedName, String artifactPattern) {
         return "## 미리 빌드된 산출물 (필수)\n"
+                + "- 이 절은 위의 Dockerfile 작성 지침(멀티스테이지 빌드 등)보다 우선합니다.\n"
                 + "- 워커가 이미 빌드했습니다: `" + STAGE_DIR + "/" + stagedName + "` (원래 위치 `" + artifactPattern + "`).\n"
                 + "- Dockerfile에 빌드 단계(mvn·gradle·npm 등)와 빌드 도구 이미지를 넣지 마세요. 런타임 이미지 하나에 이 파일을 COPY만 하세요.\n"
                 + "- 빌드 컨텍스트에는 `.netis-prebuild/`만 들어갑니다. 레포의 다른 파일을 COPY하지 마세요.\n"

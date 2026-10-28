@@ -25,6 +25,7 @@ import java.util.concurrent.CopyOnWriteArrayList;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.assertj.core.api.Assertions.catchThrowableOfType;
+import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 class DeployPrebuilderTest {
 
@@ -46,9 +47,29 @@ class DeployPrebuilderTest {
     @Test
     void shellCommand_OS별() {
         assertThat(DeployPrebuilder.shellCommand("mvn package", true))
-                .containsExactly("cmd.exe", "/d", "/s", "/c", "mvn package");
+                .containsExactly("cmd.exe", "/d", "/s", "/c", "\"mvn package\"");
+        // 앞뒤가 모두 따옴표인 명령도 바깥 한 쌍을 더 씌운다(cmd /s가 그 쌍만 벗긴다)
+        assertThat(DeployPrebuilder.shellCommand("\"C:\\x\\where.exe\" \"cmd.exe\"", true))
+                .containsExactly("cmd.exe", "/d", "/s", "/c", "\"\"C:\\x\\where.exe\" \"cmd.exe\"\"");
         assertThat(DeployPrebuilder.shellCommand("mvn package", false))
                 .containsExactly("sh", "-c", "mvn package");
+        assertThat(DeployPrebuilder.shellCommand("\"a\" \"b\"", false))
+                .containsExactly("sh", "-c", "\"a\" \"b\"");
+    }
+
+    @Test
+    void run_앞뒤_따옴표_명령이_Windows에서_그대로_돈다() throws Exception {
+        assumeTrue(WINDOWS, "Windows cmd 따옴표 규칙");
+        String where = System.getenv().getOrDefault("SystemRoot", "C:\\Windows") + "\\System32\\where.exe";
+        // 첫 글자와 끝 글자가 모두 " — 예전에는 cmd /s가 명령 자체의 따옴표를 벗겨 깨졌다
+        String cmd = "\"" + where + "\" \"cmd.exe\"";
+        List<String> sink = new CopyOnWriteArrayList<>();
+        Files.createDirectories(root.resolve("t"));
+        Files.writeString(root.resolve("t/a.war"), "x");
+
+        prebuilder(Duration.ofMinutes(1), Map.of()).run(new PrebuildSpec(cmd, "t/a.war", null), root, sink::add);
+
+        assertThat(sink).anySatisfy(line -> assertThat(line.toLowerCase(Locale.ROOT)).endsWith("\\cmd.exe"));
     }
 
     @Test
@@ -185,11 +206,22 @@ class DeployPrebuilderTest {
                 .hasMessageStartingWith("미리 빌드 산출물 없음: ");
     }
 
+    @Test
+    void resolveArtifact_Windows에서_쓸_수_없는_상위_조각은_없음() {
+        assumeTrue(WINDOWS, "?는 Windows 경로에서만 InvalidPathException");
+        assertThatThrownBy(() -> DeployPrebuilder.resolveArtifact(root, "t?/*.war"))
+                .isInstanceOf(PrebuildException.class)
+                .hasMessage("미리 빌드 산출물 없음: t?/*.war");
+    }
+
     // ── 프롬프트·Dockerfile 검사 ──
 
     @Test
     void promptSection_본문() {
         String s = DeployPrebuilder.promptSection("hm-dash.war", "hm-dash/target/*.war");
+        // 첫 항목 = 우선순위 — 생성 프롬프트 템플릿의 멀티스테이지 지침보다 앞선다
+        assertThat(s.lines().skip(1).findFirst())
+                .contains("- 이 절은 위의 Dockerfile 작성 지침(멀티스테이지 빌드 등)보다 우선합니다.");
         assertThat(s).startsWith("## 미리 빌드된 산출물 (필수)\n")
                 .contains("`.netis-prebuild/hm-dash.war`")
                 .contains("`hm-dash/target/*.war`")
@@ -266,11 +298,15 @@ class DeployPrebuilderTest {
     @Test
     void run_실패_exit() {
         String cmd = WINDOWS ? "echo failing-output& exit /b 3" : "echo failing-output; exit 3";
+        List<String> sink = new CopyOnWriteArrayList<>();
         PrebuildException e = catchThrowableOfType(PrebuildException.class,
                 () -> prebuilder(Duration.ofMinutes(1), Map.of())
-                        .run(new PrebuildSpec(cmd, "t/*.war", null), root, line -> {}));
+                        .run(new PrebuildSpec(cmd, "t/*.war", null), root, sink::add));
         assertThat(e).hasMessage("미리 빌드 실패 (exit=3)");
         assertThat(e.getLogTail().lines()).contains("failing-output");   // 머리줄(명령 원문)이 아니라 출력 줄
+        // 머리줄은 화면(sink)에만 — 꼬리에도 있으면 deploy_log에 두 번 적힌다
+        assertThat(sink.get(0)).startsWith("[미리 빌드] $ ");
+        assertThat(e.getLogTail()).doesNotContain("[미리 빌드] $");
     }
 
     @Test

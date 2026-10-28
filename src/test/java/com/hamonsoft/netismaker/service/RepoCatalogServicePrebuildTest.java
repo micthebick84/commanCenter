@@ -87,6 +87,29 @@ class RepoCatalogServicePrebuildTest {
     }
 
     @Test
+    void 산출물_빈_조각은_상대경로_위반() {
+        String msg = "미리 빌드 산출물 경로는 레포 안 상대 경로여야 합니다";
+        for (String bad : new String[]{"hm-dash/target/", "a//b.war", "a\\\\b.war", "hm-dash\\target\\"}) {
+            assertBadRequest(() -> RepoCatalogService.validatePrebuild("mvn package", bad, null), msg);
+        }
+    }
+
+    @Test
+    void 산출물_쓸_수_없는_문자() {
+        String msg = "미리 빌드 산출물 경로에 쓸 수 없는 문자가 있습니다";
+        for (String bad : new String[]{"t?/a.war", "t/a?.war", "t/<a>.war", "t/a|b.war", "t/\"a\".war",
+                "t/a:b.war", "tx:/a.war"}) {
+            assertBadRequest(() -> RepoCatalogService.validatePrebuild("mvn package", bad, null), msg);
+        }
+        // 드라이브 문자는 예전처럼 상대 경로 위반
+        assertBadRequest(() -> RepoCatalogService.validatePrebuild("mvn package", "C:\\x.war", null),
+                "미리 빌드 산출물 경로는 레포 안 상대 경로여야 합니다");
+        // *는 마지막 조각에서 계속 허용
+        assertThatCode(() -> RepoCatalogService.validatePrebuild("mvn package", "t/hm-*.war", null))
+                .doesNotThrowAnyException();
+    }
+
+    @Test
     void 별표는_마지막_조각만() {
         assertBadRequest(() -> RepoCatalogService.validatePrebuild("mvn package", "*/target/x.war", null),
                 "미리 빌드 산출물 경로의 *는 마지막 이름에만 쓸 수 있습니다");

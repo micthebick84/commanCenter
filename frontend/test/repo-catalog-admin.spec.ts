@@ -134,6 +134,7 @@ describe('admin/repo-catalog', () => {
     await w.find('[data-test="open-create"]').trigger('click')
     await flushPromises()
     await fillRequired()
+    expect(document.body.textContent).toContain('명령에 비밀번호·토큰을 넣지 마세요 — 배포 로그에 그대로 보입니다.')
     expect(document.querySelector('[data-test="form-prebuild-command"]')).toBeNull()
     expect(document.querySelector('[data-test="form-prebuild-artifact"]')).toBeNull()
     expect(document.querySelector('[data-test="form-prebuild-toolchain"]')).toBeNull()

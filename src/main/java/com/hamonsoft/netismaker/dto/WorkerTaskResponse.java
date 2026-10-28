@@ -84,7 +84,7 @@ public record WorkerTaskResponse(
     /** 미리 빌드 지시. toolchain은 워커 설정의 도구 이름(null이면 워커 환경 그대로). */
     public record PrebuildSpec(String command, String artifact, String toolchain) {}
 
-    /** 미리 빌드(prebuild) 도입 전 32개 인자 정규 생성자 — 기존 팩토리·테스트 호환. */
+    /** 미리 빌드(prebuild) 도입 전 31개 인자 정규 생성자 — 기존 팩토리·테스트 호환. */
     public WorkerTaskResponse(Long id, String githubRepo, String githubBranch, String title, String description,
                               Kind kind, List<TaskMcpSpec> mcpsExtra, String analysisMarkdown, String subtasksJson,
                               String headBranch, String headSha, List<EnvVar> envVars, String model, String effort,

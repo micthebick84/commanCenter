@@ -114,20 +114,39 @@ public class CloseNoteFolderResolver {
         }
     }
 
-    /** claude 답에서 후보 하나를 고른다. 첫 줄의 앞뒤 공백·백틱·따옴표·끝 `/`를 벗기고 `\`를 `/`로. 후보에 없으면 null. */
+    /**
+     * claude 답에서 후보 하나를 고른다. 모든 줄을 보며 코드펜스 줄은 건너뛰고, 목록 표시(`- `·`* `·`1. `)·백틱·따옴표·
+     * 끝 `/`·끝 문장부호를 벗기고 `\`를 `/`로 바꾼 뒤 NFC·대소문자 무시로 후보와 비교한다(볼트가 macOS에서 동기화되면
+     * 폴더 이름이 NFD일 수 있다). 정확히 후보 하나만 맞을 때 그 후보 원문, 아니면 null.
+     */
     static String parseAnswer(String stdout, List<String> candidates) {
-        String a = clean(firstLine(stdout));
-        return candidates.contains(a) ? a : null;
+        java.util.Set<String> matched = new java.util.LinkedHashSet<>();
+        for (String line : lines(stdout)) {
+            String a = key(clean(line));
+            for (String c : candidates) {
+                if (key(c).equals(a)) matched.add(c);
+            }
+        }
+        return matched.size() == 1 ? matched.iterator().next() : null;
     }
 
     private static boolean isNone(String stdout) {
-        return "NONE".equalsIgnoreCase(clean(firstLine(stdout)));
+        return lines(stdout).stream().anyMatch(l -> "NONE".equalsIgnoreCase(clean(l)));
+    }
+
+    private static List<String> lines(String stdout) {
+        return (stdout == null ? "" : stdout).lines().filter(l -> !l.strip().startsWith("```")).toList();
     }
 
     private static String clean(String line) {
-        String a = line.strip().replaceAll("^[`'\"]+|[`'\"]+$", "").strip().replace('\\', '/');
-        while (a.endsWith("/")) a = a.substring(0, a.length() - 1);
+        String a = line.strip().replaceFirst("^(?:[-*•]|\\d+[.)])\\s+", "")
+                .replaceAll("^[`'\"]+|[`'\"]+$", "").strip().replace('\\', '/');
+        a = a.replaceAll("[\\s.,;:。/]+$", "");
         return a;
+    }
+
+    private static String key(String s) {
+        return java.text.Normalizer.normalize(s, java.text.Normalizer.Form.NFC).toLowerCase(java.util.Locale.ROOT);
     }
 
     private static String firstLine(String s) {

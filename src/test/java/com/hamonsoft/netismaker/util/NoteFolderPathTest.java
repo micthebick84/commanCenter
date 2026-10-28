@@ -33,7 +33,7 @@ class NoteFolderPathTest {
     }
 
     @ParameterizedTest
-    @ValueSource(strings = {"../x", "a/../b", "a//b", "/a", "C:/a", "a/./b", "."})
+    @ValueSource(strings = {"../x", "a/../b", "a//b", "/a", "C:/a", "a/./b", ".", "HamonSoft/a:b", "a/b?", "a/b*", "a/<b>", "a/b|c", "a/\"b\"", "HamonSoft /동부병원", "HamonSoft/ 동부병원", "HamonSoft./x", "a/b\u0007c"})
     void 볼트_밖이나_이상한_경로는_거부한다(String raw) {
         assertThatThrownBy(() -> NoteFolderPath.normalize(raw))
                 .isInstanceOf(IllegalArgumentException.class)

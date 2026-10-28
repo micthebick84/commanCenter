@@ -91,6 +91,25 @@ class CloseNoteFolderResolverTest {
     }
 
     @Test
+    void 목록표시_코드펜스_끝마침표_대소문자_NFD도_후보로_맞춘다() {
+        List<String> c = List.of("HamonSoft/Netis-플랫폼공통", "HamonSoft/Netis-플랫폼공통/netisweb_v6.8", "HamonSoft/동부병원");
+        assertThat(CloseNoteFolderResolver.parseAnswer("- HamonSoft/동부병원", c)).isEqualTo("HamonSoft/동부병원");
+        assertThat(CloseNoteFolderResolver.parseAnswer("```\nHamonSoft/동부병원\n```", c)).isEqualTo("HamonSoft/동부병원");
+        assertThat(CloseNoteFolderResolver.parseAnswer("HamonSoft/동부병원.", c)).isEqualTo("HamonSoft/동부병원");
+        assertThat(CloseNoteFolderResolver.parseAnswer("hamonsoft/netis-플랫폼공통/NETISWEB_V6.8", c))
+                .isEqualTo("HamonSoft/Netis-플랫폼공통/netisweb_v6.8");
+        String nfd = java.text.Normalizer.normalize("HamonSoft/동부병원", java.text.Normalizer.Form.NFD);
+        assertThat(CloseNoteFolderResolver.parseAnswer(nfd, c)).isEqualTo("HamonSoft/동부병원");
+    }
+
+    @Test
+    void 답에서_후보가_둘이면_고르지_않는다() {
+        List<String> c = List.of("HamonSoft/동부병원", "HamonSoft/제2철도");
+        assertThat(CloseNoteFolderResolver.parseAnswer("HamonSoft/동부병원\nHamonSoft/제2철도", c)).isNull();
+        assertThat(CloseNoteFolderResolver.parseAnswer("NONE", c)).isNull();
+    }
+
+    @Test
     void NONE이면_별칭_폴더를_만든다() throws Exception {
         answer(0, "NONE");
         CloseNoteFolderResolver.Resolved r = resolve(task("라이나생명 대시보드 v6.8", null));

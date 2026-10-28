@@ -91,12 +91,30 @@ public record InterviewClaimResponse(
     /**
      * contentType만 null 가능 — TS 타입도 string | null (스펙 §5.4).
      * extractedTextPath = Tika sidecar(.txt) 절대경로, 오피스 문서 + 추출 성공 시만 (그 외 null).
+     * 슬라이드 그림(스펙 2026-10-27 §7): slideImagePaths = slide-001.png부터 렌더한 장수만큼의 절대경로,
+     * slideTotalPages = 원본 장수(렌더 상한으로 잘렸으면 slideImagePaths보다 크다), mediaImagePaths = 원본 그림(이름순),
+     * renderNote = 그림이 없는 이유(실패·정리됨·대기 시간 초과 — 없으면 null), inheritedFromQuestionId = 질문에서 이어받은
+     * 작업 첨부면 그 질문 id. 두 목록은 항상 non-null.
      */
     public record AttachmentRef(long id, String fileName, String absolutePath,
-                                String contentType, long sizeBytes, String extractedTextPath) {
+                                String contentType, long sizeBytes, String extractedTextPath,
+                                List<String> slideImagePaths, Integer slideTotalPages,
+                                List<String> mediaImagePaths, String renderNote, Long inheritedFromQuestionId) {
+        public AttachmentRef {
+            slideImagePaths = slideImagePaths == null ? List.of() : List.copyOf(slideImagePaths);
+            mediaImagePaths = mediaImagePaths == null ? List.of() : List.copyOf(mediaImagePaths);
+        }
+
         /** 추출본 없는 첨부(작업 첨부·비오피스) — 기존 호출처 호환. */
         public AttachmentRef(long id, String fileName, String absolutePath, String contentType, long sizeBytes) {
             this(id, fileName, absolutePath, contentType, sizeBytes, null);
+        }
+
+        /** 슬라이드 그림 없는 첨부 — 기존 호출처 호환. */
+        public AttachmentRef(long id, String fileName, String absolutePath, String contentType, long sizeBytes,
+                             String extractedTextPath) {
+            this(id, fileName, absolutePath, contentType, sizeBytes, extractedTextPath,
+                    List.of(), null, List.of(), null, null);
         }
     }
 

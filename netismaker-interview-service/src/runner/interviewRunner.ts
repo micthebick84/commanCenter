@@ -87,6 +87,37 @@ function formatSize(bytes: number): string {
 }
 
 /**
+ * 첨부 한 줄 뒤에 붙는 들여 쓴 하위 줄 (스펙 2026-10-27 §7.3) — INTERVIEW·QUESTION 두 섹션이 공용.
+ * 구버전 API claim에는 새 필드가 없으므로 타입별 가드로 걸러 하위 줄을 만들지 않는다.
+ */
+function attachmentDetailLines(a: AttachmentRef): string[] {
+  const lines: string[] = [];
+  if (typeof a.extractedTextPath === 'string' && a.extractedTextPath.length > 0) {
+    lines.push(`  - 텍스트 추출본: ${a.extractedTextPath}`);
+  }
+  const slides = Array.isArray(a.slideImagePaths) ? a.slideImagePaths.filter((x) => typeof x === 'string' && x.length > 0) : [];
+  if (slides.length > 0) {
+    const truncated = typeof a.slideTotalPages === 'number' && a.slideTotalPages > slides.length
+      ? ` (전체 ${a.slideTotalPages}장 중 ${slides.length}장만 그림 — 나머지는 텍스트 추출본 참고)`
+      : '';
+    lines.push(`  - 슬라이드 그림(${slides.length}장, 순서대로): ${slides.join(', ')}${truncated}`);
+  }
+  const media = Array.isArray(a.mediaImagePaths) ? a.mediaImagePaths.filter((x) => typeof x === 'string' && x.length > 0) : [];
+  if (media.length > 0) {
+    lines.push(`  - 원본 그림(작은 글씨를 크게 볼 때): ${media.join(', ')}`);
+  }
+  if (typeof a.renderNote === 'string' && a.renderNote.length > 0) {
+    lines.push(`  - ${a.renderNote}`);
+  }
+  return lines;
+}
+
+/** 질문에서 넘어온 첨부면 첨부 줄 끝에 붙는 표시. */
+function inheritedMarker(a: AttachmentRef): string {
+  return typeof a.inheritedFromQuestionId === 'number' ? ` (질문 #${a.inheritedFromQuestionId}에서 넘어옴)` : '';
+}
+
+/**
  * kickoff 첨부 섹션 (스펙 2026-08-16 §7). 구버전 백엔드 claim에는 attachments 필드가
  * 없으므로 무조건 Array.isArray 가드 (sessionOptions.toMcpServers 선례). 0건이면 빈 문자열.
  * contentType null은 표기 생략 — 리터럴 'null'을 렌더링하지 않는다.
@@ -96,15 +127,18 @@ function attachmentSection(claim: InterviewClaimResponse): string {
   if (atts.length === 0) return '';
   const lines = atts.map((a) => {
     const meta = [a.contentType, formatSize(a.sizeBytes)].filter(Boolean).join(', ');
-    return `- ${a.absolutePath}${meta ? ` (${meta})` : ''}`;
+    return [`- ${a.absolutePath}${meta ? ` (${meta})` : ''}${inheritedMarker(a)}`, ...attachmentDetailLines(a)].join('\n');
   });
   return (
     '첨부 자료 (요청자가 등록 시 업로드한 파일):\n' +
     lines.join('\n') +
     '\n\n' +
     'brainstorming 시작 전에 이 파일들을 Read 도구로 읽고 요구사항 파악에 활용하세요. ' +
-    '읽을 수 없는 포맷(docx/xlsx 등 오피스 문서)이거나 파일이 없으면 건너뛰고, ' +
-    '필요한 내용은 사용자에게 질문으로 확인하세요.\n\n'
+    '오피스 원본(pptx/docx/xlsx 등)은 Read로 열 수 없습니다. ' +
+    '슬라이드 그림이 있으면 모두 순서대로 Read해서 화면 레이아웃과 빨간 표시·화살표 같은 주석이 가리키는 변경점을 파악하세요. ' +
+    '글은 텍스트 추출본으로 읽고, 작은 글씨는 원본 그림으로 확인하세요. ' +
+    '그림이 없는 첨부는 추출본만 읽고, 파일이 없으면 건너뛰고 필요한 내용은 사용자에게 질문으로 확인하세요. ' +
+    '계획에는 슬라이드 번호와 함께 변경점을 적으세요(예: "슬라이드 1: 상단 카드 2개 추가").\n\n'
   );
 }
 
@@ -143,8 +177,8 @@ async function* promptFor(
 }
 
 /**
- * 질문 세션 첨부 섹션 (스펙 2026-09-13 §6). 줄 형식 `- {fileName}: {absolutePath}` + Tika sidecar가 있으면
- * ` (텍스트 추출본: {extractedTextPath} — 이 경로를 Read하세요)`. 구버전 Java claim/turn에는 attachments
+ * 질문 세션 첨부 섹션 (스펙 2026-09-13 §6). 줄 형식 `- {fileName}: {absolutePath}` + 하위 줄(`attachmentDetailLines` —
+ * 텍스트 추출본·슬라이드 그림·원본 그림·renderNote, 스펙 2026-10-27 §7.3). 구버전 Java claim/turn에는 attachments
  * 필드가 없으므로 Array.isArray 가드 (attachmentSection 선례). 0건이면 빈 문자열.
  * INTERVIEW의 attachmentSection과는 별개 — 인터뷰 킥오프 문구(brainstorming 전 읽기)를 섞지 않는다.
  */
@@ -152,16 +186,13 @@ function questionAttachmentSection(atts: AttachmentRef[] | undefined, intro: str
   const list: AttachmentRef[] = Array.isArray(atts) ? atts : [];
   if (list.length === 0) return '';
   const lines = list.map((a) => {
-    const sidecar = typeof a.extractedTextPath === 'string' && a.extractedTextPath.length > 0
-      ? ` (텍스트 추출본: ${a.extractedTextPath} — 이 경로를 Read하세요)`
-      : '';
-    return `- ${a.fileName}: ${a.absolutePath}${sidecar}`;
+    return [`- ${a.fileName}: ${a.absolutePath}${inheritedMarker(a)}`, ...attachmentDetailLines(a)].join('\n');
   });
   return (
     `${intro}\n` +
     lines.join('\n') +
     '\n\n' +
-    'Read 도구로 위 파일을 읽고 답변에 반영하세요. 읽을 수 없는 포맷이면 건너뛰고 사용자에게 확인하세요.\n\n'
+    'Read 도구로 위 파일을 읽고 답변에 반영하세요. 오피스 원본은 Read로 열 수 없으니 슬라이드 그림과 텍스트 추출본을 읽고, 그림이 없어 모르는 부분은 사용자에게 확인하세요.\n\n'
   );
 }
 

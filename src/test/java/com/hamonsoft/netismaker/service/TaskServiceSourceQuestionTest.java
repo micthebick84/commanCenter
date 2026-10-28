@@ -4,6 +4,9 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.hamonsoft.netismaker.dto.TaskCreateRequest;
 import com.hamonsoft.netismaker.entity.Task;
 import com.hamonsoft.netismaker.entity.TaskAttachment;
+import com.hamonsoft.netismaker.entity.QuestionAttachment;
+import com.hamonsoft.netismaker.entity.TaskStatusHistory;
+import com.hamonsoft.netismaker.repository.QuestionAttachmentRepository;
 import com.hamonsoft.netismaker.repository.TaskAnalysisRepository;
 import com.hamonsoft.netismaker.repository.TaskAttachmentRepository;
 import com.hamonsoft.netismaker.repository.TaskDesignRepository;
@@ -43,6 +46,7 @@ class TaskServiceSourceQuestionTest {
     private InterviewService interviewService;
     private TaskAttachmentRepository attachmentRepo;
     private AttachmentStorage attachmentStorage;
+    private QuestionAttachmentRepository questionAttachmentRepo;
     private TaskService service;
 
     @BeforeEach
@@ -53,10 +57,13 @@ class TaskServiceSourceQuestionTest {
         interviewService = mock(InterviewService.class);
         attachmentRepo = mock(TaskAttachmentRepository.class);
         attachmentStorage = mock(AttachmentStorage.class);
+        questionAttachmentRepo = mock(QuestionAttachmentRepository.class);
         service = new TaskService(taskRepo, mock(TaskAnalysisRepository.class), mock(TaskDesignRepository.class),
                 historyRepo, mock(McpCatalogService.class), repoCatalogService, new ObjectMapper(),
                 interviewService, attachmentRepo, attachmentStorage,
-                mock(TaskStageUsageRepository.class), mock(DbConnectionService.class));
+                mock(TaskStageUsageRepository.class), mock(DbConnectionService.class),
+                mock(TikaExtractionService.class), mock(com.hamonsoft.netismaker.service.render.RenderTargetPolicy.class), mock(org.springframework.context.ApplicationEventPublisher.class),
+                questionAttachmentRepo, 200);
         ReflectionTestUtils.setField(service, "userConcurrentLimit", 5);
         ReflectionTestUtils.setField(service, "maxRetry", 3);
         when(taskRepo.save(any())).thenAnswer(i -> {
@@ -200,5 +207,69 @@ class TaskServiceSourceQuestionTest {
         verify(interviewService, never()).questionTranscript(any(), any(), anyBoolean());
         verify(attachmentRepo, never()).save(any());
         verify(attachmentStorage, never()).writeText(any(), any());
+        verify(questionAttachmentRepo, never()).findBySessionIdOrderByIdAsc(any());
+    }
+
+    // ── 질문 첨부 승계 (스펙 2026-10-27 §7.5) — 순번·이력만 목으로, 실제 복사는 TaskServiceInheritAttachmentsUnitTest ──
+
+    private static QuestionAttachment qa(long id, Integer turnSeq, String name) {
+        QuestionAttachment a = QuestionAttachment.create(9L, turnSeq, name,
+                "question-9/" + (turnSeq == null ? "create" : turnSeq) + "/1-" + name, "text/plain", 10, null, "asker");
+        ReflectionTestUtils.setField(a, "id", id);
+        return a;
+    }
+
+    @Test
+    void 질문_첨부는_대화_전문_다음_순번으로_승계되고_이력이_남는다() {
+        MockMultipartFile f1 = file("a.txt");
+        when(interviewService.questionTranscript(9L, "user1", false)).thenReturn(TRANSCRIPT);
+        when(attachmentStorage.relativePath(anyLong(), anyInt(), anyString())).thenAnswer(i ->
+                "task-" + i.getArgument(0) + "/" + i.getArgument(1) + "-" + i.getArgument(2));
+        when(attachmentStorage.exists(anyString())).thenReturn(true);
+        when(questionAttachmentRepo.findBySessionIdOrderByIdAsc(9L))
+                .thenReturn(List.of(qa(31L, null, "덱.pptx"), qa(32L, 2, "표.xlsx")));
+
+        service.create(req(9L), List.of(f1), "user1", null, false);
+
+        InOrder order = inOrder(attachmentStorage);
+        order.verify(attachmentStorage).write("task-1/1-a.txt", f1);
+        order.verify(attachmentStorage).writeText("task-1/2-question-9-대화.md", TRANSCRIPT);
+        order.verify(attachmentStorage).copyTree("question-9/create/1-덱.pptx", "task-1/3-덱.pptx");
+        order.verify(attachmentStorage).copyTree("question-9/2/1-표.xlsx", "task-1/4-표.xlsx");
+        ArgumentCaptor<TaskAttachment> atts = ArgumentCaptor.forClass(TaskAttachment.class);
+        verify(attachmentRepo, times(4)).save(atts.capture());
+        assertThat(atts.getAllValues().get(2).getUploadedBy()).isEqualTo("asker");
+        assertThat(atts.getAllValues().get(2).getSourceQuestionAttachmentId()).isEqualTo(31L);
+        assertThat(atts.getAllValues().get(3).getSourceQuestionAttachmentId()).isEqualTo(32L);
+        ArgumentCaptor<TaskStatusHistory> hist = ArgumentCaptor.forClass(TaskStatusHistory.class);
+        verify(historyRepo, times(2)).save(hist.capture());
+        TaskStatusHistory inherit = hist.getAllValues().get(1);
+        assertThat(inherit.getReason()).isEqualTo("질문 #9 첨부 승계: 2개");
+        assertThat(inherit.getFromStatus()).isEqualTo(inherit.getToStatus());   // 같은 상태 로그
+    }
+
+    @Test
+    void JSON_등록도_대화_전문_다음_순번_2부터_승계한다() {
+        when(interviewService.questionTranscript(9L, "user1", false)).thenReturn(TRANSCRIPT);
+        when(attachmentStorage.relativePath(anyLong(), anyInt(), anyString())).thenAnswer(i ->
+                "task-" + i.getArgument(0) + "/" + i.getArgument(1) + "-" + i.getArgument(2));
+        when(attachmentStorage.exists(anyString())).thenReturn(true);
+        when(questionAttachmentRepo.findBySessionIdOrderByIdAsc(9L)).thenReturn(List.of(qa(31L, null, "덱.pptx")));
+
+        service.create(req(9L), "user1", null, false);
+
+        verify(attachmentStorage).copyTree("question-9/create/1-덱.pptx", "task-1/2-덱.pptx");
+    }
+
+    @Test
+    void 질문_첨부가_없으면_승계_이력도_없다() {
+        when(interviewService.questionTranscript(9L, "user1", false)).thenReturn(TRANSCRIPT);
+        when(attachmentStorage.relativePath(1L, 1, "question-9-대화.md")).thenReturn("task-1/1-question-9-대화.md");
+        when(questionAttachmentRepo.findBySessionIdOrderByIdAsc(9L)).thenReturn(List.of());
+
+        service.create(req(9L), "user1", null, false);
+
+        verify(historyRepo, times(1)).save(any());
+        verify(attachmentStorage, never()).copyTree(any(), any());
     }
 }

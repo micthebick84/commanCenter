@@ -61,7 +61,9 @@ class TaskServiceDeployTest {
         stageUsageRepo = mock(TaskStageUsageRepository.class);
         service = new TaskService(taskRepo, analysisRepo, designRepo, historyRepo, mcpCatalogService,
                 repoCatalogService, new ObjectMapper(), interviewService, attachmentRepo, attachmentStorage,
-                stageUsageRepo, mock(DbConnectionService.class));
+                stageUsageRepo, mock(DbConnectionService.class),
+                mock(TikaExtractionService.class), mock(com.hamonsoft.netismaker.service.render.RenderTargetPolicy.class), mock(org.springframework.context.ApplicationEventPublisher.class),
+                mock(com.hamonsoft.netismaker.repository.QuestionAttachmentRepository.class), 200);
         when(historyRepo.save(any())).thenAnswer(i -> i.getArgument(0));
     }
 

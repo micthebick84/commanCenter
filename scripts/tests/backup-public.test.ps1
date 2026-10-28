@@ -63,6 +63,28 @@ try {
     Assert-Equal 0 (@(Compare-RemoteHashes $local $remoteOut)).Count 'hashes: all match (case-insensitive)'
     $diff = @(Compare-RemoteHashes $local "postgres.dump $h1`r`nattachments.zip $('D' * 64)")
     Assert-True (($diff.Count -eq 2) -and ($diff -contains 'attachments.zip') -and ($diff -contains 'manifest.txt')) 'hashes: different and missing are reported' ($diff -join ',')
+
+    # ---- New-AttachmentsZip --------------------------------------------------
+    $tmp = Join-Path ([IO.Path]::GetTempPath()) ("att-zip-test-" + [guid]::NewGuid().ToString('N'))
+    try {
+        $src = Join-Path $tmp 'src'
+        foreach ($d in @('task-1', 'task-1\1-a.pptx.render', '.render-work\x', 'task-2\deep\2-b.render', 'task-2\deep')) {
+            New-Item -ItemType Directory -Force (Join-Path $src $d) | Out-Null
+        }
+        foreach ($f in @('task-1\1-a.pptx', 'task-1\1-a.pptx.render\slide-001.png', '.render-work\x\input.pptx',
+                         'task-2\deep\2-b.render\slide-001.png', 'task-2\deep\keep.txt', 'task-2\notes.render.txt')) {
+            Set-Content -LiteralPath (Join-Path $src $f) -Value 'x' -Encoding ascii
+        }
+        $zipPath = Join-Path $tmp 'attachments.zip'
+        New-AttachmentsZip $src $zipPath
+        Add-Type -AssemblyName System.IO.Compression.FileSystem
+        $zip = [IO.Compression.ZipFile]::OpenRead($zipPath)
+        try { $entries = @($zip.Entries | ForEach-Object { $_.FullName -replace '\\', '/' } | Sort-Object) } finally { $zip.Dispose() }
+        $want = @('task-1/1-a.pptx', 'task-2/deep/keep.txt', 'task-2/notes.render.txt')
+        Assert-Equal ($want -join ',') ($entries -join ',') 'zip: render outputs and .render-work excluded, other files kept'
+    } finally {
+        Remove-Item -LiteralPath $tmp -Recurse -Force -ErrorAction SilentlyContinue
+    }
 }
 catch {
     $script:failures++

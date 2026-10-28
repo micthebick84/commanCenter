@@ -1,6 +1,7 @@
 package com.hamonsoft.netismaker.workerdaemon;
 
 import com.hamonsoft.netismaker.entity.TaskMcpSpec;
+import com.hamonsoft.netismaker.util.StackSecretEnv;
 import jakarta.annotation.PostConstruct;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.annotation.Profile;
@@ -45,17 +46,6 @@ public class ClaudeExecAdapter {
      * 입력에 사용자 텍스트가 섞여도 파일·네트워크에 손댈 수단이 없다(스펙 2026-10-13 §4 ③).
      */
     static final List<String> NO_TOOLS_ARGS = List.of("--strict-mcp-config", "--tools", "");
-
-    /**
-     * claude 자식 프로세스(그리고 그 밑에서 도는 도구·빌드 스크립트·MCP 서버)에 넘기지 않는 스택 비밀.
-     * 워커 자신은 쓰지만(clone/push·PR·API 호출·DNS 등록) 에이전트나 대상 레포의 코드(npm postinstall 등)가 볼
-     * 이유는 없다 — 구현 세션은 권한 우회로 돌아 printenv 한 번이면 그대로 노출된다. claude 로그인(CLAUDE_*)과
-     * 빌드 도구 자체의 토큰은 건드리지 않도록 패턴이 아니라 이 스택이 정의한 이름만 뺀다.
-     * 인터뷰 서비스 쪽 같은 목록: netismaker-interview-service/src/sdk/childEnv.ts — 바꿀 때 같이 바꿀 것.
-     */
-    static final List<String> STACK_SECRET_ENV = List.of(
-            "WORKER_API_KEY", "SPRING_DATASOURCE_PASSWORD", "GITLAB_TOKEN", "GITHUB_PAT", "GH_TOKEN", "GITHUB_TOKEN",
-            "CLOUDFLARE_API_TOKEN", "NETISMAKER_DB_SECRET_KEY", "NETISMAKER_DB_SECRET_SALT", "MAIL_PASSWORD", "PGPASSWORD");
 
     /**
      * 구현 세션 실행 옵션 (스펙 2026-10-15 §6.1·§6.4) — extraArgs는 SDD의 --plugin-dir, env는 에이전트 커밋용 git 작성자.
@@ -263,19 +253,15 @@ public class ClaudeExecAdapter {
     }
 
     /**
-     * 자식 env = 워커 env − {@link #STACK_SECRET_ENV} + extraEnv(같은 키는 extraEnv가 이김).
+     * 자식 env = 워커 env − {@link StackSecretEnv#NAMES} + extraEnv(같은 키는 extraEnv가 이김).
+     * 구현 세션은 권한 우회로 돌아 printenv 한 번이면 env가 그대로 노출된다 — 스택 비밀은 넘기지 않는다.
      * stderr는 따로 읽는다 — redirectErrorStream 쓰지 말 것.
      */
     static ProcessBuilder processBuilder(List<String> cmd, File workingDir, Map<String, String> extraEnv) {
         ProcessBuilder pb = new ProcessBuilder(cmd).directory(workingDir);
-        removeStackSecrets(pb.environment());
+        StackSecretEnv.strip(pb.environment());
         pb.environment().putAll(extraEnv);
         return pb;
-    }
-
-    /** 이름을 대소문자 구분 없이 비교한다 — Windows env는 대소문자를 가리지 않는다. */
-    static void removeStackSecrets(Map<String, String> env) {
-        env.keySet().removeIf(k -> STACK_SECRET_ENV.stream().anyMatch(k::equalsIgnoreCase));
     }
 
     /** 도구·MCP 없이 텍스트만 생성 (종료 노트). 권한 우회 플래그를 쓰지 않는다. */

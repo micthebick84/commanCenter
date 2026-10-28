@@ -258,4 +258,43 @@ class InterviewClaimResponseTest {
         assertThat(json.get("refRepos").isArray()).isTrue();
         assertThat(json.get("refRepos").size()).isZero();
     }
+
+    // ── 첨부 슬라이드 그림 경로 (스펙 2026-10-27 §7) ──────────────────────
+
+    @Test
+    void attachment_ref의_슬라이드_필드는_JSON에_계약_이름으로_실린다() {
+        var ref = new InterviewClaimResponse.AttachmentRef(5L, "발표.pptx", "/abs/발표.pptx", null, 10L,
+                "/abs/발표.pptx.txt", List.of("/abs/발표.pptx.render/slide-001.png"), 12,
+                List.of("/abs/발표.pptx.render/media/image1.png"), null, 77L);
+
+        JsonNode json = new ObjectMapper().findAndRegisterModules().valueToTree(ref);
+
+        assertThat(json.get("slideImagePaths").get(0).asText()).isEqualTo("/abs/발표.pptx.render/slide-001.png");
+        assertThat(json.get("slideTotalPages").asInt()).isEqualTo(12);
+        assertThat(json.get("mediaImagePaths").get(0).asText()).isEqualTo("/abs/발표.pptx.render/media/image1.png");
+        assertThat(json.has("renderNote")).isTrue();
+        assertThat(json.get("renderNote").isNull()).isTrue();
+        assertThat(json.get("inheritedFromQuestionId").asLong()).isEqualTo(77L);
+    }
+
+    @Test
+    void 구_생성자와_null_목록은_빈_목록으로_정규화된다() {
+        var five = new InterviewClaimResponse.AttachmentRef(1L, "a.txt", "/abs/a.txt", "text/plain", 1L);
+        var six = new InterviewClaimResponse.AttachmentRef(2L, "a.docx", "/abs/a.docx", null, 1L, "/abs/a.docx.txt");
+        var nulls = new InterviewClaimResponse.AttachmentRef(3L, "b.pptx", "/abs/b.pptx", null, 1L, null,
+                null, null, null, "슬라이드 그림 없음: 변환 실패", null);
+
+        for (var r : List.of(five, six, nulls)) {
+            assertThat(r.slideImagePaths()).isNotNull().isEmpty();
+            assertThat(r.mediaImagePaths()).isNotNull().isEmpty();
+            assertThat(r.slideTotalPages()).isNull();
+            assertThat(r.inheritedFromQuestionId()).isNull();
+        }
+        assertThat(five.renderNote()).isNull();
+        assertThat(six.extractedTextPath()).isEqualTo("/abs/a.docx.txt");
+        assertThat(nulls.renderNote()).isEqualTo("슬라이드 그림 없음: 변환 실패");
+        JsonNode json = new ObjectMapper().findAndRegisterModules().valueToTree(five);
+        assertThat(json.get("slideImagePaths").isArray()).isTrue();
+        assertThat(json.get("mediaImagePaths").size()).isZero();
+    }
 }

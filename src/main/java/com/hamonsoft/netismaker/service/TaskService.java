@@ -4,8 +4,11 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.hamonsoft.netismaker.dto.ApproveRequest;
 import com.hamonsoft.netismaker.dto.DeployEnvSuggestionResponse;
 import com.hamonsoft.netismaker.dto.TaskCreateRequest;
+import com.hamonsoft.netismaker.entity.AttachmentRendition;
 import com.hamonsoft.netismaker.entity.EnvVar;
+import com.hamonsoft.netismaker.entity.RenderStatus;
 import com.hamonsoft.netismaker.entity.ImplementationMode;
+import com.hamonsoft.netismaker.entity.QuestionAttachment;
 import com.hamonsoft.netismaker.entity.RefRepo;
 import com.hamonsoft.netismaker.entity.Task;
 import com.hamonsoft.netismaker.entity.TaskAnalysis;
@@ -16,12 +19,16 @@ import com.hamonsoft.netismaker.entity.TaskStatus;
 import com.hamonsoft.netismaker.entity.TaskStatusHistory;
 import com.hamonsoft.netismaker.entity.TaskStageUsage;
 import com.hamonsoft.netismaker.git.RepoRef;
+import com.hamonsoft.netismaker.repository.QuestionAttachmentRepository;
 import com.hamonsoft.netismaker.repository.TaskAnalysisRepository;
 import com.hamonsoft.netismaker.repository.TaskAttachmentRepository;
 import com.hamonsoft.netismaker.repository.TaskDesignRepository;
 import com.hamonsoft.netismaker.repository.TaskRepository;
 import com.hamonsoft.netismaker.repository.TaskStageUsageRepository;
 import com.hamonsoft.netismaker.repository.TaskStatusHistoryRepository;
+import com.hamonsoft.netismaker.service.render.AttachmentRenderRequested;
+import com.hamonsoft.netismaker.service.render.RenderTargetPolicy;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.context.annotation.Profile;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.data.domain.Limit;
@@ -78,6 +85,12 @@ public class TaskService {
     private final AttachmentStorage attachmentStorage;
     private final TaskStageUsageRepository stageUsageRepo;
     private final DbConnectionService dbConnectionService;
+    private final TikaExtractionService tika;
+    private final RenderTargetPolicy renderPolicy;
+    private final ApplicationEventPublisher events;
+    private final QuestionAttachmentRepository questionAttachmentRepo;
+    /** 질문 → 작업 첨부 승계 총량 상한(MB, 원본 size_bytes 합) — 스펙 2026-10-27 §7.5. */
+    private final int inheritMaxTotalMb;
 
     @Value("${app.task.user-concurrent-limit:5}")
     private int userConcurrentLimit;
@@ -96,7 +109,12 @@ public class TaskService {
                        TaskAttachmentRepository attachmentRepo,
                        AttachmentStorage attachmentStorage,
                        TaskStageUsageRepository stageUsageRepo,
-                       DbConnectionService dbConnectionService) {
+                       DbConnectionService dbConnectionService,
+                       TikaExtractionService tika,
+                       RenderTargetPolicy renderPolicy,
+                       ApplicationEventPublisher events,
+                       QuestionAttachmentRepository questionAttachmentRepo,
+                       @Value("${app.attachment.inherit-max-total-mb:200}") int inheritMaxTotalMb) {
         this.taskRepo = taskRepo;
         this.analysisRepo = analysisRepo;
         this.designRepo = designRepo;
@@ -109,6 +127,11 @@ public class TaskService {
         this.attachmentStorage = attachmentStorage;
         this.stageUsageRepo = stageUsageRepo;
         this.dbConnectionService = dbConnectionService;
+        this.tika = tika;
+        this.renderPolicy = renderPolicy;
+        this.events = events;
+        this.questionAttachmentRepo = questionAttachmentRepo;
+        this.inheritMaxTotalMb = inheritMaxTotalMb;
     }
 
     @Transactional
@@ -132,6 +155,9 @@ public class TaskService {
         List<String> written = new ArrayList<>();
         try {
             attachTranscript(reg, 1, requesterId, written);
+            // 질문 첨부 승계는 대화 전문 다음 순번부터 (스펙 2026-10-27 §7.5)
+            InheritOutcome inherited = inheritQuestionAttachments(reg.task(), 2, written);
+            if (inherited.renderPending()) events.publishEvent(new AttachmentRenderRequested());
         } catch (RuntimeException e) {
             written.forEach(attachmentStorage::deleteQuietly);
             throw e;   // tx 롤백 → task/메타 행 전부 취소
@@ -168,16 +194,32 @@ public class TaskService {
         List<String> written = new ArrayList<>();
         try {
             int ordinal = 1;
+            boolean pendingRender = false;
             for (MultipartFile f : attached) {
-                String rel = attachmentStorage.relativePath(saved.getId(), ordinal, f.getOriginalFilename());
-                attachmentRepo.save(TaskAttachment.create(saved.getId(),
-                        AttachmentStorage.sanitize(f.getOriginalFilename()), rel,
-                        f.getContentType(), f.getSize(), requesterId));
-                written.add(rel);
+                String name = f.getOriginalFilename();
+                String rel = attachmentStorage.relativePath(saved.getId(), ordinal, name);
+                written.add(rel);   // write보다 먼저 — 반쯤 쓰인 파일도 롤백 때 지운다
                 attachmentStorage.write(rel, f);
+                String extractedRel = null;
+                Optional<String> text = tika.extractText(attachmentStorage.resolve(rel), name);
+                if (text.isPresent()) {
+                    extractedRel = attachmentStorage.extractedTextRelativePath(rel);
+                    written.add(extractedRel);
+                    attachmentStorage.writeText(extractedRel, text.get());
+                }
+                AttachmentRendition rendition = renderPolicy.initial(name);
+                pendingRender |= rendition != null && rendition.getStatus() == RenderStatus.PENDING;
+                attachmentRepo.save(TaskAttachment.create(saved.getId(),
+                        AttachmentStorage.sanitize(name), rel, f.getContentType(), f.getSize(), requesterId,
+                        extractedRel, rendition, null));
                 ordinal++;
             }
             attachTranscript(reg, ordinal, requesterId, written);
+            // 질문 첨부 승계는 대화 전문 다음 순번부터 (스펙 2026-10-27 §7.5)
+            InheritOutcome inherited = inheritQuestionAttachments(saved, ordinal + 1, written);
+            pendingRender |= inherited.renderPending();
+            // 렌더링 대기 첨부가 있으면 업로드당 한 번 깨운다(리스너는 커밋 뒤에 받는다)
+            if (pendingRender) events.publishEvent(new AttachmentRenderRequested());
         } catch (RuntimeException e) {
             written.forEach(attachmentStorage::deleteQuietly);
             throw e;   // tx 롤백 → task/메타 행 전부 취소
@@ -235,6 +277,93 @@ public class TaskService {
                 requesterId));
         written.add(rel);
         attachmentStorage.writeText(rel, reg.transcript());
+    }
+
+    /**
+     * 승계 결과 — 옮긴 개수, 원본이 없어(질문 쪽 정리됨) 뺀 개수, 총량 상한으로 뺀 개수,
+     * 렌더링 대기(PENDING)로 넣은 행이 있는지(호출자가 깨우기 이벤트를 등록당 한 번만 낸다).
+     */
+    record InheritOutcome(int copied, int skippedMissing, int skippedOverLimit, boolean renderPending) {
+        static final InheritOutcome NONE = new InheritOutcome(0, 0, 0, false);
+    }
+
+    /**
+     * 출처 질문의 첨부(등록·추가 질문 턴, id 순)를 작업 첨부로 복사한다 (스펙 2026-10-27 §7.5) — 순번은 firstOrdinal부터.
+     * 원본 → sidecar(있으면) → .render(질문 쪽 DONE이고 폴더가 있으면) 순서로, 각 대상은 복사보다 먼저 정리 목록에 넣는다
+     * (.render는 폴더째). 원본이 없으면 그 첨부만 건너뛰고, 원본 size_bytes 누적이 상한을 넘는 첨부도 건너뛴다(뒤의 작은
+     * 첨부는 계속 본다). 사용자 첨부 한도(validate)에는 세지 않는다. 복사가 실패하면 예외 — 호출자가 정리하고 롤백한다.
+     * 승계 대상이 하나라도 있으면 같은 상태 이력 한 줄, 0개면 이력도 없다.
+     */
+    private InheritOutcome inheritQuestionAttachments(Task saved, int firstOrdinal, List<String> written) {
+        Long questionId = saved.getSourceQuestionId();
+        if (questionId == null) return InheritOutcome.NONE;
+        List<QuestionAttachment> sources = questionAttachmentRepo.findBySessionIdOrderByIdAsc(questionId);
+        if (sources.isEmpty()) return InheritOutcome.NONE;
+        long capBytes = (long) inheritMaxTotalMb * 1024 * 1024;
+        long totalBytes = 0;
+        int ordinal = firstOrdinal;
+        int copied = 0;
+        int skippedMissing = 0;
+        int skippedOverLimit = 0;
+        boolean renderPending = false;
+        for (QuestionAttachment q : sources) {
+            if (!attachmentStorage.exists(q.getStoredPath())) {
+                skippedMissing++;   // 질문 첨부 정리 잡이 이미 지웠다(다운로드 410과 같은 경우)
+                continue;
+            }
+            if (totalBytes + q.getSizeBytes() > capBytes) {
+                skippedOverLimit++;
+                continue;
+            }
+            String name = q.getOriginalFilename();
+            String rel = attachmentStorage.relativePath(saved.getId(), ordinal, name);
+            written.add(rel);   // 복사보다 먼저 — 반쯤 복사된 파일도 롤백 때 지운다
+            attachmentStorage.copyTree(q.getStoredPath(), rel);
+            String extractedRel = null;
+            if (q.getExtractedTextPath() != null && attachmentStorage.exists(q.getExtractedTextPath())) {
+                extractedRel = attachmentStorage.extractedTextRelativePath(rel);
+                written.add(extractedRel);
+                attachmentStorage.copyTree(q.getExtractedTextPath(), extractedRel);
+            }
+            AttachmentRendition rendition = inheritRendition(q, name, rel, written);
+            renderPending |= rendition != null && rendition.getStatus() == RenderStatus.PENDING;
+            attachmentRepo.save(TaskAttachment.create(saved.getId(), AttachmentStorage.sanitize(name), rel,
+                    q.getContentType(), q.getSizeBytes(), q.getUploadedBy(), extractedRel, rendition, q.getId()));
+            totalBytes += q.getSizeBytes();
+            ordinal++;
+            copied++;
+        }
+        int skipped = skippedMissing + skippedOverLimit;
+        String reason = "질문 #" + questionId + " 첨부 승계: " + copied + "개"
+                + (skipped > 0 ? " / 제외 " + skipped + "개(정리됨·용량 상한)" : "");
+        historyRepo.save(TaskStatusHistory.log(saved.getId(), saved.getStatus(), saved.getStatus(),
+                "user", saved.getRequesterId(), reason));
+        return new InheritOutcome(copied, skippedMissing, skippedOverLimit, renderPending);
+    }
+
+    /**
+     * 렌더링 상태 승계 (스펙 2026-10-27 §7.5): DONE이고 .render 폴더가 있으면 폴더를 복사하고 칸 값을 새 경로로 옮긴다.
+     * 질문 쪽이 PENDING·RUNNING이거나 DONE인데 폴더가 없으면 새 첨부처럼 정책 초기값(대상이면 PENDING) — 작업 쪽을 따로
+     * 렌더링한다. SKIPPED(질문 업로드 때 렌더링이 꺼져 있었음)도 정책 초기값 — 지금 켜져 있으면 렌더링한다. FAILED·NONE은 칸 값(사유 포함)을 그대로 옮긴다.
+     */
+    private AttachmentRendition inheritRendition(QuestionAttachment q, String name, String rel, List<String> written) {
+        AttachmentRendition src = q.getRendition();
+        if (src == null) return AttachmentRendition.of(RenderStatus.NONE, null);
+        switch (src.getStatus()) {
+            case DONE -> {
+                if (src.getDir() == null || !attachmentStorage.exists(src.getDir())) return renderPolicy.initial(name);
+                String renderRel = attachmentStorage.renderDirRelativePath(rel);
+                written.add(renderRel);   // 폴더째 지우는 정리 항목(deleteQuietly가 트리째 지운다)
+                attachmentStorage.copyTree(src.getDir(), renderRel);
+                return src.copyWithDir(renderRel);
+            }
+            case PENDING, RUNNING, SKIPPED -> {   // SKIPPED = 질문 업로드 때 렌더링이 꺼져 있었음 — 지금 켜져 있으면 렌더링한다
+                return renderPolicy.initial(name);
+            }
+            default -> {
+                return src.copyWithDir(null);
+            }
+        }
     }
 
     @Transactional(readOnly = true)

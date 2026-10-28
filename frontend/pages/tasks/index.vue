@@ -225,6 +225,9 @@ const submitting = ref(false)
 // 출처 질문(스펙 2026-10-24 §7.2) — 질문 대화의 "이 대화로 작업 등록"으로 들어왔을 때만 있다. 있으면 등록 바디에 sourceQuestionId를 싣고
 // 서버가 대화 전문을 작업 첨부로 붙인다. 창 맨 위 안내 띠의 ✕로 뺄 수 있다(채운 값은 그대로).
 const source = ref<{ id: number; title: string } | null>(null)
+// 질문 첨부 승계 안내(스펙 2026-10-27) — 서버가 질문의 첨부를 작업에 복사한다. 이름 목록은 접어 두고 버튼으로 펼친다.
+const inheritedNames = ref<string[]>([])
+const inheritedOpen = ref(false)
 
 // 참조 repo 줄: 브랜치 선택 바로 아래 편집 칩 줄 + "＋ 참조 추가"가 그 아래에 펼치는 추가 폼(새 질문 화면 B안과 같은 모양).
 // 펼침·후보 제외(대상 + 이미 고른 참조)·추가(접힘)·빼기는 승인 다이얼로그·인터뷰 중 참조 변경과 같은 useRefDraft로.
@@ -385,6 +388,8 @@ async function openCreate() {
   draft.title = ''
   draft.description = ''
   source.value = null
+  inheritedNames.value = []
+  inheritedOpen.value = false
   resetRefs() // 참조를 비우고 추가 폼을 접는다
   draftFiles.value = []
   resetBranchState()
@@ -418,6 +423,7 @@ async function prefillFromQuestion() {
   draft.title = p.title
   resetRefs(p.refRepos)
   source.value = { id, title: q.title }
+  inheritedNames.value = p.attachmentNames
   if (p.repoCatalogId != null) {
     draft.repoCatalogId = p.repoCatalogId
     onRepoSelected(p.repoCatalogId, p.branch) // 브랜치는 목록이 온 뒤 — 카탈로그 기본 브랜치보다 나중에 적용된다
@@ -751,6 +757,21 @@ const fullscreen = useFullscreenDialog()
                 />
               </template>
             </q-banner>
+            <div v-if="inheritedNames.length > 0" class="q-mt-xs text-caption" data-test="inherited-attachments">
+              질문 첨부 {{ inheritedNames.length }}개가 함께 등록됩니다
+              <q-btn
+                flat
+                dense
+                no-caps
+                size="sm"
+                :label="inheritedOpen ? '접기' : '목록 보기'"
+                data-test="inherited-attachments-toggle"
+                @click="inheritedOpen = !inheritedOpen"
+              />
+              <ul v-if="inheritedOpen" class="q-my-none q-pl-md">
+                <li v-for="(n, i) in inheritedNames" :key="i" data-test="inherited-attachment-name">{{ n }}</li>
+              </ul>
+            </div>
           </q-card-section>
           <q-card-section class="q-gutter-md">
             <q-select

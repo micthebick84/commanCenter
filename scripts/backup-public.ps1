@@ -1,7 +1,8 @@
 # Backs up the live data of this PC's netisMaker stack (Windows PowerShell 5.1+).
 #   1) pg_dump (custom format) of the stack database: schema com (Symphony) and public (netis-auth),
 #      checked afterwards with pg_restore --list
-#   2) the attachments folder (app.attachment.dir) as attachments.zip
+#   2) the attachments folder (app.attachment.dir) as attachments.zip, without the regenerable slide-render
+#      output (.render-work folders and folders named *.render)
 #   3) manifest.txt: sizes, SHA-256, git HEAD of commanCenter and netis-auth
 # into <BACKUP_DIR>\<yyyyMMdd-HHmmss>\, keeping BACKUP_KEEP_DAYS days of them. With BACKUP_REMOTE
 # (user@host of a Windows OpenSSH server, key auth) the folder is also copied with scp to
@@ -111,6 +112,34 @@ function Invoke-RemotePs([string]$Remote, [string]$Script) {
         "powershell -NoProfile -NonInteractive -EncodedCommand $enc")
 }
 
+# Zips $SourceDir into $ZipPath (entries relative to $SourceDir, '/' separators) without the regenerable
+# slide-render output: any directory named .render-work or whose name ends with .render, at any depth.
+function New-AttachmentsZip([string]$SourceDir, [string]$ZipPath) {
+    Add-Type -AssemblyName System.IO.Compression
+    Add-Type -AssemblyName System.IO.Compression.FileSystem
+    $base = (Get-Item -LiteralPath $SourceDir).FullName.TrimEnd('\')
+    $fs = [IO.File]::Open($ZipPath, [IO.FileMode]::CreateNew, [IO.FileAccess]::Write)
+    try {
+        $zip = New-Object IO.Compression.ZipArchive($fs, [IO.Compression.ZipArchiveMode]::Create, $false)
+        try {
+            $stack = New-Object 'System.Collections.Generic.Stack[string]'
+            $stack.Push($base)
+            while ($stack.Count -gt 0) {
+                $dir = $stack.Pop()
+                foreach ($d in @(Get-ChildItem -LiteralPath $dir -Directory -Force)) {
+                    if ($d.Name -eq '.render-work' -or $d.Name.EndsWith('.render')) { continue }
+                    $stack.Push($d.FullName)
+                }
+                foreach ($f in @(Get-ChildItem -LiteralPath $dir -File -Force)) {
+                    $entry = $f.FullName.Substring($base.Length + 1).Replace('\', '/')
+                    [void][IO.Compression.ZipFileExtensions]::CreateEntryFromFile($zip, $f.FullName, $entry,
+                        [IO.Compression.CompressionLevel]::Optimal)
+                }
+            }
+        } finally { $zip.Dispose() }
+    } finally { $fs.Dispose() }
+}
+
 if ($MyInvocation.InvocationName -eq '.') { return }   # dot-sourced by the tests: helpers only
 
 # ---- backup -------------------------------------------------------------------
@@ -172,9 +201,7 @@ try {
 
     # 2) attachments
     if (Test-Path -LiteralPath $attDir) {
-        Add-Type -AssemblyName System.IO.Compression.FileSystem
-        [IO.Compression.ZipFile]::CreateFromDirectory($attDir, (Join-Path $dest 'attachments.zip'),
-            [IO.Compression.CompressionLevel]::Optimal, $false)
+        New-AttachmentsZip $attDir (Join-Path $dest 'attachments.zip')
     } else {
         Write-Log "[..]   no attachments folder ($attDir) - skipped"
     }

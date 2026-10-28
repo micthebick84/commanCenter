@@ -45,8 +45,27 @@ public class TaskAttachment {
     @Column(name = "created_at", nullable = false, updatable = false)
     private OffsetDateTime createdAt;
 
+    /** 추출 텍스트 sidecar 상대경로 — 질문 첨부 승계분 등, 없으면 null. */
+    @Column(name = "extracted_text_path", length = 500)
+    private String extractedTextPath;
+
+    /** 질문 첨부에서 승계된 경우 그 질문 첨부 id (스펙 2026-10-27). */
+    @Column(name = "source_question_attachment_id")
+    private Long sourceQuestionAttachmentId;
+
+    @Embedded
+    private AttachmentRendition rendition = AttachmentRendition.of(RenderStatus.NONE, null);
+
     public static TaskAttachment create(Long taskId, String originalFilename, String storedPath,
                                         String contentType, long sizeBytes, String uploadedBy) {
+        return create(taskId, originalFilename, storedPath, contentType, sizeBytes, uploadedBy,
+                null, AttachmentRendition.of(RenderStatus.NONE, null), null);
+    }
+
+    public static TaskAttachment create(Long taskId, String originalFilename, String storedPath,
+                                        String contentType, long sizeBytes, String uploadedBy,
+                                        String extractedTextPath, AttachmentRendition rendition,
+                                        Long sourceQuestionAttachmentId) {
         TaskAttachment a = new TaskAttachment();
         a.taskId = taskId;
         a.originalFilename = originalFilename;
@@ -55,6 +74,9 @@ public class TaskAttachment {
         a.sizeBytes = sizeBytes;
         a.uploadedBy = uploadedBy;
         a.createdAt = OffsetDateTime.now();
+        a.extractedTextPath = extractedTextPath;
+        a.rendition = rendition != null ? rendition : AttachmentRendition.of(RenderStatus.NONE, null);
+        a.sourceQuestionAttachmentId = sourceQuestionAttachmentId;
         return a;
     }
 }

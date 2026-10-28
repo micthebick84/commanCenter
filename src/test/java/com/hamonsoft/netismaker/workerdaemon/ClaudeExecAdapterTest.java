@@ -137,22 +137,13 @@ class ClaudeExecAdapterTest {
         assertThat(pb.directory()).isEqualTo(new java.io.File("."));
     }
 
-    @Test
-    void stack_secrets_are_removed_case_insensitively_and_everything_else_stays() {
-        java.util.Map<String, String> env = new java.util.HashMap<>(java.util.Map.of(
-                "GITLAB_TOKEN", "glpat-x", "worker_api_key", "k", "Spring_Datasource_Password", "pw",
-                "NETISMAKER_DB_SECRET_KEY", "key", "PATH", "C:/bin", "CLAUDE_CODE_OAUTH_TOKEN", "keep",
-                "NPM_TOKEN", "keep", "DOCKER_HOST", "ssh://x"));
-        ClaudeExecAdapter.removeStackSecrets(env);
-        assertThat(env).containsOnlyKeys("PATH", "CLAUDE_CODE_OAUTH_TOKEN", "NPM_TOKEN", "DOCKER_HOST");
-    }
-
+    // 대소문자 무시 제거 규칙 자체는 util/StackSecretEnvTest가 본다.
     @Test
     void process_builder_drops_stack_secrets_but_the_caller_can_still_pass_its_own_env() {
         ProcessBuilder pb = ClaudeExecAdapter.processBuilder(List.of("claude"), new java.io.File("."),
                 java.util.Map.of("GIT_AUTHOR_NAME", "netisMaker"));
         assertThat(pb.environment().keySet())
-                .noneMatch(k -> ClaudeExecAdapter.STACK_SECRET_ENV.stream().anyMatch(k::equalsIgnoreCase));
+                .noneMatch(k -> com.hamonsoft.netismaker.util.StackSecretEnv.NAMES.stream().anyMatch(k::equalsIgnoreCase));
         assertThat(pb.environment()).containsEntry("GIT_AUTHOR_NAME", "netisMaker").containsKey("PATH");
     }
 

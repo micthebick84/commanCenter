@@ -63,6 +63,22 @@ public class RepoCatalogEntry {
     @Column(name = "artifact_path", length = 500)
     private String artifactPath;
 
+    /** 배포 전 워커가 레포 명령으로 먼저 빌드할지 (스펙 2026-10-28 §4). 꺼져 있어도 아래 값은 보존한다. */
+    @Column(name = "prebuild_enabled", nullable = false)
+    private boolean prebuildEnabled;
+
+    /** 미리 빌드 명령(한 줄). */
+    @Column(name = "prebuild_command", columnDefinition = "TEXT")
+    private String prebuildCommand;
+
+    /** 빌드 뒤 가져올 산출물 경로(레포 안 상대, 마지막 이름에만 *). */
+    @Column(name = "prebuild_artifact", length = 500)
+    private String prebuildArtifact;
+
+    /** 워커 설정의 도구 이름(JDK·Maven 묶음). null이면 워커 환경 그대로. */
+    @Column(name = "prebuild_toolchain", length = 50)
+    private String prebuildToolchain;
+
     @Column(name = "created_by", length = 20)
     private String createdBy;
 

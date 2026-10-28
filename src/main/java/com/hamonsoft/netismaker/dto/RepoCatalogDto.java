@@ -22,19 +22,25 @@ public class RepoCatalogDto {
             OffsetDateTime createdAt,
             OffsetDateTime updatedAt,
             boolean artifactEnabled,
-            String artifactPath
+            String artifactPath,
+            boolean prebuildEnabled,
+            String prebuildCommand,
+            String prebuildArtifact,
+            String prebuildToolchain
     ) {
         public static View of(RepoCatalogEntry e) {
             return new View(e.getId(), e.getAlias(), e.getGitUrl(), e.getHost(), e.getOwnerRepo(),
                     e.getDefaultBranch(), e.getDescription(), e.isEnabled(),
-                    e.getCreatedBy(), e.getCreatedAt(), e.getUpdatedAt(), e.isArtifactEnabled(), e.getArtifactPath());
+                    e.getCreatedBy(), e.getCreatedAt(), e.getUpdatedAt(), e.isArtifactEnabled(), e.getArtifactPath(),
+                    e.isPrebuildEnabled(), e.getPrebuildCommand(), e.getPrebuildArtifact(), e.getPrebuildToolchain());
         }
 
         /** host/ownerRepo를 저장값 대신 현재 설정으로 재해석한 값으로 내보낸다(스펙 §3.3). */
         public static View of(RepoCatalogEntry e, String host, String ownerRepo) {
             return new View(e.getId(), e.getAlias(), e.getGitUrl(), host, ownerRepo,
                     e.getDefaultBranch(), e.getDescription(), e.isEnabled(),
-                    e.getCreatedBy(), e.getCreatedAt(), e.getUpdatedAt(), e.isArtifactEnabled(), e.getArtifactPath());
+                    e.getCreatedBy(), e.getCreatedAt(), e.getUpdatedAt(), e.isArtifactEnabled(), e.getArtifactPath(),
+                    e.isPrebuildEnabled(), e.getPrebuildCommand(), e.getPrebuildArtifact(), e.getPrebuildToolchain());
         }
     }
 
@@ -59,9 +65,28 @@ public class RepoCatalogDto {
             Boolean artifactEnabled,
 
             @Size(max = 500)
-            String artifactPath
+            String artifactPath,
+
+            /** 배포 전 미리 빌드 (스펙 2026-10-28 §4). null이면 미리 빌드 4개 값을 바꾸지 않는다. */
+            Boolean prebuildEnabled,
+
+            @Size(max = 4000)
+            String prebuildCommand,
+
+            @Size(max = 500)
+            String prebuildArtifact,
+
+            @Size(max = 50)
+            String prebuildToolchain
     ) {
-        /** 산출물 설정 도입 전 5개 인자 — 기존 호출부·테스트 호환(산출물 설정 유지). */
+        /** 미리 빌드 설정 도입 전 7개 인자 — 기존 호출부·테스트 호환(미리 빌드 설정 유지). */
+        public UpsertRequest(String alias, String gitUrl, String defaultBranch, String description, Boolean enabled,
+                             Boolean artifactEnabled, String artifactPath) {
+            this(alias, gitUrl, defaultBranch, description, enabled, artifactEnabled, artifactPath,
+                    null, null, null, null);
+        }
+
+        /** 산출물 설정 도입 전 5개 인자 — 기존 호출부·테스트 호환(산출물·미리 빌드 설정 유지). */
         public UpsertRequest(String alias, String gitUrl, String defaultBranch, String description, Boolean enabled) {
             this(alias, gitUrl, defaultBranch, description, enabled, null, null);
         }

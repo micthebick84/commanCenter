@@ -81,7 +81,7 @@ DB 연결과 같은 구조다. 연결(또는 배포 작업)마다 `createSdkMcpS
 
 ## 5. SSH 연결 도구 (`ssh-<id>`)
 
-### 5.1 데이터 — `V35`의 `com.ssh_connection`
+### 5.1 데이터 — `V36__ssh_connection.sql`(PR-B)
 
 ```sql
 CREATE TABLE IF NOT EXISTS com.ssh_connection (
@@ -114,13 +114,19 @@ CREATE TABLE IF NOT EXISTS com.ssh_connection (
 CREATE INDEX IF NOT EXISTS idx_ssh_connection_repo ON com.ssh_connection(repo_catalog_id);
 
 ALTER TABLE com.interview_session
-    ADD COLUMN IF NOT EXISTS ssh_connection_ids JSONB   NOT NULL DEFAULT '[]'::jsonb,
-    ADD COLUMN IF NOT EXISTS deploy_task_ids    JSONB   NOT NULL DEFAULT '[]'::jsonb,
-    ADD COLUMN IF NOT EXISTS owner_is_admin     BOOLEAN NOT NULL DEFAULT false;
+    ADD COLUMN IF NOT EXISTS ssh_connection_ids JSONB NOT NULL DEFAULT '[]'::jsonb;
+```
+
+PR-A(배포 작업 도구)의 V35는 이것만 더한다:
+
+```sql
+ALTER TABLE com.interview_session
+    ADD COLUMN IF NOT EXISTS deploy_task_ids JSONB   NOT NULL DEFAULT '[]'::jsonb,
+    ADD COLUMN IF NOT EXISTS owner_is_admin  BOOLEAN NOT NULL DEFAULT false;
 ```
 
 - 세션에는 id만 둔다(V24와 같은 이유 — 비밀을 세션 행마다 복제하지 않는다).
-- `owner_is_admin`: 질문 등록 때 요청자(= 소유자)의 관리자 여부를 박제한다. `QuestionService.create`는 지금 관리자 여부를 받지 않으므로(`QuestionService.java:112,146`) 컨트롤러에서 넘기도록 시그니처를 늘린다. 이 값이 있어야 선택 검증과 claim이 같은 규칙(§5.3)을 쓸 수 있다. 등록 뒤 관리자 권한이 바뀌어도 반영하지 않는다(남는 한계).
+- `owner_is_admin`(V35, PR-A에서 먼저 들어간다): 질문 등록 때 요청자(= 소유자)의 관리자 여부를 박제한다. `QuestionService.create`는 지금 관리자 여부를 받지 않으므로(`QuestionService.java:112,146`) 컨트롤러에서 넘기도록 시그니처를 늘린다. 이 값이 있어야 선택 검증과 claim이 같은 규칙(§5.3)을 쓸 수 있다. 등록 뒤 관리자 권한이 바뀌어도 반영하지 않는다(남는 한계).
 - 거부 이름 목록은 코드 상수(§5.5)이고 연결별로 늘리지 않는다.
 
 ### 5.2 암호화 — `SshSecretCipher`
@@ -274,8 +280,7 @@ DB 연결 화면 패턴(`frontend/components/DbConnectionPicker.vue`·`DbConnect
 **1단계 = PR 두 개(배포 작업 도구 먼저)**
 
 - **PR-A 배포 작업 도구**(약 1.5–2일): V35의 `deploy_task_ids`·`owner_is_admin`, 등록·`ask` 검증과 note, claim `withDeploy`, `deployMcp.ts`·`deployToolGate`·`deploySection`·활동 요약, `DeployTaskPicker`·칩, 테스트. 새 비밀·라이브러리 없음.
-- **PR-B SSH 연결**(약 3–4일): V36의 `com.ssh_connection`·`ssh_connection_ids`(PR-A가 먼저 병합되므로 마이그레이션을 나눈다), `SshSecretCipher`·스택 비밀 목록, CRUD·접속 테스트(`sshj`)·허용 대역, 선택 권한, claim `withSsh`, `ssh2`·`sshMcp.ts`·`sshToolGate`·`sshSection`·가리기·활동 요약, 다이얼로그·픽커·관리자 화면, 테스트. (위 §5.1의 SQL은 PR-B에서 V36으로 들어간다. PR-A의 V35는 `interview_session`의 `deploy_task_ids`·`owner_is_admin` 두 칸만.)
-
+- **PR-B SSH 연결**(약 3–4일): V36의 `com.ssh_connection`·`ssh_connection_ids`(PR-A가 먼저 병합되므로 마이그레이션을 나눈다), `SshSecretCipher`·스택 비밀 목록, CRUD·접속 테스트(`sshj`)·허용 대역, 선택 권한, claim `withSsh`, `ssh2`·`sshMcp.ts`·`sshToolGate`·`sshSection`·가리기·활동 요약, 다이얼로그·픽커·관리자 화면, 테스트.
 **배포 순서**
 
 - PR-A: API(V35) → 인터뷰 서비스(진행 중 턴 없을 때 재기동) → 프론트 `.output` 재빌드. 구버전 러너는 `deployTargets`를 모르는 필드로 버리고 도구 없이 답하므로 순서가 바뀌어도 위험하지 않다.

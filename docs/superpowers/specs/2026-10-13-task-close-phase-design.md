@@ -87,6 +87,7 @@
 - `claude -p`를 **레포 밖 빈 폴더** `~/netis-maker/close/task-{id}`에서 1회 실행. 프롬프트(설정 `close.note-prompt-template`, 기본값 코드 내장)는 worklog 노트 형식(배경·한 일·결정과 근거·검증·남은 일, 한국어)으로 **마크다운 본문만 stdout에 출력**하게 한다. 모델은 설정 `CLOSE_NOTE_MODEL`(기본 sonnet), 타임아웃 10분.
 - **도구 없이 실행하고 파일은 워커가 쓴다.** (§9 검토 요청 1) 노트 재료에는 사용자 입력(설명·플랜)이 섞이므로, 쓰기 도구를 쥔 세션이 볼트의 다른 위치를 고치는 경로를 없앤다. 내장 도구 비활성 + MCP 미주입(정확한 CLI 플래그는 계획 단계에서 실측).
 - 워커가 볼트에 직접 쓴다: `{CLOSE_OBSIDIAN_VAULT_DIR}/HamonSoft/netisMaker/<제목 슬러그>-작업{id}-YYYY-MM-DD.md`(작업 id로 같은 날 같은 제목 충돌 회피, 같은 경로가 있으면 덮어씀 — 재시도 멱등). 프런트매터에 `task_id`, `pr`, `merge_commit`, `closed` 날짜, 태그 `netismaker/작업종료`.
+- (2026-10-28 변경) 노트 폴더는 이제 레포 기준이다 — 카탈로그 `note_folder`, 비면 Claude가 볼트 기존 폴더에서 고르거나 `HamonSoft/<별칭>`, 진행상황 노트만 `CLOSE_NOTE_FOLDER`에 남는다. `docs/superpowers/specs/2026-10-28-close-note-folder-by-repo-design.md`.
 - 같은 폴더의 `netisMaker-진행상황-YYYY-MM-DD.md`에 `- [[노트 이름]] — 작업 {id} 종료(병합 {sha7})` 한 줄을 덧붙인다(없으면 만든다, 같은 줄이 있으면 생략 — 멱등).
 - 비밀 마스킹: 프롬프트에 규칙을 넣고, 워커가 파일에 쓰기 전 `GitRemotes.mask`/`maskSecrets`를 한 번 더 통과시킨다.
 - 노트 경로(볼트 상대)를 진행 보고에 실어 `task.close_note_path`에 저장.

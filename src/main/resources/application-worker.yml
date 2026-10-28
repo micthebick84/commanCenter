@@ -58,6 +58,8 @@ netis-maker:
       retention-days: ${WORKTREE_CLEANUP_RETENTION_DAYS:7}
     # 작업 종료(kind=CLOSE) — PR 병합 → 배포 중지 → 옵시디언 노트 → 브랜치 정리 (스펙 2026-10-13).
     # obsidian-vault-dir가 비면 노트 단계에서 종료실패가 된다(볼트가 이 워커 PC에 있어야 한다).
+    # note-folder = 진행상황 노트 폴더 겸 레포 별칭이 없을 때의 노트 폴더. 노트 자체는 레포 카탈로그의 노트 폴더(비면 첫 단계
+    #   '{note-folder 첫 단계}/' 아래 기존 폴더 중 Claude가 고르거나 그 아래 별칭 폴더)에 쓴다 (스펙 2026-10-28 close-note-folder).
     close:
       obsidian-vault-dir: ${CLOSE_OBSIDIAN_VAULT_DIR:}
       note-folder: ${CLOSE_NOTE_FOLDER:HamonSoft/netisMaker}

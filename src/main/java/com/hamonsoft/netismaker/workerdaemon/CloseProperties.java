@@ -10,7 +10,8 @@ import java.util.Set;
 /**
  * 작업 종료(kind=CLOSE) 설정 (스펙 2026-10-13 §4). WorkerProperties와 분리 — 기존 생성자 호출부를 건드리지 않는다.
  *  obsidian-vault-dir  볼트 루트. 비면 노트 단계가 '미설정'으로 실패한다(종료실패 → 설정 후 재시도).
- *  note-folder         볼트 안 노트 폴더(작업정리 관례: HamonSoft/netisMaker)
+ *  note-folder         진행상황 노트 폴더(기본 HamonSoft/netisMaker). 레포 별칭이 없을 때의 노트 폴더이고, 첫 단계(HamonSoft)는
+ *                      노트 폴더 후보 루트다 — 노트는 레포 기준 폴더에 쓴다(스펙 2026-10-28 close-note-folder)
  *  merge-method        merge | squash | rebase (GitLab은 rebase를 merge로 취급)
  */
 @ConfigurationProperties(prefix = "netis-maker.worker.close")

@@ -110,7 +110,7 @@ app:
     implementation-timeout-minutes: 45                  # 방식별 워커 claude 상한 — claim 때 작업에 기록해 보낸다
     implementation-review-timeout-minutes: 80
     implementation-sdd-timeout-minutes: 240
-    deploy-stale-threshold-minutes: 15
+    deploy-stale-threshold-minutes: 70         # 워커 dockerfile 10m + 미리 빌드 20m + build 30m + 여유 — application-worker.yml deploy 상한과 같이 볼 것
     design-stale-threshold-minutes: 30         # 디자인 생성(목업+DesignSync 업로드) 처리 시간 초과
     close-stale-threshold-minutes: 60          # 종료(병합·배포 중지·산출물 꺼내기·업로드·노트 claude 10분·정리) 처리 시간 초과 → 종료대기로 재큐잉
     worker-dead-threshold-seconds: 60          # 분석 단계 heartbeat 사망 판정

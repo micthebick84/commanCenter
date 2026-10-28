@@ -46,7 +46,7 @@ public class StaleTaskRecoveryJob {
     @Value("${app.task.stale-threshold-minutes:5}")
     private int analysisStaleThresholdMinutes;
 
-    @Value("${app.task.deploy-stale-threshold-minutes:15}")
+    @Value("${app.task.deploy-stale-threshold-minutes:70}")
     private int deployStaleThresholdMinutes;
 
     @Value("${app.task.worker-dead-threshold-seconds:60}")

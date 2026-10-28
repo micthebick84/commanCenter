@@ -79,6 +79,10 @@ describe('admin/repo-catalog', () => {
         enabled: true,
         artifactEnabled: false,
         artifactPath: null,
+        prebuildEnabled: false,
+        prebuildCommand: null,
+        prebuildArtifact: null,
+        prebuildToolchain: null,
       },
     })
     w.unmount()
@@ -110,6 +114,101 @@ describe('admin/repo-catalog', () => {
       method: 'POST',
       body: expect.objectContaining({ artifactEnabled: true, artifactPath: '/usr/local/tomcat/webapps/ROOT.war' }),
     }))
+    w.unmount()
+  })
+
+  function setInput(sel: string, value: string) {
+    const el = document.querySelector(sel) as HTMLInputElement
+    el.value = value
+    el.dispatchEvent(new Event('input'))
+  }
+
+  async function fillRequired() {
+    setInput('[data-test="form-alias"]', '동부병원')
+    setInput('[data-test="form-giturl"]', 'owner/netisdash')
+    await flushPromises()
+  }
+
+  it('미리 빌드를 켜면 세 입력이 보이고 함께 보낸다', async () => {
+    const w = await mountPage([])
+    await w.find('[data-test="open-create"]').trigger('click')
+    await flushPromises()
+    await fillRequired()
+    expect(document.querySelector('[data-test="form-prebuild-command"]')).toBeNull()
+    expect(document.querySelector('[data-test="form-prebuild-artifact"]')).toBeNull()
+    expect(document.querySelector('[data-test="form-prebuild-toolchain"]')).toBeNull()
+    ;(document.querySelector('[data-test="form-prebuild-enabled"]') as HTMLElement).click()
+    await flushPromises()
+    setInput('[data-test="form-prebuild-command"]', ' mvn -B -o package ')
+    setInput('[data-test="form-prebuild-artifact"]', 'hm-dash/target/*.war')
+    setInput('[data-test="form-prebuild-toolchain"]', 'jdk8-maven')
+    await flushPromises()
+
+    useApiMock.mockResolvedValueOnce({})
+    useApiMock.mockResolvedValueOnce([])
+    ;(document.querySelector('[data-test="form-submit"]') as HTMLElement).click()
+    await flushPromises()
+    expect(useApiMock).toHaveBeenCalledWith('/api/admin/repo-catalog', expect.objectContaining({
+      method: 'POST',
+      body: expect.objectContaining({
+        prebuildEnabled: true,
+        prebuildCommand: 'mvn -B -o package',
+        prebuildArtifact: 'hm-dash/target/*.war',
+        prebuildToolchain: 'jdk8-maven',
+      }),
+    }))
+    w.unmount()
+  })
+
+  it('도구 이름을 비우면 prebuildToolchain은 null로 보낸다', async () => {
+    const w = await mountPage([])
+    await w.find('[data-test="open-create"]').trigger('click')
+    await flushPromises()
+    await fillRequired()
+    ;(document.querySelector('[data-test="form-prebuild-enabled"]') as HTMLElement).click()
+    await flushPromises()
+    setInput('[data-test="form-prebuild-command"]', 'mvn -B -o package')
+    setInput('[data-test="form-prebuild-artifact"]', 'hm-dash/target/*.war')
+    await flushPromises()
+
+    useApiMock.mockResolvedValueOnce({})
+    useApiMock.mockResolvedValueOnce([])
+    ;(document.querySelector('[data-test="form-submit"]') as HTMLElement).click()
+    await flushPromises()
+    expect(useApiMock).toHaveBeenCalledWith('/api/admin/repo-catalog', expect.objectContaining({
+      body: expect.objectContaining({ prebuildEnabled: true, prebuildToolchain: null }),
+    }))
+    w.unmount()
+  })
+
+  const prebuildRow = {
+    id: 9, alias: '동부병원', gitUrl: 'https://gitlab.hamon.vip/g/p.git', host: 'gitlab',
+    ownerRepo: 'g/p', defaultBranch: null, description: null, enabled: true,
+    createdBy: 'admin', createdAt: '', updatedAt: '',
+    artifactEnabled: false, artifactPath: null,
+    prebuildEnabled: true, prebuildCommand: 'mvn -B -o package',
+    prebuildArtifact: 'hm-dash/target/*.war', prebuildToolchain: 'jdk8-maven',
+  }
+
+  it('켜진 항목에만 목록에 미리 빌드 칩이 보인다', async () => {
+    const w = await mountPage([
+      prebuildRow,
+      { ...prebuildRow, id: 10, alias: '꺼진 레포', prebuildEnabled: false, prebuildCommand: null, prebuildArtifact: null, prebuildToolchain: null },
+    ])
+    const chips = w.findAll('[data-test="catalog-prebuild-chip"]')
+    expect(chips).toHaveLength(1)
+    expect(chips[0].text()).toBe('미리 빌드')
+    w.unmount()
+  })
+
+  it('수정 다이얼로그가 기존 미리 빌드 값을 채운다', async () => {
+    const w = await mountPage([prebuildRow])
+    const editBtn = w.findAll('button').find((b) => b.find('.q-icon').text() === 'edit')
+    await editBtn!.trigger('click')
+    await flushPromises()
+    expect((document.querySelector('[data-test="form-prebuild-command"]') as HTMLInputElement).value).toBe('mvn -B -o package')
+    expect((document.querySelector('[data-test="form-prebuild-artifact"]') as HTMLInputElement).value).toBe('hm-dash/target/*.war')
+    expect((document.querySelector('[data-test="form-prebuild-toolchain"]') as HTMLInputElement).value).toBe('jdk8-maven')
     w.unmount()
   })
 })

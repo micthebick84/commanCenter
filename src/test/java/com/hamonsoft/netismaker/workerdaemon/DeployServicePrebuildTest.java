@@ -181,6 +181,45 @@ class DeployServicePrebuildTest {
     }
 
     @Test
+    void 성공하면_긴_빌드_출력은_화면으로만_가고_deploy_log에는_요약_줄만_남는다() throws Exception {
+        when(prebuilder.run(eq(SPEC), any(), any())).thenAnswer(inv -> {
+            Consumer<String> out = inv.getArgument(2);
+            out.accept("[미리 빌드] $ mvn package (도구=jdk8-maven)");
+            for (int i = 0; i < 20_000; i++) out.accept("[INFO] building module " + i);
+            out.accept("[미리 빌드 산출물] hm-dash/target/hm-dash.war (0.0MB) → .netis-prebuild/hm-dash.war");
+            return STAGED;
+        });
+        Files.writeString(wt.toPath().resolve("Dockerfile"), "FROM x\nCOPY .netis-prebuild/hm-dash.war /a.war\n");
+
+        var result = service().deploy(task(SPEC), sink::add);
+
+        assertThat(sink).hasSize(20_002).contains("[INFO] building module 19999");
+        assertThat(result.log()).doesNotContain("[INFO] building module")
+                .contains("[미리 빌드] $ mvn package").contains("[미리 빌드 산출물] hm-dash/target/hm-dash.war");
+    }
+
+    @Test
+    void 실패하면_꼬리는_deploy_log에_한_번만_나온다() throws Exception {
+        when(prebuilder.run(any(), any(), any())).thenAnswer(inv -> {
+            Consumer<String> out = inv.getArgument(2);
+            out.accept("[미리 빌드] $ mvn package (도구=jdk8-maven)");
+            for (int i = 0; i < 1000; i++) out.accept("[INFO] line " + i);
+            out.accept("[ERROR] TAILMARK compile error");
+            throw new DeployPrebuilder.PrebuildException("미리 빌드 실패 (exit=1)",
+                    "[INFO] line 999\n[ERROR] TAILMARK compile error\n");
+        });
+
+        assertThatThrownBy(() -> service().deploy(task(SPEC), sink::add))
+                .isInstanceOfSatisfying(DeployService.DeployException.class, e -> {
+                    String log = e.getDeployLog();
+                    assertThat(log).contains("[미리 빌드] $ mvn package");
+                    assertThat(log.split("TAILMARK", -1)).hasSize(2);   // 정확히 한 번
+                    assertThat(log).doesNotContain("[INFO] line 0\n").doesNotContain("[INFO] line 500\n");
+                });
+        assertThat(sink).hasSize(1002);   // 화면 스트림에는 전부
+    }
+
+    @Test
     void 생성이_실패하면_dockerignore를_쓰지_않는다() throws Exception {
         prebuilderStages();
         when(claude.exec(anyString(), any(), any(), anyList(), anyBoolean()))

@@ -74,7 +74,8 @@ public class DeployService {
             Path dockerfile = wt.toPath().resolve("Dockerfile");
 
             // 미리 빌드 — Dockerfile 확인·생성보다 먼저(생성 프롬프트가 산출물 이름을 쓴다).
-            // 줄은 화면 배포 로그(logSink)와 결과 로그(log) 둘 다에 남긴다.
+            // 출력 줄은 전부 화면 배포 로그(logSink)로 흘리고, 결과 로그(log → deploy_log)에는 실행기의 요약 줄([미리 빌드…)만 남긴다
+            // — 빌드 출력 전체는 상한이 없다. 실패하면 PrebuildException의 꼬리 8000자를 한 번만 붙인다.
             WorkerTaskResponse.PrebuildSpec prebuild = task.prebuild();
             DeployPrebuilder.Staged staged = null;
             if (prebuild != null) {
@@ -83,11 +84,10 @@ public class DeployService {
                 }
                 try {
                     staged = prebuilder.run(prebuild, wt.toPath(), line -> {
-                        log.append(line).append('\n');
+                        if (line.startsWith("[미리 빌드")) log.append(line).append('\n');
                         logSink.accept(line);
                     });
                 } catch (DeployPrebuilder.PrebuildException e) {
-                    // 사유는 그대로, 출력 꼬리(8000자)는 deploy_log에 — 이미 쌓인 줄과 겹칠 수 있지만 시간 초과 때도 꼬리가 남는다.
                     throw new DeployException(e.getMessage(), log + e.getLogTail());
                 }
             }

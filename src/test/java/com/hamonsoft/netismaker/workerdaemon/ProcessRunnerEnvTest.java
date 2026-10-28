@@ -70,6 +70,17 @@ class ProcessRunnerEnvTest {
     }
 
     @Test
+    void apply_env_replaces_a_parent_key_that_differs_only_in_case() {
+        // Windows ProcessBuilder.environment()는 대소문자를 가리는 HashMap 복제본 — 부모 키가 "Path"면
+        // put("PATH")가 키를 하나 더 만들고, 자식이 어느 쪽을 받을지는 맵 순서에 달린다.
+        Map<String, String> env = new HashMap<>(Map.of("Path", "orig", "java_home", "old", "OTHER", "o"));
+
+        ProcessRunner.applyEnv(env, Map.of("PATH", "new", "JAVA_HOME", "j"), Set.of());
+
+        assertThat(env).containsExactlyInAnyOrderEntriesOf(Map.of("PATH", "new", "JAVA_HOME", "j", "OTHER", "o"));
+    }
+
+    @Test
     void a_removed_parent_variable_never_reaches_the_child() throws Exception {
         Optional<String> name = parentVariable();
         assumeTrue(name.isPresent(), "지워 볼 부모 env가 없다");

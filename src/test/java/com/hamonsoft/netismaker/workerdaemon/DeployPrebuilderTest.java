@@ -242,6 +242,23 @@ class DeployPrebuilderTest {
     }
 
     @Test
+    void run_툴체인_env가_자식에_실제로_들어간다() throws Exception {
+        String javaHome = root.resolve("fake-jdk").toString();
+        String mvnBin = root.resolve("fake-mvn").resolve("bin").toString();
+        String cmd = WINDOWS
+                ? "echo JH=%JAVA_HOME%& echo P=%PATH%& " + makeWarCommand()
+                : "echo JH=$JAVA_HOME; echo P=$PATH; " + makeWarCommand();
+        List<String> sink = new CopyOnWriteArrayList<>();
+        prebuilder(Duration.ofMinutes(1), Map.of("jdk8-maven", new Toolchain(javaHome, mvnBin)))
+                .run(new PrebuildSpec(cmd, "t/a.war", "jdk8-maven"), root, sink::add);
+
+        assertThat(sink).contains("JH=" + javaHome);
+        String bin = javaHome + (WINDOWS ? "\\bin" : "/bin");
+        assertThat(sink).anySatisfy(line ->
+                assertThat(line).startsWith("P=" + bin + java.io.File.pathSeparator + mvnBin + java.io.File.pathSeparator));
+    }
+
+    @Test
     void run_비밀env_제거() {
         assertThat(DeployPrebuilder.removedEnv()).containsExactlyInAnyOrderElementsOf(StackSecretEnv.NAMES);
     }

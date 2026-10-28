@@ -30,6 +30,22 @@ class CloseNoteWriterTest {
     }
 
     @Test
+    void 노트와_진행상황은_서로_다른_폴더에_쓴다() throws Exception {
+        CloseNoteWriter.Written w = writer.write(vault, "HamonSoft/동부병원", "HamonSoft/netisMaker", meta, "# 본문", day);
+        assertThat(w.relativePath()).isEqualTo("HamonSoft/동부병원/로그인-세션-만료-수정-작업12-2026-10-13.md");
+        assertThat(w.file().getParent()).isEqualTo(vault.resolve("HamonSoft/동부병원"));
+        assertThat(vault.resolve("HamonSoft/동부병원/netisMaker-진행상황-2026-10-13.md")).doesNotExist();
+        assertThat(Files.readString(vault.resolve("HamonSoft/netisMaker/netisMaker-진행상황-2026-10-13.md")))
+                .contains("- [[로그인-세션-만료-수정-작업12-2026-10-13]] — 작업 #12 종료(병합 abcdef1)");
+    }
+
+    @Test
+    void 진행상황_폴더가_볼트_밖이면_실패() {
+        assertThatThrownBy(() -> writer.write(vault, "HamonSoft/동부병원", "../밖", meta, "# 본문", day))
+                .isInstanceOf(IOException.class);
+    }
+
+    @Test
     void 재시도는_같은_파일을_덮어쓰고_진행상황_줄은_한번만() throws Exception {
         writer.write(vault, "HamonSoft/netisMaker", meta, "첫 본문", day);
         CloseNoteWriter.Written w = writer.write(vault, "HamonSoft/netisMaker", meta, "둘째 본문", day);

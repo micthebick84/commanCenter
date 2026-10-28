@@ -79,6 +79,10 @@ public class RepoCatalogEntry {
     @Column(name = "prebuild_toolchain", length = 50)
     private String prebuildToolchain;
 
+    /** 종료 노트를 쓸 볼트 상대 폴더 (스펙 2026-10-28 close-note-folder). null이면 첫 종료 때 워커가 정해 기록한다. */
+    @Column(name = "note_folder", length = 500)
+    private String noteFolder;
+
     @Column(name = "created_by", length = 20)
     private String createdBy;
 

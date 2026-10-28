@@ -12,9 +12,9 @@ import java.util.regex.Pattern;
 
 /**
  * 종료 노트를 볼트에 쓴다 (스펙 2026-10-13 §4 ③). 파일 이름·진행상황 추기는 여기서 결정론으로 — claude는 본문만 만든다.
- *  - 노트: {folder}/{slug}-작업{id}-{date}.md  (같은 경로면 덮어씀 — 재시도 멱등)
+ *  - 노트: {noteFolder}/{slug}-작업{id}-{date}.md  (같은 경로면 덮어씀 — 재시도 멱등)
  *    산출물이 있으면 프런트매터에 artifact, 본문 끝에 한 줄(NoteMeta.artifactLine)을 더한다 (스펙 2026-10-14 §4)
- *  - 진행상황: {folder}/netisMaker-진행상황-{date}.md 끝에 "- [[노트]] — 작업 #id 종료(병합 sha7)" (이미 있으면 생략)
+ *  - 진행상황: {progressFolder}/netisMaker-진행상황-{date}.md 끝에 "- [[노트]] — 작업 #id 종료(병합 sha7)" (이미 있으면 생략)
  */
 public class CloseNoteWriter {
 
@@ -37,18 +37,35 @@ public class CloseNoteWriter {
     private static final Pattern BARE_TOKENS = Pattern.compile(
             "ghp_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|glpat-[A-Za-z0-9_-]{16,}|sk-ant-[A-Za-z0-9_-]{16,}");
 
+    /** 노트와 진행상황을 같은 폴더에 — 노트 폴더 분리 전 호출부 호환. */
     public Written write(Path vault, String folder, NoteMeta meta, String body, LocalDate date) throws IOException {
-        Path dir = vault.resolve(folder).normalize();
-        if (!dir.startsWith(vault.normalize())) throw new IOException("노트 폴더가 볼트 밖입니다: " + folder);
+        return write(vault, folder, folder, meta, body, date);
+    }
+
+    /**
+     * 노트는 레포 기준 폴더에, 진행상황 줄은 한 곳(CLOSE_NOTE_FOLDER)에 (스펙 2026-10-28 close-note-folder §4).
+     * 위키링크는 이름으로 찾으므로 폴더가 달라도 열린다. relativePath는 볼트 기준.
+     */
+    public Written write(Path vault, String noteFolder, String progressFolder, NoteMeta meta, String body,
+                         LocalDate date) throws IOException {
+        Path dir = insideVault(vault, noteFolder);
+        Path progressDir = insideVault(vault, progressFolder);
         Files.createDirectories(dir);
+        Files.createDirectories(progressDir);
 
         String name = slug(meta.title()) + "-작업" + meta.taskId() + "-" + date;
         Path file = dir.resolve(name + ".md");
         String tail = meta.artifactLine() == null ? "" : "\n\n" + maskSecrets(meta.artifactLine());
         Files.writeString(file, frontmatter(meta, date) + clean(body) + tail + "\n", StandardCharsets.UTF_8);
 
-        appendProgress(dir.resolve("netisMaker-진행상황-" + date + ".md"), name, meta, date);
-        return new Written(folder.replace('\\', '/') + "/" + name + ".md", file);
+        appendProgress(progressDir.resolve("netisMaker-진행상황-" + date + ".md"), name, meta, date);
+        return new Written(noteFolder.replace('\\', '/') + "/" + name + ".md", file);
+    }
+
+    private static Path insideVault(Path vault, String folder) throws IOException {
+        Path dir = vault.resolve(folder).normalize();
+        if (!dir.startsWith(vault.normalize())) throw new IOException("노트 폴더가 볼트 밖입니다: " + folder);
+        return dir;
     }
 
     /** 경로·위키링크에 문제 되는 문자를 '-'로, 공백도 '-'로. 60자(코드포인트) 상한, 비면 "작업". */

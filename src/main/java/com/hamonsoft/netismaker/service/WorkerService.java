@@ -20,6 +20,7 @@ import com.hamonsoft.netismaker.repository.TaskRepository;
 import com.hamonsoft.netismaker.repository.TaskStageUsageRepository;
 import com.hamonsoft.netismaker.repository.TaskStatusHistoryRepository;
 import com.hamonsoft.netismaker.repository.WorkerHeartbeatRepository;
+import com.hamonsoft.netismaker.util.NoteFolderPath;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -232,8 +233,10 @@ public class WorkerService {
         List<TaskStatusHistory> history = new ArrayList<>(
                 historyRepo.findByTaskIdOrderByAtDescIdDesc(t.getId(), Limit.of(CLOSE_HISTORY_LIMIT)));
         Collections.reverse(history); // 시간순(오래된 것 먼저)
+        RepoCatalogEntry cat = RepoCatalogRepository.findForTask(repoCatalogRepo, t.getRepoCatalogId(), t.getGitUrl())
+                .orElse(null);
         return CloseContext.of(t, registeredPlanMarkdown(t.getId()), a, history,
-                stageUsageRepo.findByTaskIdOrderByStageAsc(t.getId()), CloseLinks.taskUrl(publicBaseUrl, t.getId()));
+                stageUsageRepo.findByTaskIdOrderByStageAsc(t.getId()), CloseLinks.taskUrl(publicBaseUrl, t.getId()), cat);
     }
 
     /**
@@ -683,11 +686,33 @@ public class WorkerService {
                     }
                     t.setCloseNotePath(req.notePath());
                 }
+                recordNoteFolder(t, req.noteFolder());
             }
             case BRANCH_DELETED -> { /* 기록만 */ }
         }
         t.setCloseProgress(CloseStep.append(t.getCloseProgress(), req.step()));
         t.setUpdatedAt(OffsetDateTime.now());
+    }
+
+    /**
+     * 워커가 이번 종료에서 정한 노트 폴더를 카탈로그에 기록한다(비어 있을 때만, 스펙 2026-10-28 close-note-folder §5).
+     * 노트는 이미 썼으니 값이 잘못됐거나 카탈로그가 없으면 기록만 건너뛴다 — 종료를 멈출 이유가 아니다.
+     */
+    private void recordNoteFolder(Task t, String raw) {
+        if (raw == null || raw.isBlank()) return;
+        String folder;
+        try {
+            folder = NoteFolderPath.normalize(raw);
+        } catch (IllegalArgumentException e) {
+            log.warn("종료 노트 폴더 기록 건너뜀: task={} {} — {}", t.getId(), raw, e.getMessage());
+            return;
+        }
+        RepoCatalogEntry cat = RepoCatalogRepository.findForTask(repoCatalogRepo, t.getRepoCatalogId(), t.getGitUrl())
+                .orElse(null);
+        if (cat == null) return;
+        if (repoCatalogRepo.recordNoteFolderIfEmpty(cat.getId(), folder) > 0) {
+            log.info("레포 카탈로그 노트 폴더 기록: catalog={} {}", cat.getId(), folder);
+        }
     }
 
     /** 종료 결과 보고. CLOSED는 이 작업에 필요한 단계(CloseStep.required)가 모두 보고된 뒤에만 받는다 — 단계가 빠진 채 끝났다고 믿지 않는다. */

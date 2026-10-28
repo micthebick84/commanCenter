@@ -83,6 +83,7 @@ describe('admin/repo-catalog', () => {
         prebuildCommand: null,
         prebuildArtifact: null,
         prebuildToolchain: null,
+        noteFolder: null,
       },
     })
     w.unmount()
@@ -210,6 +211,87 @@ describe('admin/repo-catalog', () => {
     expect((document.querySelector('[data-test="form-prebuild-command"]') as HTMLInputElement).value).toBe('mvn -B -o package')
     expect((document.querySelector('[data-test="form-prebuild-artifact"]') as HTMLInputElement).value).toBe('hm-dash/target/*.war')
     expect((document.querySelector('[data-test="form-prebuild-toolchain"]') as HTMLInputElement).value).toBe('jdk8-maven')
+    w.unmount()
+  })
+
+  const noteRow = {
+    id: 11, alias: '동부병원 대시보드', gitUrl: 'https://gitlab.hamon.vip/a/b.git', host: 'gitlab',
+    ownerRepo: 'a/b', defaultBranch: null, description: null, enabled: true,
+    createdBy: 'admin', createdAt: '', updatedAt: '',
+    artifactEnabled: false, artifactPath: null,
+    prebuildEnabled: false, prebuildCommand: null, prebuildArtifact: null, prebuildToolchain: null,
+    noteFolder: 'HamonSoft/동부병원',
+  }
+
+  async function openEditOf(w: any) {
+    const editBtn = w.findAll('button').find((b: any) => b.find('.q-icon').text() === 'edit')
+    await editBtn!.trigger('click')
+    await flushPromises()
+  }
+
+  async function submitAndBody() {
+    useApiMock.mockClear()
+    useApiMock.mockResolvedValueOnce({})
+    useApiMock.mockResolvedValueOnce([])
+    ;(document.querySelector('[data-test="form-submit"]') as HTMLElement).click()
+    await flushPromises()
+    return useApiMock.mock.calls.find((c: any[]) => c[1]?.method === 'PUT' || c[1]?.method === 'POST')![1].body
+  }
+
+  it('목록에 노트 폴더가 보이고 비었으면 자동', async () => {
+    const w = await mountPage([noteRow, { ...noteRow, id: 12, alias: '빈 레포', noteFolder: null }])
+    const cells = w.findAll('[data-test="catalog-note-folder"]').map((c) => c.text())
+    expect(cells).toEqual(['노트 폴더: HamonSoft/동부병원', '노트 폴더: 자동'])
+    w.unmount()
+  })
+
+  it('노트 폴더를 안 바꾸고 저장하면 PUT 바디에 noteFolder가 없다', async () => {
+    const w = await mountPage([noteRow])
+    await openEditOf(w)
+    expect((document.querySelector('[data-test="form-note-folder"]') as HTMLInputElement).value).toBe('HamonSoft/동부병원')
+    const body = await submitAndBody()
+    expect(body).not.toHaveProperty('noteFolder')
+    w.unmount()
+  })
+
+  it('노트 폴더를 바꾸면 그 값을 보낸다', async () => {
+    const w = await mountPage([noteRow])
+    await openEditOf(w)
+    setInput('[data-test="form-note-folder"]', ' HamonSoft/Netis-플랫폼공통/netisweb_v6.8 ')
+    await flushPromises()
+    expect(await submitAndBody()).toMatchObject({ noteFolder: 'HamonSoft/Netis-플랫폼공통/netisweb_v6.8' })
+    w.unmount()
+  })
+
+  it('노트 폴더를 지우면 빈 문자열을 보낸다', async () => {
+    const w = await mountPage([noteRow])
+    await openEditOf(w)
+    setInput('[data-test="form-note-folder"]', '')
+    await flushPromises()
+    expect(await submitAndBody()).toMatchObject({ noteFolder: '' })
+    w.unmount()
+  })
+
+  it('등록 때 노트 폴더를 함께 보낸다', async () => {
+    const w = await mountPage([])
+    await w.find('[data-test="open-create"]').trigger('click')
+    await flushPromises()
+    await fillRequired()
+    setInput('[data-test="form-note-folder"]', 'HamonSoft/동부병원')
+    await flushPromises()
+    expect(await submitAndBody()).toMatchObject({ noteFolder: 'HamonSoft/동부병원' })
+    w.unmount()
+  })
+
+  it('활성 토글 바디에는 noteFolder가 없다', async () => {
+    const w = await mountPage([noteRow])
+    useApiMock.mockClear()
+    useApiMock.mockResolvedValueOnce({})
+    useApiMock.mockResolvedValueOnce([])
+    await w.find('.q-toggle').trigger('click')
+    await flushPromises()
+    const put = useApiMock.mock.calls.find((c: any[]) => c[1]?.method === 'PUT')!
+    expect(put[1].body).not.toHaveProperty('noteFolder')
     w.unmount()
   })
 })

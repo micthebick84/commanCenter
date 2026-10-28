@@ -82,6 +82,83 @@ class WorkerServiceCloseTest {
         assertThat(r.closeContext().history()).extracting(com.hamonsoft.netismaker.dto.CloseContext.HistoryLine::to).containsExactly("종료승인대기", "종료대기");
     }
 
+    private RepoCatalogEntry catalog(String noteFolder) {
+        RepoCatalogEntry e = RepoCatalogEntry.create("동부병원 대시보드", "https://gitlab.hamon.vip/a/b.git", "gitlab",
+                null, null, "동부병원 대시보드 레포", "admin");
+        ReflectionTestUtils.setField(e, "id", 9L);
+        e.setNoteFolder(noteFolder);
+        return e;
+    }
+
+    @Test
+    void 종료_claim에_노트_폴더_재료를_싣는다() {
+        Task t = task(TaskStatus.CLOSE_PENDING);
+        t.setRepoAlias("동부병원 대시보드");
+        t.setRepoCatalogId(9L);
+        when(catalogRepo.findById(9L)).thenReturn(Optional.of(catalog("HamonSoft/동부병원")));
+        when(taskRepo.findClaimableForUpdateSkipLocked(any())).thenReturn(List.of(t));
+
+        WorkerTaskResponse r = service.claimNextTask("w1").orElseThrow();
+
+        assertThat(r.closeContext().repoAlias()).isEqualTo("동부병원 대시보드");
+        assertThat(r.closeContext().repoDescription()).isEqualTo("동부병원 대시보드 레포");
+        assertThat(r.closeContext().noteFolder()).isEqualTo("HamonSoft/동부병원");
+    }
+
+    @Test
+    void 카탈로그_id가_비어도_git_url로_찾아_싣는다() {
+        Task t = task(TaskStatus.CLOSE_PENDING);
+        t.setRepoAlias("동부병원 대시보드");
+        t.setGitUrl("https://gitlab.hamon.vip/a/b.git");
+        when(catalogRepo.findByGitUrl("https://gitlab.hamon.vip/a/b.git")).thenReturn(Optional.of(catalog("HamonSoft/동부병원")));
+        when(taskRepo.findClaimableForUpdateSkipLocked(any())).thenReturn(List.of(t));
+
+        WorkerTaskResponse r = service.claimNextTask("w1").orElseThrow();
+
+        assertThat(r.closeContext().noteFolder()).isEqualTo("HamonSoft/동부병원");
+    }
+
+    private Task closingWithCatalog() {
+        Task t = task(TaskStatus.CLOSING);
+        t.setWorkerId("w1");
+        t.setRepoCatalogId(9L);
+        when(taskRepo.findActiveByIdForUpdate(7L)).thenReturn(Optional.of(t));
+        when(catalogRepo.findById(9L)).thenReturn(Optional.of(catalog(null)));
+        return t;
+    }
+
+    @Test
+    void 노트_보고의_폴더를_카탈로그가_비었을_때만_기록한다() {
+        closingWithCatalog();
+        service.recordCloseProgress(7L, new CloseProgressRequest("w1", CloseStep.NOTE_WRITTEN, null,
+                "HamonSoft/라이나생명 대시보드 v6.8/a.md", "HamonSoft/라이나생명 대시보드 v6.8"));
+        verify(catalogRepo).recordNoteFolderIfEmpty(9L, "HamonSoft/라이나생명 대시보드 v6.8");
+    }
+
+    @Test
+    void 노트_보고에_폴더가_없으면_기록하지_않는다() {
+        closingWithCatalog();
+        service.recordCloseProgress(7L, new CloseProgressRequest("w1", CloseStep.NOTE_WRITTEN, null, "HamonSoft/x/a.md", null));
+        verify(catalogRepo, never()).recordNoteFolderIfEmpty(anyLong(), anyString());
+    }
+
+    @Test
+    void 잘못된_폴더는_기록만_건너뛰고_단계는_누적한다() {
+        Task t = closingWithCatalog();
+        service.recordCloseProgress(7L, new CloseProgressRequest("w1", CloseStep.NOTE_WRITTEN, null, "a.md", "../x"));
+        verify(catalogRepo, never()).recordNoteFolderIfEmpty(anyLong(), anyString());
+        assertThat(t.getCloseProgress()).isEqualTo("NOTE_WRITTEN");
+    }
+
+    @Test
+    void 카탈로그가_없으면_기록하지_않는다() {
+        Task t = task(TaskStatus.CLOSING);
+        t.setWorkerId("w1");
+        when(taskRepo.findActiveByIdForUpdate(7L)).thenReturn(Optional.of(t));
+        service.recordCloseProgress(7L, new CloseProgressRequest("w1", CloseStep.NOTE_WRITTEN, null, "HamonSoft/x/a.md", "HamonSoft/x"));
+        verify(catalogRepo, never()).recordNoteFolderIfEmpty(anyLong(), anyString());
+    }
+
     @Test
     void 진행_보고는_단계를_누적하고_단계별_값을_저장한다() {
         Task t = task(TaskStatus.CLOSING);

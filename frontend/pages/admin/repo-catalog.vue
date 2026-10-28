@@ -27,6 +27,7 @@ interface RepoEntry {
   prebuildCommand: string | null
   prebuildArtifact: string | null
   prebuildToolchain: string | null
+  noteFolder: string | null
 }
 
 const $q = useQuasar()
@@ -94,7 +95,10 @@ const form = reactive({
   prebuildCommand: '',
   prebuildArtifact: '',
   prebuildToolchain: '',
+  noteFolder: '',
 })
+// 수정 창을 열 때의 노트 폴더 — 바뀌었을 때만 보낸다(그 사이 첫 종료가 자동 기록한 값을 덮지 않게, 스펙 2026-10-28 close-note-folder §3-1)
+let originalNoteFolder = ''
 const submitting = ref(false)
 
 function openCreate() {
@@ -110,6 +114,7 @@ function openCreate() {
   form.prebuildCommand = ''
   form.prebuildArtifact = ''
   form.prebuildToolchain = ''
+  form.noteFolder = ''
   showForm.value = true
 }
 
@@ -126,13 +131,15 @@ function openEdit(e: RepoEntry) {
   form.prebuildCommand = e.prebuildCommand ?? ''
   form.prebuildArtifact = e.prebuildArtifact ?? ''
   form.prebuildToolchain = e.prebuildToolchain ?? ''
+  form.noteFolder = e.noteFolder ?? ''
+  originalNoteFolder = form.noteFolder
   showForm.value = true
 }
 
 async function submit() {
   submitting.value = true
   try {
-    const body = {
+    const body: Record<string, unknown> = {
       alias: form.alias,
       gitUrl: form.gitUrl,
       defaultBranch: form.defaultBranch || null,
@@ -145,6 +152,9 @@ async function submit() {
       prebuildArtifact: form.prebuildArtifact.trim() || null,
       prebuildToolchain: form.prebuildToolchain.trim() || null,
     }
+    // 등록은 비면 null, 수정은 바꿨을 때만(빈 문자열 = 비움 → 다음 종료 때 다시 정함)
+    if (!editingId.value) body.noteFolder = form.noteFolder.trim() || null
+    else if (form.noteFolder.trim() !== originalNoteFolder.trim()) body.noteFolder = form.noteFolder.trim()
     if (editingId.value) {
       await useApi(`/api/admin/repo-catalog/${editingId.value}`, { method: 'PUT', body })
       $q.notify({ type: 'positive', message: '수정 완료' })
@@ -259,6 +269,7 @@ const canSubmit = computed(
           <span>{{ e.defaultBranch ?? '기본 브랜치 자동 감지' }}</span>
         </div>
         <code class="text-grey-6 card-url">{{ e.gitUrl }}</code>
+        <div class="text-caption text-grey-7" data-test="catalog-note-folder">노트 폴더: {{ e.noteFolder ?? '자동' }}</div>
         <div v-if="e.description" class="card-desc">{{ e.description }}</div>
         <template #actions>
           <q-btn
@@ -333,6 +344,7 @@ const canSubmit = computed(
             label="미리 빌드"
             data-test="catalog-prebuild-chip"
           />
+          <div class="text-caption text-grey-7" data-test="catalog-note-folder">노트 폴더: {{ props.row.noteFolder ?? '자동' }}</div>
         </q-td>
       </template>
       <template #body-cell-ownerRepo="props">
@@ -434,6 +446,18 @@ const canSubmit = computed(
           autocorrect="off"
           spellcheck="false"
           data-test="form-artifact-path"
+        />
+        <q-input
+          v-model="form.noteFolder"
+          label="노트 폴더 (선택)"
+          placeholder="HamonSoft/동부병원"
+          hint="옵시디언 볼트 안 경로. 비우면 첫 작업 종료 때 자동으로 정해 여기에 기록됩니다."
+          outlined
+          :dense="!mobile"
+          autocapitalize="off"
+          autocorrect="off"
+          spellcheck="false"
+          data-test="form-note-folder"
         />
         <q-toggle
           v-model="form.prebuildEnabled"

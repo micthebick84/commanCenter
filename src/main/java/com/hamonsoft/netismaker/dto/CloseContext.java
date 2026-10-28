@@ -1,6 +1,7 @@
 package com.hamonsoft.netismaker.dto;
 
 import com.hamonsoft.netismaker.entity.CloseStep;
+import com.hamonsoft.netismaker.entity.RepoCatalogEntry;
 import com.hamonsoft.netismaker.entity.Task;
 import com.hamonsoft.netismaker.entity.TaskAnalysis;
 import com.hamonsoft.netismaker.entity.TaskStageUsage;
@@ -30,13 +31,27 @@ public record CloseContext(
         /** 관리자가 '산출물 없이 마무리'를 눌렀다 — 노트에 '없음'을 쓴다. */
         boolean artifactSkipped,
         /** 작업 화면 주소({APP_PUBLIC_BASE_URL}/tasks/{id}). 설정이 비면 null. */
-        String taskUrl
+        String taskUrl,
+        /** 노트 폴더 결정 재료 (스펙 2026-10-28 close-note-folder §5) — 작업의 레포 별칭 스냅샷. */
+        String repoAlias,
+        /** 카탈로그 설명. 카탈로그가 없으면 null. */
+        String repoDescription,
+        /** 카탈로그의 노트 폴더. 비었거나 카탈로그가 없으면 null — 워커가 정한다. */
+        String noteFolder
 ) {
+    /** 노트 폴더 재료 도입 전 12개 인자 — 기존 테스트 호환. */
+    public CloseContext(String planMarkdown, String analysisMarkdown, String implementationTail, String mergeCommitSha,
+                        String deployUrl, OffsetDateTime deployedAt, List<HistoryLine> history, List<UsageLine> usage,
+                        String artifactName, Long artifactSizeBytes, boolean artifactSkipped, String taskUrl) {
+        this(planMarkdown, analysisMarkdown, implementationTail, mergeCommitSha, deployUrl, deployedAt, history, usage,
+                artifactName, artifactSizeBytes, artifactSkipped, taskUrl, null, null, null);
+    }
+
     /** 산출물 필드 도입 전 8개 인자 생성자 — 기존 테스트 호환. */
     public CloseContext(String planMarkdown, String analysisMarkdown, String implementationTail, String mergeCommitSha,
                         String deployUrl, OffsetDateTime deployedAt, List<HistoryLine> history, List<UsageLine> usage) {
         this(planMarkdown, analysisMarkdown, implementationTail, mergeCommitSha, deployUrl, deployedAt, history, usage,
-                null, null, false, null);
+                null, null, false, null, null, null, null);
     }
 
     static final int PLAN_MAX = 12_000;
@@ -59,6 +74,13 @@ public record CloseContext(
     public static CloseContext of(Task t, String planMarkdown, TaskAnalysis a,
                                   List<TaskStatusHistory> historyOldestFirst, List<TaskStageUsage> usage,
                                   String taskUrl) {
+        return of(t, planMarkdown, a, historyOldestFirst, usage, taskUrl, null);
+    }
+
+    /** @param catalog 작업의 레포 카탈로그(노트 폴더·설명). 없으면 null */
+    public static CloseContext of(Task t, String planMarkdown, TaskAnalysis a,
+                                  List<TaskStatusHistory> historyOldestFirst, List<TaskStageUsage> usage,
+                                  String taskUrl, RepoCatalogEntry catalog) {
         return new CloseContext(
                 head(planMarkdown, PLAN_MAX),
                 a == null ? null : head(a.getMarkdownResult(), ANALYSIS_MAX),
@@ -73,7 +95,10 @@ public record CloseContext(
                 t.getArtifactName(),
                 t.getArtifactSize(),
                 CloseStep.ARTIFACT_SKIPPED.equals(t.getCloseArtifactMode()),
-                taskUrl);
+                taskUrl,
+                t.getRepoAlias(),
+                catalog == null ? null : catalog.getDescription(),
+                catalog == null ? null : catalog.getNoteFolder());
     }
 
     static String head(String s, int max) {

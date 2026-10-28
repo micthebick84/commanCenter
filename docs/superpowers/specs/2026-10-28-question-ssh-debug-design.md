@@ -57,7 +57,7 @@ DB 연결과 같은 구조다. 연결(또는 배포 작업)마다 `createSdkMcpS
 
 - 질문 등록·`ask` 바디 `deployTaskIds: number[]`(`ask`는 MCP·DB·참조와 같은 규칙: null=유지, `[]`=전부 해제, 같은 집합이면 검증 없는 no-op, 새로 넣은 것만 검증, 바뀌면 system note `배포 작업 변경: #12, #15` + SSE `note`, 다음 질문부터 반영). 상한 2.
 - 검증(세션 소유자 기준, 위반 400): 작업이 있고 소프트 삭제되지 않았으며, **질문 대상 레포와 같은 `repo_catalog_id`**이고, 세션 소유자가 그 작업을 볼 수 있고(작업 조회 권한 규칙을 그대로 쓴다 — 구현 때 `TaskController`의 조회 판정을 재사용), 상태가 `배포완료`·`배포중단됨`·`배포실패` 중 하나.
-- 저장: `interview_session.deploy_task_ids JSONB NOT NULL DEFAULT '[]'`(V35). 비밀이 없으므로 암호화 대상이 아니다.
+- 저장: `interview_session.deploy_task_ids JSONB NOT NULL DEFAULT '[]'`(V36). 비밀이 없으므로 암호화 대상이 아니다.
 
 ### 4.2 claim
 
@@ -81,7 +81,7 @@ DB 연결과 같은 구조다. 연결(또는 배포 작업)마다 `createSdkMcpS
 
 ## 5. SSH 연결 도구 (`ssh-<id>`)
 
-### 5.1 데이터 — `V36__ssh_connection.sql`(PR-B)
+### 5.1 데이터 — `V37__ssh_connection.sql`(PR-B)
 
 ```sql
 CREATE TABLE IF NOT EXISTS com.ssh_connection (
@@ -117,7 +117,7 @@ ALTER TABLE com.interview_session
     ADD COLUMN IF NOT EXISTS ssh_connection_ids JSONB NOT NULL DEFAULT '[]'::jsonb;
 ```
 
-PR-A(배포 작업 도구)의 V35는 이것만 더한다:
+PR-A(배포 작업 도구)의 V36는 이것만 더한다:
 
 ```sql
 ALTER TABLE com.interview_session
@@ -126,7 +126,7 @@ ALTER TABLE com.interview_session
 ```
 
 - 세션에는 id만 둔다(V24와 같은 이유 — 비밀을 세션 행마다 복제하지 않는다).
-- `owner_is_admin`(V35, PR-A에서 먼저 들어간다): 질문 등록 때 요청자(= 소유자)의 관리자 여부를 박제한다. `QuestionService.create`는 지금 관리자 여부를 받지 않으므로(`QuestionService.java:112,146`) 컨트롤러에서 넘기도록 시그니처를 늘린다. 이 값이 있어야 선택 검증과 claim이 같은 규칙(§5.3)을 쓸 수 있다. 등록 뒤 관리자 권한이 바뀌어도 반영하지 않는다(남는 한계).
+- `owner_is_admin`(V36, PR-A에서 먼저 들어간다): 질문 등록 때 요청자(= 소유자)의 관리자 여부를 박제한다. `QuestionService.create`는 지금 관리자 여부를 받지 않으므로(`QuestionService.java:112,146`) 컨트롤러에서 넘기도록 시그니처를 늘린다. 이 값이 있어야 선택 검증과 claim이 같은 규칙(§5.3)을 쓸 수 있다. 등록 뒤 관리자 권한이 바뀌어도 반영하지 않는다(남는 한계).
 - 거부 이름 목록은 코드 상수(§5.5)이고 연결별로 늘리지 않는다.
 
 ### 5.2 암호화 — `SshSecretCipher`
@@ -277,14 +277,14 @@ DB 연결 화면 패턴(`frontend/components/DbConnectionPicker.vue`·`DbConnect
 
 ## 10. 단계와 배포 순서
 
-**1단계 = PR 두 개(배포 작업 도구 먼저)**
+**1단계 = PR 두 개(배포 작업 도구 먼저)** — 마이그레이션 번호는 구현 때 main의 다음 번호로 정한다(2026-10-28 기준 V35는 `feature/deploy-prebuild`의 `V35__repo_catalog_prebuild.sql`이 쓰고 있어 이 문서는 V36·V37로 적었다).
 
-- **PR-A 배포 작업 도구**(약 1.5–2일): V35의 `deploy_task_ids`·`owner_is_admin`, 등록·`ask` 검증과 note, claim `withDeploy`, `deployMcp.ts`·`deployToolGate`·`deploySection`·활동 요약, `DeployTaskPicker`·칩, 테스트. 새 비밀·라이브러리 없음.
-- **PR-B SSH 연결**(약 3–4일): V36의 `com.ssh_connection`·`ssh_connection_ids`(PR-A가 먼저 병합되므로 마이그레이션을 나눈다), `SshSecretCipher`·스택 비밀 목록, CRUD·접속 테스트(`sshj`)·허용 대역, 선택 권한, claim `withSsh`, `ssh2`·`sshMcp.ts`·`sshToolGate`·`sshSection`·가리기·활동 요약, 다이얼로그·픽커·관리자 화면, 테스트.
+- **PR-A 배포 작업 도구**(약 1.5–2일): V36의 `deploy_task_ids`·`owner_is_admin`, 등록·`ask` 검증과 note, claim `withDeploy`, `deployMcp.ts`·`deployToolGate`·`deploySection`·활동 요약, `DeployTaskPicker`·칩, 테스트. 새 비밀·라이브러리 없음.
+- **PR-B SSH 연결**(약 3–4일): V37의 `com.ssh_connection`·`ssh_connection_ids`(PR-A가 먼저 병합되므로 마이그레이션을 나눈다), `SshSecretCipher`·스택 비밀 목록, CRUD·접속 테스트(`sshj`)·허용 대역, 선택 권한, claim `withSsh`, `ssh2`·`sshMcp.ts`·`sshToolGate`·`sshSection`·가리기·활동 요약, 다이얼로그·픽커·관리자 화면, 테스트.
 **배포 순서**
 
-- PR-A: API(V35) → 인터뷰 서비스(진행 중 턴 없을 때 재기동) → 프론트 `.output` 재빌드. 구버전 러너는 `deployTargets`를 모르는 필드로 버리고 도구 없이 답하므로 순서가 바뀌어도 위험하지 않다.
-- PR-B: `public.env`에 `NETISMAKER_SSH_SECRET_KEY`·`NETISMAKER_SSH_SECRET_SALT`·`SSH_ALLOWED_CIDRS` 추가(키는 비밀번호 관리자 등에 따로 보관) → API(V36) → 인터뷰 서비스(`npm ci` — `ssh2`) → 프론트 재빌드. 기존 운영 규칙대로 재기동 전 진행 중 세션 확인.
+- PR-A: API(V36) → 인터뷰 서비스(진행 중 턴 없을 때 재기동) → 프론트 `.output` 재빌드. 구버전 러너는 `deployTargets`를 모르는 필드로 버리고 도구 없이 답하므로 순서가 바뀌어도 위험하지 않다.
+- PR-B: `public.env`에 `NETISMAKER_SSH_SECRET_KEY`·`NETISMAKER_SSH_SECRET_SALT`·`SSH_ALLOWED_CIDRS` 추가(키는 비밀번호 관리자 등에 따로 보관) → API(V37) → 인터뷰 서비스(`npm ci` — `ssh2`) → 프론트 재빌드. 기존 운영 규칙대로 재기동 전 진행 중 세션 확인.
 
 **2단계(후보, 첫 작업은 감사)**
 

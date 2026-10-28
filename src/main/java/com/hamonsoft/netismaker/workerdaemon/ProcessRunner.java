@@ -16,6 +16,7 @@ import java.util.Set;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Consumer;
 import java.util.stream.Collectors;
+import java.util.stream.Stream;
 
 /**
  * 워커가 사용하는 외부 프로세스 실행 공통 헬퍼. 워커의 docker·git·gh 호출이 모두 여기를 지난다
@@ -70,10 +71,12 @@ public final class ProcessRunner {
     /**
      * env에서 removeEnv의 이름을 대소문자 무시로 지우고 extraEnv를 넣는다 — 지우기 먼저, 넣기 나중
      * (인터뷰 서비스 noPromptGitEnv와 같은 규칙). Windows env 이름은 대소문자를 가리지 않아 표기가 달라도 같은 변수다.
+     * extraEnv 이름과 대소문자만 다른 기존 키도 먼저 지운다 — Windows의 ProcessBuilder.environment()는 대소문자를 가리는
+     * HashMap 복제본이라, 부모 키가 "Path"일 때 put("PATH")는 키를 하나 더 만들고 자식이 어느 쪽을 받을지는 맵 순서에 달린다.
      */
     static void applyEnv(Map<String, String> env, Map<String, String> extraEnv, Set<String> removeEnv) {
-        if (!removeEnv.isEmpty()) {
-            Set<String> names = removeEnv.stream()
+        if (!removeEnv.isEmpty() || !extraEnv.isEmpty()) {
+            Set<String> names = Stream.concat(removeEnv.stream(), extraEnv.keySet().stream())
                     .map(n -> n.toUpperCase(Locale.ROOT))
                     .collect(Collectors.toSet());
             List<String> doomed = env.keySet().stream()
@@ -92,8 +95,15 @@ public final class ProcessRunner {
     public static Result runStreaming(File workingDir, List<String> command,
                                       long timeoutSeconds, Consumer<String> onLine)
             throws IOException, InterruptedException {
+        return runStreaming(workingDir, command, Map.of(), Set.of(), timeoutSeconds, onLine);
+    }
+
+    /** runStreaming + env 조정(규칙은 {@link #applyEnv}) — 배포 전 미리 빌드가 스택 비밀을 빼고 툴체인을 얹을 때. */
+    public static Result runStreaming(File workingDir, List<String> command, Map<String, String> extraEnv,
+                                      Set<String> removeEnv, long timeoutSeconds, Consumer<String> onLine)
+            throws IOException, InterruptedException {
         log.debug("exec-stream ({}): {}", workingDir, describe(command));
-        return execute(workingDir, command, Map.of(), Set.of(), timeoutSeconds, onLine);
+        return execute(workingDir, command, extraEnv, removeEnv, timeoutSeconds, onLine);
     }
 
     public static String requireSuccess(File workingDir, List<String> command, long timeoutSeconds)

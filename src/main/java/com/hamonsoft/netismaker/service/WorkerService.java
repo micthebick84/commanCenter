@@ -20,6 +20,8 @@ import com.hamonsoft.netismaker.repository.TaskRepository;
 import com.hamonsoft.netismaker.repository.TaskStageUsageRepository;
 import com.hamonsoft.netismaker.repository.TaskStatusHistoryRepository;
 import com.hamonsoft.netismaker.repository.WorkerHeartbeatRepository;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.ApplicationEventPublisher;
@@ -61,6 +63,8 @@ import java.util.Optional;
 @Service
 @Profile("api")
 public class WorkerService {
+
+    private static final Logger log = LoggerFactory.getLogger(WorkerService.class);
 
     /** 종료 노트 재료로 싣는 상태 이력 상한(최신 N건). 본문 길이 상한은 CloseContext가 가진다. */
     private static final int CLOSE_HISTORY_LIMIT = 200;
@@ -211,7 +215,7 @@ public class WorkerService {
                     (d != null && d.isApproved()) ? d : null, registeredPlanMarkdown(t.getId())));
         }
         if (from == TaskStatus.DEPLOY_PENDING) {
-            return Optional.of(WorkerTaskResponse.forDeploy(t));
+            return Optional.of(WorkerTaskResponse.forDeploy(t, prebuildFor(t)));
         }
         if (from == TaskStatus.UNDEPLOY_PENDING) {
             return Optional.of(WorkerTaskResponse.forUndeploy(t));
@@ -230,6 +234,25 @@ public class WorkerService {
         Collections.reverse(history); // 시간순(오래된 것 먼저)
         return CloseContext.of(t, registeredPlanMarkdown(t.getId()), a, history,
                 stageUsageRepo.findByTaskIdOrderByStageAsc(t.getId()), CloseLinks.taskUrl(publicBaseUrl, t.getId()));
+    }
+
+    /**
+     * 배포 claim에 싣는 미리 빌드 지시 (스펙 2026-10-28 §3). 카탈로그 enabled(등록 허용)와 무관하게 prebuildEnabled만 본다 —
+     * 이미 승인된 작업의 배포가 카탈로그 비활성으로 달라지지 않게. 카탈로그는 closeArtifactSpec과 같이 id 우선, 없으면 git_url로
+     * 찾는다(FK가 ON DELETE SET NULL이라 삭제 뒤 id가 비고, 다시 등록한 항목은 git_url로 찾힌다). 못 찾으면 끄고(예전 동작) —
+     * 카탈로그 id·git_url이 둘 다 없는 레거시 작업이 아니면 경고만 남긴다.
+     */
+    private WorkerTaskResponse.PrebuildSpec prebuildFor(Task t) {
+        RepoCatalogEntry cat = RepoCatalogRepository.findForTask(repoCatalogRepo, t.getRepoCatalogId(), t.getGitUrl())
+                .orElse(null);
+        if (cat == null) {
+            if (t.getRepoCatalogId() != null || t.getGitUrl() != null) {
+                log.warn("배포 claim: 카탈로그 항목 없음(id={}, gitUrl={}) — 미리 빌드 끔", t.getRepoCatalogId(), t.getGitUrl());
+            }
+            return null;
+        }
+        if (!cat.isPrebuildEnabled()) return null;
+        return new WorkerTaskResponse.PrebuildSpec(cat.getPrebuildCommand(), cat.getPrebuildArtifact(), cat.getPrebuildToolchain());
     }
 
     /** 산출물 모드가 REQUIRED이고 아직 안 올렸을 때만 지시를 싣는다 — 워커는 null이면 단계를 건너뛴다. */

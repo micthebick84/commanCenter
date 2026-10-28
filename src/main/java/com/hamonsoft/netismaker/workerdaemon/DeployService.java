@@ -6,6 +6,7 @@ import com.hamonsoft.netismaker.git.GitRemotes;
 import com.hamonsoft.netismaker.workerdaemon.deploy.DeployTarget;
 import com.hamonsoft.netismaker.workerdaemon.deploy.DockerfileSupport;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.annotation.Profile;
 import org.springframework.stereotype.Component;
 
@@ -18,7 +19,8 @@ import java.util.Map;
 /**
  * 배포 단계 오케스트레이션 (워커):
  *   1) head 브랜치 fetch + deploy worktree 체크아웃
- *   2) Dockerfile 있으면 사용, 없으면 claude로 생성
+ *   1.5) 카탈로그에 미리 빌드가 켜졌으면(task.prebuild) 워커에서 빌드해 산출물을 .netis-prebuild/로 (스펙 2026-10-28 §5.2)
+ *   2) Dockerfile 있으면 사용, 없으면 claude로 생성(미리 빌드면 산출물 안내 포함 + .dockerignore를 산출물만 보내도록 씀)
  *   3) EXPOSE 포트 파싱
  *   4) DeployTarget.deploy 호출 (build + run)
  *
@@ -34,15 +36,26 @@ public class DeployService {
     private final WorktreeService worktrees;
     private final ClaudeExecAdapter claude;
     private final DeployTarget target;
+    /** 미리 빌드 실행기. null이면(실행기 없이 만든 서비스) prebuild 지시가 온 배포를 명확히 실패시킨다. */
+    private final DeployPrebuilder prebuilder;
 
+    /** 미리 빌드 실행기 없이 만든다 — 미리 빌드가 필요 없는 구성·테스트용. */
     public DeployService(WorkerProperties props, GitRepoCache repos,
                          WorktreeService worktrees, ClaudeExecAdapter claude,
                          DeployTarget target) {
+        this(props, repos, worktrees, claude, target, null);
+    }
+
+    @Autowired
+    public DeployService(WorkerProperties props, GitRepoCache repos,
+                         WorktreeService worktrees, ClaudeExecAdapter claude,
+                         DeployTarget target, DeployPrebuilder prebuilder) {
         this.props = props;
         this.repos = repos;
         this.worktrees = worktrees;
         this.claude = claude;
         this.target = target;
+        this.prebuilder = prebuilder;
     }
 
     /** 배포 수행. 실패 시 DeployException(로그 포함). */
@@ -60,14 +73,47 @@ public class DeployService {
                     task.headBranch(), task.id());
             Path dockerfile = wt.toPath().resolve("Dockerfile");
 
+            // 미리 빌드 — Dockerfile 확인·생성보다 먼저(생성 프롬프트가 산출물 이름을 쓴다).
+            // 출력 줄은 전부 화면 배포 로그(logSink)로 흘리고, 결과 로그(log → deploy_log)에는 실행기의 요약 줄([미리 빌드…)만 남긴다
+            // — 빌드 출력 전체는 상한이 없다. 실패하면 PrebuildException의 꼬리 8000자를 한 번만 붙인다.
+            WorkerTaskResponse.PrebuildSpec prebuild = task.prebuild();
+            DeployPrebuilder.Staged staged = null;
+            if (prebuild != null) {
+                if (prebuilder == null) {
+                    throw new DeployException("미리 빌드 실행기가 없음", log.toString());
+                }
+                try {
+                    staged = prebuilder.run(prebuild, wt.toPath(), line -> {
+                        if (line.startsWith("[미리 빌드")) log.append(line).append('\n');
+                        logSink.accept(line);
+                    });
+                } catch (DeployPrebuilder.PrebuildException e) {
+                    throw new DeployException(e.getMessage(), log + e.getLogTail());
+                }
+            }
+
             if (!Files.exists(dockerfile)) {
                 log.append("[Dockerfile 없음 → claude 생성]\n");
-                generateDockerfile(task, wt, log);
+                String section = staged == null ? null
+                        : DeployPrebuilder.promptSection(staged.fileName(), prebuild.artifact());
+                generateDockerfile(task, wt, log, section);
                 if (!Files.exists(dockerfile)) {
                     throw new DeployException("claude가 Dockerfile을 생성하지 못함", log.toString());
                 }
+                if (staged != null) {
+                    // 생성이 끝난 뒤에 쓴다 — 생성 claude가 만든 .dockerignore보다 워커 것이 이긴다.
+                    Path ignore = wt.toPath().resolve(".dockerignore");
+                    boolean replaced = Files.exists(ignore);
+                    Files.writeString(ignore, DeployPrebuilder.DOCKERIGNORE);
+                    log.append("[빌드 컨텍스트] .dockerignore를 미리 빌드 산출물만 보내도록 씀")
+                            .append(replaced ? " (레포의 .dockerignore 교체)" : "").append('\n');
+                }
             } else {
                 log.append("[기존 Dockerfile 사용]\n");
+            }
+            if (staged != null && !DeployPrebuilder.dockerfileUsesStage(Files.readString(dockerfile))) {
+                log.append("[경고] Dockerfile이 ").append(DeployPrebuilder.STAGE_DIR)
+                        .append("/를 쓰지 않음 — 미리 빌드 산출물이 이미지에 들어가지 않을 수 있음\n");
             }
 
             int containerPort = DockerfileSupport.parseExposedPort(Files.readString(dockerfile))
@@ -151,17 +197,26 @@ public class DeployService {
 
     /** 템플릿(비면 기본값)의 placeholder를 채우고 끝에 빌드 금지 규칙을 붙인다. */
     static String buildDockerfilePrompt(String tpl, String githubRepo, String branch) {
-        String base = (tpl == null || tpl.isBlank()) ? DEFAULT_DOCKERFILE_PROMPT : tpl;
-        return base
-                .replace("{github_repo}", githubRepo)
-                .replace("{branch}", branch)
-                + DOCKERFILE_NO_BUILD_RULE;
+        return buildDockerfilePrompt(tpl, githubRepo, branch, null);
     }
 
-    private void generateDockerfile(WorkerTaskResponse task, File worktree, StringBuilder log)
-            throws Exception {
+    /** prebuildSection(미리 빌드 안내)이 null·빈 값이면 3인자와 같은 문자열, 아니면 템플릿 뒤·빌드 금지 규칙 앞에 넣는다. */
+    static String buildDockerfilePrompt(String tpl, String githubRepo, String branch, String prebuildSection) {
+        String base = (tpl == null || tpl.isBlank()) ? DEFAULT_DOCKERFILE_PROMPT : tpl;
+        String filled = base
+                .replace("{github_repo}", githubRepo)
+                .replace("{branch}", branch);
+        if (prebuildSection != null && !prebuildSection.isBlank()) {
+            filled += (filled.endsWith("\n") ? "" : "\n") + "\n" + prebuildSection
+                    + (prebuildSection.endsWith("\n") ? "" : "\n");
+        }
+        return filled + DOCKERFILE_NO_BUILD_RULE;
+    }
+
+    private void generateDockerfile(WorkerTaskResponse task, File worktree, StringBuilder log,
+                                    String prebuildSection) throws Exception {
         String prompt = buildDockerfilePrompt(props.deploy().dockerfilePromptTemplate(),
-                task.githubRepo(), task.headBranch());
+                task.githubRepo(), task.headBranch(), prebuildSection);
         ClaudeExecAdapter.ExecResult exec = claude.exec(
                 prompt, worktree, props.deploy().dockerfileTimeout(), java.util.List.of(), true);
         log.append(tail(exec.stdout(), 2000)).append('\n');

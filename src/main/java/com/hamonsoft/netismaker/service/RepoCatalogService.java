@@ -19,6 +19,7 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Objects;
 import java.util.Set;
+import java.util.regex.Pattern;
 
 @Service
 @Profile("api")
@@ -65,6 +66,7 @@ public class RepoCatalogService {
                 p.ownerRepo(), blankToNull(req.defaultBranch()), req.description(), adminId);
         if (req.enabled() != null) e.setEnabled(req.enabled());
         applyArtifact(e, req);
+        applyPrebuild(e, req);
         return repo.save(e);
     }
 
@@ -91,6 +93,7 @@ public class RepoCatalogService {
         e.setDescription(req.description());
         if (req.enabled() != null) e.setEnabled(req.enabled());
         applyArtifact(e, req);
+        applyPrebuild(e, req);
         e.setUpdatedAt(OffsetDateTime.now());
         return e;
     }
@@ -240,6 +243,67 @@ public class RepoCatalogService {
         if (req.artifactEnabled() == null) return;
         e.setArtifactEnabled(req.artifactEnabled());
         e.setArtifactPath(blankToNull(req.artifactPath()));
+    }
+
+    /**
+     * prebuildEnabled가 null이면(활성화 토글 등) 미리 빌드 설정 4개를 그대로 둔다 (스펙 2026-10-28 §3).
+     * 켜면 검증 후 앞뒤 공백을 뺀 값을, 끄면 검증 없이 값을 보존한다(빈 문자열은 null).
+     */
+    private static void applyPrebuild(RepoCatalogEntry e, RepoCatalogDto.UpsertRequest req) {
+        if (req.prebuildEnabled() == null) return;
+        if (req.prebuildEnabled()) {
+            validatePrebuild(req.prebuildCommand(), req.prebuildArtifact(), req.prebuildToolchain());
+        }
+        e.setPrebuildEnabled(req.prebuildEnabled());
+        e.setPrebuildCommand(blankToNull(req.prebuildCommand()));
+        e.setPrebuildArtifact(blankToNull(req.prebuildArtifact()));
+        e.setPrebuildToolchain(blankToNull(req.prebuildToolchain()));
+    }
+
+    private static final Pattern PREBUILD_TOOLCHAIN = Pattern.compile("^[A-Za-z0-9._-]{1,50}$");
+    private static final Pattern PREBUILD_ARTIFACT_FORBIDDEN = Pattern.compile("[?<>|\":]");
+
+    /**
+     * 미리 빌드를 켤 때의 입력 검증. 위반이면 400. 순서: 명령 필수 → 한 줄 → 산출물 필수 → 상대 경로(빈 조각 포함)
+     * → 쓸 수 없는 문자 → * 위치 → 도구 이름.
+     * 경로는 {@code /}·{@code \} 둘 다 구분자로 본다(워커가 Windows일 수 있다).
+     */
+    static void validatePrebuild(String command, String artifact, String toolchain) {
+        String cmd = blankToNull(command);
+        if (cmd == null) throw badRequest("미리 빌드 명령이 필요합니다");
+        if (cmd.indexOf('\n') >= 0 || cmd.indexOf('\r') >= 0) throw badRequest("미리 빌드 명령은 한 줄이어야 합니다");
+        String art = blankToNull(artifact);
+        if (art == null) throw badRequest("미리 빌드 산출물 경로가 필요합니다");
+
+        String[] parts = art.split("[/\\\\]", -1);
+        boolean drive = art.length() >= 2 && art.charAt(1) == ':' && Character.isLetter(art.charAt(0));
+        boolean dotdot = false;
+        boolean emptyPart = false;   // 끝 구분자(hm-dash/target/)·a//b — 워커가 산출물 이름을 못 찾는다
+        for (String part : parts) {
+            if (part.equals("..")) dotdot = true;
+            if (part.isEmpty()) emptyPart = true;
+        }
+        if (art.startsWith("/") || art.startsWith("\\") || drive || dotdot || emptyPart) {
+            throw badRequest("미리 빌드 산출물 경로는 레포 안 상대 경로여야 합니다");
+        }
+        // Windows 워커에서 경로가 될 수 없는 문자(드라이브 C:는 위에서 걸렀다 — 여기의 :는 어디에 있든)
+        if (PREBUILD_ARTIFACT_FORBIDDEN.matcher(art).find()) {
+            throw badRequest("미리 빌드 산출물 경로에 쓸 수 없는 문자가 있습니다");
+        }
+        for (int i = 0; i < parts.length - 1; i++) {
+            if (parts[i].indexOf('*') >= 0) {
+                throw badRequest("미리 빌드 산출물 경로의 *는 마지막 이름에만 쓸 수 있습니다");
+            }
+        }
+
+        String tool = blankToNull(toolchain);
+        if (tool != null && !PREBUILD_TOOLCHAIN.matcher(tool).matches()) {
+            throw badRequest("미리 빌드 도구 이름은 영문·숫자·. _ -로 50자 이하여야 합니다");
+        }
+    }
+
+    private static TaskException badRequest(String message) {
+        return new TaskException(HttpStatus.BAD_REQUEST, message);
     }
 
     private static String blankToNull(String s) {

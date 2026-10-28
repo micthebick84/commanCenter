@@ -82,4 +82,22 @@ class WorkerTaskResponseRepoTest {
         assertThat(back.closeContext()).isNull();
         assertThat(back.closeProgress()).isNull();
     }
+
+    @Test
+    void prebuild_spec_round_trips_and_a_payload_without_it_reads_null() throws Exception {
+        Task t = Task.create("acme/widgets", "main", "t", "d", "admin", 3, List.of(), "claude-opus-5", "high");
+        WorkerTaskResponse.PrebuildSpec spec = new WorkerTaskResponse.PrebuildSpec("mvn -o package", "t/*.war", "jdk8-maven");
+        WorkerTaskResponse r = WorkerTaskResponse.forDeploy(t, spec);
+
+        com.fasterxml.jackson.databind.ObjectMapper json =
+                new com.fasterxml.jackson.databind.ObjectMapper().findAndRegisterModules();
+        WorkerTaskResponse back = json.readValue(json.writeValueAsString(r), WorkerTaskResponse.class);
+        assertThat(back.prebuild()).isEqualTo(spec);
+        assertThat(WorkerTaskResponse.forDeploy(t).prebuild()).isNull();
+
+        // 구버전 API가 보낸 claim — prebuild 키가 없으면 null
+        WorkerTaskResponse old = json.readValue(
+                "{\"id\":1,\"githubRepo\":\"a/b\",\"kind\":\"DEPLOY\"}", WorkerTaskResponse.class);
+        assertThat(old.prebuild()).isNull();
+    }
 }

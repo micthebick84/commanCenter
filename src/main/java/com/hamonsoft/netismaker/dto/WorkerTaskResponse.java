@@ -70,10 +70,34 @@ public record WorkerTaskResponse(
          * IMPLEMENTATION 전용: 읽기 전용 참조 repo와 인터뷰가 고정한 커밋 (스펙 2026-10-24 §4.7). 다른 kind는 빈 목록,
          * 구버전 API의 null도 빈 목록으로 읽는다 — 워커는 null을 보지 않는다.
          */
-        List<TaskRefRepo> refRepos
+        List<TaskRefRepo> refRepos,
+        /**
+         * DEPLOY 전용: 배포 전 레포 명령으로 먼저 빌드하라는 지시 (스펙 2026-10-28 §3). 꺼진 레포·다른 kind·구버전 API는
+         * null — 워커는 지금처럼 Dockerfile 빌드만 한다.
+         */
+        PrebuildSpec prebuild
 ) {
     public WorkerTaskResponse {
         if (refRepos == null) refRepos = List.of();
+    }
+
+    /** 미리 빌드 지시. toolchain은 워커 설정의 도구 이름(null이면 워커 환경 그대로). */
+    public record PrebuildSpec(String command, String artifact, String toolchain) {}
+
+    /** 미리 빌드(prebuild) 도입 전 31개 인자 정규 생성자 — 기존 팩토리·테스트 호환. */
+    public WorkerTaskResponse(Long id, String githubRepo, String githubBranch, String title, String description,
+                              Kind kind, List<TaskMcpSpec> mcpsExtra, String analysisMarkdown, String subtasksJson,
+                              String headBranch, String headSha, List<EnvVar> envVars, String model, String effort,
+                              String designMarkdown, String mockupFilesJson, String feedbackHistoryJson,
+                              String designUrl, String designSystemProjectId, String designOutputProjectId,
+                              String gitUrl, String repoHost, String planMarkdown,
+                              Integer prNumber, String prUrl, String closeProgress, CloseContext closeContext,
+                              CloseArtifactSpec closeArtifact, DbMcpGrant dbMcp, ImplementationSpec implementation,
+                              List<TaskRefRepo> refRepos) {
+        this(id, githubRepo, githubBranch, title, description, kind, mcpsExtra, analysisMarkdown, subtasksJson,
+                headBranch, headSha, envVars, model, effort, designMarkdown, mockupFilesJson, feedbackHistoryJson,
+                designUrl, designSystemProjectId, designOutputProjectId, gitUrl, repoHost, planMarkdown,
+                prNumber, prUrl, closeProgress, closeContext, closeArtifact, dbMcp, implementation, refRepos, null);
     }
 
     /** 구현 지시 블록. mode는 ImplementationMode 이름, timeoutMinutes는 claim 때 작업에 기록한 상한. */
@@ -168,7 +192,7 @@ public record WorkerTaskResponse(
                 analysisMarkdown, subtasksJson, headBranch, headSha, envVars, model, effort, designMarkdown,
                 mockupFilesJson, feedbackHistoryJson, designUrl, designSystemProjectId, designOutputProjectId,
                 gitUrl, repoHost, planMarkdown, prNumber, prUrl, closeProgress, closeContext, closeArtifact, grant,
-                implementation, refRepos);
+                implementation, refRepos, prebuild);
     }
 
     /** 워커가 clone/폴더/MR에 쓰는 저장소 참조. 새 필드가 없는 페이로드는 GitHub로 복원된다. */
@@ -224,11 +248,16 @@ public record WorkerTaskResponse(
     }
 
     public static WorkerTaskResponse forDeploy(Task t) {
+        return forDeploy(t, null);
+    }
+
+    public static WorkerTaskResponse forDeploy(Task t, PrebuildSpec prebuild) {
         return new WorkerTaskResponse(t.getId(), t.getGithubRepo(), t.getGithubBranch(),
                 t.getTitle(), t.getDescription(), Kind.DEPLOY, List.of(), null, null,
                 t.getHeadBranch(), t.getHeadSha(),
                 t.getEnvVars() == null ? List.of() : List.copyOf(t.getEnvVars()), null, null,
-                null, null, null, null, null, null, t.getGitUrl(), hostOf(t), null);
+                null, null, null, null, null, null, t.getGitUrl(), hostOf(t), null,
+                null, null, null, null, null, null, null, List.of(), prebuild);
     }
 
     public static WorkerTaskResponse forUndeploy(Task t) {

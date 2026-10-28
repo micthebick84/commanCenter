@@ -23,6 +23,10 @@ interface RepoEntry {
   updatedAt: string
   artifactEnabled: boolean
   artifactPath: string | null
+  prebuildEnabled: boolean
+  prebuildCommand: string | null
+  prebuildArtifact: string | null
+  prebuildToolchain: string | null
 }
 
 const $q = useQuasar()
@@ -86,6 +90,10 @@ const form = reactive({
   enabled: true,
   artifactEnabled: false,
   artifactPath: '',
+  prebuildEnabled: false,
+  prebuildCommand: '',
+  prebuildArtifact: '',
+  prebuildToolchain: '',
 })
 const submitting = ref(false)
 
@@ -98,6 +106,10 @@ function openCreate() {
   form.enabled = true
   form.artifactEnabled = false
   form.artifactPath = ''
+  form.prebuildEnabled = false
+  form.prebuildCommand = ''
+  form.prebuildArtifact = ''
+  form.prebuildToolchain = ''
   showForm.value = true
 }
 
@@ -110,6 +122,10 @@ function openEdit(e: RepoEntry) {
   form.enabled = e.enabled
   form.artifactEnabled = e.artifactEnabled ?? false
   form.artifactPath = e.artifactPath ?? ''
+  form.prebuildEnabled = e.prebuildEnabled ?? false
+  form.prebuildCommand = e.prebuildCommand ?? ''
+  form.prebuildArtifact = e.prebuildArtifact ?? ''
+  form.prebuildToolchain = e.prebuildToolchain ?? ''
   showForm.value = true
 }
 
@@ -124,6 +140,10 @@ async function submit() {
       enabled: form.enabled,
       artifactEnabled: form.artifactEnabled,
       artifactPath: form.artifactPath || null,
+      prebuildEnabled: form.prebuildEnabled,
+      prebuildCommand: form.prebuildCommand.trim() || null,
+      prebuildArtifact: form.prebuildArtifact.trim() || null,
+      prebuildToolchain: form.prebuildToolchain.trim() || null,
     }
     if (editingId.value) {
       await useApi(`/api/admin/repo-catalog/${editingId.value}`, { method: 'PUT', body })
@@ -219,6 +239,16 @@ const canSubmit = computed(
             :label="`${e.host} · 등록 불가`"
             class="q-ma-none"
           />
+          <q-chip
+            v-if="e.prebuildEnabled"
+            size="sm"
+            dense
+            color="blue-grey-2"
+            text-color="grey-9"
+            label="미리 빌드"
+            class="q-ma-none"
+            data-test="catalog-prebuild-chip"
+          />
         </template>
         <div class="row no-wrap items-center q-gutter-x-xs">
           <q-icon name="folder" size="14px" color="grey-6" />
@@ -293,6 +323,15 @@ const canSubmit = computed(
             color="orange-3"
             text-color="grey-9"
             :label="`${props.row.host} · 등록 불가`"
+          />
+          <q-chip
+            v-if="props.row.prebuildEnabled"
+            size="sm"
+            dense
+            color="blue-grey-2"
+            text-color="grey-9"
+            label="미리 빌드"
+            data-test="catalog-prebuild-chip"
           />
         </q-td>
       </template>
@@ -396,6 +435,51 @@ const canSubmit = computed(
           spellcheck="false"
           data-test="form-artifact-path"
         />
+        <q-toggle
+          v-model="form.prebuildEnabled"
+          label="배포 전 워커에서 미리 빌드"
+          color="primary"
+          data-test="form-prebuild-enabled"
+        />
+        <div class="text-caption text-grey-7">
+          사내 라이브러리처럼 원격 Docker 안에서 받을 수 없는 의존성이 있을 때. 명령은 워커 PC에서 운영자 계정으로 실행됩니다. 명령에 비밀번호·토큰을 넣지 마세요 — 배포 로그에 그대로 보입니다.
+        </div>
+        <template v-if="form.prebuildEnabled">
+          <q-input
+            v-model="form.prebuildCommand"
+            label="빌드 명령"
+            placeholder="mvn -B -o package"
+            outlined
+            :dense="!mobile"
+            autocapitalize="off"
+            autocorrect="off"
+            spellcheck="false"
+            data-test="form-prebuild-command"
+          />
+          <q-input
+            v-model="form.prebuildArtifact"
+            label="산출물 경로"
+            placeholder="hm-dash/target/*.war"
+            outlined
+            :dense="!mobile"
+            autocapitalize="off"
+            autocorrect="off"
+            spellcheck="false"
+            data-test="form-prebuild-artifact"
+          />
+          <q-input
+            v-model="form.prebuildToolchain"
+            label="도구 이름 (선택)"
+            placeholder="jdk8-maven"
+            hint="워커 설정의 툴체인 이름. 비우면 워커 기본 환경"
+            outlined
+            :dense="!mobile"
+            autocapitalize="off"
+            autocorrect="off"
+            spellcheck="false"
+            data-test="form-prebuild-toolchain"
+          />
+        </template>
       </template>
     </AdminFormDialog>
 

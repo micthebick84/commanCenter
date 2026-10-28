@@ -190,9 +190,19 @@ netis-maker:
       public-host: ${DEPLOY_PUBLIC_HOST:localhost}
       # docker build 시간 상한. 넘기면 docker CLI(와 ssh 헬퍼)를 강제 종료하고 배포실패.
       # 구형 빌더가 컨테이너 안에서 mvn·apt-get을 돌리고 원격 데몬으로 컨텍스트를 보내 콜드 빌드는 10분을 넘볼 수 있다.
+      # API `app.task.deploy-stale-threshold-minutes`(70)보다 생성+미리 빌드+build 합이 작게 둘 것.
       build-timeout: ${DEPLOY_BUILD_TIMEOUT:30m}
       # Dockerfile이 없을 때 생성하는 claude의 시간 상한(build-timeout과 별개).
       dockerfile-timeout: ${DEPLOY_DOCKERFILE_TIMEOUT:10m}
+      # 배포 전 워커 미리 빌드(레포 카탈로그에서 켠 레포만, PrebuildProperties). 명령 env에서 스택 비밀은 뺀다.
+      # 툴체인 java-home이 비면 "설정 안 됨" — 그 도구를 쓰는 레포의 배포만 실패한다(기동은 막지 않음).
+      # 툴체인을 더 두려면 항목을 더한다(env 이름 규칙은 jdk8-maven처럼).
+      prebuild:
+        timeout: ${DEPLOY_PREBUILD_TIMEOUT:20m}
+        toolchains:
+          jdk8-maven:
+            java-home: ${PREBUILD_JDK8_JAVA_HOME:}
+            path: ${PREBUILD_JDK8_PATH:}      # PATH 앞에 붙일 폴더, ';'(Windows)·':'(그 밖) 구분 — 예: Maven bin
       # 컨테이너 기동 후 생존 확인 grace 기간(초). 이 안에 종료되면 배포실패 + 컨테이너 로그 첨부.
       health-check-seconds: ${DEPLOY_HEALTHCHECK_SECONDS:15}
       # HTTP readiness: 기동 후 최대 이 시간(초) 안에 readiness-path가 응답하면 즉시 배포완료.

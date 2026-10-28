@@ -6,6 +6,7 @@ import com.hamonsoft.netismaker.entity.RefRepo;
 import com.hamonsoft.netismaker.entity.RepoCatalogEntry;
 import com.hamonsoft.netismaker.git.RepoRef;
 import com.hamonsoft.netismaker.repository.RepoCatalogRepository;
+import com.hamonsoft.netismaker.util.NoteFolderPath;
 import com.hamonsoft.netismaker.util.RepoUrlParser;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Profile;
@@ -67,6 +68,7 @@ public class RepoCatalogService {
         if (req.enabled() != null) e.setEnabled(req.enabled());
         applyArtifact(e, req);
         applyPrebuild(e, req);
+        applyNoteFolder(e, req, true);
         return repo.save(e);
     }
 
@@ -94,6 +96,7 @@ public class RepoCatalogService {
         if (req.enabled() != null) e.setEnabled(req.enabled());
         applyArtifact(e, req);
         applyPrebuild(e, req);
+        applyNoteFolder(e, req, false);
         e.setUpdatedAt(OffsetDateTime.now());
         return e;
     }
@@ -258,6 +261,19 @@ public class RepoCatalogService {
         e.setPrebuildCommand(blankToNull(req.prebuildCommand()));
         e.setPrebuildArtifact(blankToNull(req.prebuildArtifact()));
         e.setPrebuildToolchain(blankToNull(req.prebuildToolchain()));
+    }
+
+    /**
+     * 종료 노트 폴더 (스펙 2026-10-28 close-note-folder §3-1). 수정 때 null이면 그대로 둔다 — 활성 토글이나 이 칸을 안 바꾼 저장이
+     * 첫 종료 때 자동 기록된 값을 덮지 않게. 공백은 비움(다음 종료 때 다시 고르게), 그 밖은 검증 후 저장. 등록은 null·공백 모두 비움.
+     */
+    private static void applyNoteFolder(RepoCatalogEntry e, RepoCatalogDto.UpsertRequest req, boolean creating) {
+        if (!creating && req.noteFolder() == null) return;
+        try {
+            e.setNoteFolder(NoteFolderPath.normalize(req.noteFolder()));
+        } catch (IllegalArgumentException ex) {
+            throw badRequest(ex.getMessage());
+        }
     }
 
     private static final Pattern PREBUILD_TOOLCHAIN = Pattern.compile("^[A-Za-z0-9._-]{1,50}$");

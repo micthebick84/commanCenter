@@ -43,7 +43,10 @@ class TaskCloserTest {
     }
 
     private WorkerTaskResponse task(String progress, String mergeSha) {
-        CloseContext ctx = new CloseContext(null, null, null, mergeSha, "http://h:1", null, List.of(), List.of());
+        return taskWith(progress, new CloseContext(null, null, null, mergeSha, "http://h:1", null, List.of(), List.of()));
+    }
+
+    private WorkerTaskResponse taskWith(String progress, CloseContext ctx) {
         return new WorkerTaskResponse(7L, "acme/w", "main", "로그인 수정", "d", WorkerTaskResponse.Kind.CLOSE,
                 List.of(), null, null, "netismaker/task-7", SHA, List.of(), null, null, null, null, null, null,
                 null, null, null, "github", null, 3, "https://github.com/acme/w/pull/3", progress, ctx);
@@ -70,6 +73,60 @@ class TaskCloserTest {
         Clock clock = Clock.fixed(Instant.parse("2026-10-13T03:00:00Z"), ZoneId.of("Asia/Seoul"));
         closer = new TaskCloser(props, cp, http, deploy, worktrees, claude, reporter, List.of(mr),
                 new CloseNoteWriter(), clock);
+    }
+
+    private List<CloseProgressRequest> reported() {
+        ArgumentCaptor<CloseProgressRequest> cap = ArgumentCaptor.forClass(CloseProgressRequest.class);
+        verify(http, atLeast(0)).postCloseProgress(eq(7L), cap.capture());
+        return cap.getAllValues();
+    }
+
+    private static CloseContext folderCtx(String alias, String noteFolder) {
+        return new CloseContext(null, null, null, null, "http://h:1", null, List.of(), List.of(),
+                null, null, false, null, alias, null, noteFolder);
+    }
+
+    private static final ClaudeExecAdapter.Usage U1 = new ClaudeExecAdapter.Usage(new java.math.BigDecimal("0.01"), 10, 1, 0, 0);
+    private static final ClaudeExecAdapter.Usage U2 = new ClaudeExecAdapter.Usage(new java.math.BigDecimal("0.20"), 200, 20, 0, 0);
+
+    @Test
+    void 카탈로그_노트_폴더에_쓰고_기록할_폴더는_보내지_않는다() throws Exception {
+        closer.process(taskWith("MERGED,UNDEPLOYED", folderCtx("동부병원 대시보드", "HamonSoft/동부병원")));
+        assertThat(tmp.resolve("vault/HamonSoft/동부병원/로그인-수정-작업7-2026-10-13.md")).exists();
+        assertThat(tmp.resolve("vault/HamonSoft/netisMaker/netisMaker-진행상황-2026-10-13.md")).exists();
+        CloseProgressRequest note = reported().get(0);
+        assertThat(note.step()).isEqualTo(CloseStep.NOTE_WRITTEN);
+        assertThat(note.notePath()).isEqualTo("HamonSoft/동부병원/로그인-수정-작업7-2026-10-13.md");
+        assertThat(note.noteFolder()).isNull();
+    }
+
+    @Test
+    void 고른_폴더에_쓰고_기록할_폴더와_합친_사용량을_보낸다() throws Exception {
+        Files.createDirectories(tmp.resolve("vault/HamonSoft/동부병원"));
+        when(claude.execWithoutTools(anyString(), any(), any(), anyString()))
+                .thenReturn(new ClaudeExecAdapter.ExecResult(0, "HamonSoft/동부병원", 10, U1))
+                .thenReturn(new ClaudeExecAdapter.ExecResult(0, "# 노트 본문", 10, U2));
+        closer.process(taskWith("MERGED,UNDEPLOYED", folderCtx("동부병원 대시보드", null)));
+        assertThat(tmp.resolve("vault/HamonSoft/동부병원/로그인-수정-작업7-2026-10-13.md")).exists();
+        assertThat(reported().get(0).noteFolder()).isEqualTo("HamonSoft/동부병원");
+        WorkerResultRequest r = terminal();
+        assertThat(r.status()).isEqualTo(TaskStatus.CLOSED);
+        assertThat(r.usage().costUsd()).isEqualByComparingTo("0.21");
+        assertThat(r.usage().inputTokens()).isEqualTo(210);
+    }
+
+    @Test
+    void 폴더_고르기_실패면_노트_없이_종료실패() throws Exception {
+        Files.createDirectories(tmp.resolve("vault/HamonSoft/동부병원"));
+        when(claude.execWithoutTools(anyString(), any(), any(), anyString()))
+                .thenReturn(new ClaudeExecAdapter.ExecResult(1, "", 10, U1));
+        closer.process(taskWith("MERGED,UNDEPLOYED", folderCtx("동부병원 대시보드", null)));
+        assertThat(reported()).isEmpty();
+        verify(mr, never()).deleteBranch(any(), any());
+        WorkerResultRequest r = terminal();
+        assertThat(r.status()).isEqualTo(TaskStatus.CLOSE_FAILED);
+        assertThat(r.failureReason()).startsWith("노트 폴더 고르기 실패(exit=1)");
+        assertThat(r.usage().costUsd()).isEqualByComparingTo("0.01");
     }
 
     private List<CloseStep> reportedSteps() {
@@ -215,7 +272,7 @@ class TaskCloserTest {
     @Test
     void 노트_저장이_실패해도_사용량은_종료실패에_실린다() throws Exception {
         CloseNoteWriter badWriter = mock(CloseNoteWriter.class);
-        when(badWriter.write(any(), any(), any(), any(), any())).thenThrow(new java.io.IOException("디스크 가득"));
+        when(badWriter.write(any(), any(), any(), any(), any(), any())).thenThrow(new java.io.IOException("디스크 가득"));
         WorkerProperties props = mock(WorkerProperties.class);
         when(props.id()).thenReturn("w1");
         when(props.reposDir()).thenReturn(tmp.resolve("repos").toString());

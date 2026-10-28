@@ -44,6 +44,7 @@ public class TaskCloser {
     private final ResultReporter reporter;
     private final List<MergeRequestCloser> closers;
     private final CloseNoteWriter noteWriter;
+    private final CloseNoteFolderResolver folderResolver;
     private final ArtifactPublisher artifacts;
     private final Clock clock;
 
@@ -76,6 +77,7 @@ public class TaskCloser {
         this.reporter = reporter;
         this.closers = closers;
         this.noteWriter = noteWriter;
+        this.folderResolver = new CloseNoteFolderResolver(claude, closeProps);
         this.artifacts = artifacts;
         this.clock = clock;
     }
@@ -131,7 +133,7 @@ public class TaskCloser {
             if (!done.contains(CloseStep.NOTE_WRITTEN)) {
                 NoteOutcome n = writeNote(task, mergeSha, uploaded);
                 usage = n.usage();
-                progress(task, CloseStep.NOTE_WRITTEN, null, n.relativePath());
+                progress(task, CloseStep.NOTE_WRITTEN, null, n.relativePath(), n.recordFolder());
             }
             if (!done.contains(CloseStep.BRANCH_DELETED)) {
                 step("브랜치 삭제", () -> { closerFor(ref).deleteBranch(ref, task.headBranch()); return null; });
@@ -152,7 +154,8 @@ public class TaskCloser {
         reporter.reportTerminal(taskId, WorkerResultRequest.closeFailed(props.id(), GitRemotes.mask(reason), null));
     }
 
-    private record NoteOutcome(String relativePath, WorkerResultRequest.UsageReport usage) {}
+    /** recordFolder = 카탈로그에 기록할 노트 폴더(이번에 정했을 때만, 아니면 null). */
+    private record NoteOutcome(String relativePath, String recordFolder, WorkerResultRequest.UsageReport usage) {}
 
     /** 볼트 경로가 설정돼 있고 실제 폴더인지 — 아니면 노트 단계 실패 메시지로 멈춘다. */
     private Path requireVault() throws StepFailed {
@@ -167,17 +170,10 @@ public class TaskCloser {
     private NoteOutcome writeNote(WorkerTaskResponse task, String mergeSha, ArtifactInfo uploaded) throws StepFailed {
         Path vault = requireVault();
         Path work = Paths.get(props.reposDir()).resolveSibling("close").resolve("task-" + task.id());
-        ClaudeExecAdapter.ExecResult r = step("노트 생성", () -> {
-            Files.createDirectories(work);
-            try {
-                return claude.execWithoutTools(CloseNotePrompt.render(closeProps.notePromptTemplate(), task, mergeSha),
-                        work.toFile(), closeProps.noteTimeout(), closeProps.noteModel());
-            } finally {
-                RepoCacheCleanupJob.DeleteResult d = RepoCacheCleanupJob.deleteTree(work);
-                if (d.failures() > 0) log.warn("노트 작업 폴더 정리 실패 {}건: {}", d.failures(), work);
-            }
-        });
-        WorkerResultRequest.UsageReport usage = usageOf(r.usage());
+        CloseNoteFolderResolver.Resolved folder = resolveFolder(vault, task, work);
+        WorkerResultRequest.UsageReport folderUsage = usageOf(folder.usage());
+        ClaudeExecAdapter.ExecResult r = generateNote(task, mergeSha, work, folderUsage);
+        WorkerResultRequest.UsageReport usage = sum(folderUsage, usageOf(r.usage()));
         // 코드펜스만 있는 출력("```markdown\n```")은 clean() 뒤에 비므로 빈 노트와 같이 실패로 본다.
         if (r.exitCode() != 0 || CloseNoteWriter.clean(r.stdout()).isBlank()) {
             String out = r.stdout() == null ? "" : r.stdout();
@@ -186,13 +182,64 @@ public class TaskCloser {
         }
         CloseNoteWriter.Written w;
         try {
-            w = step("노트 저장", () -> noteWriter.write(vault, closeProps.noteFolder(),
+            w = step("노트 저장", () -> noteWriter.write(vault, folder.folder(), closeProps.noteFolder(),
                     noteMeta(task, mergeSha, uploaded),
                     r.stdout(), LocalDate.now(clock)));
         } catch (StepFailed e) {
             throw new StepFailed(e.getMessage(), usage);
         }
-        return new NoteOutcome(w.relativePath(), usage);
+        return new NoteOutcome(w.relativePath(), folder.record() ? folder.folder() : null, usage);
+    }
+
+    /** 노트 본문 생성. 실패하면 앞서 쓴 폴더 고르기 사용량을 싣는다. */
+    private ClaudeExecAdapter.ExecResult generateNote(WorkerTaskResponse task, String mergeSha, Path work,
+                                                      WorkerResultRequest.UsageReport folderUsage) throws StepFailed {
+        try {
+            return step("노트 생성", () -> {
+                Files.createDirectories(work);
+                try {
+                    return claude.execWithoutTools(CloseNotePrompt.render(closeProps.notePromptTemplate(), task, mergeSha),
+                            work.toFile(), closeProps.noteTimeout(), closeProps.noteModel());
+                } finally {
+                    RepoCacheCleanupJob.DeleteResult d = RepoCacheCleanupJob.deleteTree(work);
+                    if (d.failures() > 0) log.warn("노트 작업 폴더 정리 실패 {}건: {}", d.failures(), work);
+                }
+            });
+        } catch (StepFailed e) {
+            throw new StepFailed(e.getMessage(), e.usage() != null ? e.usage() : folderUsage);
+        }
+    }
+
+    /** 노트 폴더 결정(스펙 2026-10-28 close-note-folder §3). 폴더 고르기 claude가 돈 뒤의 실패는 그 사용량을 싣는다. */
+    private CloseNoteFolderResolver.Resolved resolveFolder(Path vault, WorkerTaskResponse task, Path work) throws StepFailed {
+        try {
+            return folderResolver.resolve(vault, task, work);
+        } catch (CloseNoteFolderResolver.ResolveFailed e) {
+            throw new StepFailed(e.getMessage(), usageOf(e.usage()));
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new StepFailed("노트 폴더 고르기 중단됨");
+        } finally {
+            RepoCacheCleanupJob.DeleteResult d = RepoCacheCleanupJob.deleteTree(work);
+            if (d.failures() > 0) log.warn("노트 작업 폴더 정리 실패 {}건: {}", d.failures(), work);
+        }
+    }
+
+    /** 두 claude 호출(폴더 고르기 + 노트 생성)의 사용량 합. 한쪽이 null이면 다른 쪽. */
+    static WorkerResultRequest.UsageReport sum(WorkerResultRequest.UsageReport a, WorkerResultRequest.UsageReport b) {
+        if (a == null) return b;
+        if (b == null) return a;
+        return new WorkerResultRequest.UsageReport(add(a.costUsd(), b.costUsd()), add(a.inputTokens(), b.inputTokens()),
+                add(a.outputTokens(), b.outputTokens()), add(a.cacheCreationTokens(), b.cacheCreationTokens()),
+                add(a.cacheReadTokens(), b.cacheReadTokens()));
+    }
+
+    private static java.math.BigDecimal add(java.math.BigDecimal a, java.math.BigDecimal b) {
+        return a == null ? b : b == null ? a : a.add(b);
+    }
+
+    private static Long add(Long a, Long b) {
+        return a == null ? b : b == null ? a : Long.valueOf(a + b);
     }
 
     /**
@@ -237,8 +284,13 @@ public class TaskCloser {
     }
 
     private void progress(WorkerTaskResponse task, CloseStep s, String mergeSha, String notePath) throws StepFailed {
+        progress(task, s, mergeSha, notePath, null);
+    }
+
+    private void progress(WorkerTaskResponse task, CloseStep s, String mergeSha, String notePath, String noteFolder)
+            throws StepFailed {
         step("진행 보고(" + s + ")", () -> {
-            http.postCloseProgress(task.id(), new CloseProgressRequest(props.id(), s, mergeSha, notePath));
+            http.postCloseProgress(task.id(), new CloseProgressRequest(props.id(), s, mergeSha, notePath, noteFolder));
             return null;
         });
     }

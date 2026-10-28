@@ -10,6 +10,8 @@ import { useNowTick } from '~/composables/useNowTick'
 import { MAX_FILES, MAX_FILE_MB, MAX_TOTAL_MB, validateFiles } from '~/composables/attachmentLimits'
 import { useHydrationSafeAuth } from '~/composables/useHydrationSafeAuth'
 import { useFullscreenDialog } from '~/composables/dialogLayout'
+import DeployEnvDialog from '~/components/tasks/DeployEnvDialog.vue'
+import type { EnvVar } from '~/composables/deployEnvForm'
 import RefRepoChips from '~/components/RefRepoChips.vue'
 import RefRepoAddForm from '~/components/RefRepoAddForm.vue'
 import { toInputs, useRefDraft, type RefRepoView } from '~/composables/refRepos'
@@ -44,6 +46,7 @@ interface TaskResponse {
   totalCostUsd: number | null
   claimedAt?: string | null
   implementationTimeoutMinutes?: number | null
+  envVars?: EnvVar[] | null
 }
 
 interface PageResponse<T> {
@@ -147,11 +150,24 @@ async function onDrop(stageKey: string, e: DragEvent) {
   await applyMove(id, move!)
 }
 
+// 보드 드래그·모바일 ⋮ 시트의 배포/재배포 환경변수 다이얼로그 (추천 불러오기·전송은 DeployEnvDialog)
+const envDialog = ref(false)
+const envMode = ref<'deploy' | 'redeploy'>('deploy')
+const envTask = ref<TaskResponse | null>(null)
+
 /**
  * 드래그 전이 실행. 배포 계열은 되돌리기가 비싸서(컨테이너 빌드/기동, 공개 URL 회수)
  * 목업과 달리 확인을 한 번 받는다 — 승인 계열은 목업대로 바로 실행.
  */
 async function applyMove(id: number, move: MoveDef) {
+  // 배포·재배포는 확인창 대신 환경변수 다이얼로그로 — 본문 없이 POST하면 서버가 저장된 env를 그대로 써서
+  // 첫 배포는 구현 때 뽑은 템플릿·직전 배포 값 없이 변수 0개로 떴다. 상세 화면의 배포 버튼과 같은 창이다.
+  if (move.path === 'deploy' || move.path === 'redeploy') {
+    envTask.value = tasks.value.find((t) => t.id === id) ?? null
+    envMode.value = move.path
+    envDialog.value = envTask.value != null
+    return
+  }
   // 종료 전이(close/approve·close/retry)는 병합이 끼어 있어 되돌릴 수 없음을 확인창에 밝힌다
   const warn = move.path.startsWith('close/') ? ' PR 병합·배포 중지·브랜치 삭제는 되돌릴 수 없습니다.' : ''
   if (move.confirm && !(await confirmDialog($q, `작업 #${id} — ${move.label}을(를) 실행할까요?${warn}`, { ok: move.label }))) return
@@ -878,6 +894,15 @@ const fullscreen = useFullscreenDialog()
         </q-card-actions>
       </q-card>
     </q-dialog>
+
+    <DeployEnvDialog
+      v-if="envTask"
+      v-model="envDialog"
+      :task-id="String(envTask.id)"
+      :mode="envMode"
+      :saved-env-vars="envTask.envVars ?? []"
+      @submitted="refresh"
+    />
   </q-page>
 </template>
 

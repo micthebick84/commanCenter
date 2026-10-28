@@ -71,20 +71,59 @@ describe('pages/tasks — 모바일 리스트 (스펙 2026-09-06 §4.1)', () => 
     w.unmount()
   })
 
-  it('⋮ → 시트의 배포 전이는 확인 후 POST /api/tasks/{id}/deploy', async () => {
-    await setViewportWidth(390)
-    vi.spyOn(window, 'confirm').mockReturnValue(false) // Claude 앱 브라우저 창처럼 네이티브 confirm이 안 뜨는 환경
-    const w = mount(PageWrapper, { attachTo: document.body })
-    await flushPromises()
-    const menus = w.findAll('[data-test="card-menu"]')
-    await menus[1]!.trigger('click') // #18 PR생성
-    await flushPromises()
-    ;(document.body.querySelector('[data-test="sheet-move"]') as HTMLElement).click()
-    await flushPromises()
-    expect(document.body.textContent).not.toContain('되돌릴 수 없습니다')
-    await confirmOk()
-    expect(useApiMock).toHaveBeenCalledWith('/api/tasks/18/deploy', { method: 'POST' })
-    w.unmount()
+  describe('⋮ → 시트의 배포·재배포는 환경변수 다이얼로그를 거친다 (본문 없는 POST로 첫 배포가 변수 없이 뜨던 문제)', () => {
+    const suggestion = {
+      rows: [{ key: 'DB_URL', value: 'jdbc:x', secret: false, description: '', required: true, source: 'TEMPLATE', valueFromPrevious: false }],
+      templateCount: 1,
+      previousTaskId: null,
+    }
+    function stubWith(list: unknown[]) {
+      useApiMock.mockImplementation((url: string) =>
+        /\/api\/tasks\/\d+\/deploy-env$/.test(url)
+          ? Promise.resolve(suggestion)
+          : url.startsWith('/api/tasks')
+            ? Promise.resolve({ content: list, totalElements: list.length, totalPages: 1 })
+            : Promise.resolve(null),
+      )
+    }
+    async function openSheetMove(w: ReturnType<typeof mount>, index: number) {
+      await w.findAll('[data-test="card-menu"]')[index]!.trigger('click')
+      await flushPromises()
+      ;(document.body.querySelector('[data-test="sheet-move"]') as HTMLElement).click()
+      await flushPromises()
+    }
+
+    it('배포: 확인창 없이 다이얼로그가 추천 값을 채우고, 배포를 누르면 envVars를 실어 POST한다', async () => {
+      await setViewportWidth(390)
+      stubWith(tasks)
+      const w = mount(PageWrapper, { attachTo: document.body })
+      await flushPromises()
+      await openSheetMove(w, 1) // #18 PR생성
+      expect(document.body.querySelector('[data-test="confirm-dialog-ok"]')).toBeNull()
+      expect(useApiMock).toHaveBeenCalledWith('/api/tasks/18/deploy-env')
+      expect(useApiMock).not.toHaveBeenCalledWith('/api/tasks/18/deploy', expect.anything())
+      expect(document.body.querySelector('[data-test="env-key-label"]')!.textContent).toBe('DB_URL')
+      ;(document.body.querySelector('[data-test="env-submit"]') as HTMLElement).click()
+      await flushPromises()
+      expect(useApiMock).toHaveBeenCalledWith('/api/tasks/18/deploy', {
+        method: 'POST',
+        body: { envVars: [{ key: 'DB_URL', value: 'jdbc:x', secret: false }] },
+      })
+      w.unmount()
+    })
+
+    it('재배포(배포실패): 같은 다이얼로그가 redeploy 모드로 열린다', async () => {
+      await setViewportWidth(390)
+      stubWith([t(40, 'DEPLOY_FAILED', '배포실패', '2026-08-24T03:00:00Z', { envVars: [{ key: 'A', value: '1', secret: false }] })])
+      const w = mount(PageWrapper, { attachTo: document.body })
+      await flushPromises()
+      await openSheetMove(w, 0)
+      expect(document.body.querySelector('[data-test="env-submit"]')!.textContent).toContain('재배포')
+      ;(document.body.querySelector('[data-test="env-submit"]') as HTMLElement).click()
+      await flushPromises()
+      expect(useApiMock).toHaveBeenCalledWith('/api/tasks/40/redeploy', expect.objectContaining({ method: 'POST' }))
+      w.unmount()
+    })
   })
 
   it('⋮ → 시트의 종료 전이 확인창은 되돌릴 수 없다는 문구를 덧붙인다 — 다른 전이는 그대로', async () => {

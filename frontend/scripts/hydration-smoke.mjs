@@ -30,6 +30,7 @@ const VIEWPORTS = [
   { name: '390', width: 390, height: 844 },
 ]
 const ANON_PATHS = ['/login', '/tasks', '/questions', '/requests']
+const QUESTION_PATHS = ['/questions', '/questions/3']
 const AUTH_PATHS = [
   '/',
   '/login',
@@ -170,10 +171,13 @@ async function startServer() {
 // ── 점검 ──────────────────────────────────────────────────────────────────────
 const HYDRATION_RE = /hydrat/i
 
-async function runCase(browser, { viewport, loggedIn, cookie }) {
+async function runCase(browser, { viewport, loggedIn, cookie, listHidden = false, paths: onlyPaths }) {
   const context = await browser.newContext({ viewport: { width: viewport.width, height: viewport.height } })
   if (cookie) {
     await context.addCookies([{ name: 'netis-maker-screen', value: cookie, url: BASE }])
+  }
+  if (listHidden) {
+    await context.addCookies([{ name: 'netis-maker-questions-list', value: 'hidden', url: BASE }])
   }
   if (loggedIn) {
     await context.addInitScript((v) => { try { localStorage.setItem('netis-maker-auth', v) } catch { /* noop */ } }, AUTH_STORAGE)
@@ -188,10 +192,10 @@ async function runCase(browser, { viewport, loggedIn, cookie }) {
   })
 
   const failures = []
-  const paths = loggedIn ? AUTH_PATHS : ANON_PATHS
+  const paths = onlyPaths ?? (loggedIn ? AUTH_PATHS : ANON_PATHS)
   for (const path of paths) {
     const page = await context.newPage()
-    const label = `${viewport.name}px ${loggedIn ? '로그인' : '비로그인'} 쿠키=${cookie ?? '없음'} ${path}`
+    const label = `${viewport.name}px ${loggedIn ? '로그인' : '비로그인'} 쿠키=${cookie ?? '없음'}${listHidden ? ' 목록접힘' : ''} ${path}`
     const problems = []
     page.on('console', (msg) => {
       if (HYDRATION_RE.test(msg.text())) problems.push(`console.${msg.type()}: ${msg.text()}`)
@@ -237,6 +241,10 @@ async function main() {
           r.unmocked.forEach((u) => unmocked.add(u))
         }
       }
+      // 질문 목록 접힘 쿠키(pages/questions.vue) — 서버·클라이언트가 같은 쿠키로 접힌 사이드바를 그리는지(좁은 화면은 무시)
+      const r = await runCase(browser, { viewport, loggedIn: true, cookie: matching, listHidden: true, paths: QUESTION_PATHS })
+      failures.push(...r.failures)
+      r.unmocked.forEach((u) => unmocked.add(u))
     }
     if (unmocked.size) console.log(`\n목 응답이 없어 null로 답한 API: ${[...unmocked].sort().join(', ')}`)
     if (failures.length) {

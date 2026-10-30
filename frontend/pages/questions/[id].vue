@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import type { Ref } from 'vue'
 import { useQuasar } from 'quasar'
 import InterviewPanel from '~/components/InterviewPanel.vue'
 import QuestionComposer from '~/components/chat/QuestionComposer.vue'
@@ -25,6 +26,8 @@ const route = useRoute()
 const $q = useQuasar()
 const sessionId = computed(() => Number(route.params.id))
 const openDrawer = inject<() => void>('questions:open-drawer', () => {})
+// 넓은 화면에서 셸 사이드바를 접었으면 좁은 화면처럼 헤더의 목록 버튼으로 다시 연다(셸 pages/questions.vue)
+const listHidden = inject<Ref<boolean>>('questions:list-hidden', ref(false))
 const refreshList = inject<() => void>('questions:refresh', () => {})
 
 const redirected = ref(false)
@@ -201,11 +204,12 @@ function goToTask() {
   <div class="conversation column no-wrap">
     <div class="row items-center no-wrap conv-header">
       <q-btn
-        v-if="$q.screen.lt.md"
+        v-if="$q.screen.lt.md || listHidden"
         flat
         dense
         round
         icon="menu"
+        aria-label="질문 목록 열기"
         data-test="open-drawer"
         @click="openDrawer"
       />

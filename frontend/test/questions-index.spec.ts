@@ -1,5 +1,6 @@
 import { mount, flushPromises } from '@vue/test-utils'
 import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { ref } from 'vue'
 import { QFile, QSelect } from 'quasar'
 import QuestionsIndex from '../pages/questions/index.vue'
 import { useApiMock } from './mocks/nuxt'
@@ -45,6 +46,22 @@ describe('pages/questions/index — 새 질문 입력창 (스펙 2026-09-05 §3�
     expect(w.find('[data-test="composer-send"]').attributes('disabled')).toBeDefined()
     expect(w.find('[data-test="model-picker"]').attributes('disabled')).toBeUndefined() // create 모드 = 픽커 활성
     expect(w.find('[data-test="mcp-button"]').text()).toContain('MCP 도구') // 넓은 화면: 라벨 노출
+    w.unmount()
+  })
+
+  it('넓은 화면에서는 목록 버튼이 없고, 셸 사이드바가 접혔으면(questions:list-hidden) 보인다 — 누르면 셸의 열기를 부른다', async () => {
+    const plain = mount(QuestionsIndex)
+    await flushPromises()
+    expect(plain.find('[data-test="open-drawer"]').exists()).toBe(false)
+    plain.unmount()
+
+    const openDrawer = vi.fn()
+    const w = mount(QuestionsIndex, {
+      global: { provide: { 'questions:list-hidden': ref(true), 'questions:open-drawer': openDrawer } },
+    })
+    await flushPromises()
+    await w.find('[data-test="open-drawer"]').trigger('click')
+    expect(openDrawer).toHaveBeenCalledTimes(1)
     w.unmount()
   })
 

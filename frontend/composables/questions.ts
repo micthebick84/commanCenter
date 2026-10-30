@@ -113,6 +113,9 @@ export function taskPrefillFromQuestion(q: QuestionDetail, catalog: RepoCatalogO
   }
 }
 
+/** 넓은 화면에서 질문 목록(사이드바)을 접었는지 기억하는 쿠키. 값은 'hidden'(접힘)뿐이고 펼치면 지운다. 화면 상태일 뿐 민감 정보 없음. */
+export const QUESTIONS_LIST_COOKIE = 'netis-maker-questions-list'
+
 export interface QuestionGroup {
   key: 'today' | 'week' | 'older'
   label: string

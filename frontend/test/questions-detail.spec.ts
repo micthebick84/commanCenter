@@ -1,5 +1,6 @@
 import { mount, flushPromises } from '@vue/test-utils'
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import { ref } from 'vue'
 import { QFile } from 'quasar'
 import QuestionDetail from '../pages/questions/[id].vue'
 import ModelEffortPicker from '../components/chat/ModelEffortPicker.vue'
@@ -94,6 +95,24 @@ describe('pages/questions/[id] — 대화 (스펙 2026-09-05 §3·§6)', () => {
     expect(w.find('[data-test="model-picker"]').text()).toContain('Sonnet 5') // 세션 값으로 시드
     expect(w.find('.bubble.assistant strong').text()).toBe('AuthController')
     expect(w.find('[data-test="close-session"]').text()).toContain('세션 종료') // 넓은 화면: 라벨 노출
+    expect(w.find('[data-test="open-drawer"]').exists()).toBe(false)
+    w.unmount()
+  })
+
+  it('넓은 화면이라도 셸 사이드바가 접혔으면(questions:list-hidden) 헤더에 목록 버튼을 보이고, 누르면 셸의 열기를 부른다', async () => {
+    const openDrawer = vi.fn()
+    const listHidden = ref(true)
+    const w = mount(QuestionDetail, {
+      global: { provide: { 'questions:list-hidden': listHidden, 'questions:open-drawer': openDrawer } },
+    })
+    await flushPromises()
+    const btn = w.find('[data-test="open-drawer"]')
+    expect(btn.exists()).toBe(true)
+    expect(btn.attributes('aria-label')).toBe('질문 목록 열기')
+    await btn.trigger('click')
+    expect(openDrawer).toHaveBeenCalledTimes(1)
+    listHidden.value = false // 셸이 다시 펼치면 버튼이 사라진다
+    await flushPromises()
     expect(w.find('[data-test="open-drawer"]').exists()).toBe(false)
     w.unmount()
   })

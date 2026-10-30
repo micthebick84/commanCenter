@@ -38,6 +38,7 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.Optional;
+import java.util.Set;
 
 /**
  *  워커 API 비즈니스 로직.
@@ -167,8 +168,34 @@ public class WorkerService {
         List<Task> candidates = supportsRefRepos
                 ? taskRepo.findClaimableForUpdateSkipLocked(PageRequest.of(0, 1))
                 : taskRepo.findClaimableExcludingRefImplementationsForUpdateSkipLocked();
-        if (candidates.isEmpty()) return Optional.empty();
-        Task t = candidates.get(0);
+        return candidates.isEmpty() ? Optional.empty() : Optional.of(claim(candidates.get(0), workerId));
+    }
+
+    /**
+     * 받을 작업 종류를 고른 워커(next-task kinds)용 claim — 그 종류의 대기 상태만 후보로 같은 FIFO 순서로 잡는다.
+     * 다른 PC의 워커가 이 PC에만 있는 볼트(종료 노트)·미리 빌드 도구(배포)가 필요한 일을 잡지 않게 한다.
+     */
+    @Transactional
+    public Optional<WorkerTaskResponse> claimNextTask(String workerId, boolean supportsRefRepos,
+                                                      Set<WorkerTaskResponse.Kind> kinds) {
+        List<TaskStatus> statuses = kinds.stream().map(WorkerService::claimableStatusFor).toList();
+        List<Task> candidates = taskRepo.findClaimableAmongForUpdateSkipLocked(statuses, supportsRefRepos);
+        return candidates.isEmpty() ? Optional.empty() : Optional.of(claim(candidates.get(0), workerId));
+    }
+
+    /** 작업 종류 → 워커가 그 종류를 claim하는 대기 상태 ({@link TaskRepository#CLAIMABLE_STATUSES}의 한 값). */
+    static TaskStatus claimableStatusFor(WorkerTaskResponse.Kind kind) {
+        return switch (kind) {
+            case ANALYSIS -> TaskStatus.PENDING;
+            case IMPLEMENTATION -> TaskStatus.APPROVED;
+            case DESIGN -> TaskStatus.DESIGN_PENDING;
+            case DEPLOY -> TaskStatus.DEPLOY_PENDING;
+            case UNDEPLOY -> TaskStatus.UNDEPLOY_PENDING;
+            case CLOSE -> TaskStatus.CLOSE_PENDING;
+        };
+    }
+
+    private WorkerTaskResponse claim(Task t, String workerId) {
         TaskStatus from = t.getStatus();
 
         if (from == TaskStatus.PENDING) {
@@ -207,24 +234,24 @@ public class WorkerService {
                     outProjectId = cat.getDesignOutputProjectId();
                 }
             }
-            return Optional.of(WorkerTaskResponse.forDesign(t, a, prev, dsProjectId, outProjectId));
+            return WorkerTaskResponse.forDesign(t, a, prev, dsProjectId, outProjectId);
         }
         if (t.getStatus() == TaskStatus.IMPLEMENTING) {
             TaskAnalysis a = analysisRepo.findById(t.getId()).orElse(null);
             TaskDesign d = designRepo.findById(t.getId()).orElse(null);
-            return Optional.of(WorkerTaskResponse.forImplementation(t, a,
-                    (d != null && d.isApproved()) ? d : null, registeredPlanMarkdown(t.getId())));
+            return WorkerTaskResponse.forImplementation(t, a,
+                    (d != null && d.isApproved()) ? d : null, registeredPlanMarkdown(t.getId()));
         }
         if (from == TaskStatus.DEPLOY_PENDING) {
-            return Optional.of(WorkerTaskResponse.forDeploy(t, prebuildFor(t)));
+            return WorkerTaskResponse.forDeploy(t, prebuildFor(t));
         }
         if (from == TaskStatus.UNDEPLOY_PENDING) {
-            return Optional.of(WorkerTaskResponse.forUndeploy(t));
+            return WorkerTaskResponse.forUndeploy(t);
         }
         if (from == TaskStatus.CLOSE_PENDING) {
-            return Optional.of(WorkerTaskResponse.forClose(t, closeContext(t), closeArtifactSpec(t)));
+            return WorkerTaskResponse.forClose(t, closeContext(t), closeArtifactSpec(t));
         }
-        return Optional.of(WorkerTaskResponse.forAnalysis(t));
+        return WorkerTaskResponse.forAnalysis(t);
     }
 
     /** 종료 노트 재료 — 확정 플랜·분석·구현 로그 끝·이력(시간순)·단계별 비용. 본문 상한은 CloseContext.of. */

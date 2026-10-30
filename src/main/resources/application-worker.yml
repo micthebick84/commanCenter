@@ -26,6 +26,9 @@ spring:
 netis-maker:
   worker:
     id: ${WORKER_ID:mac-worker-1}
+    # 이 워커가 받을 작업 종류(쉼표 구분: ANALYSIS,IMPLEMENTATION,DESIGN,DEPLOY,UNDEPLOY,CLOSE). 비면 전부.
+    # 다른 PC의 워커는 IMPLEMENTATION,DESIGN만 — 종료 노트는 볼트가 있는 PC, 배포는 미리 빌드 도구가 있는 PC의 워커가 맡는다.
+    kinds: ${WORKER_KINDS:}
     version: ${WORKER_VERSION:0.1.0}
     # 사내 백엔드 외부 공개 워커 엔드포인트 (DESIGN §6 외부 공개 모델)
     api-base-url: ${API_BASE_URL:https://worker.netis-maker.internal}

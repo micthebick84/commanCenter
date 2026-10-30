@@ -6,8 +6,9 @@ import { groupByRecency, type QuestionSummary } from '~/composables/questions'
 import ClaudeUsagePanel from '~/components/ClaudeUsagePanel.vue'
 import { useHydrationSafeAuth } from '~/composables/useHydrationSafeAuth'
 
-const props = defineProps<{ activeId: number | null }>()
-const emit = defineEmits<{ (e: 'select', id: number): void; (e: 'new'): void }>()
+// collapsible: 넓은 화면 셸만 켠다 — "새 질문" 옆 접기 버튼(collapse). 좁은 화면 서랍은 백드롭으로 닫으므로 버튼 없음.
+const props = defineProps<{ activeId: number | null; collapsible?: boolean }>()
+const emit = defineEmits<{ (e: 'select', id: number): void; (e: 'new'): void; (e: 'collapse'): void }>()
 
 // 데스크톱은 사이드바가 SSR로 그려진다 — 관리자 토글은 하이드레이션 결과가 SSR(비로그인)과 같도록 게이트된 값으로
 const { isAdmin } = useHydrationSafeAuth()
@@ -61,15 +62,31 @@ defineExpose({ refresh })
 
 <template>
   <aside class="question-sidebar column no-wrap">
-    <q-btn
-      unelevated
-      color="primary"
-      icon="add"
-      label="새 질문"
-      class="full-width"
-      data-test="new-question"
-      @click="emit('new')"
-    />
+    <div class="row items-center no-wrap">
+      <q-btn
+        unelevated
+        color="primary"
+        icon="add"
+        label="새 질문"
+        class="col"
+        data-test="new-question"
+        @click="emit('new')"
+      />
+      <q-btn
+        v-if="props.collapsible"
+        flat
+        dense
+        round
+        icon="menu_open"
+        color="grey-8"
+        aria-label="목록 숨기기"
+        class="q-ml-xs"
+        data-test="collapse-list"
+        @click="emit('collapse')"
+      >
+        <q-tooltip>목록 숨기기</q-tooltip>
+      </q-btn>
+    </div>
     <div class="col scroll q-mt-sm">
       <div v-if="rows.length === 0" class="text-caption text-grey-7 q-pa-sm">
         아직 질문이 없습니다. 레포에 대해 궁금한 점을 물어보세요.

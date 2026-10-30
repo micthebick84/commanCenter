@@ -8,6 +8,7 @@ import {
   useApiMock,
   useAuthStoreMock,
   useRuntimeConfigMock,
+  useCookieMock,
   resetNuxtMocks,
 } from './mocks/nuxt'
 
@@ -45,6 +46,7 @@ Object.assign(globalThis as any, {
   useApi: useApiMock,
   useAuthStore: useAuthStoreMock,
   useRuntimeConfig: useRuntimeConfigMock,
+  useCookie: useCookieMock,
   // Nuxt page-only macro — no-op in Vitest (pages are tested without the router layer)
   definePageMeta: vi.fn(),
   // 라우트 기본값 — 경로·파라미터·쿼리가 빈 홈. 작업 등록 화면(pages/tasks/index.vue)이 질문에서 넘어온 쿼리를 읽게 되는데

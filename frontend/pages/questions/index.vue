@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import type { Ref } from 'vue'
 import { useQuasar } from 'quasar'
 import { DEFAULT_MODEL, DEFAULT_EFFORT } from '~/composables/modelEffort'
 import McpPicker from '~/components/McpPicker.vue'
@@ -17,6 +18,8 @@ definePageMeta({ layout: 'default' })
 const $q = useQuasar()
 const refreshList = inject<() => void>('questions:refresh', () => {})
 const openDrawer = inject<() => void>('questions:open-drawer', () => {})
+// 넓은 화면에서 셸 사이드바를 접었으면 좁은 화면처럼 목록 버튼으로 다시 연다(셸 pages/questions.vue)
+const listHidden = inject<Ref<boolean>>('questions:list-hidden', ref(false))
 
 const draft = reactive({
   repoCatalogId: null as number | null,
@@ -236,8 +239,8 @@ defineExpose({ draft, submit, onRepoSelected, db })
 
 <template>
   <div class="new-question column no-wrap">
-    <div v-if="$q.screen.lt.md" class="row items-center q-px-sm q-pt-sm">
-      <q-btn flat dense round icon="menu" data-test="open-drawer" @click="openDrawer" />
+    <div v-if="$q.screen.lt.md || listHidden" class="row items-center q-px-sm q-pt-sm">
+      <q-btn flat dense round icon="menu" aria-label="질문 목록 열기" data-test="open-drawer" @click="openDrawer" />
     </div>
     <div class="col column no-wrap items-center q-px-lg new-question-body">
       <div class="hero text-center">

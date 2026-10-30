@@ -11,6 +11,9 @@ import com.hamonsoft.netismaker.dto.WorkerRuntimeStatusRequest;
 import com.hamonsoft.netismaker.dto.WorkerStartupRequest;
 import com.hamonsoft.netismaker.dto.WorkerStartupResponse;
 import com.hamonsoft.netismaker.dto.WorkerTaskResponse;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Profile;
 import org.springframework.core.ParameterizedTypeReference;
 import org.springframework.http.HttpStatus;
@@ -26,14 +29,20 @@ import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.nio.file.Path;
 import java.time.Duration;
+import java.util.Arrays;
+import java.util.EnumSet;
 import java.util.HashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
+import java.util.stream.Collectors;
 
 /**
  *  사내 백엔드 워커 API 호출 (외부망 → HTTPS).
  */
+@Slf4j
 @Component
 @Profile("worker")
 public class WorkerHttpClient {
@@ -47,12 +56,42 @@ public class WorkerHttpClient {
     private final ObjectMapper mapper = new ObjectMapper()
             .configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false);
 
+    /** next-task의 kinds — 이 워커가 받을 작업 종류(쉼표 구분, 대문자). 빈 값이면 보내지 않아 전부 받는다. */
+    private final String kinds;
+
     public WorkerHttpClient(WorkerProperties props) {
+        this(props, "");
+    }
+
+    @Autowired
+    public WorkerHttpClient(WorkerProperties props, @Value("${netis-maker.worker.kinds:}") String kinds) {
         this.props = props;
+        this.kinds = normalizeKinds(kinds);
         this.http = RestClient.builder()
                 .baseUrl(props.apiBaseUrl())
                 .defaultHeader("X-Worker-API-Key", props.apiKey())
                 .build();
+        if (!this.kinds.isEmpty()) log.info("받는 작업 종류: {} (WORKER_KINDS)", this.kinds);
+    }
+
+    /**
+     * WORKER_KINDS를 검사해 정규화한다 — 오타를 API의 400 폴링 반복이 아니라 기동 실패로 드러내려고.
+     * 빈 값·공백뿐이면 "" (전부 받음).
+     */
+    static String normalizeKinds(String kinds) {
+        if (kinds == null || kinds.isBlank()) return "";
+        Set<WorkerTaskResponse.Kind> out = EnumSet.noneOf(WorkerTaskResponse.Kind.class);
+        for (String token : kinds.split(",")) {
+            String name = token.trim().toUpperCase(Locale.ROOT);
+            if (name.isEmpty()) continue;
+            try {
+                out.add(WorkerTaskResponse.Kind.valueOf(name));
+            } catch (IllegalArgumentException e) {
+                throw new IllegalArgumentException("WORKER_KINDS에 모르는 작업 종류: '" + token.trim() + "' (가능: "
+                        + Arrays.toString(WorkerTaskResponse.Kind.values()) + ")");
+            }
+        }
+        return out.stream().map(Enum::name).collect(Collectors.joining(","));
     }
 
     public void heartbeat(WorkerHeartbeatRequest req) {
@@ -85,8 +124,12 @@ public class WorkerHttpClient {
     public Optional<WorkerTaskResponse> nextTask() {
         try {
             WorkerTaskResponse body = http.get()
-                    .uri(uri -> uri.path("/worker/next-task").queryParam("workerId", props.id())
-                            .queryParam("supports", SUPPORTS).build())
+                    .uri(uri -> {
+                        uri.path("/worker/next-task").queryParam("workerId", props.id())
+                                .queryParam("supports", SUPPORTS);
+                        if (!kinds.isEmpty()) uri.queryParam("kinds", kinds);
+                        return uri.build();
+                    })
                     .retrieve()
                     .body(WorkerTaskResponse.class);
             return Optional.ofNullable(body);

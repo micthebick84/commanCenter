@@ -161,6 +161,32 @@ public interface TaskRepository extends JpaRepository<Task, Long> {
                 TaskStatus.APPROVED.dbValue());
     }
 
+    /**
+     * 받을 작업 종류를 고른 워커(next-task kinds)용 claim — 후보 상태를 그 종류의 대기 상태로 좁힌다.
+     * 순서·잠금은 {@link #findClaimableForUpdateSkipLocked}와 같고, includeRefImplementations=false(참조를 모르는 워커)면
+     * {@link #findClaimableExcludingRefImplementations}처럼 참조 있는 구현대기를 건너뛴다.
+     */
+    @Query(value = """
+        SELECT t.* FROM com.task t
+        WHERE t.status IN (:claimable) AND t.deleted_at IS NULL
+          AND (CAST(:includeRefImplementations AS boolean)
+               OR NOT (t.status = :approved AND t.ref_repos <> CAST('[]' AS jsonb)))
+        ORDER BY t.created_at ASC
+        LIMIT 1
+        FOR UPDATE SKIP LOCKED
+        """, nativeQuery = true)
+    List<Task> findClaimableAmong(@Param("claimable") Collection<String> claimable,
+                                  @Param("approved") String approved,
+                                  @Param("includeRefImplementations") boolean includeRefImplementations);
+
+    /** 종류를 고른 워커용 claim 1건 — 후보 상태는 {@link #CLAIMABLE_STATUSES} 중에서만 고른다. */
+    default List<Task> findClaimableAmongForUpdateSkipLocked(Collection<TaskStatus> statuses,
+                                                             boolean supportsRefRepos) {
+        List<String> claimable = statuses.stream().filter(CLAIMABLE_STATUSES::contains).map(TaskStatus::dbValue).toList();
+        if (claimable.isEmpty()) return List.of();
+        return findClaimableAmong(claimable, TaskStatus.APPROVED.dbValue(), supportsRefRepos);
+    }
+
     /** 호환 alias. 기존 호출처 단계적 마이그레이션 위함. */
     default List<Task> findPendingForUpdateSkipLocked(Pageable pageable) {
         return findClaimableForUpdateSkipLocked(pageable);

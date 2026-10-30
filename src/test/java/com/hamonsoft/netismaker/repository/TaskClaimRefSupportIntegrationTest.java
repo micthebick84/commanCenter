@@ -110,6 +110,27 @@ class TaskClaimRefSupportIntegrationTest {
         assertThat(claimed).allSatisfy(r -> assertThat(r.refRepos()).isEmpty());
     }
 
+    /** next-task kinds(다른 PC 워커) — 고른 종류의 대기만 FIFO로 잡고, 참조를 모르면 참조 있는 구현은 여전히 건너뛴다. */
+    @Test
+    void a_worker_with_kinds_claims_only_those_kinds() {
+        Task close = task(TaskStatus.CLOSE_PENDING, false, 90);
+        Task deploy = task(TaskStatus.DEPLOY_PENDING, false, 80);
+        Task refImpl = task(TaskStatus.APPROVED, true, 70);
+        Task design = task(TaskStatus.DESIGN_PENDING, false, 60);
+        Task impl = task(TaskStatus.APPROVED, false, 50);
+        var kinds = java.util.EnumSet.of(WorkerTaskResponse.Kind.IMPLEMENTATION, WorkerTaskResponse.Kind.DESIGN);
+
+        WorkerTaskResponse first = workerService.claimNextTask("remote-1", false, kinds).orElseThrow();
+        WorkerTaskResponse second = workerService.claimNextTask("remote-1", false, kinds).orElseThrow();
+        assertThat(List.of(first.id(), second.id())).containsExactly(design.getId(), impl.getId());
+        assertThat(workerService.claimNextTask("remote-1", false, kinds)).isEmpty();
+        assertThat(workerService.claimNextTask("remote-2", true, kinds).orElseThrow().id()).isEqualTo(refImpl.getId());
+
+        assertThat(taskRepo.findById(close.getId()).orElseThrow().getStatus()).isEqualTo(TaskStatus.CLOSE_PENDING);
+        assertThat(taskRepo.findById(deploy.getId()).orElseThrow().getStatus()).isEqualTo(TaskStatus.DEPLOY_PENDING);
+        assertThat(workerService.claimNextTask("local", true).orElseThrow().id()).isEqualTo(close.getId());
+    }
+
     @Test
     void removing_every_ref_makes_the_task_claimable_by_old_workers() {
         Task kept = task(TaskStatus.IMPLEMENTATION_FAILED, true, 60);      // 더 오래됐지만 참조를 그대로 두고 재시도

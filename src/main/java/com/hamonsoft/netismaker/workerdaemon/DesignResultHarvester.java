@@ -21,7 +21,7 @@ import java.util.List;
  *    ERROR.txt        → 존재하면 즉시 실패 (인증/pull 실패 fail-fast)
  *    DESIGN.md        → 필수. designMarkdown
  *    screens/*.html   → 1개 이상 필수. mockup_files의 html 원문
- *    result.json      → 선택. {screens:[{path,title}], designProjectId, designUrl}
+ *    result.json      → 선택. {screens:[{path,title}]} (designProjectId·designUrl은 예전 워커 호환으로만 읽음)
  *                       title은 result.json 우선, 없으면 파일명 사용
  */
 @Component

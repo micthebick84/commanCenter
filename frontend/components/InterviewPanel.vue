@@ -279,12 +279,13 @@ async function downloadAttachment(id: number) {
 async function confirm() {
   if (status.value !== 'PLAN_READY' || confirming.value) return
   confirming.value = true
+  const withDesign = designRequested.value // 전송 시점 값 — 응답 대기 중 토글을 바꿔도 알림은 실제로 보낸 값을 따른다
   try {
     const res = await useApi<{ taskId: number }>(`/api/interviews/${props.sessionId}/confirm`, {
       method: 'POST',
-      body: { designRequested: designRequested.value, implementationMode: implementationMode.value },
+      body: { designRequested: withDesign, implementationMode: implementationMode.value },
     })
-    $q.notify({ type: 'positive', message: '확정 완료 — 구현 큐에 진입했습니다' })
+    $q.notify({ type: 'positive', message: `확정 완료 — ${withDesign ? '디자인' : '구현'} 큐에 진입했습니다` })
     emit('confirmed', res.taskId)
   } catch (e: any) {
     $q.notify({ type: 'negative', message: e?.data?.message ?? '확정 실패' })
@@ -560,7 +561,7 @@ defineExpose({
                 dense
                 label="디자인 단계 포함"
               >
-                <q-tooltip>분석 승인 후 화면 목업을 생성해 승인받습니다</q-tooltip>
+                <q-tooltip>구현 전에 화면 목업을 먼저 만들어 승인받습니다</q-tooltip>
               </q-toggle>
               <q-btn
                 data-test="confirm"

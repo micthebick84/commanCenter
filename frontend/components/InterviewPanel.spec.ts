@@ -1,5 +1,5 @@
 import { mount, flushPromises } from '@vue/test-utils'
-import { describe, it, expect, afterEach } from 'vitest'
+import { describe, it, expect, afterEach, vi } from 'vitest'
 import { h } from 'vue'
 import InterviewPanel from './InterviewPanel.vue'
 import { FakeEventSource } from '../test/mocks/eventsource'
@@ -89,6 +89,9 @@ describe('InterviewPanel — confirm flow', () => {
     reg = w.find('[data-test="confirm"]')
     expect(reg.attributes('disabled')).toBeUndefined()
 
+    const vm = w.vm as unknown as { $q: { notify: (opts: unknown) => void } }
+    const notifySpy = vi.spyOn(vm.$q, 'notify')
+
     useApiMock.mockResolvedValueOnce({ taskId: 123 }) // 이제 다음 useApi 호출(confirm POST)이 소비
     await reg.trigger('click')
     await flushPromises()
@@ -97,6 +100,7 @@ describe('InterviewPanel — confirm flow', () => {
       method: 'POST',
       body: { designRequested: false, implementationMode: 'REVIEW' },
     })
+    expect(notifySpy).toHaveBeenCalledWith({ type: 'positive', message: '확정 완료 — 구현 큐에 진입했습니다' })
     expect(w.emitted('confirmed')?.[0]).toEqual([123])
     w.unmount()
   })
@@ -110,6 +114,9 @@ describe('InterviewPanel — confirm flow', () => {
     await w.find('.q-toggle').trigger('click')
     await flushPromises()
 
+    const vm = w.vm as unknown as { $q: { notify: (opts: unknown) => void } }
+    const notifySpy = vi.spyOn(vm.$q, 'notify')
+
     useApiMock.mockResolvedValueOnce({ taskId: 124 })
     await w.find('[data-test="confirm"]').trigger('click')
     await flushPromises()
@@ -118,6 +125,7 @@ describe('InterviewPanel — confirm flow', () => {
       method: 'POST',
       body: { designRequested: true, implementationMode: 'REVIEW' },
     })
+    expect(notifySpy).toHaveBeenCalledWith({ type: 'positive', message: '확정 완료 — 디자인 큐에 진입했습니다' })
     w.unmount()
   })
 

@@ -115,16 +115,17 @@ const fullscreen = useFullscreenDialog()
       />
       <q-space />
       <q-btn
-        v-if="design.designUrl"
+        v-if="mockups.length"
         flat
         dense
         icon="open_in_new"
-        label="Claude Design에서 열기"
+        label="크게 보기"
         type="a"
-        :href="design.designUrl"
+        :href="`/designs/${taskId}?screen=${selectedTab + 1}`"
         target="_blank"
+        rel="noopener"
+        data-test="design-open-large"
       />
-      <q-chip v-else dense outline icon="cloud_off" label="업로드 실패 — 로컬 미리보기만" />
       <template v-if="isAdmin && status === 'DESIGN_REVIEW'">
         <q-btn
           unelevated

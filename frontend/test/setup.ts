@@ -49,6 +49,8 @@ Object.assign(globalThis as any, {
   useCookie: useCookieMock,
   // Nuxt page-only macro — no-op in Vitest (pages are tested without the router layer)
   definePageMeta: vi.fn(),
+  // 탭 제목(<title>) — unhead 자동 임포트. 스파이로 둬 페이지가 넘긴 제목을 볼 수 있게 한다(pages/designs/[id].vue).
+  useHead: vi.fn(),
   // 라우트 기본값 — 경로·파라미터·쿼리가 빈 홈. 작업 등록 화면(pages/tasks/index.vue)이 질문에서 넘어온 쿼리를 읽게 되는데
   // (스펙 2026-10-24 §7.2) 그 화면을 마운트하는 여러 spec이 useRoute를 넣지 않는다. 특정 라우트가 필요한 spec은
   // 모듈 단계에서 자기 useRoute를 넣어 이 값을 덮는다(setup 파일이 spec 모듈보다 먼저 돈다).

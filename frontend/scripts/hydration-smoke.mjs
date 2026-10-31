@@ -42,6 +42,8 @@ const AUTH_PATHS = [
   '/questions/3',
   '/requests',
   '/requests/1',
+  // 디자인 목업 크게 보기(blank 레이아웃) — 작업 1의 design 목업을 마운트 뒤에 읽어 sandbox iframe에 그린다
+  '/designs/1',
   '/admin/repo-catalog',
   '/admin/mcp-catalog',
   '/admin/workers',
@@ -70,6 +72,13 @@ const TASKS = [
     // 작업 상세의 참조 칩 줄(DB 칩 다음)과 "레포" 옆 출처 질문 링크(/questions/3)
     refRepos: REF_REPOS,
     sourceQuestionId: 3,
+    // 디자인 목업 — 작업 상세의 디자인 카드와 /designs/1 크게 보기가 그린다
+    design: {
+      designMarkdown: '# 디자인',
+      mockupFilesJson: JSON.stringify([{ path: 'screens/main.html', title: '메인', html: '<p>목업</p>' }]),
+      designProjectId: null, designUrl: null, rejectCount: 0, feedbackHistoryJson: '[]',
+      approved: true, approvedBy: 'admin', approvedAt: NOW, completedAt: NOW,
+    },
   }),
   task(2, 'AWAITING_APPROVAL', '승인대기'),
   task(3, 'CANCELLED', '취소됨'),

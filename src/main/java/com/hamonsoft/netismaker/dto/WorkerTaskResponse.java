@@ -17,7 +17,9 @@ import java.util.List;
  *  kind=IMPLEMENTATION → worktree에서 구현 prompt 실행 (분석 산출물 동봉)
  *  kind=DEPLOY         → head 브랜치(headBranch@headSha)를 빌드해 docker 배포 (envVars 주입)
  *  kind=UNDEPLOY       → 컨테이너 netis-task-{id} 중지 (id만 사용)
- *  kind=DESIGN         → 목업 생성 + Claude Design 업로드 (디자인 시스템/출력 프로젝트 ID 동봉)
+ *  kind=DESIGN         → 목업 생성 (DESIGN.md + screens/*.html). designSystemProjectId·designOutputProjectId·designUrl은
+ *                        예전 Claude Design용 값이라 2026-10-31부터 새 워커는 채우지도 쓰지도 않는다
+ *                        (스펙 2026-10-31-design-phase-without-claude-design-design.md)
  *  kind=CLOSE          → 작업 종료: PR 병합 → 배포 중지 → 노트 → 브랜치 정리 (prNumber/headSha/closeProgress/closeContext/closeArtifact 동봉)
  */
 public record WorkerTaskResponse(

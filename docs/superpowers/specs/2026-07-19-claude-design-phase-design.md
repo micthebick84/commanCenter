@@ -1,5 +1,7 @@
 # Claude Design 연동 디자인 구간 — 설계
 
+> 2026-10-31: Claude Design 업로드·디자인 시스템 pull(DesignSync)은 `2026-10-31-design-phase-without-claude-design-design.md`로 대체됨 — 목업은 DB와 Symphony 화면에서만 본다.
+
 날짜: 2026-07-19
 상태: 사용자 승인 대기
 

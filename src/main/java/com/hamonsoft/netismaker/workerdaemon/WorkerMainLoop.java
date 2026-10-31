@@ -600,7 +600,8 @@ public class WorkerMainLoop {
             return;
         }
 
-        String prompt = renderDesignPrompt(task) + DbMcpWorkerSupport.promptSection(task.dbMcp());
+        String prompt = renderDesignPrompt(props.designPromptTemplate(), task)
+                + DbMcpWorkerSupport.promptSection(task.dbMcp());
         ClaudeExecAdapter.ExecResult exec;
         try {
             exec = claude.exec(prompt, wt, props.designTimeout(),
@@ -631,22 +632,18 @@ public class WorkerMainLoop {
                 exec.stdout(), exec.durationMs(), usageOf(exec)));
         // 수확 완료 후 design worktree는 best-effort 정리 (산출물은 DB로 감 — 보존 불필요)
         worktrees.discard(GitRemotes.localKey(task.repoRef()), WorktreeKind.DESIGN, task.id());
-        log.info("디자인 생성 완료: task={} screens 포함, url={}", task.id(), harvest.designUrl());
+        log.info("디자인 생성 완료: task={} screens 포함", task.id());
     }
 
-    private String renderDesignPrompt(WorkerTaskResponse task) {
-        String tpl = props.designPromptTemplate();
-        return tpl
-                .replace("{github_repo}", task.githubRepo())
-                .replace("{task_id}", String.valueOf(task.id()))
+    /** 디자인 프롬프트 — 템플릿의 {title}·{description}·{analysis_markdown}·{subtasks_json}·{previous_design_markdown}·{feedback_history}만 치환한다. */
+    static String renderDesignPrompt(String template, WorkerTaskResponse task) {
+        return template
                 .replace("{title}", task.title())
                 .replace("{description}", task.description())
                 .replace("{analysis_markdown}", nvl(task.analysisMarkdown(), ""))
                 .replace("{subtasks_json}", nvl(task.subtasksJson(), "[]"))
                 .replace("{previous_design_markdown}", nvl(task.designMarkdown(), "(없음 — 첫 생성)"))
-                .replace("{feedback_history}", nvl(task.feedbackHistoryJson(), "[]"))
-                .replace("{design_system_project_id}", nvl(task.designSystemProjectId(), "없음"))
-                .replace("{design_output_project_id}", nvl(task.designOutputProjectId(), "없음"));
+                .replace("{feedback_history}", nvl(task.feedbackHistoryJson(), "[]"));
     }
 
     private static String nvl(String s, String def) {
@@ -852,13 +849,8 @@ public class WorkerMainLoop {
                                String modeLine, String reviewNotes, List<String> refWarnings) {
         boolean gitlab = task.repoRef().isGitlab();
         boolean hasDesign = task.designMarkdown() != null && !task.designMarkdown().isBlank();
-        // 마크다운 링크를 깨는 값(공백, ')', 개행 등) 방어 — 형태가 이상하면 링크만 생략
-        boolean hasDesignUrl = task.designUrl() != null
-                && task.designUrl().matches("https?://[^\\s)]+");
         String designLine = !hasDesign ? ""
-                : "- **디자인**: 확정 디자인 기반 구현"
-                + (hasDesignUrl ? " — [Claude Design 목업](" + task.designUrl() + ")" : "")
-                + " (작업 상세의 디자인 카드 참고)\n";
+                : "- **디자인**: 확정 디자인 기반 구현 (Symphony 작업 #" + task.id() + " 디자인 카드 참고)\n";
         String head = "## netisMaker 자동 생성 " + (gitlab ? "MR" : "PR") + "\n\n"
                 + "- **Task**: #" + task.id() + " " + task.title() + "\n"
                 + "- **베이스**: `" + task.githubBranch() + "`\n"

@@ -62,3 +62,79 @@ describe('DesignReviewCard — admin review actions', () => {
     w.unmount()
   })
 })
+
+const TWO = JSON.stringify([
+  { path: 'screens/a.html', title: '목록', html: '<p>A</p>' },
+  { path: 'screens/b.html', title: '상세', html: '<p>B</p>' },
+])
+
+describe('DesignReviewCard — 크게 보기', () => {
+  it('links 크게 보기 to the selected screen in a new tab', async () => {
+    const w = mount(DesignReviewCard, {
+      props: {
+        taskId: 12,
+        status: 'DESIGN_REVIEW',
+        design: baseDesign({ mockupFilesJson: TWO }),
+        isAdmin: true,
+      },
+    })
+    const btn = () => w.find('[data-test="design-open-large"]')
+    expect(btn().attributes('href')).toBe('/designs/12?screen=1')
+    expect(btn().attributes('target')).toBe('_blank')
+    expect(btn().attributes('rel')).toContain('noopener')
+    expect(btn().text()).toContain('크게 보기')
+    await w.findAll('.q-tab')[1].trigger('click')
+    expect(btn().attributes('href')).toBe('/designs/12?screen=2')
+    w.unmount()
+  })
+
+  it('clamps the 크게 보기 screen to the last mockup when the mockup count shrinks under the selected tab', async () => {
+    const ONE = JSON.stringify([{ path: 'screens/a.html', title: '목록', html: '<p>A</p>' }])
+    const w = mount(DesignReviewCard, {
+      props: {
+        taskId: 12,
+        status: 'DESIGN_REVIEW',
+        design: baseDesign({ mockupFilesJson: TWO }),
+        isAdmin: true,
+      },
+    })
+    const btn = () => w.find('[data-test="design-open-large"]')
+    await w.findAll('.q-tab')[1].trigger('click')
+    expect(btn().attributes('href')).toBe('/designs/12?screen=2')
+    // 반려 뒤 재생성으로 목업이 1개로 줄어도 선택 탭 번호(1)는 남는다 — 링크는 범위 밖(screen=3)이 되면 안 된다
+    await w.setProps({ design: baseDesign({ mockupFilesJson: ONE }) })
+    expect(btn().attributes('href')).toBe('/designs/12?screen=1')
+    w.unmount()
+  })
+
+  it('shows no 크게 보기 without mockups', () => {
+    const w = mount(DesignReviewCard, {
+      props: {
+        taskId: 12,
+        status: 'DESIGN_REVIEW',
+        design: baseDesign({ mockupFilesJson: '[]' }),
+        isAdmin: true,
+      },
+    })
+    expect(w.find('[data-test="design-open-large"]').exists()).toBe(false)
+    w.unmount()
+  })
+
+  it('never shows the Claude Design link or the upload-failed chip, even for old rows with a designUrl', () => {
+    const w = mount(DesignReviewCard, {
+      props: {
+        taskId: 12,
+        status: 'DESIGN_REVIEW',
+        design: baseDesign({
+          mockupFilesJson: TWO,
+          designUrl: 'https://claude.ai/design/p/1',
+          designProjectId: 'p1',
+        }),
+        isAdmin: true,
+      },
+    })
+    expect(w.text()).not.toContain('Claude Design')
+    expect(w.text()).not.toContain('업로드 실패')
+    w.unmount()
+  })
+})

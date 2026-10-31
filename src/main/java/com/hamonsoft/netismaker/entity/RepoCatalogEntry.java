@@ -47,11 +47,17 @@ public class RepoCatalogEntry {
     @Column(nullable = false)
     private boolean enabled;
 
-    /** Claude Design 디자인 시스템 프로젝트 ID (입력). null이면 디자인 시 pull skip. */
+    /**
+     * 예전 Claude Design 디자인 시스템 프로젝트 ID. 2026-10-31부터 새 워커는 이 값을 쓰지 않는다
+     * (스펙 2026-10-31-design-phase-without-claude-design-design.md) — 기존 값은 보존만 한다.
+     */
     @Column(name = "design_system_project_id", length = 100)
     private String designSystemProjectId;
 
-    /** Claude Design 목업 출력 프로젝트 ID. 워커가 최초 업로드 시 create_project 후 박제. */
+    /**
+     * 예전 Claude Design 목업 출력 프로젝트 ID. 2026-10-31부터 새 워커는 업로드도 박제도 하지 않는다
+     * (같은 스펙) — 기존 값은 보존만 한다.
+     */
     @Column(name = "design_output_project_id", length = 100)
     private String designOutputProjectId;
 

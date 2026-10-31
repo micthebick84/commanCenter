@@ -88,6 +88,25 @@ describe('DesignReviewCard — 크게 보기', () => {
     w.unmount()
   })
 
+  it('clamps the 크게 보기 screen to the last mockup when the mockup count shrinks under the selected tab', async () => {
+    const ONE = JSON.stringify([{ path: 'screens/a.html', title: '목록', html: '<p>A</p>' }])
+    const w = mount(DesignReviewCard, {
+      props: {
+        taskId: 12,
+        status: 'DESIGN_REVIEW',
+        design: baseDesign({ mockupFilesJson: TWO }),
+        isAdmin: true,
+      },
+    })
+    const btn = () => w.find('[data-test="design-open-large"]')
+    await w.findAll('.q-tab')[1].trigger('click')
+    expect(btn().attributes('href')).toBe('/designs/12?screen=2')
+    // 반려 뒤 재생성으로 목업이 1개로 줄어도 선택 탭 번호(1)는 남는다 — 링크는 범위 밖(screen=3)이 되면 안 된다
+    await w.setProps({ design: baseDesign({ mockupFilesJson: ONE }) })
+    expect(btn().attributes('href')).toBe('/designs/12?screen=1')
+    w.unmount()
+  })
+
   it('shows no 크게 보기 without mockups', () => {
     const w = mount(DesignReviewCard, {
       props: {

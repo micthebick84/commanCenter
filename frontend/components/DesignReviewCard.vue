@@ -121,7 +121,7 @@ const fullscreen = useFullscreenDialog()
         icon="open_in_new"
         label="크게 보기"
         type="a"
-        :href="`/designs/${taskId}?screen=${selectedTab + 1}`"
+        :href="`/designs/${taskId}?screen=${Math.min(selectedTab, mockups.length - 1) + 1}`"
         target="_blank"
         rel="noopener"
         data-test="design-open-large"

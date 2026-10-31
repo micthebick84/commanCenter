@@ -102,6 +102,7 @@ describe('InterviewPanel — confirm flow', () => {
     })
     expect(notifySpy).toHaveBeenCalledWith({ type: 'positive', message: '확정 완료 — 구현 큐에 진입했습니다' })
     expect(w.emitted('confirmed')?.[0]).toEqual([123])
+    notifySpy.mockRestore()
     w.unmount()
   })
 
@@ -126,6 +127,40 @@ describe('InterviewPanel — confirm flow', () => {
       body: { designRequested: true, implementationMode: 'REVIEW' },
     })
     expect(notifySpy).toHaveBeenCalledWith({ type: 'positive', message: '확정 완료 — 디자인 큐에 진입했습니다' })
+    notifySpy.mockRestore()
+    w.unmount()
+  })
+
+  it('알림은 확정을 보낸 시점의 토글 값을 따른다 — 응답 대기 중 토글을 꺼도 디자인 큐 알림', async () => {
+    const w = await mountPanel(9)
+    const es = FakeEventSource.last()
+    es.emit('plan_ready', { designMarkdown: 'd', planMarkdown: 'p', planJson: JSON.stringify([]) })
+    await flushPromises()
+
+    await w.find('.q-toggle').trigger('click') // 켬
+    await flushPromises()
+
+    const vm = w.vm as unknown as { $q: { notify: (opts: unknown) => void } }
+    const notifySpy = vi.spyOn(vm.$q, 'notify')
+
+    let resolveConfirm!: (v: { taskId: number }) => void
+    useApiMock.mockReturnValueOnce(new Promise((resolve) => { resolveConfirm = resolve })) // 응답 전까지 대기
+    await w.find('[data-test="confirm"]').trigger('click')
+    await flushPromises()
+    expect(useApiMock).toHaveBeenCalledWith('/api/interviews/9/confirm', {
+      method: 'POST',
+      body: { designRequested: true, implementationMode: 'REVIEW' },
+    })
+
+    await w.find('.q-toggle').trigger('click') // 응답 전에 끔
+    await flushPromises()
+    resolveConfirm({ taskId: 126 })
+    await flushPromises()
+
+    expect(notifySpy).toHaveBeenCalledWith({ type: 'positive', message: '확정 완료 — 디자인 큐에 진입했습니다' })
+    expect(notifySpy).not.toHaveBeenCalledWith({ type: 'positive', message: '확정 완료 — 구현 큐에 진입했습니다' })
+    expect(w.emitted('confirmed')?.[0]).toEqual([126])
+    notifySpy.mockRestore()
     w.unmount()
   })
 

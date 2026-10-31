@@ -52,7 +52,7 @@ onMounted(async () => {
     task.value = await useApi<TaskDesignView>(`/api/tasks/${id}`)
     selected.value = screenIndex(route.query.screen, mockups.value.length)
   } catch (e) {
-    loadError.value = (e as { data?: { message?: string } } | null)?.data?.message ?? '작업을 불러오지 못했습니다'
+    loadError.value = (e as { data?: { message?: string } } | null)?.data?.message || '작업을 불러오지 못했습니다'
   } finally {
     loading.value = false
   }

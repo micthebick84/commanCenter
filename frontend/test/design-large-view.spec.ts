@@ -127,6 +127,16 @@ describe('designs/[id] — 크게 보기', () => {
     w.unmount()
   })
 
+  it('falls back to a generic message when the server message is an empty string', async () => {
+    useApiMock.mockRejectedValueOnce({ statusCode: 403, data: { message: '' } })
+    const w = mount(PageWrapper, { attachTo: document.body })
+    await flushPromises()
+    expect(w.find('[data-test="design-error"]').text()).toBe('작업을 불러오지 못했습니다')
+    expect(w.find('[data-test="design-empty"]').exists()).toBe(false) // 빈 메시지가 "목업 없음"으로 잘못 빠지지 않는다
+    expect(w.find('[data-test="design-back"]').attributes('href')).toBe('/tasks/12')
+    w.unmount()
+  })
+
   it('renders only the bar while loading — the same markup the server renders', async () => {
     useApiMock.mockReturnValueOnce(new Promise(() => {})) // 응답 전
     const w = mount(PageWrapper, { attachTo: document.body })

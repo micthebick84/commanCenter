@@ -632,7 +632,7 @@ public class WorkerMainLoop {
                 exec.stdout(), exec.durationMs(), usageOf(exec)));
         // 수확 완료 후 design worktree는 best-effort 정리 (산출물은 DB로 감 — 보존 불필요)
         worktrees.discard(GitRemotes.localKey(task.repoRef()), WorktreeKind.DESIGN, task.id());
-        log.info("디자인 생성 완료: task={} screens 포함, url={}", task.id(), harvest.designUrl());
+        log.info("디자인 생성 완료: task={} screens 포함", task.id());
     }
 
     /** 디자인 프롬프트 — 템플릿의 {title}·{description}·{analysis_markdown}·{subtasks_json}·{previous_design_markdown}·{feedback_history}만 치환한다. */

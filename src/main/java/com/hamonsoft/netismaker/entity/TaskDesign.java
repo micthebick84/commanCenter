@@ -13,7 +13,8 @@ import java.time.OffsetDateTime;
 /**
  * 디자인 산출물 (1 task : 1 design). design_requested=true 작업의 디자인 구간 결과.
  * 반려 시 row를 유지하고 feedback_history/reject_count만 누적, 재생성 결과로 덮어쓴다.
- * mockup_files 형식: [{"path","title","html"}] — DB가 진실원본 (Claude Design 업로드는 비치명).
+ * mockup_files 형식: [{"path","title","html"}] — DB가 진실원본. design_project_id·design_url은 예전 Claude Design 업로드
+ * 결과를 담던 컬럼이라 2026-10-31부터 새 워커는 채우지 않는다 (스펙 2026-10-31-design-phase-without-claude-design-design.md).
  */
 @Entity
 @Table(name = "task_design", schema = "com")

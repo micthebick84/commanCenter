@@ -17,8 +17,9 @@ import java.util.List;
 /**
  * claude 디자인 세션의 .design-out/ 산출물을 수확해 보고 페이로드로 변환.
  *
- *  계약 (design-prompt-template과 동기):
- *    ERROR.txt        → 존재하면 즉시 실패 (인증/pull 실패 fail-fast)
+ *  계약:
+ *    ERROR.txt        → 존재하면 즉시 실패. 예전 Claude Design 프롬프트(인증/pull 실패 fail-fast) 호환용이며
+ *                       2026-10-31부터의 새 프롬프트는 쓰지 않는다
  *    DESIGN.md        → 필수. designMarkdown
  *    screens/*.html   → 1개 이상 필수. mockup_files의 html 원문
  *    result.json      → 선택. {screens:[{path,title}]} (designProjectId·designUrl은 예전 워커 호환으로만 읽음)

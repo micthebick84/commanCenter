@@ -106,4 +106,13 @@ describe('loadConfig', () => {
     expect(warnSpy).toHaveBeenCalledTimes(4);
     warnSpy.mockRestore();
   });
+
+  it('defaults workerHeartbeatIntervalMs=20s and claudeAuthCheckIntervalMs=5min, honors overrides (스펙 2026-11-02)', () => {
+    const c = loadConfig(base);
+    expect(c.workerHeartbeatIntervalMs).toBe(20_000);
+    expect(c.claudeAuthCheckIntervalMs).toBe(300_000);
+    const o = loadConfig({ ...base, WORKER_HEARTBEAT_INTERVAL_MS: '10000', CLAUDE_AUTH_CHECK_INTERVAL_MS: '60000' });
+    expect(o.workerHeartbeatIntervalMs).toBe(10_000);
+    expect(o.claudeAuthCheckIntervalMs).toBe(60_000);
+  });
 });

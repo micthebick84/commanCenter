@@ -52,6 +52,31 @@ describe('JavaApiClient', () => {
     expect(JSON.parse(init.body).content).toBe('What columns?');
   });
 
+  it('workerHeartbeat POSTs the body to /worker/heartbeat (workerId in body, no query) and throws on non-2xx', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(null, { status: 200 }));
+    const client = new JavaApiClient(cfg, fetchMock);
+    const body = {
+      workerId: 'iw-1',
+      hostname: 'h',
+      version: 'interview-service/0.1.0',
+      claudeSessionOk: false,
+      vpnStatus: null,
+      mcps: [],
+      lostReportCount: 0,
+      claudeAuthMethod: 'CREDENTIALS',
+      claudeAuthExpiresAt: '2026-10-31T02:23:45.460Z',
+    };
+    await client.workerHeartbeat(body);
+    const [url, init] = fetchMock.mock.calls[0]!;
+    expect(url).toBe('http://api:8090/worker/heartbeat');
+    expect(init.method).toBe('POST');
+    expect(init.headers['X-Worker-API-Key']).toBe('KEY');
+    expect(JSON.parse(init.body)).toEqual(body);
+
+    const failing = new JavaApiClient(cfg, vi.fn().mockResolvedValue(new Response(null, { status: 500 })));
+    await expect(failing.workerHeartbeat(body)).rejects.toBeInstanceOf(HttpStatusError);
+  });
+
   it('heartbeat POSTs to /worker/interviews/{id}/heartbeat?workerId=... (no body)', async () => {
     const fetchMock = vi.fn().mockResolvedValue(new Response(null, { status: 200 }));
     const client = new JavaApiClient(cfg, fetchMock);

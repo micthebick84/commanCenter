@@ -30,6 +30,14 @@ public interface DeployTarget {
                     java.util.Set<String> protectedContainers) { }
 
     /**
+     * 베이스 이미지(FROM)가 빌드 때 받을 수 있는지 미리 확인한다. MISSING은 "레지스트리에 그 태그가 없다"가 확실할 때만 —
+     * 인증 거부·네트워크 오류·미지원 구현은 UNKNOWN으로 두고 판단을 docker build에 맡긴다.
+     */
+    default ImageAvailability checkImage(String image) {
+        return ImageAvailability.UNKNOWN;
+    }
+
+    /**
      * @param taskId        작업 ID (공개 배포 라우팅 슬러그 등에 사용)
      * @param contextDir    빌드 컨텍스트(Dockerfile 포함 worktree)
      * @param imageName     예: netis-task-7:abcdef1
@@ -52,4 +60,6 @@ public interface DeployTarget {
     record DeployResult(String url, String containerId, int hostPort, String image, String log) {}
 
     enum DeployStatus { RUNNING, STOPPED, UNKNOWN }
+
+    enum ImageAvailability { PRESENT, MISSING, UNKNOWN }
 }

@@ -83,6 +83,11 @@ public class DnsRegisteringDeployTarget implements DeployTarget {
     }
 
     @Override
+    public ImageAvailability checkImage(String image) {
+        return delegate.checkImage(image);
+    }
+
+    @Override
     public void gc(int orphanGraceMinutes, int keepImagesPerTask, Set<String> protectedContainers) {
         delegate.gc(orphanGraceMinutes, keepImagesPerTask, protectedContainers);
         Set<String> owned;

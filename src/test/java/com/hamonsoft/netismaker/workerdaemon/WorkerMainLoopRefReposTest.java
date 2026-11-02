@@ -98,7 +98,7 @@ class WorkerMainLoopRefReposTest {
         WorkerMainLoop loop = new WorkerMainLoop(props(), http, repos, claude, mock(PromptResultParser.class),
                 mock(WorkerMcpSupport.class), worktrees, gitOps, mock(DeployService.class), reporter,
                 mock(SilentLossTracker.class), mock(DesignResultHarvester.class), mock(TaskCloser.class),
-                new SuperpowersPlugin(pluginPath));
+                new SuperpowersPlugin(pluginPath), mock(ClaudeAuthProbe.class));
         loop.nanoClock = now::get;
         return loop;
     }

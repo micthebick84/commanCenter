@@ -139,6 +139,8 @@ public class WorkerService {
         h.setHostname(req.hostname());
         h.setVersion(req.version());
         h.setClaudeSessionOk(req.claudeSessionOk());
+        h.setClaudeAuthMethod(req.claudeAuthMethod());
+        h.setClaudeAuthExpiresAt(req.claudeAuthExpiresAt());
         h.setVpnStatus(req.vpnStatus());
         h.setMcps(req.mcps() == null ? List.of() : req.mcps());
         h.setLostReportCount(req.lostReportCount() == null ? 0 : req.lostReportCount());

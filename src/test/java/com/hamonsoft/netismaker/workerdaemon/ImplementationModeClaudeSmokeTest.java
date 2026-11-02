@@ -187,7 +187,7 @@ class ImplementationModeClaudeSmokeTest {
 
         new WorkerMainLoop(props, http, cache, claude, mock(PromptResultParser.class), mcp, worktrees, gitOps,
                 mock(DeployService.class), reporter, mock(SilentLossTracker.class), mock(DesignResultHarvester.class),
-                mock(TaskCloser.class), plugin)
+                mock(TaskCloser.class), plugin, mock(ClaudeAuthProbe.class))
                 .pollAndProcess();
 
         ArgumentCaptor<WorkerResultRequest> report = ArgumentCaptor.forClass(WorkerResultRequest.class);

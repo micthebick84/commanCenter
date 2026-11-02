@@ -13,14 +13,19 @@ import org.springframework.stereotype.Component;
 import java.io.File;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.time.Duration;
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
+import java.util.StringJoiner;
 
 /**
  * 배포 단계 오케스트레이션 (워커):
  *   1) head 브랜치 fetch + deploy worktree 체크아웃
  *   1.5) 카탈로그에 미리 빌드가 켜졌으면(task.prebuild) 워커에서 빌드해 산출물을 .netis-prebuild/로 (스펙 2026-10-28 §5.2)
  *   2) Dockerfile 있으면 사용, 없으면 claude로 생성(미리 빌드면 산출물 안내 포함 + .dockerignore를 산출물만 보내도록 씀)
+ *      — 생성했으면 FROM 이미지가 레지스트리에 있는지 확인해 없으면 한 번 다시 생성, 그래도 없으면 배포실패
  *   3) EXPOSE 포트 파싱
  *   4) DeployTarget.deploy 호출 (build + run)
  *
@@ -96,9 +101,27 @@ public class DeployService {
                 log.append("[Dockerfile 없음 → claude 생성]\n");
                 String section = staged == null ? null
                         : DeployPrebuilder.promptSection(staged.fileName(), prebuild.artifact());
-                generateDockerfile(task, wt, log, section);
-                if (!Files.exists(dockerfile)) {
-                    throw new DeployException("claude가 Dockerfile을 생성하지 못함", log.toString());
+                String prompt = buildDockerfilePrompt(props.deploy().dockerfilePromptTemplate(),
+                        task.githubRepo(), task.headBranch(), section);
+                // 재생성까지 합쳐 dockerfile-timeout 한 번 — API 배포중 회수 판정(70분)이 이 상한을 한 번만 센다.
+                Duration budget = props.deploy().dockerfileTimeout();
+                long started = System.nanoTime();
+                generateDockerfile(prompt, wt, log, budget);
+                List<String> missing = missingBaseImages(dockerfile, log);
+                if (!missing.isEmpty()) {
+                    String names = String.join(", ", missing);
+                    Duration left = budget.minusNanos(System.nanoTime() - started);
+                    if (left.compareTo(MIN_REGENERATE_TIME) < 0) {
+                        throw new DeployException("베이스 이미지가 레지스트리에 없음: " + names
+                                + " (다시 생성할 시간이 남지 않음)", log.toString());
+                    }
+                    log.append("[베이스 이미지 없음] ").append(names).append(" → claude 다시 생성\n");
+                    generateDockerfile(prompt + regenerateSection(missing), wt, log, left);
+                    missing = missingBaseImages(dockerfile, log);
+                    if (!missing.isEmpty()) {
+                        throw new DeployException("베이스 이미지가 레지스트리에 없음: " + String.join(", ", missing),
+                                log.toString());
+                    }
                 }
                 if (staged != null) {
                     // 생성이 끝난 뒤에 쓴다 — 생성 claude가 만든 .dockerignore보다 워커 것이 이긴다.
@@ -177,16 +200,23 @@ public class DeployService {
     /**
      * Dockerfile 생성 프롬프트 끝에 코드에서 붙이는 규칙 — 운영자가 yml 템플릿을 바꿔도 빠지지 않는다.
      * 생성 claude는 --dangerously-skip-permissions라 Bash로 검증 빌드를 돌릴 수 있고, 워커의 DOCKER_HOST를
-     * 물려받아 원격에서 빌드가 돌다 timeout에 걸렸다(2026-10-08 작업 9).
+     * 물려받아 원격에서 빌드가 돌다 timeout에 걸렸다(2026-10-08 작업 9). `docker manifest inspect`만 예외로 연다 —
+     * 이미지를 받지 않는 레지스트리 조회라 데몬을 쓰지 않고, 없는 태그를 지어내는 것(작업 18·23)을 막는 데 필요하다.
      */
     static final String DOCKERFILE_NO_BUILD_RULE = """
 
             ## 금지 (필수)
             - docker build, docker run, docker compose 등 docker 명령과 gradle·mvn·npm 빌드를 실행하지 마세요.
               빌드와 실행은 워커가 빌드 로그를 남기며 직접 합니다. 파일을 읽고 Dockerfile을 쓰는 것으로 끝내세요.
+              예외는 하나 — FROM에 쓸 이미지:태그가 레지스트리에 있는지 `docker manifest inspect <이미지:태그>`로 확인하는 것만 됩니다.
             - 워커는 BuildKit이 없는 구형 빌더(docker build, buildx 없음)로 빌드합니다. BuildKit 전용 문법은 쓰지 마세요:
               RUN --mount(캐시·시크릿 마운트), COPY --link, COPY/ADD --chmod, heredoc(RUN <<EOF), ADD --checksum,
               TARGETARCH·BUILDPLATFORM 같은 자동 빌드 인자. 파일 권한은 RUN chmod로, 소유자는 COPY --chown으로 지정하세요.
+
+            ## 베이스 이미지 (필수)
+            - FROM의 이미지:태그는 레지스트리에 실제로 있는 것만 쓰세요. 버전 번호를 조합해 태그를 지어내지 말고
+              (예: 없는 태그 `tomcat:7.0.109-jre8`), 확실하지 않으면 위 명령으로 확인하세요.
+            - 워커가 빌드 전에 FROM 이미지를 확인합니다. 없으면 한 번 다시 만들게 하고, 그래도 없으면 배포가 실패합니다.
             """;
 
     private static final String DEFAULT_DOCKERFILE_PROMPT = """
@@ -213,17 +243,58 @@ public class DeployService {
         return filled + DOCKERFILE_NO_BUILD_RULE;
     }
 
-    private void generateDockerfile(WorkerTaskResponse task, File worktree, StringBuilder log,
-                                    String prebuildSection) throws Exception {
-        String prompt = buildDockerfilePrompt(props.deploy().dockerfilePromptTemplate(),
-                task.githubRepo(), task.headBranch(), prebuildSection);
-        ClaudeExecAdapter.ExecResult exec = claude.exec(
-                prompt, worktree, props.deploy().dockerfileTimeout(), java.util.List.of(), true);
+    /**
+     * 베이스 이미지가 레지스트리에 없을 때 같은 프롬프트 끝에 붙이는 재생성 지시 — 생성 claude가 버전 조합으로 태그를
+     * 지어내 docker build가 첫 줄에서 실패했다(2026-11-02 작업 23 `tomcat:7.0.109-jre8-openjdk`, 10-28 작업 18).
+     */
+    static String regenerateSection(List<String> missing) {
+        return """
+
+                ## 다시 생성 (필수)
+                - 방금 쓴 Dockerfile의 FROM 이미지가 레지스트리에 없습니다: %s
+                  (워커의 `docker manifest inspect` 결과 no such manifest — 그 태그가 없다는 뜻입니다.)
+                - 실제로 있는 이미지:태그로 FROM을 고쳐 Dockerfile을 다시 쓰세요. 다른 내용은 필요할 때만 바꾸세요.
+                - 고른 태그는 `docker manifest inspect <이미지:태그>`로 있는지 확인하고 쓰세요.
+                """.formatted(String.join(", ", missing));
+    }
+
+    /** 다시 생성할 남은 시간이 이보다 짧으면 재생성하지 않고 실패시킨다 — 짧은 상한으로 부른 claude는 대개 시간 초과로 끝난다. */
+    static final Duration MIN_REGENERATE_TIME = Duration.ofMinutes(1);
+
+    private void generateDockerfile(String prompt, File worktree, StringBuilder log,
+                                    Duration timeout) throws Exception {
+        ClaudeExecAdapter.ExecResult exec = claude.exec(prompt, worktree, timeout, List.of(), true);
         log.append(tail(exec.stdout(), 2000)).append('\n');
         if (exec.exitCode() != 0) {
             throw new DeployException("Dockerfile 생성 claude exit=" + exec.exitCode(),
                     log.toString());
         }
+        if (!Files.exists(worktree.toPath().resolve("Dockerfile"))) {
+            throw new DeployException("claude가 Dockerfile을 생성하지 못함", log.toString());
+        }
+    }
+
+    /**
+     * 생성한 Dockerfile의 FROM 이미지를 배포 타깃에 확인해 한 줄로 남기고, 레지스트리에 없는 것이 확실한 이미지만 돌려준다.
+     * 확인 못 함(인증·네트워크·null)은 통과 — 판단을 docker build에 맡긴다.
+     */
+    private List<String> missingBaseImages(Path dockerfile, StringBuilder log) throws java.io.IOException {
+        List<String> images = DockerfileSupport.parseBaseImages(Files.readString(dockerfile));
+        List<String> missing = new ArrayList<>();
+        if (images.isEmpty()) return missing;
+        StringJoiner line = new StringJoiner(", ", "[베이스 이미지] ", "\n");
+        for (String image : images) {
+            DeployTarget.ImageAvailability a = target.checkImage(image);
+            if (a == null) a = DeployTarget.ImageAvailability.UNKNOWN;
+            if (a == DeployTarget.ImageAvailability.MISSING) missing.add(image);
+            line.add(image + "=" + switch (a) {
+                case PRESENT -> "있음";
+                case MISSING -> "없음";
+                case UNKNOWN -> "확인 못 함";
+            });
+        }
+        log.append(line);
+        return missing;
     }
 
     private static String tail(String s, int max) {

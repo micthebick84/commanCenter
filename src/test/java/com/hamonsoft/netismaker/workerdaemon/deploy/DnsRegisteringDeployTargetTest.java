@@ -46,6 +46,12 @@ class DnsRegisteringDeployTargetTest {
         public void gc(int orphanGraceMinutes, int keepImagesPerTask, Set<String> protectedContainers) {
             calls.add("gc");
         }
+
+        @Override
+        public ImageAvailability checkImage(String image) {
+            calls.add("checkImage " + image);
+            return ImageAvailability.MISSING;
+        }
     }
 
     static class FakeDns implements PublicDnsRegistrar {
@@ -159,6 +165,14 @@ class DnsRegisteringDeployTargetTest {
         delegate.statuses.put("netis-task-7", DeployTarget.DeployStatus.RUNNING);
 
         assertThat(target.status("netis-task-7")).isEqualTo(DeployTarget.DeployStatus.RUNNING);
+    }
+
+    @Test
+    void checkImage_is_delegated() {
+        assertThat(target.checkImage("tomcat:7.0.109-jre8")).isEqualTo(DeployTarget.ImageAvailability.MISSING);
+
+        assertThat(delegate.calls).containsExactly("checkImage tomcat:7.0.109-jre8");
+        assertThat(dns.calls).isEmpty();
     }
 
     @Test

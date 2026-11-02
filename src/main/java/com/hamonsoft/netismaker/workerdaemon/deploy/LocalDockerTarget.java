@@ -367,6 +367,37 @@ public class LocalDockerTarget implements DeployTarget {
         }
     }
 
+    /**
+     * 데몬에 이미 있으면(빌드 캐시·로컬 전용 이미지) 레지스트리를 묻지 않는다. 없으면 `docker manifest inspect`로
+     * 레지스트리에 묻는다 — 이미지를 받지 않는 조회라 빠르고, 데몬(DOCKER_HOST)이 아니라 워커 PC에서 바로 나간다.
+     */
+    @Override
+    public ImageAvailability checkImage(String image) {
+        try {
+            ProcessRunner.Result local = ProcessRunner.run(new File("."),
+                    List.of(DOCKER, "image", "inspect", "--format", "{{.Id}}", image), 60);
+            if (local.exitCode() == 0) return ImageAvailability.PRESENT;
+            ProcessRunner.Result remote = ProcessRunner.run(new File("."),
+                    List.of(DOCKER, "manifest", "inspect", image), 60);
+            return classifyManifestInspect(remote.exitCode(), remote.stdout());
+        } catch (Exception e) {
+            log.warn("베이스 이미지 확인 실패 (빌드에 맡김): {} — {}", image, e.getMessage());
+            return ImageAvailability.UNKNOWN;
+        }
+    }
+
+    /**
+     * `docker manifest inspect` 결과 판정. 없는 태그는 레지스트리가 `no such manifest`로 답한다 — 없는 저장소·비공개
+     * 저장소는 둘 다 인증 거부로 보여 구별할 수 없으니 UNKNOWN(stderr는 redirectErrorStream으로 stdout에 합본됨).
+     */
+    static ImageAvailability classifyManifestInspect(int exitCode, String output) {
+        if (exitCode == 0) return ImageAvailability.PRESENT;
+        if (output != null && output.toLowerCase(java.util.Locale.ROOT).contains("no such manifest")) {
+            return ImageAvailability.MISSING;
+        }
+        return ImageAvailability.UNKNOWN;
+    }
+
     /** 현재 docker가 호스트에 게시 중인 포트 집합 (할당 충돌 회피). */
     private Set<Integer> dockerPublishedPorts() {
         Set<Integer> ports = new HashSet<>();

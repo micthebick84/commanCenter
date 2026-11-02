@@ -216,8 +216,9 @@ CREATE TABLE com.worker_heartbeat (
   last_seen_at      TIMESTAMPTZ NOT NULL,
   hostname          VARCHAR(100),
   version           VARCHAR(50),
-  claude_session_ok BOOLEAN,
+  claude_session_ok BOOLEAN,                    -- claude 로그인 판정(2026-11-02부터 채워짐, NULL = 판정 없음)
   vpn_status        VARCHAR(20)                 -- 워커가 자체 보고 (선택)
+  -- 이후 추가: mcps(V2), lost_report_count(V13), claude_auth_method·claude_auth_expires_at(V37)
 );
 
 CREATE OR REPLACE VIEW com.task_queue_stats AS
@@ -331,7 +332,8 @@ GET    /api/me                          로그인 사용자 + role
 
 **워커 API** (X-Worker-API-Key 필수):
 ```
-POST   /worker/heartbeat                {worker_id, hostname, version, claude_session_ok, vpn_status?}
+POST   /worker/heartbeat                {worker_id, hostname, version, claude_session_ok, vpn_status?, mcps, lost_report_count,
+                                         claude_auth_method?, claude_auth_expires_at?}  ← 인터뷰 서비스도 보냄(2026-11-02)
 GET    /worker/next-task                대기 작업 1건 atomic claim (FOR UPDATE SKIP LOCKED)
                                         없으면 204
 POST   /worker/tasks/{id}/result        body: { status: '분석완료'|'분석실패',

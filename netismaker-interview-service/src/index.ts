@@ -5,6 +5,8 @@ import { resolveClaudeCli } from './sdk/claudeCli.js';
 import { loadBaseMcpServers } from './sdk/mcpBase.js';
 import { InterviewRunner } from './runner/interviewRunner.js';
 import { ClaimLoop } from './claimLoop.js';
+import { checkClaudeAuth, realClaudeAuthDeps } from './claudeAuth.js';
+import { WorkerHeartbeatReporter, serviceVersion } from './workerHeartbeat.js';
 
 async function main(): Promise<void> {
   // CLI가 system/session_state_changed(idle = 턴 완전 종료)를 내보내게 한다. SDK 0.2.117은 이 변수를 넘기지 않고,
@@ -33,7 +35,19 @@ async function main(): Promise<void> {
     concurrency: cfg.concurrency,
   });
 
-  const shutdown = (): void => loop.stop();
+  // 관리 화면 "워커 헬스"에 이 서비스의 생존과 claude 로그인 판정을 남긴다 (스펙 2026-11-02 §5)
+  const workerHeartbeat = new WorkerHeartbeatReporter(client, {
+    workerId: cfg.workerId,
+    version: `interview-service/${serviceVersion()}`,
+    intervalMs: cfg.workerHeartbeatIntervalMs,
+    authIntervalMs: cfg.claudeAuthCheckIntervalMs,
+    checkAuth: () => checkClaudeAuth(realClaudeAuthDeps(claudeCliPath)),
+  });
+
+  const shutdown = (): void => {
+    workerHeartbeat.stop();
+    loop.stop();
+  };
   process.on('SIGINT', shutdown);
   process.on('SIGTERM', shutdown);
 
@@ -41,6 +55,7 @@ async function main(): Promise<void> {
   console.log(
     `[interview-service] worker=${cfg.workerId} concurrency=${cfg.concurrency} cli=${claudeCliPath} mcps=[${Object.keys(mcpsBase).join(', ')}] polling ${cfg.apiBaseUrl} git=[${cfg.githubPat ? 'github' : ''}${cfg.gitlabToken ? ' gitlab' : ''}]`,
   );
+  workerHeartbeat.start();
   await loop.start();
 }
 

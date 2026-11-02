@@ -12,6 +12,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 
+import java.time.OffsetDateTime;
 import java.util.List;
 import java.util.Optional;
 
@@ -43,7 +44,7 @@ class WorkerServiceHeartbeatTest {
 
     private WorkerHeartbeatRequest req(Integer lostReportCount) {
         return new WorkerHeartbeatRequest("mac-worker-1", "host", "0.1.0", true, "ok",
-                List.of("local-db"), lostReportCount);
+                List.of("local-db"), lostReportCount, null, null);
     }
 
     @Test
@@ -60,5 +61,35 @@ class WorkerServiceHeartbeatTest {
         ArgumentCaptor<WorkerHeartbeat> cap = ArgumentCaptor.forClass(WorkerHeartbeat.class);
         verify(heartbeatRepo).save(cap.capture());
         assertThat(cap.getValue().getLostReportCount()).isEqualTo(0);
+    }
+
+    @Test
+    void heartbeat_persists_claude_auth_status() {
+        OffsetDateTime exp = OffsetDateTime.parse("2026-10-31T02:23:45.460Z");
+        service.heartbeat(new WorkerHeartbeatRequest("win-worker-1", "host", "0.1.0", false, null,
+                List.of(), 0, "CREDENTIALS", exp));
+        ArgumentCaptor<WorkerHeartbeat> cap = ArgumentCaptor.forClass(WorkerHeartbeat.class);
+        verify(heartbeatRepo).save(cap.capture());
+        assertThat(cap.getValue().getClaudeSessionOk()).isFalse();
+        assertThat(cap.getValue().getClaudeAuthMethod()).isEqualTo("CREDENTIALS");
+        assertThat(cap.getValue().getClaudeAuthExpiresAt()).isEqualTo(exp);
+    }
+
+    @Test
+    void heartbeat_from_old_worker_clears_claude_auth_fields() {
+        // 구버전 워커는 세 칸을 보내지 않는다 — 예전 판정값이 남아 있으면 안 된다
+        WorkerHeartbeat existing = new WorkerHeartbeat();
+        existing.setWorkerId("mac-worker-1");
+        existing.setClaudeSessionOk(false);
+        existing.setClaudeAuthMethod("CREDENTIALS");
+        existing.setClaudeAuthExpiresAt(OffsetDateTime.parse("2026-10-31T02:23:45.460Z"));
+        when(heartbeatRepo.findById("mac-worker-1")).thenReturn(Optional.of(existing));
+
+        service.heartbeat(new WorkerHeartbeatRequest("mac-worker-1", "host", "0.1.0", null, null,
+                List.of(), 0, null, null));
+
+        assertThat(existing.getClaudeSessionOk()).isNull();
+        assertThat(existing.getClaudeAuthMethod()).isNull();
+        assertThat(existing.getClaudeAuthExpiresAt()).isNull();
     }
 }

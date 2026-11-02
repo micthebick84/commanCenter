@@ -21,6 +21,10 @@ export interface Config {
   gitlabToken?: string;
   /** 동시에 돌릴 턴 수(INTERVIEW_CONCURRENCY, 기본 1 = 직렬). 질문·인터뷰 공용 큐에서 최대 N건을 함께 claim한다. */
   concurrency: number;
+  /** 서비스 하트비트(POST /worker/heartbeat) 간격 ms(WORKER_HEARTBEAT_INTERVAL_MS, 기본 20초) — 관리 화면 alive 기준 60초보다 짧게. */
+  workerHeartbeatIntervalMs: number;
+  /** claude 로그인 판정 간격 ms(CLAUDE_AUTH_CHECK_INTERVAL_MS, 기본 5분, 스펙 2026-11-02 §3). */
+  claudeAuthCheckIntervalMs: number;
 }
 
 function req(env: Record<string, string | undefined>, key: string): string {
@@ -92,5 +96,7 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
     githubPat: env.GITHUB_PAT || undefined,
     gitlabToken: env.GITLAB_TOKEN || undefined,
     concurrency: posInt(env, 'INTERVIEW_CONCURRENCY', 1),
+    workerHeartbeatIntervalMs: posNum(env, 'WORKER_HEARTBEAT_INTERVAL_MS', 20_000),
+    claudeAuthCheckIntervalMs: posNum(env, 'CLAUDE_AUTH_CHECK_INTERVAL_MS', 300_000),
   };
 }

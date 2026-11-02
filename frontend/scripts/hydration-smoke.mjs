@@ -112,7 +112,10 @@ const REQUEST_DETAIL = {
     { id: 2, kind: 'SYSTEM', authorId: 'admin', authorAdmin: true, body: '상태가 검토중으로 바뀌었습니다', createdAt: NOW },
   ],
 }
-const WORKERS = [{ workerId: 'smoke-worker-1', hostname: 'smoke', version: '1.0', lastSeenAt: NOW, alive: true, claudeSessionOk: true, vpnStatus: null, mcps: ['docs'], lostReportCount: 0 }]
+const WORKERS = [
+  { workerId: 'smoke-worker-1', hostname: 'smoke', version: '1.0', lastSeenAt: NOW, alive: true, claudeSessionOk: true, claudeAuthMethod: 'ENV_TOKEN', claudeAuthExpiresAt: null, vpnStatus: null, mcps: ['docs'], lostReportCount: 0 },
+  { workerId: 'smoke-interview-1', hostname: 'smoke', version: 'interview-service/0.1.0', lastSeenAt: NOW, alive: true, claudeSessionOk: false, claudeAuthMethod: 'CREDENTIALS', claudeAuthExpiresAt: '2026-10-31T02:23:45.460Z', vpnStatus: null, mcps: [], lostReportCount: 0 },
+]
 
 /** pathname → 응답 본문. 목록에 없는 /api/ 요청은 null(200)로 답하고 보고서에 남긴다. */
 function apiResponse(path) {

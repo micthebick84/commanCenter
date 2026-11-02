@@ -28,7 +28,7 @@ import java.util.function.LongSupplier;
  *  워커 메인 루프.
  *
  *   매 5초:  백엔드 폴링 → 작업이 있으면 kind에 따라 분기 처리
- *   매 10초: heartbeat
+ *   매 10초: heartbeat (claude 로그인 판정은 ClaudeAuthProbe가 5분마다 — 하트비트는 그 값을 싣는다)
  *
  *   ANALYSIS 흐름:
  *     1) git fetch/clone (GitRepoCache)
@@ -70,6 +70,7 @@ public class WorkerMainLoop {
     private final DesignResultHarvester designHarvester;
     private final TaskCloser closer;
     private final SuperpowersPlugin superpowers;
+    private final ClaudeAuthProbe claudeAuth;
 
     /** 기동 알림이 성공(또는 구 API의 404)한 뒤에만 claim한다. 스케줄러 스레드와 테스트가 함께 읽는다. */
     private volatile boolean startupReported;
@@ -90,7 +91,8 @@ public class WorkerMainLoop {
                           SilentLossTracker silentLossTracker,
                           DesignResultHarvester designHarvester,
                           TaskCloser closer,
-                          SuperpowersPlugin superpowers) {
+                          SuperpowersPlugin superpowers,
+                          ClaudeAuthProbe claudeAuth) {
         this.props = props;
         this.http = http;
         this.repos = repos;
@@ -105,14 +107,17 @@ public class WorkerMainLoop {
         this.designHarvester = designHarvester;
         this.closer = closer;
         this.superpowers = superpowers;
+        this.claudeAuth = claudeAuth;
     }
 
     @Scheduled(fixedRateString = "#{${netis-maker.worker.heartbeat-interval-seconds:10} * 1000}")
     public void sendHeartbeat() {
+        // claude 로그인 판정은 ClaudeAuthProbe가 따로(기본 5분) 해 두고 여기서는 읽기만 한다 (스펙 2026-11-02 §3)
+        ClaudeAuthProbe.Status auth = claudeAuth.current();
         try {
             http.heartbeat(new WorkerHeartbeatRequest(
-                    props.id(), hostname(), props.version(), null, null, mcps.getServerNames(),
-                    silentLossTracker.currentCount()));
+                    props.id(), hostname(), props.version(), auth.ok(), null, mcps.getServerNames(),
+                    silentLossTracker.currentCount(), auth.methodName(), auth.expiresAtUtc()));
         } catch (RestClientException e) {
             log.warn("heartbeat 실패: {}", e.getMessage());
         }

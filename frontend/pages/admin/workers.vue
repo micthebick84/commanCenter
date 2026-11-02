@@ -2,6 +2,8 @@
 import AdminSectionTabs from '~/components/tasks/AdminSectionTabs.vue'
 import AdminCatalogCard from '~/components/AdminCatalogCard.vue'
 import AdminInfoBanner from '~/components/AdminInfoBanner.vue'
+import ClaudeAuthChip from '~/components/ClaudeAuthChip.vue'
+import { claudeAuthAlerts, claudeAuthView } from '~/composables/claudeAuth'
 definePageMeta({ layout: 'default' })
 
 interface WorkerHealth {
@@ -11,12 +13,18 @@ interface WorkerHealth {
   lastSeenAt: string | null
   alive: boolean
   claudeSessionOk: boolean | null
+  claudeAuthMethod?: string | null
+  claudeAuthExpiresAt?: string | null
   vpnStatus: string | null
   mcps: string[]
   lostReportCount: number
 }
 
 const { data, loading } = useTaskPolling<WorkerHealth[]>(() => useApi('/api/workers/health'))
+
+// claude 로그인이 끊겼거나 3일 안에 만료되는 워커 — 페이지 맨 위 경고 (스펙 2026-11-02 §6)
+const authAlerts = computed(() => claudeAuthAlerts(data.value ?? []))
+const authAlertBad = computed(() => authAlerts.value.some((a) => a.view.level === 'bad'))
 
 function lastSeenAgo(iso: string | null): string {
   if (!iso) return '—'
@@ -29,11 +37,6 @@ function lastSeenAgo(iso: string | null): string {
   if (hr < 24) return `${hr}시간 전`
   return `${Math.floor(hr / 24)}일 전`
 }
-
-function bool(b: boolean | null): string {
-  if (b === null || b === undefined) return '—'
-  return b ? 'OK' : 'NG'
-}
 </script>
 
 <template>
@@ -45,6 +48,21 @@ function bool(b: boolean | null): string {
       <q-spinner v-if="loading" size="1.2em" color="primary" />
       <span class="text-caption text-grey-7 q-ml-sm">5초마다 자동 갱신</span>
     </div>
+
+    <q-banner
+      v-if="authAlerts.length"
+      :class="authAlertBad ? 'bg-red-1 text-red-10' : 'bg-orange-1 text-orange-10'"
+      class="q-mb-md"
+      data-test="claude-auth-alert"
+    >
+      <template #avatar><q-icon :name="authAlertBad ? 'error' : 'schedule'" /></template>
+      <div class="text-weight-medium">Claude 로그인 확인 필요</div>
+      <div v-for="a in authAlerts" :key="a.workerId" class="q-mt-xs" data-test="claude-auth-alert-row">
+        <strong>{{ a.workerId }}</strong> — {{ a.view.label }}<template v-if="a.view.methodLabel || a.view.expiresLabel">
+          ({{ [a.view.methodLabel, a.view.expiresLabel].filter(Boolean).join(' · ') }})</template>.
+        {{ a.view.action }}
+      </div>
+    </q-banner>
 
     <q-banner v-if="data && data.length === 0" class="bg-grey-2 q-mb-md">
       <template #avatar><q-icon name="info" /></template>
@@ -76,18 +94,7 @@ function bool(b: boolean | null): string {
           <dt>버전</dt>
           <dd>{{ w.version ?? '—' }}</dd>
           <dt>Claude OAuth</dt>
-          <dd>
-            <q-chip
-              v-if="w.claudeSessionOk !== null"
-              :color="w.claudeSessionOk ? 'green-2' : 'red-2'"
-              :text-color="w.claudeSessionOk ? 'green-9' : 'red-9'"
-              size="sm"
-              dense
-              :label="bool(w.claudeSessionOk)"
-              class="q-ma-none"
-            />
-            <span v-else>—</span>
-          </dd>
+          <dd data-test="card-claude-auth"><ClaudeAuthChip :row="w" /></dd>
           <dt>네트워크</dt>
           <dd>{{ w.vpnStatus ?? '—' }}</dd>
           <dt>유실 보고</dt>
@@ -123,7 +130,7 @@ function bool(b: boolean | null): string {
         { name: 'hostname', label: 'Hostname', field: 'hostname', align: 'left' },
         { name: 'version', label: 'Version', field: 'version', align: 'left' },
         { name: 'lastSeenAt', label: '마지막 응답', field: 'lastSeenAt', align: 'left' },
-        { name: 'claudeSession', label: 'Claude OAuth', field: (r) => bool(r.claudeSessionOk), align: 'center' },
+        { name: 'claudeSession', label: 'Claude OAuth', field: (r) => claudeAuthView(r).label, align: 'center' },
         { name: 'vpnStatus', label: '네트워크', field: 'vpnStatus', align: 'center' },
         { name: 'mcps', label: 'MCP 도구', field: 'mcps', align: 'left' },
         { name: 'lostReportCount', label: '유실 보고', field: 'lostReportCount', align: 'center' },
@@ -151,16 +158,8 @@ function bool(b: boolean | null): string {
         </q-td>
       </template>
       <template #body-cell-claudeSession="props">
-        <q-td :props="props">
-          <q-chip
-            v-if="props.row.claudeSessionOk !== null"
-            :color="props.row.claudeSessionOk ? 'green-2' : 'red-2'"
-            :text-color="props.row.claudeSessionOk ? 'green-9' : 'red-9'"
-            size="sm"
-            dense
-            :label="bool(props.row.claudeSessionOk)"
-          />
-          <span v-else>—</span>
+        <q-td :props="props" data-test="cell-claude-auth">
+          <ClaudeAuthChip :row="props.row" />
         </q-td>
       </template>
       <template #body-cell-mcps="props">
@@ -193,6 +192,9 @@ function bool(b: boolean | null): string {
     <AdminInfoBanner summary="alive 기준 · 유실 보고 안내" class="q-mt-md">
       <strong>alive 기준</strong>: 마지막 heartbeat가 60초 이내. 그 이상 응답 없으면
       <strong>Stale 회수 잡</strong>(매 1분)이 자동으로 분석중 작업을 작업대기로 되돌립니다.
+      <br /><strong>Claude OAuth</strong>: 워커·인터뷰 서비스가 5분마다 그 PC의 claude 로그인을 확인해 보고합니다.
+      <strong>setup-token</strong>(env CLAUDE_CODE_OAUTH_TOKEN, 1년)이면 OK, <strong>CLI 로그인</strong>(claude auth
+      login)은 refresh token 만료 시각(로그인 후 약 30일)까지 — 3일 안이면 주황, 지나거나 로그아웃이면 빨강입니다.
       <br /><strong>유실 보고</strong>: 결과 보고가 끝내 백엔드에 닿지 못한 횟수입니다. 워커
       재시작 시 0으로 리셋되며, 유실된 결과 원본은 워커의
       <code>~/netis-maker/dead-letter/</code>에 보존됩니다.

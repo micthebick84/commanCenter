@@ -35,6 +35,14 @@ public class WorkerHeartbeat {
     @Column(name = "claude_session_ok")
     private Boolean claudeSessionOk;
 
+    /** claude 로그인 판정 방식 ENV_TOKEN|CREDENTIALS|CLI (V37). */
+    @Column(name = "claude_auth_method", length = 20)
+    private String claudeAuthMethod;
+
+    /** CLI 로그인의 refresh token 만료 시각 — setup-token·CLI 확인이면 null (V37). */
+    @Column(name = "claude_auth_expires_at")
+    private OffsetDateTime claudeAuthExpiresAt;
+
     @Column(name = "vpn_status", length = 20)
     private String vpnStatus;
 

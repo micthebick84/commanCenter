@@ -257,6 +257,23 @@ export interface RateLimitInfo {
   unifiedWindows?: Record<string, { utilization?: number; resetsAt?: number } | undefined>;
 }
 
+/**
+ * Body for POST /worker/heartbeat (Java WorkerHeartbeatRequest) — 관리 화면 "워커 헬스"의 한 줄(스펙 2026-11-02 §5).
+ * claudeSessionOk·claudeAuthMethod·claudeAuthExpiresAt = claude 로그인 판정(src/claudeAuth.ts), 판정 못 하면 셋 다 null.
+ */
+export interface WorkerHeartbeatRequest {
+  workerId: string;
+  hostname: string;
+  version: string;
+  claudeSessionOk: boolean | null;
+  vpnStatus: null;
+  mcps: string[];
+  lostReportCount: number;
+  claudeAuthMethod: string | null;
+  /** ISO-8601 또는 null. */
+  claudeAuthExpiresAt: string | null;
+}
+
 /** Body for POST /worker/usage/rate-limits?workerId=… (Java WorkerRateLimitRequest). */
 export interface WorkerRateLimitRequest {
   limitType: string;

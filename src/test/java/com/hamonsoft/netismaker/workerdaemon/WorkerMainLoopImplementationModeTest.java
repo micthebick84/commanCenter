@@ -84,7 +84,7 @@ class WorkerMainLoopImplementationModeTest {
         return new WorkerMainLoop(props(), http, repos, claude, mock(PromptResultParser.class),
                 mock(WorkerMcpSupport.class), worktrees, gitOps, mock(DeployService.class), reporter,
                 mock(SilentLossTracker.class), mock(DesignResultHarvester.class), mock(TaskCloser.class),
-                plugin);
+                plugin, mock(ClaudeAuthProbe.class));
     }
 
     /** 인터뷰 플랜이 있는 구현 작업. mode가 null이면 claim에 implementation 블록이 없다(옛 API). */

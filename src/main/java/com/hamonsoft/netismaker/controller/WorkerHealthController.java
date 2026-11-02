@@ -69,6 +69,8 @@ public class WorkerHealthController {
         view.put("lastSeenAt", h.getLastSeenAt());
         view.put("alive", h.getLastSeenAt() != null && h.getLastSeenAt().isAfter(threshold));
         view.put("claudeSessionOk", h.getClaudeSessionOk());
+        view.put("claudeAuthMethod", h.getClaudeAuthMethod());
+        view.put("claudeAuthExpiresAt", h.getClaudeAuthExpiresAt());
         view.put("vpnStatus", h.getVpnStatus());
         view.put("mcps", h.getMcps() == null ? java.util.List.of() : h.getMcps());
         view.put("lostReportCount", h.getLostReportCount() != null ? h.getLostReportCount() : 0);

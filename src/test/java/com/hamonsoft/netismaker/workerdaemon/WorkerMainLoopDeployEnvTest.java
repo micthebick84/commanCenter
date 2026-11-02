@@ -125,7 +125,7 @@ class WorkerMainLoopDeployEnvTest {
         WorkerMainLoop loop = new WorkerMainLoop(props(), http, repos, claude, mock(PromptResultParser.class),
                 mock(WorkerMcpSupport.class), worktrees, gitOps, mock(DeployService.class), reporter,
                 mock(SilentLossTracker.class), mock(DesignResultHarvester.class), mock(TaskCloser.class),
-                new SuperpowersPlugin(""));
+                new SuperpowersPlugin(""), mock(ClaudeAuthProbe.class));
         loop.pollAndProcess();
         return new Run(reporter, gitOps, presentAtCommit);
     }

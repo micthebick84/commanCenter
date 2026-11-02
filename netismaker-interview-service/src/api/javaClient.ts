@@ -1,6 +1,7 @@
 import type {
   InterviewClaimResponse,
   WorkerActivityRequest,
+  WorkerHeartbeatRequest,
   WorkerPlanRequest,
   WorkerQuestionRequest,
   WorkerRateLimitRequest,
@@ -155,6 +156,19 @@ export class JavaApiClient {
       body: JSON.stringify(body),
     });
     if (!res.ok) throw new HttpStatusError(res.status, `rate-limit failed: ${res.status}`);
+  }
+
+  /**
+   * 서비스 하트비트 — Java 워커와 같은 POST /worker/heartbeat(바디에 workerId, 쿼리 없음). 관리 화면 "워커 헬스"의 한 줄.
+   * 실패 처리(경고 1회)는 호출자(WorkerHeartbeatReporter) 책임.
+   */
+  async workerHeartbeat(body: WorkerHeartbeatRequest): Promise<void> {
+    const res = await this.fetchFn(this.url('/worker/heartbeat'), {
+      method: 'POST',
+      headers: this.headers(),
+      body: JSON.stringify(body),
+    });
+    if (!res.ok) throw new HttpStatusError(res.status, `worker heartbeat failed: ${res.status}`);
   }
 
   async heartbeat(id: number): Promise<void> {

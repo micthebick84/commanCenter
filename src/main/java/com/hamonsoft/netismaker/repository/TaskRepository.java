@@ -125,7 +125,7 @@ public interface TaskRepository extends JpaRepository<Task, Long> {
 
     /**
      * 워커 claim 후보 상태 — {@link #findClaimableForUpdateSkipLocked}의 JPQL 목록을 그대로 옮긴 것.
-     * 네이티브 쿼리({@link #findClaimableExcludingRefImplementationsForUpdateSkipLocked})가 이 목록을 쓴다.
+     * 네이티브 쿼리({@link #findClaimableAmong})가 이 목록을 쓴다.
      * 두 목록이 어긋나지 않는지는 TaskRepositoryClaimableStatusesTest가 JPQL 문자열을 읽어 확인한다.
      */
     List<TaskStatus> CLAIMABLE_STATUSES = List.of(
@@ -137,54 +137,43 @@ public interface TaskRepository extends JpaRepository<Task, Long> {
             TaskStatus.CLOSE_PENDING);
 
     /**
-     * 참조 repo를 모르는 워커(구버전 — next-task에 supports=refRepos가 없음)용 claim (스펙 2026-10-24 §4.7).
-     * {@link #findClaimableForUpdateSkipLocked}와 같지만 참조(ref_repos)가 있는 구현대기는 건너뛴다 — 그 작업은 참조를 아는
-     * 워커가 올 때까지 대기로 남는다. 디자인·배포·종료 claim은 참조와 무관해 막지 않는다.
+     * 기능을 다 알지는 못하는 워커(next-task의 supports가 모자란 구버전)나 받을 작업 종류를 고른 워커(next-task kinds)용 claim.
+     * 순서(created_at 오래된 순)·잠금(FOR UPDATE SKIP LOCKED)은 {@link #findClaimableForUpdateSkipLocked}와 같고 후보 상태만
+     * 넘겨 받은 목록으로 좁힌다. 구현대기(approved)에 한해 워커가 모르는 기능이 필요한 작업을 건너뛴다 — 그 작업은 아는 워커가 올
+     * 때까지 대기로 남고, 디자인·배포·종료 claim은 막지 않는다(수정 회차 안의 자동 재배포도 그대로 간다).
+     * <ul>
+     *   <li>includeRefImplementations=false(참조를 모르는 워커): 참조(ref_repos)가 있는 구현대기를 건너뛴다 (스펙 2026-10-24 §4.7).</li>
+     *   <li>includeFixRounds=false(fixRounds를 모르는 워커): 수정 회차가 열린(active_fix_request_id) 구현대기를 건너뛴다 — 구버전
+     *       jar는 회차 필드를 버리고 base에서 -rN 브랜치를 새로 딴다 (스펙 2026-11-03 §7).</li>
+     * </ul>
      * JPQL로 jsonb를 비교하지 못하므로 네이티브 쿼리다(findRecentlyDeployedWithEnv와 같은 CAST 비교).
-     * 상태 값은 DB 저장 값(한글)이라 {@link #findClaimableExcludingRefImplementationsForUpdateSkipLocked}가 채운다.
-     */
-    @Query(value = """
-        SELECT t.* FROM com.task t
-        WHERE t.status IN (:claimable) AND t.deleted_at IS NULL
-          AND NOT (t.status = :approved AND t.ref_repos <> CAST('[]' AS jsonb))
-        ORDER BY t.created_at ASC
-        LIMIT 1
-        FOR UPDATE SKIP LOCKED
-        """, nativeQuery = true)
-    List<Task> findClaimableExcludingRefImplementations(@Param("claimable") Collection<String> claimable,
-                                                        @Param("approved") String approved);
-
-    /** 참조를 모르는 워커용 claim 1건 — 후보 상태({@link #CLAIMABLE_STATUSES})를 DB 값으로 바꿔 넘긴다. */
-    default List<Task> findClaimableExcludingRefImplementationsForUpdateSkipLocked() {
-        return findClaimableExcludingRefImplementations(
-                CLAIMABLE_STATUSES.stream().map(TaskStatus::dbValue).toList(),
-                TaskStatus.APPROVED.dbValue());
-    }
-
-    /**
-     * 받을 작업 종류를 고른 워커(next-task kinds)용 claim — 후보 상태를 그 종류의 대기 상태로 좁힌다.
-     * 순서·잠금은 {@link #findClaimableForUpdateSkipLocked}와 같고, includeRefImplementations=false(참조를 모르는 워커)면
-     * {@link #findClaimableExcludingRefImplementations}처럼 참조 있는 구현대기를 건너뛴다.
+     * 상태 값은 DB 저장 값(한글)이라 {@link #findClaimableAmongForUpdateSkipLocked}가 채운다.
      */
     @Query(value = """
         SELECT t.* FROM com.task t
         WHERE t.status IN (:claimable) AND t.deleted_at IS NULL
           AND (CAST(:includeRefImplementations AS boolean)
                OR NOT (t.status = :approved AND t.ref_repos <> CAST('[]' AS jsonb)))
+          AND (CAST(:includeFixRounds AS boolean)
+               OR NOT (t.status = :approved AND t.active_fix_request_id IS NOT NULL))
         ORDER BY t.created_at ASC
         LIMIT 1
         FOR UPDATE SKIP LOCKED
         """, nativeQuery = true)
     List<Task> findClaimableAmong(@Param("claimable") Collection<String> claimable,
                                   @Param("approved") String approved,
-                                  @Param("includeRefImplementations") boolean includeRefImplementations);
+                                  @Param("includeRefImplementations") boolean includeRefImplementations,
+                                  @Param("includeFixRounds") boolean includeFixRounds);
 
-    /** 종류를 고른 워커용 claim 1건 — 후보 상태는 {@link #CLAIMABLE_STATUSES} 중에서만 고른다. */
+    /**
+     * 위 네이티브 claim 1건 — 후보 상태는 {@link #CLAIMABLE_STATUSES} 중에서만 고른다(종류를 고르지 않은 워커는 그 전체를 넘긴다).
+     * 워커가 두 기능을 다 알고 종류도 안 골랐으면 이 쿼리 대신 전체 큐(JPQL)를 쓴다.
+     */
     default List<Task> findClaimableAmongForUpdateSkipLocked(Collection<TaskStatus> statuses,
-                                                             boolean supportsRefRepos) {
+                                                             boolean supportsRefRepos, boolean supportsFixRounds) {
         List<String> claimable = statuses.stream().filter(CLAIMABLE_STATUSES::contains).map(TaskStatus::dbValue).toList();
         if (claimable.isEmpty()) return List.of();
-        return findClaimableAmong(claimable, TaskStatus.APPROVED.dbValue(), supportsRefRepos);
+        return findClaimableAmong(claimable, TaskStatus.APPROVED.dbValue(), supportsRefRepos, supportsFixRounds);
     }
 
     /** 호환 alias. 기존 호출처 단계적 마이그레이션 위함. */

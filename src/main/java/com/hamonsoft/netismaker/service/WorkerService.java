@@ -16,6 +16,7 @@ import com.hamonsoft.netismaker.repository.InterviewSessionRepository;
 import com.hamonsoft.netismaker.repository.RepoCatalogRepository;
 import com.hamonsoft.netismaker.repository.TaskAnalysisRepository;
 import com.hamonsoft.netismaker.repository.TaskDesignRepository;
+import com.hamonsoft.netismaker.repository.TaskFixRequestRepository;
 import com.hamonsoft.netismaker.repository.TaskRepository;
 import com.hamonsoft.netismaker.repository.TaskStageUsageRepository;
 import com.hamonsoft.netismaker.repository.TaskStatusHistoryRepository;
@@ -107,6 +108,14 @@ public class WorkerService {
         this.implementationModePolicy = policy;
     }
 
+    /** 수정 회차 claim의 요청 기록 조회 (스펙 2026-11-03 §7). 생성자를 바꾸지 않으려고 setter 주입 — 회차 없는 단위 테스트에서는 null. */
+    private TaskFixRequestRepository fixRequestRepo;
+
+    @Autowired
+    void setFixRequestRepository(TaskFixRequestRepository fixRequestRepo) {
+        this.fixRequestRepo = fixRequestRepo;
+    }
+
     public WorkerService(TaskRepository taskRepo,
                          TaskAnalysisRepository analysisRepo,
                          TaskDesignRepository designRepo,
@@ -155,34 +164,57 @@ public class WorkerService {
      * 반환된 WorkerTaskResponse.kind를 보고 워커가 분기:
      *  - ANALYSIS       → 기존 분석 흐름 (analysis 필드 null)
      *  - IMPLEMENTATION → worktree 구현 흐름 (analysis 마크다운 + subtasks 동봉)
+     *
+     * 1인자 = 모든 기능을 아는 워커(거르는 조건 없음).
      */
     @Transactional
     public Optional<WorkerTaskResponse> claimNextTask(String workerId) {
-        return claimNextTask(workerId, true);
+        return claimNextTask(workerId, WorkerCapabilities.ALL, null);
     }
 
     /**
      * supportsRefRepos=false(구버전 워커 — next-task에 supports=refRepos 없음)면 참조 repo가 있는 구현대기를 건너뛴다
      * (스펙 2026-10-24 §4.7) — 모르는 필드를 버리고 참조 없이 구현해 버리지 않게. 그 작업은 대기로 남는다.
+     * 이 오버로드는 fixRounds를 모르는 워커로 본다(수정 회차 구현대기도 건너뜀) — 둘 다 알리는 워커는
+     * {@link #claimNextTask(String, WorkerCapabilities, Set)}를 쓴다.
      */
     @Transactional
     public Optional<WorkerTaskResponse> claimNextTask(String workerId, boolean supportsRefRepos) {
-        List<Task> candidates = supportsRefRepos
-                ? taskRepo.findClaimableForUpdateSkipLocked(PageRequest.of(0, 1))
-                : taskRepo.findClaimableExcludingRefImplementationsForUpdateSkipLocked();
-        return candidates.isEmpty() ? Optional.empty() : Optional.of(claim(candidates.get(0), workerId));
+        return claimNextTask(workerId, new WorkerCapabilities(supportsRefRepos, false), null);
     }
 
     /**
      * 받을 작업 종류를 고른 워커(next-task kinds)용 claim — 그 종류의 대기 상태만 후보로 같은 FIFO 순서로 잡는다.
      * 다른 PC의 워커가 이 PC에만 있는 볼트(종료 노트)·미리 빌드 도구(배포)가 필요한 일을 잡지 않게 한다.
+     * fixRounds를 모르는 워커로 본다 — {@link #claimNextTask(String, boolean)} 참고.
      */
     @Transactional
     public Optional<WorkerTaskResponse> claimNextTask(String workerId, boolean supportsRefRepos,
                                                       Set<WorkerTaskResponse.Kind> kinds) {
-        List<TaskStatus> statuses = kinds.stream().map(WorkerService::claimableStatusFor).toList();
-        List<Task> candidates = taskRepo.findClaimableAmongForUpdateSkipLocked(statuses, supportsRefRepos);
-        return candidates.isEmpty() ? Optional.empty() : Optional.of(claim(candidates.get(0), workerId));
+        return claimNextTask(workerId, new WorkerCapabilities(supportsRefRepos, false), kinds);
+    }
+
+    /**
+     * 워커가 알린 기능(caps)에 맞춰 claim — 모르는 기능이 필요한 구현대기는 건너뛴다(참조 repo가 있는 것 §4.7, 수정 회차가 열린 것
+     * 2026-11-03 §7). 구버전 jar는 그런 작업의 모르는 필드를 버리고 엉뚱하게 구현하기 때문이다. 어느 경로(종류를 골랐든 아니든)에서도
+     * 같은 조건이 걸린다. kinds가 null이면 전부, 아니면 그 종류의 대기 상태만 후보로 같은 FIFO 순서로 잡는다.
+     * 두 기능을 다 알고 종류도 안 골랐으면 거를 것이 없어 기존 전체 큐(JPQL)를 그대로 쓴다.
+     */
+    @Transactional
+    public Optional<WorkerTaskResponse> claimNextTask(String workerId, WorkerCapabilities caps,
+                                                      Set<WorkerTaskResponse.Kind> kinds) {
+        List<Task> candidates;
+        if (kinds == null) {
+            candidates = caps.needsFilteredQueue()
+                    ? taskRepo.findClaimableAmongForUpdateSkipLocked(TaskRepository.CLAIMABLE_STATUSES,
+                            caps.refRepos(), caps.fixRounds())
+                    : taskRepo.findClaimableForUpdateSkipLocked(PageRequest.of(0, 1));
+        } else {
+            List<TaskStatus> statuses = kinds.stream().map(WorkerService::claimableStatusFor).toList();
+            candidates = taskRepo.findClaimableAmongForUpdateSkipLocked(statuses, caps.refRepos(), caps.fixRounds());
+        }
+        // claim이 null이면(수정 회차 기록이 깨진 작업을 구현실패로 치웠다) 이번 poll은 빈 응답 — 큐 머리가 치워졌으니 다음 poll이 뒤를 잡는다
+        return candidates.isEmpty() ? Optional.empty() : Optional.ofNullable(claim(candidates.get(0), workerId));
     }
 
     /** 작업 종류 → 워커가 그 종류를 claim하는 대기 상태 ({@link TaskRepository#CLAIMABLE_STATUSES}의 한 값). */
@@ -197,15 +229,30 @@ public class WorkerService {
         };
     }
 
+    /**
+     * 후보 1건을 claim해 응답을 만든다. 수정 회차 기록이 깨진 구현대기는 claim하지 않고 구현실패로 치운 뒤 null을 돌려준다.
+     */
     private WorkerTaskResponse claim(Task t, String workerId) {
         TaskStatus from = t.getStatus();
+
+        // 수정 회차가 열린 구현대기 — 회차의 방식·본문·브랜치를 싣는다 (스펙 2026-11-03 §7). 다른 상태의 회차 표시(자동 재배포 등)는 보지 않는다.
+        OpenFixRound round = null;
+        if (from == TaskStatus.APPROVED && t.getActiveFixRequestId() != null) {
+            round = openFixRoundOf(t);
+            if (round == null) {
+                failBrokenFixRound(t);
+                return null;
+            }
+        }
 
         if (from == TaskStatus.PENDING) {
             t.setStatus(TaskStatus.IN_PROGRESS);
         } else if (from == TaskStatus.APPROVED) {
             t.setStatus(TaskStatus.IMPLEMENTING);
-            // 이번 시도의 상한을 기록 — claim 응답과 작업 화면이 같은 값을 쓴다 (스펙 2026-10-15 §5.3)
-            t.setImplementationTimeoutMinutes(implementationModePolicy.timeoutMinutes(t.getImplementationMode()));
+            // 이번 시도의 상한을 기록 — claim 응답과 작업 화면이 같은 값을 쓴다 (스펙 2026-10-15 §5.3).
+            // 수정 회차는 회차의 방식으로 정한다 — 방식은 작업이 아니라 요청 기록에 있다 (스펙 2026-11-03 §6.2)
+            t.setImplementationTimeoutMinutes(implementationModePolicy.timeoutMinutes(
+                    round != null ? round.mode() : t.getImplementationMode()));
         } else if (from == TaskStatus.DESIGN_PENDING) {
             t.setStatus(TaskStatus.DESIGNING);
         } else if (from == TaskStatus.DEPLOY_PENDING) {
@@ -242,7 +289,8 @@ public class WorkerService {
             TaskAnalysis a = analysisRepo.findById(t.getId()).orElse(null);
             TaskDesign d = designRepo.findById(t.getId()).orElse(null);
             return WorkerTaskResponse.forImplementation(t, a,
-                    (d != null && d.isApproved()) ? d : null, registeredPlanMarkdown(t.getId()));
+                    (d != null && d.isApproved()) ? d : null, registeredPlanMarkdown(t.getId()),
+                    round == null ? null : round.spec(), round == null ? null : round.mode());
         }
         if (from == TaskStatus.DEPLOY_PENDING) {
             return WorkerTaskResponse.forDeploy(t, prebuildFor(t));
@@ -254,6 +302,38 @@ public class WorkerService {
             return WorkerTaskResponse.forClose(t, closeContext(t), closeArtifactSpec(t));
         }
         return WorkerTaskResponse.forAnalysis(t);
+    }
+
+    /** claim 때 읽은 열린 수정 회차 — 회차의 구현 방식과 워커에 보낼 지시. */
+    private record OpenFixRound(ImplementationMode mode, WorkerTaskResponse.FixRoundSpec spec) {}
+
+    /**
+     * 작업이 가리키는 열린 수정 회차. 승인된 요청(회차 번호 있음)이어야 하고, 아니면 null — 데이터가 깨진 것이다.
+     * 이전 본문은 승인된 앞 회차(round 미만)의 요청 본문, 오래된 회차부터. 구현 방식이 비어 있으면(있을 수 없다) 작업의 방식을 쓴다.
+     */
+    private OpenFixRound openFixRoundOf(Task t) {
+        TaskFixRequest r = fixRequestRepo.findById(t.getActiveFixRequestId()).orElse(null);
+        if (r == null || r.getStatus() != FixRequestStatus.APPROVED || r.getRound() == null) return null;
+        List<String> previous = fixRequestRepo
+                .findByTaskIdAndStatusAndRoundLessThanOrderByRoundAsc(t.getId(), FixRequestStatus.APPROVED, r.getRound())
+                .stream().map(TaskFixRequest::getBody).toList();
+        ImplementationMode mode = r.getImplementationMode() != null ? r.getImplementationMode() : t.getImplementationMode();
+        return new OpenFixRound(mode, new WorkerTaskResponse.FixRoundSpec(r.getId(), r.getRound(), r.getAttempt(),
+                r.getBody(), previous, t.getHeadBranch(), t.getHeadSha()));
+    }
+
+    /**
+     * 회차 표시는 있는데 승인된 요청 기록이 없는 구현대기 — 이대로 claim하면 회차 없는 구현으로 가서 base에서 -rN 브랜치를
+     * 새로 따 버린다. 워커에게 내주지 않고 구현실패로 두어 사람이 보게 하고, 큐 머리를 막지 않는다.
+     */
+    private void failBrokenFixRound(Task t) {
+        TaskStatus from = t.getStatus();
+        String reason = "수정 회차 기록을 찾을 수 없어 구현을 시작하지 않았습니다 (회차 요청 #" + t.getActiveFixRequestId() + ")";
+        log.error("claim 거부: 작업 {}의 수정 회차 요청 #{} 기록이 없거나 승인 상태가 아님", t.getId(), t.getActiveFixRequestId());
+        t.setStatus(TaskStatus.IMPLEMENTATION_FAILED);
+        t.setFailureReason(reason);
+        t.setUpdatedAt(OffsetDateTime.now());
+        historyRepo.save(TaskStatusHistory.log(t.getId(), from, t.getStatus(), "system", null, reason));
     }
 
     /** 종료 노트 재료 — 확정 플랜·분석·구현 로그 끝·이력(시간순)·단계별 비용. 본문 상한은 CloseContext.of. */

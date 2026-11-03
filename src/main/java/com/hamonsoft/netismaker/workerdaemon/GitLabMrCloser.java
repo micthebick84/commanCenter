@@ -14,7 +14,9 @@ import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.regex.Pattern;
 
@@ -24,6 +26,8 @@ import java.util.regex.Pattern;
  *   PUT    …/merge_requests/:iid            title에서 "Draft:" 접두어 제거(=draft 해제), 실패 시 원복
  *   PUT    …/merge_requests/:iid/merge      sha 고정, squash 선택(rebase는 merge와 동일 취급)
  *   DELETE …/repository/branches/:branch    404 "Branch Not Found"만 이미 없음
+ *   GET    …/merge_requests?state=opened&target_branch=  삭제 전 그 브랜치를 target으로 쓰는 MR → PUT target_branch
+ *   GET    …/repository/branches/:branch    충돌로 보이는 MR의 target이 지워졌는지
  */
 @Slf4j
 public class GitLabMrCloser implements MergeRequestCloser {
@@ -82,6 +86,11 @@ public class GitLabMrCloser implements MergeRequestCloser {
                     + shortSha(sha) + "(으)로 바뀌었습니다 — 확인되지 않은 커밋이라 병합하지 않습니다");
         }
         if (mr.path("has_conflicts").asBoolean(false)) {
+            // target 브랜치가 지워진 MR도 GitLab은 충돌로 표시한다 — 그때는 고칠 곳이 다르니 따로 알린다.
+            String target = mr.path("target_branch").asText("");
+            if (!target.isBlank() && branchMissing(ref, target)) {
+                throw new CloseRefusedException("target 브랜치 없음: " + target + "이(가) 삭제됐습니다 — MR의 target 브랜치를 바꾼 뒤 재시도하세요");
+            }
             throw new CloseRefusedException("충돌: target 브랜치와 충돌합니다 — 충돌을 해결한 뒤 재시도하세요");
         }
         String title = mr.path("title").asText("");
@@ -170,6 +179,44 @@ public class GitLabMrCloser implements MergeRequestCloser {
         }
         if (s == 401 || s == 403) throw new IOException("GitLab 인증 실패(" + s + ") — 토큰 scope(api) 확인");
         throw new IOException("브랜치 삭제 실패(" + s + "): " + snippet(body));
+    }
+
+    @Override
+    public List<String> retargetDependents(RepoRef ref, String branch, String newTarget)
+            throws IOException, InterruptedException {
+        requireToken();
+        String project = ref.apiBase() + "/api/v4/projects/" + enc(ref.path());
+        HttpResponse<String> res = send(HttpRequest.newBuilder(URI.create(project
+                + "/merge_requests?state=opened&per_page=100&target_branch=" + enc(branch))).GET());
+        if (res.statusCode() != 200) {
+            throw new IOException("target이 " + branch + "인 MR 조회 실패(" + res.statusCode() + "): " + snippet(res.body()));
+        }
+        List<String> moved = new ArrayList<>();
+        for (JsonNode m : JSON.readTree(res.body())) {
+            int iid = m.path("iid").asInt();
+            HttpResponse<String> u = put(project + "/merge_requests/" + iid, Map.of("target_branch", newTarget));
+            if (u.statusCode() != 200) {
+                throw new IOException("MR !" + iid + " target 변경 실패(" + u.statusCode() + "): " + snippet(u.body()));
+            }
+            log.info("MR !{} target 변경: {} → {}", iid, branch, newTarget);
+            moved.add("!" + iid);
+        }
+        return moved;
+    }
+
+    /** 브랜치가 없다고 확인될 때만 true — 조회 실패는 모름(false)으로 본다. */
+    private boolean branchMissing(RepoRef ref, String branch) {
+        try {
+            HttpResponse<String> r = send(HttpRequest.newBuilder(URI.create(ref.apiBase() + "/api/v4/projects/"
+                    + enc(ref.path()) + "/repository/branches/" + enc(branch))).GET());
+            return r.statusCode() == 404 && r.body() != null && r.body().contains("Branch Not Found");
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            return false;
+        } catch (IOException e) {
+            log.warn("target 브랜치 확인 실패: {}", GitRemotes.mask(String.valueOf(e.getMessage())));
+            return false;
+        }
     }
 
     static String classify(String detailed) {

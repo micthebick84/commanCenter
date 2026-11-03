@@ -135,6 +135,23 @@ public class GitHubPrCloser implements MergeRequestCloser {
         throw new IOException("브랜치 삭제 실패: " + snippet(out));
     }
 
+    @Override
+    public List<String> retargetDependents(RepoRef ref, String branch, String newTarget)
+            throws IOException, InterruptedException {
+        ProcessRunner.Result r = gh.run(List.of("pr", "list", "--repo", ref.path(), "--base", branch,
+                "--state", "open", "--json", "number", "--limit", "100"));
+        if (r.exitCode() != 0) throw new IOException("base가 " + branch + "인 PR 조회 실패: " + snippet(r.stdout()));
+        List<String> moved = new ArrayList<>();
+        for (JsonNode p : JSON.readTree(r.stdout())) {
+            String n = p.path("number").asText();
+            ProcessRunner.Result e = gh.run(List.of("pr", "edit", n, "--repo", ref.path(), "--base", newTarget));
+            if (e.exitCode() != 0) throw new IOException("PR #" + n + " base 변경 실패: " + snippet(e.stdout()));
+            log.info("PR #{} base 변경: {} → {}", n, branch, newTarget);
+            moved.add("#" + n);
+        }
+        return moved;
+    }
+
     private JsonNode view(RepoRef ref, String n) throws IOException, InterruptedException {
         ProcessRunner.Result r = gh.run(List.of("pr", "view", n, "--repo", ref.path(), "--json",
                 "state,isDraft,headRefOid,mergeStateStatus,mergeCommit"));

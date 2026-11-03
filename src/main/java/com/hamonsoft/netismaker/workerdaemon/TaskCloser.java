@@ -26,7 +26,8 @@ import java.util.Locale;
 /**
  * 작업 종료(kind=CLOSE) 오케스트레이션 (스펙 2026-10-13 §4, 2026-10-14 §4).
  *   ① 병합 → ② 배포 중지 → [③ 산출물 업로드 — claim에 closeArtifact가 있을 때만] → ④ 옵시디언 노트
- *   → ⑤ 원격 브랜치 삭제 (+ 로컬 worktree 정리, 실패는 경고만)
+ *   → ⑤ 원격 브랜치 삭제 — 그 전에 이 브랜치를 target으로 쓰는 열린 PR/MR을 기준 브랜치로 옮긴다
+ *   (+ 로컬 worktree 정리, 실패는 경고만)
  * 단계마다 close-progress를 보고하고, claim의 closeProgress에 있는 단계는 건너뛴다. 어느 단계든 실패하면
  * 그 뒤 단계는 하지 않고 종료실패를 보고한다(관리자 재시도 → 남은 단계부터).
  */
@@ -136,6 +137,7 @@ public class TaskCloser {
                 progress(task, CloseStep.NOTE_WRITTEN, null, n.relativePath(), n.recordFolder());
             }
             if (!done.contains(CloseStep.BRANCH_DELETED)) {
+                retargetDependents(task, ref);
                 step("브랜치 삭제", () -> { closerFor(ref).deleteBranch(ref, task.headBranch()); return null; });
                 progress(task, CloseStep.BRANCH_DELETED, null, null);
             }
@@ -293,6 +295,21 @@ public class TaskCloser {
             http.postCloseProgress(task.id(), new CloseProgressRequest(props.id(), s, mergeSha, notePath, noteFolder));
             return null;
         });
+    }
+
+    /**
+     * 지울 head 브랜치를 target으로 쓰는 열린 PR/MR을 이 작업의 기준 브랜치로 옮긴다 — 병합으로 그 내용이 이미 거기 있다.
+     * 못 옮기면 브랜치를 지우지 않고 멈춘다(지우면 그 MR이 병합할 수 없게 된다). API는 BRANCH_DELETED 보고 때
+     * 같은 브랜치를 기준으로 쓰는 작업의 기준을 옮긴다.
+     */
+    private void retargetDependents(WorkerTaskResponse task, RepoRef ref) throws StepFailed {
+        String base = task.githubBranch();
+        if (base == null || base.isBlank() || base.equals(task.headBranch())) return;
+        List<String> moved = step("브랜치 삭제 전 target 옮기기",
+                () -> closerFor(ref).retargetDependents(ref, task.headBranch(), base));
+        if (moved != null && !moved.isEmpty()) {
+            log.info("작업 종료: task={} {}를 target으로 쓰던 {}의 target을 {}로 옮김", task.id(), task.headBranch(), moved, base);
+        }
     }
 
     private void cleanupLocal(WorkerTaskResponse task) {

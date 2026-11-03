@@ -117,9 +117,10 @@ public class WorkerHttpClient {
 
     /**
      * next-task의 supports — 이 워커가 아는 기능(쉼표 구분). API는 refRepos가 없는 요청(구버전 워커)에게 참조 repo가 있는
-     * 구현을 넘기지 않는다 (스펙 2026-10-24 §4.7).
+     * 구현을 넘기지 않고(스펙 2026-10-24 §4.7), fixRounds가 없는 요청에게 수정 회차 구현을 넘기지 않는다(스펙 2026-11-03 §7 —
+     * 구버전은 회차 정보를 버리고 base에서 -rN 브랜치를 새로 딴다).
      */
-    static final String SUPPORTS = "refRepos";
+    static final String SUPPORTS = "refRepos,fixRounds";
 
     public Optional<WorkerTaskResponse> nextTask() {
         try {

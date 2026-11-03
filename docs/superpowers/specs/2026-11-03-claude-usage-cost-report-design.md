@@ -65,6 +65,11 @@
 - **뽑는 칸**
   - `type == "assistant"`이고 `message.usage`가 있는 줄만 본다.
   - `event_key` = `message.id` + `":"` + `requestId`(없으면 `message.id`만). `message.id`도 없는 줄은 건너뛴다.
+  - **같은 응답이 여러 줄로 남는다** (검토자 실측, 이 PC 기록 974개 파일)
+    - 응답이 스트리밍되며 블록마다 한 줄씩 남는다. 앞줄의 `output_tokens`는 중간값이고(`stop_reason` null), 마지막 줄이 최종값이다. input·cache 칸은 같다.
+    - 첫 줄만 세면 output 토큰이 약 30% 빠진다.
+    - 그래서 수집기는 묶음 안에서 키마다 **칸별 최댓값**을 보낸다. 같은 응답의 앞줄과 뒷줄이 다른 회차로 나뉘는 경우는 API가 합친다(§5).
+    - 메인 파일과 subagents 파일 사이에 겹치는 키는 없었다. 세션 폴더가 옮겨진 사본(같은 키·같은 값)은 키로 걸러진다. (Claude 판단)
   - `occurred_at` = `timestamp`, `model`, `speed`, `service_tier`, `entrypoint`, `session_id`, `is_sidechain`
   - 토큰: `input`, `output`, `cache_write_5m`, `cache_write_1h`, `cache_read`
     - 5분/1시간 분리가 없으면 `cache_creation_input_tokens` 전체를 5분으로 센다.
@@ -75,6 +80,7 @@
   - 비교는 대소문자를 무시하고 경로를 정규화해서 한다(Windows).
 - **보내기**
   - `POST /worker/usage/claude-code-events`(`X-Worker-API-Key`)로 한 번에 1000줄까지 묶어 보낸다. `machine`은 설정값이고 기본은 호스트 이름이다.
+  - 새 줄이 없는 회차에도 빈 묶음과 회차 요약(못 읽은 줄 수)을 보낸다. 그래야 "수집이 멈춤"과 "쓴 것이 없음"이 구별된다(§5 수집기 상태). (Claude 판단)
   - 성공한 만큼만 위치를 앞으로 옮긴다. 실패하면(구 API 404 포함) 경고 한 줄을 남기고 다음 회차에 다시 보낸다.
 - **과거분**: 상태 파일이 없는 첫 회차는 모든 파일을 처음부터 읽는다. 그래서 남아 있는 약 30일치가 자연히 들어간다.
 
@@ -83,14 +89,20 @@
 - **`com.claude_usage_event`**
   - 칸: `id`, `event_key` VARCHAR(200) UNIQUE, `occurred_at` timestamptz, `machine`, `category`(`SYMPHONY`|`DIRECT` CHECK), `model`, `speed`, `service_tier`, `entrypoint`, `session_id`, `is_sidechain`, 토큰 5칸(bigint), `created_at`
   - 인덱스 `(occurred_at)`.
-  - 넣을 때 `ON CONFLICT (event_key) DO NOTHING`. 응답은 `{received, inserted}`다.
+  - 넣을 때 `ON CONFLICT (event_key) DO UPDATE`로 토큰 5칸을 칸마다 큰 값(`GREATEST`)으로 바꾼다. 다른 칸은 처음 값을 둔다. 응답은 `{received, inserted, updated}`다. (Claude 판단 — §4의 여러 줄 문제)
+- **`com.claude_usage_collector`**
+  - 칸: `machine` PK, `last_reported_at`, `last_event_at`, `unreadable_lines`(마지막 회차), `updated_at`
+  - 수신할 때마다 upsert한다. 화면의 "PC별 마지막 보고 시각"은 이 표에서 낸다. (Claude 판단)
 - **`com.usage_subscription_fee`**
   - 칸: `id`, `effective_from` date, `monthly_fee` numeric(12,2), `currency`('USD'), `created_by`, `created_at`
   - 구독료가 바뀐 이력을 남겨, 지난 달은 그때의 구독료로 계산한다. 통화는 USD 하나로 시작한다. (Claude 판단)
 - **가격표**
   - 설정 `app.usage.prices.<모델 id>.{input,output,cache-write-5m,cache-write-1h,cache-read}`(USD / 100만 토큰)이고, fast 모드 배수는 `fast-multiplier`다.
   - 초기값은 **구현 시점의 Anthropic 공식 가격**을 확인해 넣는다. 빌더가 추측으로 채우지 않는다.
-  - 가격표에 없는 모델은 비용을 비워 두고 "가격 미등록 모델" 경고에 이름과 토큰을 보여 준다.
+  - **모델 이름 맞추기** (Claude 판단)
+    - 정확히 일치하는 키가 없으면 끝의 날짜 접미사(`-\d{8}`, 예: `claude-haiku-4-5-20251001`)를 떼고 다시 찾는다.
+    - 공식 가격에 프롬프트 길이 구간 단가가 있으면 선택 칸(`long-context.threshold`·단가)으로 둔다. 이때 비용은 이벤트 단위로 계산한 뒤 더한다.
+  - 가격표에 없는 모델은 비용을 비워 두고 "가격 미등록 모델" 경고에 이름과 토큰을 보여 준다. 토큰 합이 0인 모델과 `<synthetic>`은 경고에서 뺀다.
   - 가격이 바뀌면 설정을 고치고 API를 재기동한다. 과거분도 새 가격으로 다시 계산된다(이벤트에는 토큰만 저장). (Claude 판단)
 
 ## 6. 집계 API (관리자)
@@ -102,11 +114,13 @@
     - 토큰 5종 합계, API 환산 비용
     - `byCategory`(SYMPHONY·DIRECT별 토큰·비용)
     - `byModel`
-    - 구독료 몫: 월은 그 달 구독료, 주·일은 `월 구독료 × 기간 일수 ÷ 그 달 일수`(기간이 두 달에 걸치면 날짜별로 나눠 더함)
+    - 구독료 몫: 모든 기간에서 날짜별로 "그날 적용되는 월 구독료 ÷ 그 달 일수"를 더한다. 달 중간에 구독료가 바뀌거나 기간이 두 달에 걸쳐도 같은 규칙이다.
+      - 구독료가 없는 날이 섞인 기간은 `ratio`를 null로 두고 "구독료 적용 전 기간 포함"으로 표시한다.
+      - 구독료 설정 폼의 적용 시작일 기본값은 가장 이른 이벤트가 있는 달의 1일이다. (Claude 판단)
     - `ratio` = 비용 ÷ 구독료 몫
     - `series`: 일 → 시간별, 주·월 → 일별 비용
     - 직전 기간 비용·배수(비교용)
-    - `coverage`: PC별 마지막 보고 시각, 가장 이른 이벤트 시각, 가격 미등록 모델 목록
+    - `coverage`: PC별 마지막 보고 시각·마지막 이벤트 시각(`claude_usage_collector`), 가장 이른 이벤트 시각, 가격 미등록 모델 목록
   - 구독료가 입력되지 않았으면 `ratio`는 null이고, 화면은 "구독료를 입력하세요"를 보여 준다.
 - **`GET /api/usage/summary.csv?period=…&date=…`**: 일별(일 기간은 시간별) 행을 내려받는다. 칸은 날짜, 구분, 모델, 토큰 5종, 비용이다. 회사에 보여 줄 근거 자료용이다. (Claude 판단)
 - **구독료**

@@ -15,6 +15,9 @@ IMAGE="${TRAEFIK_IMAGE:-traefik:v3.7}"
 # Docker Desktop은 게시 포트로 들어온 요청의 출발지를 네트워크 게이트웨이(172.x)로 보여 주므로 사설 대역을 믿는다 —
 # 18080을 cloudflared 호스트만 닿게(방화벽) 두는 전제.
 TRUSTED_IPS="${TRAEFIK_TRUSTED_IPS:-127.0.0.1/32,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16}"
+# X-Forwarded-For에 Traefik 앞 단계(위 게이트웨이 172.x)를 덧붙이지 않는다 — Cloudflare가 넣은 실제 접속 IP 하나만 간다.
+# 헤더 값을 그대로 접속 IP로 저장하는 앱이 "IP, 172.18.0.1"을 IP 길이 칸에 넣다 실패해 로그인이 막혔다
+# (2026-11-03 netis-v6.8 작업 20: COM_USER_HISTORY.LOGIN_IP Data too long).
 
 # 공유 네트워크 보장 (멱등)
 docker network inspect "$NETWORK" >/dev/null 2>&1 || docker network create "$NETWORK"
@@ -35,6 +38,7 @@ docker run -d --name traefik \
   --providers.docker=true \
   --providers.docker.exposedByDefault=false \
   --entrypoints.web.address=:80 \
-  "--entrypoints.web.forwardedHeaders.trustedIPs=${TRUSTED_IPS}"
+  "--entrypoints.web.forwardedHeaders.trustedIPs=${TRUSTED_IPS}" \
+  --entrypoints.web.forwardedHeaders.notAppendXForwardedFor=true
 
 echo "  ✓ Traefik ready — http://localhost:${ENTRYPOINT_PORT} (미지 Host는 404)"

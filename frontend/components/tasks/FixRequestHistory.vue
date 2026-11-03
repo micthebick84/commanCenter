@@ -57,14 +57,14 @@ function modeText(r: FixRequestView): string | null {
         <div class="row items-center" style="gap: 6px">
           <span v-if="r.round != null" class="text-subtitle2 text-weight-bold">{{ r.round }}회차</span>
           <q-chip dense size="sm" square :color="STATUS_COLOR[r.status] ?? 'grey-7'" text-color="white" :label="fixRequestStatusLabel(r.status)" />
-          <q-chip v-if="modeText(r)" dense size="sm" outline icon="account_tree" :label="modeText(r)" />
+          <q-chip v-if="modeText(r)" dense size="sm" outline icon="account_tree" :label="modeText(r) ?? undefined" />
           <q-chip
             v-if="fixOutcomeLabel(r.outcome)"
             dense
             size="sm"
             outline
             :style="{ color: OUTCOME_COLOR[r.outcome ?? ''] ?? '#616161' }"
-            :label="fixOutcomeLabel(r.outcome)"
+            :label="fixOutcomeLabel(r.outcome) ?? undefined"
           />
           <span v-if="r.attempt >= 2" class="text-caption text-grey-7">{{ r.attempt }}회째 시도</span>
           <q-space />

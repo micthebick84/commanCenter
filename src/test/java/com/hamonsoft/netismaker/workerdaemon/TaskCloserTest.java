@@ -156,6 +156,29 @@ class TaskCloserTest {
     }
 
     @Test
+    void 브랜치를_지우기_전에_그_브랜치를_target으로_쓰는_PR을_기준_브랜치로_옮긴다() throws Exception {
+        when(mr.retargetDependents(any(), eq("netismaker/task-7"), eq("main"))).thenReturn(List.of("#4"));
+        closer.process(task("MERGED,UNDEPLOYED,NOTE_WRITTEN"));
+
+        var order = inOrder(mr);
+        order.verify(mr).retargetDependents(any(RepoRef.class), eq("netismaker/task-7"), eq("main"));
+        order.verify(mr).deleteBranch(any(RepoRef.class), eq("netismaker/task-7"));
+        assertThat(terminal().status()).isEqualTo(TaskStatus.CLOSED);
+    }
+
+    @Test
+    void target_옮기기가_실패하면_브랜치를_지우지_않고_종료실패() throws Exception {
+        when(mr.retargetDependents(any(), any(), any())).thenThrow(new java.io.IOException("PR #4 base 변경 실패: x"));
+        closer.process(task("MERGED,UNDEPLOYED,NOTE_WRITTEN"));
+
+        verify(mr, never()).deleteBranch(any(), any());
+        assertThat(reportedSteps()).isEmpty();
+        WorkerResultRequest r = terminal();
+        assertThat(r.status()).isEqualTo(TaskStatus.CLOSE_FAILED);
+        assertThat(r.failureReason()).startsWith("브랜치 삭제 전 target 옮기기 실패").contains("PR #4");
+    }
+
+    @Test
     void 끝난_단계는_건너뛴다() throws Exception {
         closer.process(task("MERGED,UNDEPLOYED"));
         verify(mr, never()).merge(any(), anyInt(), any(), any());

@@ -11,6 +11,7 @@ import com.hamonsoft.netismaker.dto.WorkerRuntimeStatusRequest;
 import com.hamonsoft.netismaker.dto.WorkerTaskResponse;
 import com.hamonsoft.netismaker.entity.*;
 import com.hamonsoft.netismaker.git.GitRemotes;
+import com.hamonsoft.netismaker.git.RepoRef;
 import com.hamonsoft.netismaker.repository.InterviewPlanRepository;
 import com.hamonsoft.netismaker.repository.InterviewSessionRepository;
 import com.hamonsoft.netismaker.repository.RepoCatalogRepository;
@@ -717,10 +718,32 @@ public class WorkerService {
                 }
                 recordNoteFolder(t, req.noteFolder());
             }
-            case BRANCH_DELETED -> { /* 기록만 */ }
+            case BRANCH_DELETED -> {
+                if (!CloseStep.parse(t.getCloseProgress()).contains(CloseStep.BRANCH_DELETED)) rebaseDependents(t);
+            }
         }
         t.setCloseProgress(CloseStep.append(t.getCloseProgress(), req.step()));
         t.setUpdatedAt(OffsetDateTime.now());
+    }
+
+    /**
+     * 지운 head 브랜치를 기준으로 쓰던 같은 레포의 작업을 이 작업의 기준 브랜치로 옮긴다 — 병합으로 그 내용이 이미
+     * 거기 들어갔다. 워커는 브랜치를 지우기 전에 그 브랜치를 target으로 쓰는 열린 PR/MR을 같은 곳으로 옮긴다.
+     * 안 옮기면 그 작업의 종료(병합)·구현 재시도가 없는 브랜치를 기준으로 삼아 실패한다(작업 25, 2026-11-03).
+     */
+    private void rebaseDependents(Task t) {
+        String deleted = t.getHeadBranch();
+        String base = t.getGithubBranch();
+        if (deleted == null || deleted.isBlank() || deleted.equals(base)) return;
+        String host = RepoRef.fromSnapshot(t.getGithubRepo(), t.getGitUrl()).host();
+        for (Task d : taskRepo.findActiveByBaseBranch(t.getGithubRepo(), deleted, t.getId())) {
+            if (!host.equals(RepoRef.fromSnapshot(d.getGithubRepo(), d.getGitUrl()).host())) continue;
+            d.setGithubBranch(base);
+            d.setUpdatedAt(OffsetDateTime.now());
+            historyRepo.save(TaskStatusHistory.log(d.getId(), d.getStatus(), d.getStatus(), "worker", t.getWorkerId(),
+                    "기준 브랜치 변경: " + deleted + " → " + base + " (작업 #" + t.getId() + " 종료로 병합·삭제)"));
+            log.info("기준 브랜치 변경: task={} {} → {} (종료 task={})", d.getId(), deleted, base, t.getId());
+        }
     }
 
     /**

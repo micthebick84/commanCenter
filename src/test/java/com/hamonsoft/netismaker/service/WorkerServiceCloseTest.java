@@ -11,6 +11,7 @@ import com.hamonsoft.netismaker.entity.TaskStatusHistory;
 import com.hamonsoft.netismaker.repository.*;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.data.domain.Limit;
 import org.springframework.test.util.ReflectionTestUtils;
@@ -175,6 +176,37 @@ class WorkerServiceCloseTest {
         assertThat(t.getDeployUrl()).isNull();
         assertThat(t.getDeployedAt()).isNull(); // 배포 중지 복귀(PR_CREATED)와 같은 규칙
         assertThat(t.getCloseNotePath()).isEqualTo("HamonSoft/netisMaker/a.md");
+    }
+
+    private Task dependent(long id, String repo, String gitUrl) {
+        Task d = Task.create(repo, "netismaker/task-7", "후속", "desc", "user1", 3, List.of(), "claude-opus-5-5", "high");
+        ReflectionTestUtils.setField(d, "id", id);
+        d.setGitUrl(gitUrl);
+        d.setStatus(TaskStatus.DEPLOYED);
+        return d;
+    }
+
+    @Test
+    void 브랜치_삭제_보고는_그_브랜치를_기준으로_쓰던_작업을_기준_브랜치로_옮긴다() {
+        Task t = task(TaskStatus.CLOSING);
+        t.setWorkerId("w1");
+        t.setCloseProgress("MERGED,UNDEPLOYED,NOTE_WRITTEN");
+        when(taskRepo.findActiveByIdForUpdate(7L)).thenReturn(Optional.of(t));
+        Task same = dependent(25L, "owner/repo", null);
+        Task otherHost = dependent(26L, "owner/repo", "https://gitlab.hamon.vip/owner/repo.git");
+        when(taskRepo.findActiveByBaseBranch("owner/repo", "netismaker/task-7", 7L)).thenReturn(List.of(same, otherHost));
+
+        service.recordCloseProgress(7L, new CloseProgressRequest("w1", CloseStep.BRANCH_DELETED, null, null));
+        service.recordCloseProgress(7L, new CloseProgressRequest("w1", CloseStep.BRANCH_DELETED, null, null)); // 중복 무해
+
+        assertThat(same.getGithubBranch()).isEqualTo("main");
+        assertThat(otherHost.getGithubBranch()).isEqualTo("netismaker/task-7");
+        verify(taskRepo, times(1)).findActiveByBaseBranch(any(), any(), any());
+        ArgumentCaptor<TaskStatusHistory> h = ArgumentCaptor.forClass(TaskStatusHistory.class);
+        verify(historyRepo).save(h.capture());
+        assertThat(h.getValue().getTaskId()).isEqualTo(25L);
+        assertThat(h.getValue().getReason()).isEqualTo("기준 브랜치 변경: netismaker/task-7 → main (작업 #7 종료로 병합·삭제)");
+        assertThat(t.getCloseProgress()).endsWith("BRANCH_DELETED");
     }
 
     @Test

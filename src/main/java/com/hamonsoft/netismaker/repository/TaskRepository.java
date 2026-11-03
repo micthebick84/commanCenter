@@ -81,6 +81,22 @@ public interface TaskRepository extends JpaRepository<Task, Long> {
     Optional<Task> findActiveByIdForUpdate(@Param("id") Long id);
 
     /**
+     * 같은 레포에서 이 브랜치를 기준(github_branch)으로 쓰는 다른 작업 — 종료된 작업 제외.
+     * 종료가 head 브랜치를 지울 때 그 브랜치에 기대던 작업의 기준을 옮기는 데 쓴다. 호스트 비교는 호출부에서 한다.
+     */
+    @Query("""
+        SELECT t FROM Task t
+        WHERE t.deletedAt IS NULL
+          AND t.id <> :excludeId
+          AND t.githubRepo = :githubRepo
+          AND t.githubBranch = :branch
+          AND t.status <> com.hamonsoft.netismaker.entity.TaskStatus.CLOSED
+        ORDER BY t.id
+        """)
+    List<Task> findActiveByBaseBranch(@Param("githubRepo") String githubRepo, @Param("branch") String branch,
+                                      @Param("excludeId") Long excludeId);
+
+    /**
      * 같은 레포에서 env를 넣어 배포 요청한 다른 작업 — '배포대기' 진입이 최근인 순, 최대 20건 (스펙 2026-10-07 §6.2).
      * 배포 중지가 deployed_at을 지우므로 상태 이력으로 정렬한다. env_vars는 배포·재배포 요청 때만 저장되므로
      * "비어 있지 않음" = "배포 요청된 적 있음". 호스트(GitHub/GitLab) 비교는 호출부(TaskService)에서 한다.

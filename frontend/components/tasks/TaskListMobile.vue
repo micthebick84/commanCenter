@@ -5,6 +5,7 @@ import TaskCardCompact, { type CardTask } from '~/components/tasks/TaskCardCompa
 import TaskActionSheet from '~/components/tasks/TaskActionSheet.vue'
 import QueueStatsBar from '~/components/QueueStatsBar.vue'
 import { sortForMobile, ATTENTION_GROUPS, CHIP, type AttentionGroup, type MoveDef } from '~/composables/taskStages'
+import { TASK_TYPE_FILTERS, matchesTypeFilter } from '~/composables/taskType'
 
 const props = defineProps<{ tasks: CardTask[]; isAdmin: boolean }>()
 const mine = defineModel<boolean>('mine', { default: true })
@@ -41,16 +42,37 @@ function pickStatus(s: string | null) {
   statusPick.value = s
   statusSheetOpen.value = false
 }
+
+// 타입 필터(스펙 2026-11-03 §4.3) — 상세 필터와 같은 방식: 서버 조회는 그대로 두고 받은 목록 안에서만 거른다(리뷰 파인딩 11).
+// null = 전체 타입, 'NONE' = 타입 없음, 그 밖에는 타입 enum 이름.
+const typePick = ref<string | null>(null)
+const typeSheetOpen = ref(false)
+const typeOptions = computed(() =>
+  TASK_TYPE_FILTERS.map((f) => ({ ...f, key: f.value ?? 'all', count: props.tasks.filter((t) => matchesTypeFilter(t, f.value)).length })),
+)
+const typePickLabel = computed(() =>
+  typePick.value == null ? '타입' : (TASK_TYPE_FILTERS.find((f) => f.value === typePick.value)?.label ?? typePick.value),
+)
+function pickType(v: string | null) {
+  typePick.value = v
+  typeSheetOpen.value = false
+}
 function resetFilters() {
   filter.value = 'all'
   statusPick.value = null
+  typePick.value = null
 }
 
 const groups = computed(() => sortForMobile(props.tasks, props.isAdmin))
 const counts = computed(() => Object.fromEntries(groups.value.map((g) => [g.key, g.items.length])) as Record<string, number>)
 const visibleGroups = computed(() =>
-  (statusPick.value ? sortForMobile(props.tasks.filter((t) => t.status === statusPick.value), props.isAdmin) : groups.value)
-    .filter((g) => filter.value === 'all' || g.key === filter.value),
+  (statusPick.value || typePick.value != null
+    ? sortForMobile(
+        props.tasks.filter((t) => (!statusPick.value || t.status === statusPick.value) && matchesTypeFilter(t, typePick.value)),
+        props.isAdmin,
+      )
+    : groups.value
+  ).filter((g) => filter.value === 'all' || g.key === filter.value),
 )
 
 // 시트는 연 작업의 id만 들고, 내용은 매 폴링의 최신 목록에서 다시 찾는다 — 연 때의 객체를 들고 있으면
@@ -132,6 +154,17 @@ function openSheet(task: CardTask) {
         @click="statusSheetOpen = true"
         @remove="statusPick = null"
       >{{ statusPick ? statusPickLabel : '상세 필터' }}</q-chip>
+      <q-chip
+        clickable
+        icon="category"
+        :removable="typePick != null"
+        :color="typePick != null ? 'blue-1' : undefined"
+        :text-color="typePick != null ? 'primary' : undefined"
+        :outline="typePick == null"
+        data-test="mobile-type-filter"
+        @click="typeSheetOpen = true"
+        @remove="typePick = null"
+      >{{ typePickLabel }}</q-chip>
     </div>
 
     <q-dialog v-model="statusSheetOpen" position="bottom">
@@ -155,6 +188,25 @@ function openSheet(task: CardTask) {
                 <span class="status-dot" :style="{ background: (CHIP[o.value] ?? ['#f5f5f5', '#616161'])[1] }" />{{ o.label }}
               </span>
             </q-item-section>
+            <q-item-section side>{{ o.count }}</q-item-section>
+          </q-item>
+        </q-list>
+      </q-card>
+    </q-dialog>
+
+    <q-dialog v-model="typeSheetOpen" position="bottom">
+      <q-card class="status-sheet" data-test="type-sheet">
+        <div class="status-sheet__title">타입으로 좁혀 보기</div>
+        <q-list>
+          <q-item
+            v-for="o in typeOptions"
+            :key="o.key"
+            clickable
+            :active="typePick === o.value"
+            :data-test="`type-option-${o.key}`"
+            @click="pickType(o.value)"
+          >
+            <q-item-section>{{ o.label }}</q-item-section>
             <q-item-section side>{{ o.count }}</q-item-section>
           </q-item>
         </q-list>

@@ -17,6 +17,7 @@ import RefRepoAddForm from '~/components/RefRepoAddForm.vue'
 import { toInputs, useRefDraft, type RefRepoView } from '~/composables/refRepos'
 import { taskPrefillFromQuestion, type QuestionDetail } from '~/composables/questions'
 import { taskPrefillFromTask, type FollowUpSource } from '~/composables/taskFix'
+import { TASK_TYPES, TASK_TYPE_FILTERS, taskTypeLabel } from '~/composables/taskType'
 
 definePageMeta({ layout: 'default' })
 
@@ -48,6 +49,8 @@ interface TaskResponse {
   claimedAt?: string | null
   implementationTimeoutMinutes?: number | null
   envVars?: EnvVar[] | null
+  /** 작업 타입(스펙 2026-11-03 §4) — null·없음은 타입 없음(기존 작업). 칩은 타입이 있을 때만 그린다. */
+  taskType?: string | null
 }
 
 interface PageResponse<T> {
@@ -62,14 +65,17 @@ const route = useRoute()
 const { isAdmin } = useHydrationSafeAuth()
 const mine = ref(true)
 const statusFilter = ref<string | null>(null)
+// 타입 필터(스펙 2026-11-03 §4.3): null = 전체 타입, 'NONE' = 타입 없음, 그 밖에는 타입 enum 이름
+const typeFilter = ref<string | null>(null)
 
-// statusFilter는 데스크톱 보드 전용 셀렉트 — 모바일 리스트는 그룹 칩으로 따로 좁히므로,
+// statusFilter·typeFilter는 데스크톱 보드 전용 셀렉트 — 모바일 리스트는 그룹 칩·상세 필터로 받은 목록 안에서 따로 좁히므로,
 // 데스크톱에서 필터를 골라둔 채로 화면이 좁아져도 서버 조회까지 몰래 좁아지면 안 된다(리뷰 파인딩 11).
 const { data: page, refresh } = useTaskPolling<PageResponse<TaskResponse>>(() =>
   useApi('/api/tasks', {
     params: {
       mine: String(mine.value),
       status: $q.screen.lt.md ? undefined : statusFilter.value || undefined,
+      type: $q.screen.lt.md ? undefined : typeFilter.value || undefined,
       size: 50,
     },
   }),
@@ -231,6 +237,8 @@ function openTaskDetail(task: { id: number }) {
 // ── 등록 다이얼로그 ──────────────────────────────────────────────
 const showCreate = ref(false)
 const draft = reactive({
+  // 작업 타입(스펙 2026-11-03 §4.2): 화면에서는 필수이고 미리 골라 두는 값이 없다 — 질문·원래 작업에서 넘어와도 요청자가 직접 고른다
+  taskType: null as string | null,
   repoCatalogId: null as number | null,
   githubBranch: '',
   title: '',
@@ -400,6 +408,7 @@ function onBranchFilter(val: string, update: (cb: () => void) => void) {
 
 // 창을 비우고 연다 — 카탈로그까지 받아야 끝난다(질문 프리필이 그 카탈로그로 대상·참조를 고른다).
 async function openCreate() {
+  draft.taskType = null
   draft.repoCatalogId = null
   draft.githubBranch = ''
   draft.title = ''
@@ -493,6 +502,7 @@ onMounted(() => {
 const canSubmit = computed(
   () =>
     !submitting.value &&
+    !!draft.taskType &&
     draft.repoCatalogId !== null &&
     !!draft.githubBranch &&
     !!draft.title.trim() &&
@@ -505,6 +515,8 @@ async function submit() {
     githubBranch: draft.githubBranch,
     title: draft.title,
     description: draft.description,
+    // 타입은 골랐을 때만 싣는다 — 화면은 필수라 늘 실리지만, 비어 있으면 키를 생략해 서버가 타입 없음으로 저장한다 (스펙 2026-11-03 §4.2)
+    ...(draft.taskType ? { taskType: draft.taskType } : {}),
     // 참조는 하나라도 골랐을 때만 싣는다 — 없으면 필드를 생략해 등록 바디가 예전과 같다 (스펙 2026-10-24 §7.2)
     ...(draft.refRepos.length > 0 ? { refRepos: toInputs(draft.refRepos) } : {}),
     // 출처 질문도 있을 때만 — 서버가 그 질문의 대화 전문을 작업 첨부로 붙인다 (스펙 2026-10-24 §7.2)
@@ -599,6 +611,19 @@ const fullscreen = useFullscreenDialog()
         class="q-ml-md"
         @update:model-value="refresh"
       />
+      <!-- 타입 필터(스펙 2026-11-03 §4.3) — 상태 select 바로 뒤. 첫 QSelect가 상태 select라는 전제의 시험이 있다 -->
+      <q-select
+        v-model="typeFilter"
+        :options="TASK_TYPE_FILTERS"
+        emit-value
+        map-options
+        dense
+        outlined
+        style="min-width: 130px"
+        class="q-ml-md"
+        data-test="task-filter-type"
+        @update:model-value="refresh"
+      />
       <q-btn class="q-ml-md" color="primary" icon="add" label="작업 등록" @click="openCreate" />
     </div>
 
@@ -663,6 +688,8 @@ const fullscreen = useFullscreenDialog()
                     <span class="card-status" :style="{ background: c.bg, color: c.fg }">
                       {{ c.task.statusLabel }}
                     </span>
+                    <!-- 타입 없음(기존 작업 전부)이면 칩을 그리지 않는다 — 같은 '타입 없음' 칩이 카드를 덮지 않게 -->
+                    <span v-if="c.task.taskType" class="card-type" data-test="task-type-chip">{{ taskTypeLabel(c.task.taskType) }}</span>
                     <span v-if="costBadge(c.task)" class="card-cost">{{ costBadge(c.task) }}</span>
                     <span
                       v-if="elapsedOf(c.task)"
@@ -825,6 +852,20 @@ const fullscreen = useFullscreenDialog()
             </div>
           </q-card-section>
           <q-card-section class="q-gutter-md">
+            <!-- 작업 타입(스펙 2026-11-03 §4.2) — 창 맨 앞. 필수이고 미리 고른 값이 없다(질문·원래 작업에서 넘어와도 비어 있음) -->
+            <q-select
+              v-model="draft.taskType"
+              :options="TASK_TYPES"
+              label="작업 타입"
+              outlined
+              dense
+              emit-value
+              map-options
+              autofocus
+              data-test="form-task-type"
+              hint="필수 — 타입에 맞게 인터뷰와 구현 방식이 달라집니다"
+            />
+
             <q-select
               v-model="draft.repoCatalogId"
               :options="repoOptions"
@@ -834,7 +875,6 @@ const fullscreen = useFullscreenDialog()
               dense
               emit-value
               map-options
-              autofocus
               data-test="repo-select"
               :hint="repoCatalog.length === 0 ? '등록된 레포 없음 — 관리자에게 문의' : '관리자가 등록한 레포 중 선택'"
               @update:model-value="onRepoSelected"
@@ -1028,6 +1068,7 @@ const fullscreen = useFullscreenDialog()
 .card-id { font-size: 12px; font-weight: 700; color: #9e9e9e; }
 .card-status { font-size: 11px; font-weight: 500; padding: 2px 7px; border-radius: 4px; }
 .card-cost { font-size: 11px; font-weight: 600; color: #2e7d32; padding: 2px 6px; border-radius: 4px; background: rgba(46, 125, 50, 0.08); }
+.card-type { font-size: 11px; font-weight: 600; color: #455a64; padding: 2px 6px; border-radius: 4px; background: rgba(69, 90, 100, 0.1); white-space: nowrap; }
 .board-elapsed--warn { color: #ef6c00; font-weight: 600; }
 .card-title {
   font-size: 14.5px;

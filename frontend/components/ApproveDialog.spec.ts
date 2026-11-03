@@ -791,3 +791,98 @@ describe('ApproveDialog 참조 repo (스펙 2026-10-24 §7.3)', () => {
     w.unmount()
   })
 })
+
+describe('ApproveDialog 작업 타입 (스펙 2026-11-03 §4.2)', () => {
+  const BODY = { model: 'claude-opus-5-5', effort: 'medium', mcpCatalogIds: [] }
+  const typeSelect = (w: ReturnType<typeof mountDialog>) =>
+    w.findAllComponents(QSelect).find((c) => (c.vm.$attrs as Record<string, unknown>)['data-test'] === 'approve-task-type')!
+
+  it('현재 타입을 미리 고르고, 그대로 승인하면 바디에 키가 없다', async () => {
+    routeApi()
+    const w = mountDialog({ taskType: 'FEATURE_CHANGE' })
+    await flushPromises()
+    expect(typeSelect(w).props('modelValue')).toBe('FEATURE_CHANGE')
+    await (w.vm as any).approve()
+    await flushPromises()
+    expect(approveCall()?.[1]).toEqual({ method: 'POST', body: BODY })
+    w.unmount()
+  })
+
+  it('타입을 바꾸면 바디에 taskType이 실린다', async () => {
+    routeApi()
+    const w = mountDialog({ taskType: 'FEATURE_CHANGE' })
+    await flushPromises()
+    typeSelect(w).vm.$emit('update:modelValue', 'BUG_FIX')
+    await flushPromises()
+    await (w.vm as any).approve()
+    await flushPromises()
+    expect(approveCall()?.[1]).toEqual({ method: 'POST', body: { ...BODY, taskType: 'BUG_FIX' } })
+    w.unmount()
+  })
+
+  it('바꿨다가 원래 값으로 되돌리면 키가 없다', async () => {
+    routeApi()
+    const w = mountDialog({ taskType: 'FEATURE_CHANGE' })
+    await flushPromises()
+    typeSelect(w).vm.$emit('update:modelValue', 'DB_WORK')
+    await flushPromises()
+    typeSelect(w).vm.$emit('update:modelValue', 'FEATURE_CHANGE')
+    await flushPromises()
+    await (w.vm as any).approve()
+    await flushPromises()
+    expect(approveCall()?.[1]).toEqual({ method: 'POST', body: BODY })
+    w.unmount()
+  })
+
+  it('타입 없는 작업(null·키 없음)은 비어 있고, 고르지 않으면 키가 없으며, 고르면 실린다', async () => {
+    for (const overrides of [{ taskType: null }, {}]) {
+      routeApi()
+      useApiMock.mockClear()
+      const w = mountDialog(overrides)
+      await flushPromises()
+      expect(typeSelect(w).props('modelValue')).toBeNull()
+      await (w.vm as any).approve()
+      await flushPromises()
+      expect(approveCall()?.[1]).toEqual({ method: 'POST', body: BODY })
+      w.unmount()
+      document.body.innerHTML = ''
+    }
+    routeApi()
+    useApiMock.mockClear() // 위 반복의 승인 호출이 남아 있으면 approveCall()이 그것을 집는다
+    const w = mountDialog({ taskType: null })
+    await flushPromises()
+    typeSelect(w).vm.$emit('update:modelValue', 'NEW_FEATURE')
+    await flushPromises()
+    await (w.vm as any).approve()
+    await flushPromises()
+    expect(approveCall()?.[1]).toEqual({ method: 'POST', body: { ...BODY, taskType: 'NEW_FEATURE' } })
+    w.unmount()
+  })
+
+  it('옵션은 네 타입뿐이다(타입 없음으로 되돌리는 선택지는 없다 — null은 유지를 뜻한다)', async () => {
+    routeApi()
+    const w = mountDialog({ taskType: 'BUG_FIX' })
+    await flushPromises()
+    const options = typeSelect(w).props('options') as { value: unknown; label: string }[]
+    expect(options.map((o) => o.value)).toEqual(['NEW_FEATURE', 'FEATURE_CHANGE', 'BUG_FIX', 'DB_WORK'])
+    expect(options.map((o) => o.label)).toEqual(['신규 개발', '기능 수정', '버그 픽스', 'DB 작업'])
+    w.unmount()
+  })
+
+  it('요약 바로 아래·지난 인터뷰 안내 위에 있고, 닫았다 다시 열면 현재 타입으로 돌아간다', async () => {
+    routeApi({ interviews: [session(21, 'CANCELLED', '취소됨', 'claude-sonnet-5', 'max')] })
+    const w = mountDialog({ taskType: 'FEATURE_CHANGE' })
+    await flushPromises()
+    const field = document.body.querySelector('[data-test="approve-task-type"]')!.closest('.q-card__section')!
+    expect(document.body.querySelector('[data-test="approve-summary"]')!.closest('.q-card__section')!.nextElementSibling).toBe(field)
+    expect(field.nextElementSibling).toBe(document.body.querySelector('[data-test="previous-hint"]')!.closest('.q-card__section'))
+
+    typeSelect(w).vm.$emit('update:modelValue', 'DB_WORK')
+    await flushPromises()
+    await w.setProps({ modelValue: false })
+    await w.setProps({ modelValue: true })
+    await flushPromises()
+    expect(typeSelect(w).props('modelValue')).toBe('FEATURE_CHANGE')
+    w.unmount()
+  })
+})

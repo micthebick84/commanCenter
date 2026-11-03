@@ -9,6 +9,7 @@ import { implementationModeText } from '~/composables/implementationMode'
 import RefRepoChips from '~/components/RefRepoChips.vue'
 // DetailTask는 defineProps 타입에 쓰이므로 상대 경로 — vitest는 .nuxt 없이 돌아 SFC 매크로 타입의 `~/` import를 못 푼다.
 import { taskRefContext, type RefRepoView } from '../../composables/refRepos'
+import { taskTypeLabel } from '../../composables/taskType'
 
 // [id].vue의 TaskResponse 중 이 컴포넌트가 읽는 부분집합
 export interface DetailTask {
@@ -40,6 +41,8 @@ export interface DetailTask {
   refRepos?: RefRepoView[]
   /** 질문 대화에서 이어 등록했으면 그 질문 id — 정보 영역 출처 링크 */
   sourceQuestionId?: number | null
+  /** 작업 타입(스펙 2026-11-03 §4) — 요청 상세 섹션 머리의 칩. null·없음은 타입 없음이라 칩이 없다. */
+  taskType?: string | null
 }
 
 const props = defineProps<{
@@ -125,6 +128,10 @@ const deployCaption = computed(() => {
           <q-item-section>
             <q-item-label>요청 상세</q-item-label>
             <q-item-label caption>{{ task.repoAlias ?? task.githubRepo }} · {{ task.githubBranch }}</q-item-label>
+          </q-item-section>
+          <!-- 타입 칩 — 접힌 채로도 보이게 첫 섹션 머리에 둔다. 타입 없음(기존 작업 전부)이면 칩을 그리지 않는다 -->
+          <q-item-section v-if="task.taskType" side>
+            <q-chip dense size="sm" outline :label="taskTypeLabel(task.taskType)" data-test="task-type-chip" />
           </q-item-section>
           <q-item-section side><q-icon :name="open.request ? 'expand_less' : 'expand_more'" /></q-item-section>
         </q-item>

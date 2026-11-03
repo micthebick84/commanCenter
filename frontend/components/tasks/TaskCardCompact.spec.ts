@@ -202,4 +202,23 @@ describe('TaskCardCompact (스펙 2026-09-06 §4.1 카드)', () => {
     expect(w.find('[data-test="card-elapsed"]').exists()).toBe(false)
     w.unmount()
   })
+
+  it('타입이 있으면 칩에 화면 이름을 보여 주고, 타입 없음(null·키 없음)이면 칩이 없다', () => {
+    const typed = mount(TaskCardCompact, {
+      props: { task: { ...base, taskType: 'BUG_FIX' }, isAdmin: false },
+    })
+    expect(typed.find('[data-test="task-type-chip"]').text()).toBe('버그 픽스')
+    typed.unmount()
+    const db = mount(TaskCardCompact, {
+      props: { task: { ...base, taskType: 'DB_WORK' }, isAdmin: false },
+    })
+    expect(db.find('[data-test="task-type-chip"]').text()).toBe('DB 작업')
+    db.unmount()
+    for (const task of [{ ...base, taskType: null }, base]) {
+      const w = mount(TaskCardCompact, { props: { task, isAdmin: false } })
+      expect(w.find('[data-test="task-type-chip"]').exists()).toBe(false)
+      expect(w.text()).not.toContain('타입 없음')
+      w.unmount()
+    }
+  })
 })

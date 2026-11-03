@@ -69,6 +69,8 @@ const TASKS = [
   task(1, 'PR_CREATED', 'PR생성', {
     implementation: { prUrl: 'https://github.com/acme/widgets/pull/1', prNumber: 1, headBranch: 'netismaker/task-1', headSha: 'abc123', implementationLog: '완료' },
     totalCostUsd: 1.23,
+    // 작업 타입 — 보드 카드·모바일 카드·상세 머리줄(1280)·요청 상세 섹션 머리(390)의 타입 칩이 같은 마크업으로 하이드레이션돼야 한다(나머지 작업은 타입 없음 = 칩 없음)
+    taskType: 'NEW_FEATURE',
     // 수정 요청 회차 현황 — 작업 상세가 수정 요청 기록 카드를 마운트 뒤에 불러와 그린다(위 fix-requests 목)
     fix: { activeRound: null, activeMode: null, approvedRounds: 1, maxRounds: 3 },
     // 작업 상세의 참조 칩 줄(DB 칩 다음)과 "레포" 옆 출처 질문 링크(/questions/3)

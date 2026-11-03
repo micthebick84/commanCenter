@@ -20,6 +20,7 @@ import { mrNoun, mrRef } from '~/composables/mergeRequestLabel'
 import { elapsedLabel, implementationModeLabel, implementationModeText } from '~/composables/implementationMode'
 import { canAbortFix, canFollowUp, canRequestFix, fixLimitReached, followUpPath, type FixView } from '~/composables/taskFix'
 import { useNowTick } from '~/composables/useNowTick'
+import { taskTypeLabel } from '~/composables/taskType'
 import { downloadAttachment as downloadBlob } from '~/composables/attachmentDownload'
 import {
   closeSteps,
@@ -154,6 +155,8 @@ interface TaskResponse {
   sourceQuestionId?: number | null
   /** 수정 요청 회차 현황 (스펙 2026-11-03 §6) — 상세 응답에만 있다. */
   fix?: FixView | null
+  /** 작업 타입 (스펙 2026-11-03 §4) — null·없음은 타입 없음(기존 작업). 칩은 타입이 있을 때만 그린다. */
+  taskType?: string | null
 }
 
 const route = useRoute()
@@ -729,6 +732,7 @@ function onAction(kind: NextActionKind) {
         <div v-if="!$q.screen.lt.md" class="row items-center conv-header-chips">
           <q-chip dense size="sm" outline icon="smart_toy" :label="task.model" class="q-ml-sm" />
           <q-chip dense size="sm" outline icon="tune" :label="task.effort" />
+          <q-chip v-if="task.taskType" dense size="sm" outline :label="taskTypeLabel(task.taskType)" data-test="task-type-chip" />
           <q-chip v-if="modeChip" dense size="sm" outline icon="account_tree" :label="modeChip" data-test="impl-mode-chip" />
           <q-chip v-if="task.totalCostUsd != null" dense size="sm" outline
                   icon="paid" color="primary"

@@ -37,6 +37,7 @@ import ApproveTaskSummary, {
   type SummaryTask,
 } from '~/components/tasks/ApproveTaskSummary.vue'
 import { useFullscreenDialog } from '~/composables/dialogLayout'
+import { TASK_TYPES } from '~/composables/taskType'
 
 // 지난 인터뷰 목록 행 — 백엔드 InterviewSummaryResponse (InterviewHistoryCard와 동일 계약)
 interface SessionSummary {
@@ -56,6 +57,10 @@ const emit = defineEmits<{ (e: 'approved'): void }>()
 const $q = useQuasar()
 const model = ref(DEFAULT_MODEL)
 const effort = ref(DEFAULT_EFFORT)
+// 작업 타입(스펙 2026-11-03 §4.2): 열 때마다 작업의 현재 타입으로 미리 고른다. 바꿨을 때만 승인 바디에 싣는다(서버는 키가 없으면 유지).
+// 승인 뒤에는 바꿀 수 없다 — 타입 없음으로 되돌리는 선택지는 없다(null은 "유지"를 뜻한다).
+const taskType = ref<string | null>(null)
+const taskTypeChanged = computed(() => taskType.value != null && taskType.value !== (props.task.taskType ?? null))
 const mcpCatalogIds = ref<number[]>([])
 // DB 연결(스펙 2026-10-14 §7): 레포 공용 활성 연결을 기본 선택, 마지막 인터뷰 선택이 있으면 그것을 우선.
 // 기능이 꺼져 있으면(enabled=false) 피커를 숨기고 승인 바디에도 싣지 않는다.
@@ -165,6 +170,7 @@ async function init() {
   dbLoading.value = !!props.task.repoCatalogId
   model.value = DEFAULT_MODEL
   effort.value = DEFAULT_EFFORT
+  taskType.value = props.task.taskType ?? null
   mcpCatalogIds.value = []
   dbConnectionIds.value = []
   registrantDbIds.value = []
@@ -219,6 +225,7 @@ async function approve() {
         model: model.value,
         effort: effort.value,
         mcpCatalogIds: mcpCatalogIds.value,
+        ...(taskTypeChanged.value ? { taskType: taskType.value } : {}),
         ...(db.enabled ? { dbConnectionIds: dbConnectionIds.value } : {}),
         ...(refsChanged.value ? { refRepos: toInputs(refs.value) } : {}),
       },
@@ -273,6 +280,21 @@ const fullscreen = useFullscreenDialog()
 
         <q-card-section :class="fullscreen ? '' : 'q-pt-none'">
           <ApproveTaskSummary :task="task" />
+        </q-card-section>
+
+        <!-- 작업 타입 (스펙 2026-11-03 §4.2) — 요약 바로 아래. 현재 타입을 미리 고르고, 바꿨을 때만 승인 바디에 실린다 -->
+        <q-card-section class="q-pt-none">
+          <q-select
+            v-model="taskType"
+            :options="TASK_TYPES"
+            label="작업 타입"
+            outlined
+            dense
+            emit-value
+            map-options
+            :disable="approving"
+            data-test="approve-task-type"
+          />
         </q-card-section>
 
         <q-card-section v-if="previousHint" class="q-pt-none">

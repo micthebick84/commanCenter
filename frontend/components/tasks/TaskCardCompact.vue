@@ -11,6 +11,7 @@ import {
 import { mrRef } from '~/composables/mergeRequestLabel'
 import { elapsedLabel } from '~/composables/implementationMode'
 import { useNowTick } from '~/composables/useNowTick'
+import { taskTypeLabel } from '~/composables/taskType'
 
 export interface CardTask {
   id: number
@@ -28,6 +29,8 @@ export interface CardTask {
   deployment?: { deployUrl: string | null } | null
   claimedAt?: string | null
   implementationTimeoutMinutes?: number | null
+  /** 작업 타입(스펙 2026-11-03 §4) — null·없음은 타입 없음. 칩은 타입이 있을 때만 그린다. */
+  taskType?: string | null
 }
 
 const props = defineProps<{ task: CardTask; isAdmin: boolean }>()
@@ -94,6 +97,8 @@ function segStyle(state: string, color: string) {
         :style="{ background: chip[0], color: chip[1] }"
         >{{ task.statusLabel }}</span
       >
+      <!-- 타입 없음(기존 작업 전부)이면 칩을 그리지 않는다 — 같은 '타입 없음' 칩이 카드를 덮지 않게 -->
+      <span v-if="task.taskType" class="card-type" data-test="task-type-chip">{{ taskTypeLabel(task.taskType) }}</span>
       <div class="col column seg-col">
         <div class="row no-wrap seg-bar">
           <span
@@ -225,6 +230,16 @@ function segStyle(state: string, color: string) {
   padding: 3px 8px;
   border-radius: 4px;
   white-space: nowrap;
+}
+.card-type {
+  font-size: 11.5px;
+  font-weight: 600;
+  padding: 3px 8px;
+  border-radius: 4px;
+  white-space: nowrap;
+  color: #455a64;
+  background: rgba(69, 90, 100, 0.1);
+  margin-left: -4px;
 }
 .seg-col {
   gap: 3px;

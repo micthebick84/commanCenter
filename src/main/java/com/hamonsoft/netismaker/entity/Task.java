@@ -143,6 +143,14 @@ public class Task {
     @Setter
     private int restartRequeueCount;
 
+    /**
+     * 지금 진행 중인 수정 요청 회차의 TaskFixRequest id (스펙 2026-11-03 §4·§8). null = 수정 회차 없음.
+     * 승인(또는 관리자 직접 요청)에서 채우고 회차가 닫힐 때 비운다. 기록용이라 FK가 없다.
+     */
+    @Column(name = "active_fix_request_id")
+    @Setter
+    private Long activeFixRequestId;
+
     /** 이번 시도의 구현 상한(분) — claim 때 방식별 설정값으로 기록, 화면 경과 표시용. 그 전에는 null. */
     @Column(name = "implementation_timeout_minutes")
     @Setter

@@ -26,7 +26,7 @@
     - TS: `TaskTypeWire`, `kickoffLead`, `taskTypeGuide(taskType: unknown)`, `writableDbLine`, claim 칸 `taskType`·`writableDbConnections`
     - 시험 헬퍼: `kickoffOf(claim, db = noDb())`, `KICKOFF_GOLDEN`
     - 화면: data-test `approve-task-type`
-- **실행 전 사용자 확인(1건):** 계획 고쳐 달라기 턴이 실패·만료하면 이미 나온 계획도 확정할 수 없게 된다(Task 6 "결정"). 이 계획은 설계 §4.1("기존 턴 상한·유휴 만료를 따른다")대로 완화하지 않는다. 사용자가 완화를 고르면 Task 6 뒤에 API Task를 하나 더한다(끔+계획 행이 있는 세션의 실패·만료를 PLAN_READY·플랜승인대기로 되돌림, 호출부 6곳의 SSE push 변경).
+- **사용자 확인됨(2026-11-03, "추천대로"):** 계획 고쳐 달라기 턴이 실패·만료하면 이미 나온 계획도 확정할 수 없게 된다(Task 6 "결정"). 이 계획은 설계 §4.1("기존 턴 상한·유휴 만료를 따른다")대로 완화하지 않는다. 사용자가 완화를 고르면 Task 6 뒤에 API Task를 하나 더한다(끔+계획 행이 있는 세션의 실패·만료를 PLAN_READY·플랜승인대기로 되돌림, 호출부 6곳의 SSE push 변경).
 - **마이그레이션:** Task 4 시작 때 `R/db/migration`의 가장 큰 번호 + 1로 `V{n}__interview_superpowers.sql`을 만든다.
   - 예정 번호는 V40이다. 작업 타입 Part B가 `V40__db_write.sql`을 가져갔으면(`2026-11-03-task-type-db-write.md:23-25`) V41이 된다.
   - PR 병합 직전에 `origin/main`의 가장 큰 번호를 다시 본다. 그사이 같은 번호가 생겼으면 이 브랜치의 번호를 올린다. 체크섬은 main 병합 때 굳는다.
@@ -393,7 +393,7 @@ it('켬: force-finish 문턱에서는 지금처럼 재요청 문구만')   // su
   - **설계와 다름 ②:** 계획 고쳐 달라기의 `replyToSeq`는 null로 받는다.
     - 화면은 라이브로 받은 계획의 design 턴 seq를 모른다(plan 엔드포인트는 `plan_ready`·`status`만 보낸다, `InterviewWorkerController.java:127-134`).
     - 두 번째 제출은 중복 no-op 대신 상태 검사의 409로 막힌다.
-  - **결정(설계 §4.1 "기존 턴 상한·유휴 만료를 따른다", 실행 전 사용자 확인 대상):** 고쳐 달라기 턴이 실패(최대 턴·워커 실패·재기동 재개 소진·stale 회수)하거나 QUEUED·입력대기 TTL로 만료되면 지금 규칙대로 FAILED/EXPIRED·승인대기다(`InterviewService.java:525-537,643-653`). 이미 나온 계획도 확정할 수 없게 되고, 본문은 design 턴에만 남는다.
+  - **결정(설계 §4.1 "기존 턴 상한·유휴 만료를 따른다", 사용자 확인됨 2026-11-03 — 완화하지 않음):** 고쳐 달라기 턴이 실패(최대 턴·워커 실패·재기동 재개 소진·stale 회수)하거나 QUEUED·입력대기 TTL로 만료되면 지금 규칙대로 FAILED/EXPIRED·승인대기다(`InterviewService.java:525-537,643-653`). 이미 나온 계획도 확정할 수 없게 되고, 본문은 design 턴에만 남는다.
     - 완화하지 않는 이유: 간단 인터뷰는 재승인 뒤 첫 턴에 다시 계획을 내므로 다시 하는 비용이 작다. 완화하려면 실패·만료 호출부 6곳(`InterviewStaleRecoveryJob.java:80-86,103-108,120-122,135-137`, `InterviewWorkerController.java:94-106,160-163`)이 FAILED·EXPIRED를 고정으로 push하는 것을 바꿔야 한다.
 - [ ] **Step 4: 통과 확인** — `Set-Location <W>`에서 Step 2 명령과 `.\gradlew.bat test --tests "com.hamonsoft.netismaker.service.Interview*" --tests "com.hamonsoft.netismaker.controller.Interview*"` PASS, `.\gradlew.bat compileTestJava` 성공, CI 클래스는 skipped
 - [ ] **Step 5: 커밋** — `feat(interview): 간단 인터뷰 플랜완료에 계획 수정 요청 받기`

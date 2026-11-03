@@ -20,6 +20,9 @@ import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 import org.mockito.InOrder;
 import org.springframework.context.ApplicationEventPublisher;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageImpl;
+import org.springframework.data.domain.PageRequest;
 import org.springframework.http.HttpStatus;
 import org.springframework.test.util.ReflectionTestUtils;
 
@@ -31,6 +34,7 @@ import java.util.concurrent.atomic.AtomicReference;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
@@ -45,7 +49,8 @@ import static org.mockito.Mockito.when;
 /**
  * 등록·승인의 작업 타입 (스펙 2026-11-03 §4.2) — 등록 바디의 타입을 저장하고(없으면 null, 모르는 값은 저장 전 400),
  * 승인 바디의 타입이 다르면 세션을 만들기 전에 반영하고 같은 상태 이력 행을 남긴다. null·같은 값은 이력 없는 no-op이고
- * 레거시 분석완료 승인은 타입을 보지 않는다. Docker 없이 도는 단위 시험(하네스는 TaskServiceApproveRefsTest 모양).
+ * 레거시 분석완료 승인은 타입을 보지 않는다. 목록(§4.3)은 타입 필터를 저장소 쿼리까지 넘기는 길만 본다(쿼리 자체는 CI의
+ * TaskListTypeFilterIntegrationTest). Docker 없이 도는 단위 시험(하네스는 TaskServiceApproveRefsTest 모양).
  */
 class TaskServiceTaskTypeTest {
 
@@ -266,5 +271,33 @@ class TaskServiceTaskTypeTest {
         assertThat(task.getTaskType()).isEqualTo(TaskType.NEW_FEATURE);
         assertThat(reasons()).allMatch(r -> !r.startsWith("타입 변경"));
         verify(interviewService, never()).createForTask(any(), any(), any(), any());
+    }
+
+    // ── 목록 필터 (스펙 §4.3) ──
+
+    @Test
+    void 목록_관리자는_전체_쿼리에_상태와_타입_필터를_넘긴다() {
+        PageRequest page = PageRequest.of(0, 20);
+        Page<Task> expected = new PageImpl<>(List.of(task));
+        TaskTypeFilter bugFix = new TaskTypeFilter(false, TaskType.BUG_FIX);
+        when(taskRepo.findAllActive(TaskStatus.APPROVED, false, TaskType.BUG_FIX, page)).thenReturn(expected);
+
+        assertThat(service.list("admin", true, false, TaskStatus.APPROVED, bugFix, page)).isSameAs(expected);
+
+        verify(taskRepo, never()).findByRequester(any(), any(), anyBoolean(), any(), any());
+    }
+
+    @Test
+    void 목록_본인_작업_쿼리는_일반_사용자와_내_것만_보는_관리자가_쓴다() {
+        PageRequest page = PageRequest.of(0, 20);
+        Page<Task> expected = new PageImpl<>(List.of(task));
+        // "타입 없음"만: any=false, type=null — 필터 없음(any=true)과 다른 호출이다
+        when(taskRepo.findByRequester("user1", null, false, null, page)).thenReturn(expected);
+        when(taskRepo.findByRequester("admin", null, true, null, page)).thenReturn(expected);
+
+        assertThat(service.list("user1", false, false, null, TaskTypeFilter.parse("NONE"), page)).isSameAs(expected);
+        assertThat(service.list("admin", true, true, null, TaskTypeFilter.ANY, page)).isSameAs(expected);
+
+        verify(taskRepo, never()).findAllActive(any(), anyBoolean(), any(), any());
     }
 }

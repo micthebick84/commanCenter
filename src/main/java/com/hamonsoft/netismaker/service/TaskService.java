@@ -445,11 +445,11 @@ public class TaskService {
 
     @Transactional(readOnly = true)
     public Page<Task> list(String viewerId, boolean isAdmin, boolean mineOnly,
-                           TaskStatus status, Pageable pageable) {
+                           TaskStatus status, TaskTypeFilter type, Pageable pageable) {
         if (isAdmin && !mineOnly) {
-            return taskRepo.findAllActive(status, pageable);
+            return taskRepo.findAllActive(status, type.any(), type.type(), pageable);
         }
-        return taskRepo.findByRequester(viewerId, status, pageable);
+        return taskRepo.findByRequester(viewerId, status, type.any(), type.type(), pageable);
     }
 
     @Transactional

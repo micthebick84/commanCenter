@@ -2,6 +2,7 @@ package com.hamonsoft.netismaker.repository;
 
 import com.hamonsoft.netismaker.entity.Task;
 import com.hamonsoft.netismaker.entity.TaskStatus;
+import com.hamonsoft.netismaker.entity.TaskType;
 import jakarta.persistence.LockModeType;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
@@ -38,26 +39,35 @@ public interface TaskRepository extends JpaRepository<Task, Long> {
 
     /**
      * 본인 작업 목록 (deleted_at IS NULL).
+     * 타입 조건(스펙 2026-11-03 §4.3): anyType=true면 거르지 않고, 아니면 type이 null일 때 "타입 없음"만,
+     * 값이 있으면 그 타입만 — JPQL의 `= null`은 늘 거짓이라 "타입 없음"을 IS NULL로 따로 쓴다.
      */
     @Query("""
         SELECT t FROM Task t
         WHERE t.requesterId = :requesterId
           AND t.deletedAt IS NULL
           AND (:status IS NULL OR t.status = :status)
+          AND (:anyType = true OR (:type IS NULL AND t.taskType IS NULL) OR t.taskType = :type)
     """)
     Page<Task> findByRequester(@Param("requesterId") String requesterId,
                                @Param("status") TaskStatus status,
+                               @Param("anyType") boolean anyType,
+                               @Param("type") TaskType type,
                                Pageable pageable);
 
     /**
-     * 전체 작업 목록 (ADMIN용).
+     * 전체 작업 목록 (ADMIN용). 타입 조건은 {@link #findByRequester}와 같다.
      */
     @Query("""
         SELECT t FROM Task t
         WHERE t.deletedAt IS NULL
           AND (:status IS NULL OR t.status = :status)
+          AND (:anyType = true OR (:type IS NULL AND t.taskType IS NULL) OR t.taskType = :type)
     """)
-    Page<Task> findAllActive(@Param("status") TaskStatus status, Pageable pageable);
+    Page<Task> findAllActive(@Param("status") TaskStatus status,
+                             @Param("anyType") boolean anyType,
+                             @Param("type") TaskType type,
+                             Pageable pageable);
 
     /**
      * 단건 조회 (soft-deleted 제외).

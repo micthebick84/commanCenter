@@ -51,7 +51,7 @@ class TaskControllerSecretRedactionTest {
         when(taskService.getForView(eq(5L), anyString(), anyBoolean())).thenReturn(task);
         when(taskService.cancel(eq(5L), anyString(), anyBoolean())).thenReturn(task);
         when(taskService.retry(eq(5L), anyString(), anyBoolean())).thenReturn(task);
-        when(taskService.list(anyString(), anyBoolean(), anyBoolean(), any(), any()))
+        when(taskService.list(anyString(), anyBoolean(), anyBoolean(), any(), any(), any()))
                 .thenReturn(new PageImpl<>(List.of(task)));
     }
 
@@ -69,7 +69,7 @@ class TaskControllerSecretRedactionTest {
         JwtAuthenticationToken user = auth("user1", "ROLE_USER");
 
         assertThat(values(controller.get(5L, user))).containsExactly("jdbc:x", "");
-        assertThat(values(controller.list(null, false, PageRequest.of(0, 20), user).getContent().get(0)))
+        assertThat(values(controller.list(null, null, false, PageRequest.of(0, 20), user).getContent().get(0)))
                 .containsExactly("jdbc:x", "");
         assertThat(values(controller.cancel(5L, user))).containsExactly("jdbc:x", "");
         assertThat(values(controller.retry(5L, user))).containsExactly("jdbc:x", "");
@@ -80,7 +80,7 @@ class TaskControllerSecretRedactionTest {
         JwtAuthenticationToken admin = auth("admin", "ROLE_ADMIN");
 
         assertThat(values(controller.get(5L, admin))).containsExactly("jdbc:x", "pw");
-        assertThat(values(controller.list(null, false, PageRequest.of(0, 20), admin).getContent().get(0)))
+        assertThat(values(controller.list(null, null, false, PageRequest.of(0, 20), admin).getContent().get(0)))
                 .containsExactly("jdbc:x", "pw");
     }
 

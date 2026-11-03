@@ -11,6 +11,8 @@ import java.util.List;
  * dbConnectionIds: 스펙 2026-10-14 §4 — 검증 기준은 작업 등록자(최대 3개, 같은 레포, 활성, 공용이거나 등록자 본인 것).
  * refRepos: 스펙 2026-10-24 §4.2 — null = 등록 값 유지, [] = 전부 해제, 같은 집합 = 검증 없는 no-op,
  * 바뀌면 새로 들어온 것만 카탈로그 검증. @Valid가 있어야 원소의 @Size(branch 255자)가 적용된다.
+ * taskType: 스펙 2026-11-03 §4.2 — {@code TaskType} enum 이름. null·공백 = 등록 값 유지(타입 없음으로 되돌리는 경로는 없다),
+ * 같은 값 = 이력 없는 no-op, 다르면 세션을 만들기 전에 바꾸고 이력에 `타입 변경: A → B`. 모르는 값은 400.
  */
 public record ApproveRequest(
         List<Long> mcpCatalogIds,
@@ -18,15 +20,22 @@ public record ApproveRequest(
         String effort,
         List<Long> dbConnectionIds,
         @Valid
-        List<RefRepoInput> refRepos
+        List<RefRepoInput> refRepos,
+        String taskType
 ) {
+    /** 타입 도입 전 5인자 — 기존 호출부·테스트 호환(타입은 등록 값 유지). */
+    public ApproveRequest(List<Long> mcpCatalogIds, String model, String effort, List<Long> dbConnectionIds,
+                          List<RefRepoInput> refRepos) {
+        this(mcpCatalogIds, model, effort, dbConnectionIds, refRepos, null);
+    }
+
     /** 참조 선택 도입 전 4인자 — 기존 호출부·테스트 호환(참조는 등록 값 유지). */
     public ApproveRequest(List<Long> mcpCatalogIds, String model, String effort, List<Long> dbConnectionIds) {
-        this(mcpCatalogIds, model, effort, dbConnectionIds, null);
+        this(mcpCatalogIds, model, effort, dbConnectionIds, null, null);
     }
 
     /** DB 선택 도입 전 3인자 — 기존 호출부·테스트 호환. */
     public ApproveRequest(List<Long> mcpCatalogIds, String model, String effort) {
-        this(mcpCatalogIds, model, effort, null, null);
+        this(mcpCatalogIds, model, effort, null, null, null);
     }
 }

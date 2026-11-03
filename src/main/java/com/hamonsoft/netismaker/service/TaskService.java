@@ -19,6 +19,7 @@ import com.hamonsoft.netismaker.entity.TaskMcpSpec;
 import com.hamonsoft.netismaker.entity.TaskStatus;
 import com.hamonsoft.netismaker.entity.TaskStatusHistory;
 import com.hamonsoft.netismaker.entity.TaskStageUsage;
+import com.hamonsoft.netismaker.entity.TaskType;
 import com.hamonsoft.netismaker.git.RepoRef;
 import com.hamonsoft.netismaker.repository.QuestionAttachmentRepository;
 import com.hamonsoft.netismaker.repository.TaskAnalysisRepository;
@@ -247,6 +248,8 @@ public class TaskService {
      */
     private Registration register(TaskCreateRequest req, String requesterId, String requesterEmail,
                                   boolean requesterIsAdmin) {
+        // 작업 타입 (스펙 2026-11-03 §4.2) — 모르는 값은 400, 없으면 타입 없음(null). 아무것도 저장하기 전에 해석한다.
+        TaskType taskType = TaskType.parseRequest(req.taskType());
         long active = taskRepo.countActiveByRequester(requesterId);
         if (active >= userConcurrentLimit) {
             throw TaskException.tooManyRequests(
@@ -268,6 +271,7 @@ public class TaskService {
         t.setRequesterEmail(requesterEmail);
         t.setRefRepos(new ArrayList<>(refs));
         t.setSourceQuestionId(req.sourceQuestionId());
+        t.setTaskType(taskType);
         Task saved = taskRepo.save(t);
         historyRepo.save(TaskStatusHistory.log(saved.getId(), null, TaskStatus.AWAITING_APPROVAL,
                 "user", requesterId, "작업 등록"));
@@ -534,12 +538,18 @@ public class TaskService {
      * 참조 repo(스펙 2026-10-24 §4.2): null = 등록 값 유지, 같은 집합 = 검증 없는 no-op, 바뀌면 새로 들어온 것만 검증 —
      * 등록 뒤 비활성된 기존 참조로 400이 나지 않게. 세션을 만들기 전에 task에 반영해 createForTask가 복사하고,
      * 바뀌었으면 승인 이력 다음에 별도 이력 행을 남긴다(기존 승인 이력 문구는 그대로).
+     * 작업 타입(스펙 2026-11-03 §4.2): null·공백 = 등록 값 유지, 같은 값 = 이력 없는 no-op, 다르면 세션을 만들기 전에 바꾸고
+     * 참조 이력 다음에 `타입 변경: A → B` 행을 남긴다. 모르는 값은 다른 검증과 같이 세션 생성 전에 400.
+     * 인터뷰가 실패·만료·취소되면 승인대기로 돌아오므로(InterviewService) 다시 승인할 때 한 번 더 바꿀 수 있다.
      */
     private void startInterview(Task t, String adminId, ApproveRequest req) {
         List<TaskMcpSpec> extras = resolveMcpExtras(req == null ? null : req.mcpCatalogIds());
         String model = ModelEffortPolicy.resolveModel(req == null ? null : req.model());
         String effort = ModelEffortPolicy.resolveEffort(req == null ? null : req.effort());
         ModelEffortPolicy.validate(model, effort);   // 검증이 먼저 — 실패 시 세션이 생기면 안 된다
+        TaskType requestedType = TaskType.parseRequest(req == null ? null : req.taskType());
+        TaskType typeBefore = t.getTaskType();
+        boolean typeChanged = requestedType != null && requestedType != typeBefore;
         // DB 연결 검증도 세션 생성 전 — 기준은 작업 등록자 (스펙 2026-10-14 §4)
         List<Long> dbIds = dbConnectionService.validateSelection(t.getRepoCatalogId(), t.getRequesterId(),
                 req == null ? null : req.dbConnectionIds());
@@ -551,6 +561,7 @@ public class TaskService {
         t.setMcpsExtra(new ArrayList<>(extras));
         t.setDbConnectionIds(new ArrayList<>(dbIds));
         if (refChange != null) t.setRefRepos(new ArrayList<>(refChange.next()));
+        if (typeChanged) t.setTaskType(requestedType);
         t.setFailureReason(null);
         interviewService.createForTask(t, model, effort, extras);
 
@@ -562,6 +573,10 @@ public class TaskService {
         if (refChange != null) {
             historyRepo.save(TaskStatusHistory.log(t.getId(), TaskStatus.INTERVIEWING, TaskStatus.INTERVIEWING,
                     "user", adminId, RefRepoChanges.approvalHistory(refChange)));
+        }
+        if (typeChanged) {
+            historyRepo.save(TaskStatusHistory.log(t.getId(), TaskStatus.INTERVIEWING, TaskStatus.INTERVIEWING,
+                    "user", adminId, "타입 변경: " + TaskType.labelOf(typeBefore) + " → " + TaskType.labelOf(requestedType)));
         }
     }
 

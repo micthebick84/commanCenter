@@ -52,7 +52,7 @@ import java.util.function.LongSupplier;
  *     8) 참조 worktree는 모든 경로에서 지운다(대상 worktree는 지금처럼 성공이면 지우고 실패면 남긴다)
  *
  *   수정 회차(claim의 implementation.fix — 스펙 2026-11-03 §7)는 1) 참조 준비 뒤 갈라진다(implementFixRound):
- *     회차 브랜치만 fetch(fetchOnly) → 그 끝에 detached worktree(createOnBranch, 새 브랜치 없음) → 끝 커밋이 기록된 head_sha와 다르면
+ *     회차 브랜치가 비었거나 베이스 브랜치면 fetch·claude 없이 구현실패 → 회차 브랜치만 fetch(fetchOnly) → 그 끝에 detached worktree(createOnBranch, 새 브랜치 없음) → 끝 커밋이 기록된 head_sha와 다르면
  *     (사람이 MR에 push) 그 위에서 고치고 프롬프트·구현 로그에 남김 → 회차 프롬프트(직접·리뷰, SDD는 리뷰로) + claude
  *     → 실패면 wip 커밋을 같은 브랜치에 push / 성공이면 같은 브랜치에 fast-forward push(PR/MR은 새로 만들지 않음)
  *     → 보고는 성공·실패 모두 회차 표지(작업 시도 번호·회차 안 시도 번호·요청 id)와 회차 브랜치를 싣는다
@@ -501,6 +501,16 @@ public class WorkerMainLoop {
         String label = FixRoundPrompts.label(fix);
         String repoKey = GitRemotes.localKey(task.repoRef());
 
+        // 0. 이어 고칠 브랜치 확인 — 비었거나 베이스 브랜치면 fetch·claude 없이 구현실패(베이스에 직접 push하면 안 된다).
+        //    API가 요청 때 막지만 claim 값은 믿지 않는다(깨진 데이터·구버전 API)
+        if (!isUsableFixBranch(branch, task.githubBranch())) {
+            String shown = branch == null || branch.isBlank() ? "없음" : branch.strip();
+            safePostImplementationFailure(task, attempt,
+                    label + ": 이어 고칠 브랜치가 비었거나 베이스 브랜치와 같음(" + shown + ") — 진행하지 않음",
+                    branch, null, null);
+            return;
+        }
+
         // 1. 회차 브랜치만 fetch(캐시 HEAD·베이스는 그대로) → 그 끝에 detached worktree(구현 자리 task-{id}, 새 브랜치 없음)
         GitRepoCache.CheckedOutRepo repo;
         try {
@@ -610,6 +620,12 @@ public class WorkerMainLoop {
         log.info("{} 구현 완료: task={} {}@{} (방식 {}, 회차 안 {}회째{})", label, task.id(), branch,
                 RefRepoPrompts.sha7(headSha), mode, fix.attempt(), remoteAhead ? ", 원격 끝 위에서" : "");
         worktrees.discard(repoKey, WorktreeKind.TASK, task.id());
+    }
+
+    /** 회차가 이어 push할 브랜치로 쓸 수 있다 — 비어 있지 않고 베이스 브랜치와 다르다(앞뒤 공백 무시). */
+    static boolean isUsableFixBranch(String headBranch, String baseBranch) {
+        if (headBranch == null || headBranch.isBlank()) return false;
+        return baseBranch == null || !headBranch.strip().equals(baseBranch.strip());
     }
 
     /** 실패 보고에 실을 원격 브랜치 끝 — wip을 올렸으면 그 커밋, 아니면 처음 받은 끝(tip). */
@@ -956,7 +972,10 @@ public class WorkerMainLoop {
                 + DEPLOY_ENV_INSTRUCTION;
     }
 
-    /** 승인된 디자인이 있으면 구현 프롬프트에 삽입할 블록, 없으면 빈 문자열 (기존 작업 불변). 수정 회차 프롬프트도 쓴다. */
+    /**
+     * 승인된 디자인이 있으면 구현 프롬프트에 삽입할 블록, 없으면 빈 문자열 (기존 작업 불변). 수정 회차 프롬프트는 이 절 대신
+     * 참고용 H3(FixRoundPrompts.designSection)를 쓴다.
+     */
     static String renderDesignSection(WorkerTaskResponse task) {
         if (task.designMarkdown() == null || task.designMarkdown().isBlank()) return "";
         return """

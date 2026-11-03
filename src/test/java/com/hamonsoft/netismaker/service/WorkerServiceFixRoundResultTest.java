@@ -171,6 +171,46 @@ class WorkerServiceFixRoundResultTest {
                 anyLong(), anyLong(), anyLong(), anyLong());
     }
 
+    /** 회차 성공 보고 + 워커가 거둔 배포 env 템플릿(null = 구버전 워커). */
+    private static WorkerResultRequest successWithTemplate(List<com.hamonsoft.netismaker.entity.EnvTemplateItem> template) {
+        return new WorkerResultRequest("w1", TaskStatus.PR_CREATED,
+                null, null, null, 10L, null,
+                null, null, BRANCH, "new9999", "fix log",
+                null, null, null, null, null,
+                null, null, null, null, USAGE,
+                template).withImplementationAttempt(1).withFixAttempt(1).withFixRequestId(502L);
+    }
+
+    @Test
+    void 회차_성공보고의_배포_env_템플릿을_보통_구현처럼_저장한다() {
+        Task t = t(IMPLEMENTING);
+        t.setEnvTemplate(new ArrayList<>(List.of(new com.hamonsoft.netismaker.entity.EnvTemplateItem("OLD", "", false, false))));
+        request(2, 1);
+
+        svc.recordResult(42L, successWithTemplate(List.of(
+                new com.hamonsoft.netismaker.entity.EnvTemplateItem(" JWT_SECRET ", "서명 키", true, true),
+                new com.hamonsoft.netismaker.entity.EnvTemplateItem("BAD-KEY", "", false, false))));
+
+        assertThat(t.getStatus()).isEqualTo(DEPLOY_PENDING);
+        // 정리(sanitize)한 값 — 공백 제거·잘못된 이름 버림. 자동 재배포가 쓰는 저장 env(envVars)는 그대로
+        assertThat(t.getEnvTemplate()).containsExactly(
+                new com.hamonsoft.netismaker.entity.EnvTemplateItem("JWT_SECRET", "서명 키", true, true));
+        assertThat(t.getEnvVars()).extracting(EnvVar::key).containsExactly("A");
+    }
+
+    @Test
+    void 회차_성공보고에_템플릿이_없으면_기존_템플릿을_둔다() {
+        Task t = t(IMPLEMENTING);
+        t.setEnvTemplate(new ArrayList<>(List.of(new com.hamonsoft.netismaker.entity.EnvTemplateItem("KEEP", "", false, false))));
+        request(2, 1);
+
+        svc.recordResult(42L, successWithTemplate(null));
+
+        assertThat(t.getStatus()).isEqualTo(DEPLOY_PENDING);
+        assertThat(t.getEnvTemplate()).extracting(com.hamonsoft.netismaker.entity.EnvTemplateItem::key)
+                .containsExactly("KEEP");
+    }
+
     @Test
     void 회차_성공보고의_커밋은_이력에_7자로_줄인다() {
         t(IMPLEMENTING);
@@ -427,6 +467,7 @@ class WorkerServiceFixRoundResultTest {
 
     @Test
     void 배포중지중에_온_회차_보고는_배포중지_성공으로_읽지_않는다() {
+        // 수정 중단이 이전 배포가 떠 있는 작업을 배포중지대기로 보낸 뒤의 모양 — 회차는 이미 닫혀(표시 없음) 보통 배포 중지와 같다
         Task t = t(UNDEPLOYING);
         t.setActiveFixRequestId(null);
         t.setDeployUrl("https://task-42-win.micthebick.dev");
@@ -444,10 +485,13 @@ class WorkerServiceFixRoundResultTest {
         assertThat(rows.get(1).getReason()).startsWith("닫힌 수정 회차(요청 #502)의 늦은 보고 무시");
         verify(deployLogStream, never()).finish(any());
 
-        // 표지 없는 PR생성은 지금처럼 배포 중지 성공
+        // 표지 없는 PR생성은 지금처럼 배포 중지 성공 — 배포 칸을 비우고 PR생성으로
         svc.recordResult(42L, WorkerResultRequest.undeployed("w1", "stopped"));
         assertThat(t.getStatus()).isEqualTo(PR_CREATED);
         assertThat(t.getDeployUrl()).isNull();
+        assertThat(t.getDeployContainerId()).isNull();
+        assertThat(t.getActiveFixRequestId()).isNull();
+        verify(fixRepo, never()).save(any());   // 닫힌 회차의 기록을 다시 건드리지 않는다
     }
 
     @Test

@@ -343,6 +343,63 @@ class WorkerMainLoopFixRoundTest {
         verify(claude, never()).exec(anyString(), any(), any(), anyList(), anyBoolean(), any(), any(), any());
     }
 
+    /** 회차 브랜치만 바꾼 claim — 깨진 데이터·구버전 API가 보낸 값. */
+    private void claimsOnBranch(String headBranch) {
+        var fix = new WorkerTaskResponse.FixRoundSpec(9L, 2, 1, BODY, List.of(PREVIOUS), headBranch, RECORDED_HEAD);
+        when(http.nextTask()).thenReturn(Optional.of(WorkerTaskResponse.forImplementation(task(ImplementationMode.DIRECT),
+                TaskAnalysis.create(42L, "# 설계 문서", "[]", null, 1000L), null, "### 작업 1: 로그인 화면", fix,
+                ImplementationMode.DIRECT)));
+    }
+
+    @Test
+    void 회차_브랜치가_베이스와_같으면_fetch도_claude도_없이_실패보고() throws Exception {
+        claimsOnBranch(" main ");   // 작업의 베이스 브랜치 — 여기에 push하면 베이스에 직접 커밋된다
+
+        loop().pollAndProcess();
+
+        WorkerResultRequest r = reported();
+        assertThat(r.status()).isEqualTo(TaskStatus.IMPLEMENTATION_FAILED);
+        assertThat(r.failureReason())
+                .isEqualTo("수정 2회차: 이어 고칠 브랜치가 비었거나 베이스 브랜치와 같음(main) — 진행하지 않음");
+        assertThat(r.headBranch()).isEqualTo(" main ");   // 받은 값 그대로
+        assertThat(r.headSha()).isNull();
+        hasFixMarks(r);
+        verify(repos, never()).fetchOnly(any(), anyString());
+        verify(repos, never()).ensureFresh(any(), anyString());
+        verify(worktrees, never()).createOnBranch(any(), anyString(), anyString(), anyLong());
+        verify(claude, never()).exec(anyString(), any(), any(), anyList(), anyBoolean(), any(), any(), any());
+        verify(gitOps, never()).commitAndPush(any(), any(), anyString(), anyString(), any());
+    }
+
+    @Test
+    void 회차_브랜치가_비었으면_fetch도_claude도_없이_실패보고() throws Exception {
+        for (String blank : new String[]{null, "", "  "}) {
+            reset(reporter, repos, claude);
+            claimsOnBranch(blank);
+
+            loop().pollAndProcess();
+
+            WorkerResultRequest r = reported();
+            assertThat(r.status()).as(String.valueOf(blank)).isEqualTo(TaskStatus.IMPLEMENTATION_FAILED);
+            assertThat(r.failureReason())
+                    .isEqualTo("수정 2회차: 이어 고칠 브랜치가 비었거나 베이스 브랜치와 같음(없음) — 진행하지 않음");
+            assertThat(r.headBranch()).isEqualTo(blank);
+            hasFixMarks(r);
+            verify(repos, never()).fetchOnly(any(), any());
+            verify(claude, never()).exec(anyString(), any(), any(), anyList(), anyBoolean(), any(), any(), any());
+        }
+    }
+
+    @Test
+    void 회차_브랜치_판정() {
+        assertThat(WorkerMainLoop.isUsableFixBranch(BRANCH, "main")).isTrue();
+        assertThat(WorkerMainLoop.isUsableFixBranch(BRANCH, null)).isTrue();
+        assertThat(WorkerMainLoop.isUsableFixBranch("main", "main")).isFalse();
+        assertThat(WorkerMainLoop.isUsableFixBranch(" main", "main ")).isFalse();
+        assertThat(WorkerMainLoop.isUsableFixBranch(null, "main")).isFalse();
+        assertThat(WorkerMainLoop.isUsableFixBranch(" ", "main")).isFalse();
+    }
+
     @Test
     void 참조_준비_실패도_회차_표지를_단다() throws Exception {
         Task t = task(ImplementationMode.DIRECT);

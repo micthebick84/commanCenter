@@ -190,6 +190,24 @@ class TaskFixServiceTest {
     }
 
     @Test
+    void 이어_고칠_브랜치가_베이스_브랜치면_409() {
+        // 회차는 head_branch에 이어 push한다 — 베이스(main)를 가리키면 베이스에 직접 커밋하게 된다. 등록자·관리자 모두
+        for (boolean admin : new boolean[]{false, true}) {
+            Task t = task(DEPLOYED);
+            t.setHeadBranch(" main ");
+            assertThatThrownBy(() -> svc.request(42L, admin ? ADMIN : OWNER, admin, "본문", null))
+                    .as(admin ? "관리자" : "등록자")
+                    .isInstanceOf(TaskException.class)
+                    .satisfies(e -> assertThat(((TaskException) e).getStatus()).isEqualTo(HttpStatus.CONFLICT))
+                    .hasMessageContaining("베이스 브랜치(main)");
+            assertThat(t.getStatus()).isEqualTo(DEPLOYED);
+            assertThat(t.getActiveFixRequestId()).isNull();
+        }
+        verify(fixRepo, never()).save(any());
+        verify(historyRepo, never()).save(any());
+    }
+
+    @Test
     void 커밋_정보가_없어도_409() {
         Task t = task(DEPLOYED);
         t.setHeadSha(" ");
@@ -527,7 +545,9 @@ class TaskFixServiceTest {
 
     @Test
     void 수정중단은_회차_구현실패에서만_PR생성으로() {
-        Task t = task(IMPLEMENTATION_FAILED);
+        Task t = task(IMPLEMENTATION_FAILED);   // 배포 칸(컨테이너 id·주소)이 없다 — 떠 있는 배포가 없으면 바로 PR생성
+        assertThat(t.getDeployContainerId()).isNull();
+        assertThat(t.getDeployUrl()).isNull();
         t.setFailureReason("claude exit=1");
         t.setWorkerId("w1");
         t.setHeadSha("wip7777");   // 실패 보고가 남긴 브랜치 끝 — 그대로 둔다(이후 배포 기준)
@@ -551,6 +571,65 @@ class TaskFixServiceTest {
         assertThat(h.getActorType()).isEqualTo("user");
         assertThat(h.getActorId()).isEqualTo(ADMIN);
         assertThat(h.getReason()).isEqualTo("수정 2회차 중단 → PR생성");
+    }
+
+    @Test
+    void 이전_배포가_떠_있으면_수정중단은_배포중지대기로() {
+        // 회차가 닫히면 GC 보호가 풀리고 PR생성은 중지·보호 대상이 아니다 — 컨테이너·공개 주소가 추적 없이 남지 않게 배포 중지 길로 보낸다
+        Task t = task(IMPLEMENTATION_FAILED);
+        t.setFailureReason("claude exit=1");
+        t.setWorkerId("w1");
+        t.setHeadSha("wip7777");
+        t.setDeployUrl("https://task-42-win.micthebick.dev");
+        t.setDeployContainerId("c0ffee");
+        t.setDeployHostPort(19001);
+        TaskFixRequest r = openRound(t, 2);
+
+        Task out = svc.abort(42L, ADMIN);
+
+        assertThat(out.getStatus()).isEqualTo(UNDEPLOY_PENDING);
+        assertThat(out.getActiveFixRequestId()).isNull();          // 회차는 지금 닫는다 — 중지 길은 이 작업을 회차로 다루지 않는다
+        assertThat(out.getFailureReason()).isNull();
+        assertThat(out.getWorkerId()).isNull();
+        assertThat(out.getClaimedAt()).isNull();
+        assertThat(out.getHeadSha()).isEqualTo("wip7777");
+        // 배포 칸은 워커가 컨테이너를 내린 뒤 PR생성 보고가 비운다(관리자 배포 중지와 같은 길)
+        assertThat(out.getDeployContainerId()).isEqualTo("c0ffee");
+        assertThat(out.getDeployUrl()).isEqualTo("https://task-42-win.micthebick.dev");
+        assertThat(r.getOutcome()).isEqualTo(com.hamonsoft.netismaker.entity.FixOutcome.ABORTED);
+        assertThat(r.getClosedAt()).isNotNull();
+        verify(fixRepo).save(r);
+        TaskStatusHistory h = savedHistory();
+        assertThat(h.getFromStatus()).isEqualTo("구현실패");
+        assertThat(h.getToStatus()).isEqualTo("배포중지대기");
+        assertThat(h.getActorType()).isEqualTo("user");
+        assertThat(h.getActorId()).isEqualTo(ADMIN);
+        assertThat(h.getReason()).isEqualTo("수정 2회차 중단 → 배포 중지");
+    }
+
+    @Test
+    void 배포_주소만_남아_있어도_수정중단은_배포중지대기로() {
+        Task t = task(IMPLEMENTATION_FAILED);
+        t.setDeployUrl("http://10.1.1.75:19001");
+        openRound(t, 1);
+
+        assertThat(svc.abort(42L, ADMIN).getStatus()).isEqualTo(UNDEPLOY_PENDING);
+        assertThat(savedHistory().getReason()).isEqualTo("수정 1회차 중단 → 배포 중지");
+    }
+
+    @Test
+    void 회차_기록이_없어도_이전_배포가_떠_있으면_배포중지대기로() {
+        Task t = task(IMPLEMENTATION_FAILED);
+        t.setActiveFixRequestId(77L);
+        t.setDeployContainerId("c0ffee");
+        when(fixRepo.findById(77L)).thenReturn(Optional.empty());
+
+        Task out = svc.abort(42L, ADMIN);
+
+        assertThat(out.getStatus()).isEqualTo(UNDEPLOY_PENDING);
+        assertThat(out.getActiveFixRequestId()).isNull();
+        assertThat(savedHistory().getReason())
+                .isEqualTo("열린 수정 회차 기록이 없어(요청 #77) 회차 표시만 지움 — 수정 중단 → 배포 중지");
     }
 
     @Test

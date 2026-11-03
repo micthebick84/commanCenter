@@ -424,6 +424,7 @@ describe('pages/tasks/[id] — 수정 요청 (스펙 2026-11-03 §6)', () => {
       await flushPromises()
       const dialog = body().querySelector('[data-test="impl-retry-dialog"]')!
       expect(dialog.textContent).toContain('수정 2회차 구현 재시도 (같은 브랜치)')
+      expect(dialog.textContent).toMatch(/수정 \d+회차/) // 아래 '열린 회차가 없으면' 시험의 부정 검사가 실제 문구에 걸리는 모양인지
       expect(dialog.textContent).toContain('같은 브랜치')
       expect(dialog.textContent).not.toContain('베이스에서 처음부터 새 브랜치')
       expect(dialog.querySelector('[data-test="impl-mode-REVIEW"]')).not.toBeNull()
@@ -447,7 +448,7 @@ describe('pages/tasks/[id] — 수정 요청 (스펙 2026-11-03 §6)', () => {
       await flushPromises()
       const dialog = body().querySelector('[data-test="impl-retry-dialog"]')!
       expect(dialog.textContent).toContain('구현 재시도')
-      expect(dialog.textContent).not.toMatch(/수정 d+회차/)
+      expect(dialog.textContent).not.toMatch(/수정 \d+회차/)
       expect(dialog.textContent).toContain('베이스에서 처음부터 새 브랜치')
       expect(dialog.querySelector('[data-test="impl-mode-SDD"]')).not.toBeNull()
       w.unmount()

@@ -746,6 +746,7 @@ public class WorkerService {
     /**
      * 회차 구현 성공 → 자동 재배포. PR/MR은 새로 만들지 않으므로 prUrl은 받지 않고, 브랜치는 회차 브랜치여야 한다(다른 브랜치의 커밋을
      * head_sha로 두면 배포(브랜치 끝)·종료 병합(head_sha 고정)이 어긋난다). 배포 전에 head_sha를 새 끝으로 바꾼다(§7).
+     * 배포 env 템플릿은 보통 구현 성공처럼 받는다 — 자동 재배포는 저장된 env 값(envVars)을 그대로 쓰고, 템플릿은 다음 배포 다이얼로그의 안내다.
      * 이력은 두 줄 — 구현 완료(워커) → 자동 재배포(system). PR생성은 거쳐 가기만 한다.
      */
     private void fixRoundSucceeded(Task t, TaskFixRequest round, WorkerResultRequest req, String reasonPrefix) {
@@ -760,6 +761,7 @@ public class WorkerService {
         String label = FixRounds.label(round);
         t.setHeadSha(req.headSha().strip());
         t.setImplementationLog(req.implementationLog());
+        applyEnvTemplate(t, req);   // 회차가 새 env를 남겼으면 템플릿 갱신 — 보통 구현 성공과 같다(null이면 기존 유지)
         historyRepo.save(TaskStatusHistory.log(t.getId(), from, TaskStatus.PR_CREATED, "worker", req.workerId(),
                 reasonPrefix + label + " 구현 완료: " + FixRounds.shortSha(req.headSha())));
         logRefWarnings(t, req);

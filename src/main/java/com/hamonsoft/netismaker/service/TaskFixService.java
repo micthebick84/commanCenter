@@ -32,6 +32,7 @@ import java.util.Set;
  *   reject   ─► 수정승인대기 → 요청 전 상태 + 사유                  (관리자)
  *   withdraw ─► 수정승인대기 → 요청 전 상태                         (등록자 본인 또는 관리자)
  *   abort    ─► 수정 회차의 구현실패 → PR생성, 회차 닫힘(ABORTED)   (관리자, §7.1)
+ *               이전 배포가 떠 있으면 → 배포중지대기 (워커가 내린 뒤 PR생성)
  *
  * 락 정책은 TaskService·TaskCloseService와 같다 — findActiveByIdForUpdate 후 재판정.
  * 회차(round)는 승인된 요청 수 + 1이다. 열린 회차는 task.active_fix_request_id가 가리키고, 반려·철회는 회차에 세지 않는다.
@@ -81,6 +82,11 @@ public class TaskFixService {
         }
         if (isBlank(t.getHeadBranch()) || isBlank(t.getHeadSha())) {
             throw TaskException.conflict("이어서 고칠 브랜치·커밋 정보가 없어 수정을 요청할 수 없습니다 — 새 작업으로 등록하세요");
+        }
+        // 회차는 head_branch에 이어 push한다 — 베이스 브랜치를 가리키면(깨진 데이터) 베이스에 직접 커밋하게 되므로 받지 않는다
+        if (t.getGithubBranch() != null && t.getHeadBranch().strip().equals(t.getGithubBranch().strip())) {
+            throw TaskException.conflict("이어서 고칠 브랜치가 베이스 브랜치(" + t.getGithubBranch().strip()
+                    + ")와 같아 수정을 요청할 수 없습니다 — 새 작업으로 등록하세요");
         }
         long approved = fixRepo.countByTaskIdAndStatus(taskId, FixRequestStatus.APPROVED);
         requireRoundLeft(approved);
@@ -136,6 +142,11 @@ public class TaskFixService {
      * 자동 재배포는 없다 — 사람이 PR생성에서 보통 배포(브랜치 끝)를 다시 누른다. head_sha는 건드리지 않는다: 회차의 구현실패 보고가
      * 이미 브랜치 끝(wip 커밋 포함)을 남겼다(WorkerService). 이전 구현 결과의 흔적은 실패 사유만 비운다(로그는 확인용으로 둔다).
      *
+     * 이전 배포가 아직 떠 있으면(배포 런타임 칸이 남아 있으면) PR생성이 아니라 배포중지대기로 보낸다 — 회차가 닫히면 GC 보호가 풀리고
+     * PR생성은 중지·보호 대상이 아니라 컨테이너와 공개 주소(DNS)가 추적 없이 남기 때문이다. 이후는 관리자 배포 중지와 같은 길이다:
+     * 워커가 컨테이너를 내리고 PR생성 보고로 배포 칸을 비운다(WorkerService.recordDeployResult). 회차는 지금 닫으므로 그 길에서
+     * 이 작업을 회차로 다루는 곳은 없다.
+     *
      * 회차 표시는 있는데 열린 회차 기록이 없는 경우 재시도는 409라 이 길이 유일한 출구다 — 요청 기록은 건드리지 않고 표시만 지운 뒤
      * PR생성으로 보낸다. 이런 표시는 두 곳에서 생긴다: claim이 깨진 회차를 구현실패로 치운 경우(WorkerService.failBrokenFixRound —
      * 구현 시작 전이라 브랜치·head_sha는 회차 전 그대로)와 재기동 재큐가 기록을 못 찾은 경우(TaskRecovery — 끊긴 시도가 push한 커밋이
@@ -155,10 +166,20 @@ public class TaskFixService {
         Long requestId = t.getActiveFixRequestId();
         TaskFixRequest r = FixRounds.closeActive(fixRepo, t, FixOutcome.ABORTED);
         t.setFailureReason(null);
+        boolean liveDeploy = hasDeployRuntime(t);
+        String next = liveDeploy ? "배포 중지" : "PR생성";
         String reason = r != null
-                ? FixRounds.label(r) + " 중단 → PR생성"
-                : "열린 수정 회차 기록이 없어(요청 #" + requestId + ") 회차 표시만 지움 — 수정 중단 → PR생성";
-        return move(t, TaskStatus.PR_CREATED, adminId, reason);
+                ? FixRounds.label(r) + " 중단 → " + next
+                : "열린 수정 회차 기록이 없어(요청 #" + requestId + ") 회차 표시만 지움 — 수정 중단 → " + next;
+        return move(t, liveDeploy ? TaskStatus.UNDEPLOY_PENDING : TaskStatus.PR_CREATED, adminId, reason);
+    }
+
+    /**
+     * 이전 배포의 런타임 칸(컨테이너 id·배포 주소)이 남아 있다 — 배포 중지 보고(PR생성 복귀)가 비우는 칸이다. 컨테이너가 이미
+     * 없어도(배포실패 등) 중지는 해가 없다: 워커의 docker rm -f·DNS 삭제는 없는 대상을 그냥 지나간다.
+     */
+    private static boolean hasDeployRuntime(Task t) {
+        return t.getDeployContainerId() != null || t.getDeployUrl() != null;
     }
 
     /** 작업의 수정 요청 기록, 최신순. 열람 권한(등록자·관리자)은 호출자가 TaskService.getForView로 먼저 검증한다. */

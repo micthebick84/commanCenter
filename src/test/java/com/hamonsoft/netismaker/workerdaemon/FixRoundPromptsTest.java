@@ -61,11 +61,31 @@ class FixRoundPromptsTest {
     }
 
     @Test
-    void 확정_디자인이_있으면_원래_작업에_넣는다() {
+    void 확정_디자인이_있으면_원래_작업에_참고용_H3로_넣는다() {
         String p = FixRoundPrompts.render(task("# 디자인 문서"), fix(1, null), TIP, false,
                 ImplementationMode.DIRECT, ImplementationPrompts.DIRECT_COMMIT_RULE);
 
-        assertThat(p).contains("## 확정된 디자인").contains("# 디자인 문서");
+        assertThat(p).contains("\n### 확정된 디자인 (참고용 — 이미 구현됨, 이번 수정 범위만 고칠 것)\n")
+                .contains("# 디자인 문서")
+                .contains("`.design/`은 참조용이며 커밋하지 마세요.");
+        // 보통 구현의 H2 절("반드시 이 디자인 기준으로 구현")은 회차 에이전트가 이미 된 화면을 다시 만들게 한다
+        assertThat(p).doesNotContain("반드시 이 디자인 기준으로 구현").doesNotContain("\n## 확정된 디자인");
+        // "원래 작업" 절 안(H3)에 들어간다
+        assertThat(p.indexOf("## 원래 작업 (참고용)")).isLessThan(p.indexOf("### 확정된 디자인"));
+    }
+
+    @Test
+    void 확정_디자인이_없으면_디자인_절이_없다() {
+        String p = FixRoundPrompts.render(task(" "), fix(1, null), TIP, false,
+                ImplementationMode.DIRECT, ImplementationPrompts.DIRECT_COMMIT_RULE);
+
+        assertThat(p).doesNotContain("확정된 디자인");
+    }
+
+    @Test
+    void 보통_구현_프롬프트의_디자인_절은_그대로_H2다() {
+        assertThat(WorkerMainLoop.renderDesignSection(task("# 디자인 문서")))
+                .contains("\n## 확정된 디자인 (반드시 이 디자인 기준으로 구현)\n").contains("# 디자인 문서");
     }
 
     @Test

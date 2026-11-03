@@ -587,10 +587,10 @@ async function withdrawFix() {
 async function abortFix() {
   if (!(await confirmDialog(
     $q,
-    '수정 회차를 닫고 PR생성 상태로 되돌립니다. 이 브랜치에는 배포되지 않은 커밋이 남아 있을 수 있어요 — 이어서 배포하려면 PR생성에서 다시 배포하세요. 이 회차는 실패한 회차로 세어집니다.',
+    '수정 회차를 닫고 PR생성 상태로 되돌립니다. 이전 배포가 아직 떠 있으면 먼저 그 배포를 중지합니다. 이 브랜치에는 배포되지 않은 커밋이 남아 있을 수 있어요 — 이어서 배포하려면 PR생성에서 다시 배포하세요. 이 회차는 실패한 회차로 세어집니다.',
     { title: '수정 중단', ok: '수정 중단' },
   ))) return
-  await closeAction('fix-requests/abort', '수정 중단 — PR생성 상태로 돌렸습니다')
+  await closeAction('fix-requests/abort', '수정 중단 — 회차를 닫았습니다')
 }
 
 // 구현 방식·경과 시간 (스펙 2026-10-15 §7) — 경과는 마운트 뒤 30초마다 다시 계산(API 호출 없음)

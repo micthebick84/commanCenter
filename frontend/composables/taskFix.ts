@@ -75,7 +75,7 @@ export function canFollowUp(task: { status: string; fix?: FixView | null }, isAd
   return FIX_REQUEST_STATUSES.includes(task.status) && fixLimitReached(task)
 }
 
-/** 수정 중단: 관리자가 회차의 구현실패를 닫는다 → PR생성 (스펙 §7.1). 열린 회차가 있는 구현실패에서만. */
+/** 수정 중단: 관리자가 회차의 구현실패를 닫는다 → PR생성, 이전 배포가 떠 있으면 배포 중지를 거쳐 (스펙 §7.1). 열린 회차가 있는 구현실패에서만. */
 export function canAbortFix(task: { status: string; fix?: FixView | null }, isAdmin: boolean): boolean {
   return isAdmin && task.status === 'IMPLEMENTATION_FAILED' && task.fix?.activeRound != null
 }

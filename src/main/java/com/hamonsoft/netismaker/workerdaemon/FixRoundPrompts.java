@@ -95,7 +95,7 @@ final class FixRoundPrompts {
 
         p.append("\n## 원래 작업 (참고용)\n\n### 제목\n").append(task.title()).append("\n\n### 요구사항\n")
                 .append(task.description() == null ? "" : task.description()).append("\n");
-        String design = WorkerMainLoop.renderDesignSection(task);
+        String design = designSection(task);
         if (!design.isEmpty()) p.append(design).append("\n");
         if (task.planMarkdown() != null && !task.planMarkdown().isBlank()) {
             p.append("\n### 확정된 구현 계획 (참고용 — 다시 실행하지 마세요)\n").append(task.planMarkdown()).append("\n");
@@ -115,6 +115,22 @@ final class FixRoundPrompts {
                 + WorkerMainLoop.DEPLOY_ENV_INSTRUCTION
                 + DbMcpWorkerSupport.promptSection(task.dbMcp())
                 + RefRepoPrompts.promptSection(refs);
+    }
+
+    /**
+     * "원래 작업" 아래 H3로 넣는 승인된 디자인 — 참고용. 보통 구현 프롬프트의 H2 절(WorkerMainLoop.renderDesignSection, "반드시 이 디자인
+     * 기준으로 구현")을 그대로 넣으면 회차 에이전트가 이미 된 화면을 다시 만들 수 있어 따로 쓴다. 승인된 디자인이 없으면 빈 문자열.
+     */
+    static String designSection(WorkerTaskResponse task) {
+        if (task.designMarkdown() == null || task.designMarkdown().isBlank()) return "";
+        return """
+
+                ### 확정된 디자인 (참고용 — 이미 구현됨, 이번 수정 범위만 고칠 것)
+                아래 디자인 문서와 `.design/` 디렉토리의 화면 목업 HTML은 이 작업에서 승인되어 이미 구현된 디자인입니다.
+                이번 수정 요청이 화면을 고치게 할 때만 그 부분을 목업에 맞추는 기준으로 쓰고, 요청과 상관없는 화면을 디자인대로 다시 만들지 마세요.
+                `.design/`은 참조용이며 커밋하지 마세요.
+
+                """ + task.designMarkdown();
     }
 
     private static String sha7(String sha) {

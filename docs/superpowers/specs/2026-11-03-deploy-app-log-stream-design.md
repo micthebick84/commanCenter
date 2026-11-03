@@ -17,8 +17,12 @@
 - **배포 중 빌드 로그는 이미 실시간이다.**
   - 워커가 `POST /worker/tasks/{id}/deploy-log`로 보내면, API가 `task_deploy_log_chunk`(V10)에 저장하고 SSE로 보낸다(`DeployLogStreamService.java:42-55`).
   - 구독은 `GET /api/tasks/{id}/logs/stream?access_token=…`이다(등록자·관리자, `TaskController.java:273-279`).
-  - 화면은 데스크톱 상세 `[id].vue:424-457`에 `EventSource`로 있다. 모바일(`TaskDetailMobile.vue`)에는 없다.
-  - 핑과 재연결이 없다(`[id].vue:445`).
+  - 연결은 부모 `[id].vue`의 status watch가 화면 폭과 상관없이 배포중·배포중지중에서 `EventSource`로 연다(`[id].vue:429-462`). 데스크톱은 그 로그를 그린다(`:1398-1402`). 모바일(`TaskDetailMobile.vue`)에는 그리는 곳이 없다.
+  - 핑과 재연결이 없다. 오류가 나면 그냥 닫는다(`onerror = () => closeLog()`).
+- **운영 경로에서는 브라우저의 끊김이 API에 전달되지 않는다** (검토자 확인)
+  - `app-win` 주소는 cloudflared → `localhost:3001`(Nitro)로 가고, `/api/**`는 Nitro routeRules 프록시를 거친다(`frontend/nuxt.config.ts:69-71`).
+  - h3 `sendProxy`(라이브 1.15.11)는 upstream fetch에 abort signal을 걸지 않는다. 브라우저가 끊긴 뒤에도 upstream을 끝까지 읽고, 끊긴 응답에 써도 예외가 나지 않는다.
+  - 그래서 API의 `SseEmitter`는 쓰기 실패를 보지 못한다. 로컬 dev는 devProxy가 끊김을 전달하므로 시험에서는 드러나지 않는다.
 - **배포가 끝난 뒤 앱 로그를 보는 기능은 없다.**
   - 워커가 readiness 확인 때 `docker logs --tail 100`·`--tail 2000`을 한 번 돌릴 뿐이다(`LocalDockerTarget.java:514,528`).
   - 컨테이너 이름은 `netis-task-{id}`다(`DeployTarget.java:44`).
@@ -54,10 +58,24 @@
 - **자식 프로세스 env**
   - `StackSecretEnv`로 스택 비밀을 뺀다. `DOCKER_HOST`는 남긴다.
   - stdout·stderr를 둘 다 읽는다. docker는 컨테이너 stderr를 stderr로 내보낸다. 줄마다 `stream: out|err`를 붙인다.
-- **구독**: `GET /api/tasks/{id}/app-logs/stream?access_token=…` (SSE)
+- **구독**: API `GET /api/tasks/{id}/app-logs/stream?access_token=…` (SSE)
   - 권한은 등록자·관리자이고, 빌드 로그 스트림과 같은 인증 방식이다.
-  - 받는 상태는 **배포완료·배포중단됨**이다. 그 밖의 상태는 409다.
-  - 배포중단됨은 컨테이너가 없을 수 있다. docker가 "No such container"를 내면 `info` 이벤트 `컨테이너가 없어 로그를 볼 수 없습니다`를 보내고 끝낸다.
+  - 받는 상태는 **배포완료·배포중단됨**이다(§3 결정 대기 — 아래 질문).
+  - HTTP 상태 코드는 인증·권한(401/403/404)에만 쓴다. 나머지 거절과 종료는 200 응답 안의 `end` 이벤트로 보내고 닫는다. 브라우저 `EventSource`는 상태 코드와 본문을 읽지 못하기 때문이다. (Claude 판단)
+  - **`end{reason, message}`의 reason**
+    - `not-allowed-status`: 허용 상태가 아님
+    - `too-many`: 동시에 볼 수 있는 앱 로그 수를 넘었습니다
+    - `disabled`: docker 없음 또는 설정 꺼짐
+    - `no-container`: 컨테이너가 없어 로그를 볼 수 없습니다
+    - `docker-error`
+    - `time-limit`
+    - `container-stopped`
+- **끊김 전달 — 이 스트림만 Nitro 서버 라우트로 받는다** (Claude 판단)
+  - 화면은 `/api/**` 밖의 경로(예: `/stream/tasks/{id}/app-logs`)로 연결한다. Nitro 서버 라우트가 API로 fetch하되 `AbortController`를 걸고, 브라우저 요청이 닫히면(`req` 'close') upstream을 끊는다.
+  - `/api/**` 아래에 두면 routeRules 프록시가 서버 라우트보다 먼저 돌아 가려진다(nitropack `app.mjs`). 그래서 경로를 따로 둔다.
+  - cloudflared 설정은 바꾸지 않는다.
+  - 30분 상한과 동시 상한은 보조 안전장치로 남긴다.
+  - **완료 조건(라이브 확인)**: Cloudflare를 거쳐 카드를 접은 뒤 약 20초 안에 API PC와 10.1.1.75에서 그 docker·ssh가 사라진다.
 - **보는 사람마다 프로세스 하나** (Claude 판단)
   - 연결 하나에 docker 프로세스 하나를 둔다. 공유·버퍼링보다 단순하고, 보는 사람은 많아야 두세 명이다.
   - 상한(설정값)
@@ -74,9 +92,11 @@
   - 20초마다 SSE 주석 핑을 보낸다(Cloudflare 유휴 끊김 방지).
 - **줄 처리**
   - 한 줄은 4000자까지만 보내고, 넘으면 `…(잘림)`을 붙인다.
-  - 비밀 값 가리기
-    - 그 작업의 `envVars` 중 `secret=true`이고 길이가 4자 이상인 값을 `••••`로 바꾼다. 짧은 값은 흔한 문자열과 겹쳐 오탐이 많다. (Claude 판단)
-    - 토큰류도 `GitRemotes.mask`로 함께 가린다.
+  - 비밀 값 가리기 (Claude 판단, 아래 순서로 적용)
+    1. 그 작업의 `envVars` 중 `secret=true`이고 4자 이상인 값을 `••••`로 바꾼다. 짧은 값은 흔한 문자열과 겹쳐 오탐이 많다.
+    2. API 프로세스 자신의 `StackSecretEnv.NAMES` 값 중 비어 있지 않은 것도 가린다. 배포 앱이 스택과 같은 DB 비밀번호를 비밀 표시 없이 받았을 때를 막는다.
+    3. URL 안의 자격증명(`GitRemotes.mask`, `://user:secret@` 형태)을 가린다.
+    4. 단독 토큰(`ghp_`·`github_pat_`·`glpat-`·`sk-ant-` 등)을 가린다. 이 패턴은 지금 워커 `CloseNoteWriter.BARE_TOKENS`에만 있으므로 API·워커 공용 유틸로 옮기고, `CloseNoteWriter`도 그것을 쓰게 한다.
 - **빌드 로그 스트림 보강**: 기존 `DeployLogStreamService`의 SSE에도 같은 20초 핑을 넣는다. (Claude 판단)
 - **설정**: `app.app-log.*`. `enabled` 기본 true, `tail-lines` 500, 위 상한들.
 
@@ -100,10 +120,13 @@
   - 화면 지우기
   - 복사(지금 보이는 줄)
   - 내려받기(`task-{id}-app-{시각}.log`, 보이는 줄)
-- **재연결**
-  - 오류나 `end(time-limit)`이면 3초 뒤 다시 연결한다.
-  - 다시 연결하면 서버가 tail 500부터 다시 보낸다. 화면은 마지막으로 받은 `ts` 이하의 줄을 버려 중복을 줄인다. (Claude 판단)
-- **모바일 빌드 로그**: `TaskDetailMobile.vue`에 배포중일 때 빌드 로그 아코디언을 더한다. 기존 `/logs/stream`을 그대로 쓴다.
+- **재연결** (Claude 판단)
+  - `end(time-limit)`: 탭이 보일 때(`document.visibilityState === 'visible'`)만 다시 연결한다. 탭이 숨겨진 채 끝났으면 닫아 두었다가, 다시 보이면(`visibilitychange`) 연결한다. 잊고 열어 둔 탭이 docker·ssh를 끝없이 붙잡지 않게 하려는 것이다.
+  - `end(container-stopped)`: 작업이 아직 허용 상태면 몇 초 뒤 한두 번만 다시 연결한다. 컨테이너는 `--restart unless-stopped`라(`LocalDockerTarget.java:214`), 앱이 기동하다 죽기를 반복할 수 있다. docker logs는 재시작 전 로그도 주므로 tail에 기동 오류가 남는다.
+  - 그 밖의 `end`: 멈추고 사유와 "다시 연결" 버튼을 보여 준다.
+  - 이벤트 없이 끊긴 `onerror`: 지수 백오프로 몇 번까지만 재시도한 뒤 멈춘다.
+  - 다시 연결하면 서버가 tail 500부터 다시 보낸다. 화면은 마지막으로 받은 `ts` 이하의 줄을 버려 중복을 줄인다.
+- **모바일 빌드 로그**: 연결 구조는 그대로 둔다. 부모 `[id].vue`가 이미 연 빌드 로그(`liveLog`)를 prop으로 `TaskDetailMobile.vue`에 넘기고, 아코디언(`v-if` 게이트)으로 그린다. 표시 상태는 데스크톱과 같은 배포중·배포중지중이다. (Claude 판단)
 - **스타일 규칙**: Quasar 반응형 이름을 클래스로 쓰지 않는다. 다이얼로그는 쓰지 않는다(카드 안 스크롤 영역).
 - **하이드레이션 스모크**: 새 API가 SSE라 목이 필요 없을 수 있다. 빠진 API 목록에 뜨면 넣는다.
 

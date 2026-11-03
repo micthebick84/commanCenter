@@ -19,7 +19,7 @@
 
 - **타입 개념이 없다.** 엔티티·DTO·화면·프롬프트 어디에도 없다. 등록 바디는 `TaskCreateRequest`(repoCatalogId, githubBranch, title, description, refRepos, sourceQuestionId)뿐이다.
 - **인터뷰 시작 문구가 하나로 고정돼 있다.** "I want to add a feature…"(`netismaker-interview-service/src/runner/interviewRunner.ts:160` 부근)로 시작하고, 버그 픽스도 새 기능처럼 설계한다.
-- **커밋·PR 제목이 하나로 고정돼 있다.** 커밋 `"feat: " + title`(`WorkerMainLoop.java:437`), PR 제목도 같은 형태(`:453-455`)다. 브랜치는 `{prefix}task-{id}-{slug}[-rN]`이고 prefix는 전역 `netismaker/`다(`WorktreeService.java:123-132`, `application-worker.yml:85`).
+- **커밋 앞머리가 하나로 고정돼 있다.** 커밋은 `"feat: " + title`(`WorkerMainLoop.java:437`)이다. PR 제목은 앞머리 없이 제목 그대로다(`:453-455` → GitHub `--title title`(`GitHubPrCreator.java:86`), GitLab `"Draft: " + title`(`GitLabMrCreator.java:55`)). 브랜치는 `{prefix}task-{id}-{slug}[-rN]`이고 prefix는 전역 `netismaker/`다(`WorktreeService.java:123-132`, `application-worker.yml:85`).
 - **DB 연결은 모든 단계에서 읽기 전용이다.** 막는 장치가 세 겹이다.
   1. SQL 검사: `SqlReadOnlyChecker.java:22-39`, TS `sqlReadOnly.ts`
   2. READ ONLY 트랜잭션과 항상 ROLLBACK: `JdbcReadOnlyQueryExecutor.java:48-55,77-86`
@@ -69,7 +69,10 @@
 | `FEATURE_CHANGE` | 기능 수정 | `feat` |
 | `BUG_FIX` | 버그 픽스 | `fix` |
 | `DB_WORK` | DB 작업 | `db` |
-| (null) | 타입 없음 | `feat` (지금과 같음) |
+| (null) | 타입 없음 | 지금과 같음 — 커밋만 `feat`, PR 제목은 앞머리 없음 |
+
+- PR 제목에 앞머리를 붙이는 것은 새 동작이다. 타입이 있으면 `<앞머리>: 제목`, GitLab은 `Draft: <앞머리>: 제목`이다. (Claude 판단 — 형식)
+- PR #122 수정 회차의 커밋은 타입과 무관하게 #122대로 `fix: 수정 N회차 — 제목`을 유지한다. 회차는 PR을 새로 만들지 않으므로 PR 제목에는 영향이 없다. (Claude 판단)
 
 ### 4.2 저장·입력
 
@@ -103,7 +106,7 @@
   - **기능 수정**: 지금 어떻게 동작하는지(코드를 읽어 확인), 무엇을 어떻게 바꿀지, 바꾸면 안 되는 것부터 묻는다.
   - **버그 픽스**: 어느 화면에서, 무엇을 했을 때, 어떤 오류가 뜨는지부터 묻는다. 첨부(캡처·로그)가 있으면 먼저 본다. 읽기 도구와 DB 읽기로 원인을 좁혀 본다. 계획은 "재현 → 원인 → 수정 → 같은 오류가 다시 안 나는지 확인(가능하면 회귀 테스트)" 순서로 쓴다.
   - **DB 작업**: 어떤 테이블·데이터를 어떻게 바꿀지 묻는다. 계획에는 실행할 SQL을 순서대로 적고, 각 SQL이 §6.2의 어느 분류(바로 실행 / 승인 대기)에 해당하는지 표시한다.
-- 모든 타입의 계획에 "DB 변경이 필요하면 구현 단계에서 개발 DB에 직접 적용된다(§6.2 규칙)"는 사실을 알려, 계획에 DB 변경 단계를 넣게 한다. (Claude 판단)
+- 구현 때 쓰기 가능한 연결이 있을 때만 "DB 변경이 필요하면 구현 단계에서 개발 DB에 직접 적용된다(§6.2 규칙)"고 알려, 계획에 DB 변경 단계를 넣게 한다. 쓰기 가능 여부는 claim의 `writableDbConnections`(optional, 연결 이름 목록)로 받는다. 이 값은 §6.1 조건 1·3·4를 claim 시점에 계산한 것이다. 목록이 비면 지금처럼 읽기 전용을 전제로 둔다. (Claude 판단)
 - 인터뷰 단계의 DB는 지금처럼 읽기 전용이다. 인터뷰 서비스의 DB 코드(`dbMcp.ts`·`db/adapters.ts`·`sqlReadOnly.ts`)는 바꾸지 않는다.
 
 ### 5.2 구현 (워커)
@@ -116,7 +119,11 @@
 - DB 쓰기 안내(§6.7)는 타입과 무관하게, 쓰기 가능한 연결이 하나라도 있으면 들어간다.
 - 커밋 메시지와 PR 제목 앞머리를 §4.1 표대로 바꾼다(`WorkerMainLoop.java:437,453-455`).
 - **브랜치 이름은 바꾸지 않는다** (`netismaker/task-…` 유지). 바꾸면 브랜치 정리(`WorktreeService.java:493-501`, prefix 기준)와 늦은 보고 구분이 흔들린다. (Claude 판단)
-- 리뷰·SDD 등 구현 방식, 구현 재시도, PR #122의 수정 요청(같은 브랜치 이어 고치기)에도 같은 규칙을 쓴다.
+- 구현 방식(직접·리뷰·SDD)과 무관하게 같은 규칙을 쓴다.
+- **이전 시도가 있는 경우**: 구현 재시도(새 `-rN` 브랜치), 재기동 재큐, PR #122 수정 회차가 해당한다.
+  - 워커가 claude를 돌리기 전에 `GET /worker/tasks/{id}/db-changes`로 이전 시도·회차의 쓰기 기록을 받는다. 그리고 "이미 적용된 SQL" 절을 넣는다. 지시는 "공용 개발 DB에 이미 반영돼 있으니 다시 실행하지 말고, `describe_table`·`query`로 지금 상태를 확인한 뒤 남은 것만 적용하라"이다.
+  - 조회가 실패하면 쓰기 연결이 있는 작업은 claude를 돌리지 않고 구현실패(사유 `DB 변경 기록 조회 실패`, 재시도 가능)로 끝낸다. 같은 SQL이 두 번 실행되는 것을 막기 위해서다. (Claude 판단)
+  - 수정 회차의 프롬프트는 #122가 코드(`FixRoundPrompts`)로 만든다. 그래서 타입 절은 넣지 않고, DB 절(§6.7)과 "이미 적용된 SQL" 절만 넣는다. (Claude 판단)
 
 ## 6. 구현 단계 개발 DB 쓰기
 
@@ -125,7 +132,11 @@
 1. 전역 스위치 `DB_WRITE_ENABLED=true`(public.env, 기본 false). 배포한 뒤 켠다. (Claude 판단)
 2. 토큰 단계가 **구현**이다. `task_db_mcp_token.stage`가 IMPLEMENTING인 토큰이다. 디자인 토큰은 읽기만 한다.
 3. 그 작업이 승인 때 고른 연결(`task.db_connection_ids`)이다.
-4. 연결에 **쓰기 허용**이 켜져 있다. `db_connection.allow_write`이고, 관리자만 켜고 끌 수 있다.
+4. 연결에 **쓰기 허용**이 켜져 있다.
+   - `db_connection.allow_write`이고, **레포 공용(REPO) 연결에만** 둔다. 관리자만 관리 화면(`DbConnectionAdminDialog.vue`)에서 켜고 끌 수 있다.
+   - 개인(USER) 연결은 늘 false다. 관리자가 남의 개인 연결을 볼 수 없고(`DbConnectionService.java:206-213`), 소유자가 접속 대상을 언제든 바꿀 수 있기 때문이다. 일반 등록·수정 바디로는 이 값을 바꿀 수 없다. 쓰기를 판정할 때 `scope=REPO`를 다시 확인한다. (Claude 판단)
+   - 쓰기 허용 연결의 접속 대상(db_type·host·port·database_name·username)을 바꾸면, 같은 트랜잭션에서 `allow_write`를 끄고 그 연결의 소유 기록(§6.3)을 지운다. 화면에는 "접속 대상이 바뀌어 쓰기 허용을 껐습니다"를 띄운다. 다른 DB(운영 DB 포함)로 쓰기가 새는 것과, 옛 소유 기록이 새 DB의 같은 이름 테이블에 적용되는 것을 막는다. (Claude 판단)
+   - 연결 계정에 실제 쓰기 권한이 있어야 한다. 읽기 전용 계정이면 모든 `execute`가 `FAILED`가 된다(§9 5단계에서 확인).
 5. 작업을 claim한 워커가 쓰기 지원을 알렸다(`supports=dbWrite`, 기존 supports 가드 `WorkerController.java:103-110`와 같은 방식). 옛 워커는 실행한 SQL을 PR 스크립트로 남기지 못한다(§6.6). 그래서 옛 워커에는 쓰기 도구를 주지 않는다. (Claude 판단)
 
 조건을 만족하면 그 연결의 MCP 도구 목록에 `execute`가 추가된다. 도구 이름은 `mcp__db-<id>__execute`이며 기존 `--allowedTools mcp__db-<id>` 와일드카드(`WorkerMcpSupport.java:178-184`)가 그대로 덮는다. 조건이 하나라도 거짓이면 도구 목록에 없다. 직접 호출해도 서버가 거부한다.
@@ -141,18 +152,22 @@
 | 분류 | 문장 |
 |---|---|
 | **바로 실행** | `CREATE TABLE`(새 테이블, 소유 기록 남김) · `CREATE INDEX` · `CREATE SEQUENCE` · `CREATE VIEW`(새 뷰) · `COMMENT ON` · 남의 테이블에 `ALTER TABLE … ADD COLUMN`(NULL 허용이거나 DEFAULT가 있을 때만) · `INSERT` · `UPDATE`/`DELETE`(WHERE 있음, 영향 행 상한 이내) · **그 작업의 테이블에는 위 규칙과 무관하게 DROP·TRUNCATE·ALTER 전부와 조건 없는 UPDATE/DELETE** |
-| **승인 대기** (실행하지 않고 기록, 관리자가 나중에 실행) | 남의 테이블에 `ALTER TABLE … DROP COLUMN` · 컬럼 이름 변경(`RENAME COLUMN`) · 컬럼 타입·NULL 여부 변경(`ALTER COLUMN … TYPE`/`MODIFY`/`SET NOT NULL`) · NOT NULL이면서 DEFAULT 없는 `ADD COLUMN` · 제약 추가(`ADD CONSTRAINT` UNIQUE·FK·CHECK) · 남의 테이블에 대한 `CREATE TRIGGER` · `CREATE`/`REPLACE` PROCEDURE·FUNCTION · 남의 뷰 `CREATE OR REPLACE VIEW` |
+| **승인 대기** (실행하지 않고 기록, 관리자가 나중에 실행) | 남의 테이블에 `ALTER TABLE … DROP COLUMN` · 컬럼 이름 변경(`RENAME COLUMN`) · 컬럼 타입·NULL 여부 변경(`ALTER COLUMN … TYPE`/`MODIFY`/`SET NOT NULL`) · NOT NULL이면서 DEFAULT 없는 `ADD COLUMN` · 제약 추가(`ADD CONSTRAINT` UNIQUE·FK·CHECK, `ADD COLUMN`에 인라인으로 붙은 UNIQUE·REFERENCES·CHECK 포함) · 남의 테이블에 `CREATE UNIQUE INDEX` · 남의 테이블에 대한 `CREATE TRIGGER` · `CREATE`/`REPLACE` PROCEDURE·FUNCTION · 남의 뷰 `CREATE OR REPLACE VIEW` |
 | **거부** | 남의 테이블에 `DROP TABLE`·`TRUNCATE`·테이블 이름 변경 · 남의 테이블에 WHERE 없는 `UPDATE`/`DELETE` · 영향 행 상한 초과 · `GRANT`/`REVOKE` · 사용자·역할(`CREATE/ALTER/DROP USER/ROLE`) · `DROP DATABASE/SCHEMA` · `ALTER SYSTEM`·세션·권한 변경 · 여러 문장 · 분석 불가 |
 
-- 영향 행 상한: 한 문장 1000행이다. DML은 트랜잭션 안에서 실행한다. 영향 행 수가 상한을 넘으면 ROLLBACK하고 거부한다. (Claude 판단)
-- "NOT NULL + DEFAULT 없는 ADD COLUMN"과 "제약 추가"가 승인 대기인 이유가 있다. 다른 사람 코드의 INSERT가 그 컬럼이나 제약 때문에 깨지기 때문이다. 사용자가 짚은 "다른 사람 화면을 깨뜨리지 않기" 기준을 Claude가 넓힌 것이다. (Claude 판단)
+- 영향 행 상한은 남의 테이블에만 건다. UPDATE/DELETE는 한 문장 1000행, INSERT(INSERT…SELECT 포함)는 한 문장 10000행이고, 둘 다 설정값이다. 그 작업의 테이블에는 상한이 없다. DML은 트랜잭션 안에서 실행하고, 영향 행 수가 상한을 넘으면 ROLLBACK한 뒤 거부한다. (Claude 판단)
+- "NOT NULL + DEFAULT 없는 ADD COLUMN", "제약 추가", "유니크 인덱스"가 승인 대기인 이유가 있다. 다른 사람 코드의 INSERT가 그 컬럼이나 제약 때문에 깨지기 때문이다. 사용자가 짚은 "다른 사람 화면을 깨뜨리지 않기" 기준을 Claude가 넓힌 것이다. (Claude 판단)
 - 거부·승인 대기 응답에는 이유와 대안을 담아 세션이 다음 행동을 고를 수 있게 한다. 예: "남의 테이블 컬럼 삭제는 승인 대기로 기록됨 — 옛 컬럼은 두고 새 컬럼을 쓰세요".
 - 방언: PostgreSQL · MySQL · MariaDB · Oracle(`db_connection.db_type`). 분석기는 빌더가 고른다(§10).
 
 ### 6.3 소유 테이블 기록
 
 - 새 테이블 `com.task_db_object`(connection_id, schema_name, object_name, object_type, task_id, created_at, UNIQUE(connection_id, schema_name, object_name, object_type))를 둔다.
-- `CREATE TABLE`/`CREATE VIEW`/`CREATE SEQUENCE`가 성공하면 이 작업 id로 기록한다.
+- `CREATE TABLE`/`CREATE VIEW`/`CREATE SEQUENCE`로 **새로 생긴 경우에만** 이 작업 id로 기록한다.
+  - 실행 전에 같은 연결의 카탈로그에서 대상이 없는지 확인한다.
+  - `IF NOT EXISTS` 문장이 이미 있는 대상 때문에 아무 일도 하지 않았으면 기록하지 않고, 결과에 "이미 있음"을 돌려준다. 이렇게 하지 않으면 레거시 테이블에 `CREATE TABLE IF NOT EXISTS`만 보내도 소유가 생겨 DROP이 열린다.
+  - 확인이 애매하면 거부한다. (Claude 판단)
+- **의존 작업이 있으면 소유 예외를 끈다.** 다른 열린 작업이 이 작업의 head 브랜치를 기준 브랜치로 쓰고 있으면(`TaskRepository.findActiveByBaseBranch`, 작업 25 ← 19 사례), 이 작업의 테이블에도 남의 테이블 규칙을 적용한다. 그 작업 코드가 이 테이블을 쓰기 때문이다. 승인 대기·거부 응답에는 그 이유를 담는다. (Claude 판단)
 - 소유 판단은 이 기록만 본다. Symphony 이전에 사람이 만든 테이블은 모두 남의 테이블이다.
 - 그 작업이 테이블을 DROP하면 기록을 지운다.
 - 작업이 종료·취소되어도 기록은 남는다. 그래서 같은 작업의 재시도나 수정 요청은 계속 소유자이고, 다른 작업에는 남의 테이블이다. (Claude 판단)
@@ -173,7 +188,7 @@
 - 새 테이블 `com.task_db_write_log`의 칸:
   - id, task_id, connection_id, attempt(구현 시도 번호)
   - sql_text(전문)
-  - classification(`EXECUTED`·`DEFERRED`·`REJECTED`·`FAILED`), reason, affected_rows, error
+  - classification(`EXECUTED`·`DEFERRED`·`DISMISSED`·`REJECTED`·`FAILED`), reason, affected_rows, error
   - created_at, executed_at, executed_by(세션이면 NULL, 관리자 실행이면 user_id)
 - 거부된 문장도 남긴다. 세션이 무엇을 시도했는지 보기 위해서다.
 - **작업 상세**(데스크톱·모바일)에 "DB 변경" 절을 둔다.
@@ -183,6 +198,10 @@
     - 실행 전 "PR 병합 뒤 실행을 권장합니다 — 같은 DB를 쓰는 다른 화면이 아직 옛 컬럼을 쓸 수 있습니다"를 보여 준다.
     - 병합 여부로 막지는 않는다. (Claude 판단)
   - 관리자 실행은 API가 같은 연결로 한다. 결과는 기록 행을 `EXECUTED`로 바꾸고 이력에 남긴다. 이 경로는 분류 규칙 중 "승인 대기 → 실행"만 허용한다. 거부 분류는 관리자도 실행할 수 없다.
+  - 승인 대기 항목에는 관리자에게 **실행 안 함** 버튼도 있다. 누르면 `DISMISSED`가 되고 이력에 남으며, 스크립트 파일(§6.6)의 "병합 뒤 실행" 절에서 빠진다. 재시도나 회차가 같은 문장을 다시 남겼을 때, 또는 취소된 작업의 것을 정리하는 데 쓴다. (Claude 판단)
+  - 승인 대기가 남아 있는 작업을 관리자가 종료 승인할 때, 확인창에 "승인 대기 SQL N건 — 병합 뒤 실행 필요" 한 줄을 띄운다. 목록 배지나 필터는 두지 않는다. (Claude 판단)
+- **승인 다이얼로그**: 지금처럼 레포 공용 연결을 미리 고르는 동작(`ApproveDialog.vue:127-131`)은 그대로 둔다. 연결 칩에 "쓰기" 표시를 달고, 고정 캡션 "읽기 전용으로 조회합니다"(`:305`)를 선택 상태에 맞게 바꾼다. 작업 단위로 쓰기를 끄는 칸은 두지 않는다. (Claude 판단)
+- **쓰기를 못 쓰는 DB 작업**: 타입이 DB 작업인데 쓰기 허용 연결을 고르지 않았으면, 승인 다이얼로그에 "구현 때 개발 DB에 바로 적용할 수 없습니다 — SQL은 스크립트 파일로만 남습니다"를 경고로 띄운다. 승인은 막지 않는다. (Claude 판단)
 - PR 본문에 "DB 변경" 절을 넣는다. 실행한 SQL 수, 승인 대기 SQL 목록, 스크립트 파일 경로를 적는다.
 - 질문 세션의 DB 연결 화면 안내 문구(`DbConnectionDialog.vue:158`)를 고친다. "쓰기 허용을 켠 연결은 구현 단계에서 쓰기가 가능하다"는 내용이다. 나머지 "읽기 전용" 고정 문구도 쓰기 허용 연결이면 상황에 맞게 바꾼다.
 
@@ -197,6 +216,16 @@
 - **"변경 없음 = 실패" 해소**: SQL이 하나라도 실행됐거나 승인 대기로 남았으면 이 파일이 생기므로 커밋할 것이 있다. 그래서 DB만 바꾼 작업도 PR까지 정상 진행된다.
   - SQL도 파일 변경도 없으면 지금처럼 구현실패다. 아무것도 안 한 구현은 실패가 맞다.
 - 재시도(새 브랜치)와 수정 요청(같은 브랜치)이 있을 때는 파일을 **누적 기록 전체**로 다시 만든다.
+- **실패 경로에서도 만든다.** claude 시간 초과나 비정상 종료로 남은 변경을 `wip:` 커밋으로 push하는 경로(`WorkerMainLoop.java:403-419` → `GitOpsService.preservePartialWork`)가 해당한다.
+  - 특히 PR #122 수정 회차에서는 wip이 PR 브랜치에 그대로 올라가고, "수정 중단" 뒤 종료 때 그대로 병합된다.
+  - 그래서 이 경로에서도 커밋 전에 같은 파일 생성 로직을 돌린다.
+  - 기록 조회가 실패하면 wip은 그대로 올리고, 실패 사유 끝에 "SQL 스크립트 파일 미반영"을 붙인다. (Claude 판단)
+- **성공 판정**: 재시도 새 브랜치는 base에서 시작한다. 그래서 이전 시도가 SQL을 실행했으면 이번 시도가 아무것도 안 해도 누적 파일 때문에 커밋할 것이 생긴다.
+  - DB 작업은 누적 파일만으로도 성공으로 본다. 1회차에 SQL을 다 적용하고 PR 생성에서 실패한 경우, 재시도가 할 일은 파일뿐이기 때문이다.
+  - 다른 타입은 이번 시도의 코드 변경이나 이번 시도(attempt) 번호의 쓰기 기록이 있어야 성공이다. 없으면 지금처럼 "변경 없음"으로 구현실패다. (Claude 판단)
+- **쓰기를 못 쓸 때**: 쓰기 도구가 없는 구현이 해당한다(연결 미선택, 쓰기 허용 없음, 스위치 꺼짐, 옛 워커).
+  - 이때 DB 작업 지시는 "SQL을 실행하지 말고 같은 경로 파일(`db/symphony/task-<id>.sql`)에 직접 적어라"로 바뀐다. PR 본문에는 "개발 DB 미적용 — 수동 적용 필요"를 적는다.
+  - 그 작업의 쓰기 기록이 하나도 없으면 워커는 세션이 쓴 파일을 덮어쓰지 않는다. (Claude 판단)
 
 ### 6.7 구현 프롬프트의 DB 절
 
@@ -255,7 +284,8 @@ ALTER TABLE com.repo_catalog ADD COLUMN db_script_dir VARCHAR(255) NULL;
 3. **인터뷰 서비스**: 타입별 kickoff를 넣는다. 순서는 자유다. 값이 없으면 지금 문구를 쓴다.
 4. **프론트**: `.output`을 재빌드한다.
 5. **쓰기 켜기**
-   - 관리자가 개발 DB 연결에 "쓰기 허용"을 켠다.
+   - 쓰기 허용을 켤 연결의 계정에 실제 쓰기 권한(CREATE·ALTER·INSERT·UPDATE·DELETE)이 있는지 확인한다. 읽기 전용 계정이면 계정을 바꾼다. 질문·인터뷰 세션도 같은 계정을 쓰지만, 그 경로는 코드 쪽 READ ONLY로 지킨다(§12).
+   - 관리자가 개발 DB 연결에 "쓰기 허용"을 켠다. 첫 관찰은 연결 하나만 켜서 한다. 어느 연결로 할지와 시험 작업으로 할지 실제 작업으로 할지는 켤 때 사용자와 정한다.
    - public.env에 `DB_WRITE_ENABLED=true`를 넣고 API만 단건 재기동한다(`stop-public.ps1 -Only api` → 작업 스케줄러).
    - 첫 작업은 관리자가 지켜본다.
 

@@ -162,7 +162,7 @@ public class WorkerHttpClient {
                 seq, com.hamonsoft.netismaker.git.GitRemotes.mask(content));
     }
 
-    /** 배포 런타임 정합 대상(배포완료+배포중단됨) 목록. 실패 시 예외 전파 — 호출부가 스킵 판단. */
+    /** 배포 런타임 정합·GC 보호 대상 목록(배포완료·배포중단됨 + 진행 중·종료 단계·수정 회차 상태). 실패 시 예외 전파 — 호출부가 스킵 판단. */
     public List<DeployedTaskSummary> deployedTasks() {
         List<DeployedTaskSummary> body = http.get().uri("/worker/deployed-tasks")
                 .retrieve()

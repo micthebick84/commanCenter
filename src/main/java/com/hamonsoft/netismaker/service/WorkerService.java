@@ -1050,7 +1050,12 @@ public class WorkerService {
         deployLogStream.ingestChunk(taskId, req.seq() == null ? 0 : req.seq(), req.content());
     }
 
-    /** 배포 런타임 정합 대상(배포완료 + 배포중단됨) 목록. 워커 DeployReconcileJob이 주기 조회. */
+    /**
+     * 배포 런타임 정합·GC 보호 대상 목록. 워커 DeployReconcileJob·DockerGcJob이 주기 조회.
+     * 배포완료·배포중단됨뿐 아니라 배포 계열 진행 중·종료 단계·수정승인대기와 열린 수정 회차(active_fix_request_id)가 있는 작업도
+     * 담는다({@code TaskRepository.findDeployReconcilable}) — 대사는 앞 둘만 하고 나머지는 GC 보호용이다.
+     * 응답에 수정승인대기가 나가므로 이를 모르는 구 워커 jar는 역직렬화에 실패해 그 주기를 건너뛴다(컨테이너는 안전).
+     */
     @Transactional(readOnly = true)
     public List<DeployedTaskSummary> listDeployReconcilable() {
         return taskRepo.findDeployReconcilable().stream()

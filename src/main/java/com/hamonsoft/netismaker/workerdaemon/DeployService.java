@@ -26,6 +26,7 @@ import java.util.StringJoiner;
  *   1.5) 카탈로그에 미리 빌드가 켜졌으면(task.prebuild) 워커에서 빌드해 산출물을 .netis-prebuild/로 (스펙 2026-10-28 §5.2)
  *   2) Dockerfile 있으면 사용, 없으면 claude로 생성(미리 빌드면 산출물 안내 포함 + .dockerignore를 산출물만 보내도록 씀)
  *      — 생성했으면 FROM 이미지가 레지스트리에 있는지 확인해 없으면 한 번 다시 생성, 그래도 없으면 배포실패
+ *      — 생성했으면 끝에 JVM 기본 로케일 ko_KR(JAVA_TOOL_OPTIONS)을 붙인다(Dockerfile이 정했으면 그대로)
  *   3) EXPOSE 포트 파싱
  *   4) DeployTarget.deploy 호출 (build + run)
  *
@@ -122,6 +123,14 @@ public class DeployService {
                         throw new DeployException("베이스 이미지가 레지스트리에 없음: " + String.join(", ", missing),
                                 log.toString());
                     }
+                }
+                // 생성(재생성 포함)이 끝난 뒤에 붙인다 — 다시 만든 Dockerfile에도 들어가게.
+                var localized = DockerfileSupport.appendJavaLocale(Files.readString(dockerfile));
+                if (localized.isPresent()) {
+                    Files.writeString(dockerfile, localized.get());
+                    log.append("[로케일] JAVA_TOOL_OPTIONS=-Duser.language=ko -Duser.country=KR 추가\n");
+                } else {
+                    log.append("[로케일] Dockerfile이 이미 정함 — 그대로 둠\n");
                 }
                 if (staged != null) {
                     // 생성이 끝난 뒤에 쓴다 — 생성 claude가 만든 .dockerignore보다 워커 것이 이긴다.

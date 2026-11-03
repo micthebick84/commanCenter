@@ -32,6 +32,43 @@ class DockerfileSupportTest {
     }
 
     @Test
+    void java_locale_is_appended_at_the_end() {
+        String dockerfile = "FROM tomcat:7-jre8\nCOPY app.war /usr/local/tomcat/webapps/ROOT.war\nEXPOSE 8080\n";
+
+        assertThat(DockerfileSupport.appendJavaLocale(dockerfile))
+                .hasValue(dockerfile + DockerfileSupport.JAVA_LOCALE_BLOCK);
+        assertThat(DockerfileSupport.JAVA_LOCALE_BLOCK)
+                .endsWith("ENV JAVA_TOOL_OPTIONS=\"-Duser.language=ko -Duser.country=KR\"\n");
+    }
+
+    @Test
+    void java_locale_starts_on_its_own_line_when_last_line_has_no_newline() {
+        assertThat(DockerfileSupport.appendJavaLocale("FROM x\nCMD [\"run\"]"))
+                .hasValue("FROM x\nCMD [\"run\"]\n" + DockerfileSupport.JAVA_LOCALE_BLOCK);
+    }
+
+    @Test
+    void java_locale_is_left_alone_when_the_dockerfile_already_sets_it() {
+        assertThat(DockerfileSupport.appendJavaLocale(
+                "FROM x\nENV JAVA_TOOL_OPTIONS=-Xss1m\n")).isEmpty();
+        assertThat(DockerfileSupport.appendJavaLocale(
+                "FROM x\nENV JAVA_OPTS=\"-Xmx2g -Duser.language=en\"\n")).isEmpty();
+    }
+
+    @Test
+    void java_locale_ignores_mentions_in_comments() {
+        String dockerfile = "FROM x\n# JAVA_TOOL_OPTIONS -Duser.language 는 워커가 정한다\n";
+
+        assertThat(DockerfileSupport.appendJavaLocale(dockerfile))
+                .hasValue(dockerfile + DockerfileSupport.JAVA_LOCALE_BLOCK);
+    }
+
+    @Test
+    void java_locale_of_null_dockerfile() {
+        assertThat(DockerfileSupport.appendJavaLocale(null)).isEmpty();
+    }
+
+    @Test
     void base_images_of_multistage_build() {
         String dockerfile = """
                 FROM maven:3.6.3-jdk-8 AS build

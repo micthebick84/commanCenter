@@ -54,12 +54,34 @@ public record WorkerResultRequest(
         Integer implementationAttempt,
         // 구현 성공 시 참조 repo 변경 경고 (스펙 2026-10-24 §4.8 — 원소마다 masked()가 가리고 500자로 자른다.
         // null이면 경고 없음·구버전 워커·다른 단계)
-        List<String> refWarnings
+        List<String> refWarnings,
+        // 수정 회차 구현 결과(PR생성·구현실패)의 회차 안 시도 번호 = claim의 implementation.fix.attempt (스펙 2026-11-03 §7 —
+        // null이면 회차 밖 구현·구버전 워커·다른 단계). 같은 회차 안 이전 시도의 늦은 보고를 가려낸다.
+        Integer fixAttempt
 ) {
     /** 참조 repo 변경 경고 한 줄의 글자 수 상한(UTF-16 단위) — masked()가 가린 뒤 자른다. */
     public static final int REF_WARNING_MAX_LENGTH = 500;
 
-    /** 참조 경고 도입 전 24개 인자 정규 생성자 — 기존 호출부·테스트 호환. Jackson은 정규 생성자(25개)로 읽는다. */
+    /** 회차 시도 번호 도입 전 25개 인자 생성자 — 워커 성공 보고·기존 테스트 호환. Jackson은 정규 생성자(26개)로 읽는다. */
+    public WorkerResultRequest(String workerId, TaskStatus status,
+                               String markdownResult, String subtasksJson, String claudeLog,
+                               Long durationMs, String failureReason,
+                               String prUrl, Integer prNumber, String headBranch, String headSha,
+                               String implementationLog,
+                               String deployUrl, String deployContainerId, Integer deployHostPort,
+                               String deployImage, String deployLog,
+                               String designMarkdown, String mockupFilesJson, String designProjectId,
+                               String designUrl,
+                               UsageReport usage, List<EnvTemplateItem> envTemplate, Integer implementationAttempt,
+                               List<String> refWarnings) {
+        this(workerId, status, markdownResult, subtasksJson, claudeLog, durationMs, failureReason,
+                prUrl, prNumber, headBranch, headSha, implementationLog,
+                deployUrl, deployContainerId, deployHostPort, deployImage, deployLog,
+                designMarkdown, mockupFilesJson, designProjectId, designUrl, usage, envTemplate,
+                implementationAttempt, refWarnings, null);
+    }
+
+    /** 참조 경고 도입 전 24개 인자 생성자 — 기존 호출부·테스트 호환. */
     public WorkerResultRequest(String workerId, TaskStatus status,
                                String markdownResult, String subtasksJson, String claudeLog,
                                Long durationMs, String failureReason,
@@ -100,7 +122,7 @@ public record WorkerResultRequest(
                 failureReason, prUrl, prNumber, headBranch, headSha, implementationLog,
                 deployUrl, deployContainerId, deployHostPort, deployImage, deployLog,
                 designMarkdown, mockupFilesJson, designProjectId, designUrl, usage, envTemplate, attempt,
-                refWarnings);
+                refWarnings, fixAttempt);
     }
 
     /** 참조 repo 변경 경고만 바꾼 사본. */
@@ -109,7 +131,16 @@ public record WorkerResultRequest(
                 failureReason, prUrl, prNumber, headBranch, headSha, implementationLog,
                 deployUrl, deployContainerId, deployHostPort, deployImage, deployLog,
                 designMarkdown, mockupFilesJson, designProjectId, designUrl, usage, envTemplate,
-                implementationAttempt, warnings);
+                implementationAttempt, warnings, fixAttempt);
+    }
+
+    /** 회차 안 시도 번호만 바꾼 사본 — 워커가 수정 회차 구현 결과(성공·실패 모두)를 보낼 때 붙인다. */
+    public WorkerResultRequest withFixAttempt(Integer attempt) {
+        return new WorkerResultRequest(workerId, status, markdownResult, subtasksJson, claudeLog, durationMs,
+                failureReason, prUrl, prNumber, headBranch, headSha, implementationLog,
+                deployUrl, deployContainerId, deployHostPort, deployImage, deployLog,
+                designMarkdown, mockupFilesJson, designProjectId, designUrl, usage, envTemplate,
+                implementationAttempt, refWarnings, attempt);
     }
 
     /**
@@ -148,7 +179,7 @@ public record WorkerResultRequest(
                 prUrl, prNumber, headBranch, headSha, m(implementationLog),
                 deployUrl, deployContainerId, deployHostPort, deployImage, m(deployLog),
                 m(designMarkdown), m(mockupFilesJson), designProjectId, designUrl,
-                usage, maskTemplate(envTemplate), implementationAttempt, maskWarnings(refWarnings));
+                usage, maskTemplate(envTemplate), implementationAttempt, maskWarnings(refWarnings), fixAttempt);
     }
 
     private static List<String> maskWarnings(List<String> warnings) {

@@ -510,4 +510,101 @@ class TaskFixServiceTest {
     void 요청_가능_상태는_배포완료_배포중단됨_배포실패() {
         assertThat(TaskFixService.REQUESTABLE).containsExactlyInAnyOrder(DEPLOYED, DEPLOY_LOST, DEPLOY_FAILED);
     }
+
+    // ── 수정 중단 (§7.1) ─────────────────────────────────
+
+    /** 열린 회차의 승인된 요청 #77 — 작업이 가리킨다. */
+    private TaskFixRequest openRound(Task t, int round) {
+        TaskFixRequest r = TaskFixRequest.pending(42L, "본문", DEPLOYED, OWNER);
+        ReflectionTestUtils.setField(r, "id", 77L);
+        r.setStatus(APPROVED);
+        r.setRound(round);
+        r.setImplementationMode(ImplementationMode.REVIEW);
+        t.setActiveFixRequestId(77L);
+        when(fixRepo.findById(77L)).thenReturn(Optional.of(r));
+        return r;
+    }
+
+    @Test
+    void 수정중단은_회차_구현실패에서만_PR생성으로() {
+        Task t = task(IMPLEMENTATION_FAILED);
+        t.setFailureReason("claude exit=1");
+        t.setWorkerId("w1");
+        t.setHeadSha("wip7777");   // 실패 보고가 남긴 브랜치 끝 — 그대로 둔다(이후 배포 기준)
+        TaskFixRequest r = openRound(t, 2);
+
+        Task out = svc.abort(42L, ADMIN);
+
+        assertThat(out.getStatus()).isEqualTo(PR_CREATED);
+        assertThat(out.getActiveFixRequestId()).isNull();
+        assertThat(out.getFailureReason()).isNull();
+        assertThat(out.getWorkerId()).isNull();
+        assertThat(out.getHeadBranch()).isEqualTo("netismaker/task-42-x");
+        assertThat(out.getHeadSha()).isEqualTo("wip7777");
+        assertThat(out.getPrUrl()).isEqualTo("https://github.com/owner/repo/pull/7");
+        assertThat(r.getOutcome()).isEqualTo(com.hamonsoft.netismaker.entity.FixOutcome.ABORTED);
+        assertThat(r.getClosedAt()).isNotNull();
+        assertThat(r.getStatus()).isEqualTo(APPROVED);   // 승인된 회차로 센다(실패한 회차)
+        TaskStatusHistory h = savedHistory();
+        assertThat(h.getFromStatus()).isEqualTo("구현실패");
+        assertThat(h.getToStatus()).isEqualTo("PR생성");
+        assertThat(h.getActorType()).isEqualTo("user");
+        assertThat(h.getActorId()).isEqualTo(ADMIN);
+        assertThat(h.getReason()).isEqualTo("수정 2회차 중단 → PR생성");
+    }
+
+    @Test
+    void 회차_없는_구현실패는_수정중단_409() {
+        Task t = task(IMPLEMENTATION_FAILED);
+
+        assertThatThrownBy(() -> svc.abort(42L, ADMIN))
+                .isInstanceOf(TaskException.class)
+                .satisfies(e -> assertThat(((TaskException) e).getStatus()).isEqualTo(HttpStatus.CONFLICT));
+        assertThat(t.getStatus()).isEqualTo(IMPLEMENTATION_FAILED);
+        verify(historyRepo, never()).save(any());
+    }
+
+    @Test
+    void 회차_구현실패가_아니면_수정중단_409() {
+        for (TaskStatus s : new TaskStatus[]{APPROVED_STATUS, IMPLEMENTING, DEPLOY_PENDING, DEPLOYING, DEPLOYED}) {
+            Task t = task(s);
+            TaskFixRequest r = openRound(t, 1);
+            assertThatThrownBy(() -> svc.abort(42L, ADMIN))
+                    .as(s.name())
+                    .isInstanceOf(TaskException.class)
+                    .satisfies(e -> assertThat(((TaskException) e).getStatus()).isEqualTo(HttpStatus.CONFLICT));
+            assertThat(t.getActiveFixRequestId()).isEqualTo(77L);
+            assertThat(r.getOutcome()).isNull();
+        }
+        verify(historyRepo, never()).save(any());
+    }
+
+    @Test
+    void 회차_기록을_못_찾으면_수정중단이_회차_표시만_지우고_PR생성으로() {
+        // claim이 깨진 회차를 구현실패로 치운 경우(WorkerService.failBrokenFixRound) — 재시도는 409라 이 길이 유일한 출구다.
+        // 그 구현은 시작도 안 했으므로 브랜치·head_sha는 회차 전 그대로다.
+        Task t = task(IMPLEMENTATION_FAILED);
+        t.setActiveFixRequestId(77L);
+        when(fixRepo.findById(77L)).thenReturn(Optional.empty());
+
+        Task out = svc.abort(42L, ADMIN);
+
+        assertThat(out.getStatus()).isEqualTo(PR_CREATED);
+        assertThat(out.getActiveFixRequestId()).isNull();
+        assertThat(savedHistory().getReason()).isEqualTo("수정 회차 기록을 찾을 수 없어(요청 #77) 회차 표시만 지움 — 수정 중단 → PR생성");
+        verify(fixRepo, never()).save(any());
+    }
+
+    @Test
+    void 승인되지_않은_요청을_가리키면_요청은_건드리지_않고_회차_표시만_지운다() {
+        Task t = task(IMPLEMENTATION_FAILED);
+        TaskFixRequest r = openRound(t, 1);
+        r.setStatus(FixRequestStatus.REJECTED);
+
+        svc.abort(42L, ADMIN);
+
+        assertThat(t.getActiveFixRequestId()).isNull();
+        assertThat(t.getStatus()).isEqualTo(PR_CREATED);
+        assertThat(r.getOutcome()).isNull();
+    }
 }

@@ -134,6 +134,20 @@ class WorkerServiceFixRoundClaimTest {
     }
 
     @Test
+    void 회차_방식이_비어_있으면_작업_방식이_아니라_리뷰로_본다() {
+        // 수정 회차는 직접·리뷰만 고른다 — 작업 방식(여기 SDD)으로 떨어지면 원래 플랜 전체를 다시 구현하게 된다(스펙 §6.2)
+        Task t = fixRoundTask(502L);
+        t.setImplementationMode(ImplementationMode.SDD);
+        when(fixRepo.findById(502L)).thenReturn(Optional.of(approved(502L, 1, null, 1, "수정")));
+
+        WorkerTaskResponse r = svc.claimNextTask("w1", ALL, null).orElseThrow();
+
+        assertThat(r.implementation().mode()).isEqualTo("REVIEW");
+        assertThat(r.implementation().timeoutMinutes()).isEqualTo(80);
+        assertThat(t.getImplementationTimeoutMinutes()).isEqualTo(80);
+    }
+
+    @Test
     void 첫_회차는_이전_본문이_빈_목록이다() {
         fixRoundTask(501L);
         when(fixRepo.findById(501L)).thenReturn(Optional.of(

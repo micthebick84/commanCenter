@@ -4,6 +4,7 @@ import com.hamonsoft.netismaker.entity.ImplementationMode;
 import com.hamonsoft.netismaker.entity.Task;
 import com.hamonsoft.netismaker.entity.TaskStatus;
 import com.hamonsoft.netismaker.entity.WorkerHeartbeat;
+import com.hamonsoft.netismaker.repository.TaskFixRequestRepository;
 import com.hamonsoft.netismaker.repository.TaskRepository;
 import com.hamonsoft.netismaker.repository.TaskStatusHistoryRepository;
 import com.hamonsoft.netismaker.repository.WorkerHeartbeatRepository;
@@ -36,8 +37,10 @@ class StaleTaskRecoveryJobTest {
         heartbeatRepo = mock(WorkerHeartbeatRepository.class);
         deployLogStream = mock(DeployLogStreamService.class);
         when(deployLogStream.consolidate(any())).thenReturn(java.util.Optional.empty());
-        job = new StaleTaskRecoveryJob(taskRepo, heartbeatRepo, new TaskRecovery(historyRepo, deployLogStream),
-                ImplementationModePolicy.defaults());
+        // 수정 회차 없는 작업만 다룬다 — 회차 경로는 StaleTaskRecoveryJobFixRoundTest
+        TaskFixRequestRepository fixRepo = mock(TaskFixRequestRepository.class);
+        job = new StaleTaskRecoveryJob(taskRepo, heartbeatRepo, new TaskRecovery(historyRepo, deployLogStream, fixRepo),
+                ImplementationModePolicy.defaults(), fixRepo);
         ReflectionTestUtils.setField(job, "analysisStaleThresholdMinutes", 5);
         ReflectionTestUtils.setField(job, "deployStaleThresholdMinutes", 15);
         ReflectionTestUtils.setField(job, "workerDeadThresholdSeconds", 60);

@@ -121,8 +121,20 @@ class TaskFixControllerTest {
     }
 
     @Test
+    void 수정_중단은_관리자를_넘기고_관리자_응답이다() {
+        task.setStatus(TaskStatus.PR_CREATED);
+        when(fixService.abort(5L, "admin")).thenReturn(task);
+
+        TaskResponse r = controller.abort(5L, admin);
+
+        assertThat(r.status()).isEqualTo(TaskStatus.PR_CREATED);
+        assertThat(r.envVars()).extracting(EnvVar::value).containsExactly("pw");
+        verify(fixService).abort(5L, "admin");
+    }
+
+    @Test
     void 승인과_반려는_관리자_전용이고_요청_철회_조회는_아니다() {
-        for (String name : new String[]{"approve", "reject"}) {
+        for (String name : new String[]{"approve", "reject", "abort"}) {
             Method m = method(name);
             assertThat(m.getAnnotation(PreAuthorize.class)).as(name).isNotNull();
             assertThat(m.getAnnotation(PreAuthorize.class).value()).isEqualTo("hasAuthority('ROLE_ADMIN')");

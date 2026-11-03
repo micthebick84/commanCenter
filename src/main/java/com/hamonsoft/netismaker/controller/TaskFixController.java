@@ -24,6 +24,7 @@ import java.util.List;
  *   POST /{id}/fix-requests/approve   ROLE_ADMIN (바디 implementationMode 선택)
  *   POST /{id}/fix-requests/reject    ROLE_ADMIN (바디 reason)
  *   POST /{id}/fix-requests/withdraw  등록자 본인 또는 관리자
+ *   POST /{id}/fix-requests/abort     ROLE_ADMIN — 수정 회차의 구현실패 → PR생성(회차 닫힘, §7.1)
  *   GET  /{id}/fix-requests           등록자 본인 또는 관리자 — 수정 요청 기록, 최신순
  */
 @RestController
@@ -69,6 +70,13 @@ public class TaskFixController {
         boolean isAdmin = AuthContext.isAdmin(auth);
         Task t = fixService.withdraw(id, AuthContext.requireUserId(auth), isAdmin);
         return view(t, isAdmin);
+    }
+
+    /** 수정 회차의 구현실패 → PR생성, 회차 닫힘 (스펙 §7.1). 바디 없음. */
+    @PostMapping("/{id}/fix-requests/abort")
+    @PreAuthorize("hasAuthority('ROLE_ADMIN')")
+    public TaskResponse abort(@PathVariable Long id, JwtAuthenticationToken auth) {
+        return view(fixService.abort(id, AuthContext.requireUserId(auth)), true);
     }
 
     /** ACL = 작업 조회와 같다(소유자 또는 관리자, 삭제된 작업 404) — TaskController.history와 같은 방식. */

@@ -327,6 +327,21 @@ public class Task {
         this.updatedAt = OffsetDateTime.now();
     }
 
+    /**
+     * 수정 회차의 구현을 같은 회차·같은 브랜치에서 다시 큐에 넣을 준비 (스펙 2026-11-03 §7) — 구현대기(APPROVED), 직전 시도의
+     * 결과·점유 흔적만 비운다. 이어 갈 브랜치·head_sha·PR 칸과 시도 번호는 그대로 둔다 — {@link #prepareImplementationRequeue()}처럼
+     * 지우면 워커가 base에서 -rN 브랜치를 새로 딴다. 회차 안 시도 번호(요청 기록의 attempt)는 호출자가 올린다.
+     */
+    public void prepareFixRoundRequeue() {
+        this.status = TaskStatus.APPROVED;
+        this.failureReason = null;
+        this.implementationLog = null;
+        this.implementationTimeoutMinutes = null;
+        this.workerId = null;
+        this.claimedAt = null;
+        this.updatedAt = OffsetDateTime.now();
+    }
+
     public boolean isOwnedBy(String userId) {
         return requesterId.equals(userId);
     }

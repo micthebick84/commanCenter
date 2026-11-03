@@ -1,6 +1,7 @@
 package com.hamonsoft.netismaker.service;
 
 import com.hamonsoft.netismaker.dto.TaskResponse;
+import com.hamonsoft.netismaker.entity.FixOutcome;
 import com.hamonsoft.netismaker.entity.FixRequestStatus;
 import com.hamonsoft.netismaker.entity.ImplementationMode;
 import com.hamonsoft.netismaker.entity.Task;
@@ -22,14 +23,15 @@ import java.util.List;
 import java.util.Set;
 
 /**
- * 배포 뒤 수정 요청의 사람 쪽 전이 (스펙 2026-11-03 §4·§6). 구현·재배포·회차 닫기는 이 서비스 밖(워커·WorkerService) —
- * 여기는 요청을 받고 회차를 여는 데까지다.
+ * 배포 뒤 수정 요청의 사람 쪽 전이 (스펙 2026-11-03 §4·§6·§7.1). 구현·자동 재배포와 그 결과로 회차를 닫는 일은
+ * 이 서비스 밖(WorkerService·TaskRecovery) — 여기는 요청을 받고 회차를 여는 데와 사람이 회차를 접는 수정 중단까지다.
  *
  *   request  ─► 배포완료|배포중단됨|배포실패 → 수정승인대기 (등록자 본인 또는 관리자)
  *               관리자가 낸 요청은 승인 단계 없이 곧바로 → 구현대기 (수정 n회차)
  *   approve  ─► 수정승인대기 → 구현대기, 회차 확정·구현 방식 결정   (관리자 — 컨트롤러가 강제)
  *   reject   ─► 수정승인대기 → 요청 전 상태 + 사유                  (관리자)
  *   withdraw ─► 수정승인대기 → 요청 전 상태                         (등록자 본인 또는 관리자)
+ *   abort    ─► 수정 회차의 구현실패 → PR생성, 회차 닫힘(ABORTED)   (관리자, §7.1)
  *
  * 락 정책은 TaskService·TaskCloseService와 같다 — findActiveByIdForUpdate 후 재판정.
  * 회차(round)는 승인된 요청 수 + 1이다. 열린 회차는 task.active_fix_request_id가 가리키고, 반려·철회는 회차에 세지 않는다.
@@ -127,6 +129,35 @@ public class TaskFixService {
         TaskFixRequest r = pendingOrNull(taskId);
         if (r != null) decide(r, FixRequestStatus.WITHDRAWN, actorId, null);
         return move(t, statusBeforeRequest(r), actorId, "수정 요청 철회");
+    }
+
+    /**
+     * 수정 중단 (스펙 §7.1) — 수정 회차의 구현실패 → PR생성, 회차를 ABORTED로 닫는다(승인된 회차로 센다). 관리자 한정(컨트롤러).
+     * 자동 재배포는 없다 — 사람이 PR생성에서 보통 배포(브랜치 끝)를 다시 누른다. head_sha는 건드리지 않는다: 회차의 구현실패 보고가
+     * 이미 브랜치 끝(wip 커밋 포함)을 남겼다(WorkerService). 이전 구현 결과의 흔적은 실패 사유만 비운다(로그는 확인용으로 둔다).
+     *
+     * 회차 표시는 있는데 기록이 없거나 깨진 경우(claim이 구현실패로 치운 깨진 회차) 재시도는 409라 이 길이 유일한 출구다 — 요청 기록은
+     * 건드리지 않고 표시만 지운 뒤 PR생성으로 보낸다. 그 회차는 구현을 시작하지 않았으므로 브랜치·head_sha는 회차 전 그대로다.
+     */
+    @Transactional
+    public Task abort(Long taskId, String adminId) {
+        Task t = taskRepo.findActiveByIdForUpdate(taskId).orElseThrow(TaskException::notFound);
+        if (t.getStatus() != TaskStatus.IMPLEMENTATION_FAILED) {
+            throw TaskException.conflict("수정 회차의 구현실패 상태에서만 수정을 중단할 수 있습니다 (현재: "
+                    + t.getStatus().dbValue() + ")");
+        }
+        if (t.getActiveFixRequestId() == null) {
+            throw TaskException.conflict("수정 회차가 아닌 구현실패는 중단할 수 없습니다 — 구현 재시도를 쓰세요");
+        }
+        Long requestId = t.getActiveFixRequestId();
+        TaskFixRequest r = FixRounds.openRequest(fixRepo, t);
+        FixRounds.close(t, r, FixOutcome.ABORTED, OffsetDateTime.now());
+        if (r != null) fixRepo.save(r);
+        t.setFailureReason(null);
+        String reason = r != null
+                ? FixRounds.label(r) + " 중단 → PR생성"
+                : "수정 회차 기록을 찾을 수 없어(요청 #" + requestId + ") 회차 표시만 지움 — 수정 중단 → PR생성";
+        return move(t, TaskStatus.PR_CREATED, adminId, reason);
     }
 
     /** 작업의 수정 요청 기록, 최신순. 열람 권한(등록자·관리자)은 호출자가 TaskService.getForView로 먼저 검증한다. */

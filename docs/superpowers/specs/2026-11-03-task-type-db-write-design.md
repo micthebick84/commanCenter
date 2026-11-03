@@ -1,7 +1,7 @@
 # 작업(Task) — 작업 타입(신규 개발·기능 수정·버그 픽스·DB 작업)과 구현 단계 개발 DB 쓰기 설계
 
 - 날짜: 2026-11-03
-- 상태: 초안 — 사용자 검토 대기 (brainstorming: 코드 현황 조사 → 질의 6건 확인, 아래 §3)
+- 상태: 초안 — 사용자 검토 대기 (brainstorming: 코드 현황 조사 → 질의 6건 확인 → 검토자 4관점 확인 → 질의 2건(DB 작업은 배포 없이 종료 허용, 자동 마이그레이션 레포는 다르게) — 아래 §3)
 - 범위: netisMaker 백엔드(API + 워커 데몬) + 인터뷰 서비스(프롬프트만) + 프론트엔드(Nuxt)
 - 선행 조건: PR #122(수정 요청, `feat/fix-request-same-branch`, V38) 병합 뒤 구현한다. 같은 파일(`Task.java`·`TaskResponse.java`·`TaskService.java`·`WorkerMainLoop.java`·`WorkerTaskResponse.java`·`tasks/index.vue`·`tasks/[id].vue`)을 고치고, 이 기능의 마이그레이션은 **V39**다.
 - 표기: "(Claude 판단)"은 사용자가 정하지 않았고 설계자가 정한 것이다. 빌더가 더 나은 근거가 있으면 바꿔도 되지만, 바꾸면 PR 본문에 적는다.
@@ -57,6 +57,8 @@
 | 막음 | 기존 테이블 삭제(DROP)와 비우기(TRUNCATE), 조건 없이 전체 행을 수정·삭제하는 것 |
 | 기록 | 실행한 SQL을 모두 작업별로 기록하고 작업 상세에서 보여 준다. 같은 내용을 PR에 스크립트 파일로 남긴다 |
 | DB 작업의 완료 | 코드 변경이 없어도 정상 완료다(구현실패가 아니다) |
+| DB 작업의 종료 | 배포 없이 종료할 수 있다(PR생성에서 바로 종료 요청, §6.9) |
+| 자동 마이그레이션 레포 | 앱이 뜰 때 테이블 스크립트를 자동 실행하는 레포(Flyway 등)는 다르게 다룬다(§6.8) |
 | 레거시 | 레거시 기능은 거의 바뀌지 않는다. 충돌은 새로 추가되는 기능에서 생긴다 |
 
 ## 4. 작업 타입
@@ -137,7 +139,8 @@
    - 개인(USER) 연결은 늘 false다. 관리자가 남의 개인 연결을 볼 수 없고(`DbConnectionService.java:206-213`), 소유자가 접속 대상을 언제든 바꿀 수 있기 때문이다. 일반 등록·수정 바디로는 이 값을 바꿀 수 없다. 쓰기를 판정할 때 `scope=REPO`를 다시 확인한다. (Claude 판단)
    - 쓰기 허용 연결의 접속 대상(db_type·host·port·database_name·username)을 바꾸면, 같은 트랜잭션에서 `allow_write`를 끄고 그 연결의 소유 기록(§6.3)을 지운다. 화면에는 "접속 대상이 바뀌어 쓰기 허용을 껐습니다"를 띄운다. 다른 DB(운영 DB 포함)로 쓰기가 새는 것과, 옛 소유 기록이 새 DB의 같은 이름 테이블에 적용되는 것을 막는다. (Claude 판단)
    - 연결 계정에 실제 쓰기 권한이 있어야 한다. 읽기 전용 계정이면 모든 `execute`가 `FAILED`가 된다(§9 5단계에서 확인).
-5. 작업을 claim한 워커가 쓰기 지원을 알렸다(`supports=dbWrite`, 기존 supports 가드 `WorkerController.java:103-110`와 같은 방식). 옛 워커는 실행한 SQL을 PR 스크립트로 남기지 못한다(§6.6). 그래서 옛 워커에는 쓰기 도구를 주지 않는다. (Claude 판단)
+5. 작업의 대상 레포가 자동 마이그레이션 레포가 아니다(§6.8).
+6. 작업을 claim한 워커가 쓰기 지원을 알렸다(`supports=dbWrite`, 기존 supports 가드 `WorkerController.java:103-110`와 같은 방식). 옛 워커는 실행한 SQL을 PR 스크립트로 남기지 못한다(§6.6). 그래서 옛 워커에는 쓰기 도구를 주지 않는다. (Claude 판단)
 
 조건을 만족하면 그 연결의 MCP 도구 목록에 `execute`가 추가된다. 도구 이름은 `mcp__db-<id>__execute`이며 기존 `--allowedTools mcp__db-<id>` 와일드카드(`WorkerMcpSupport.java:178-184`)가 그대로 덮는다. 조건이 하나라도 거짓이면 도구 목록에 없다. 직접 호출해도 서버가 거부한다.
 
@@ -237,7 +240,38 @@
   - "남의 테이블 컬럼을 지우거나 바꿔야 하면 옛 컬럼을 두고 새 컬럼을 추가해 그쪽을 쓰고, 옛 컬럼 삭제는 `execute`로 보내 승인 대기로 남겨라"
   - "가데이터는 알아볼 수 있게 넣어라(예: 이름에 `[테스트]`)"
   - "적용 뒤 `query`로 결과를 확인하라"
+  - "레포에 마이그레이션 파일을 만들지 마라. 이미 개발 DB에 적용됐고, 운영용 스크립트는 워커가 따로 만든다(§6.6). 레포에 앱 기동 때 스크립트를 자동 실행하는 장치(Flyway·Liquibase·`schema.sql` 자동 실행 등)가 보이면 DDL은 `execute`로 실행하지 말고, PR 본문에 '자동 마이그레이션 레포로 보임 — 카탈로그 설정 확인 필요'를 남겨라" (Claude 판단)
 - **읽기만 되는 연결**: 지금 문구 그대로 둔다.
+
+### 6.8 자동 마이그레이션 레포
+
+앱이 뜰 때 레포의 테이블 스크립트를 DB에 자동 실행하는 레포가 대상이다(Flyway·Liquibase 등). 이런 레포에서 구현 세션이 개발 DB에 직접 적용하고 레포 관례대로 마이그레이션 파일까지 만들면, 시험 컨테이너가 뜰 때 같은 스크립트를 다시 돌려 기동이 실패하거나 이중으로 적용된다. 그래서 다르게 다룬다.
+
+- 레포 카탈로그에 **자동 마이그레이션** 표시(`repo_catalog.db_migration_managed`, 기본 false)를 둔다. 관리자가 관리 화면(`/admin/repo-catalog`)에서 켠다. (Claude 판단)
+- 켜진 레포의 작업
+  - 구현 단계에 `execute` 도구를 주지 않는다. 쓰기 허용 연결을 골랐어도 마찬가지다(§6.1에 조건 추가). 인터뷰의 `writableDbConnections`도 비운다.
+  - 구현 지시는 "DB 변경은 레포의 마이그레이션 관례대로 파일로 만들어라. 가데이터도 관례가 허용하면 그 방식으로 넣어라. 개발 DB에는 시험 컨테이너가 뜰 때 적용된다"로 바뀐다.
+  - §6.6의 워커 스크립트 파일과 "DB 변경" 기록은 생기지 않는다. 레포의 마이그레이션 파일이 그 역할을 한다.
+  - 다른 사람 화면을 깨뜨리지 않는 기준(옛 컬럼을 두고 새 컬럼 추가)은 같은 지시로 준다. 다만 서버가 강제할 수는 없다. 마이그레이션 파일은 PR 검토로 지킨다.
+- 표시가 꺼진 레포에서 세션이 자동 마이그레이션 장치를 발견하면 §6.7대로 DDL 실행을 멈추고 PR 본문에 알린다. 관리자는 표시를 켜고 그 작업을 다시 돌릴지 정한다.
+
+### 6.9 배포 없이 종료 (DB 작업)
+
+지금 종료 요청은 배포완료·배포중단됨에서만 받는다(`TaskCloseService.REQUESTABLE`, `:38`). 앱 코드가 그대로인 DB 작업도 앱을 다시 빌드해서 띄워야 종료할 수 있는 셈인데, 이를 연다.
+
+- 타입이 **DB 작업**인 작업은 **PR생성**에서도 종료를 요청할 수 있다. 등록자 "확인 완료"로 요청한 뒤 종료승인대기 → 관리자 승인 → 종료로 이어지는 흐름은 같다.
+  - 다른 타입은 지금처럼 배포를 거친다. (Claude 판단 — 범위)
+  - DB 작업도 PR생성에서 배포를 고를 수 있는 길은 그대로 둔다.
+- 철회·반려하면 직전 상태(PR생성)로 돌아간다. 지금 `statusBeforeReview`가 이력에서 직전 상태를 찾는 방식을 그대로 쓰되, 후보에 PR생성을 더한다.
+- **종료 단계**
+  - 병합은 그대로 한다.
+  - **배포 중지**: 띄운 컨테이너가 없으면 실행하지 않고 끝난 것으로 기록한다(`CloseStep.UNDEPLOYED`).
+  - **산출물 업로드**: 배포 이미지가 없으므로 이 작업은 산출물 모드를 늘 꺼진 것(null)으로 둔다. 종료 승인 때 `close_artifact_mode`를 정하는 곳에서 가른다.
+  - 노트와 브랜치 정리는 그대로다.
+- **화면**
+  - PR생성 상태의 DB 작업에는 다음 할 일로 "확인 완료(종료 요청)"가 보인다. 등록자와 관리자에게 보이고, "배포"(관리자)도 함께 남는다.
+  - 데스크톱 상세 버튼, 모바일 시트, 스테퍼, `taskStages.ts`의 `nextAction`·`attentionGroup`에 반영한다. 스테퍼는 배포 단계를 "건너뜀"으로 그린다.
+- PR #122의 수정 요청은 지금처럼 배포 상태에서만 열린다. PR생성에 머문 DB 작업을 고치려면 배포하거나 새 작업을 등록한다. (Claude 판단 — §11 비목표)
 
 ## 7. 데이터 모델 (V39)
 
@@ -246,6 +280,7 @@ ALTER TABLE com.task ADD COLUMN task_type VARCHAR(20) NULL
   CHECK (task_type IN ('NEW_FEATURE','FEATURE_CHANGE','BUG_FIX','DB_WORK'));
 ALTER TABLE com.db_connection ADD COLUMN allow_write BOOLEAN NOT NULL DEFAULT false;
 ALTER TABLE com.repo_catalog ADD COLUMN db_script_dir VARCHAR(255) NULL;
+ALTER TABLE com.repo_catalog ADD COLUMN db_migration_managed BOOLEAN NOT NULL DEFAULT false;
 -- com.task_db_object, com.task_db_write_log (§6.3, §6.5) — 인덱스: write_log(task_id, created_at), db_object(connection_id)
 ```
 
@@ -258,9 +293,12 @@ ALTER TABLE com.repo_catalog ADD COLUMN db_script_dir VARCHAR(255) NULL;
   - 등록·승인 검증과 이력, 목록 필터
   - `DbConnection.allowWrite`와 관리자 API·화면(`DbConnectionAdminDialog.vue`)
   - `DbMcpTools`에 `execute`, 쓰기 분류기·실행기, 소유·기록 테이블과 리포지토리
-  - 작업 상세용 `GET /api/tasks/{id}/db-changes`와 관리자 `POST …/db-changes/{logId}/execute`
+  - 작업 상세용 `GET /api/tasks/{id}/db-changes`와 관리자 `POST …/db-changes/{logId}/execute`·`…/dismiss`
   - 워커용 `GET /worker/tasks/{id}/db-changes`
+  - 인터뷰 claim `writableDbConnections`
   - 토큰 TTL
+  - 레포 카탈로그 `db_script_dir`·`db_migration_managed`(검증·부분 갱신·관리 화면)
+  - 종료: DB 작업의 PR생성 종료 요청, 철회·반려 복귀, 컨테이너 없는 배포 중지 단계, 산출물 모드
 - **워커**
   - supports=dbWrite
   - 타입별 구현 지시, 커밋·PR 앞머리
@@ -272,6 +310,9 @@ ALTER TABLE com.repo_catalog ADD COLUMN db_script_dir VARCHAR(255) NULL;
   - 승인 다이얼로그 타입 select
   - 카드·상세 칩, 목록 필터(데스크톱·모바일)
   - 작업 상세 "DB 변경" 절(데스크톱·모바일), 연결 관리 쓰기 허용 토글, "읽기 전용" 문구 정리
+  - 레포 카탈로그 "자동 마이그레이션" 토글과 "DB 스크립트 폴더"
+  - DB 작업 PR생성의 "확인 완료(종료 요청)": 상세 버튼, 모바일 시트, 스테퍼, `taskStages.ts`
+  - 종료 승인 확인창의 "승인 대기 SQL N건" 경고
   - hydration-smoke 목 갱신
 
 ## 9. 배포 순서
@@ -306,6 +347,9 @@ ALTER TABLE com.repo_catalog ADD COLUMN db_script_dir VARCHAR(255) NULL;
   - 작업 종료·취소 시 그 작업이 만든 테이블·가데이터 자동 정리.
   - 브랜치 이름 접두 변경.
   - 타입별 권한 차등.
+  - DB 작업 외 타입의 배포 없는 종료.
+  - PR생성에 머문 DB 작업의 수정 요청(PR #122는 배포 상태에서만 연다).
+  - 자동 마이그레이션 레포의 서버 쪽 SQL 분류(마이그레이션 파일은 PR 검토로 지킨다).
 - **반목표**(기술적으로 동작해도 실패인 것)
   - 같은 DB를 쓰는 다른 사람의 화면이 이 기능 때문에 깨지는 것.
   - 쓰기 허용을 켜지 않은 연결에 한 번이라도 쓰기가 일어나는 것.

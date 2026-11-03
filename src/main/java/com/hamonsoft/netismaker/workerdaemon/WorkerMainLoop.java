@@ -7,6 +7,7 @@ import com.hamonsoft.netismaker.dto.WorkerTaskResponse;
 import com.hamonsoft.netismaker.entity.EnvTemplateItem;
 import com.hamonsoft.netismaker.entity.ImplementationMode;
 import com.hamonsoft.netismaker.entity.TaskStatus;
+import com.hamonsoft.netismaker.entity.TaskType;
 import com.hamonsoft.netismaker.git.GitRemotes;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.web.client.RestClientException;
@@ -15,6 +16,9 @@ import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
 import java.io.File;
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.LinkOption;
 import java.nio.file.Path;
 import java.time.Duration;
 import java.util.ArrayList;
@@ -391,10 +395,14 @@ public class WorkerMainLoop {
         //    worktree는 격리 환경이라 워커 머신 다른 곳에 영향 없음.
         //    참조 절은 템플릿 밖 DB 절 뒤에 붙는다(운영자 템플릿을 바꿔도 빠지지 않게). 참조 폴더는 절대 경로로 읽으므로
         //    --add-dir를 주지 않는다 — 참조 repo의 .claude 설정이 이 세션에 붙으면 안 된다 (스펙 2026-10-24 §6.4·§6.7)
+        //    작업 타입 절은 템플릿 안({plan_section} 바로 뒤) — 이 구현에는 아직 개발 DB 쓰기 도구가 없어 DB 작업은 SQL을 파일에 적게 한다
+        TaskType taskType = taskTypeOf(task);
         String prompt = renderImplementationPrompt(task, repo.commitSha(), wt.branchName(),
                 ImplementationPrompts.planSection(task, mode.effective(), repo.commitSha(), designWritten,
                         !ready.isEmpty()),
-                ImplementationPrompts.commitRule(mode.effective()))
+                ImplementationPrompts.commitRule(mode.effective()),
+                ImplementationPrompts.taskTypeSection(taskType, false, false,
+                        ImplementationPrompts.defaultScriptPath(task.id())))
                 + DbMcpWorkerSupport.promptSection(task.dbMcp())
                 + RefRepoPrompts.promptSection(ready);
         List<String> extraArgs = mode.effective() == ImplementationMode.SDD
@@ -438,10 +446,12 @@ public class WorkerMainLoop {
         // 배포 env 목록(.netis-deploy-env.json)도 커밋 전에 회수·삭제 — 없거나 틀려도 구현은 계속 (스펙 2026-10-07 §4.3)
         List<EnvTemplateItem> envTemplate = DeployEnvManifest.harvest(wtPath);
 
-        // 5. 변경 commit + push(대상만) — 에이전트가 만든 커밋(SDD 태스크 커밋)도 받아들인다
+        // 5. 변경 commit + push(대상만) — 에이전트가 만든 커밋(SDD 태스크 커밋)도 받아들인다.
+        //    커밋 앞머리는 작업 타입을 따른다(타입 없음 feat) — 세션이 쓴 스크립트 파일은 무시 규칙이 있어도 먼저 index에 올린다
         String headSha;
         try {
-            String commitMsg = "feat: " + task.title()
+            forceAddSessionScript(task, wt.dir());
+            String commitMsg = TaskType.commitPrefixOf(taskType) + ": " + task.title()
                     + "\n\n" + "task #" + task.id()
                     + "\n\nCo-Authored-By: netisMaker <" + props.gitUserEmail() + ">";
             headSha = gitOps.commitAndPush(wt.dir(), task.repoRef(), wt.branchName(), commitMsg, repo.commitSha());
@@ -459,7 +469,7 @@ public class WorkerMainLoop {
                     refWarnings);
             pr = gitOps.createDraftPr(wt.dir(), task.repoRef(),
                     task.githubBranch(), wt.branchName(),
-                    task.title(), body);
+                    TaskType.prTitle(taskType, task.title()), body);
         } catch (Exception e) {
             safePostImplementationFailure(task, attempt,
                     "PR/MR 생성 실패: " + e.getMessage() + fallbackNote + refNote,
@@ -591,6 +601,8 @@ public class WorkerMainLoop {
         // 5. 같은 브랜치에 fast-forward push(force 없음 — 그 사이 원격이 앞섰으면 거절된다). 에이전트 커밋도 tip 이후면 받아들인다
         String headSha;
         try {
+            // 커밋 앞머리는 늘 fix — 작업 타입과 무관(스펙 2026-11-03 §4.1). 세션이 쓴 스크립트 파일은 무시 규칙이 있어도 먼저 올린다
+            forceAddSessionScript(task, wt.dir());
             String commitMsg = "fix: " + label + " — " + task.title()
                     + "\n\n" + "task #" + task.id()
                     + "\n\nCo-Authored-By: netisMaker <" + props.gitUserEmail() + ">";
@@ -691,6 +703,15 @@ public class WorkerMainLoop {
                 : fallback;
     }
 
+    /**
+     * claim의 작업 타입 — 구현 블록이 없거나(구버전 API) 타입이 없거나 모르는 값(다른 버전 API)이면 null(타입 없음).
+     * 타입 없음은 커밋 앞머리 feat·PR 제목 앞머리 없음·타입 절 없음으로 타입이 생기기 전과 같다.
+     */
+    static TaskType taskTypeOf(WorkerTaskResponse task) {
+        WorkerTaskResponse.ImplementationSpec s = task.implementation();
+        return s == null ? null : TaskType.fromWireOrNull(s.taskType());
+    }
+
     /** claim의 참조 repo — 없으면(구버전 API·다른 kind) 빈 목록. */
     static List<WorkerTaskResponse.TaskRefRepo> refsOf(WorkerTaskResponse task) {
         return task.refRepos() == null ? List.of() : task.refRepos();
@@ -731,6 +752,18 @@ public class WorkerMainLoop {
         return env;
     }
 
+    /**
+     * 세션이 쓴 SQL 스크립트 파일({@link ImplementationPrompts#defaultScriptPath})이 worktree에 있으면 index에 강제로 올린다
+     * (스펙 2026-11-03 §6.6). 타입과 무관 — 파일이 있으면 늘 올린다. 대상 레포의 {@code .gitignore}가 그 경로를 무시해도 커밋·WIP에
+     * 들어가게 하고, 이것이 먼저 일어나야 {@code git status --porcelain} 기반 "변경 있음" 판단에도 보인다. 파일이 없으면 아무것도 안 한다.
+     */
+    private void forceAddSessionScript(WorkerTaskResponse task, File worktreeDir)
+            throws IOException, InterruptedException {
+        String rel = ImplementationPrompts.defaultScriptPath(task.id());
+        if (!Files.isRegularFile(worktreeDir.toPath().resolve(rel), LinkOption.NOFOLLOW_LINKS)) return;
+        gitOps.forceAdd(worktreeDir, rel);
+    }
+
     private static boolean writeScratch(Path worktree, String relPath, String content) {
         try {
             ImplementationScratch.write(worktree, relPath, content);
@@ -755,6 +788,15 @@ public class WorkerMainLoop {
                                                String baseSha, String what, String why) {
         // git add -A가 .netis/·.design/·배포 env 목록을 WIP 커밋에 담지 않도록 먼저 지운다
         ImplementationScratch.deleteAll(wt.dir().toPath());
+        // 세션이 쓴 스크립트 파일은 무시 규칙(db/·*.sql)이 있어도 WIP에 들어가야 한다 — git add -A는 무시된 파일을 담지 않는다.
+        // 이미 중단 보고 중이라 실패해도 경고만 남기고 보존을 계속한다
+        try {
+            forceAddSessionScript(task, wt.dir());
+        } catch (Exception e) {
+            if (e instanceof InterruptedException) Thread.currentThread().interrupt();
+            log.warn("세션이 쓴 스크립트 파일 강제 추가 실패 — WIP 보존은 계속합니다: task={} {}",
+                    task.id(), GitRemotes.mask(String.valueOf(e.getMessage())));
+        }
         GitOpsService.PartialWork w = gitOps.preservePartialWork(wt.dir(), task.repoRef(), wt.branchName(), baseSha,
                 "wip: " + what + " 중단(" + why + ") — task #" + task.id());
         return PartialOutcome.of(w, wt.branchName());
@@ -909,12 +951,12 @@ public class WorkerMainLoop {
     }
 
     private String renderImplementationPrompt(WorkerTaskResponse task, String baseSha, String branchName,
-                                              String planSection, String commitRule) {
+                                              String planSection, String commitRule, String taskTypeSection) {
         String tpl = props.implementationPromptTemplate();
         if (tpl == null || tpl.isBlank()) {
             tpl = defaultImplementationPrompt();
         }
-        return fillImplementationPrompt(tpl, task, baseSha, branchName, planSection, commitRule);
+        return fillImplementationPrompt(tpl, task, baseSha, branchName, planSection, commitRule, taskTypeSection);
     }
 
     /**
@@ -950,13 +992,20 @@ public class WorkerMainLoop {
                 renderPlanSection(task), ImplementationPrompts.DIRECT_COMMIT_RULE);
     }
 
-    /**
-     * 구현 프롬프트 템플릿의 placeholder를 채운다(yml 템플릿·기본 템플릿 공용). planSection·commitRule은 방식별
-     * (ImplementationPrompts, 스펙 2026-10-15 §6). 끝에 배포 env 목록 지시를 붙인다.
-     * {commit_rule}은 계획·디자인 본문을 넣기 전에 치환한다(본문 안의 같은 글자를 건드리지 않게).
-     */
+    /** 타입 절 없는 채우기 — 기존 호출부·테스트용(타입 없음과 같은 결과). */
     static String fillImplementationPrompt(String tpl, WorkerTaskResponse task, String baseSha, String branchName,
                                            String planSection, String commitRule) {
+        return fillImplementationPrompt(tpl, task, baseSha, branchName, planSection, commitRule, "");
+    }
+
+    /**
+     * 구현 프롬프트 템플릿의 placeholder를 채운다(yml 템플릿·기본 템플릿 공용). planSection·commitRule은 방식별
+     * (ImplementationPrompts, 스펙 2026-10-15 §6), taskTypeSection은 작업 타입별(스펙 2026-11-03 §5.2 — 타입 없음은 빈 문자열).
+     * 끝에 배포 env 목록 지시를 붙인다.
+     * {commit_rule}·{task_type_section}은 계획·디자인 본문을 넣기 전에 치환한다(본문 안의 같은 글자를 건드리지 않게).
+     */
+    static String fillImplementationPrompt(String tpl, WorkerTaskResponse task, String baseSha, String branchName,
+                                           String planSection, String commitRule, String taskTypeSection) {
         return tpl
                 .replace("{github_repo}", task.githubRepo())
                 .replace("{github_branch}", task.githubBranch())
@@ -967,6 +1016,7 @@ public class WorkerMainLoop {
                 .replace("{analysis_markdown}", task.analysisMarkdown() == null ? "" : task.analysisMarkdown())
                 .replace("{subtasks_json}", task.subtasksJson() == null ? "[]" : task.subtasksJson())
                 .replace("{commit_rule}", commitRule)
+                .replace("{task_type_section}", taskTypeSection)
                 .replace("{design_section}", renderDesignSection(task))
                 .replace("{plan_section}", planSection)
                 + DEPLOY_ENV_INSTRUCTION;
@@ -1029,7 +1079,7 @@ public class WorkerMainLoop {
                 ## 요구사항
                 {description}
                 {design_section}
-                {plan_section}
+                {plan_section}{task_type_section}
                 ## 사전 분석 결과
                 {analysis_markdown}
 

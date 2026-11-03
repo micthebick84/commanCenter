@@ -54,6 +54,19 @@ public class GitOpsService {
         return !porcelain.isBlank();
     }
 
+    /**
+     * {@code git add -f -- <relPath>} — 대상 레포의 {@code .gitignore}가 그 경로를 무시해도 커밋·WIP에 들어가게 index에 올린다
+     * (세션이 쓴 SQL 스크립트 파일, 스펙 2026-11-03 §6.6). {@code git status --porcelain}과 {@code git add -A}는 무시된 파일을
+     * 보지 않아, 이것 없이는 무시 규칙(`db/`·`*.sql`)이 있는 레포의 DB 작업이 "nothing to commit"으로 실패한다.
+     * 이미 추적 중인 파일에는 아무 일도 하지 않는다. 파일이 없거나 git이 거절하면 IOException.
+     *
+     * @param relPath worktree 기준 상대 경로(슬래시 구분)
+     */
+    public void forceAdd(File worktreeDir, String relPath) throws IOException, InterruptedException {
+        ProcessRunner.requireSuccess(worktreeDir,
+                List.of("git", "add", "-f", "--", relPath), GIT_TIMEOUT_SECONDS);
+    }
+
     /** 예전 동작 — 변경이 꼭 있어야 커밋한다(에이전트 커밋을 모르는 호출부용). */
     public String commitAndPush(File worktreeDir, RepoRef ref, String branchName, String commitMessage)
             throws IOException, InterruptedException {

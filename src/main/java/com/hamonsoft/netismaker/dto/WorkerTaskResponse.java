@@ -106,11 +106,20 @@ public record WorkerTaskResponse(
      * 구현 지시 블록. mode는 ImplementationMode 이름, timeoutMinutes는 claim 때 작업에 기록한 상한.
      * fix는 수정 회차가 열린 구현대기를 claim했을 때만 채운다(스펙 2026-11-03 §7) — 이 경우 mode·timeoutMinutes는 회차의
      * 구현 방식을 따르고(작업의 방식이 아니라), attempt는 작업의 시도 번호 그대로다. null이면 지금 구현과 같다.
+     * taskType은 작업 타입 enum 이름(스펙 2026-11-03 §4) — 타입 없음·구버전 API는 null이고 워커는 모르는 값도 타입 없음으로 읽는다
+     * ({@code TaskType.fromWireOrNull}). 구현 claim에서만 쓰는 값이라 최상위가 아니라 이 블록에 둔다(32칸 정규 생성자와
+     * 호환 생성자들을 바꾸는 연쇄를 피한다).
      */
-    public record ImplementationSpec(String mode, Integer attempt, Integer timeoutMinutes, FixRoundSpec fix) {
-        /** 수정 회차 도입 전 3인자 생성자 — 회차 없는 구현(fix=null). 기존 팩토리·테스트 호환. */
+    public record ImplementationSpec(String mode, Integer attempt, Integer timeoutMinutes, FixRoundSpec fix,
+                                     String taskType) {
+        /** 작업 타입 도입 전 4인자 생성자 — 타입 없음(taskType=null). 기존 팩토리·테스트 호환. */
+        public ImplementationSpec(String mode, Integer attempt, Integer timeoutMinutes, FixRoundSpec fix) {
+            this(mode, attempt, timeoutMinutes, fix, null);
+        }
+
+        /** 수정 회차 도입 전 3인자 생성자 — 회차 없는 구현(fix=null), 타입 없음. 기존 팩토리·테스트 호환. */
         public ImplementationSpec(String mode, Integer attempt, Integer timeoutMinutes) {
-            this(mode, attempt, timeoutMinutes, null);
+            this(mode, attempt, timeoutMinutes, null, null);
         }
     }
 
@@ -271,7 +280,9 @@ public record WorkerTaskResponse(
     private static ImplementationSpec implementationSpecOf(Task t, FixRoundSpec fix, ImplementationMode modeOverride) {
         ImplementationMode mode = modeOverride != null ? modeOverride
                 : t.getImplementationMode() == null ? ImplementationMode.DIRECT : t.getImplementationMode();
-        return new ImplementationSpec(mode.name(), t.getImplementationAttempt(), t.getImplementationTimeoutMinutes(), fix);
+        String taskType = t.getTaskType() == null ? null : t.getTaskType().name();
+        return new ImplementationSpec(mode.name(), t.getImplementationAttempt(), t.getImplementationTimeoutMinutes(),
+                fix, taskType);
     }
 
     /** 작업 참조(task.ref_repos)를 그대로 싣는다 — 고정 커밋이 없거나 틀린 원소는 워커가 claude 실행 전에 구현실패로 끝낸다. */

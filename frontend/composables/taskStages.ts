@@ -58,6 +58,7 @@ export const STAGES: StageDef[] = [
       'DEPLOY_PENDING',
       'DEPLOYING',
       'DEPLOYED',
+      'FIX_REVIEW',
       'DEPLOY_FAILED',
       'DEPLOY_LOST',
       'UNDEPLOY_PENDING',
@@ -112,6 +113,8 @@ export const CHIP: Record<string, [string, string]> = {
   DEPLOY_PENDING: ['#ede7f6', '#5e35b1'],
   DEPLOYING: ['#fff3e0', '#e65100'],
   DEPLOYED: ['#e0f2f1', '#00695c'],
+  // 수정 요청 승인 대기(스펙 2026-11-03 §6) — 관리자 승인 대기는 초록(인터뷰·종료 구간과 같은 규칙)
+  FIX_REVIEW: ['#e8f5e9', '#2e7d32'],
   DEPLOY_FAILED: ['#fce4ec', '#ad1457'],
   DEPLOY_LOST: ['#fbe9e7', '#bf360c'],
   UNDEPLOY_PENDING: ['#fbe9e7', '#bf360c'],
@@ -340,6 +343,8 @@ export const ATTENTION_GROUPS: { key: AttentionGroup; label: string; color: stri
 export const DEPLOY_ACTIVE_STATUSES = [
   'DEPLOYED', 'DEPLOY_LOST', 'DEPLOY_PENDING', 'DEPLOYING', 'UNDEPLOY_PENDING', 'UNDEPLOYING',
   'CLOSE_REVIEW', 'CLOSE_PENDING', 'CLOSING', 'CLOSE_FAILED',
+  // 수정 요청 승인 대기 — 이전에 배포된 컨테이너가 아직 떠 있다(열린 수정 회차 중 구현중·구현실패 등은 서버가 따로 막고 409 메시지를 준다)
+  'FIX_REVIEW',
 ]
 
 export function cancelable(task: { status: string }): boolean {
@@ -350,7 +355,7 @@ const FAILED_STATUSES = ['FAILED', 'IMPLEMENTATION_FAILED', 'DESIGN_FAILED', 'DE
 /** 사람 입력을 기다리는 상태 — 요청자에게도 "확인 필요"로 보인다 */
 const HUMAN_INPUT_STATUSES = ['INTERVIEW_INPUT', 'INTERVIEW_REVIEW']
 /** 관리자 판단을 기다리는 상태 — 관리자에게만 "확인 필요" */
-const ADMIN_GATE_STATUSES = ['AWAITING_APPROVAL', 'COMPLETED', 'DESIGN_REVIEW', 'CLOSE_REVIEW']
+const ADMIN_GATE_STATUSES = ['AWAITING_APPROVAL', 'COMPLETED', 'DESIGN_REVIEW', 'CLOSE_REVIEW', 'FIX_REVIEW']
 const DONE_STATUSES = ['PR_CREATED', 'DEPLOYED', 'CLOSED']
 
 export function attentionGroup(task: { status: string }, isAdmin: boolean): AttentionGroup {
@@ -428,6 +433,7 @@ export type NextActionKind =
   | 'approve-interview' | 'open-interview' | 'approve-impl' | 'review-design'
   | 'deploy' | 'redeploy' | 'open-pr' | 'open-url' | 'retry'
   | 'request-close' | 'withdraw-close' | 'approve-close' | 'retry-close' | 'retry-implementation'
+  | 'approve-fix' | 'withdraw-fix'
 
 export interface NextAction {
   text: string
@@ -489,6 +495,11 @@ export function nextAction(
       if (isAdmin) return { text: '종료 요청됨 — 승인하면 PR 병합·배포 중지·노트 작성·브랜치 삭제를 진행합니다', primary: { label: '종료 승인', icon: 'task_alt', kind: 'approve-close' } }
       if (isOwner) return { text: '종료 요청됨 — 관리자 승인을 기다리는 중입니다', primary: { label: '요청 철회', icon: 'undo', kind: 'withdraw-close' } }
       return { text: '종료 승인을 기다리는 중입니다' }
+    case 'FIX_REVIEW':
+      // 관리자는 구현 방식을 골라 승인(반려는 보조 버튼), 등록자는 승인 전에 철회할 수 있다 (스펙 2026-11-03 §6.2)
+      if (isAdmin) return { text: '수정 요청됨 — 승인하면 같은 브랜치에서 이어 고친 뒤 자동으로 다시 배포합니다', primary: { label: '수정 승인', icon: 'build', kind: 'approve-fix' } }
+      if (isOwner) return { text: '수정 요청됨 — 관리자 승인을 기다리는 중입니다', primary: { label: '수정 요청 철회', icon: 'undo', kind: 'withdraw-fix' } }
+      return { text: '수정 요청 승인을 기다리는 중입니다' }
     case 'CLOSE_FAILED':
       return isAdmin
         ? { text: '종료 실패 — 사유를 확인하고 재시도하세요(끝난 단계는 건너뜁니다)', primary: { label: '종료 재시도', icon: 'refresh', kind: 'retry-close' } }

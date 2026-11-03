@@ -12,10 +12,13 @@ import TaskDetailMobile from '~/components/tasks/TaskDetailMobile.vue'
 import TaskHistoryTimeline from '~/components/tasks/TaskHistoryTimeline.vue'
 import DeployEnvDialog from '~/components/tasks/DeployEnvDialog.vue'
 import ImplementationRetryDialog from '~/components/tasks/ImplementationRetryDialog.vue'
+import FixRequestDialog from '~/components/tasks/FixRequestDialog.vue'
+import FixRequestHistory from '~/components/tasks/FixRequestHistory.vue'
 import { stageSteps, nextAction, ageOf, type NextActionKind } from '~/composables/taskStages'
 import { renderMarkdown } from '~/composables/useMarkdown'
 import { mrNoun, mrRef } from '~/composables/mergeRequestLabel'
-import { elapsedLabel, implementationModeText } from '~/composables/implementationMode'
+import { elapsedLabel, implementationModeLabel, implementationModeText } from '~/composables/implementationMode'
+import { canAbortFix, canFollowUp, canRequestFix, fixLimitReached, followUpPath, type FixView } from '~/composables/taskFix'
 import { useNowTick } from '~/composables/useNowTick'
 import { downloadAttachment as downloadBlob } from '~/composables/attachmentDownload'
 import {
@@ -149,6 +152,8 @@ interface TaskResponse {
   refRepos?: RefRepoView[]
   /** 질문 대화에서 이어 등록했으면 그 질문 id (스펙 2026-10-24 §4.1) — "레포" 옆 출처 링크. */
   sourceQuestionId?: number | null
+  /** 수정 요청 회차 현황 (스펙 2026-11-03 §6) — 상세 응답에만 있다. */
+  fix?: FixView | null
 }
 
 const route = useRoute()
@@ -474,6 +479,7 @@ function statusClass(status: string) {
       DEPLOY_PENDING: 'status-chip status-deploy-pending',
       DEPLOYING: 'status-chip status-deploying',
       DEPLOYED: 'status-chip status-deployed',
+      FIX_REVIEW: 'status-chip status-completed',
       DEPLOY_FAILED: 'status-chip status-deploy-failed',
       DEPLOY_LOST: 'status-chip status-deploy-lost',
       UNDEPLOY_PENDING: 'status-chip status-deploying',
@@ -512,6 +518,81 @@ const steps = computed(() => (task.value ? stageSteps(task.value) : []))
 const myRequesterId = computed(() => auth.me?.username ?? (auth.me?.user_id != null ? String(auth.me.user_id) : null))
 const isOwner = computed(() => !!task.value && myRequesterId.value != null && task.value.requesterId === myRequesterId.value)
 const action = computed(() => (task.value ? nextAction(task.value, auth.isAdmin, isOwner.value) : null))
+// 배포 뒤 수정 요청 (스펙 2026-11-03 §6·§7) — 요청·승인·반려·철회·중단·이력. 액션은 종료 액션과 같은 POST → 알림 → 재조회 흐름이라 closeAction을 쓴다.
+const showFixRequest = ref(false)
+const canFixRequest = computed(() => !!task.value && canRequestFix(task.value, auth.isAdmin, isOwner.value))
+const canAbort = computed(() => !!task.value && canAbortFix(task.value, auth.isAdmin))
+const showFollowUp = computed(() => !!task.value && canFollowUp(task.value, auth.isAdmin, isOwner.value))
+const followUpHref = computed(() => (task.value ? followUpPath(task.value) : '/tasks'))
+const fixNextRound = computed(() => (task.value?.fix?.approvedRounds ?? 0) + 1)
+// 상한 안내 — 한도를 다 쓴 배포 계열 작업에서만(종료된 작업은 링크만)
+const fixLimitNote = computed(() => {
+  const t = task.value
+  if (!t?.fix || !showFollowUp.value || t.status === 'CLOSED' || !fixLimitReached(t)) return null
+  return `수정 요청은 작업당 최대 ${t.fix.maxRounds}회예요 (${t.fix.approvedRounds}/${t.fix.maxRounds} 사용). 이어서 고칠 내용은 새 작업으로 등록해 주세요.`
+})
+// 수정 회차 진행 안내 — 열린 회차가 있을 때(승인 대기 중에는 "다음 할 일" 문구가 같은 말을 한다)
+const fixBannerText = computed(() => {
+  const f = task.value?.fix
+  if (f?.activeRound == null) return null
+  const mode = f.activeMode ? ` (${implementationModeLabel(f.activeMode)})` : ''
+  return `수정 ${f.activeRound}회차 진행 중${mode} — 같은 브랜치에서 이어 고친 뒤 자동으로 다시 배포해요.`
+})
+// 기록 카드는 작업이 다시 읽혀 상태·갱신 시각·회차 수가 바뀔 때만 다시 조회한다 — 5초 폴링마다 갈아끼워지는 task 객체가 아니라 값으로 비교.
+const fixHistoryKey = ref(0)
+watch(
+  () => {
+    const t = task.value
+    return t ? `${t.status}|${t.updatedAt}|${t.fix?.activeRound ?? ''}|${t.fix?.approvedRounds ?? ''}` : ''
+  },
+  (_now, before) => {
+    if (before) fixHistoryKey.value++ // 처음 읽힌 순간(before 없음)은 기록 카드가 마운트되며 스스로 조회한다
+  },
+)
+
+function approveFix() {
+  $q.dialog({
+    title: '수정 요청 승인',
+    message: '구현 방식을 고르세요. 승인하면 같은 브랜치에서 이어 고친 뒤 자동으로 다시 배포합니다.',
+    options: {
+      type: 'radio',
+      model: 'REVIEW',
+      items: [
+        { label: '리뷰 — 구현 뒤 Opus 리뷰 1회 (기본)', value: 'REVIEW' },
+        { label: '직접 — 리뷰 없이 바로 구현', value: 'DIRECT' },
+      ],
+    },
+    ok: { label: '승인', flat: true, 'data-test': 'fix-approve-ok' },
+    cancel: { label: '취소', flat: true },
+    persistent: true,
+  }).onOk((mode: string) => closeAction('fix-requests/approve', '수정 요청 승인 — 구현 큐에 넣었습니다', { implementationMode: mode }))
+}
+
+function rejectFix() {
+  $q.dialog({
+    title: '수정 요청 반려',
+    message: '반려 사유를 입력하세요 (등록자에게 보입니다)',
+    prompt: { model: '', type: 'text', isValid: (v: string) => v.trim().length > 0 },
+    ok: { label: '반려', flat: true, 'data-test': 'fix-reject-ok' },
+    cancel: { label: '취소', flat: true },
+    persistent: true,
+  }).onOk((reason: string) => closeAction('fix-requests/reject', '수정 요청 반려', { reason: reason.trim() }))
+}
+
+async function withdrawFix() {
+  if (!(await confirmDialog($q, '수정 요청을 철회할까요? 직전 상태로 돌아가고, 필요하면 다시 요청할 수 있습니다.', { title: '수정 요청 철회', ok: '철회' }))) return
+  await closeAction('fix-requests/withdraw', '수정 요청 철회')
+}
+
+async function abortFix() {
+  if (!(await confirmDialog(
+    $q,
+    '수정 회차를 닫고 PR생성 상태로 되돌립니다. 이 브랜치에는 배포되지 않은 커밋이 남아 있을 수 있어요 — 이어서 배포하려면 PR생성에서 다시 배포하세요. 이 회차는 실패한 회차로 세어집니다.',
+    { title: '수정 중단', ok: '수정 중단' },
+  ))) return
+  await closeAction('fix-requests/abort', '수정 중단 — PR생성 상태로 돌렸습니다')
+}
+
 // 구현 방식·경과 시간 (스펙 2026-10-15 §7) — 경과는 마운트 뒤 30초마다 다시 계산(API 호출 없음)
 const nowTick = useNowTick()
 const elapsed = computed(() => (task.value ? elapsedLabel(task.value, nowTick.value) : null))
@@ -616,6 +697,8 @@ function onAction(kind: NextActionKind) {
     case 'approve-close': return approveClose()
     case 'retry-close': return retryClose()
     case 'retry-implementation': return void (showImplRetry.value = true)
+    case 'approve-fix': return approveFix()
+    case 'withdraw-fix': return withdrawFix()
   }
 }
 </script>
@@ -676,11 +759,19 @@ function onAction(kind: NextActionKind) {
               <template #extra>
                 <q-btn v-if="auth.isAdmin && task.implementation?.prUrl" outline color="primary" icon="open_in_new" :label="`${mrRef(task.implementation.prUrl, task.implementation.prNumber!)} 열기`" :href="task.implementation.prUrl" target="_blank" />
                 <q-btn v-if="!$q.screen.lt.md && canAdminRequestCloseLost" outline color="primary" icon="task_alt" label="종료 요청" data-test="close-request-secondary" @click="requestClose" />
+                <q-btn v-if="!$q.screen.lt.md && showFollowUp" outline color="primary" icon="add_circle_outline" label="새 작업으로 등록" :href="followUpHref" data-test="fix-request-new-task" />
               </template>
             </TaskNextAction>
           </div>
         </div>
       </q-card>
+
+      <!-- 수정 요청 안내 — 데스크톱·모바일 공용. 열린 회차 안내와 상한 안내(버튼은 데스크톱 배포 카드·모바일 더 보기 메뉴) -->
+      <q-banner v-if="fixBannerText" dense rounded class="q-mb-md bg-blue-1 text-blue-10" data-test="fix-round-banner">
+        <template #avatar><q-icon name="build" color="primary" /></template>
+        {{ fixBannerText }}
+      </q-banner>
+      <div v-if="fixLimitNote" class="q-mb-md text-caption text-grey-8" data-test="fix-limit-note">{{ fixLimitNote }}</div>
 
       <!-- 작업 종료 카드 — 데스크톱·모바일 공용(진행 카드 바로 아래). 반려·종료 취소 버튼은 모바일에서는 하단 더 보기 메뉴로 간다. -->
       <q-card v-if="task.close" flat bordered class="q-mb-md" data-test="close-card">
@@ -802,6 +893,7 @@ function onAction(kind: NextActionKind) {
             </div>
           </template>
         </TaskDetailMobile>
+        <FixRequestHistory v-if="task.fix" class="q-mt-md" :task-id="String(task.id)" :refresh-key="fixHistoryKey" />
         <!-- 좁은 화면: 인라인 패널은 하단 액션 바와 겹쳐 입력이 답답하다 → 카드에는 열기 버튼만, 대화는 전체화면 시트(스펙 §4.2) -->
         <q-card v-if="isInterviewPhase && task.interviewSessionId" id="interview-card" flat bordered class="q-mt-md">
           <q-card-section class="row items-center no-wrap q-gutter-sm">
@@ -865,6 +957,22 @@ function onAction(kind: NextActionKind) {
                   <q-item v-if="auth.isAdmin && ['DEPLOYED','DEPLOY_LOST'].includes(task.status)" v-close-popup clickable class="text-negative" data-test="bar-more-undeploy" @click="undeploy">
                     <q-item-section avatar><q-icon name="stop" color="negative" /></q-item-section>
                     <q-item-section>중지</q-item-section>
+                  </q-item>
+                  <q-item v-if="canFixRequest" v-close-popup clickable data-test="bar-more-fix-request" @click="showFixRequest = true">
+                    <q-item-section avatar><q-icon name="build" /></q-item-section>
+                    <q-item-section>수정 요청</q-item-section>
+                  </q-item>
+                  <q-item v-if="showFollowUp" v-close-popup clickable tag="a" :href="followUpHref" data-test="bar-more-fix-new-task">
+                    <q-item-section avatar><q-icon name="add_circle_outline" /></q-item-section>
+                    <q-item-section>새 작업으로 등록</q-item-section>
+                  </q-item>
+                  <q-item v-if="auth.isAdmin && task.status === 'FIX_REVIEW'" v-close-popup clickable class="text-negative" data-test="bar-more-fix-reject" @click="rejectFix">
+                    <q-item-section avatar><q-icon name="block" color="negative" /></q-item-section>
+                    <q-item-section>수정 반려</q-item-section>
+                  </q-item>
+                  <q-item v-if="canAbort" v-close-popup clickable class="text-warning" data-test="bar-more-fix-abort" @click="abortFix">
+                    <q-item-section avatar><q-icon name="stop_circle" color="warning" /></q-item-section>
+                    <q-item-section>수정 중단</q-item-section>
                   </q-item>
                   <q-item v-if="canAdminRequestCloseLost" v-close-popup clickable data-test="bar-more-close-request" @click="requestClose">
                     <q-item-section avatar><q-icon name="task_alt" /></q-item-section>
@@ -1166,7 +1274,7 @@ function onAction(kind: NextActionKind) {
 
       <!-- 배포 카드 -->
       <q-card
-        v-if="task.status === 'PR_CREATED' || task.deployment"
+        v-if="task.status === 'PR_CREATED' || task.deployment || task.status === 'FIX_REVIEW' || task.fix?.activeRound != null"
         flat
         bordered
         class="q-mb-md"
@@ -1218,6 +1326,34 @@ function onAction(kind: NextActionKind) {
               @click="undeploy"
             />
           </template>
+          <!-- 수정 요청 (스펙 2026-11-03 §6) — 등록자·관리자의 보조 버튼. 반려는 관리자, 수정 중단은 회차의 구현실패에서 관리자만 -->
+          <q-btn
+            v-if="canFixRequest"
+            outline
+            color="primary"
+            icon="build"
+            label="수정 요청"
+            data-test="fix-request-open"
+            @click="showFixRequest = true"
+          />
+          <q-btn
+            v-if="auth.isAdmin && task.status === 'FIX_REVIEW'"
+            outline
+            color="negative"
+            icon="block"
+            label="반려"
+            data-test="fix-reject"
+            @click="rejectFix"
+          />
+          <q-btn
+            v-if="canAbort"
+            outline
+            color="warning"
+            icon="stop_circle"
+            label="수정 중단"
+            data-test="fix-abort"
+            @click="abortFix"
+          />
         </q-card-section>
 
         <q-banner
@@ -1278,6 +1414,8 @@ function onAction(kind: NextActionKind) {
           </q-expansion-item>
         </q-card-section>
       </q-card>
+
+      <FixRequestHistory v-if="task.fix" :task-id="String(task.id)" :refresh-key="fixHistoryKey" />
 
       <div v-if="usageByStage['DESIGN']" class="row items-center q-mb-xs">
         <q-chip dense size="sm" outline icon="bolt"
@@ -1379,9 +1517,19 @@ function onAction(kind: NextActionKind) {
       <ImplementationRetryDialog
         v-model="showImplRetry"
         :task-id="String(task.id)"
-        :current-mode="task.implementationMode ?? 'DIRECT'"
+        :current-mode="task.fix?.activeRound != null ? (task.fix.activeMode ?? 'REVIEW') : (task.implementationMode ?? 'DIRECT')"
         :ref-repos="task.refRepos ?? []"
         :failure-reason="task.failureReason"
+        :fix-round="task.fix?.activeRound ?? null"
+        @submitted="refresh"
+      />
+
+      <FixRequestDialog
+        v-model="showFixRequest"
+        :task-id="String(task.id)"
+        :is-admin="auth.isAdmin"
+        :next-round="fixNextRound"
+        :max-rounds="task.fix?.maxRounds ?? 0"
         @submitted="refresh"
       />
 

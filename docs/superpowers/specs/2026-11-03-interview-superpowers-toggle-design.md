@@ -3,7 +3,7 @@
 - 날짜: 2026-11-03
 - 상태: 초안 — 사용자 검토 대기 (brainstorming: 동기 확인 → 사용자가 방식 결정을 위임 → 제안 1건 확인, 아래 §3)
 - 범위: 인터뷰 서비스(Node, Agent SDK) + API(승인·claim) + 프론트(승인 다이얼로그·상세). 워커는 바꾸지 않는다.
-- 선행: `2026-11-03-task-type-db-write-design.md`(작업 타입)를 먼저 구현한다. 기본값이 타입(DB 작업)에 따라 정해지기 때문이다. 마이그레이션은 그다음 번호인 **V40**이다. (Claude 판단)
+- 선행: `2026-11-03-task-type-db-write-design.md`(작업 타입)를 먼저 구현한다. 기본값이 타입(DB 작업)에 따라 정해지기 때문이다. 이 기능은 작업 타입 PR 위에 **별도 브랜치·PR로 쌓는다**. 마이그레이션 번호는 병합 시점 최신 다음 번호로 하며, 예정은 V40이다. (Claude 판단)
 - 표기: "(Claude 판단)"은 사용자가 정하지 않았고 설계자가 정한 것이다. 이 문서의 방식 결정은 사용자가 위임해 전부 Claude 판단이며, 사용자는 §3 전체를 확인했다.
 
 ## 1. 목표
@@ -51,6 +51,7 @@ DB 작업처럼 등록 설명만으로 할 일이 거의 정해지는 간단한 
   - `ApproveRequest.superpowersEnabled`(Boolean, 선택)를 추가한다. null이면 true(옛 화면·다른 호출자는 지금과 같음).
   - `TaskService.startInterview` → `InterviewService.createForTask`에서 세션에 저장한다.
   - 끔일 때만 이력 `인터뷰 방식: 간단(superpowers 끔)`을 남긴다.
+- **프리필**: 승인 다이얼로그 프리필용으로 `InterviewSummaryResponse`(`/api/tasks/{id}/interviews`)에 `superpowersEnabled`를 추가한다.
 - **claim**: `InterviewClaimResponse.superpowersEnabled`(Boolean)를 추가한다. 인터뷰 서비스 `types.ts`에는 optional로 두고, 없거나 true면 지금과 같다.
 - **응답**: 작업 상세에서 보여 주기 위해 `TaskResponse`에 지금 인터뷰 세션의 `interviewSuperpowersEnabled`(Boolean, 세션이 없으면 null)를 싣는다. 값을 어디서 가져올지는 빌더가 정한다(이미 세션을 조회하는 곳이 있으면 그곳).
 
@@ -60,11 +61,14 @@ DB 작업처럼 등록 설명만으로 할 일이 거의 정해지는 간단한 
 
 1. **플러그인과 Skill**: `buildOptions`에 `superpowers: boolean` 입력을 더한다. 끔이면 `plugins: []`로 두고 `allowedTools`에서 `'Skill'`을 뺀다. 나머지(Read·Grep·Glob·MCP 사전 승인, INTERVIEW 게이트, settingSources 격리)는 그대로 둔다. 호출 4곳이 같은 값을 쓰게 한다.
 2. **kickoff**
-   - 첫 문장(작업 타입별 문구, 작업 타입 설계 §5.1)과 첨부 절, PLANNING-ONLY 금지 사항, 정규 형식 안내는 공통으로 쓴다.
+   - 작업 타입 PR에서 kickoff를 두 절로 나눠 둔다. "타입 절"은 첫 문장과 타입별 계획 내용 요구이고, "진행 방식 절"은 brainstorming 줄 또는 간단 지시다. 켬·타입 없음의 kickoff 바이트(`interviewRunner.test.ts`의 KICKOFF_GOLDEN)는 그대로 유지한다. (Claude 판단)
+   - 공통으로 쓰는 것: 첫 문장(작업 타입별 문구, 작업 타입 설계 §5.1), 첨부 절, PLANNING-ONLY 금지 사항, 정규 형식 안내.
+   - 타입별 **계획 내용 요구**도 끔에서 그대로 남긴다. DB 작업의 "SQL을 순서대로, 각 문장의 §6.2 분류 표시", 버그 픽스의 "재현 → 원인 → 수정 → 재발 확인" 순서, `writableDbConnections` 안내가 여기에 해당한다. 타입 지시 중 "~부터 묻는다"만 끔에서 "먼저 자료·코드·DB로 확인하고, 그래도 알 수 없는 것만 한 번의 질문 묶음에 넣는다"로 바꾼다. (Claude 판단)
    - "(via brainstorming → writing-plans)"와 마지막 "Use the brainstorming skill…" 줄만 간단 인터뷰 지시로 바꾼다. 지시 요지:
      - "superpowers 스킬은 없다. 먼저 등록 설명·첨부·레포 코드·(있으면) DB를 읽기 도구로 살펴라."
      - "할 일과 범위가 분명하면 질문하지 말고 바로 정규 형식의 계획을 내라."
      - "꼭 사람이 정해야 하는 것이 있을 때만, 그 질문들을 한 메시지에 번호를 붙여 모두 담아 한 번만 물어라. 추측으로 정할 수 있는 것은 묻지 말고 계획에 '가정'으로 적어라."
+     - "질문과 계획을 한 메시지에 섞지 마라. 질문할 때는 질문만, 계획을 낼 때는 계획만 쓴다." 정규 헤딩이 있으면 그 메시지가 계획으로 확정되어(`planHarvest.ts:15-16`) 함께 쓴 질문이 묻히기 때문이다. (Claude 판단)
 3. **답변 뒤 턴**: 끔이면 resume 프롬프트 앞에 다음 줄을 붙인다. "이 답변으로 질문은 끝입니다. 더 묻지 말고 이 답을 반영해 정규 형식의 최종 계획을 내세요." 계획 형식은 `buildPlanReformatSplice`와 같은 문구를 재사용한다.
 4. **마무리 보정**
    - 끔인 세션에서 답변 뒤 턴이 계획 없이 다시 질문으로 끝나면, 러너가 같은 세션에서 `buildPlanReformatSplice()`로 한 번 더 요청한다(지금 near-miss·force-finish 경로와 같은 방식).
@@ -76,8 +80,11 @@ DB 작업처럼 등록 설명만으로 할 일이 거의 정해지는 간단한 
 
 - **승인 다이얼로그**(`ApproveDialog.vue`)
   - 모델·추론 아래에 토글 "superpowers 인터뷰"(켬/끔)를 둔다. 끔일 때 보조 문구는 "간단 인터뷰 — 질문을 최대 한 번 모아서 묻고 바로 계획"이다.
-  - 기본값은 작업 타입이 DB 작업이면 끔, 아니면 켬이다.
-  - 다시 승인할 때 "지난 인터뷰 프리필"이 있으면 지난 세션 값을 쓴다.
+  - 기본값을 정하는 순서 (Claude 판단)
+    1. 지난 인터뷰 세션이 있으면 그 세션의 값을 쓴다. 판정 기준은 DB 연결 프리필과 같고(`/api/tasks/{id}/interviews`의 첫 행이 있는지), 모델 유효성은 보지 않는다.
+    2. 지난 세션이 없으면 지금 고른 타입의 기본값을 쓴다. DB 작업이면 끔, 아니면 켬이다.
+    3. 관리자가 타입 select를 바꾸면 토글을 새 타입의 기본값으로 다시 맞춘다. 단, 관리자가 토글을 직접 바꾼 뒤에는 타입을 바꿔도 따라가지 않는다.
+  - 프리필에 쓰기 위해 `InterviewSummaryResponse`에 `superpowersEnabled`를 추가한다(§4).
   - 바디에 `superpowersEnabled`를 싣는다.
 - **작업 상세**(데스크톱 `[id].vue`·모바일 `TaskDetailMobile.vue`): 인터뷰 정보 줄에 `간단 인터뷰` 칩을 단다. 끔일 때만 보인다.
 - hydration-smoke 목: 바뀐 응답 필드가 있으면 목에 넣는다.
@@ -89,6 +96,8 @@ DB 작업처럼 등록 설명만으로 할 일이 거의 정해지는 간단한 
 3. **프론트**: `.output`을 재빌드한다.
 
 인터뷰 서비스가 먼저인 이유: 구버전 러너는 새 필드를 버리고 superpowers를 계속 로드하므로 "끔"이 조용히 무시된다. 질문 세션을 도입할 때의 "인터뷰 서비스 먼저" 규칙과 같다. 워커는 바꾸지 않는다.
+
+작업 타입 기능과 한 번에 배포한다면 순서를 합친다: 인터뷰 서비스 → API(V39·V40) → 워커 → 프론트. 두 문서의 순서 제약을 모두 지킨다.
 
 ## 8. 빌더에게 맡기는 것
 

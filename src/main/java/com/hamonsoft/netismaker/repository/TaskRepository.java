@@ -239,10 +239,12 @@ public interface TaskRepository extends JpaRepository<Task, Long> {
      * 종료 4상태(종료승인대기·종료대기·종료중·종료실패)도 포함한다: 컨테이너는 종료 ②단계에서야 내려가므로
      * 그 전(반려·철회 후 배포완료로 복귀 포함)에 GC가 지우면 "반려했더니 배포가 죽었다"가 된다.
      * 작업종료는 ②에서 이미 중지했으므로 제외. 대사는 여전히 DEPLOYED/DEPLOY_LOST만 한다.
+     * 수정승인대기와 열린 수정 회차(active_fix_request_id)가 있는 작업도 포함한다: 회차 동안 구현중·PR생성 등
+     * 어느 상태든 이전에 배포된 컨테이너를 사용자가 계속 보고 있어야 하므로 GC가 지우면 안 된다(대사는 영향 없음).
      */
     @Query("""
         SELECT t FROM Task t
-        WHERE t.status IN (com.hamonsoft.netismaker.entity.TaskStatus.DEPLOYED,
+        WHERE (t.status IN (com.hamonsoft.netismaker.entity.TaskStatus.DEPLOYED,
                            com.hamonsoft.netismaker.entity.TaskStatus.DEPLOY_LOST,
                            com.hamonsoft.netismaker.entity.TaskStatus.DEPLOY_PENDING,
                            com.hamonsoft.netismaker.entity.TaskStatus.DEPLOYING,
@@ -251,7 +253,9 @@ public interface TaskRepository extends JpaRepository<Task, Long> {
                            com.hamonsoft.netismaker.entity.TaskStatus.CLOSE_REVIEW,
                            com.hamonsoft.netismaker.entity.TaskStatus.CLOSE_PENDING,
                            com.hamonsoft.netismaker.entity.TaskStatus.CLOSING,
-                           com.hamonsoft.netismaker.entity.TaskStatus.CLOSE_FAILED)
+                           com.hamonsoft.netismaker.entity.TaskStatus.CLOSE_FAILED,
+                           com.hamonsoft.netismaker.entity.TaskStatus.FIX_REVIEW)
+               OR t.activeFixRequestId IS NOT NULL)
           AND t.deletedAt IS NULL
     """)
     List<Task> findDeployReconcilable();

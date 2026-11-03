@@ -474,7 +474,16 @@ public class TaskService {
             case CLOSE_REVIEW, CLOSE_PENDING, CLOSING, CLOSE_FAILED ->
                     throw TaskException.conflict("종료 처리 중인 작업은 삭제할 수 없습니다 — 종료를 마치거나 반려한 뒤 삭제하세요 (현재: "
                             + t.getStatus().dbValue() + ")");
+            // 수정 요청 승인 대기: 이전에 배포된 컨테이너를 사용자가 아직 보고 있다 (회차 id는 승인 때 채워지므로 아래 검사로는 못 막는다).
+            case FIX_REVIEW ->
+                    throw TaskException.conflict("수정 회차 진행 중에는 삭제할 수 없습니다 (현재: "
+                            + t.getStatus().dbValue() + ")");
             default -> { }
+        }
+        // 열린 수정 회차: 구현중·구현실패·PR생성 등 어느 상태든 이전 배포 컨테이너가 살아 있다 — 회차가 닫혀야 삭제할 수 있다.
+        if (t.getActiveFixRequestId() != null) {
+            throw TaskException.conflict("수정 회차 진행 중에는 삭제할 수 없습니다 (현재: "
+                    + t.getStatus().dbValue() + ")");
         }
         interviewService.closeOpenSessionsForTask(t.getId(), actorId);
         t.setDeletedAt(OffsetDateTime.now());

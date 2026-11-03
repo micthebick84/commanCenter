@@ -98,6 +98,23 @@ class GitHubPrCloserTest {
     }
 
     @Test
+    void 지울_브랜치를_base로_쓰는_열린_PR을_옮긴다() throws Exception {
+        replies.add(new ProcessRunner.Result(0, "[{\"number\":8}]"));
+        assertThat(closer().retargetDependents(ref(), "netismaker/task-5-x", "main")).containsExactly("#8");
+        assertThat(calls.get(0)).containsExactly("pr", "list", "--repo", "acme/widgets", "--base", "netismaker/task-5-x",
+                "--state", "open", "--json", "number", "--limit", "100");
+        assertThat(calls.get(1)).containsExactly("pr", "edit", "8", "--repo", "acme/widgets", "--base", "main");
+    }
+
+    @Test
+    void PR_base_변경이_실패하면_예외() {
+        replies.add(new ProcessRunner.Result(0, "[{\"number\":8}]"));
+        replies.add(new ProcessRunner.Result(1, "HTTP 403"));
+        assertThatThrownBy(() -> closer().retargetDependents(ref(), "b", "main"))
+                .isInstanceOf(IOException.class).hasMessageContaining("PR #8 base 변경 실패");
+    }
+
+    @Test
     void 브랜치_삭제의_다른_실패는_예외() {
         replies.add(new ProcessRunner.Result(1, "HTTP 403: Resource not accessible"));
         assertThatThrownBy(() -> closer().deleteBranch(ref(), "b")).isInstanceOf(java.io.IOException.class);

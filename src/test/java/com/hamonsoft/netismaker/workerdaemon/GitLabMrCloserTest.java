@@ -105,19 +105,77 @@ class GitLabMrCloserTest {
         assertRefusedBeforeAnyChange();
     }
 
+    private static final String TARGET = "/api/v4/projects/g%2Fp/repository/branches/netismaker%2Ftask-1";
+
+    private static String conflicted() {
+        return mr("opened", true, SHA, "conflict", null)
+                .replace("\"has_conflicts\":false", "\"has_conflicts\":true,\"target_branch\":\"netismaker/task-1\"");
+    }
+
     @Test
     void 충돌_MR은_아무것도_바꾸지_않고_거부() {
-        route("GET " + MR, 200, mr("opened", true, SHA, "conflict", null)
-                .replace("\"has_conflicts\":false", "\"has_conflicts\":true"));
+        route("GET " + MR, 200, conflicted());
+        route("GET " + TARGET, 200, "{\"name\":\"netismaker/task-1\"}");
         assertThatThrownBy(() -> new GitLabMrCloser("t").merge(ref(), 9, SHA, "merge"))
-                .isInstanceOf(MergeRequestCloser.CloseRefusedException.class).hasMessageContaining("충돌");
-        assertRefusedBeforeAnyChange();
+                .isInstanceOf(MergeRequestCloser.CloseRefusedException.class).hasMessageStartingWith("충돌");
+        assertNoChange();
+    }
+
+    @Test
+    void target_브랜치가_지워져_충돌로_보이면_target_없음으로_거부() {
+        route("GET " + MR, 200, conflicted());
+        route("GET " + TARGET, 404, "{\"message\":\"404 Branch Not Found\"}");
+        assertThatThrownBy(() -> new GitLabMrCloser("t").merge(ref(), 9, SHA, "merge"))
+                .isInstanceOf(MergeRequestCloser.CloseRefusedException.class)
+                .hasMessageStartingWith("target 브랜치 없음: netismaker/task-1");
+        assertNoChange();
+    }
+
+    @Test
+    void target_브랜치_확인이_실패하면_충돌로_거부() {
+        route("GET " + MR, 200, conflicted());
+        route("GET " + TARGET, 500, "{}");
+        assertThatThrownBy(() -> new GitLabMrCloser("t").merge(ref(), 9, SHA, "merge"))
+                .isInstanceOf(MergeRequestCloser.CloseRefusedException.class).hasMessageStartingWith("충돌");
     }
 
     private void assertRefusedBeforeAnyChange() {
         assertThat(seen).hasSize(1);
+        assertNoChange();
+    }
+
+    private void assertNoChange() {
         assertThat(seen.get(0)).startsWith("GET " + MR);
         assertThat(seen).noneMatch(s -> s.startsWith("PUT "));
+    }
+
+    private static final String MRS = "/api/v4/projects/g%2Fp/merge_requests";
+
+    @Test
+    void 지울_브랜치를_target으로_쓰는_열린_MR을_옮긴다() throws Exception {
+        route("GET " + MRS, 200, "[{\"iid\":2},{\"iid\":4}]");
+        route("PUT " + MRS + "/2", 200, "{}");
+        route("PUT " + MRS + "/4", 200, "{}");
+
+        assertThat(new GitLabMrCloser("t").retargetDependents(ref(), "netismaker/task-9", "main"))
+                .containsExactly("!2", "!4");
+        assertThat(seen).filteredOn(s -> s.startsWith("PUT ")).hasSize(2)
+                .allMatch(s -> s.contains("\"target_branch\":\"main\""));
+    }
+
+    @Test
+    void 옮길_MR이_없으면_아무것도_바꾸지_않는다() throws Exception {
+        route("GET " + MRS, 200, "[]");
+        assertThat(new GitLabMrCloser("t").retargetDependents(ref(), "netismaker/task-9", "main")).isEmpty();
+        assertThat(seen).hasSize(1);
+    }
+
+    @Test
+    void MR_target_변경이_거부되면_예외() {
+        route("GET " + MRS, 200, "[{\"iid\":2}]");
+        route("PUT " + MRS + "/2", 403, "{\"message\":\"403 Forbidden\"}");
+        assertThatThrownBy(() -> new GitLabMrCloser("t").retargetDependents(ref(), "netismaker/task-9", "main"))
+                .isInstanceOf(IOException.class).hasMessageContaining("MR !2 target 변경 실패(403)");
     }
 
     @Test

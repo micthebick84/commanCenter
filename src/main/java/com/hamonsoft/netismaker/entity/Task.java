@@ -30,6 +30,8 @@ public class Task {
     @Column(name = "github_repo", nullable = false, length = 255)
     private String githubRepo;
 
+    /** 기준 브랜치. 이 브랜치를 head로 쓰던 다른 작업이 종료돼 브랜치가 지워지면 그 작업의 target으로 옮긴다. */
+    @Setter
     @Column(name = "github_branch", nullable = false, length = 255)
     private String githubBranch;
 

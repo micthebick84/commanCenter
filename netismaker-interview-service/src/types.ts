@@ -167,7 +167,16 @@ export interface InterviewClaimResponse {
    * 참조를 고른 적 없는 세션·질문 세션은 false. 구버전 API는 필드가 없다 → `=== true`로만 판정한다.
    */
   refsCleared?: boolean;
+  /**
+   * 작업 타입 (스펙 2026-11-03 §5.1) — API가 claim 때 작업 행에서 읽어 enum 이름으로 싣는다. 타입 없음·질문 세션은 null,
+   * 구버전 API는 필드 자체가 없다 → `undefined`·`null`을 둘 다 타입 없음으로 본다. 모르는 값(다른 버전의 새 타입)도 타입 없음으로
+   * 읽는다(kickoffByType의 리터럴 비교) — 그래서 타입은 좁지만 읽는 쪽은 `unknown`처럼 다룬다.
+   */
+  taskType?: TaskTypeWire | null;
 }
+
+/** 작업 타입의 와이어 값 — Java `TaskType` enum 이름. */
+export type TaskTypeWire = 'NEW_FEATURE' | 'FEATURE_CHANGE' | 'BUG_FIX' | 'DB_WORK';
 
 /** SSE activity 와이어 계약의 활동 type (스펙 §4.1). */
 export type ActivityEventType = 'tool' | 'text' | 'thinking';

@@ -218,7 +218,18 @@ public class InterviewService {
         return Optional.of(InterviewClaimResponse.of(s, turns, attachmentRefsFor(s),
                 turnAttachmentsFor(s), attachmentRootFor(s))
                 .withRefRepos(refsFor(s))
-                .withRefsCleared(refsCleared(s, turns)));
+                .withRefsCleared(refsCleared(s, turns))
+                .withTaskType(taskTypeOf(s)));
+    }
+
+    /**
+     * 작업 인터뷰의 작업 타입 (스펙 2026-11-03 §5.1) — enum 이름, 타입 없음·작업 없음·삭제된 작업은 null.
+     * 세션에 칸을 두지 않고 claim 때 작업 행에서 읽는다(승인 때 관리자가 바꾼 값이 곧바로 반영되고, {@link #attachmentRefsFor}가
+     * 작업을 읽는 것과 같은 방식). 질문 세션은 taskId가 없어 작업을 읽지 않는다.
+     */
+    private String taskTypeOf(InterviewSession s) {
+        if (s.getTaskId() == null) return null;
+        return taskRepo.findActiveById(s.getTaskId()).map(Task::getTaskType).map(Enum::name).orElse(null);
     }
 
     /**

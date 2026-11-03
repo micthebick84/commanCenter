@@ -297,4 +297,54 @@ class InterviewClaimResponseTest {
         assertThat(json.get("slideImagePaths").isArray()).isTrue();
         assertThat(json.get("mediaImagePaths").size()).isZero();
     }
+
+    // ── 작업 타입 (스펙 2026-11-03 §5.1) ─────────────────────────────────────────
+
+    @Test
+    void of는_taskType이_없고_JSON에는_null_칸이_나간다() {
+        InterviewClaimResponse base = InterviewClaimResponse.of(session(), List.of(), List.of());
+
+        assertThat(base.taskType()).isNull();
+        JsonNode json = new ObjectMapper().findAndRegisterModules().valueToTree(base);
+        assertThat(json.has("taskType")).isTrue();
+        assertThat(json.get("taskType").isNull()).isTrue();
+    }
+
+    @Test
+    void withTaskType은_그_칸만_바꾼다() {
+        InterviewClaimResponse base = InterviewClaimResponse.of(session(), List.of(), List.of());
+
+        InterviewClaimResponse typed = base.withTaskType("DB_WORK");
+
+        assertThat(typed.taskType()).isEqualTo("DB_WORK");
+        assertThat(typed).usingRecursiveComparison().ignoringFields("taskType").isEqualTo(base);
+        assertThat(typed.withTaskType(null)).isEqualTo(base);
+    }
+
+    @Test
+    void with사본이_taskType_유지_JSON() throws Exception {
+        var dbRef = new InterviewClaimResponse.DbConnectionRef("db-7", "운영 (MySQL)", "MYSQL", "h", 3306, "app", "u", "Pw-9");
+        InterviewClaimResponse typed = InterviewClaimResponse.of(session(), List.of(), List.of()).withTaskType("BUG_FIX");
+
+        InterviewClaimResponse viaDb = typed.withDb(List.of(dbRef), List.of("참고"));
+        InterviewClaimResponse viaRefs = typed.withRefRepos(List.of(claimRef(11L, SHA)));
+        InterviewClaimResponse viaCleared = typed.withRefsCleared(true);
+
+        ObjectMapper mapper = new ObjectMapper().findAndRegisterModules();
+        for (InterviewClaimResponse r : List.of(viaDb, viaRefs, viaCleared)) {
+            assertThat(r.taskType()).isEqualTo("BUG_FIX");
+            assertThat(mapper.writeValueAsString(r)).contains("\"taskType\":\"BUG_FIX\"");
+        }
+        // 순서와 무관 — 다른 with*를 먼저 거쳐도 타입을 나중에 붙이면 다른 칸이 그대로 남는다
+        InterviewClaimResponse chained = InterviewClaimResponse.of(session(), List.of(), List.of())
+                .withRefRepos(List.of(claimRef(11L, SHA)))
+                .withRefsCleared(true)
+                .withDb(List.of(dbRef), List.of("참고"))
+                .withTaskType("DB_WORK");
+        assertThat(chained.taskType()).isEqualTo("DB_WORK");
+        assertThat(chained.refRepos()).containsExactly(claimRef(11L, SHA));
+        assertThat(chained.refsCleared()).isTrue();
+        assertThat(chained.dbConnections()).containsExactly(dbRef);
+        assertThat(chained.dbNotices()).containsExactly("참고");
+    }
 }

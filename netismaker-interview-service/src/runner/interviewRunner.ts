@@ -9,6 +9,7 @@ import { withTurnInputGate } from './turnInputGate.js';
 import { tryHarvest, type HarvestResult } from './planHarvest.js';
 import { harvestSessionPlanFiles } from './planFiles.js';
 import { relay } from './messageRelay.js';
+import { kickoffLead, taskTypeGuide } from './kickoffByType.js';
 import {
   ensureRepo as defaultEnsureRepo,
   ensureRefRepos as defaultEnsureRefRepos,
@@ -147,6 +148,8 @@ function attachmentSection(claim: InterviewClaimResponse): string {
  * 접두는 둘로 나뉜다 (스펙 2026-10-24 §5.2): `everyTurn`(참조 절 — 인터뷰 중 변경·실패를 알리려 매 턴 다시 싣는다)은 kickoff·resume
  * 모두 맨 앞에, `kickoffOnly`(DB 절)는 kickoff에만 붙는다 — DB가 붙은 인터뷰의 resume 프롬프트가 지금과 같도록.
  * 둘 다 비면 프롬프트는 지금과 바이트까지 같다.
+ * kickoff 본문은 작업 타입에 따라 첫 문장(`kickoffLead`)과 첨부 절 다음의 지시 문단(`taskTypeGuide`)만 바뀐다 — 타입 없음·NEW_FEATURE·
+ * 모르는 값은 지금과 같고, resume 입력(답변)은 타입과 무관하다 (스펙 2026-11-03 §5.1).
  */
 async function* promptFor(
   claim: InterviewClaimResponse,
@@ -157,9 +160,10 @@ async function* promptFor(
     yield userTurn(
       everyTurn +
       (prefixes.kickoffOnly ?? '') +
-      `I want to add a feature to the repo at ${claim.githubRepo} (branch ${claim.githubBranch}).\n` +
+      kickoffLead(claim) +
         `Title: ${claim.title}\nRequest: ${claim.description}\n\n` +
         attachmentSection(claim) +
+        taskTypeGuide(claim.taskType) +
         'IMPORTANT — this is a PLANNING-ONLY interview. Your only deliverable is a written ' +
         'implementation PLAN (via brainstorming → writing-plans), NOT code. Do NOT implement the ' +
         'feature: do not create or modify source files, do not run builds/installs/tests, do not ' +

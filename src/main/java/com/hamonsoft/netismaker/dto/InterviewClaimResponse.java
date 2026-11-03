@@ -64,7 +64,13 @@ public record InterviewClaimResponse(
          * '없음(전부 해제)'이고 지금 참조가 없을 때만 true. 그 밖(참조를 고른 적 없음·질문 세션 포함)은 false라
          * 프롬프트가 그대로다. InterviewService.claim이 withRefsCleared로 채운다.
          */
-        boolean refsCleared
+        boolean refsCleared,
+        /**
+         * 작업 타입 (스펙 2026-11-03 §5.1) — {@code TaskType} enum 이름('NEW_FEATURE'|'FEATURE_CHANGE'|'BUG_FIX'|'DB_WORK'),
+         * 타입 없음·질문 세션은 null(키는 항상 나간다). 세션에 칸을 두지 않고 claim 때 작업 행에서 읽는다 —
+         * InterviewService.claim이 withTaskType으로 채운다. 인터뷰 서비스는 모르는 값을 타입 없음으로 읽는다.
+         */
+        String taskType
 ) {
     /** 어느 경로로 생성돼도 non-null 계약 유지 (스펙 §5.4). */
     public InterviewClaimResponse {
@@ -175,23 +181,23 @@ public record InterviewClaimResponse(
                 attachmentRoot,
                 s.getGitUrl(), RepoRef.fromSnapshot(s.getGithubRepo(), s.getGitUrl()).host(),
                 s.getDbConnectionIds() == null ? List.of() : List.copyOf(s.getDbConnectionIds()), List.of(), List.of(),
-                List.of(), false);
+                List.of(), false, null);
     }
 
-    /** DB 접속정보만 채운 사본 (스펙 §5.4). 참조 repo·refsCleared는 그대로 실어 나른다. */
+    /** DB 접속정보만 채운 사본 (스펙 §5.4). 참조 repo·refsCleared·taskType은 그대로 실어 나른다. */
     public InterviewClaimResponse withDb(List<DbConnectionRef> refs, List<String> notices) {
         return new InterviewClaimResponse(sessionId, githubRepo, githubBranch, title, description, claudeSessionId,
                 currentPhase, workDir, lastAnswer, replyToSeq, mcpsExtra, turns, model, effort, totalCostUsd,
                 attachments, kind, attachmentRoot, gitUrl, repoHost, dbConnectionIds, refs, notices, refRepos,
-                refsCleared);
+                refsCleared, taskType);
     }
 
-    /** 참조 repo만 채운 사본 (스펙 2026-10-22 §4.4). DB 접속정보·refsCleared는 그대로 실어 나른다. */
+    /** 참조 repo만 채운 사본 (스펙 2026-10-22 §4.4). DB 접속정보·refsCleared·taskType은 그대로 실어 나른다. */
     public InterviewClaimResponse withRefRepos(List<ClaimRefRepo> refs) {
         return new InterviewClaimResponse(sessionId, githubRepo, githubBranch, title, description, claudeSessionId,
                 currentPhase, workDir, lastAnswer, replyToSeq, mcpsExtra, turns, model, effort, totalCostUsd,
                 attachments, kind, attachmentRoot, gitUrl, repoHost, dbConnectionIds, dbConnections, dbNotices, refs,
-                refsCleared);
+                refsCleared, taskType);
     }
 
     /** refsCleared만 바꾼 사본 (스펙 2026-10-24 §4.4). 나머지는 그대로 실어 나른다. */
@@ -199,6 +205,14 @@ public record InterviewClaimResponse(
         return new InterviewClaimResponse(sessionId, githubRepo, githubBranch, title, description, claudeSessionId,
                 currentPhase, workDir, lastAnswer, replyToSeq, mcpsExtra, turns, model, effort, totalCostUsd,
                 attachments, kind, attachmentRoot, gitUrl, repoHost, dbConnectionIds, dbConnections, dbNotices,
-                refRepos, cleared);
+                refRepos, cleared, taskType);
+    }
+
+    /** taskType만 바꾼 사본 (스펙 2026-11-03 §5.1). 나머지는 그대로 실어 나른다. */
+    public InterviewClaimResponse withTaskType(String taskType) {
+        return new InterviewClaimResponse(sessionId, githubRepo, githubBranch, title, description, claudeSessionId,
+                currentPhase, workDir, lastAnswer, replyToSeq, mcpsExtra, turns, model, effort, totalCostUsd,
+                attachments, kind, attachmentRoot, gitUrl, repoHost, dbConnectionIds, dbConnections, dbNotices,
+                refRepos, refsCleared, taskType);
     }
 }

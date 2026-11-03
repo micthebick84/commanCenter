@@ -1198,6 +1198,81 @@ describe('InterviewRunner kind=QUESTION (스펙 §6 — plan 경로 미진입, Q
         '이 정확한 구조라야 시스템이 완료를 인식하며, 없으면 인터뷰가 끝나지 않습니다.\n\n' +
         'Use the brainstorming skill: read the project context, then ask me one clarifying question at a time.';
 
+      /** 한 claim의 첫 프롬프트(kickoff 또는 resume 입력). 작업 타입 시험이 쓴다 — 참조·DB 없음. */
+      const kickoffOf = async (claim: InterviewClaimResponse, db = noDb()): Promise<string> => {
+        const { fakeQuery, captured } = capturing(() => questionStream());
+        await runnerWith(makeClient(), fakeQuery, vi.fn(), { createDbMcp: vi.fn().mockReturnValue(db) }).run(claim);
+        return captured.prompt;
+      };
+
+      it('작업 타입: 타입 없음·NEW_FEATURE·모르는 값은 골든', async () => {
+        for (const t of [undefined, null, 'NEW_FEATURE', 'QA_WORK']) {
+          expect(await kickoffOf({ ...freshClaim, taskType: t } as any)).toBe(KICKOFF_GOLDEN);
+        }
+      });
+
+      it('작업 타입: 버그 픽스 kickoff', async () => {
+        const p = await kickoffOf({ ...freshClaim, taskType: 'BUG_FIX' });
+        expect(p.startsWith(`I want to fix a bug in the repo at ${freshClaim.githubRepo} (branch ${freshClaim.githubBranch}).\n`)).toBe(true);
+        for (const s of [
+          '어느 화면에서, 무엇을 했을 때, 어떤 오류가 뜨는지',
+          '재현 → 원인 → 수정 → 같은 오류가 다시 안 나는지 확인',
+          '`# <기능> 구현 계획`',
+          '### 작업 N:',
+          'PLANNING-ONLY',
+        ]) {
+          expect(p).toContain(s);
+        }
+      });
+
+      it('작업 타입: 기능 수정·DB 작업', async () => {
+        const change = await kickoffOf({ ...freshClaim, taskType: 'FEATURE_CHANGE' });
+        expect(change.startsWith(`I want to change an existing feature in the repo at ${freshClaim.githubRepo} (branch ${freshClaim.githubBranch}).\n`)).toBe(true);
+        expect(change).toContain('바꾸면 안 되는 것');
+        const db = await kickoffOf({ ...freshClaim, taskType: 'DB_WORK' });
+        expect(db.startsWith(`I want to change database tables or data used by the repo at ${freshClaim.githubRepo} (branch ${freshClaim.githubBranch}).\n`)).toBe(true);
+        expect(db).toContain('[바로 실행]');
+        expect(db).toContain('[승인 대기]');
+      });
+
+      it('작업 타입: 지시 문단은 Title·Request와 첨부 다음, IMPORTANT 앞에 한 번만 들어가고 나머지는 골든과 같다', async () => {
+        const imp = KICKOFF_GOLDEN.indexOf('IMPORTANT —');
+        const titleAndRequest = KICKOFF_GOLDEN.slice(KICKOFF_GOLDEN.indexOf('Title:'), imp);
+        const tail = KICKOFF_GOLDEN.slice(imp);
+        const cases: Array<[string, string]> = [
+          ['FEATURE_CHANGE', 'I want to change an existing feature in the repo at acme/widgets (branch main).\n'],
+          ['BUG_FIX', 'I want to fix a bug in the repo at acme/widgets (branch main).\n'],
+          ['DB_WORK', 'I want to change database tables or data used by the repo at acme/widgets (branch main).\n'],
+        ];
+        for (const [type, first] of cases) {
+          const p = await kickoffOf({ ...freshClaim, taskType: type } as InterviewClaimResponse);
+          expect(p.startsWith(first + titleAndRequest)).toBe(true);
+          expect(p.endsWith(tail)).toBe(true);
+          const guide = p.slice((first + titleAndRequest).length, p.length - tail.length);
+          expect(guide.startsWith('작업 타입: ')).toBe(true);
+          expect(guide.endsWith('\n\n')).toBe(true);
+          expect(p.split('작업 타입: ').length).toBe(2);
+        }
+        // 첨부가 있으면 첨부 절 다음에 지시 문단이 온다
+        const withAtt = await kickoffOf({ ...freshClaimWithAttachments, taskType: 'BUG_FIX' });
+        expect(withAtt.indexOf('첨부 자료')).toBeGreaterThan(-1);
+        expect(withAtt.indexOf('작업 타입: 버그 픽스')).toBeGreaterThan(withAtt.indexOf('계획에는 슬라이드 번호와 함께'));
+        expect(withAtt.indexOf('작업 타입: 버그 픽스')).toBeLessThan(withAtt.indexOf('IMPORTANT —'));
+      });
+
+      it('작업 타입: 참조 절·DB 절 뒤에도 kickoff 본문만 타입별로 바뀐다', async () => {
+        const db = withDb();
+        const { fakeQuery, captured } = capturing(() => questionStream());
+        await runnerWith(makeClient(), fakeQuery, preparer([iAvailable()]), { createDbMcp: vi.fn().mockReturnValue(db) })
+          .run({ ...interviewClaimWithRefs, taskType: 'BUG_FIX' });
+        const prefix = interviewRefSection([iAvailable()]) + dbSection(db);
+        expect(captured.prompt.startsWith(prefix + 'I want to fix a bug in the repo at ')).toBe(true);
+      });
+
+      it('작업 타입: resume은 타입과 무관', async () => {
+        expect(await kickoffOf({ ...resumeClaim, taskType: 'BUG_FIX' })).toBe(resumeClaim.lastAnswer);
+      });
+
       /** 한 턴의 SDK 질의마다 프롬프트를 따로 모은다 — handoff·near-miss처럼 한 턴에 질의가 여러 번일 때. */
       function capturingEach(...streams: Array<() => AsyncIterable<unknown>>) {
         const prompts: string[] = [];

@@ -776,6 +776,76 @@ class InterviewServiceTest {
         assertThat(c.refsCleared()).isFalse();
     }
 
+    // ── 작업 타입 (스펙 2026-11-03 §5.1) — 세션 칸이 아니라 claim 때 작업 행에서 읽는다 ───────────────
+
+    private Task typedTask(long id, TaskType type) {
+        Task t = Task.create("owner/repo", "main", "T", "d", "u1", 3, List.of(), "claude-opus-4-8", "high");
+        ReflectionTestUtils.setField(t, "id", id);
+        t.setTaskType(type);
+        return t;
+    }
+
+    @Test
+    void 작업_인터뷰_claim은_작업_타입() {
+        InterviewSession s = session(1L, InterviewStatus.QUEUED);
+        s.setTaskId(77L);
+        when(sessionRepo.findClaimableForUpdateSkipLocked(any(), any())).thenReturn(List.of(s));
+        when(turnRepo.findBySessionIdOrderBySeqAsc(1L)).thenReturn(List.of());
+        when(taskRepo.findActiveById(77L)).thenReturn(Optional.of(typedTask(77L, TaskType.BUG_FIX)));
+
+        InterviewClaimResponse c = service.claim("w1").orElseThrow();
+
+        assertThat(c.taskType()).isEqualTo("BUG_FIX");
+    }
+
+    @Test
+    void 질문_세션_claim의_taskType은_null이고_작업을_읽지_않는다() {
+        InterviewSession s = questionSession(1L, InterviewStatus.QUEUED);
+        when(sessionRepo.findClaimableForUpdateSkipLocked(any(), any())).thenReturn(List.of(s));
+        when(turnRepo.findBySessionIdOrderBySeqAsc(1L)).thenReturn(List.of());
+
+        InterviewClaimResponse c = service.claim("w1").orElseThrow();
+
+        assertThat(c.taskType()).isNull();
+        verify(taskRepo, never()).findActiveById(any());
+    }
+
+    @Test
+    void 타입_없는_작업_작업_없는_세션_지워진_작업은_taskType_null() {
+        // 타입 없는 작업(기존 작업)
+        InterviewSession untyped = session(1L, InterviewStatus.QUEUED);
+        untyped.setTaskId(77L);
+        when(sessionRepo.findClaimableForUpdateSkipLocked(any(), any())).thenReturn(List.of(untyped));
+        when(turnRepo.findBySessionIdOrderBySeqAsc(1L)).thenReturn(List.of());
+        when(taskRepo.findActiveById(77L)).thenReturn(Optional.of(typedTask(77L, null)));
+        assertThat(service.claim("w1").orElseThrow().taskType()).isNull();
+
+        // 작업이 없는 레거시 인터뷰 세션 — 작업을 읽지 않는다
+        InterviewSession noTask = session(1L, InterviewStatus.QUEUED);
+        when(sessionRepo.findClaimableForUpdateSkipLocked(any(), any())).thenReturn(List.of(noTask));
+        assertThat(service.claim("w1").orElseThrow().taskType()).isNull();
+        verify(taskRepo, times(1)).findActiveById(any());
+
+        // 소프트 삭제된 작업 — 인터뷰는 계속 claim되고 타입만 없다
+        InterviewSession deleted = session(1L, InterviewStatus.QUEUED);
+        deleted.setTaskId(78L);
+        when(sessionRepo.findClaimableForUpdateSkipLocked(any(), any())).thenReturn(List.of(deleted));
+        when(taskRepo.findActiveById(78L)).thenReturn(Optional.empty());
+        assertThat(service.claim("w1").orElseThrow().taskType()).isNull();
+    }
+
+    @Test
+    void 타입이_있는_작업의_resume_claim도_같은_타입을_싣는다() {
+        InterviewSession s = session(1L, InterviewStatus.QUEUED);
+        s.setTaskId(77L);
+        s.setClaudeSessionId("sess-1");
+        when(sessionRepo.findClaimableForUpdateSkipLocked(any(), any())).thenReturn(List.of(s));
+        when(turnRepo.findBySessionIdOrderBySeqAsc(1L)).thenReturn(List.of());
+        when(taskRepo.findActiveById(77L)).thenReturn(Optional.of(typedTask(77L, TaskType.DB_WORK)));
+
+        assertThat(service.claim("w1").orElseThrow().taskType()).isEqualTo("DB_WORK");
+    }
+
     private static InterviewTurn note(int seq, String content) {
         return InterviewTurn.of(1L, seq, "system", "note", content, null);
     }

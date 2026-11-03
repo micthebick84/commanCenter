@@ -1,9 +1,9 @@
 # 작업(Task) — 작업 타입(신규 개발·기능 수정·버그 픽스·DB 작업)과 구현 단계 개발 DB 쓰기 설계
 
 - 날짜: 2026-11-03
-- 상태: 초안 — 사용자 검토 대기 (brainstorming: 코드 현황 조사 → 질의 6건 확인 → 검토자 4관점 확인 → 질의 2건(DB 작업은 배포 없이 종료 허용, 자동 마이그레이션 레포는 다르게) — 아래 §3)
+- 상태: 사용자 승인됨 2026-11-03 (brainstorming: 코드 현황 조사 → 질의 6건 확인 → 검토자 4관점 확인 → 질의 2건(DB 작업은 배포 없이 종료 허용, 자동 마이그레이션 레포는 다르게) — 아래 §3)
 - 범위: netisMaker 백엔드(API + 워커 데몬) + 인터뷰 서비스(프롬프트만) + 프론트엔드(Nuxt)
-- 선행 조건: PR #122(수정 요청, `feat/fix-request-same-branch`, V38) 병합 뒤 구현한다. 같은 파일(`Task.java`·`TaskResponse.java`·`TaskService.java`·`WorkerMainLoop.java`·`WorkerTaskResponse.java`·`tasks/index.vue`·`tasks/[id].vue`)을 고치고, 이 기능의 마이그레이션은 **V39**다.
+- 선행 조건: PR #122(수정 요청, `feat/fix-request-same-branch`, V38) 병합 뒤 구현한다. 이 브랜치는 #122 head(`c87f82d`) 위에 있다 — #122가 main에 병합되면 main으로 rebase한다. 같은 파일(`Task.java`·`TaskResponse.java`·`TaskService.java`·`WorkerMainLoop.java`·`WorkerTaskResponse.java`·`tasks/index.vue`·`tasks/[id].vue`)을 고치고, 이 기능의 마이그레이션은 **V39**다.
 - 표기: "(Claude 판단)"은 사용자가 정하지 않았고 설계자가 정한 것이다. 빌더가 더 나은 근거가 있으면 바꿔도 되지만, 바꾸면 PR 본문에 적는다.
 
 ## 1. 목표

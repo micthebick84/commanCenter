@@ -58,7 +58,8 @@ import java.util.Set;
  *                       PR_CREATED          : pr_url/pr_number/head_* + status=PR_CREATED
  *                                             (수정 회차면 head_sha만 새 끝으로 → 자동 재배포 DEPLOY_PENDING, 2026-11-03 §7)
  *                       IMPLEMENTATION_FAILED: failure_reason + (있으면)log + status=IMPLEMENTATION_FAILED
- *                       DEPLOYED/DEPLOY_FAILED: 배포 결과 — 수정 회차가 열려 있으면 회차를 닫는다(FixRounds.close)
+ *                       DEPLOYED/DEPLOY_FAILED: 배포 결과 — 수정 회차가 열려 있으면 회차를 닫는다(FixRounds.closeActive),
+ *                                             DEPLOYED가 빌드한 커밋(headSha)을 실으면 head_sha로 기록
  *                       DESIGN_REVIEW       : task_design upsert(반려 이력 보존) + status=DESIGN_REVIEW
  *                       DESIGN_FAILED       : failure_reason + status=DESIGN_FAILED
  *                       CLOSED              : 이 작업에 필요한 종료 단계(CloseStep.required)가 모두 보고된 뒤에만 (status=CLOSED)
@@ -414,11 +415,11 @@ public class WorkerService {
             return;
         }
 
-        // 수정 회차의 구현 결과(스펙 2026-11-03 §7) — 회차 표시가 있거나 회차 안 시도 번호를 단 보고는 회차 규칙으로만 처리한다.
-        // 아래 지각 정합화(→ PR생성)나 배포 단계의 PR생성(= 배포 중지 성공)으로 새면 회차가 열린 채 갇힌다.
-        // 배포중지중의 PR생성은 배포 중지 결과라 제외한다(회차가 열린 동안에는 중지를 받지 않는다).
-        if (isImplementationResult(req) && current != TaskStatus.UNDEPLOYING
-                && (t.getActiveFixRequestId() != null || req.fixAttempt() != null)) {
+        // 수정 회차의 구현 결과(스펙 2026-11-03 §7) — 회차 표지(fixAttempt·fixRequestId)를 단 보고는 어느 상태에서든, 표지가 없는
+        // 구현 결과는 회차 표시가 있을 때 회차 규칙으로만 처리한다. 아래 지각 정합화(→ PR생성)나 배포 단계의 PR생성(= 배포 중지 성공)으로
+        // 새면 회차가 열린 채 갇히거나 배포 중지로 읽힌다. 배포중지중에 온 표지 없는 PR생성만 배포 중지 결과로 아래로 보낸다.
+        if (isImplementationResult(req)
+                && (isFixRoundReport(req) || (t.getActiveFixRequestId() != null && current != TaskStatus.UNDEPLOYING))) {
             recordFixRoundImplementationResult(t, req);
             return;
         }
@@ -485,9 +486,11 @@ public class WorkerService {
             t.setDeployLog(req.deployLog());
             t.setFailureReason(null);
             t.setUpdatedAt(OffsetDateTime.now());
-            String reconciled = "지각 보고 정합화: stale 회수 → 배포완료";
+            String reconciled = "지각 보고 정합화: stale 회수 → 배포완료" + applyBuiltSha(t, req);
             // 배포실패로 가는 길은 모두 회차를 닫지만, 표시가 남아 있으면 여기서도 닫는다(GC 보호가 영원히 남지 않게)
-            if (t.getActiveFixRequestId() != null) reconciled += closeFixRound(t, FixOutcome.DEPLOYED);
+            if (t.getActiveFixRequestId() != null) {
+                reconciled += FixRounds.closedSuffix(FixRounds.closeActive(fixRequestRepo, t, FixOutcome.DEPLOYED));
+            }
             historyRepo.save(TaskStatusHistory.log(t.getId(),
                     TaskStatus.DEPLOY_FAILED, TaskStatus.DEPLOYED,
                     "worker", req.workerId(), reconciled));
@@ -650,39 +653,23 @@ public class WorkerService {
         return req.status() == TaskStatus.PR_CREATED || req.status() == TaskStatus.IMPLEMENTATION_FAILED;
     }
 
+    /** 수정 회차 구현 보고의 표지(회차 안 시도 번호·요청 id)를 하나라도 단 보고 — fixRounds를 아는 워커가 회차 구현에만 붙인다. */
+    private static boolean isFixRoundReport(WorkerResultRequest req) {
+        return req.fixAttempt() != null || req.fixRequestId() != null;
+    }
+
     /**
-     * 수정 회차의 구현 결과 (스펙 2026-11-03 §7). 회차 안 시도 번호(fixAttempt)로 늦은 보고를 가려낸 뒤, 지금 시도의 성공은 같은 브랜치의
+     * 수정 회차의 구현 결과 (스펙 2026-11-03 §7). 늦은 보고를 먼저 가려낸 뒤({@link #ignoredFixReport}), 지금 시도의 성공은 같은 브랜치의
      * 새 끝(head_sha)을 저장하고 저장된 env 그대로 자동 재배포(배포대기)로, 실패는 회차를 연 채 구현실패로 둔다.
-     *
-     * 무시하는 보고(상태는 그대로, 같은 상태의 이력 한 줄):
-     *  - 회차 표시가 있는데 회차 시도 번호가 없다 — 회차는 fixRounds를 아는 워커만 받으므로 회차 전 구현 보고의 재전송이다.
-     *    받으면 옛 커밋을 자동 재배포한다.
-     *  - 회차 시도 번호가 있는데 열린 회차가 없다 — 수정 중단 등으로 이미 닫힌 회차의 보고.
-     *  - 회차 시도 번호가 열린 회차의 지금 시도와 다르다 — 같은 회차의 이전 시도(재시도·재기동 재큐 전).
-     *  - 같은 시도인데 작업이 이미 자동 재배포로 넘어갔다 — 받은 보고의 재전송. 배포중에 받으면 배포 중지 성공으로 읽혀 회차가 갇힌다.
-     * 이미 받은 보고의 재전송이 분명한 둘은 사용량을 다시 쌓지 않는다.
      */
     private void recordFixRoundImplementationResult(Task t, WorkerResultRequest req) {
         TaskStatus current = t.getStatus();
         TaskFixRequest round = FixRounds.openRequest(fixRequestRepo, t);
-        Integer fixAttempt = req.fixAttempt();
-        String ignored = null;
-        boolean countUsage = true;
-        if (fixAttempt == null) {
-            ignored = "수정 회차 전 구현의 늦은 보고 무시";
-            countUsage = false;
-        } else if (round == null) {
-            ignored = "닫힌 수정 회차의 늦은 보고 무시";
-        } else if (fixAttempt != round.getAttempt()) {
-            ignored = "이전 수정 시도(" + fixAttempt + "회째)의 늦은 보고 무시";
-        } else if (current != TaskStatus.IMPLEMENTING && current != TaskStatus.IMPLEMENTATION_FAILED) {
-            ignored = "이미 끝난 수정 시도(" + fixAttempt + "회째)의 늦은 보고 무시";
-            countUsage = false;
-        }
+        IgnoredFixReport ignored = ignoredFixReport(t, round, req);
         if (ignored != null) {
             historyRepo.save(TaskStatusHistory.log(t.getId(), current, current, "worker", req.workerId(),
-                    ignored + ": " + req.status().dbValue() + ignoredWorkDetail(req)));
-            if (countUsage) accumulateUsage(t.getId(), TaskStageUsage.STAGE_IMPLEMENTATION, req);
+                    ignored.reason() + ": " + req.status().dbValue() + ignoredWorkDetail(req)));
+            if (ignored.countUsage()) accumulateUsage(t.getId(), TaskStageUsage.STAGE_IMPLEMENTATION, req);
             return;
         }
 
@@ -704,23 +691,74 @@ public class WorkerService {
         }
     }
 
+    /** 무시할 회차 보고 — 이력 사유 앞부분과, 사용량을 쌓을지. */
+    private record IgnoredFixReport(String reason, boolean countUsage) {}
+
+    /**
+     * 열린 회차의 지금 시도 결과가 아니면 무시한다(상태는 그대로, 같은 상태의 이력 한 줄). null = 지금 시도의 결과.
+     *  - 표지가 없다(회차 표시만 있다): 회차는 fixRounds를 아는 워커만 받으므로 회차 전 구현 보고의 재전송이다 — 받으면 옛 커밋을 재배포한다.
+     *  - 요청 id가 열린 회차와 다르다(또는 열린 회차가 없다): 다른·닫힌 회차의 보고. 회차 안 시도 번호는 회차마다 1부터라
+     *    요청 id로만 가를 수 있다(예: 1회차를 중단하고 연 2회차의 1회째에 1회차 1회째 보고가 늦게 온 경우).
+     *  - 요청 id 없이 열린 회차가 없다: 닫힌 회차의 보고(요청 id를 싣지 않는 워커).
+     *  - 회차 안 시도 번호가 지금 시도와 다르다: 같은 회차의 이전 시도(재시도·재기동 재큐 전).
+     *  - 같은 시도인데 작업이 구현대기다: 아직 claim 전이라 이 회차의 보고일 수 없다 — 요청 id를 싣지 않은 다른 회차의 보고.
+     *  - 같은 시도인데 자동 재배포로 넘어갔다: 받은 보고의 재전송. 배포중에 받으면 배포 중지 성공으로 읽혀 회차가 갇힌다.
+     *
+     * 사용량은 보고의 시도가 그 요청 기록의 지금 시도보다 앞설 때만 쌓는다 — 재시도·재큐로 밀린 시도의 결과는 반영된 적이 없을 수 있다
+     * (회차 밖 구현의 이전 시도 보고와 같은 규칙). 회차 전 구현·회차의 마지막 시도·어느 요청인지 모르는 보고는 이미 반영된 보고의 재전송일 수
+     * 있어 쌓지 않는다 — 두 번 세느니 덜 센다.
+     */
+    private IgnoredFixReport ignoredFixReport(Task t, TaskFixRequest round, WorkerResultRequest req) {
+        Integer fixAttempt = req.fixAttempt();
+        Long requestId = req.fixRequestId();
+        if (!isFixRoundReport(req)) {
+            return new IgnoredFixReport("수정 회차 전 구현의 늦은 보고 무시", false);
+        }
+        if (requestId != null && (round == null || !requestId.equals(round.getId()))) {
+            TaskFixRequest of = fixRequestRepo.findById(requestId)
+                    .filter(r -> t.getId().equals(r.getTaskId())).orElse(null);
+            return new IgnoredFixReport((round == null ? "닫힌" : "다른") + " 수정 회차(요청 #" + requestId + ")의 늦은 보고 무시",
+                    isSuperseded(of, fixAttempt));
+        }
+        if (round == null) {
+            return new IgnoredFixReport("닫힌 수정 회차의 늦은 보고 무시", false);
+        }
+        if (fixAttempt == null) {
+            return new IgnoredFixReport("회차 안 시도 번호가 없는 수정 회차 보고 무시", false);
+        }
+        if (fixAttempt != round.getAttempt()) {
+            return new IgnoredFixReport("이전 수정 시도(" + fixAttempt + "회째)의 늦은 보고 무시", isSuperseded(round, fixAttempt));
+        }
+        if (t.getStatus() == TaskStatus.APPROVED) {
+            return new IgnoredFixReport("다른 수정 회차의 늦은 보고 무시", false);
+        }
+        if (t.getStatus() != TaskStatus.IMPLEMENTING && t.getStatus() != TaskStatus.IMPLEMENTATION_FAILED) {
+            return new IgnoredFixReport("이미 끝난 수정 시도(" + fixAttempt + "회째)의 늦은 보고 무시", false);
+        }
+        return null;
+    }
+
+    /** 보고의 시도가 그 요청 기록의 지금 시도보다 앞선다 — 재시도·재큐로 밀린 시도. 요청을 모르면 false. */
+    private static boolean isSuperseded(TaskFixRequest r, Integer fixAttempt) {
+        return r != null && fixAttempt != null && fixAttempt < r.getAttempt();
+    }
+
     /**
      * 회차 구현 성공 → 자동 재배포. PR/MR은 새로 만들지 않으므로 prUrl은 받지 않고, 브랜치는 회차 브랜치여야 한다(다른 브랜치의 커밋을
      * head_sha로 두면 배포(브랜치 끝)·종료 병합(head_sha 고정)이 어긋난다). 배포 전에 head_sha를 새 끝으로 바꾼다(§7).
      * 이력은 두 줄 — 구현 완료(워커) → 자동 재배포(system). PR생성은 거쳐 가기만 한다.
      */
     private void fixRoundSucceeded(Task t, TaskFixRequest round, WorkerResultRequest req, String reasonPrefix) {
-        String branch = req.headBranch() == null ? "" : req.headBranch().strip();
-        if (!branch.equals(t.getHeadBranch())) {
-            throw new TaskException(HttpStatus.BAD_REQUEST,
-                    "수정 회차 구현 완료 보고의 브랜치가 회차 브랜치(" + t.getHeadBranch() + ")가 아닙니다: " + branch);
+        if (!isRoundBranch(t, req)) {
+            throw new TaskException(HttpStatus.BAD_REQUEST, "수정 회차 구현 완료 보고의 브랜치가 회차 브랜치("
+                    + t.getHeadBranch() + ")가 아닙니다: " + (req.headBranch() == null ? "" : req.headBranch().strip()));
         }
         if (req.headSha() == null || req.headSha().isBlank()) {
             throw new TaskException(HttpStatus.BAD_REQUEST, "수정 회차 구현 완료 시 headSha 필수");
         }
         TaskStatus from = t.getStatus();
         String label = FixRounds.label(round);
-        t.setHeadSha(req.headSha());
+        t.setHeadSha(req.headSha().strip());
         t.setImplementationLog(req.implementationLog());
         historyRepo.save(TaskStatusHistory.log(t.getId(), from, TaskStatus.PR_CREATED, "worker", req.workerId(),
                 reasonPrefix + label + " 구현 완료: " + FixRounds.shortSha(req.headSha())));
@@ -738,30 +776,41 @@ public class WorkerService {
     }
 
     /**
-     * 회차 구현 실패 — 회차는 열어 둔다(관리자가 구현 재시도 또는 수정 중단을 고른다). 브랜치는 회차 브랜치 그대로 두고 보고한 끝만
-     * head_sha로 받는다 — wip 커밋을 push했을 수 있어 수정 중단 뒤 배포·종료 병합의 기준이 된다(§7.1).
+     * 회차 구현 실패 — 회차는 열어 둔다(관리자가 구현 재시도 또는 수정 중단을 고른다). 브랜치는 회차 브랜치 그대로 두고, 보고가 회차 브랜치의
+     * 끝을 실었을 때만 head_sha로 받는다 — wip 커밋을 push했을 수 있어 수정 중단 뒤 배포·종료 병합의 기준이 된다(§7.1).
+     * 브랜치가 다르거나 없는 보고의 커밋은 회차 브랜치의 것인지 알 수 없어 버린다.
      */
     private void fixRoundFailed(Task t, TaskFixRequest round, WorkerResultRequest req) {
         TaskStatus from = t.getStatus();
         t.setStatus(TaskStatus.IMPLEMENTATION_FAILED);
         t.setFailureReason(req.failureReason() == null ? "원인 미상" : req.failureReason());
         t.setImplementationLog(req.implementationLog());
-        if (req.headSha() != null && !req.headSha().isBlank()) t.setHeadSha(req.headSha());
+        if (req.headSha() != null && !req.headSha().isBlank() && isRoundBranch(t, req)) t.setHeadSha(req.headSha().strip());
         t.setUpdatedAt(OffsetDateTime.now());
         historyRepo.save(TaskStatusHistory.log(t.getId(), from, TaskStatus.IMPLEMENTATION_FAILED, "worker", req.workerId(),
                 FixRounds.label(round) + " 구현 실패: " + t.getFailureReason()));
         accumulateUsage(t.getId(), TaskStageUsage.STAGE_IMPLEMENTATION, req);
     }
 
+    /** 보고의 브랜치가 회차 브랜치(task.head_branch)와 같다(앞뒤 공백 무시). 보고에 브랜치가 없으면 false. */
+    private static boolean isRoundBranch(Task t, WorkerResultRequest req) {
+        return req.headBranch() != null && req.headBranch().strip().equals(t.getHeadBranch());
+    }
+
     /**
-     * 열린 수정 회차를 닫고 이력 사유 끝에 붙일 말을 돌려준다 — 자동 재배포가 끝났을 때(배포완료·배포실패). 기록이 없거나 깨졌으면
-     * 표시만 지운다.
+     * 배포완료 보고가 실제로 빌드한 커밋(headSha)을 실었으면 task.head_sha로 기록한다 (스펙 2026-11-03 §7) — 배포는 브랜치 끝을 빌드하므로
+     * 사람이 MR에 push했거나 끊긴 시도가 남긴 커밋이 있으면 기록과 다를 수 있고, 종료 병합이 head_sha를 고정한다. 수정 회차와 무관하게
+     * 모든 배포에 적용한다. 바뀌었으면 이력 사유에 붙일 말({@code  (head_sha abc1234→def5678)})을, 같거나 값이 없으면(예전 워커)
+     * 빈 문자열을 돌려준다.
      */
-    private String closeFixRound(Task t, FixOutcome outcome) {
-        TaskFixRequest r = FixRounds.openRequest(fixRequestRepo, t);
-        FixRounds.close(t, r, outcome, OffsetDateTime.now());
-        if (r != null) fixRequestRepo.save(r);
-        return FixRounds.closedSuffix(r);
+    private static String applyBuiltSha(Task t, WorkerResultRequest req) {
+        if (req.headSha() == null || req.headSha().isBlank()) return "";
+        String built = req.headSha().strip();
+        String before = t.getHeadSha();
+        t.setHeadSha(built);
+        if (built.equals(before)) return "";
+        String from = before == null || before.isBlank() ? "없음" : FixRounds.shortSha(before);
+        return " (head_sha " + from + "→" + FixRounds.shortSha(built) + ")";
     }
 
     /**
@@ -796,7 +845,7 @@ public class WorkerService {
                 t.setDeployImage(req.deployImage());
                 t.setDeployedAt(OffsetDateTime.now());
                 t.setDeployLog(req.deployLog());
-                reason = "배포 완료: " + req.deployUrl();
+                reason = "배포 완료: " + req.deployUrl() + applyBuiltSha(t, req);   // 빌드한 커밋 → head_sha
             }
             case DEPLOY_FAILED -> {
                 t.setStatus(TaskStatus.DEPLOY_FAILED);
@@ -820,9 +869,9 @@ public class WorkerService {
         }
         // 수정 회차의 자동 재배포가 끝났다(성공·실패) — 회차를 닫는다 (스펙 2026-11-03 §4)
         if (t.getActiveFixRequestId() != null && t.getStatus() == TaskStatus.DEPLOYED) {
-            reason += closeFixRound(t, FixOutcome.DEPLOYED);
+            reason += FixRounds.closedSuffix(FixRounds.closeActive(fixRequestRepo, t, FixOutcome.DEPLOYED));
         } else if (t.getActiveFixRequestId() != null && t.getStatus() == TaskStatus.DEPLOY_FAILED) {
-            reason += closeFixRound(t, FixOutcome.DEPLOY_FAILED);
+            reason += FixRounds.closedSuffix(FixRounds.closeActive(fixRequestRepo, t, FixOutcome.DEPLOY_FAILED));
         }
         t.setUpdatedAt(OffsetDateTime.now());
         historyRepo.save(TaskStatusHistory.log(t.getId(), from, t.getStatus(),

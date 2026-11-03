@@ -765,8 +765,8 @@ public class TaskService {
     private String requeueFixRound(Task t, String rawMode, ImplementationMode requested) {
         TaskFixRequest r = FixRounds.openRequest(fixRequestRepo, t);
         if (r == null) {
-            throw TaskException.conflict("수정 회차 기록(요청 #" + t.getActiveFixRequestId()
-                    + ")을 찾을 수 없어 구현을 재시도할 수 없습니다 — 수정 중단으로 회차를 닫으세요");
+            throw TaskException.conflict("열린 수정 회차 기록(요청 #" + t.getActiveFixRequestId()
+                    + ")이 없어 구현을 재시도할 수 없습니다 — 수정 중단으로 회차를 닫으세요");
         }
         ImplementationMode before = FixRounds.modeOf(r);
         ImplementationMode after = requested == null ? before : TaskFixService.parseFixMode(rawMode);

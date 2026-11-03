@@ -100,7 +100,8 @@ public class TaskRecovery {
                 deployLogStream.consolidate(t.getId()).ifPresent(t::setDeployLog); // 부분 로그 보존
                 deployLogStream.finish(t.getId());
                 // 수정 회차의 자동 재배포였으면 배포실패로 회차가 닫힌다(스펙 2026-11-03 §4) — 표시를 남기면 GC 보호가 영원히 남는다
-                String closed = t.getActiveFixRequestId() == null ? "" : closeFixRound(t);
+                String closed = t.getActiveFixRequestId() == null ? ""
+                        : FixRounds.closedSuffix(FixRounds.closeActive(fixRequestRepo, t, FixOutcome.DEPLOY_FAILED));
                 logTransition(t, from, TaskStatus.DEPLOY_FAILED, cause,
                         reason(cause, TaskStatus.DEPLOY_FAILED, "배포중 stale → 배포실패") + closed);
                 log.error("{}: task={} → DEPLOY_FAILED", label, t.getId());
@@ -154,7 +155,7 @@ public class TaskRecovery {
         String label = cause.label();
         TaskFixRequest r = FixRounds.openRequest(fixRequestRepo, t);
         if (r == null) {
-            String reason = label + " (수정 회차 기록(요청 #" + t.getActiveFixRequestId() + ")을 찾을 수 없어 자동 재큐하지 않음)";
+            String reason = label + " (열린 수정 회차 기록(요청 #" + t.getActiveFixRequestId() + ")이 없어 자동 재큐하지 않음)";
             t.setStatus(TaskStatus.IMPLEMENTATION_FAILED);
             t.setFailureReason(reason);
             logTransition(t, from, TaskStatus.IMPLEMENTATION_FAILED, cause, reason);
@@ -170,14 +171,6 @@ public class TaskRecovery {
                         + t.getRestartRequeueCount() + "/" + MAX_RESTART_REQUEUES + ")");
         log.warn("{}: task={} → APPROVED({} 자동 재큐 {}/{})", label, t.getId(), FixRounds.label(r),
                 t.getRestartRequeueCount(), MAX_RESTART_REQUEUES);
-    }
-
-    /** 열린 수정 회차를 배포실패로 닫고 이력 사유 끝에 붙일 말을 돌려준다. 기록이 없거나 깨졌으면 표시만 지운다. */
-    private String closeFixRound(Task t) {
-        TaskFixRequest r = FixRounds.openRequest(fixRequestRepo, t);
-        FixRounds.close(t, r, FixOutcome.DEPLOY_FAILED, OffsetDateTime.now());
-        if (r != null) fixRequestRepo.save(r);
-        return FixRounds.closedSuffix(r);
     }
 
     /** 이력 사유 — stale 원인은 기존 고정 문구, 워커 재기동 원인은 "{label} → {전이 후 상태}". */

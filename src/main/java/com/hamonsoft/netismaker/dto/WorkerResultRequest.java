@@ -13,7 +13,7 @@ import java.util.List;
  *   status=FAILED                → failureReason 필수 (분석)
  *   status=PR_CREATED            → prUrl, headBranch 필수 (구현, envTemplate 선택) / 또는 UNDEPLOY 성공 복귀
  *   status=IMPLEMENTATION_FAILED → failureReason 필수 (구현)
- *   status=DEPLOYED              → deployUrl, deployContainerId, deployHostPort 필수 (배포)
+ *   status=DEPLOYED              → deployUrl, deployContainerId, deployHostPort 필수 (배포, headSha = 빌드한 커밋 선택)
  *   status=DEPLOY_FAILED         → failureReason 필수 (배포)
  *   status=DESIGN_REVIEW         → designMarkdown, mockupFilesJson 필수 (디자인 → 승인 대기)
  *   status=DESIGN_FAILED         → failureReason 필수 (디자인)
@@ -57,12 +57,34 @@ public record WorkerResultRequest(
         List<String> refWarnings,
         // 수정 회차 구현 결과(PR생성·구현실패)의 회차 안 시도 번호 = claim의 implementation.fix.attempt (스펙 2026-11-03 §7 —
         // null이면 회차 밖 구현·구버전 워커·다른 단계). 같은 회차 안 이전 시도의 늦은 보고를 가려낸다.
-        Integer fixAttempt
+        Integer fixAttempt,
+        // 수정 회차 구현 결과의 요청 id = claim의 implementation.fix.requestId (스펙 2026-11-03 §7 — null이면 회차 밖 구현·
+        // 구버전 워커·다른 단계). 다른(이미 닫힌) 회차의 늦은 보고를 가려낸다 — 회차 안 시도 번호는 회차마다 1부터라 그것만으로는 못 가른다.
+        Long fixRequestId
 ) {
     /** 참조 repo 변경 경고 한 줄의 글자 수 상한(UTF-16 단위) — masked()가 가린 뒤 자른다. */
     public static final int REF_WARNING_MAX_LENGTH = 500;
 
-    /** 회차 시도 번호 도입 전 25개 인자 생성자 — 워커 성공 보고·기존 테스트 호환. Jackson은 정규 생성자(26개)로 읽는다. */
+    /** 회차 요청 id 도입 전 26개 인자 생성자 — 기존 호출부·테스트 호환. Jackson은 정규 생성자(27개)로 읽는다. */
+    public WorkerResultRequest(String workerId, TaskStatus status,
+                               String markdownResult, String subtasksJson, String claudeLog,
+                               Long durationMs, String failureReason,
+                               String prUrl, Integer prNumber, String headBranch, String headSha,
+                               String implementationLog,
+                               String deployUrl, String deployContainerId, Integer deployHostPort,
+                               String deployImage, String deployLog,
+                               String designMarkdown, String mockupFilesJson, String designProjectId,
+                               String designUrl,
+                               UsageReport usage, List<EnvTemplateItem> envTemplate, Integer implementationAttempt,
+                               List<String> refWarnings, Integer fixAttempt) {
+        this(workerId, status, markdownResult, subtasksJson, claudeLog, durationMs, failureReason,
+                prUrl, prNumber, headBranch, headSha, implementationLog,
+                deployUrl, deployContainerId, deployHostPort, deployImage, deployLog,
+                designMarkdown, mockupFilesJson, designProjectId, designUrl, usage, envTemplate,
+                implementationAttempt, refWarnings, fixAttempt, null);
+    }
+
+    /** 회차 시도 번호 도입 전 25개 인자 생성자 — 워커 성공 보고·기존 테스트 호환. */
     public WorkerResultRequest(String workerId, TaskStatus status,
                                String markdownResult, String subtasksJson, String claudeLog,
                                Long durationMs, String failureReason,
@@ -78,7 +100,7 @@ public record WorkerResultRequest(
                 prUrl, prNumber, headBranch, headSha, implementationLog,
                 deployUrl, deployContainerId, deployHostPort, deployImage, deployLog,
                 designMarkdown, mockupFilesJson, designProjectId, designUrl, usage, envTemplate,
-                implementationAttempt, refWarnings, null);
+                implementationAttempt, refWarnings, null, null);
     }
 
     /** 참조 경고 도입 전 24개 인자 생성자 — 기존 호출부·테스트 호환. */
@@ -122,7 +144,7 @@ public record WorkerResultRequest(
                 failureReason, prUrl, prNumber, headBranch, headSha, implementationLog,
                 deployUrl, deployContainerId, deployHostPort, deployImage, deployLog,
                 designMarkdown, mockupFilesJson, designProjectId, designUrl, usage, envTemplate, attempt,
-                refWarnings, fixAttempt);
+                refWarnings, fixAttempt, fixRequestId);
     }
 
     /** 참조 repo 변경 경고만 바꾼 사본. */
@@ -131,7 +153,7 @@ public record WorkerResultRequest(
                 failureReason, prUrl, prNumber, headBranch, headSha, implementationLog,
                 deployUrl, deployContainerId, deployHostPort, deployImage, deployLog,
                 designMarkdown, mockupFilesJson, designProjectId, designUrl, usage, envTemplate,
-                implementationAttempt, warnings, fixAttempt);
+                implementationAttempt, warnings, fixAttempt, fixRequestId);
     }
 
     /** 회차 안 시도 번호만 바꾼 사본 — 워커가 수정 회차 구현 결과(성공·실패 모두)를 보낼 때 붙인다. */
@@ -140,12 +162,21 @@ public record WorkerResultRequest(
                 failureReason, prUrl, prNumber, headBranch, headSha, implementationLog,
                 deployUrl, deployContainerId, deployHostPort, deployImage, deployLog,
                 designMarkdown, mockupFilesJson, designProjectId, designUrl, usage, envTemplate,
-                implementationAttempt, refWarnings, attempt);
+                implementationAttempt, refWarnings, attempt, fixRequestId);
+    }
+
+    /** 회차 요청 id만 바꾼 사본 — 워커가 수정 회차 구현 결과(성공·실패 모두)에 claim의 fix.requestId를 그대로 붙인다. */
+    public WorkerResultRequest withFixRequestId(Long requestId) {
+        return new WorkerResultRequest(workerId, status, markdownResult, subtasksJson, claudeLog, durationMs,
+                failureReason, prUrl, prNumber, headBranch, headSha, implementationLog,
+                deployUrl, deployContainerId, deployHostPort, deployImage, deployLog,
+                designMarkdown, mockupFilesJson, designProjectId, designUrl, usage, envTemplate,
+                implementationAttempt, refWarnings, fixAttempt, requestId);
     }
 
     /**
      * envTemplate 도입 전 22개 인자 생성자 — 구현 성공 보고 외에는 템플릿이 없다.
-     * Jackson은 레코드의 정규 생성자(25개)를 쓰므로 역직렬화와 무관하다(WorkerResultRequestJsonTest).
+     * Jackson은 레코드의 정규 생성자(27개)를 쓰므로 역직렬화와 무관하다(WorkerResultRequestJsonTest).
      */
     public WorkerResultRequest(String workerId, TaskStatus status,
                                String markdownResult, String subtasksJson, String claudeLog,
@@ -179,7 +210,7 @@ public record WorkerResultRequest(
                 prUrl, prNumber, headBranch, headSha, m(implementationLog),
                 deployUrl, deployContainerId, deployHostPort, deployImage, m(deployLog),
                 m(designMarkdown), m(mockupFilesJson), designProjectId, designUrl,
-                usage, maskTemplate(envTemplate), implementationAttempt, maskWarnings(refWarnings), fixAttempt);
+                usage, maskTemplate(envTemplate), implementationAttempt, maskWarnings(refWarnings), fixAttempt, fixRequestId);
     }
 
     private static List<String> maskWarnings(List<String> warnings) {
@@ -214,13 +245,23 @@ public record WorkerResultRequest(
         private static boolean zero(Long v) { return v == null || v == 0L; }
     }
 
-    /** 배포 성공 보고. */
+    /** 배포 성공 보고 — 빌드한 커밋을 모르는 예전 형식(head_sha 그대로). */
     public static WorkerResultRequest deployed(String workerId, String deployUrl,
                                                String containerId, int hostPort,
                                                String image, Long durationMs, String deployLog) {
+        return deployed(workerId, deployUrl, containerId, hostPort, image, durationMs, deployLog, null);
+    }
+
+    /**
+     * 배포 성공 보고 + 실제로 빌드한 커밋(builtSha). API가 task.head_sha를 이 값으로 바꾼다 — 배포는 브랜치 끝을 빌드하므로
+     * 사람이 MR에 push했거나 끊긴 시도가 남긴 커밋이 있으면 기록된 head_sha와 다를 수 있다(스펙 2026-11-03 §7, 종료 병합의 기준).
+     */
+    public static WorkerResultRequest deployed(String workerId, String deployUrl,
+                                               String containerId, int hostPort,
+                                               String image, Long durationMs, String deployLog, String builtSha) {
         return new WorkerResultRequest(workerId, TaskStatus.DEPLOYED,
                 null, null, null, durationMs, null,
-                null, null, null, null, null,
+                null, null, null, builtSha, null,
                 deployUrl, containerId, hostPort, image, deployLog,
                 null, null, null, null, null);
     }

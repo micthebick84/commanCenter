@@ -136,8 +136,11 @@ public class TaskFixService {
      * 자동 재배포는 없다 — 사람이 PR생성에서 보통 배포(브랜치 끝)를 다시 누른다. head_sha는 건드리지 않는다: 회차의 구현실패 보고가
      * 이미 브랜치 끝(wip 커밋 포함)을 남겼다(WorkerService). 이전 구현 결과의 흔적은 실패 사유만 비운다(로그는 확인용으로 둔다).
      *
-     * 회차 표시는 있는데 기록이 없거나 깨진 경우(claim이 구현실패로 치운 깨진 회차) 재시도는 409라 이 길이 유일한 출구다 — 요청 기록은
-     * 건드리지 않고 표시만 지운 뒤 PR생성으로 보낸다. 그 회차는 구현을 시작하지 않았으므로 브랜치·head_sha는 회차 전 그대로다.
+     * 회차 표시는 있는데 열린 회차 기록이 없는 경우 재시도는 409라 이 길이 유일한 출구다 — 요청 기록은 건드리지 않고 표시만 지운 뒤
+     * PR생성으로 보낸다. 이런 표시는 두 곳에서 생긴다: claim이 깨진 회차를 구현실패로 치운 경우(WorkerService.failBrokenFixRound —
+     * 구현 시작 전이라 브랜치·head_sha는 회차 전 그대로)와 재기동 재큐가 기록을 못 찾은 경우(TaskRecovery — 끊긴 시도가 push한 커밋이
+     * 브랜치에 남아 head_sha가 원격 끝보다 뒤일 수 있다). 어느 쪽이든 다음 배포는 브랜치 끝을 빌드하고, 빌드한 커밋을 배포완료 보고가
+     * head_sha로 다시 기록한다(WorkerService.recordDeployResult).
      */
     @Transactional
     public Task abort(Long taskId, String adminId) {
@@ -150,13 +153,11 @@ public class TaskFixService {
             throw TaskException.conflict("수정 회차가 아닌 구현실패는 중단할 수 없습니다 — 구현 재시도를 쓰세요");
         }
         Long requestId = t.getActiveFixRequestId();
-        TaskFixRequest r = FixRounds.openRequest(fixRepo, t);
-        FixRounds.close(t, r, FixOutcome.ABORTED, OffsetDateTime.now());
-        if (r != null) fixRepo.save(r);
+        TaskFixRequest r = FixRounds.closeActive(fixRepo, t, FixOutcome.ABORTED);
         t.setFailureReason(null);
         String reason = r != null
                 ? FixRounds.label(r) + " 중단 → PR생성"
-                : "수정 회차 기록을 찾을 수 없어(요청 #" + requestId + ") 회차 표시만 지움 — 수정 중단 → PR생성";
+                : "열린 수정 회차 기록이 없어(요청 #" + requestId + ") 회차 표시만 지움 — 수정 중단 → PR생성";
         return move(t, TaskStatus.PR_CREATED, adminId, reason);
     }
 

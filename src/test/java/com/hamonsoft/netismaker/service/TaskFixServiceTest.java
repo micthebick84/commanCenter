@@ -591,7 +591,7 @@ class TaskFixServiceTest {
 
         assertThat(out.getStatus()).isEqualTo(PR_CREATED);
         assertThat(out.getActiveFixRequestId()).isNull();
-        assertThat(savedHistory().getReason()).isEqualTo("수정 회차 기록을 찾을 수 없어(요청 #77) 회차 표시만 지움 — 수정 중단 → PR생성");
+        assertThat(savedHistory().getReason()).isEqualTo("열린 수정 회차 기록이 없어(요청 #77) 회차 표시만 지움 — 수정 중단 → PR생성");
         verify(fixRepo, never()).save(any());
     }
 
@@ -606,5 +606,19 @@ class TaskFixServiceTest {
         assertThat(t.getActiveFixRequestId()).isNull();
         assertThat(t.getStatus()).isEqualTo(PR_CREATED);
         assertThat(r.getOutcome()).isNull();
+    }
+
+    @Test
+    void 이미_닫힌_요청을_가리키면_그_결과를_덮지_않는다() {
+        Task t = task(IMPLEMENTATION_FAILED);
+        TaskFixRequest r = openRound(t, 1);
+        r.setOutcome(com.hamonsoft.netismaker.entity.FixOutcome.DEPLOY_FAILED);
+
+        svc.abort(42L, ADMIN);
+
+        assertThat(t.getActiveFixRequestId()).isNull();
+        assertThat(t.getStatus()).isEqualTo(PR_CREATED);
+        assertThat(r.getOutcome()).isEqualTo(com.hamonsoft.netismaker.entity.FixOutcome.DEPLOY_FAILED);
+        assertThat(savedHistory().getReason()).startsWith("열린 수정 회차 기록이 없어(요청 #77)");
     }
 }

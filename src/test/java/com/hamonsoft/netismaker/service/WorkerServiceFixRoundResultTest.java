@@ -104,11 +104,28 @@ class WorkerServiceFixRoundResultTest {
     }
 
     private static WorkerResultRequest failure(String headSha) {
+        return failure(BRANCH, headSha);
+    }
+
+    private static WorkerResultRequest failure(String headBranch, String headSha) {
         return new WorkerResultRequest("w1", TaskStatus.IMPLEMENTATION_FAILED,
                 null, null, null, null, "claude exit=1",
-                null, null, BRANCH, headSha, "fail log",
+                null, null, headBranch, headSha, "fail log",
                 null, null, null, null, null,
                 null, null, null, null, USAGE);
+    }
+
+    /** 다른 요청(id)의 승인된 기록 — 다른·닫힌 회차의 보고가 어느 요청에서 왔는지 볼 때. */
+    private TaskFixRequest otherRequest(long id, int round, int attempt, com.hamonsoft.netismaker.entity.FixOutcome outcome) {
+        TaskFixRequest r = TaskFixRequest.pending(42L, "앞 회차", DEPLOYED, "user1");
+        ReflectionTestUtils.setField(r, "id", id);
+        r.setStatus(FixRequestStatus.APPROVED);
+        r.setRound(round);
+        r.setImplementationMode(ImplementationMode.REVIEW);
+        r.setAttempt(attempt);
+        r.setOutcome(outcome);
+        when(fixRepo.findById(id)).thenReturn(Optional.of(r));
+        return r;
     }
 
     private List<TaskStatusHistory> histories() {
@@ -227,6 +244,31 @@ class WorkerServiceFixRoundResultTest {
         assertThat(t.getHeadSha()).isEqualTo(OLD_SHA);
     }
 
+    @Test
+    void 회차_실패보고의_브랜치가_회차_브랜치가_아니면_커밋을_버린다() {
+        // 다른 브랜치의 커밋을 head_sha로 두면 수정 중단 뒤 배포(회차 브랜치 끝)·종료 병합(head_sha 고정)이 어긋난다
+        Task t = t(IMPLEMENTING);
+        request(2, 1);
+
+        svc.recordResult(42L, failure("netismaker/task-42-x-r2", "other77").withImplementationAttempt(1).withFixAttempt(1));
+
+        assertThat(t.getStatus()).isEqualTo(IMPLEMENTATION_FAILED);
+        assertThat(t.getHeadSha()).isEqualTo(OLD_SHA);
+        assertThat(t.getHeadBranch()).isEqualTo(BRANCH);
+        assertThat(t.getFailureReason()).isEqualTo("claude exit=1");
+    }
+
+    @Test
+    void 회차_실패보고에_브랜치가_없어도_커밋을_버린다() {
+        Task t = t(IMPLEMENTING);
+        request(2, 1);
+
+        svc.recordResult(42L, failure(null, "other77").withImplementationAttempt(1).withFixAttempt(1));
+
+        assertThat(t.getStatus()).isEqualTo(IMPLEMENTATION_FAILED);
+        assertThat(t.getHeadSha()).isEqualTo(OLD_SHA);
+    }
+
     // ── 늦은 보고 ─────────────────────────────────────────
 
     @Test
@@ -287,6 +329,125 @@ class WorkerServiceFixRoundResultTest {
         assertThat(t.getHeadSha()).isEqualTo(OLD_SHA);
         assertThat(histories().get(0).getReason())
                 .isEqualTo("닫힌 수정 회차의 늦은 보고 무시: PR생성 (브랜치: " + BRANCH + ")");
+        // 어느 요청의 몇 번째 시도인지 모른다 — 이미 반영된 보고의 재전송일 수 있어 사용량을 다시 쌓지 않는다
+        verifyNoInteractions(stageUsageRepo);
+    }
+
+    // ── 요청 id로 회차를 가른다 (회차 안 시도 번호는 회차마다 1부터) ─────
+
+    @Test
+    void 다른_회차의_늦은보고는_시도번호가_같아도_무시() {
+        // 1회차(#502)를 중단하고 연 2회차(#503)의 1회째가 진행 중인데 1회차 1회째의 보고가 늦게 왔다
+        Task t = t(IMPLEMENTING);
+        t.setActiveFixRequestId(503L);
+        otherRequest(503L, 2, 1, null);
+        otherRequest(502L, 1, 1, com.hamonsoft.netismaker.entity.FixOutcome.ABORTED);
+
+        svc.recordResult(42L, success(BRANCH, "late555")
+                .withImplementationAttempt(1).withFixAttempt(1).withFixRequestId(502L));
+
+        assertThat(t.getStatus()).isEqualTo(IMPLEMENTING);
+        assertThat(t.getHeadSha()).isEqualTo(OLD_SHA);
+        assertThat(t.getActiveFixRequestId()).isEqualTo(503L);
+        TaskStatusHistory row = histories().get(0);
+        assertThat(row.getToStatus()).isEqualTo("구현중");
+        assertThat(row.getReason()).isEqualTo("다른 수정 회차(요청 #502)의 늦은 보고 무시: PR생성 (브랜치: " + BRANCH + ")");
+        // #502의 마지막 시도 — 그 결과는 이미 반영됐을 수 있어 쌓지 않는다
+        verifyNoInteractions(stageUsageRepo);
+    }
+
+    @Test
+    void 다른_회차의_밀린_시도_보고는_사용량을_쌓는다() {
+        Task t = t(IMPLEMENTING);
+        t.setActiveFixRequestId(503L);
+        otherRequest(503L, 2, 1, null);
+        otherRequest(502L, 1, 2, com.hamonsoft.netismaker.entity.FixOutcome.DEPLOYED);   // #502는 2회째에서 끝났다
+
+        svc.recordResult(42L, failure("wip7777").withImplementationAttempt(1).withFixAttempt(1).withFixRequestId(502L));
+
+        assertThat(t.getStatus()).isEqualTo(IMPLEMENTING);
+        verify(stageUsageRepo).accumulate(eq(42L), eq(TaskStageUsage.STAGE_IMPLEMENTATION), any(),
+                anyLong(), anyLong(), anyLong(), anyLong());
+    }
+
+    @Test
+    void 회차가_없을때_요청id를_단_보고는_닫힌_회차의_것() {
+        Task t = t(DEPLOYED);
+        t.setActiveFixRequestId(null);
+        otherRequest(502L, 1, 1, com.hamonsoft.netismaker.entity.FixOutcome.DEPLOYED);
+
+        svc.recordResult(42L, success(BRANCH, "new9999")
+                .withImplementationAttempt(1).withFixAttempt(1).withFixRequestId(502L));
+
+        assertThat(t.getStatus()).isEqualTo(DEPLOYED);
+        assertThat(t.getHeadSha()).isEqualTo(OLD_SHA);
+        assertThat(histories().get(0).getReason())
+                .isEqualTo("닫힌 수정 회차(요청 #502)의 늦은 보고 무시: PR생성 (브랜치: " + BRANCH + ")");
+        verifyNoInteractions(stageUsageRepo);   // 배포까지 간 회차의 마지막 시도 = 받은 성공 보고의 재전송
+    }
+
+    @Test
+    void 요청id와_시도번호가_모두_맞으면_받는다() {
+        Task t = t(IMPLEMENTING);
+        request(2, 1);
+
+        svc.recordResult(42L, success(BRANCH, "new9999")
+                .withImplementationAttempt(1).withFixAttempt(1).withFixRequestId(502L));
+
+        assertThat(t.getStatus()).isEqualTo(DEPLOY_PENDING);
+        assertThat(t.getHeadSha()).isEqualTo("new9999");
+    }
+
+    @Test
+    void 요청id가_맞아도_이전_시도면_무시() {
+        Task t = t(IMPLEMENTING);
+        request(2, 2);
+
+        svc.recordResult(42L, success(BRANCH, "old1111")
+                .withImplementationAttempt(1).withFixAttempt(1).withFixRequestId(502L));
+
+        assertThat(t.getStatus()).isEqualTo(IMPLEMENTING);
+        assertThat(histories().get(0).getReason()).startsWith("이전 수정 시도(1회째)의 늦은 보고 무시");
+    }
+
+    @Test
+    void 구현대기에_온_같은_시도번호_보고는_다른_회차의_것으로_무시() {
+        // 요청 id를 싣지 않은 보고 — 열린 회차는 아직 claim 전이라 이 회차의 1회째 결과일 수 없다
+        Task t = t(APPROVED);
+        request(2, 1);
+
+        svc.recordResult(42L, success(BRANCH, "late555").withImplementationAttempt(1).withFixAttempt(1));
+
+        assertThat(t.getStatus()).isEqualTo(APPROVED);
+        assertThat(t.getHeadSha()).isEqualTo(OLD_SHA);
+        assertThat(histories().get(0).getReason())
+                .isEqualTo("다른 수정 회차의 늦은 보고 무시: PR생성 (브랜치: " + BRANCH + ")");
+        verifyNoInteractions(stageUsageRepo);
+    }
+
+    @Test
+    void 배포중지중에_온_회차_보고는_배포중지_성공으로_읽지_않는다() {
+        Task t = t(UNDEPLOYING);
+        t.setActiveFixRequestId(null);
+        t.setDeployUrl("https://task-42-win.micthebick.dev");
+        t.setDeployContainerId("c1");
+
+        svc.recordResult(42L, success(BRANCH, "late555").withImplementationAttempt(1).withFixAttempt(1));
+        svc.recordResult(42L, success(BRANCH, "late555").withImplementationAttempt(1).withFixAttempt(1)
+                .withFixRequestId(502L));
+
+        assertThat(t.getStatus()).isEqualTo(UNDEPLOYING);
+        assertThat(t.getDeployUrl()).isEqualTo("https://task-42-win.micthebick.dev");
+        assertThat(t.getDeployContainerId()).isEqualTo("c1");
+        List<TaskStatusHistory> rows = histories();
+        assertThat(rows.get(0).getReason()).startsWith("닫힌 수정 회차의 늦은 보고 무시");
+        assertThat(rows.get(1).getReason()).startsWith("닫힌 수정 회차(요청 #502)의 늦은 보고 무시");
+        verify(deployLogStream, never()).finish(any());
+
+        // 표지 없는 PR생성은 지금처럼 배포 중지 성공
+        svc.recordResult(42L, WorkerResultRequest.undeployed("w1", "stopped"));
+        assertThat(t.getStatus()).isEqualTo(PR_CREATED);
+        assertThat(t.getDeployUrl()).isNull();
     }
 
     @Test
@@ -423,7 +584,105 @@ class WorkerServiceFixRoundResultTest {
         svc.recordResult(42L, deployed());
 
         assertThat(t.getStatus()).isEqualTo(DEPLOYED);
+        assertThat(t.getHeadSha()).isEqualTo(OLD_SHA);   // 빌드한 커밋을 싣지 않은 예전 워커 — head_sha 그대로
         assertThat(histories().get(0).getReason()).isEqualTo("배포 완료: https://task-42-win.micthebick.dev");
         verifyNoInteractions(fixRepo);
+    }
+
+    @Test
+    void 이미_닫힌_요청을_가리키면_결과를_덮지_않고_표시만_지운다() {
+        Task t = t(DEPLOYING);
+        TaskFixRequest r = request(2, 1);
+        r.setOutcome(FixOutcome.ABORTED);   // 표시가 닫힌 요청을 가리키는 깨진 데이터
+
+        svc.recordResult(42L, deployed());
+
+        assertThat(t.getActiveFixRequestId()).isNull();
+        assertThat(r.getOutcome()).isEqualTo(FixOutcome.ABORTED);
+        assertThat(histories().get(0).getReason()).endsWith(" (수정 회차 닫힘)");
+        verify(fixRepo, never()).save(any());
+    }
+
+    // ── 배포가 빌드한 커밋 = head_sha (회차와 무관) ─────────
+
+    private static WorkerResultRequest deployedBuilt(String builtSha) {
+        return WorkerResultRequest.deployed("w1", "https://task-42-win.micthebick.dev", "c1", 19001, "img", 5L, "dlog",
+                builtSha);
+    }
+
+    @Test
+    void 배포완료가_빌드한_커밋을_실으면_head_sha를_바꾸고_이력에_남긴다() {
+        Task t = t(DEPLOYING);
+        t.setActiveFixRequestId(null);   // 보통 작업
+
+        svc.recordResult(42L, deployedBuilt("fedcba9876543210fedcba9876543210fedcba98"));
+
+        assertThat(t.getHeadSha()).isEqualTo("fedcba9876543210fedcba9876543210fedcba98");
+        assertThat(histories().get(0).getReason())
+                .isEqualTo("배포 완료: https://task-42-win.micthebick.dev (head_sha 0123456→fedcba9)");
+    }
+
+    @Test
+    void 빌드한_커밋이_같으면_이력에_붙이지_않는다() {
+        Task t = t(DEPLOYING);
+        t.setActiveFixRequestId(null);
+
+        svc.recordResult(42L, deployedBuilt(OLD_SHA));
+
+        assertThat(t.getHeadSha()).isEqualTo(OLD_SHA);
+        assertThat(histories().get(0).getReason()).isEqualTo("배포 완료: https://task-42-win.micthebick.dev");
+    }
+
+    @Test
+    void 빌드한_커밋이_비어_있으면_head_sha는_그대로() {
+        Task t = t(DEPLOYING);
+        t.setActiveFixRequestId(null);
+
+        svc.recordResult(42L, deployedBuilt("  "));
+
+        assertThat(t.getHeadSha()).isEqualTo(OLD_SHA);
+        assertThat(histories().get(0).getReason()).isEqualTo("배포 완료: https://task-42-win.micthebick.dev");
+    }
+
+    @Test
+    void 회차_자동_재배포도_빌드한_커밋을_남기고_회차를_닫는다() {
+        Task t = t(DEPLOYING);
+        t.setHeadSha("new9999");
+        request(2, 1);
+
+        svc.recordResult(42L, deployedBuilt("abcdef1234567890abcdef1234567890abcdef12"));
+
+        assertThat(t.getHeadSha()).isEqualTo("abcdef1234567890abcdef1234567890abcdef12");
+        assertThat(t.getActiveFixRequestId()).isNull();
+        assertThat(histories().get(0).getReason())
+                .isEqualTo("배포 완료: https://task-42-win.micthebick.dev (head_sha new9999→abcdef1) (수정 2회차 닫힘)");
+    }
+
+    @Test
+    void 지각_배포완료_정합화도_빌드한_커밋을_남긴다() {
+        Task t = t(DEPLOY_FAILED);
+        t.setActiveFixRequestId(null);
+
+        svc.recordResult(42L, deployedBuilt("fedcba9876543210fedcba9876543210fedcba98"));
+
+        assertThat(t.getStatus()).isEqualTo(DEPLOYED);
+        assertThat(t.getHeadSha()).isEqualTo("fedcba9876543210fedcba9876543210fedcba98");
+        assertThat(histories().get(0).getReason())
+                .isEqualTo("지각 보고 정합화: stale 회수 → 배포완료 (head_sha 0123456→fedcba9)");
+    }
+
+    @Test
+    void 배포실패는_빌드한_커밋을_실어도_head_sha를_바꾸지_않는다() {
+        Task t = t(DEPLOYING);
+        t.setActiveFixRequestId(null);
+
+        svc.recordResult(42L, new WorkerResultRequest("w1", TaskStatus.DEPLOY_FAILED,
+                null, null, null, null, "docker build 실패",
+                null, null, null, "fedcba9876543210fedcba9876543210fedcba98", null,
+                null, null, null, null, "dlog",
+                null, null, null, null, null));
+
+        assertThat(t.getStatus()).isEqualTo(DEPLOY_FAILED);
+        assertThat(t.getHeadSha()).isEqualTo(OLD_SHA);
     }
 }

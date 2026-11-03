@@ -213,6 +213,18 @@ class WorkerServiceFixRoundClaimTest {
         assertThat(t.getStatus()).isEqualTo(TaskStatus.IMPLEMENTATION_FAILED);
     }
 
+    @Test
+    void 이미_닫힌_요청을_가리키면_구현실패로_둔다() {
+        Task t = fixRoundTask(502L);
+        TaskFixRequest closed = approved(502L, 1, ImplementationMode.REVIEW, 1, "수정");
+        closed.setOutcome(com.hamonsoft.netismaker.entity.FixOutcome.DEPLOYED);
+        when(fixRepo.findById(502L)).thenReturn(Optional.of(closed));
+
+        assertThat(svc.claimNextTask("w1", ALL, null)).isEmpty();
+
+        assertThat(t.getStatus()).isEqualTo(TaskStatus.IMPLEMENTATION_FAILED);
+    }
+
     // ── 후보 쿼리 고르기 ─────────────────────────────────
 
     @Test

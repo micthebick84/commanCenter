@@ -76,22 +76,23 @@ class TaskFixRoundLifecycleIntegrationTest {
         return taskRepo.findById(id).orElseThrow();
     }
 
-    private static WorkerResultRequest success(String sha, int fixAttempt) {
+    /** Task 6 워커 모양 — 회차 구현 결과에 claim의 fix.requestId·fix.attempt를 되돌려 붙인다. */
+    private static WorkerResultRequest success(String sha, long requestId, int fixAttempt) {
         return new WorkerResultRequest("w1", TaskStatus.PR_CREATED,
                 null, null, null, 10L, null,
                 null, null, BRANCH, sha, "fix log",
                 null, null, null, null, null,
                 null, null, null, null, null)
-                .withImplementationAttempt(1).withFixAttempt(fixAttempt);
+                .withImplementationAttempt(1).withFixAttempt(fixAttempt).withFixRequestId(requestId);
     }
 
-    private static WorkerResultRequest failure(String sha, int fixAttempt) {
+    private static WorkerResultRequest failure(String sha, long requestId, int fixAttempt) {
         return new WorkerResultRequest("w1", TaskStatus.IMPLEMENTATION_FAILED,
                 null, null, null, null, "claude exit=1",
                 null, null, BRANCH, sha, "fail log",
                 null, null, null, null, null,
                 null, null, null, null, null)
-                .withImplementationAttempt(1).withFixAttempt(fixAttempt);
+                .withImplementationAttempt(1).withFixAttempt(fixAttempt).withFixRequestId(requestId);
     }
 
     @Test
@@ -105,7 +106,7 @@ class TaskFixRoundLifecycleIntegrationTest {
         assertThat(impl.kind()).isEqualTo(WorkerTaskResponse.Kind.IMPLEMENTATION);
         assertThat(impl.implementation().fix().attempt()).isEqualTo(1);
 
-        workerService.recordResult(id, success(NEW_SHA, 1));
+        workerService.recordResult(id, success(NEW_SHA, requestId, 1));
 
         Task pending = reload(id);
         assertThat(pending.getStatus()).isEqualTo(TaskStatus.DEPLOY_PENDING);
@@ -118,11 +119,14 @@ class TaskFixRoundLifecycleIntegrationTest {
 
         WorkerTaskResponse deploy = workerService.claimNextTask("w1", NEW, null).orElseThrow();
         assertThat(deploy.kind()).isEqualTo(WorkerTaskResponse.Kind.DEPLOY);
+        // 배포는 브랜치 끝을 빌드한다 — 그사이 사람이 MR에 push했으면 그 커밋이 head_sha가 된다
+        String built = "2222222222222222222222222222222222222222";
         workerService.recordResult(id, WorkerResultRequest.deployed("w1", "https://task-x-win.micthebick.dev",
-                "c1", 19001, "img", 5L, "dlog"));
+                "c1", 19001, "img", 5L, "dlog", built));
 
         Task done = reload(id);
         assertThat(done.getStatus()).isEqualTo(TaskStatus.DEPLOYED);
+        assertThat(done.getHeadSha()).isEqualTo(built);
         assertThat(done.getActiveFixRequestId()).isNull();
         TaskFixRequest closed = fixRepo.findById(requestId).orElseThrow();
         assertThat(closed.getOutcome()).isEqualTo(FixOutcome.DEPLOYED);
@@ -140,7 +144,7 @@ class TaskFixRoundLifecycleIntegrationTest {
         Long requestId = reload(id).getActiveFixRequestId();
 
         workerService.claimNextTask("w1", NEW, null).orElseThrow();
-        workerService.recordResult(id, failure(WIP_SHA, 1));
+        workerService.recordResult(id, failure(WIP_SHA, requestId, 1));
         Task failed = reload(id);
         assertThat(failed.getStatus()).isEqualTo(TaskStatus.IMPLEMENTATION_FAILED);
         assertThat(failed.getHeadSha()).isEqualTo(WIP_SHA);
@@ -159,10 +163,10 @@ class TaskFixRoundLifecycleIntegrationTest {
         assertThat(again.implementation().fix().headSha()).isEqualTo(WIP_SHA);
 
         // 1회째의 늦은 성공 보고는 무시된다
-        workerService.recordResult(id, success(NEW_SHA, 1));
+        workerService.recordResult(id, success(NEW_SHA, requestId, 1));
         assertThat(reload(id).getStatus()).isEqualTo(TaskStatus.IMPLEMENTING);
 
-        workerService.recordResult(id, failure(null, 2));
+        workerService.recordResult(id, failure(null, requestId, 2));
         assertThat(reload(id).getStatus()).isEqualTo(TaskStatus.IMPLEMENTATION_FAILED);
 
         fixService.abort(id, "admin");

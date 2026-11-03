@@ -868,10 +868,12 @@ public class WorkerMainLoop {
             return;
         }
         long durationMs = System.currentTimeMillis() - start;
+        // 실제로 빌드한 커밋(브랜치 끝, 전체 40자)도 싣는다 — API가 head_sha를 그 값으로 맞춘다(스펙 2026-11-03 §7, 못 읽었으면 null)
         reporter.reportTerminal(task.id(), WorkerResultRequest.deployed(
                 props.id(), result.url(), result.containerId(), result.hostPort(),
-                result.image(), durationMs, result.log()));
-        log.info("배포 완료: task={} url={}", task.id(), result.url());
+                result.image(), durationMs, result.log(), result.builtSha()));
+        log.info("배포 완료: task={} url={} 빌드 커밋={}", task.id(), result.url(),
+                result.builtSha() == null ? "(모름)" : DeployService.shortSha(result.builtSha()));
     }
 
     private void processUndeploy(WorkerTaskResponse task) {

@@ -42,6 +42,20 @@ class DockerfileSupportTest {
     }
 
     @Test
+    void artifact_copy_is_appended_at_the_end() {
+        assertThat(DockerfileSupport.appendArtifactCopy("FROM a AS b\nFROM tomcat\nCMD [\"run\"]\n"))
+                .isEqualTo("FROM a AS b\nFROM tomcat\nCMD [\"run\"]\n" + DockerfileSupport.ARTIFACT_COPY_BLOCK);
+        assertThat(DockerfileSupport.ARTIFACT_COPY_BLOCK).isEqualTo(
+                "# 종료 산출물 납품 파일 (Symphony 워커가 붙임)\nCOPY .netis-prebuild/artifact/ /opt/netis-artifact/\n");
+    }
+
+    @Test
+    void artifact_copy_starts_on_its_own_line_when_last_line_has_no_newline() {
+        assertThat(DockerfileSupport.appendArtifactCopy("FROM x\nCMD [\"run\"]"))
+                .isEqualTo("FROM x\nCMD [\"run\"]\n" + DockerfileSupport.ARTIFACT_COPY_BLOCK);
+    }
+
+    @Test
     void java_locale_starts_on_its_own_line_when_last_line_has_no_newline() {
         assertThat(DockerfileSupport.appendJavaLocale("FROM x\nCMD [\"run\"]"))
                 .hasValue("FROM x\nCMD [\"run\"]\n" + DockerfileSupport.JAVA_LOCALE_BLOCK);

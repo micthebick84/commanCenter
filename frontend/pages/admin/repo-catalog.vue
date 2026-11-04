@@ -431,7 +431,7 @@ const canSubmit = computed(
         <q-toggle v-model="form.enabled" label="활성화 (사용자에게 노출)" color="positive" />
         <q-toggle
           v-model="form.artifactEnabled"
-          label="종료 때 산출물 보관 (WAR·JAR, 등록자 메일)"
+          label="종료 때 산출물 보관 (WAR·JAR·zip, 등록자 메일)"
           color="primary"
           data-test="form-artifact-enabled"
         />
@@ -439,7 +439,7 @@ const canSubmit = computed(
           v-if="form.artifactEnabled"
           v-model="form.artifactPath"
           label="이미지 안 산출물 경로 (선택)"
-          placeholder="비우면 자동: /usr/local/tomcat/webapps·/app에서 하나일 때"
+          placeholder="비우면 자동: /opt/netis-artifact/의 파일 하나 → 없으면 webapps·/app의 WAR·JAR 하나"
           outlined
           :dense="!mobile"
           autocapitalize="off"

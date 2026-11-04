@@ -25,12 +25,18 @@ class ArtifactStoreTest {
     }
 
     @Test
-    void 이름은_허용_문자이고_war나_jar로_끝나야_한다() {
+    void 이름은_허용_문자이고_허용_확장자로_끝나야_한다() {
         assertThat(ArtifactStore.validName("netis7.0-task-9-abcdef1.jar")).isTrue();
         assertThat(ArtifactStore.validName("w-task-1-abcdef1.war")).isTrue();
+        assertThat(ArtifactStore.validName("netisdash_knu-task-28-f4000f8.zip")).isTrue();
+        assertThat(ArtifactStore.validName("k-task-32-1a2b3c4.tar.gz")).isTrue();
+        assertThat(ArtifactStore.validName("k-task-32-1a2b3c4.tgz")).isTrue();
+        assertThat(ArtifactStore.validName("w-task-1-abcdef1.WAR")).isFalse();   // 워커는 소문자로 보낸다
+        assertThat(ArtifactStore.validName("a.gz")).isFalse();
+        assertThat(ArtifactStore.validName("a.tar")).isFalse();
+        assertThat(ArtifactStore.validName(".zip")).isFalse();
         assertThat(ArtifactStore.validName("../x.war")).isFalse();
         assertThat(ArtifactStore.validName("a b.war")).isFalse();
-        assertThat(ArtifactStore.validName("a.zip")).isFalse();
         assertThat(ArtifactStore.validName(null)).isFalse();
     }
 

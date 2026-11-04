@@ -3,6 +3,7 @@ package com.hamonsoft.netismaker.workerdaemon;
 import com.hamonsoft.netismaker.dto.WorkerTaskResponse;
 import com.hamonsoft.netismaker.entity.EnvVar;
 import com.hamonsoft.netismaker.git.GitRemotes;
+import com.hamonsoft.netismaker.util.ArtifactNames;
 import com.hamonsoft.netismaker.workerdaemon.deploy.DeployTarget;
 import com.hamonsoft.netismaker.workerdaemon.deploy.DockerfileSupport;
 import lombok.extern.slf4j.Slf4j;
@@ -132,6 +133,11 @@ public class DeployService {
                 } else {
                     log.append("[로케일] Dockerfile이 이미 정함 — 그대로 둠\n");
                 }
+                if (staged != null && staged.deliveryName() != null) {
+                    Files.writeString(dockerfile, DockerfileSupport.appendArtifactCopy(Files.readString(dockerfile)));
+                    log.append("[납품 파일] COPY ").append(DeployPrebuilder.DELIVERY_STAGE_DIR)
+                            .append("/ → ").append(ArtifactNames.IMAGE_DIR).append("/ 추가\n");
+                }
                 if (staged != null) {
                     // 생성이 끝난 뒤에 쓴다 — 생성 claude가 만든 .dockerignore보다 워커 것이 이긴다.
                     Path ignore = wt.toPath().resolve(".dockerignore");
@@ -142,6 +148,11 @@ public class DeployService {
                 }
             } else {
                 log.append("[기존 Dockerfile 사용]\n");
+                if (staged != null && staged.deliveryName() != null
+                        && !DeployPrebuilder.dockerfileUsesDeliveryStage(Files.readString(dockerfile))) {
+                    log.append("[경고] Dockerfile이 ").append(DeployPrebuilder.DELIVERY_STAGE_DIR)
+                            .append("/를 쓰지 않음 — 납품 파일이 이미지에 들어가지 않음\n");
+                }
             }
             if (staged != null && !DeployPrebuilder.dockerfileUsesStage(Files.readString(dockerfile))) {
                 log.append("[경고] Dockerfile이 ").append(DeployPrebuilder.STAGE_DIR)
@@ -168,7 +179,9 @@ public class DeployService {
                     "netis-task-" + task.id(),
                     containerPort,
                     env,
-                    Map.of("netis-maker.task", String.valueOf(task.id())));
+                    Map.of("netis-maker.task", String.valueOf(task.id())),
+                    task.headSha() == null || task.headSha().isBlank()
+                            ? Map.of() : Map.of("NETIS_GIT_SHA", task.headSha()));
 
             DeployTarget.DeployResult r = target.deploy(spec, logSink);
             // 컨테이너는 이미지로 돈다 — 빌드 컨텍스트(worktree)는 더 쓰지 않는다. 재배포는 createForDeploy가 새로 만든다.

@@ -53,8 +53,13 @@ public interface DeployTarget {
             String containerName,
             int containerPort,
             Map<String, String> env,
-            Map<String, String> labels
-    ) {}
+            Map<String, String> labels,
+            Map<String, String> buildArgs   // docker build --build-arg (스펙 2026-11-04 §7, 예: NETIS_GIT_SHA)
+    ) {
+        public DeploySpec {
+            buildArgs = buildArgs == null ? Map.of() : buildArgs;
+        }
+    }
 
     /** @param log build+run 합본 출력 tail. */
     record DeployResult(String url, String containerId, int hostPort, String image, String log) {}

@@ -3,6 +3,7 @@ package com.hamonsoft.netismaker.workerdaemon;
 import com.hamonsoft.netismaker.dto.ArtifactInfo;
 import com.hamonsoft.netismaker.dto.CloseArtifactSpec;
 import com.hamonsoft.netismaker.dto.WorkerTaskResponse;
+import com.hamonsoft.netismaker.util.ArtifactNames;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -29,6 +30,8 @@ class ArtifactPublisherTest {
     private WorkerProperties props;
     private final List<List<String>> calls = new ArrayList<>();
     private String findOut = "";
+    private int bundleExit = 1;
+    private String bundleOut = "find: '/opt/netis-artifact': No such file or directory\n";
     private int inspectExit = 0;
     private String inspectFailOut = "Error response from daemon: No such image: netis-task-7:abcdef1";
     private int cpExit = 0;
@@ -52,7 +55,10 @@ class ArtifactPublisherTest {
             calls.add(List.copyOf(args));
             switch (args.get(0)) {
                 case "image" -> { return new ProcessRunner.Result(inspectExit, inspectExit == 0 ? "sha256:x" : inspectFailOut); }
-                case "run" -> { return new ProcessRunner.Result(1, findOut); }
+                case "run" -> {
+                    return args.contains(ArtifactNames.IMAGE_DIR)
+                            ? new ProcessRunner.Result(bundleExit, bundleOut) : new ProcessRunner.Result(1, findOut);
+                }
                 case "cp" -> {
                     if (cpExit == 0) Files.write(Path.of(args.get(2)), WAR);
                     return new ProcessRunner.Result(cpExit, cpExit == 0 ? "" : "Could not find the file");
@@ -101,6 +107,8 @@ class ArtifactPublisherTest {
         findOut = "find: '/usr/local/tomcat/webapps': No such file or directory\n/app/netis.jar\n";
         publisher().publish(task(null, "micthebick84/netis-v7.0"));
         assertThat(calls.get(1)).containsExactly("run", "--rm", "--entrypoint", "find", "netis-task-7:abcdef1",
+                "/opt/netis-artifact", "-mindepth", "1", "-maxdepth", "1", "-type", "f");
+        assertThat(calls.get(2)).containsExactly("run", "--rm", "--entrypoint", "find", "netis-task-7:abcdef1",
                 "/usr/local/tomcat/webapps", "/app", "-maxdepth", "2", "-type", "f",
                 "(", "-name", "*.war", "-o", "-name", "*.jar", ")");
         verify(http).uploadArtifact(eq(7L), eq("netis-v7.0-task-7-abcdef1.jar"), anyString(), any(), anyString(), any());
@@ -166,9 +174,96 @@ class ArtifactPublisherTest {
     }
 
     @Test
-    void war나_jar가_아닌_경로는_거절한다() {
+    void 허용_밖_확장자는_거절한다() {
         assertThatThrownBy(() -> publisher().publish(task("/app/x.ear", "acme/w")))
-                .hasMessageContaining(".war 또는 .jar");
+                .hasMessage("산출물: .war·.jar·.zip·.tar.gz·.tgz만 보관합니다: /app/x.ear");
+    }
+
+    @Test
+    void 납품_폴더에_파일이_하나면_WAR_검색_없이_그것을_올린다() throws Exception {
+        bundleExit = 0;
+        bundleOut = "/opt/netis-artifact/knu-wars.zip\n";
+        findOut = "/usr/local/tomcat/webapps/ROOT.war\n";
+        publisher().publish(task(null, "product/netis/web/dashboard/netisdash_knu"));
+        assertThat(calls).noneMatch(c -> c.contains("*.war"));
+        assertThat(calls).anyMatch(c -> c.equals(List.of("cp", "netis-artifact-7:/opt/netis-artifact/knu-wars.zip", c.get(2))));
+        verify(http).uploadArtifact(eq(7L), eq("netisdash_knu-task-7-abcdef1.zip"),
+                eq("netis-task-7:abcdef1:/opt/netis-artifact/knu-wars.zip"), any(), anyString(), any());
+    }
+
+    @Test
+    void 납품_폴더가_비면_WAR_검색으로_넘어간다() throws Exception {
+        bundleOut = "find: '/opt/netis-artifact': No such file or directory\n";
+        findOut = "/usr/local/tomcat/webapps/ROOT.war\n";
+        publisher().publish(task(null, "acme/w"));
+        verify(http).uploadArtifact(eq(7L), eq("w-task-7-abcdef1.war"), anyString(), any(), anyString(), any());
+    }
+
+    @Test
+    void 납품_폴더에_파일이_여러_개면_후보를_나열해_실패한다() {
+        bundleExit = 0;
+        bundleOut = "/opt/netis-artifact/a.zip\n/opt/netis-artifact/b.zip\n";
+        assertThatThrownBy(() -> publisher().publish(task(null, "acme/w")))
+                .isInstanceOf(ArtifactPublisher.ArtifactException.class)
+                .hasMessage("산출물: /opt/netis-artifact/에 파일이 여러 개입니다 — 하나만 두거나 카탈로그에 경로를 지정하세요"
+                        + "(후보: /opt/netis-artifact/a.zip, /opt/netis-artifact/b.zip)");
+    }
+
+    @Test
+    void 납품_폴더_파일의_확장자가_목록_밖이면_실패한다() {
+        bundleExit = 0;
+        bundleOut = "/opt/netis-artifact/readme.txt\n";
+        assertThatThrownBy(() -> publisher().publish(task(null, "acme/w")))
+                .hasMessage("산출물: .war·.jar·.zip·.tar.gz·.tgz만 보관합니다: /opt/netis-artifact/readme.txt");
+    }
+
+    @Test
+    void 납품_폴더_확인이_데몬_오류면_WAR로_넘어가지_않고_실패한다() throws Exception {
+        bundleExit = 1;
+        bundleOut = "error during connect: Post \"http://docker.example/v1.45/containers/create\": "
+                + "ssh: connect to host 10.1.1.75 port 22: Connection refused\n";
+        findOut = "/usr/local/tomcat/webapps/ROOT.war\n";
+        assertThatThrownBy(() -> publisher().publish(task(null, "product/netis/web/dashboard/netisdash_knu")))
+                .isInstanceOf(ArtifactPublisher.ArtifactException.class)
+                .hasMessageStartingWith("산출물: 납품 폴더 확인 실패 — error during connect")
+                .hasMessageEndingWith("— 데몬 상태를 확인하고 재시도");
+        assertThat(calls).noneMatch(c -> c.contains("*.war"));
+        verify(http, never()).uploadArtifact(any(), any(), any(), any(), any(), any());
+    }
+
+    @Test
+    void find가_없는_이미지면_WAR_검색으로_넘어간다() throws Exception {
+        bundleExit = 127;
+        bundleOut = "docker: Error response from daemon: failed to create task for container: "
+                + "exec: \"find\": executable file not found in $PATH: unknown.\n";
+        findOut = "/usr/local/tomcat/webapps/ROOT.war\n";
+        publisher().publish(task(null, "acme/w"));
+        verify(http).uploadArtifact(eq(7L), eq("w-task-7-abcdef1.war"), anyString(), any(), anyString(), any());
+    }
+
+    @Test
+    void 납품_폴더가_있지만_비었으면_WAR_검색으로_넘어간다() throws Exception {
+        bundleExit = 0;
+        bundleOut = "";
+        findOut = "/usr/local/tomcat/webapps/ROOT.war\n";
+        publisher().publish(task(null, "acme/w"));
+        verify(http).uploadArtifact(eq(7L), eq("w-task-7-abcdef1.war"), anyString(), any(), anyString(), any());
+    }
+
+    @Test
+    void 카탈로그_경로가_tar_gz면_그대로_올린다() throws Exception {
+        publisher().publish(task("/opt/x/bundle.tar.gz", "acme/w"));
+        assertThat(calls).noneMatch(c -> c.get(0).equals("run"));
+        verify(http).uploadArtifact(eq(7L), eq("w-task-7-abcdef1.tar.gz"), anyString(), any(), anyString(), any());
+    }
+
+    @Test
+    void 파일_이름은_확장자를_소문자로_쓴다() {
+        assertThat(ArtifactPublisher.fileName(task(null, "acme/w"), "/app/ROOT.WAR")).isEqualTo("w-task-7-abcdef1.war");
+        assertThat(ArtifactPublisher.fileName(task(null, "acme/w"), "/opt/netis-artifact/B.TGZ"))
+                .isEqualTo("w-task-7-abcdef1.tgz");
+        assertThat(ArtifactPublisher.bundleFiles("x\n/opt/netis-artifact/a.zip\n/opt/netis-artifact/a.zip\n/app/b.war\n"))
+                .containsExactly("/opt/netis-artifact/a.zip");
     }
 
     @Test

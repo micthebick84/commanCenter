@@ -31,7 +31,7 @@ export interface RunnerDeps {
   claudeCliPath: string;
   /** 세션 최대 assistant 질문 턴(초과 시 FAILED). */
   maxTurns: number;
-  /** 이 턴 수 이상이면 force-finish 프롬프트 사용. */
+  /** 이 턴 수 이상이면 force-finish 프롬프트 사용(superpowers 켬만 — 간단 인터뷰는 문턱에서도 resume 접두 + 답변). */
   forceFinishTurns: number;
   /**
    * ~/.claude.json 글로벌+프로젝트 MCP 합본 스냅샷 (부팅 시 loadBaseMcpServers 1회) —
@@ -594,6 +594,16 @@ export class InterviewRunner {
         return;
       }
 
+      // superpowers 켬/끔(스펙 2026-11-03 간단 인터뷰 §5) — 켬은 아래 흐름이 지금과 같다. 끔(간단 인터뷰)은:
+      //  - SDK 옵션에 `superpowers: false`(첫 질의·재요청 — handoff relay는 타지 않는다) — 플러그인 없음, 'Skill' 막음(§5-1)
+      //  - 프롬프트는 늘 `promptFor` — 끔 resume 접두가 곧 마무리 요청이라 force-finish의 "재요청 문구만" 분기를 타지 않는다
+      //    (그 분기는 lastAnswer = 이번 턴의 답변·고칠 점을 버린다)
+      //  - writing-plans handoff splice 없음
+      //  - resume 턴은 채팅 본문만 계획으로 판정하고(plan 파일 대체 판정 없음), 계획이 없으면 같은 세션에 재요청 1회(§5-4)
+      //  - 계획 보고에 Claude 세션 id(`claudeSessionId`) — 첫 턴에 바로 계획을 낸 세션도 "계획 고쳐 달라기"가 같은 대화를 잇도록
+      const on = superpowersOn(claim);
+      const resume = !!claim.claudeSessionId;
+
       // 작업 DB MCP(스펙 2026-10-14 §5): 질문 세션과 같은 내장 서버. 턴마다 새로 만들고 finally에서 닫는다.
       const db = (this.deps.createDbMcp ?? createDbMcp)(claim);
       try {
@@ -608,6 +618,7 @@ export class InterviewRunner {
           model: claim.model,
           effort: claim.effort,
           abortController: controller,
+          superpowers: on,
           dbMcpServers: db.servers,
           dbDialects: db.dialects,
         });
@@ -616,10 +627,11 @@ export class InterviewRunner {
             // Invariant: forceFinishTurns > 0 means at least one assistant turn has been recorded,
             // which requires a claudeSessionId (the session id is set on the FIRST assistant turn).
             // Therefore `forceFinish && !claudeSessionId` is unreachable in production; the else
-            // branch (`promptFor`) only executes on the genuine fresh-start path (turns == 0).
+            // branch (`promptFor`) only executes on the genuine fresh-start path (turns == 0) — 켬 기준.
+            // 끔은 force-finish여도 `promptFor`(참조 절 + 끔 resume 접두 + 답변)다 — 접두가 이미 "더 묻지 말고 최종 계획"이다.
             // 참조 절은 매 턴 접두(kickoff·resume), DB 절은 kickoff 전용 (스펙 2026-10-24 §5.2). 강제 마무리·handoff·near-miss
             // splice에는 참조 절을 붙이지 않는다 — 보고(refStates)는 그 경우에도 한다.
-            forceFinish && claim.claudeSessionId
+            on && forceFinish && claim.claudeSessionId
               ? (async function* () { yield userTurn(buildPlanReformatSplice()); })()
               : promptFor(claim, {
                   everyTurn: interviewRefPrefix(refs, claim.refsCleared === true),
@@ -644,7 +656,8 @@ export class InterviewRunner {
         // Skill-dispatch shim: if brainstorming announced the writing-plans handoff
         // but no plan was produced, splice the writing-plans SKILL.md into the SAME
         // session and run one more turn (fallback when 'Skill' did not auto-fire).
-        const handoff = detectHandoff(assistantText);
+        // 켬 전용 — 간단 인터뷰(끔)는 superpowers를 쓰지 않으므로 writing-plans를 주입하지 않는다(재요청은 아래 한 블록뿐).
+        const handoff = on && detectHandoff(assistantText);
         const hasPlan = tryHarvest(assistantText).ok;
         if (handoff && !hasPlan && sessionId) {
           controller.signal.throwIfAborted(); // relay 사이 gap에서 abort됐으면 SDK 재진입 금지
@@ -664,6 +677,7 @@ export class InterviewRunner {
                 model: claim.model,
                 effort: claim.effort,
                 abortController: controller,
+                superpowers: on,
                 dbMcpServers: db.servers,
                 dbDialects: db.dialects,
               }),
@@ -687,14 +701,22 @@ export class InterviewRunner {
 
         // 채팅 본문 추출이 실패하면 이번 세션이 저장한 plan 파일로 한 번 더 판정한다 — writing-plans가
         // plan을 파일에만 쓰고 채팅엔 요약만 남기면 완료를 영영 못 알아본다(2026-10-08 세션 21).
+        // 예외: 끔 resume 턴은 채팅 본문만 본다 — 매 턴 `git reset --hard`가 untracked plan 파일을 지우지 않아(planFiles.ts
+        // `changedFiles`) 앞 턴의 계획이 다시 잡히고, 그러면 고치기 전 계획이 새 계획으로 기록된다. 끔 kickoff은 새 체크아웃이라
+        // 앞 턴 파일이 없으므로 켬과 같은 안전망을 둔다.
+        const fileFallback = on || !resume;
         const harvestTurn = async (text: string): Promise<HarvestResult> => {
           const fromText = tryHarvest(text);
-          return fromText.ok ? fromText : this.harvestPlanFiles(claim.workDir);
+          return fromText.ok || !fileFallback ? fromText : this.harvestPlanFiles(claim.workDir);
         };
         let harvested = await harvestTurn(assistantText);
-        // near-miss 보정: 추출 실패 + plan 의도 신호 시, 같은 세션에 정규 형식 재요청 1회.
-        // force-finish는 이미 reformat 프롬프트이므로 이중 splice 방지.
-        if (!harvested.ok && !forceFinish && detectPlanIntent(assistantText) && sessionId) {
+        // 정규 형식 재요청 1회(같은 세션) — 추출 실패일 때:
+        //  - near-miss 보정(켬, 끔 kickoff): plan 의도 신호가 있을 때만. force-finish는 이미 reformat 프롬프트이므로 이중 splice 방지.
+        //    사용자에게 묻는 턴(물음표)은 신호가 아니다 — 간단 인터뷰도 질문을 한 번 모아 묻는 것은 허용한다.
+        //  - 끔 resume(답변·계획 수정 요청 뒤): 신호와 무관하게 늘 — 질문은 끝났으므로 질문으로 끝난 턴도 계획을 다시 청한다(§5-4).
+        //    force-finish 문턱에서도 같다(끔은 문턱에서 재요청 문구를 미리 보내지 않으므로 이중 splice가 아니다).
+        const reformatOnce = (!on && resume) || (!forceFinish && detectPlanIntent(assistantText));
+        if (!harvested.ok && reformatOnce && sessionId) {
           controller.signal.throwIfAborted(); // relay 사이 gap에서 abort됐으면 SDK 재진입 금지
           const reformatSplice = buildPlanReformatSplice();
           const retry = await relay(
@@ -710,6 +732,7 @@ export class InterviewRunner {
                 model: claim.model,
                 effort: claim.effort,
                 abortController: controller,
+                superpowers: on,
                 dbMcpServers: db.servers,
                 dbDialects: db.dialects,
               }),
@@ -749,6 +772,9 @@ export class InterviewRunner {
             durationMs,
             // 계획 턴에 처음 받은 참조도 커밋이 고정되도록 계획 보고에도 싣는다(API recordPlan → applyRefStates).
             ...refReport,
+            // 끔 세션만 Claude 세션 id를 싣는다 — 세션 id는 질문 보고에서만 저장되므로, 첫 턴에 바로 계획을 낸 간단 인터뷰도
+            // "계획 고쳐 달라기"가 새 kickoff이 아니라 같은 대화의 resume이 되도록. 켬 바디는 키 자체가 없다(지금과 같다).
+            ...(!on && sessionId ? { claudeSessionId: sessionId } : {}),
           });
           return;
         }

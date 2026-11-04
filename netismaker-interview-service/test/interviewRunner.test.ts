@@ -1434,17 +1434,19 @@ describe('InterviewRunner kind=QUESTION (스펙 §6 — plan 경로 미진입, Q
         expect(await kickoffOf({ ...resumeClaim, writableDbConnections: ['개발DB (PostgreSQL)'] })).toBe(resumeClaim.lastAnswer);
       });
 
-      /** 한 턴의 SDK 질의마다 프롬프트를 따로 모은다 — handoff·near-miss처럼 한 턴에 질의가 여러 번일 때. */
+      /** 한 턴의 SDK 질의마다 프롬프트와 옵션을 따로 모은다 — handoff·near-miss처럼 한 턴에 질의가 여러 번일 때. */
       function capturingEach(...streams: Array<() => AsyncIterable<unknown>>) {
         const prompts: string[] = [];
-        const fakeQuery = vi.fn((args: { prompt: AsyncIterable<{ message?: { content?: string } }> }) => {
+        const options: Array<Record<string, unknown>> = [];
+        const fakeQuery = vi.fn((args: { prompt: AsyncIterable<{ message?: { content?: string } }>; options: Record<string, unknown> }) => {
           const i = prompts.push('') - 1;
+          options[i] = args.options;
           (async () => {
             for await (const p of args.prompt) prompts[i] += p.message?.content ?? '';
           })();
           return streams[i]!();
         });
-        return { fakeQuery, prompts };
+        return { fakeQuery, prompts, options };
       }
 
       // ── 간단 인터뷰(superpowers 끔) — kickoff·resume 접두 (스펙 2026-11-03 §5) ─────────────────
@@ -1522,6 +1524,232 @@ describe('InterviewRunner kind=QUESTION (스펙 §6 — plan 경로 미진입, Q
         for (const v of [undefined, null, true]) {
           expect(await kickoffOf({ ...resumeClaim, superpowersEnabled: v } as any)).toBe(resumeClaim.lastAnswer);
         }
+      });
+
+      // ── 간단 인터뷰(superpowers 끔) — 턴 흐름: 옵션·재요청·계획 보고 (스펙 2026-11-03 §5) ──────────────
+      describe('간단 인터뷰 턴 흐름 (스펙 2026-11-03 §5)', () => {
+        const OFF = { superpowersEnabled: false } as const;
+        /**
+         * assistant 메시지 하나로 끝나는 질의 스트림. init의 session_id 기본값은 resumeClaim의 세션이다 — CLI는 resume한 세션에
+         * 같은 id를 쓰므로 재요청 질의의 options.resume이 claim의 세션과 같다.
+         */
+        const said =
+          (text: string, o: { session?: string; cost?: number; usage?: Record<string, number> } = {}) =>
+          async function* () {
+            yield { type: 'system', subtype: 'init', session_id: o.session ?? resumeClaim.claudeSessionId };
+            yield { type: 'assistant', message: { content: [{ type: 'text', text }] } };
+            yield { type: 'result', subtype: 'success', total_cost_usd: o.cost ?? 0.1, usage: o.usage ?? {}, duration_ms: 100 };
+          };
+        const HANDOFF_TEXT = 'Spec approved. Invoke writing-plans skill now.';
+        const DRAFT_TEXT = '# 구현 계획 (초안)\n\n1. 가'; // 계획 의도 O(헤딩), 정규 구조 X — near-miss
+        const PLAN_TEXT = '# 구현 계획\n\n### 작업 1: 가';
+        const QUESTION_TEXT = '1. 어떤 컬럼을 넣을까요?\n2. 파일 이름은 무엇으로 할까요?';
+        const SAVED_TEXT = '계획을 docs/superpowers/plans/p.md에 저장했습니다.'; // 물음표·계획 헤딩 없음
+        const FILE_HARVEST = {
+          ok: true as const,
+          harvest: {
+            designMarkdown: '# 설계\n\n이전 계획',
+            planMarkdown: '# 이전 구현 계획\n\n### 작업 1: 이전',
+            planJson: [{ task: 1, title: '이전' }],
+          },
+        };
+        /** 한 턴을 돌린다 — 참조 없음·DB 없음(noDb). extra로 spliceRead·harvestPlanFiles를 바꾼다. 턴은 실패하지 않아야 한다. */
+        const runOne = async (claim: InterviewClaimResponse, fakeQuery: unknown, extra: Record<string, unknown> = {}) => {
+          const client = makeClient();
+          await runnerWith(client, fakeQuery, vi.fn(), { createDbMcp: vi.fn().mockReturnValue(noDb()), ...extra }).run(claim);
+          expect(client.fail).not.toHaveBeenCalled();
+          return client;
+        };
+
+        it('켬: kickoff·handoff·near-miss relay 모두 superpowers 옵션', async () => {
+          // 첫 질의 handoff 알림 → writing-plans splice → 초안(near-miss) → 정규 형식 재요청 → 계획
+          const { fakeQuery, prompts, options } = capturingEach(said(HANDOFF_TEXT), said(DRAFT_TEXT), said(PLAN_TEXT));
+          const spliceRead = vi.fn().mockReturnValue('# Writing Plans\n\nbreak into tasks');
+          const client = await runOne(resumeClaim, fakeQuery, { spliceRead });
+
+          expect(prompts).toHaveLength(3);
+          expect(prompts[0]).toBe(resumeClaim.lastAnswer);
+          expect(spliceRead).toHaveBeenCalledTimes(1);
+          expect(prompts[1]).toContain('break into tasks');
+          expect(prompts[2]).toBe(buildPlanReformatSplice());
+          expect(options).toHaveLength(3);
+          for (const o of options) {
+            expect(o.plugins).toEqual([{ type: 'local', path: '/sp/5.1.0' }]);
+            expect((o.allowedTools as string[])[0]).toBe('Skill');
+            expect(o.disallowedTools).toEqual(['AskUserQuestion']);
+          }
+          expect(client.postPlan).toHaveBeenCalledTimes(1);
+        });
+
+        it('끔: kickoff·재요청 relay 모두 plugins [] 이고 Skill이 막혀 있다', async () => {
+          // resume(질문으로 끝남 → 무조건 재요청)과 kickoff(초안 → near-miss 재요청) 두 경로
+          const cases: Array<[InterviewClaimResponse, string]> = [
+            [{ ...resumeClaim, ...OFF }, QUESTION_TEXT],
+            [{ ...freshClaim, ...OFF }, DRAFT_TEXT],
+          ];
+          for (const [claim, first] of cases) {
+            const { fakeQuery, prompts, options } = capturingEach(said(first), said(PLAN_TEXT));
+            const client = await runOne(claim, fakeQuery);
+
+            expect(prompts).toHaveLength(2);
+            expect(prompts[1]).toBe(buildPlanReformatSplice());
+            expect(options).toHaveLength(2);
+            for (const o of options) {
+              expect(o.plugins).toEqual([]);
+              expect(o.allowedTools as string[]).not.toContain('Skill');
+              expect(o.disallowedTools).toContain('Skill');
+            }
+            expect(client.postPlan).toHaveBeenCalledTimes(1);
+          }
+        });
+
+        it('끔: 첫 턴에 바로 계획 → postPlan에 claudeSessionId', async () => {
+          const { fakeQuery } = capturingEach(said(PLAN_TEXT, { session: 'sess-1' }));
+          const client = await runOne({ ...freshClaim, ...OFF }, fakeQuery);
+
+          expect(fakeQuery).toHaveBeenCalledTimes(1);
+          expect(client.postQuestion).not.toHaveBeenCalled();
+          expect(client.postPlan).toHaveBeenCalledWith(42, expect.objectContaining({
+            planMarkdown: expect.stringContaining('### 작업 1: 가'),
+            claudeSessionId: 'sess-1',
+          }));
+        });
+
+        it('켬: postPlan 바디에 claudeSessionId 키가 없다', async () => {
+          for (const v of [undefined, null, true]) {
+            for (const claim of [freshClaim, resumeClaim]) {
+              const client = await runOne({ ...claim, superpowersEnabled: v }, vi.fn(() => planCompleteStream()));
+              expect(client.postPlan).toHaveBeenCalledTimes(1);
+              expect(client.postPlan.mock.calls[0]![1]).not.toHaveProperty('claudeSessionId');
+            }
+          }
+        });
+
+        it('끔 resume이 질문으로 끝나면 같은 세션에 재요청 1회 → 계획이면 postPlan(사용량 합산)', async () => {
+          const claim = { ...resumeClaim, ...OFF };
+          const { fakeQuery, prompts, options } = capturingEach(
+            said(QUESTION_TEXT, {
+              cost: 0.1,
+              usage: { input_tokens: 100, output_tokens: 20, cache_creation_input_tokens: 5, cache_read_input_tokens: 200 },
+            }),
+            said(PLAN_TEXT, {
+              cost: 0.15,
+              usage: { input_tokens: 300, output_tokens: 60, cache_creation_input_tokens: 15, cache_read_input_tokens: 400 },
+            }),
+          );
+          const client = await runOne(claim, fakeQuery);
+
+          expect(fakeQuery).toHaveBeenCalledTimes(2);
+          expect(prompts[0]).toBe(SIMPLE_RESUME_PREFIX + claim.lastAnswer);
+          expect(prompts[1]).toBe(buildPlanReformatSplice());
+          expect(options[0]!.resume).toBe(claim.claudeSessionId);
+          expect(options[1]!.resume).toBe(claim.claudeSessionId);
+          expect(client.postQuestion).not.toHaveBeenCalled();
+          // 두 relay의 사용량 합 — 비용은 같은 세션 resume이라 SDK 보고값이 누적값이다: 0.1 + (0.15 − 0.1)
+          expect(client.postPlan).toHaveBeenCalledWith(42, expect.objectContaining({
+            planMarkdown: expect.stringContaining('### 작업 1: 가'),
+            costUsd: 0.15,
+            inputTokens: 400,
+            outputTokens: 80,
+            cacheCreationTokens: 20,
+            cacheReadTokens: 600,
+            claudeSessionId: claim.claudeSessionId,
+          }));
+        });
+
+        it('재요청 뒤에도 질문이면 postQuestion, relay는 2회뿐', async () => {
+          const again = '2. 파일 이름은 무엇으로 할까요?';
+          const { fakeQuery, prompts } = capturingEach(said(QUESTION_TEXT), said(again), said(PLAN_TEXT));
+          const client = await runOne({ ...resumeClaim, ...OFF }, fakeQuery);
+
+          expect(fakeQuery).toHaveBeenCalledTimes(2);
+          expect(prompts[1]).toBe(buildPlanReformatSplice());
+          expect(client.postPlan).not.toHaveBeenCalled();
+          expect(client.postQuestion).toHaveBeenCalledTimes(1);
+          expect(client.postQuestion).toHaveBeenCalledWith(42, expect.objectContaining({
+            content: again,
+            claudeSessionId: resumeClaim.claudeSessionId,
+            kind: 'question',
+          }));
+        });
+
+        it('끔 kickoff의 질문(물음표)은 재요청 없이 postQuestion', async () => {
+          // 간단 인터뷰는 질문을 한 번 모아 묻는 것을 허용한다 — kickoff은 켬과 같은 near-miss 조건(물음표면 재요청 없음)
+          const { fakeQuery } = capturingEach(said(QUESTION_TEXT, { session: 'sess-1' }), said(PLAN_TEXT, { session: 'sess-1' }));
+          const client = await runOne({ ...freshClaim, ...OFF }, fakeQuery);
+
+          expect(fakeQuery).toHaveBeenCalledTimes(1);
+          expect(client.postPlan).not.toHaveBeenCalled();
+          expect(client.postQuestion).toHaveBeenCalledWith(42, expect.objectContaining({
+            content: QUESTION_TEXT,
+            claudeSessionId: 'sess-1',
+            kind: 'question',
+          }));
+        });
+
+        it('끔: handoff 문구여도 writing-plans를 주입하지 않는다', async () => {
+          for (const claim of [freshClaim, resumeClaim]) {
+            const { fakeQuery, prompts } = capturingEach(said(HANDOFF_TEXT), said(PLAN_TEXT));
+            const spliceRead = vi.fn().mockReturnValue('# Writing Plans\n\nbreak into tasks');
+            const client = await runOne({ ...claim, ...OFF }, fakeQuery, { spliceRead });
+
+            expect(spliceRead).not.toHaveBeenCalled();
+            expect(prompts).toHaveLength(2);
+            expect(prompts[1]).toBe(buildPlanReformatSplice());
+            expect(client.postPlan).toHaveBeenCalledTimes(1);
+          }
+        });
+
+        it('끔 resume: 채팅에 계획이 없으면 plan 파일로 판정하지 않는다', async () => {
+          // 매 턴 git reset --hard가 untracked plan 파일을 남겨 앞 턴의 계획이 다시 잡힌다(planFiles.ts) — 고치기 전 계획이 새 계획이 되면 안 된다
+          const harvestPlanFiles = vi.fn().mockResolvedValue(FILE_HARVEST);
+          const { fakeQuery } = capturingEach(said(QUESTION_TEXT), said(SAVED_TEXT));
+          const client = await runOne({ ...resumeClaim, ...OFF }, fakeQuery, { harvestPlanFiles });
+
+          expect(fakeQuery).toHaveBeenCalledTimes(2);
+          expect(harvestPlanFiles).not.toHaveBeenCalled();
+          expect(client.postPlan).not.toHaveBeenCalled();
+          expect(client.postQuestion).toHaveBeenCalledWith(42, expect.objectContaining({ content: SAVED_TEXT }));
+        });
+
+        it('끔 kickoff: 채팅에 계획이 없으면 켬처럼 plan 파일로 판정한다', async () => {
+          // kickoff은 새 체크아웃이라 앞 턴의 plan 파일이 없다 — 켬과 같은 안전망
+          const harvestPlanFiles = vi.fn().mockResolvedValue(FILE_HARVEST);
+          const { fakeQuery } = capturingEach(said(SAVED_TEXT, { session: 'sess-1' }));
+          const client = await runOne({ ...freshClaim, ...OFF }, fakeQuery, { harvestPlanFiles });
+
+          expect(fakeQuery).toHaveBeenCalledTimes(1);
+          expect(harvestPlanFiles).toHaveBeenCalledTimes(1);
+          expect(harvestPlanFiles).toHaveBeenCalledWith(freshClaim.workDir);
+          expect(client.postQuestion).not.toHaveBeenCalled();
+          expect(client.postPlan).toHaveBeenCalledTimes(1);
+          expect(client.postPlan).toHaveBeenCalledWith(42, expect.objectContaining({
+            planMarkdown: FILE_HARVEST.harvest.planMarkdown,
+            claudeSessionId: 'sess-1',
+          }));
+        });
+
+        it('끔: force-finish 문턱(19)에서도 고칠 점이 실린다', async () => {
+          const claim = { ...resumeClaim, ...OFF, turns: turns(19), lastAnswer: '컬럼 이름을 바꿔 주세요' };
+          const { fakeQuery, prompts } = capturingEach(said(QUESTION_TEXT), said(PLAN_TEXT));
+          const client = await runOne(claim, fakeQuery);
+
+          expect(prompts[0]).toBe(SIMPLE_RESUME_PREFIX + '컬럼 이름을 바꿔 주세요');
+          // 문턱에서도 끔 resume의 재요청 1회는 그대로다
+          expect(prompts).toEqual([SIMPLE_RESUME_PREFIX + '컬럼 이름을 바꿔 주세요', buildPlanReformatSplice()]);
+          expect(client.postPlan).toHaveBeenCalledTimes(1);
+        });
+
+        it('켬: force-finish 문턱에서는 지금처럼 재요청 문구만', async () => {
+          const claim = { ...resumeClaim, superpowersEnabled: true, turns: turns(19), lastAnswer: '컬럼 이름을 바꿔 주세요' };
+          const { fakeQuery, prompts } = capturingEach(said(QUESTION_TEXT), said(PLAN_TEXT));
+          const client = await runOne(claim, fakeQuery);
+
+          expect(prompts[0]).toBe(buildPlanReformatSplice());
+          expect(prompts).toEqual([buildPlanReformatSplice()]); // near-miss 재요청도 없다
+          expect(client.postQuestion).toHaveBeenCalledTimes(1);
+          expect(client.postPlan).not.toHaveBeenCalled();
+        });
       });
 
       it('INTERVIEW claim with refs: ensureRepo → ensureRefRepos → createDbMcp → SDK, with tokens, the turn signal and timeoutMs', async () => {

@@ -445,4 +445,23 @@ class GitOpsServicePushTest {
         assertThatThrownBy(() -> new GitOpsService(props()).forceAdd(clone.toFile(), SCRIPT))
                 .isInstanceOf(IOException.class);
     }
+
+    // ---- 베이스 이후 커밋 (스펙 2026-11-03 §6.6 성공 판정의 "이번 시도의 코드 변경") — 실제 git ----
+
+    @Test
+    void hasCommitsSince는_베이스_이후_커밋이_있을때만_참() throws Exception {
+        Path bare = bareRemote("c1");
+        Path clone = workingClone(bare, "cwork1", "netismaker/task-42");
+        String base = head(clone);
+        GitOpsService ops = new GitOpsService(props());
+
+        // 커밋 안 된 변경만 있다 — 커밋은 없다
+        assertThat(ops.hasCommitsSince(clone.toFile(), base)).isFalse();
+
+        git(clone.toFile(), "add", "-A");
+        git(clone.toFile(), "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-m", "에이전트 커밋");
+        assertThat(ops.hasCommitsSince(clone.toFile(), base)).isTrue();
+        // 새 끝을 기준으로 하면 그 뒤 커밋은 없다(수정 회차의 tip 기준)
+        assertThat(ops.hasCommitsSince(clone.toFile(), head(clone))).isFalse();
+    }
 }

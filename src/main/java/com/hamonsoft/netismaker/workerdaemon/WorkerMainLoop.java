@@ -51,10 +51,12 @@ import java.util.function.LongSupplier;
  *     4) 방식 준비(계획·설계 파일 — 계획 파일 머리에 참조 절, 대신 진행 판정) → 방식별 구현 prompt(끝에 참조 절)
  *        + claude -p exec (worktree에서, --add-dir 없음)
  *        → claude가 어떻게 끝나든 참조 폴더 변경 검사(경고는 PR 본문·결과 보고, 실패면 사유 끝)
- *        → 실패하면 남은 변경을 WIP 커밋으로 push(부분 작업 보존)
+ *        → 실패하면 남은 변경을 WIP 커밋으로 push(부분 작업 보존 — DB 기록이 있으면 누적 SQL 스크립트 파일도 넣는다)
  *        → 성공하면 리뷰 메모 회수, .netis/·목업 삭제, 배포 env 목록(.netis-deploy-env.json) 회수·삭제
- *     5) GitOpsService.commitAndPush(에이전트 커밋 수용, 대상만) → headSha
- *     6) GitOpsService.createDraftPr → prUrl/prNumber (본문에 방식 줄·참조 절·리뷰 메모)
+ *     5) 커밋 직전 준비(prepareCommit) — 세션이 쓴 스크립트 파일 강제 추가, DB 기록이 필요한 구현은 이번 시도의 코드 변경을 구한 뒤
+ *        기록을 다시 받아 성공 판정(DB 작업은 누적 파일만으로도 성공)·누적 SQL 스크립트 파일 쓰기·강제 추가(스펙 2026-11-03 §6.6)
+ *        → GitOpsService.commitAndPush(에이전트 커밋 수용, 대상만) → headSha. 기록을 못 받으면 wip 보존·구현실패
+ *     6) GitOpsService.createDraftPr → prUrl/prNumber (본문에 방식 줄·참조 절·DB 변경 절·리뷰 메모)
  *     7) POST result (status=PR_CREATED 또는 IMPLEMENTATION_FAILED, 시도 번호·참조 경고 포함)
  *     8) 참조 worktree는 모든 경로에서 지운다(대상 worktree는 지금처럼 성공이면 지우고 실패면 남긴다)
  *
@@ -468,14 +470,23 @@ public class WorkerMainLoop {
         List<EnvTemplateItem> envTemplate = DeployEnvManifest.harvest(wtPath);
 
         // 5. 변경 commit + push(대상만) — 에이전트가 만든 커밋(SDD 태스크 커밋)도 받아들인다.
-        //    커밋 앞머리는 작업 타입을 따른다(타입 없음 feat) — 세션이 쓴 스크립트 파일은 무시 규칙이 있어도 먼저 index에 올린다
+        //    커밋 앞머리는 작업 타입을 따른다(타입 없음 feat). 커밋 직전 준비(prepareCommit) — 세션이 쓴 스크립트 파일은 무시 규칙이 있어도
+        //    먼저 index에 올리고, DB 기록이 필요한 구현은 기록을 다시 받아 성공 판정과 누적 SQL 스크립트 파일을 만든다(스펙 2026-11-03 §6.6)
         String headSha;
+        List<DbChangeView> dbChanges;
         try {
-            forceAddSessionScript(task, wt.dir());
+            dbChanges = prepareCommit(task, wt.dir(), repo.commitSha(), dbLog.baselineId());
             String commitMsg = TaskType.commitPrefixOf(taskType) + ": " + task.title()
                     + "\n\n" + "task #" + task.id()
                     + "\n\nCo-Authored-By: netisMaker <" + props.gitUserEmail() + ">";
             headSha = gitOps.commitAndPush(wt.dir(), task.repoRef(), wt.branchName(), commitMsg, repo.commitSha());
+        } catch (DbLogUnavailable e) {
+            // 실행한 SQL이 스크립트 파일에서 빠진 PR을 만들지 않는다 — 지금까지 작업은 wip으로 남기고 구현실패(재시도 가능, 계획 "설계와 다름")
+            PartialOutcome kept = preservePartialWork(task, wt, repo.commitSha(), "구현", DB_LOG_WIP_WHY, false);
+            safePostImplementationFailure(task, attempt,
+                    postDbLogFailureReason(e) + kept.reasonSuffix() + fallbackNote + refNote,
+                    wt.branchName(), kept.headSha(), exec.stdout(), usageOf(exec));
+            return;
         } catch (Exception e) {
             safePostImplementationFailure(task, attempt,
                     "commit/push 실패: " + e.getMessage() + fallbackNote + refNote,
@@ -483,11 +494,13 @@ public class WorkerMainLoop {
             return;
         }
 
-        // 6. Draft PR/MR
+        // 6. Draft PR/MR — 본문의 "DB 변경" 절은 커밋 직전에 받은 기록으로(스펙 2026-11-03 §6.5)
         GitOpsService.PrInfo pr;
         try {
             String body = renderPrBody(task, exec.durationMs(), headSha, modeLine, reviewNotes.orElse(null),
-                    refWarnings);
+                    refWarnings, dbChangeSection(dbChanges, db.scriptPath(),
+                            ImplementationPrompts.sessionScriptPath(db, writeTools), writeTools, db.migrationManaged(),
+                            taskType));
             pr = gitOps.createDraftPr(wt.dir(), task.repoRef(),
                     task.githubBranch(), wt.branchName(),
                     TaskType.prTitle(taskType, task.title()), body);
@@ -636,12 +649,19 @@ public class WorkerMainLoop {
         // 5. 같은 브랜치에 fast-forward push(force 없음 — 그 사이 원격이 앞섰으면 거절된다). 에이전트 커밋도 tip 이후면 받아들인다
         String headSha;
         try {
-            // 커밋 앞머리는 늘 fix — 작업 타입과 무관(스펙 2026-11-03 §4.1). 세션이 쓴 스크립트 파일은 무시 규칙이 있어도 먼저 올린다
-            forceAddSessionScript(task, wt.dir());
+            // 커밋 앞머리는 늘 fix — 작업 타입과 무관(스펙 2026-11-03 §4.1). 커밋 직전 준비는 일반 구현과 같고 기준 커밋만 tip이다 —
+            // 누적 SQL 스크립트 파일을 회차의 기록까지 넣어 다시 만든다(PR/MR을 새로 만들지 않으니 본문 DB 절은 없다)
+            prepareCommit(task, wt.dir(), tip, dbLog.baselineId());
             String commitMsg = "fix: " + label + " — " + task.title()
                     + "\n\n" + "task #" + task.id()
                     + "\n\nCo-Authored-By: netisMaker <" + props.gitUserEmail() + ">";
             headSha = gitOps.commitAndPush(wt.dir(), task.repoRef(), branch, commitMsg, tip);
+        } catch (DbLogUnavailable e) {
+            PartialOutcome kept = preservePartialWork(task, wt, tip, label, DB_LOG_WIP_WHY, false);
+            safePostImplementationFailure(task, attempt,
+                    postDbLogFailureReason(e) + kept.reasonSuffix() + reasonTail + refNote,
+                    branch, remoteEnd(kept, tip), implementationLog, usageOf(exec));
+            return;
         } catch (Exception e) {
             // 고칠 게 없다며 아무것도 바꾸지 않았으면 사유를 분명히 — 관리자가 수정 중단으로 빠져나온다 (Review Focus 2)
             String reason = isNothingToCommit(e)
@@ -798,8 +818,82 @@ public class WorkerMainLoop {
 
     /** 사전 조회 실패 사유 — 같은 SQL이 두 번 실행되지 않게 claude를 돌리지 않고 끝낸다. 메시지가 없으면 예외 이름. */
     static String dbLogFailureReason(Exception e) {
+        return "DB 변경 기록 조회 실패: " + messageOf(e);
+    }
+
+    /** SQL 스크립트 파일을 기록대로 만들지 못했을 때 사유에 붙는 말(스펙 2026-11-03 §6.6 — wip 경로는 사유 끝). */
+    static final String SCRIPT_NOT_APPLIED = " — SQL 스크립트 파일 미반영";
+
+    /** 커밋 직전 사후 조회가 실패해 wip으로 남길 때 wip 커밋 메시지의 중단 이유. */
+    static final String DB_LOG_WIP_WHY = "DB 변경 기록 조회 실패";
+
+    /** 커밋 직전 사후 조회 실패 사유 — 스크립트 파일 없이는 PR을 만들지 않고 wip으로 남긴다. 메시지가 없으면 예외 이름. */
+    static String postDbLogFailureReason(DbLogUnavailable e) {
+        return DB_LOG_WIP_WHY + SCRIPT_NOT_APPLIED + ": " + messageOf(e.failure);
+    }
+
+    private static String messageOf(Exception e) {
         String msg = e.getMessage();
-        return "DB 변경 기록 조회 실패: " + (msg == null || msg.isBlank() ? e.getClass().getSimpleName() : msg);
+        return msg == null || msg.isBlank() ? e.getClass().getSimpleName() : msg;
+    }
+
+    /** 커밋 직전 DB 변경 기록 사후 조회 실패 — 호출부가 commit/push 실패와 구분해 wip 보존·구현실패로 끝낸다. */
+    static final class DbLogUnavailable extends Exception {
+        private final Exception failure;
+
+        DbLogUnavailable(Exception failure) {
+            super(failure.getMessage(), failure);
+            this.failure = failure;
+        }
+    }
+
+    /**
+     * 커밋 직전 준비 (스펙 2026-11-03 §6.6) — 일반 구현·수정 회차 공용. baseSha는 일반 구현이면 베이스 커밋, 회차면 브랜치 끝(tip),
+     * baselineId는 claude 실행 전 기록의 최대 id다. 순서가 중요하다.
+     * <ol>
+     *   <li>세션이 쓴 스크립트 파일(누적 파일 경로·manual 경로)을 강제 추가 — 무시 규칙이 있어도 아래 변경 판정에 보이게</li>
+     *   <li>DB 기록이 필요 없는 구현이면 끝 — 성공 판정이 코드 변경뿐이라 commitAndPush의 "nothing to commit" 판정과 같다(git 호출도 그대로)</li>
+     *   <li>워커가 파일을 쓰기 <b>전에</b> 이번 시도의 코드 변경(남은 변경 또는 baseSha 이후 커밋)을 구한다</li>
+     *   <li>기록 사후 조회 — 실패하면 {@link DbLogUnavailable}</li>
+     *   <li>성공 판정({@link DbScriptFile#hasWork})이 거짓이면 commitAndPush와 같은 "nothing to commit"</li>
+     *   <li>누적 기록이 있으면 스크립트 파일을 쓰고 강제 추가 — 기록이 없으면 세션이 쓴 파일을 덮어쓰지 않고, manual 파일은 건드리지 않는다</li>
+     * </ol>
+     *
+     * @return 사후 조회한 기록(PR 본문 "DB 변경" 절의 재료) — 조회하지 않았으면 빈 목록
+     */
+    private List<DbChangeView> prepareCommit(WorkerTaskResponse task, File dir, String baseSha, long baselineId)
+            throws IOException, InterruptedException, DbLogUnavailable {
+        forceAddSessionScripts(task, dir);
+        if (!needsDbLog(task)) return List.of();
+        boolean codeChanged = gitOps.hasChanges(dir) || gitOps.hasCommitsSince(dir, baseSha);
+        List<DbChangeView> changes;
+        try {
+            changes = requireDbChanges(task);
+        } catch (Exception e) {
+            throw new DbLogUnavailable(e);
+        }
+        Optional<String> script = DbScriptFile.render(task.id(), changes);
+        boolean wrote = DbScriptFile.wroteSince(changes, baselineId);
+        if (!DbScriptFile.hasWork(taskTypeOf(task), codeChanged, wrote, script.isPresent())) {
+            throw new IOException(GitOpsService.NOTHING_TO_COMMIT);
+        }
+        if (script.isPresent()) {
+            String rel = dbSpecOf(task).scriptPath();
+            DbScriptFile.write(dir.toPath(), rel, script.get());
+            gitOps.forceAdd(dir, rel);
+            log.info("SQL 스크립트 파일 작성: task={} {} (기록 {}건, 이번 시도 쓰기 {})", task.id(), rel, changes.size(), wrote);
+        }
+        return changes;
+    }
+
+    /**
+     * 스크립트 파일을 만들 기록 — 본문이 없으면(null) "기록 없음"이 아니라 조회 실패다. 기록 없음으로 읽으면 실행한 SQL이 파일에서 빠진다
+     * (스펙 §11 반목표). 실제 클라이언트는 이미 IllegalStateException을 던진다(WorkerHttpClient.dbChanges).
+     */
+    private List<DbChangeView> requireDbChanges(WorkerTaskResponse task) {
+        List<DbChangeView> changes = http.dbChanges(task.id());
+        if (changes == null) throw new IllegalStateException("DB 변경 기록 응답 본문이 없다");
+        return changes;
     }
 
     /** 리뷰 메모 뒤에 DB 메모를 빈 줄 하나로 이어 붙인다 — 하나만 있으면 그것만, 둘 다 없으면 empty. */
@@ -849,13 +943,25 @@ public class WorkerMainLoop {
     }
 
     /**
-     * 세션이 쓴 SQL 스크립트 파일({@link ImplementationPrompts#defaultScriptPath})이 worktree에 있으면 index에 강제로 올린다
-     * (스펙 2026-11-03 §6.6). 타입과 무관 — 파일이 있으면 늘 올린다. 대상 레포의 {@code .gitignore}가 그 경로를 무시해도 커밋·WIP에
-     * 들어가게 하고, 이것이 먼저 일어나야 {@code git status --porcelain} 기반 "변경 있음" 판단에도 보인다. 파일이 없으면 아무것도 안 한다.
+     * 세션이 쓸 수 있는 SQL 스크립트 파일 — 워커의 누적 파일 경로({@code dbSpecOf(task).scriptPath()}, 카탈로그 폴더 반영)와 쓰기 도구 없이 이전
+     * 기록이 있을 때 세션이 쓰는 manual 경로(Task 14). 이 순서로 강제 추가한다.
      */
-    private void forceAddSessionScript(WorkerTaskResponse task, File worktreeDir)
+    static List<String> sessionScriptPaths(WorkerTaskResponse task) {
+        String script = dbSpecOf(task).scriptPath();
+        return List.of(script, ImplementationPrompts.manualScriptPath(script));
+    }
+
+    /**
+     * 세션이 쓴 SQL 스크립트 파일({@link #sessionScriptPaths})이 worktree에 있으면 index에 강제로 올린다(스펙 2026-11-03 §6.6). 타입과 무관 —
+     * 파일이 있으면 늘 올린다. 대상 레포의 {@code .gitignore}가 그 경로를 무시해도 커밋·WIP에 들어가게 하고, 이것이 먼저 일어나야
+     * {@code git status --porcelain} 기반 "변경 있음" 판단에도 보인다(Review Focus 3). 없는 파일은 건너뛰고, 하나라도 실패하면 예외.
+     */
+    private void forceAddSessionScripts(WorkerTaskResponse task, File worktreeDir)
             throws IOException, InterruptedException {
-        String rel = ImplementationPrompts.defaultScriptPath(task.id());
+        for (String rel : sessionScriptPaths(task)) forceAddIfPresent(worktreeDir, rel);
+    }
+
+    private void forceAddIfPresent(File worktreeDir, String rel) throws IOException, InterruptedException {
         if (!Files.isRegularFile(worktreeDir.toPath().resolve(rel), LinkOption.NOFOLLOW_LINKS)) return;
         gitOps.forceAdd(worktreeDir, rel);
     }
@@ -882,20 +988,51 @@ public class WorkerMainLoop {
      */
     private PartialOutcome preservePartialWork(WorkerTaskResponse task, WorktreeService.CreatedWorktree wt,
                                                String baseSha, String what, String why) {
+        return preservePartialWork(task, wt, baseSha, what, why, true);
+    }
+
+    /**
+     * writeScript가 거짓이면 SQL 스크립트 파일의 기록 조회·쓰기를 건너뛴다 — 커밋 직전 사후 조회가 이미 실패해 그 사유로 보고하는 경로
+     * (다시 조회하지 않고, 사유 끝 표시도 붙이지 않는다).
+     */
+    private PartialOutcome preservePartialWork(WorkerTaskResponse task, WorktreeService.CreatedWorktree wt,
+                                               String baseSha, String what, String why, boolean writeScript) {
         // git add -A가 .netis/·.design/·배포 env 목록을 WIP 커밋에 담지 않도록 먼저 지운다
         ImplementationScratch.deleteAll(wt.dir().toPath());
-        // 세션이 쓴 스크립트 파일은 무시 규칙(db/·*.sql)이 있어도 WIP에 들어가야 한다 — git add -A는 무시된 파일을 담지 않는다.
-        // 이미 중단 보고 중이라 실패해도 경고만 남기고 보존을 계속한다
-        try {
-            forceAddSessionScript(task, wt.dir());
-        } catch (Exception e) {
-            if (e instanceof InterruptedException) Thread.currentThread().interrupt();
-            log.warn("세션이 쓴 스크립트 파일 강제 추가 실패 — WIP 보존은 계속합니다: task={} {}",
-                    task.id(), GitRemotes.mask(String.valueOf(e.getMessage())));
+        // 실패 경로에서도 누적 SQL 스크립트 파일을 만든다(스펙 2026-11-03 §6.6) — 수정 회차의 wip은 PR 브랜치에 그대로 올라가 "수정 중단"
+        // 뒤 종료 때 병합된다. 기록을 못 받거나 못 쓰면 wip은 그대로 올리고 사유 끝에 알린다
+        boolean scriptMissing = writeScript && !writeScriptForWip(task, wt.dir());
+        // 스크립트 파일(워커가 방금 쓴 누적 파일 포함)과 세션의 manual 파일은 무시 규칙(db/·*.sql)이 있어도 WIP에 들어가야 한다 —
+        // git add -A는 무시된 파일을 담지 않는다. 이미 중단 보고 중이라 실패해도 경고만 남기고 다음 파일·보존을 계속한다
+        for (String rel : sessionScriptPaths(task)) {
+            try {
+                forceAddIfPresent(wt.dir(), rel);
+            } catch (Exception e) {
+                if (e instanceof InterruptedException) Thread.currentThread().interrupt();
+                log.warn("스크립트 파일 강제 추가 실패 — WIP 보존은 계속합니다: task={} {} {}",
+                        task.id(), rel, GitRemotes.mask(String.valueOf(e.getMessage())));
+            }
         }
         GitOpsService.PartialWork w = gitOps.preservePartialWork(wt.dir(), task.repoRef(), wt.branchName(), baseSha,
                 "wip: " + what + " 중단(" + why + ") — task #" + task.id());
-        return PartialOutcome.of(w, wt.branchName());
+        PartialOutcome kept = PartialOutcome.of(w, wt.branchName());
+        return scriptMissing ? kept.withNote(SCRIPT_NOT_APPLIED) : kept;
+    }
+
+    /**
+     * wip 경로의 SQL 스크립트 파일 — DB 기록이 필요 없는 구현이면 아무것도 안 하고 true. 누적 기록이 있으면 쓰고(없으면 세션 파일을 덮어쓰지
+     * 않는다) true, 조회·쓰기가 실패하면 경고를 남기고 false. 강제 추가는 호출부가 세션 파일과 함께 한다.
+     */
+    private boolean writeScriptForWip(WorkerTaskResponse task, File dir) {
+        if (!needsDbLog(task)) return true;
+        try {
+            Optional<String> script = DbScriptFile.render(task.id(), requireDbChanges(task));
+            if (script.isPresent()) DbScriptFile.write(dir.toPath(), dbSpecOf(task).scriptPath(), script.get());
+            return true;
+        } catch (Exception e) {
+            log.warn("wip의 SQL 스크립트 파일 미반영: task={} {}", task.id(), GitRemotes.mask(String.valueOf(e.getMessage())));
+            return false;
+        }
     }
 
     /**
@@ -920,6 +1057,11 @@ public class WorkerMainLoop {
                         + (w.wipError() == null ? "" : " (WIP 커밋도 실패: " + w.wipError() + ")"), null);
             }
             return new PartialOutcome("", null);
+        }
+
+        /** 사유 끝에 note를 더 붙인 결과(SQL 스크립트 파일 미반영 등). */
+        PartialOutcome withNote(String note) {
+            return new PartialOutcome(reasonSuffix + note, headSha);
         }
     }
 
@@ -1202,14 +1344,21 @@ public class WorkerMainLoop {
         return renderPrBody(task, durationMs, headSha, modeLine, reviewNotes, List.of());
     }
 
-    /**
-     * PR/MR 본문. 전체가 PR_BODY_MAX_CHARS를 넘으면 사전 분석(설계 문서)을 먼저 줄이고, 그래도 넘으면 리뷰 메모를 줄인다 —
-     * 줄인 절은 끝에 `…(이하 생략)`. 머리 줄(방식 줄 포함)·참조 절과 꼬리는 그대로 둔다. 본문이 길면 이미 push한 구현이
-     * "PR/MR 생성 실패"로 끝나기 때문이다(GitHub 65,536자 한도). 참조 절(고정 커밋·변경 경고, 스펙 2026-10-24 §6.6)은
-     * 머리 다음에 오고, 참조가 없으면 비어 본문이 예전과 같다.
-     */
+    /** DB 변경 절 없는 PR/MR 본문 — 기존 호출부·테스트용(DB 기록이 없는 구현과 같은 결과). */
     static String renderPrBody(WorkerTaskResponse task, long durationMs, String headSha,
                                String modeLine, String reviewNotes, List<String> refWarnings) {
+        return renderPrBody(task, durationMs, headSha, modeLine, reviewNotes, refWarnings, "");
+    }
+
+    /**
+     * PR/MR 본문. 전체가 PR_BODY_MAX_CHARS를 넘으면 사전 분석(설계 문서)을 먼저 줄이고, 그래도 넘으면 리뷰 메모를 줄인다 —
+     * 줄인 절은 끝에 `…(이하 생략)`. 머리 줄(방식 줄 포함)·참조 절·DB 변경 절과 꼬리는 그대로 둔다. 본문이 길면 이미 push한 구현이
+     * "PR/MR 생성 실패"로 끝나기 때문이다(GitHub 65,536자 한도). 참조 절(고정 커밋·변경 경고, 스펙 2026-10-24 §6.6)은
+     * 머리 다음에 오고, 참조가 없으면 비어 본문이 예전과 같다. DB 변경 절({@link #dbChangeSection}, 스펙 2026-11-03 §6.5)은 참조 절 다음이고
+     * 스스로 승인 대기 목록을 {@link #PR_PENDING_SQL_MAX_CHARS}로 줄여 오며, 비면 본문이 예전과 같다.
+     */
+    static String renderPrBody(WorkerTaskResponse task, long durationMs, String headSha,
+                               String modeLine, String reviewNotes, List<String> refWarnings, String dbSection) {
         boolean gitlab = task.repoRef().isGitlab();
         boolean hasDesign = task.designMarkdown() != null && !task.designMarkdown().isBlank();
         String designLine = !hasDesign ? ""
@@ -1230,8 +1379,9 @@ public class WorkerMainLoop {
 
         String analysis = task.analysisMarkdown() == null ? "" : task.analysisMarkdown();
         String notes = reviewNotes;
-        // 절 제목·구분 줄바꿈·머리·참조 절·꼬리를 뺀, 분석과 메모가 나눠 쓸 수 있는 글자 수
-        int room = PR_BODY_MAX_CHARS - head.length() - refSection.length() - tail.length()
+        String db = dbSection == null ? "" : dbSection;
+        // 절 제목·구분 줄바꿈·머리·참조 절·DB 변경 절·꼬리를 뺀, 분석과 메모가 나눠 쓸 수 있는 글자 수
+        int room = PR_BODY_MAX_CHARS - head.length() - refSection.length() - db.length() - tail.length()
                 - analysisTitle.length() - 2
                 - (notes == null ? 0 : notesTitle.length() + 2);
         int notesLength = notes == null ? 0 : notes.length();
@@ -1243,9 +1393,85 @@ public class WorkerMainLoop {
         }
         return head
                 + refSection
+                + db
                 + analysisTitle + analysis + "\n\n"
                 + (notes == null ? "" : notesTitle + notes + "\n\n")
                 + tail;
+    }
+
+    /** PR 본문 "DB 변경" 절의 승인 대기 SQL 목록 상한(자) — 이 절 혼자 본문 예산(PR_BODY_MAX_CHARS)을 다 쓰지 않게. */
+    static final int PR_PENDING_SQL_MAX_CHARS = 20_000;
+    /** 승인 대기 목록에서 상한보다 큰 문장을 자른 끝 표시 — 코드 블록 안이라 SQL 주석으로. */
+    private static final String PENDING_SQL_CUT_MARK = "\n-- …(이하 생략)\n";
+
+    /**
+     * PR 본문 "DB 변경" 절 (스펙 2026-11-03 §6.5·§6.6) — 개발 DB에 실행한 SQL 수, 승인 대기 SQL 수와 목록, 스크립트 파일 경로. 끝에 빈 줄.
+     * <ul>
+     *   <li>scriptPath는 워커의 누적 파일 — 실행됐거나 승인 대기로 남은 기록이 있을 때만(그때 워커가 그 파일을 쓴다) {@code - 스크립트 파일:} 줄</li>
+     *   <li>sessionPath는 {@code sessionScriptPath(db, writeTools)} — DB 작업에 쓰기 도구가 없으면 세션이 SQL을 적은 그 파일을
+     *       {@code - 개발 DB 미적용 — 수동 적용 필요:} 줄에 쓴다</li>
+     *   <li>자동 마이그레이션 레포는 기록·스크립트 파일이 없고 개발 DB에는 시험 컨테이너가 적용하므로(§6.8) 절이 없다. 기록도 수동 적용도 없으면
+     *       절이 없다(본문이 예전과 같다)</li>
+     * </ul>
+     * 승인 대기 목록은 스크립트 파일과 같은 모양의 SQL 코드 블록이고 {@link #PR_PENDING_SQL_MAX_CHARS}를 넘으면 나머지는 개수만 적는다.
+     */
+    static String dbChangeSection(List<DbChangeView> changes, String scriptPath, String sessionPath,
+                                  boolean writeTools, boolean migrationManaged, TaskType type) {
+        if (migrationManaged) return "";
+        int executed = 0;
+        List<DbChangeView> deferred = new ArrayList<>();
+        for (DbChangeView c : changes == null ? List.<DbChangeView>of() : changes) {
+            if (DbScriptFile.EXECUTED.equals(c.classification())) executed++;
+            else if (DbScriptFile.DEFERRED.equals(c.classification())) deferred.add(c);
+        }
+        boolean recorded = executed > 0 || !deferred.isEmpty();
+        boolean manual = type == TaskType.DB_WORK && !writeTools;
+        if (!recorded && !manual) return "";
+        StringBuilder sb = new StringBuilder("## DB 변경\n");
+        if (recorded) {
+            sb.append("- 개발 DB에 실행한 SQL: ").append(executed).append("건\n")
+              .append("- 병합 뒤 실행(승인 대기): ").append(deferred.size()).append("건\n")
+              .append("- 스크립트 파일: `").append(scriptPath).append("`\n");
+        }
+        if (manual) sb.append("- 개발 DB 미적용 — 수동 적용 필요: `").append(sessionPath).append("`\n");
+        if (!deferred.isEmpty()) sb.append(pendingSqlBlock(deferred));
+        return sb.append('\n').toString();
+    }
+
+    /** 승인 대기 SQL 목록 — 한 코드 블록에 스크립트 파일과 같은 모양으로, 상한을 넘으면 앞에서부터 싣고 나머지는 개수만. */
+    private static String pendingSqlBlock(List<DbChangeView> deferred) {
+        StringBuilder sql = new StringBuilder();
+        int listed = 0;
+        for (DbChangeView c : deferred) {
+            String stmt = (listed == 0 ? "" : "\n") + DbScriptFile.statement(c);
+            if (sql.length() + stmt.length() > PR_PENDING_SQL_MAX_CHARS) {
+                if (listed == 0) {
+                    // 문장 하나가 상한보다 크다 — 비워 두지 않고 잘라서 싣는다(서로게이트 쌍은 가운데서 자르지 않는다)
+                    int keep = PR_PENDING_SQL_MAX_CHARS - PENDING_SQL_CUT_MARK.length();
+                    if (Character.isHighSurrogate(stmt.charAt(keep - 1))) keep--;
+                    sql.append(stmt, 0, keep).append(PENDING_SQL_CUT_MARK);
+                    listed = 1;
+                }
+                break;
+            }
+            sql.append(stmt);
+            listed++;
+        }
+        int omitted = deferred.size() - listed;
+        if (omitted > 0) sql.append("\n-- …외 ").append(omitted).append("건 생략 — 스크립트 파일·작업 상세의 DB 변경에서 확인\n");
+        String fence = "`".repeat(Math.max(3, longestBacktickRun(sql) + 1));
+        return "\n병합 뒤 실행할 SQL(승인 대기 — 관리자가 PR 병합 뒤 작업 상세에서 실행):\n"
+                + fence + "sql\n" + sql + fence + "\n";
+    }
+
+    private static int longestBacktickRun(CharSequence s) {
+        int longest = 0;
+        int run = 0;
+        for (int i = 0; i < s.length(); i++) {
+            run = s.charAt(i) == '`' ? run + 1 : 0;
+            longest = Math.max(longest, run);
+        }
+        return longest;
     }
 
     /**

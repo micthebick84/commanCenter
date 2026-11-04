@@ -83,6 +83,8 @@ class WorkerMainLoopDbPromptTest {
         when(gitOps.commitAndPush(any(), any(), anyString(), anyString(), any())).thenReturn("head456");
         when(gitOps.createDraftPr(any(), any(), anyString(), anyString(), anyString(), anyString()))
                 .thenReturn(new GitOpsService.PrInfo("https://github.com/acme/widgets/pull/3", 3));
+        // claude가 코드를 바꿨다 — DB 기록이 필요한 구현은 커밋 직전에 워커가 직접 변경을 판정한다(Task 15, WorkerMainLoopDbScriptTest)
+        when(gitOps.hasChanges(any())).thenReturn(true);
     }
 
     private WorkerMainLoop loop() {
@@ -215,12 +217,14 @@ class WorkerMainLoopDbPromptTest {
                 .contains("- [실행됨] #12 개발 (PostgreSQL): CREATE TABLE t_new (id int)")
                 .contains("- [승인 대기] #13 개발 (PostgreSQL): ALTER TABLE t_old DROP COLUMN c")
                 .doesNotContain("DROP TABLE t_old");
-        // 조회는 worktree 생성 뒤 claude 전 한 번 — 참조 준비 뒤라서 참조 실패 경로의 "대상 상호작용 없음"도 유지된다
+        // 사전 조회는 worktree 생성 뒤 claude 전 한 번 — 참조 준비 뒤라서 참조 실패 경로의 "대상 상호작용 없음"도 유지된다.
+        // 나머지 한 번은 커밋 직전 사후 조회(SQL 스크립트 파일, Task 15)
         InOrder order = inOrder(worktrees, http, claude);
         order.verify(worktrees).create(any(), anyString(), eq("main"), eq(7L), anyString(), anyInt());
         order.verify(http).dbChanges(7L);
         order.verify(claude).exec(anyString(), any(), any(), anyList(), anyBoolean(), any(), any(), any());
-        verify(http, times(1)).dbChanges(anyLong());
+        order.verify(http).dbChanges(7L);
+        verify(http, times(2)).dbChanges(anyLong());
     }
 
     @Test
@@ -230,7 +234,7 @@ class WorkerMainLoopDbPromptTest {
 
         loop().pollAndProcess();
 
-        verify(http).dbChanges(7L);
+        verify(http, times(2)).dbChanges(7L);   // 사전 조회 + 커밋 직전 사후 조회
         assertThat(prompt.get()).contains("## 개발 DB 쓰기 (함께 쓰는 개발 DB)")
                 .contains("- mcp__db-12__query / list_tables / describe_table / execute : 개발 (PostgreSQL)")
                 .doesNotContain("쓰기(INSERT/UPDATE/DELETE/DDL)는 서버가 거부합니다")

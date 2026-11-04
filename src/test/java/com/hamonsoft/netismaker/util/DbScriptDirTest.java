@@ -73,6 +73,43 @@ class DbScriptDirTest {
                 .hasMessage(MESSAGE);
     }
 
+    /**
+     * 최종 리뷰 Important 4 잔여 — 값 전체의 앞뒤만 strip하면 단계 이름 앞뒤 공백이 저장된다. Windows Path는 이름 끝 공백을
+     * InvalidPathException("Trailing char < >")으로 거부하고, 끝 점은 파일 시스템이 조용히 떼어 git 경로와 디스크 경로가 어긋나며,
+     * 예약 장치 이름(확장자가 붙어도)은 파일이 아니라 장치를 가리킨다.
+     */
+    @ParameterizedTest
+    @ValueSource(strings = {
+            // 단계 이름 앞뒤 공백 (값 전체의 앞뒤 공백은 따로 떼므로 중간 단계·끝 단계 모두)
+            "db /symphony", "db / symphony", "db/x /", " db /x", "db/ x", "a/ /b", "db/\u00A0x", "db/x\u00A0/y",
+            "db/x\u3000/y", "db/\u2003x",
+            // 끝이 '.'인 단계
+            "db/x.", "db./x", "db/x../y", "db/x...",
+            // Windows 예약 장치 이름 — 대소문자 무시, 확장자가 붙어도, 어느 단계든
+            "db/con", "db/CON", "db/Con/x", "db/nul", "db/NUL.sql", "db/aux.d/x", "db/prn", "db/PRN.txt",
+            "db/com1", "db/COM9", "db/com5.sql", "db/lpt1", "db/LPT9", "db/Lpt3.x/y", "con/x", "NUL", "x/y/aux",
+            "db/com0", "db/lpt0", "db/COM\u00B9", "db/lpt\u00B2.sql", "db/con .txt"})
+    void 단계_앞뒤_공백_끝_점_Windows_예약_장치_이름은_거부한다(String raw) {
+        assertThatThrownBy(() -> DbScriptDir.normalize(raw))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessage(MESSAGE);
+    }
+
+    @Test
+    void 예약_장치_이름과_닮았어도_다른_이름은_통과시킨다() {
+        assertThat(DbScriptDir.normalize("db/console")).isEqualTo("db/console");
+        assertThat(DbScriptDir.normalize("db/nulls/aux1")).isEqualTo("db/nulls/aux1");
+        assertThat(DbScriptDir.normalize("db/com10/lpt10")).isEqualTo("db/com10/lpt10");
+        assertThat(DbScriptDir.normalize("db/xcon/prn_x")).isEqualTo("db/xcon/prn_x");
+        assertThat(DbScriptDir.normalize("db/com/lpt")).isEqualTo("db/com/lpt");
+        // 단계 안쪽 공백은 막지 않는다 — 앞뒤만 막는다
+        assertThat(DbScriptDir.normalize("db/my sql/v 1")).isEqualTo("db/my sql/v 1");
+        // 값 전체의 앞뒤 공백은 여전히 떼고 저장한다 — 마지막 단계 끝 공백도 값 끝이면 뗀 값이 저장된다
+        assertThat(DbScriptDir.normalize("db/x ")).isEqualTo("db/x");
+        assertThat(DbScriptDir.normalize("  db/sql  ")).isEqualTo("db/sql");
+        assertThat(DbScriptDir.normalize(" db/sql/ ")).isEqualTo("db/sql");
+    }
+
     @Test
     void 임시_폴더_이름은_첫_단계만_막는다() {
         assertThat(DbScriptDir.normalize(".gitx/sql")).isEqualTo(".gitx/sql");

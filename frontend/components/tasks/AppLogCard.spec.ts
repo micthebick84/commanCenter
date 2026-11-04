@@ -6,7 +6,7 @@ import { resolve } from 'node:path'
 import AppLogCard from './AppLogCard.vue'
 import { FakeEventSource, CLOSED } from '../../test/mocks/eventsource'
 import { authStub } from '../../test/mocks/nuxt'
-import { appLogFileName, formatLogTime } from '../../composables/appLog'
+import { APP_LOG_RENDER_LINES, appLogFileName, formatLogTime } from '../../composables/appLog'
 
 // 실제 useAppLogStream을 그대로 쓰고 FakeEventSource(test/setup.ts가 전역에 설치)로 구동한다 — 카드가 연결·줄·끝남을 어떻게 그리는지만 본다.
 // 재연결 타이머와 Date만 페이크로 돌린다(nextTick은 프라미스 마이크로태스크라 그대로 돈다).
@@ -15,6 +15,10 @@ let visibility: 'visible' | 'hidden'
 
 const ts = (sec: number) => `2026-11-03T01:00:${String(sec).padStart(2, '0')}.000000000Z`
 const line = (sec: number, text = `line ${sec}`, stream: 'out' | 'err' = 'out') => ({ ts: ts(sec), stream, text })
+// 분·초를 함께 써서 2000줄이 넘어도 ts가 사전순으로 계속 늘어난다(위 ts(sec)는 초만 쓰므로 60줄을 못 넘긴다). n은 1부터.
+const tsSeq = (n: number) => `2026-11-03T01:${String(Math.floor((n - 1) / 60)).padStart(2, '0')}:${String((n - 1) % 60).padStart(2, '0')}.000000000Z`
+const seqLine = (n: number) => ({ ts: tsSeq(n), stream: 'out' as const, text: `line ${n}` })
+const seqLines = (from: number, to: number) => Array.from({ length: to - from + 1 }, (_, i) => seqLine(from + i))
 const es = (i: number) => FakeEventSource.instances[i]
 
 function mountCard(props: Partial<{ taskId: number; viewable: boolean }> = {}) {
@@ -333,6 +337,62 @@ describe('AppLogCard (스펙 2026-11-03 §5)', () => {
     expect(FakeEventSource.instances).toHaveLength(5) // 토큰이 없으면 연결하지 않는다
     expect(status(w2)).toBe('끝남 — 다시 로그인한 뒤 연결하세요')
     expect(w2.find('[data-test="app-log-reconnect"]').exists()).toBe(true)
+  })
+
+  it('걸러 낸 줄이 2000줄을 넘으면 끝 2000줄만 그리고, 안내를 달고, 복사·내려받기는 전체를 쓴다 (판정 T10)', async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined)
+    Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true })
+    const w = mountCard()
+    const ev = es(0)
+    const older = () => w.find('[data-test="app-log-older"]')
+
+    // 200줄씩 10번 = 정확히 2000줄: 전부 그리고 안내는 없다
+    for (let from = 1; from <= 2000; from += 200) ev.emit('lines', { lines: seqLines(from, from + 199) })
+    await nextTick()
+    expect(APP_LOG_RENDER_LINES).toBe(2000)
+    expect(rows(w)).toHaveLength(APP_LOG_RENDER_LINES)
+    expect(rows(w)[0].text()).toBe(`[${formatLogTime(tsSeq(1))}] line 1`)
+    expect(older().exists()).toBe(false)
+
+    // 한 번 더 200줄 = 2200줄: 화면은 끝 2000줄(201번째 줄부터), 맨 위에 안내
+    ev.emit('lines', { lines: seqLines(2001, 2200) })
+    await nextTick()
+    expect(rows(w)).toHaveLength(APP_LOG_RENDER_LINES)
+    expect(rows(w)[0].text()).toBe(`[${formatLogTime(tsSeq(201))}] line 201`)
+    expect(rows(w)[APP_LOG_RENDER_LINES - 1].text()).toBe(`[${formatLogTime(tsSeq(2200))}] line 2200`)
+    expect(older().exists()).toBe(true)
+    expect(older().text()).toBe('앞의 200줄은 화면에 그리지 않습니다 — 복사·내려받기에는 들어 있습니다')
+    // 안내는 줄 영역 안의 첫 자식이다(첫 줄 앞)
+    expect(w.get('[data-test="app-log-lines"]').element.firstElementChild).toBe(older().element)
+
+    // 복사 본문은 그리지 않은 앞 줄까지 전체 2200줄이다
+    await w.get('[data-test="app-log-copy"]').trigger('click')
+    await flushPromises()
+    expect(writeText).toHaveBeenCalledTimes(1)
+    const copied = (writeText.mock.calls[0][0] as string).split('\n').filter((l) => l !== '')
+    expect(copied).toHaveLength(2200)
+    expect(copied[0]).toBe(`[${tsSeq(1)}] line 1`)
+    expect(copied[2199]).toBe(`[${tsSeq(2200)}] line 2200`)
+
+    // 내려받기도 마찬가지다
+    let saved: Blob | null = null
+    const orig = { c: URL.createObjectURL, r: URL.revokeObjectURL }
+    Object.assign(URL, {
+      createObjectURL: vi.fn((b: Blob) => {
+        saved = b
+        return 'blob:applog'
+      }),
+      revokeObjectURL: vi.fn(),
+    })
+    vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {})
+    try {
+      await w.get('[data-test="app-log-download"]').trigger('click')
+      const downloaded = (await saved!.text()).split('\n').filter((l) => l !== '')
+      expect(downloaded).toHaveLength(2200)
+      expect(downloaded[0]).toBe(`[${tsSeq(1)}] line 1`)
+    } finally {
+      Object.assign(URL, { createObjectURL: orig.c, revokeObjectURL: orig.r })
+    }
   })
 
   it('소스에 v-html이 없다', () => {

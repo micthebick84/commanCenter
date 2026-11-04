@@ -3,7 +3,7 @@
 // 접거나 떠나면 언마운트로 닫는다(useAppLogStream이 정리). 연결·재연결 규칙은 useAppLogStream, 순수 규칙은 appLog.ts.
 // 줄 본문은 로그 앱이 찍은 임의 문자열이라 `{{ }}` 보간으로만 그린다 — HTML을 그대로 넣는 디렉티브는 쓰지 않는다(AppLogCard.spec.ts가 소스를 읽어 가드).
 import { useQuasar } from 'quasar'
-import { appLogEndText, appLogFileName, appLogText, formatLogTime } from '~/composables/appLog'
+import { APP_LOG_RENDER_LINES, appLogEndText, appLogFileName, appLogText, formatLogTime } from '~/composables/appLog'
 import { saveBlob } from '~/composables/saveBlob'
 import { useAppLogStream } from '~/composables/useAppLogStream'
 
@@ -36,9 +36,13 @@ const statusText = computed(() => {
   }
 })
 
-// "오류 줄만" — 걸러 보는 중에도 새 줄은 계속 받는다(끄면 전체가 그대로 있다). 복사·내려받기는 이 보이는 줄만 쓴다.
+// "오류 줄만" — 걸러 보는 중에도 새 줄은 계속 받는다(끄면 전체가 그대로 있다). 복사·내려받기는 이 걸러 낸 줄 전체(버퍼 5000줄까지)를 쓴다.
 const errorsOnly = ref(false)
 const visibleLines = computed(() => (errorsOnly.value ? lines.value.filter((l) => l.level === 'error') : lines.value))
+// 화면(DOM)에는 걸러 낸 줄의 끝 APP_LOG_RENDER_LINES줄만 그린다 — 5000행을 300ms 묶음마다 다시 그리면 폰에서 끊긴다(판정 T10).
+// 그리지 않은 앞 줄은 복사·내려받기에 들어 있고, 맨 위 안내(olderCount)가 그 수를 알린다.
+const renderedLines = computed(() => visibleLines.value.slice(-APP_LOG_RENDER_LINES))
+const olderCount = computed(() => Math.max(0, visibleLines.value.length - APP_LOG_RENDER_LINES))
 const emptyText = computed(() => {
   if (lines.value.length > 0) return '오류 줄이 없습니다'
   return state.value === 'ended' ? '받은 로그가 없습니다' : '로그 대기 중…'
@@ -200,9 +204,12 @@ function download() {
     <div v-if="infoMessage" class="app-log-info" data-test="app-log-info">{{ infoMessage }}</div>
 
     <div ref="scrollEl" class="app-log-lines" tabindex="0" data-test="app-log-lines" @scroll="onScroll">
+      <div v-if="olderCount > 0" class="app-log-older" data-test="app-log-older">
+        앞의 {{ olderCount }}줄은 화면에 그리지 않습니다 — 복사·내려받기에는 들어 있습니다
+      </div>
       <div v-if="visibleLines.length === 0" class="app-log-empty">{{ emptyText }}</div>
       <div
-        v-for="l in visibleLines"
+        v-for="l in renderedLines"
         :key="l.seq"
         class="app-log-line"
         :class="{
@@ -286,6 +293,13 @@ function download() {
   overflow-wrap: anywhere;
 }
 .app-log-empty {
+  color: #8a8a8a;
+}
+/* 화면에 그리지 않은 앞 줄 안내 — 줄이 아니라 영역 맨 위의 한 줄 */
+.app-log-older {
+  margin-bottom: 4px;
+  padding-bottom: 4px;
+  border-bottom: 1px dashed #4a4a4a;
   color: #8a8a8a;
 }
 .app-log-line {

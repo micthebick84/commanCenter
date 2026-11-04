@@ -77,6 +77,12 @@ export interface AppLogViewLine extends AppLogWireLine {
 export const APP_LOG_MAX_LINES = 5000
 
 /**
+ * 카드가 DOM으로 그리는 최대 줄 수 — 버퍼(위 5000줄)와 복사·내려받기는 그대로 두고 화면에는 끝 2000줄만 그린다(판정 T10).
+ * 5000행을 300ms 묶음마다 다시 그리면 폰 폭·CPU 4배 감속에서 묶음당 p50 230~290ms·p95 730ms로 스크롤·버튼이 끊긴다(2000행은 약 63ms).
+ */
+export const APP_LOG_RENDER_LINES = 2000
+
+/**
  * 들어온 줄을 기존 줄 뒤에 잇는다. `cutoffTs`가 있으면 ts가 그 이하인 줄(같은 ts 포함)은 버린다 — 다시 연결하면 서버가 tail부터
  * 다시 보내므로, 마지막으로 받은 ts 이하는 이미 화면에 있다. 버린 줄은 seq를 쓰지 않는다. 결과는 끝 `max`줄이고,
  * `max`를 넘어 밀려난 줄의 seq도 이미 소비된 것으로 `nextSeq`는 계속 늘어난다. 붙일 줄이 없으면 `old`를 그대로 돌려준다.

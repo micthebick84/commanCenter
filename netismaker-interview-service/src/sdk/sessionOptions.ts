@@ -30,6 +30,12 @@ export interface SessionOptionsInput {
    */
   sessionKind?: SessionKind;
   /**
+   * superpowers 켬/끔 (스펙 2026-11-03 간단 인터뷰 §5-1). **`false`일 때만 끔**이다 — 생략·true는 지금 동작 그대로.
+   * 끔(INTERVIEW)이면 plugins:[] + allowedTools에서 'Skill' 제외 + disallowedTools에 'Skill' 추가, 이 셋만 바뀐다.
+   * QUESTION은 원래 플러그인이 없어 이 입력을 보지 않는다. 호출자는 claim.superpowersEnabled === false일 때만 false를 넘긴다.
+   */
+  superpowers?: boolean;
+  /**
    * 세션 첨부 디렉토리 절대경로 (Java InterviewClaimResponse.attachmentRoot, 스펙 2026-09-13 §6) —
    * QUESTION 게이트의 Read 전용 두 번째 허용 루트로 buildCanUseTool에 전달만 한다(SDK 옵션에는 싣지 않음).
    * null/미지정 = 추가 허용 루트 없음(종전 동작). INTERVIEW에서는 무시된다.
@@ -79,7 +85,8 @@ function toMcpServers(mcpsExtra: unknown): Record<string, { type: string; url: s
  *   `[]`이면 `--setting-sources=`로 파일 설정이 빠지지만 claude.ai 커넥터(Gmail/Drive/Calendar)는 남아서
  *   strictMcpConfig로 options.mcpServers 외 MCP를 끊는다. 대상 레포의 CLAUDE.md·.claude/settings.json도
  *   안 읽는다 — 'project'를 넣으면 레포가 permissions.allow/hooks로 canUseTool 게이트를 우회할 수 있다.
- *   'Skill' is whitelisted so the Skill tool appears in init.tools.
+ *   'Skill' is whitelisted so the Skill tool appears in init.tools. (예외: superpowers === false인 간단 인터뷰는
+ *   플러그인을 안 붙이고 'Skill'을 사전승인·모델 목록 양쪽에서 뺀다 — 아래 simple 분기.)
  * - cwd = workDir; resume reuses the identical cwd (the on-disk session store is cwd-hashed, spike 02).
  * - MCP: settingSources를 안 쓰는 대신 mcpsBase(~/.claude.json 합본 스냅샷)를 options.mcpServers로
  *   명시 주입 — 디자인/구현 워커(--mcp-config + --strict-mcp-config + --allowedTools mcp__*)와 동일 목록.
@@ -114,10 +121,12 @@ export function buildOptions(input: SessionOptionsInput): Record<string, unknown
   };
   const mcpServers = Object.keys(merged).length > 0 ? merged : undefined;
   const question = input.sessionKind === 'QUESTION';
+  // 간단 인터뷰(스펙 2026-11-03 §5-1): superpowers를 **명시적으로 false로 끈** INTERVIEW만. QUESTION은 이 값과 무관.
+  const simple = !question && input.superpowers === false;
   return {
     pathToClaudeCodeExecutable: input.claudeCliPath,
-    // QUESTION: 플러그인 자체를 안 붙인다(스킬 없음). INTERVIEW: superpowers만 로컬 플러그인으로.
-    plugins: question ? [] : [{ type: 'local', path: input.superpowersPluginPath }],
+    // QUESTION·간단 인터뷰: 플러그인 자체를 안 붙인다(스킬 없음). INTERVIEW: superpowers만 로컬 플러그인으로.
+    plugins: question || simple ? [] : [{ type: 'local', path: input.superpowersPluginPath }],
     // 운영자 설정(플러그인·훅·permissions.allow)과 claude.ai 커넥터 차단 — 위 Isolation 주석 참고.
     settingSources: [],
     strictMcpConfig: true,
@@ -128,7 +137,8 @@ export function buildOptions(input: SessionOptionsInput): Record<string, unknown
     allowedTools: question
       ? []
       : [
-          'Skill',
+          // 간단 인터뷰는 'Skill'을 사전승인하지 않는다(플러그인이 없다) — 아래 disallowedTools도 같이 본다.
+          ...(simple ? [] : ['Skill']),
           'Read',
           'Grep',
           'Glob',
@@ -140,7 +150,10 @@ export function buildOptions(input: SessionOptionsInput): Record<string, unknown
     // 헤드리스라 AskUserQuestion에 답할 사람이 없다 — canUseTool을 넘기면 CLI가 이 도구를 노출하고,
     // 호출은 "The user did not answer"로 끝나 모델이 텍스트로 재질문한다(2026-09-29 세션 #12).
     // 질문은 턴 종료 텍스트 → postQuestion → UI 경로로만 오가야 하므로 목록에서 뺀다(canUseTool deny로는 시도를 못 막음).
-    disallowedTools: ['AskUserQuestion'],
+    // 간단 인터뷰는 'Skill'도 목록에서 뺀다: allowedTools에서만 빼면 사전승인만 빠질 뿐 INTERVIEW 게이트는 Skill을 통과시키고
+    // (permissions.ts "Read/Grep/Glob/Skill … are allowed"), 플러그인이 없을 때 Skill 도구가 안 뜨는지는 검증된 적이 없다.
+    // 모델 목록에서 도구를 빼는 검증된 방법이 위 AskUserQuestion과 같은 disallowedTools다.
+    disallowedTools: simple ? ['AskUserQuestion', 'Skill'] : ['AskUserQuestion'],
     cwd: input.workDir,
     // 인터뷰 서비스 env에서 스택 비밀(GITLAB_TOKEN·WORKER_API_KEY·DB 비밀번호 등)을 뺀 복사본 — childEnv.ts 참고.
     env: childEnv(),

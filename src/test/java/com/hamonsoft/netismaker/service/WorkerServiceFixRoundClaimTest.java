@@ -168,7 +168,8 @@ class WorkerServiceFixRoundClaimTest {
         WorkerTaskResponse r = svc.claimNextTask("w1", ALL, null).orElseThrow();
 
         assertThat(r.implementation().fix()).isNull();
-        assertThat(r.implementation()).isEqualTo(new WorkerTaskResponse.ImplementationSpec("SDD", 1, 240));
+        assertThat(r.implementation()).isEqualTo(new WorkerTaskResponse.ImplementationSpec("SDD", 1, 240, null, null,
+                new WorkerTaskResponse.DbWriteSpec("db/symphony/task-42.sql", false, false)));
         verifyNoInteractions(fixRepo);
     }
 

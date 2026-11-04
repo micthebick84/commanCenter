@@ -25,7 +25,7 @@ import java.util.Locale;
 
 /**
  * 작업 종료(kind=CLOSE) 오케스트레이션 (스펙 2026-10-13 §4, 2026-10-14 §4).
- *   ① 병합 → ② 배포 중지 → [③ 산출물 업로드 — claim에 closeArtifact가 있을 때만] → ④ 옵시디언 노트
+ *   ① 병합 → ② 배포 중지(띄운 적 없으면 중지 없이 기록만) → [③ 산출물 업로드 — claim에 closeArtifact가 있을 때만] → ④ 옵시디언 노트
  *   → ⑤ 원격 브랜치 삭제 — 그 전에 이 브랜치를 target으로 쓰는 열린 PR/MR을 기준 브랜치로 옮긴다
  *   (+ 로컬 worktree 정리, 실패는 경고만)
  * 단계마다 close-progress를 보고하고, claim의 closeProgress에 있는 단계는 건너뛴다. 어느 단계든 실패하면
@@ -123,7 +123,12 @@ public class TaskCloser {
                 progress(task, CloseStep.MERGED, mergeSha, null);
             }
             if (!done.contains(CloseStep.UNDEPLOYED)) {
-                step("배포 중지", () -> { deployService.undeploy(task.id()); return null; });
+                if (neverDeployed(task.closeContext())) {
+                    // 띄운 적 없는 작업(DB 작업의 PR생성 종료 등) — 지울 컨테이너가 없으니 중지 없이 끝난 것으로만 기록한다
+                    log.info("배포 중지: 띄운 컨테이너 없음 — 건너뜀 task={}", task.id());
+                } else {
+                    step("배포 중지", () -> { deployService.undeploy(task.id()); return null; });
+                }
                 progress(task, CloseStep.UNDEPLOYED, null, null);
             }
             ArtifactInfo uploaded = null;
@@ -149,6 +154,15 @@ public class TaskCloser {
             reporter.reportTerminal(task.id(), WorkerResultRequest.closeFailed(props.id(),
                     GitRemotes.mask(e.getMessage()), e.usage() != null ? e.usage() : usage));
         }
+    }
+
+    /**
+     * 컨테이너를 띄운 적 없는 작업인가 — claim의 closeContext에 배포 URL도 배포 시각도 없다. 배포가 끝나면 둘 다 채워지고
+     * 배포를 중지하면 둘 다 비워진다. closeContext가 없으면 알 수 없으므로 거짓(지금처럼 배포 중지를 부른다).
+     * API 쪽 판정({@code TaskCloseService.neverDeployed})과 기준이 같아야 한다.
+     */
+    static boolean neverDeployed(CloseContext c) {
+        return c != null && c.deployUrl() == null && c.deployedAt() == null;
     }
 
     /** 메인 루프의 예기치 못한 예외 경로. */

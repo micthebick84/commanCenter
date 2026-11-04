@@ -1,5 +1,5 @@
 import { mount, flushPromises } from '@vue/test-utils'
-import { describe, it, expect, beforeEach, afterEach } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import DbConnectionDialog from '../components/DbConnectionDialog.vue'
 import { fetchDbConnections, type DbConnectionView } from '../composables/dbConnections'
 import { useApiMock } from './mocks/nuxt'
@@ -7,7 +7,7 @@ import { setViewportWidth } from './mocks/screen'
 
 const editing: DbConnectionView = {
   id: 7, scope: 'USER', repoCatalogId: 1, name: '내 DB', dbType: 'MYSQL', host: 'h', port: 3306,
-  databaseName: 'app', username: 'u', enabled: true, mine: true,
+  databaseName: 'app', username: 'u', enabled: true, mine: true, allowWrite: false,
 }
 
 describe('DbConnectionDialog (스펙 2026-10-02 §7)', () => {
@@ -243,6 +243,83 @@ describe('DbConnectionDialog — 오류 표시 회귀 (2026-10-06 실화면)', (
     await leave('[data-test="db-host"]')
     expect((w.vm as any).form.port).toBe(55432)
     expect(portField().classList.contains('q-field--error')).toBe(false)
+    w.unmount()
+  })
+})
+
+// 구현 단계 개발 DB 쓰기 (스펙 2026-11-03 §6.1 조건 4·§6.5) — 개인 연결은 늘 읽기, 관리자가 쓰기 허용을 켠 공용 연결만 쓰기
+describe('DbConnectionDialog — 쓰기 허용 안내', () => {
+  const repoEditing: DbConnectionView = { ...editing, id: 11, scope: 'REPO', mine: false, allowWrite: true }
+  const caption = () => document.body.querySelector('[data-test="db-dialog-caption"]')?.textContent ?? ''
+  async function open(props: Record<string, unknown>) {
+    const w = mount(DbConnectionDialog, {
+      props: { modelValue: true, scope: 'USER', repoCatalogId: 1, editing: null, ...props },
+      attachTo: document.body,
+    })
+    await flushPromises()
+    return w
+  }
+  beforeEach(() => {
+    useApiMock.mockReset()
+  })
+  afterEach(() => { document.body.innerHTML = '' })
+
+  it('개인·공용 연결 안내가 다르다', async () => {
+    const user = await open({ scope: 'USER' })
+    expect(caption()).toContain('개인 연결은 늘 읽기 전용으로만 쓰입니다')
+    expect(caption()).not.toContain('쓰기 허용')
+    user.unmount()
+    document.body.innerHTML = ''
+    const repo = await open({ scope: 'REPO' })
+    expect(caption()).toContain("관리자가 '쓰기 허용'을 켠 공용 연결은 구현 단계에서 쓰기가 가능합니다")
+    expect(caption()).not.toContain('개인 연결')
+    repo.unmount()
+  })
+
+  it('저장 뒤 쓰기 허용이 꺼졌으면 알린다', async () => {
+    useApiMock.mockResolvedValue({ ...repoEditing, host: 'other', allowWrite: false })
+    const w = await open({ scope: 'REPO', editing: repoEditing })
+    const notify = vi.spyOn((w.vm as any).$q, 'notify')
+    await (w.vm as any).save()
+    expect(notify).toHaveBeenCalledWith(expect.objectContaining({ type: 'warning', message: '접속 대상이 바뀌어 쓰기 허용을 껐습니다' }))
+    expect(w.emitted('saved')).toBeTruthy()
+    w.unmount()
+  })
+
+  it('쓰기 허용이 그대로면 알리지 않는다', async () => {
+    useApiMock.mockResolvedValue({ ...repoEditing, name: '새 이름' })
+    const w = await open({ scope: 'REPO', editing: repoEditing })
+    const notify = vi.spyOn((w.vm as any).$q, 'notify')
+    await (w.vm as any).save()
+    expect(notify).toHaveBeenCalledTimes(1)
+    expect(notify).toHaveBeenCalledWith({ type: 'positive', message: 'DB 접속정보를 저장했습니다' })
+    w.unmount()
+  })
+
+  it('원래 쓰기 허용이 아니었거나 새로 만들면 알리지 않는다', async () => {
+    useApiMock.mockResolvedValue({ ...editing, allowWrite: false })
+    const w = await open({ scope: 'USER', editing })
+    const notify = vi.spyOn((w.vm as any).$q, 'notify')
+    await (w.vm as any).save()
+    expect(notify).not.toHaveBeenCalledWith(expect.objectContaining({ type: 'warning' }))
+    w.unmount()
+    document.body.innerHTML = ''
+
+    useApiMock.mockResolvedValue({ id: 9, allowWrite: false }) // 새 연결 — 응답이 꺼짐이어도 "껐다"가 아니다
+    const c = await open({ scope: 'REPO' })
+    Object.assign((c.vm as any).form, { name: '개발', host: 'db.local', databaseName: 'app', username: 'rw', password: 'pw' })
+    const notify2 = vi.spyOn((c.vm as any).$q, 'notify')
+    await (c.vm as any).save()
+    expect(notify2).not.toHaveBeenCalledWith(expect.objectContaining({ type: 'warning' }))
+    c.unmount()
+  })
+
+  it('수정 때 쓰기 허용 값은 바디에 싣지 않는다', async () => {
+    useApiMock.mockResolvedValue({ ...repoEditing })
+    const w = await open({ scope: 'REPO', editing: repoEditing })
+    await (w.vm as any).save()
+    const body = useApiMock.mock.calls.find((c: any[]) => c[0] === '/api/db-connections/11')![1].body
+    expect(body).not.toHaveProperty('allowWrite')
     w.unmount()
   })
 })

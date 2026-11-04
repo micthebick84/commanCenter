@@ -1,5 +1,6 @@
 package com.hamonsoft.netismaker.service;
 
+import com.hamonsoft.netismaker.dbmcp.DbWriteGate;
 import com.hamonsoft.netismaker.dto.ActiveWorktreeTaskSummary;
 import com.hamonsoft.netismaker.dto.CloseArtifactSpec;
 import com.hamonsoft.netismaker.dto.CloseContext;
@@ -16,12 +17,14 @@ import com.hamonsoft.netismaker.repository.InterviewPlanRepository;
 import com.hamonsoft.netismaker.repository.InterviewSessionRepository;
 import com.hamonsoft.netismaker.repository.RepoCatalogRepository;
 import com.hamonsoft.netismaker.repository.TaskAnalysisRepository;
+import com.hamonsoft.netismaker.repository.TaskDbWriteLogRepository;
 import com.hamonsoft.netismaker.repository.TaskDesignRepository;
 import com.hamonsoft.netismaker.repository.TaskFixRequestRepository;
 import com.hamonsoft.netismaker.repository.TaskRepository;
 import com.hamonsoft.netismaker.repository.TaskStageUsageRepository;
 import com.hamonsoft.netismaker.repository.TaskStatusHistoryRepository;
 import com.hamonsoft.netismaker.repository.WorkerHeartbeatRepository;
+import com.hamonsoft.netismaker.util.DbScriptDir;
 import com.hamonsoft.netismaker.util.NoteFolderPath;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -38,6 +41,7 @@ import org.springframework.transaction.annotation.Transactional;
 import java.time.OffsetDateTime;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.EnumSet;
 import java.util.List;
 import java.util.Optional;
 import java.util.Set;
@@ -118,6 +122,25 @@ public class WorkerService {
     @Autowired
     void setFixRequestRepository(TaskFixRequestRepository fixRequestRepo) {
         this.fixRequestRepo = fixRequestRepo;
+    }
+
+    /**
+     * 구현 claim의 개발 DB 쓰기 재료 — 이전 쓰기 기록 유무(스펙 2026-11-03 §6.6). 생성자를 바꾸지 않으려고 setter 주입 —
+     * 안 부른 단위 시험에서는 null이고 이전 기록 없음으로 읽는다.
+     */
+    private TaskDbWriteLogRepository dbWriteLogRepo;
+
+    @Autowired
+    void setDbWriteLogRepository(TaskDbWriteLogRepository dbWriteLogRepo) {
+        this.dbWriteLogRepo = dbWriteLogRepo;
+    }
+
+    /** 구현 claim의 개발 DB 쓰기 재료 — 자동 마이그레이션 레포 표시(§6.8). setter 주입 — 안 부른 단위 시험에서는 null이고 false로 읽는다. */
+    private DbWriteGate dbWriteGate;
+
+    @Autowired
+    void setDbWriteGate(DbWriteGate dbWriteGate) {
+        this.dbWriteGate = dbWriteGate;
     }
 
     public WorkerService(TaskRepository taskRepo,
@@ -294,7 +317,7 @@ public class WorkerService {
             TaskDesign d = designRepo.findById(t.getId()).orElse(null);
             return WorkerTaskResponse.forImplementation(t, a,
                     (d != null && d.isApproved()) ? d : null, registeredPlanMarkdown(t.getId()),
-                    round == null ? null : round.spec(), round == null ? null : round.mode());
+                    round == null ? null : round.spec(), round == null ? null : round.mode(), dbWriteSpecFor(t));
         }
         if (from == TaskStatus.DEPLOY_PENDING) {
             return WorkerTaskResponse.forDeploy(t, prebuildFor(t));
@@ -370,6 +393,26 @@ public class WorkerService {
         }
         if (!cat.isPrebuildEnabled()) return null;
         return new WorkerTaskResponse.PrebuildSpec(cat.getPrebuildCommand(), cat.getPrebuildArtifact(), cat.getPrebuildToolchain());
+    }
+
+    /** 이전 시도·회차가 반영했거나 승인 대기로 남긴 SQL — 스크립트 파일에 실리는 분류와 같은 집합(§6.6). REJECTED·FAILED·DISMISSED는 변경이 아니다. */
+    private static final Set<WriteClassification> PRIOR_WRITE_CLASSIFICATIONS =
+            EnumSet.of(WriteClassification.EXECUTED, WriteClassification.DEFERRED);
+
+    /**
+     * 구현 claim에 싣는 개발 DB 쓰기 재료 (스펙 2026-11-03 §6.6·§6.8). 스크립트 경로는 카탈로그 폴더(없으면 기본 `db/symphony`)의
+     * `task-{id}.sql`이고, 카탈로그는 claim의 다른 보강과 같이 id 우선·없으면 git_url로 찾는다(못 찾으면 기본 폴더).
+     * 자동 마이그레이션 표시는 쓰기 판정과 같은 규칙(DbWriteGate.migrationManaged), priorWrites는 claim 시점에 이미 있는
+     * 기록 — 이번 시도는 아직 시작 전이라 이전 시도·회차 것만 본다. 판정기·기록 저장소가 없으면(단위 시험) 각각 false.
+     * 쓰기 가능 여부(연결별 writable)는 이 재료가 아니라 DB MCP grant가 정한다.
+     */
+    WorkerTaskResponse.DbWriteSpec dbWriteSpecFor(Task t) {
+        String dir = RepoCatalogRepository.findForTask(repoCatalogRepo, t.getRepoCatalogId(), t.getGitUrl())
+                .map(RepoCatalogEntry::getDbScriptDir).orElse(null);
+        boolean migrationManaged = dbWriteGate != null && dbWriteGate.migrationManaged(t);
+        boolean priorWrites = dbWriteLogRepo != null
+                && dbWriteLogRepo.existsByTaskIdAndClassificationIn(t.getId(), PRIOR_WRITE_CLASSIFICATIONS);
+        return new WorkerTaskResponse.DbWriteSpec(DbScriptDir.resolve(dir, t.getId()), migrationManaged, priorWrites);
     }
 
     /** 산출물 모드가 REQUIRED이고 아직 안 올렸을 때만 지시를 싣는다 — 워커는 null이면 단계를 건너뛴다. */

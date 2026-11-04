@@ -17,6 +17,7 @@ import com.hamonsoft.netismaker.service.InterviewService;
 import com.hamonsoft.netismaker.service.TaskException;
 import com.hamonsoft.netismaker.service.TaskFixService;
 import com.hamonsoft.netismaker.service.TaskService;
+import com.hamonsoft.netismaker.service.TaskTypeFilter;
 import jakarta.validation.Valid;
 import org.springframework.context.annotation.Profile;
 import org.springframework.core.io.FileSystemResource;
@@ -111,12 +112,13 @@ public class TaskController {
 
     @GetMapping
     public Page<TaskResponse> list(@RequestParam(required = false) TaskStatus status,
+                                   @RequestParam(required = false) String type,
                                    @RequestParam(defaultValue = "false") boolean mine,
                                    @PageableDefault(size = 20) Pageable pageable,
                                    JwtAuthenticationToken auth) {
         String userId = AuthContext.requireUserId(auth);
         boolean isAdmin = AuthContext.isAdmin(auth);
-        Page<Task> page = taskService.list(userId, isAdmin, mine, status, pageable);
+        Page<Task> page = taskService.list(userId, isAdmin, mine, status, TaskTypeFilter.parse(type), pageable);
         Map<Long, BigDecimal> totals = taskService.costTotals(
                 page.getContent().stream().map(Task::getId).toList());
         return page.map(t -> {

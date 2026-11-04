@@ -104,6 +104,61 @@ class DbMcpTokenServiceTest {
     }
 
     @Test
+    void SDD_구현토큰은_상한더하기_30분() {
+        // 구현 상한(SDD 240분)이 기본 TTL 2h보다 길면 토큰이 중간에 만료돼 401이 난다 (스펙 2026-11-03 §6.4)
+        task.setImplementationTimeoutMinutes(240);
+        String token = svc.issue(task);
+        assertThat(issued(token).getExpiresAt()).isEqualTo(OffsetDateTime.now(clock).plusMinutes(270));
+    }
+
+    @Test
+    void 구현상한더하기_여유가_기본TTL보다_짧으면_기본TTL() {
+        task.setImplementationTimeoutMinutes(45);   // 직접 방식 45분 + 30분 < 2h
+        String token = svc.issue(task);
+        assertThat(issued(token).getExpiresAt()).isEqualTo(OffsetDateTime.now(clock).plusHours(2));
+        assertThat(DbMcpTokenService.IMPLEMENTATION_TTL_MARGIN).isEqualTo(Duration.ofMinutes(30));
+    }
+
+    @Test
+    void 디자인토큰은_구현상한과_무관하게_기본TTL() {
+        task.setStatus(TaskStatus.DESIGNING);
+        task.setImplementationTimeoutMinutes(240);   // 값이 남아 있어도 디자인 토큰은 늘리지 않는다
+        String token = svc.issue(task);
+        TaskDbMcpToken row = issued(token);
+        assertThat(row.getStage()).isEqualTo("DESIGNING");
+        assertThat(row.getExpiresAt()).isEqualTo(OffsetDateTime.now(clock).plusHours(2));
+    }
+
+    @Test
+    void 쓰기허가_왕복() {
+        String token = svc.issue(task, true);
+        TaskDbMcpToken row = issued(token);
+        assertThat(row.isWriteGranted()).isTrue();
+        Optional<DbMcpTokenService.TokenAuth> auth = svc.authenticateWithGrant(token);
+        assertThat(auth).isPresent();
+        assertThat(auth.get().task()).isSameAs(task);
+        assertThat(auth.get().writeGranted()).isTrue();
+        assertThat(svc.authenticate(token)).contains(task);
+    }
+
+    @Test
+    void 인자_하나_발급은_쓰기허가_없음() {
+        String token = svc.issue(task);
+        assertThat(issued(token).isWriteGranted()).isFalse();
+        assertThat(svc.authenticateWithGrant(token)).map(DbMcpTokenService.TokenAuth::writeGranted).contains(false);
+    }
+
+    @Test
+    void 쓰기허가도_단계를_벗어나면_인증되지_않는다() {
+        String token = svc.issue(task, true);
+        issued(token);
+        task.setStatus(TaskStatus.PR_CREATED);
+        assertThat(svc.authenticateWithGrant(token)).isEmpty();
+        assertThat(svc.authenticateWithGrant(null)).isEmpty();
+        assertThat(svc.authenticateWithGrant("nope")).isEmpty();
+    }
+
+    @Test
     void revoke_all_deletes_every_token_of_the_task() {
         String token = svc.issue(task);
         issued(token);

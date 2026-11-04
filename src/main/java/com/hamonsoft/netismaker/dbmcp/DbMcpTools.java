@@ -6,6 +6,7 @@ import org.springframework.context.annotation.Profile;
 import org.springframework.stereotype.Component;
 
 import java.sql.SQLException;
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -14,6 +15,7 @@ import java.util.regex.Pattern;
 /**
  * DB MCP 도구 3개 — 인터뷰 서비스 sdk/dbMcp.ts의 Java 판 (스펙 2026-10-14 §6.1·§6.3).
  * 검사·실행이 전부 API 서버에서 일어나므로 워커의 --dangerously-skip-permissions로도 우회할 수 없다.
+ * 구현 단계 쓰기가 열린 연결에는 execute 도구 정의를 더한다(스펙 2026-11-03 §6.1) — 실행은 DbWriteService.
  */
 @Component
 @Profile("api")
@@ -36,7 +38,35 @@ public class DbMcpTools {
         this.executor = executor;
     }
 
+    /** 읽기 도구 3개 — {@link #toolDefinitions(String, boolean)}의 false. */
     public List<Map<String, Object>> toolDefinitions(String label) {
+        return toolDefinitions(label, false);
+    }
+
+    /**
+     * writable(스펙 2026-11-03 §6.1 — 토큰 쓰기 허가 && 조건 1~5)이면 쓰기 도구 execute를 더한다. 실행은 이 클래스가 아니라
+     * {@link DbWriteService}가 하고, 직접 불러도 서버가 같은 판정으로 다시 거부한다.
+     */
+    public List<Map<String, Object>> toolDefinitions(String label, boolean writable) {
+        List<Map<String, Object>> tools = new ArrayList<>(readTools(label));
+        if (writable) {
+            tools.add(tool("execute", "공용 개발 DB에 쓰기 SQL 한 문장을 실행합니다. 서버가 분류해 바로 실행·승인 대기·거부합니다.",
+                    Map.of("sql", Map.of("type", "string")), List.of("sql")));
+        }
+        return List.copyOf(tools);
+    }
+
+    /** execute 결과를 세션이 읽을 줄로 — `분류:`, 있으면 `이유:`·`오류:`·`영향 행:`·`기록: #id`. */
+    public static String formatWriteResult(DbWriteService.ExecuteResult r) {
+        StringBuilder out = new StringBuilder("분류: ").append(r.classification());
+        if (r.reason() != null) out.append("\n이유: ").append(r.reason());
+        if (r.error() != null) out.append("\n오류: ").append(r.error());
+        if (r.affectedRows() != null) out.append("\n영향 행: ").append(r.affectedRows());
+        if (r.logId() != null) out.append("\n기록: #").append(r.logId());
+        return out.toString();
+    }
+
+    private List<Map<String, Object>> readTools(String label) {
         return List.of(
                 tool("query",
                         label + " 읽기 전용 조회. SELECT 계열 단일 문장만 실행되고, 결과는 최대 " + DbMcpLimits.MAX_ROWS

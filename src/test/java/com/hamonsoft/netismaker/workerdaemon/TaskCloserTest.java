@@ -1,5 +1,8 @@
 package com.hamonsoft.netismaker.workerdaemon;
 
+import ch.qos.logback.classic.Logger;
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.read.ListAppender;
 import com.hamonsoft.netismaker.dto.ArtifactInfo;
 import com.hamonsoft.netismaker.dto.CloseArtifactSpec;
 import com.hamonsoft.netismaker.dto.CloseContext;
@@ -13,6 +16,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.mockito.ArgumentCaptor;
+import org.slf4j.LoggerFactory;
 import org.springframework.web.client.RestClientException;
 
 import java.nio.file.Files;
@@ -348,6 +352,77 @@ class TaskCloserTest {
         assertThat(r.status()).isEqualTo(TaskStatus.CLOSE_FAILED);
         assertThat(r.failureReason()).startsWith("배포 중지 실패");
         verify(claude, never()).execWithoutTools(any(), any(), any(), any());
+    }
+
+    /** 배포 URL도 배포 시각도 없는 claim — 컨테이너를 띄운 적 없는 작업(DB 작업의 PR생성 종료 등). */
+    private WorkerTaskResponse neverDeployedTask(String progress) {
+        return taskWith(progress, new CloseContext(null, null, null, null, null, null, List.of(), List.of()));
+    }
+
+    private static CloseContext deployCtx(String deployUrl, OffsetDateTime deployedAt) {
+        return new CloseContext(null, null, null, null, deployUrl, deployedAt, List.of(), List.of());
+    }
+
+    @Test
+    void 배포흔적이_없으면_배포중지를_부르지_않고_UNDEPLOYED() throws Exception {
+        Logger logger = (Logger) LoggerFactory.getLogger(TaskCloser.class);
+        ListAppender<ILoggingEvent> appender = new ListAppender<>();
+        appender.start();
+        logger.addAppender(appender);
+        try {
+            closer.process(neverDeployedTask(null));
+
+            verify(deploy, never()).undeploy(anyLong());
+            assertThat(reportedSteps()).containsExactly(CloseStep.MERGED, CloseStep.UNDEPLOYED,
+                    CloseStep.NOTE_WRITTEN, CloseStep.BRANCH_DELETED);
+            CloseProgressRequest undeployed = reported().get(1);
+            assertThat(undeployed.step()).isEqualTo(CloseStep.UNDEPLOYED);
+            assertThat(undeployed.mergeCommitSha()).isNull();
+            assertThat(undeployed.notePath()).isNull();
+            assertThat(terminal().status()).isEqualTo(TaskStatus.CLOSED);
+            assertThat(appender.list).extracting(ILoggingEvent::getFormattedMessage)
+                    .anySatisfy(m -> assertThat(m).contains("배포 중지: 띄운 컨테이너 없음 — 건너뜀").contains("task=7"));
+        } finally {
+            logger.detachAppender(appender);
+        }
+    }
+
+    @Test
+    void 배포흔적이_없고_배포중지가_이미_끝났으면_건너뛴_로그도_보고도_없다() throws Exception {
+        closer.process(neverDeployedTask("MERGED,UNDEPLOYED"));
+
+        verify(deploy, never()).undeploy(anyLong());
+        assertThat(reportedSteps()).containsExactly(CloseStep.NOTE_WRITTEN, CloseStep.BRANCH_DELETED);
+        assertThat(terminal().status()).isEqualTo(TaskStatus.CLOSED);
+    }
+
+    @Test
+    void closeContext가_null이거나_배포URL이_있으면_지금처럼() throws Exception {
+        // closeContext가 없으면 배포 흔적을 알 수 없다 — 지금처럼 배포 중지를 부른다
+        closer.process(taskWith(null, null));
+        verify(deploy).undeploy(7L);
+        assertThat(reportedSteps()).containsExactly(CloseStep.MERGED, CloseStep.UNDEPLOYED,
+                CloseStep.NOTE_WRITTEN, CloseStep.BRANCH_DELETED);
+        assertThat(terminal().status()).isEqualTo(TaskStatus.CLOSED);
+    }
+
+    @Test
+    void 배포URL만_있거나_배포시각만_있어도_배포중지를_부른다() throws Exception {
+        closer.process(taskWith("MERGED,NOTE_WRITTEN", deployCtx("http://h:1", null)));
+        verify(deploy).undeploy(7L);
+
+        reset(deploy, reporter, http);
+        closer.process(taskWith("MERGED,NOTE_WRITTEN", deployCtx(null, OffsetDateTime.parse("2026-10-13T03:00:00+09:00"))));
+        verify(deploy).undeploy(7L);
+    }
+
+    @Test
+    void 배포흔적_판정은_URL과_시각이_모두_비었을_때만_참() {
+        assertThat(TaskCloser.neverDeployed(null)).isFalse();
+        assertThat(TaskCloser.neverDeployed(deployCtx(null, null))).isTrue();
+        assertThat(TaskCloser.neverDeployed(deployCtx("http://h:1", null))).isFalse();
+        assertThat(TaskCloser.neverDeployed(deployCtx(null, OffsetDateTime.parse("2026-10-13T03:00:00+09:00")))).isFalse();
+        assertThat(TaskCloser.neverDeployed(deployCtx("http://h:1", OffsetDateTime.parse("2026-10-13T03:00:00+09:00")))).isFalse();
     }
 
     @Test

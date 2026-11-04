@@ -3,6 +3,7 @@ package com.hamonsoft.netismaker.controller;
 import com.hamonsoft.netismaker.TestcontainersConfig;
 import com.hamonsoft.netismaker.entity.Task;
 import com.hamonsoft.netismaker.entity.TaskStatus;
+import com.hamonsoft.netismaker.entity.TaskType;
 import com.hamonsoft.netismaker.repository.InterviewSessionRepository;
 import com.hamonsoft.netismaker.repository.TaskAnalysisRepository;
 import com.hamonsoft.netismaker.repository.TaskDesignRepository;
@@ -98,6 +99,59 @@ class TaskCloseFlowIntegrationTest {
                 .andExpect(status().isForbidden());
         mvc.perform(post("/api/tasks/" + id + "/close/cancel").with(adminJwt("admin")))
                 .andExpect(status().isConflict());
+    }
+
+    private Long savePrCreated(String title, TaskType type) {
+        Task t = Task.create("owner/repo", "main", title, "d", "user1", 3, List.of(), "claude-opus-5-5", "high");
+        t.setStatus(TaskStatus.PR_CREATED);
+        t.setTaskType(type);
+        t.setPrNumber(4);
+        t.setPrUrl("https://github.com/owner/repo/pull/4");
+        t.setHeadBranch("netismaker/task-y");
+        t.setHeadSha("0123456789abcdef0123456789abcdef01234567");
+        return taskRepo.save(t).getId();
+    }
+
+    @Test
+    void DB작업은_PR생성에서_종료를_요청하고_철회_반려하면_PR생성으로_돌아온다() throws Exception {
+        // 스펙 2026-11-03 §6.9 — 배포 없이 종료. 직전 상태는 실제 이력(PR생성→종료승인대기)에서 찾는다.
+        Long id = savePrCreated("DB 작업 종료", TaskType.DB_WORK);
+
+        mvc.perform(post("/api/tasks/" + id + "/close-request").with(userJwt("user2")))
+                .andExpect(status().isForbidden());
+        mvc.perform(post("/api/tasks/" + id + "/close-request").with(userJwt("user1")))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("CLOSE_REVIEW"))
+                .andExpect(jsonPath("$.taskType").value("DB_WORK"));
+        mvc.perform(post("/api/tasks/" + id + "/close-request/withdraw").with(userJwt("user1")))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("PR_CREATED"));
+
+        mvc.perform(post("/api/tasks/" + id + "/close-request").with(userJwt("user1")))
+                .andExpect(status().isOk());
+        mvc.perform(post("/api/tasks/" + id + "/close/reject").with(adminJwt("admin"))
+                        .contentType(MediaType.APPLICATION_JSON).content("{\"reason\":\"다시 확인\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("PR_CREATED"));
+
+        mvc.perform(post("/api/tasks/" + id + "/close-request").with(userJwt("user1")))
+                .andExpect(status().isOk());
+        // 배포한 적 없는 DB 작업은 산출물 모드가 꺼진 채로 종료 큐에 들어간다
+        mvc.perform(post("/api/tasks/" + id + "/close/approve").with(adminJwt("admin")))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("CLOSE_PENDING"))
+                .andExpect(jsonPath("$.close.artifactMode").isEmpty());
+    }
+
+    @Test
+    void 다른_타입과_타입_없는_작업은_PR생성에서_종료를_요청할_수_없다() throws Exception {
+        for (TaskType type : new TaskType[]{TaskType.BUG_FIX, TaskType.NEW_FEATURE, TaskType.FEATURE_CHANGE, null}) {
+            Long id = savePrCreated("타입 " + type, type);
+            mvc.perform(post("/api/tasks/" + id + "/close-request").with(userJwt("user1")))
+                    .andExpect(status().isConflict())
+                    .andExpect(jsonPath("$.message").value(
+                            org.hamcrest.Matchers.containsString("배포완료 또는 배포중단됨 상태에서만")));
+        }
     }
 
     @Test

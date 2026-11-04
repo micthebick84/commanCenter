@@ -22,6 +22,8 @@ export interface SummaryTask {
   dbConnectionIds?: number[]
   /** 읽기 전용 참조 repo — 승인 다이얼로그가 편집 초안을 이 값으로 채운다 (스펙 2026-10-24 §7.3). 없으면 참조 없음. */
   refRepos?: RefRepoView[]
+  /** 작업 타입 — 승인 다이얼로그의 타입 select를 이 값으로 미리 고른다 (스펙 2026-11-03 §4.2). null·없음은 타입 없음. */
+  taskType?: string | null
 }
 
 const props = defineProps<{ task: SummaryTask }>()

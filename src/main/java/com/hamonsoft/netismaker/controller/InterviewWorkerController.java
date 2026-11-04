@@ -76,7 +76,8 @@ public class InterviewWorkerController {
             String notice = "QUESTION".equals(c.kind())
                     ? "DB 접속정보를 불러오지 못해 DB 도구 없이 답합니다"
                     : "DB 접속정보를 불러오지 못해 DB 도구 없이 진행합니다";
-            return c.withDb(List.of(), List.of(notice));
+            // DB 도구가 없는 인터뷰에 "구현 때 이 연결에 쓰인다"고 알리면 읽을 수도 없는 연결 이야기가 된다 — 쓰기 목록도 비운다 (스펙 2026-11-03 §5.1)
+            return c.withDb(List.of(), List.of(notice)).withWritableDbConnections(List.of());
         }
     }
 

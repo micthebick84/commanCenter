@@ -123,7 +123,8 @@ netis-maker:
 
       ## 5. 위험 요소 및 미해결 질문
       - ...
-    # 구현 prompt 템플릿. {branch_name}/{analysis_markdown}/{subtasks_json}/{design_section}/{plan_section}/{commit_rule} 추가 placeholder.
+    # 구현 prompt 템플릿. {branch_name}/{analysis_markdown}/{subtasks_json}/{design_section}/{plan_section}/{commit_rule}/{task_type_section} 추가 placeholder.
+    # {task_type_section}은 작업 타입별 지시(타입 없음·신규 개발·기능 수정은 빈 문자열) — {plan_section} 바로 뒤에 붙여 둔다(줄을 따로 두면 타입 없음 프롬프트가 한 줄 늘어난다).
     # 미설정 시 WorkerMainLoop.defaultImplementationPrompt() 사용.
     implementation-prompt-template: |
       당신은 코드 구현 전문가입니다. 현재 디렉토리는 새 git worktree이며
@@ -136,7 +137,7 @@ netis-maker:
       ## 요구사항
       {description}
       {design_section}
-      {plan_section}
+      {plan_section}{task_type_section}
       ## 사전 분석 결과 (참고용 — 우선 따르세요)
       {analysis_markdown}
 

@@ -1,6 +1,7 @@
 package com.hamonsoft.netismaker.controller;
 
 import com.hamonsoft.netismaker.dbmcp.DbMcpGrantService;
+import com.hamonsoft.netismaker.dbmcp.DbWriteService;
 import com.hamonsoft.netismaker.dto.WorkerTaskResponse;
 import com.hamonsoft.netismaker.service.TaskException;
 import com.hamonsoft.netismaker.service.WorkerCapabilities;
@@ -21,7 +22,7 @@ import static org.mockito.Mockito.*;
 class WorkerControllerKindsTest {
 
     private final WorkerService workerService = mock(WorkerService.class);
-    private final WorkerController controller = new WorkerController(workerService, mock(DbMcpGrantService.class));
+    private final WorkerController controller = new WorkerController(workerService, mock(DbMcpGrantService.class), mock(DbWriteService.class));
 
     @Test
     void parses_names_case_insensitively_and_ignores_blanks() {

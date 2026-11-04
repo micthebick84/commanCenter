@@ -54,6 +54,25 @@ public class GitOpsService {
         return !porcelain.isBlank();
     }
 
+    /**
+     * {@code git add -f -- <relPath>} — 대상 레포의 {@code .gitignore}가 그 경로를 무시해도 커밋·WIP에 들어가게 index에 올린다
+     * (세션이 쓴 SQL 스크립트 파일, 스펙 2026-11-03 §6.6). {@code git status --porcelain}과 {@code git add -A}는 무시된 파일을
+     * 보지 않아, 이것 없이는 무시 규칙(`db/`·`*.sql`)이 있는 레포의 DB 작업이 "nothing to commit"으로 실패한다.
+     * 이미 추적 중인 파일에는 아무 일도 하지 않는다. 파일이 없거나 git이 거절하면 IOException.
+     *
+     * @param relPath worktree 기준 상대 경로(슬래시 구분)
+     */
+    public void forceAdd(File worktreeDir, String relPath) throws IOException, InterruptedException {
+        ProcessRunner.requireSuccess(worktreeDir,
+                List.of("git", "add", "-f", "--", relPath), GIT_TIMEOUT_SECONDS);
+    }
+
+    /**
+     * 변경도 베이스 이후 커밋도 없을 때의 메시지. 워커의 구현 성공 판정(SQL 스크립트 파일을 쓰기 전에 하는 판정)도 같은 문구를 쓴다 —
+     * 수정 회차는 이 문구로 "변경 없음"을 알아본다(WorkerMainLoop.isNothingToCommit).
+     */
+    static final String NOTHING_TO_COMMIT = "nothing to commit — 구현 시도 후 파일 변경이 없음";
+
     /** 예전 동작 — 변경이 꼭 있어야 커밋한다(에이전트 커밋을 모르는 호출부용). */
     public String commitAndPush(File worktreeDir, RepoRef ref, String branchName, String commitMessage)
             throws IOException, InterruptedException {
@@ -75,7 +94,7 @@ public class GitOpsService {
                                 String baseSha) throws IOException, InterruptedException {
         boolean changes = hasChanges(worktreeDir);
         if (!changes && (baseSha == null || commitsSince(worktreeDir, baseSha) == 0)) {
-            throw new IOException("nothing to commit — 구현 시도 후 파일 변경이 없음");
+            throw new IOException(NOTHING_TO_COMMIT);
         }
         if (changes) commitAll(worktreeDir, commitMessage);
         push(worktreeDir, ref, branchName);
@@ -185,6 +204,14 @@ public class GitOpsService {
         String out = ProcessRunner.requireSuccess(dir, List.of("git", "rev-parse", "HEAD"), GIT_TIMEOUT_SECONDS);
         return out.lines().map(String::strip).filter(GitRepoCache::isFullSha).reduce((a, b) -> b)
                 .orElseThrow(() -> new IOException("HEAD 커밋을 읽지 못했습니다: " + GitRemotes.mask(out.strip())));
+    }
+
+    /**
+     * baseSha 이후 HEAD에 커밋이 있는가(에이전트 커밋 — SDD 태스크 커밋 등). 구현 성공 판정의 "이번 시도의 코드 변경"을 워커가 스크립트 파일을
+     * 쓰기 전에 구할 때 쓴다(스펙 2026-11-03 §6.6). 수정 회차는 baseSha가 회차 브랜치 끝(tip)이다. git 실패는 IOException.
+     */
+    public boolean hasCommitsSince(File worktreeDir, String baseSha) throws IOException, InterruptedException {
+        return commitsSince(worktreeDir, baseSha) > 0;
     }
 
     private static int commitsSince(File worktreeDir, String baseSha) throws IOException, InterruptedException {

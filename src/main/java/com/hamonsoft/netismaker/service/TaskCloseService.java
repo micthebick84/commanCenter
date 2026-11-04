@@ -5,6 +5,7 @@ import com.hamonsoft.netismaker.entity.RepoCatalogEntry;
 import com.hamonsoft.netismaker.entity.Task;
 import com.hamonsoft.netismaker.entity.TaskStatus;
 import com.hamonsoft.netismaker.entity.TaskStatusHistory;
+import com.hamonsoft.netismaker.entity.TaskType;
 import com.hamonsoft.netismaker.repository.RepoCatalogRepository;
 import com.hamonsoft.netismaker.repository.TaskRepository;
 import com.hamonsoft.netismaker.repository.TaskStatusHistoryRepository;
@@ -22,6 +23,7 @@ import java.util.Set;
  * 작업 종료 단계의 사람 쪽 전이 (스펙 2026-10-13 §3·§5). 워커 쪽(claim·진행·결과)은 WorkerService.
  *
  *   requestClose ─► 배포완료|배포중단됨 → 종료승인대기   (등록자 본인 또는 관리자)
+ *                   DB 작업은 PR생성에서도 가능 (스펙 2026-11-03 §6.9)
  *   withdraw     ─► 종료승인대기 → 직전 상태             (등록자 본인 또는 관리자)
  *   approve      ─► 종료승인대기 → 종료대기              (관리자 — 컨트롤러가 강제)
  *   reject       ─► 종료승인대기 → 직전 상태 + 사유      (관리자)
@@ -35,7 +37,15 @@ import java.util.Set;
 @Profile("api")
 public class TaskCloseService {
 
+    /** 타입과 상관없이 종료를 요청할 수 있는 상태. DB 작업의 PR생성은 {@link #canRequestClose}가 더한다. */
     private static final Set<TaskStatus> REQUESTABLE = EnumSet.of(TaskStatus.DEPLOYED, TaskStatus.DEPLOY_LOST);
+
+    /** 종료승인대기에서 돌아갈 수 있는 직전 상태 후보 — 종료 요청을 받는 상태 전부(DB 작업의 PR생성 포함). */
+    private static final Set<TaskStatus> RETURNABLE =
+            EnumSet.of(TaskStatus.DEPLOYED, TaskStatus.DEPLOY_LOST, TaskStatus.PR_CREATED);
+
+    private static final String REQUEST_GATE_MESSAGE =
+            "배포완료 또는 배포중단됨 상태에서만 종료를 요청할 수 있습니다 (DB 작업은 PR생성에서도 가능)";
 
     private final TaskRepository taskRepo;
     private final TaskStatusHistoryRepository historyRepo;
@@ -59,9 +69,8 @@ public class TaskCloseService {
     @Transactional
     public Task requestClose(Long taskId, String actorId, boolean isAdmin, String actorEmail) {
         Task t = lockOwned(taskId, actorId, isAdmin);
-        if (!REQUESTABLE.contains(t.getStatus())) {
-            throw TaskException.conflict("배포완료 또는 배포중단됨 상태에서만 종료를 요청할 수 있습니다 (현재: "
-                    + t.getStatus().dbValue() + ")");
+        if (!canRequestClose(t)) {
+            throw TaskException.conflict(REQUEST_GATE_MESSAGE + " (현재: " + t.getStatus().dbValue() + ")");
         }
         if (t.getPrNumber() == null || isBlank(t.getHeadBranch()) || isBlank(t.getHeadSha())) {
             throw TaskException.conflict("PR 정보(번호·브랜치·커밋)가 없어 종료할 수 없습니다");
@@ -70,11 +79,29 @@ public class TaskCloseService {
         return move(t, TaskStatus.CLOSE_REVIEW, "user", actorId, "결과 확인 완료 → 종료 요청");
     }
 
+    /**
+     * 종료 요청을 받는 작업인가 — 배포완료·배포중단됨, 그리고 타입이 DB 작업인 PR생성(스펙 2026-11-03 §6.9).
+     * 수정 요청의 후보({@code TaskFixService.REQUESTABLE})와는 별개라 거기는 바뀌지 않는다.
+     */
+    static boolean canRequestClose(Task t) {
+        return REQUESTABLE.contains(t.getStatus())
+                || (t.getStatus() == TaskStatus.PR_CREATED && t.getTaskType() == TaskType.DB_WORK);
+    }
+
+    /**
+     * 배포한 흔적이 없는 작업인가 — 배포 URL도 배포 시각도 비어 있다. 배포가 끝나면 둘 다 채워지고(WorkerService), 배포를
+     * 중지하면 둘 다 비워지므로(중지 뒤 PR생성) 구현 직후나 배포 중지 뒤의 PR생성은 늘 참이다.
+     * 종료 단계에서 배포 중지를 건너뛰는 워커 쪽 판정({@code TaskCloser.neverDeployed})과 기준이 같아야 한다.
+     */
+    static boolean neverDeployed(Task t) {
+        return t.getDeployUrl() == null && t.getDeployedAt() == null;
+    }
+
     @Transactional
     public Task withdraw(Long taskId, String actorId, boolean isAdmin) {
         Task t = lockOwned(taskId, actorId, isAdmin);
         requireReview(t, "철회");
-        return move(t, statusBeforeReview(t.getId()), "user", actorId, "종료 요청 철회");
+        return move(t, statusBeforeReview(t), "user", actorId, "종료 요청 철회");
     }
 
     @Transactional
@@ -88,8 +115,13 @@ public class TaskCloseService {
                 + (t.getCloseArtifactMode() == null ? "" : " (산출물 보관)"));
     }
 
-    /** 전역 스위치 + 작업 레포의 카탈로그 항목(repo_catalog_id, 없으면 git_url)이 둘 다 켜졌을 때만. */
+    /**
+     * 전역 스위치 + 작업 레포의 카탈로그 항목(repo_catalog_id, 없으면 git_url)이 둘 다 켜졌을 때만.
+     * 단 DB 작업이 배포한 적 없으면 늘 꺼진 것 — 꺼낼 배포 이미지가 없다(스펙 2026-11-03 §6.9). 보조 '배포'로 배포까지 한
+     * DB 작업은 다른 작업과 같이 스위치·카탈로그를 따른다.
+     */
     boolean artifactRequired(Task t) {
+        if (t.getTaskType() == TaskType.DB_WORK && neverDeployed(t)) return false;
         return artifactProps.enabled()
                 && RepoCatalogRepository.findForTask(catalogRepo, t.getRepoCatalogId(), t.getGitUrl())
                         .map(RepoCatalogEntry::isArtifactEnabled).orElse(false);
@@ -100,7 +132,7 @@ public class TaskCloseService {
         if (isBlank(reason)) throw new TaskException(HttpStatus.BAD_REQUEST, "반려 사유는 필수입니다");
         Task t = taskRepo.findActiveByIdForUpdate(taskId).orElseThrow(TaskException::notFound);
         requireReview(t, "반려");
-        return move(t, statusBeforeReview(t.getId()), "user", adminId, "종료 반려: " + reason.trim());
+        return move(t, statusBeforeReview(t), "user", adminId, "종료 반려: " + reason.trim());
     }
 
     @Transactional
@@ -129,7 +161,7 @@ public class TaskCloseService {
         }
         t.setFailureReason(null);
         t.setCloseProgress(null);
-        return move(t, statusBeforeReview(t.getId()), "user", adminId, "종료 취소(병합 전)");
+        return move(t, statusBeforeReview(t), "user", adminId, "종료 취소(병합 전)");
     }
 
     /**
@@ -156,21 +188,30 @@ public class TaskCloseService {
     }
 
     /**
-     * 종료승인대기로 들어오기 직전 상태. 배포완료·배포중단됨만 돌려준다 — 이력을 못 읽으면 컨테이너 생존을 장담할 수
-     * 없으므로 배포중단됨(재배포를 유도하는 쪽)으로 돌린다. DeployReconcileJob이 살아 있으면 배포완료로 되돌린다.
+     * 종료승인대기로 들어오기 직전 상태. 배포완료·배포중단됨·PR생성(DB 작업)만 돌려준다 — 이력을 못 읽으면
+     * {@link #fallbackBeforeReview}.
      */
-    TaskStatus statusBeforeReview(Long taskId) {
-        for (TaskStatusHistory h : historyRepo.findByTaskIdOrderByAtDescIdDesc(taskId, Limit.of(50))) {
+    TaskStatus statusBeforeReview(Task t) {
+        for (TaskStatusHistory h : historyRepo.findByTaskIdOrderByAtDescIdDesc(t.getId(), Limit.of(50))) {
             if (TaskStatus.CLOSE_REVIEW.dbValue().equals(h.getToStatus()) && h.getFromStatus() != null) {
                 try {
                     TaskStatus from = TaskStatus.fromDb(h.getFromStatus());
-                    return REQUESTABLE.contains(from) ? from : TaskStatus.DEPLOY_LOST;
+                    return RETURNABLE.contains(from) ? from : fallbackBeforeReview(t);
                 } catch (IllegalArgumentException e) {
-                    return TaskStatus.DEPLOY_LOST;
+                    return fallbackBeforeReview(t);
                 }
             }
         }
-        return TaskStatus.DEPLOY_LOST;
+        return fallbackBeforeReview(t);
+    }
+
+    /**
+     * 직전 상태를 이력에서 못 찾았을 때의 대체값. 컨테이너 생존을 장담할 수 없으므로 배포중단됨(재배포를 유도하는 쪽)으로
+     * 돌린다 — DeployReconcileJob이 살아 있으면 배포완료로 되돌린다. 단 배포한 적 없는 DB 작업은 PR생성이다: 컨테이너가
+     * 없어 정합 잡이 배포완료로 되돌릴 수 없으니 배포중단됨에 갇힌다. (스펙 2026-11-03 §6.9)
+     */
+    private static TaskStatus fallbackBeforeReview(Task t) {
+        return t.getTaskType() == TaskType.DB_WORK && neverDeployed(t) ? TaskStatus.PR_CREATED : TaskStatus.DEPLOY_LOST;
     }
 
     private Task lockOwned(Long taskId, String actorId, boolean isAdmin) {

@@ -358,6 +358,19 @@ const HUMAN_INPUT_STATUSES = ['INTERVIEW_INPUT', 'INTERVIEW_REVIEW']
 const ADMIN_GATE_STATUSES = ['AWAITING_APPROVAL', 'COMPLETED', 'DESIGN_REVIEW', 'CLOSE_REVIEW', 'FIX_REVIEW']
 const DONE_STATUSES = ['PR_CREATED', 'DEPLOYED', 'CLOSED']
 
+/**
+ * DB 작업(스펙 2026-11-03 §6.9)은 PR생성에서 배포 없이 종료를 요청한다. 다음 할 일·상세 보조 배포 버튼·모바일 시트가 같은 판정을 쓴다.
+ * attentionGroup은 이 판정을 쓰지 않는다 — 소유자 인자가 없고 전역 하단 배지 수에도 쓰여서, 'attention'으로 두면 관계없는 사용자의 배지까지 늘어난다.
+ * 같은 "확인 완료 — 종료 요청"을 기다리는 배포완료가 이미 DONE_STATUSES라 PR생성의 DB 작업도 그와 같이 'done'으로 둔다.
+ */
+export function isDbWorkPrCreated(task: { status: string; taskType?: string | null }): boolean {
+  return task.status === 'PR_CREATED' && task.taskType === 'DB_WORK'
+}
+
+/** DB 작업 PR생성의 종료 요청 확인 문구 — 띄운 앱이 없으니 배포 결과가 아니라 개발 DB 반영 결과를 묻는다. */
+export const DB_WORK_CLOSE_REQUEST_CONFIRM =
+  '개발 DB 반영 결과를 확인했나요? 승인되면 PR을 병합하고 노트 작성·브랜치 정리를 진행합니다.'
+
 export function attentionGroup(task: { status: string }, isAdmin: boolean): AttentionGroup {
   const s = task.status
   if (s === 'CANCELLED') return 'closed'
@@ -408,7 +421,13 @@ const DESIGN_STATUSES = STAGES.find((s) => s.key === 'design')!.statuses
  *    취소됨은 전 단계 future). idx>=0 가드로 파이프라인 밖 상태는 그대로 future 유지.
  *    작업종료(CLOSED)는 예외 — 전 단계를 done으로 채운다(디자인 skipped 규칙도 적용하지 않는다).
  */
-export function stageSteps(task: { status: string; designRequested?: boolean }): StageStep[] {
+export function stageSteps(task: {
+  status: string
+  designRequested?: boolean
+  taskType?: string | null
+  /** 배포한 적 없으면 null(서버 TaskResponse — deployUrl·deployLog가 없고 배포 진행 상태도 아님). 키가 없어도 "없음"이다. */
+  deployment?: unknown
+}): StageStep[] {
   const pipeline = STAGES.filter((s) => !s.terminal)
   const closed = task.status === 'CLOSED'
   const idx = closed ? pipeline.length : pipeline.findIndex((s) => s.statuses.includes(task.status))
@@ -423,6 +442,10 @@ export function stageSteps(task: { status: string; designRequested?: boolean }):
       if (s.key === 'design' && !task.designRequested && !inDesign && state !== 'done') state = 'skipped'
       if (s.key === 'design' && !task.designRequested && state === 'done') state = 'skipped'
     }
+    // DB 작업은 PR생성에서 바로 종료를 요청할 수 있다(스펙 2026-11-03 §6.9) — 배포를 거치지 않고 지나간 배포 단계는 건너뜀으로 그린다.
+    // "배포 안 함"은 deployment == null로 근사한다(서버의 deployUrl·deployedAt 둘 다 없음과 거의 같다, TaskResponse.hasDeploy).
+    // 작업종료(CLOSED)에도 적용한다 — 디자인 skipped 규칙과 달리 배포 없이 끝난 DB 작업의 끝 모습이다.
+    if (s.key === 'deploy' && state === 'done' && task.taskType === 'DB_WORK' && !task.deployment) state = 'skipped'
     return { key: s.key, label: s.name, color: s.color, state }
   })
 }
@@ -447,6 +470,7 @@ export function nextAction(
     status: string
     implementation?: { prUrl: string | null } | null
     deployment?: { deployUrl: string | null } | null
+    taskType?: string | null
   },
   isAdmin: boolean,
   isOwner = false,
@@ -479,6 +503,10 @@ export function nextAction(
         : { text: '디자인 검토 중입니다' }
     case 'PR_CREATED': {
       const noun = mrNoun(task.implementation?.prUrl)
+      // DB 작업(스펙 2026-11-03 §6.9): 배포 없이 종료할 수 있다 — 관리자·등록자의 주 행동은 종료 요청이고, 관리자의 배포는 상세의 보조 버튼·시트 항목으로 남는다
+      if (isDbWorkPrCreated(task) && (isAdmin || isOwner)) {
+        return { text: 'DB 작업 — 개발 DB 반영을 확인했으면 종료를 요청하세요', primary: { label: '확인 완료 — 종료 요청', icon: 'task_alt', kind: 'request-close' } }
+      }
       if (isAdmin) return { text: `${noun} 생성됨 — 배포할 수 있습니다`, primary: { label: '배포', icon: 'rocket_launch', kind: 'deploy' } }
       return task.implementation?.prUrl
         ? { text: `${noun} 생성됨`, primary: { label: `${noun} 열기`, icon: 'open_in_new', kind: 'open-pr' } }

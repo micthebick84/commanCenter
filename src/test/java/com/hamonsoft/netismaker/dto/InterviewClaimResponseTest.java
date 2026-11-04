@@ -347,4 +347,67 @@ class InterviewClaimResponseTest {
         assertThat(chained.dbConnections()).containsExactly(dbRef);
         assertThat(chained.dbNotices()).containsExactly("참고");
     }
+
+    // ── 구현 단계에서 쓰기가 열릴 연결 label (스펙 2026-11-03 §5.1) ─────────────────────────────
+
+    @Test
+    void of는_writableDbConnections가_비어_있고_null은_빈_목록으로_정규화된다() {
+        InterviewClaimResponse base = InterviewClaimResponse.of(session(), List.of(), List.of());
+
+        assertThat(base.writableDbConnections()).isNotNull().isEmpty();
+        assertThat(base.withWritableDbConnections(null).writableDbConnections()).isNotNull().isEmpty();
+    }
+
+    @Test
+    void withWritableDbConnections는_그_칸만_바꾸고_목록을_복사한다() {
+        InterviewClaimResponse base = InterviewClaimResponse.of(session(), List.of(), List.of());
+        java.util.ArrayList<String> names = new java.util.ArrayList<>(List.of("개발DB (PostgreSQL)"));
+
+        InterviewClaimResponse filled = base.withWritableDbConnections(names);
+        names.add("나중에 더함");
+
+        assertThat(filled.writableDbConnections()).containsExactly("개발DB (PostgreSQL)");
+        assertThat(filled).usingRecursiveComparison().ignoringFields("writableDbConnections").isEqualTo(base);
+        assertThat(filled.withWritableDbConnections(List.of())).isEqualTo(base);
+    }
+
+    @Test
+    void 사본4곳이_writableDbConnections_유지() throws Exception {
+        var dbRef = new InterviewClaimResponse.DbConnectionRef("db-7", "운영 (MySQL)", "MYSQL", "h", 3306, "app", "u", "Pw-9");
+        InterviewClaimResponse writable = InterviewClaimResponse.of(session(), List.of(), List.of())
+                .withWritableDbConnections(List.of("개발DB (PostgreSQL)"));
+
+        InterviewClaimResponse viaDb = writable.withDb(List.of(dbRef), List.of("참고"));
+        InterviewClaimResponse viaRefs = writable.withRefRepos(List.of(claimRef(11L, SHA)));
+        InterviewClaimResponse viaCleared = writable.withRefsCleared(true);
+        InterviewClaimResponse viaType = writable.withTaskType("DB_WORK");
+
+        ObjectMapper mapper = new ObjectMapper().findAndRegisterModules();
+        for (InterviewClaimResponse r : List.of(viaDb, viaRefs, viaCleared, viaType)) {
+            assertThat(r.writableDbConnections()).containsExactly("개발DB (PostgreSQL)");
+            assertThat(mapper.writeValueAsString(r)).contains("\"writableDbConnections\":[\"개발DB (PostgreSQL)\"]");
+        }
+        // 다른 with*를 먼저 거쳐 나중에 붙여도 다른 칸이 그대로 남는다
+        InterviewClaimResponse chained = InterviewClaimResponse.of(session(), List.of(), List.of())
+                .withRefRepos(List.of(claimRef(11L, SHA)))
+                .withRefsCleared(true)
+                .withTaskType("DB_WORK")
+                .withDb(List.of(dbRef), List.of("참고"))
+                .withWritableDbConnections(List.of("개발DB (PostgreSQL)"));
+        assertThat(chained.writableDbConnections()).containsExactly("개발DB (PostgreSQL)");
+        assertThat(chained.taskType()).isEqualTo("DB_WORK");
+        assertThat(chained.refRepos()).containsExactly(claimRef(11L, SHA));
+        assertThat(chained.refsCleared()).isTrue();
+        assertThat(chained.dbConnections()).containsExactly(dbRef);
+    }
+
+    @Test
+    void writableDbConnections는_빈_목록이어도_JSON에_배열로_나간다() {
+        JsonNode json = new ObjectMapper().findAndRegisterModules()
+                .valueToTree(InterviewClaimResponse.of(session(), List.of(), List.of()));
+
+        assertThat(json.has("writableDbConnections")).isTrue();
+        assertThat(json.get("writableDbConnections").isArray()).isTrue();
+        assertThat(json.get("writableDbConnections").size()).isZero();
+    }
 }

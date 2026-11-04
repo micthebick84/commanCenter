@@ -9,7 +9,7 @@ import { withTurnInputGate } from './turnInputGate.js';
 import { tryHarvest, type HarvestResult } from './planHarvest.js';
 import { harvestSessionPlanFiles } from './planFiles.js';
 import { relay } from './messageRelay.js';
-import { kickoffLead, taskTypeGuide } from './kickoffByType.js';
+import { kickoffLead, taskTypeGuide, writableDbLine } from './kickoffByType.js';
 import {
   ensureRepo as defaultEnsureRepo,
   ensureRefRepos as defaultEnsureRefRepos,
@@ -150,6 +150,8 @@ function attachmentSection(claim: InterviewClaimResponse): string {
  * 둘 다 비면 프롬프트는 지금과 바이트까지 같다.
  * kickoff 본문은 작업 타입에 따라 첫 문장(`kickoffLead`)과 첨부 절 다음의 지시 문단(`taskTypeGuide`)만 바뀐다 — 타입 없음·NEW_FEATURE·
  * 모르는 값은 지금과 같고, resume 입력(답변)은 타입과 무관하다 (스펙 2026-11-03 §5.1).
+ * 구현 때 개발 DB 쓰기가 열리는 연결이 있으면(`claim.writableDbConnections`) 지시 문단 바로 뒤에 한 줄 안내(`writableDbLine`)가 붙는다 —
+ * 타입과 무관하고 kickoff에만 붙으며, 목록이 비면 지금과 바이트까지 같다.
  */
 async function* promptFor(
   claim: InterviewClaimResponse,
@@ -164,6 +166,7 @@ async function* promptFor(
         `Title: ${claim.title}\nRequest: ${claim.description}\n\n` +
         attachmentSection(claim) +
         taskTypeGuide(claim.taskType) +
+        writableDbLine(claim.writableDbConnections) +
         'IMPORTANT — this is a PLANNING-ONLY interview. Your only deliverable is a written ' +
         'implementation PLAN (via brainstorming → writing-plans), NOT code. Do NOT implement the ' +
         'feature: do not create or modify source files, do not run builds/installs/tests, do not ' +

@@ -173,6 +173,13 @@ export interface InterviewClaimResponse {
    * 읽는다(kickoffByType의 리터럴 비교) — 그래서 타입은 좁지만 읽는 쪽은 `unknown`처럼 다룬다.
    */
   taskType?: TaskTypeWire | null;
+  /**
+   * 구현 단계에서 개발 DB 쓰기가 열릴 연결의 표시 이름 (스펙 2026-11-03 §5.1) — claim DB 절과 같은 label(`이름 (DB 종류)`).
+   * API가 쓰기 조건 1·3·4·5를 claim 때 계산해 싣는다. 인터뷰 중 DB는 여전히 읽기 전용이고, 이 값은 "구현 때 이 연결에 변경이 직접
+   * 적용된다"는 한 줄 안내(`writableDbLine`)에만 쓴다. 목록이 비면(질문 세션·쓸 연결 없음·DB 접속정보를 못 불러온 인터뷰) 지금 문구,
+   * 구버전 API는 칸이 없다 → 배열이 아니면 안내하지 않는다.
+   */
+  writableDbConnections?: string[];
 }
 
 /** 작업 타입의 와이어 값 — Java `TaskType` enum 이름. */

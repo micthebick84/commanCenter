@@ -1,9 +1,10 @@
 import type { InterviewClaimResponse } from '../types.js';
 
 /**
- * 작업 타입별 인터뷰 kickoff 문구 (스펙 2026-11-03 §5.1). 순수 함수만 둔다 — kickoff 프롬프트의 두 자리를 채운다:
+ * 작업 타입별 인터뷰 kickoff 문구 (스펙 2026-11-03 §5.1). 순수 함수만 둔다 — kickoff 프롬프트의 세 자리를 채운다:
  *  - `kickoffLead`  : 맨 앞 첫 문장(`I want to …\n`)
  *  - `taskTypeGuide`: 첨부 절 다음·`IMPORTANT —` 앞의 지시 문단(없으면 '')
+ *  - `writableDbLine`: `taskTypeGuide` 바로 뒤의 개발 DB 쓰기 안내 한 줄(타입과 무관, 없으면 '')
  *
  * 타입 판정은 와이어 값과의 리터럴 비교다. 타입 없음(undefined·null)·`NEW_FEATURE`·모르는 값(다른 버전 API의 새 타입)은 모두 지금의
  * 문구(첫 문장 그대로, 지시 문단 없음)라 타입이 생기기 전과 프롬프트가 바이트까지 같다.
@@ -48,4 +49,22 @@ export function taskTypeGuide(taskType: unknown): string {
   if (taskType === 'BUG_FIX') return BUG_FIX_GUIDE + '\n\n';
   if (taskType === 'DB_WORK') return DB_WORK_GUIDE + '\n\n';
   return '';
+}
+
+/**
+ * 구현 단계에서 개발 DB 쓰기가 열리는 연결 안내 문단 (스펙 2026-11-03 §5.1) — kickoff의 `taskTypeGuide` 바로 뒤에 붙는다.
+ * 끝에 빈 줄(`\n\n`)을 포함하고, 연결 이름이 하나도 없으면 ''라 프롬프트가 지금과 바이트까지 같다.
+ * 인자가 `unknown`인 것은 구버전 API에는 칸이 없고(undefined) 다른 버전의 값이 배열이 아닐 수도 있어서다 — 배열이 아니면 안내하지 않는다.
+ * 이름은 API가 claim DB 절과 같은 label(`이름 (DB 종류)`)로 보낸다. 문자열이 아닌 원소와 빈 이름은 건너뛴다.
+ * 인터뷰 단계의 DB는 읽기 전용이라는 말을 같이 적어, 인터뷰 중에 변경을 시도하지 않게 한다.
+ */
+export function writableDbLine(names: unknown): string {
+  if (!Array.isArray(names)) return '';
+  const labels = names.filter((n): n is string => typeof n === 'string').map((n) => n.trim()).filter((n) => n.length > 0);
+  if (labels.length === 0) return '';
+  return (
+    `구현 단계에서는 다음 DB 연결의 공용 개발 DB에 변경이 직접 적용됩니다: ${labels.join(', ')}. ` +
+    '남의 테이블 컬럼 삭제·변경 등은 승인 대기로 남습니다. ' +
+    'DB 변경이 필요하면 계획에 DB 변경 단계를 넣으세요. 이 인터뷰에서는 읽기 전용입니다.\n\n'
+  );
 }

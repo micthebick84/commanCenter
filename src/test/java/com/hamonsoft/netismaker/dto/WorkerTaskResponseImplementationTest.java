@@ -99,4 +99,53 @@ class WorkerTaskResponseImplementationTest {
         assertThat(new WorkerTaskResponse.ImplementationSpec("DIRECT", 1, 45, null))
                 .isEqualTo(new WorkerTaskResponse.ImplementationSpec("DIRECT", 1, 45, null, null));
     }
+
+    // ---- 개발 DB 쓰기 재료 DbWriteSpec (스펙 2026-11-03 §6.6·§6.8) — 구현 claim에서만 쓰므로 ImplementationSpec에 둔다 ----
+
+    private static final WorkerTaskResponse.DbWriteSpec DB = new WorkerTaskResponse.DbWriteSpec("sql/dev/task-7.sql", true, true);
+
+    @Test
+    void 호환_생성자는_db_null() {
+        assertThat(new WorkerTaskResponse.ImplementationSpec("DIRECT", 1, 45).db()).isNull();
+        assertThat(new WorkerTaskResponse.ImplementationSpec("DIRECT", 1, 45, null).db()).isNull();
+        assertThat(new WorkerTaskResponse.ImplementationSpec("DIRECT", 1, 45, null, "BUG_FIX").db()).isNull();
+        assertThat(new WorkerTaskResponse.ImplementationSpec("DIRECT", 1, 45, null, "BUG_FIX"))
+                .isEqualTo(new WorkerTaskResponse.ImplementationSpec("DIRECT", 1, 45, null, "BUG_FIX", null));
+    }
+
+    @Test
+    void forImplementation_여섯_인자판은_db를_싣지_않고_일곱_인자판은_싣는다() throws Exception {
+        Task t = task();
+        t.setTaskType(TaskType.DB_WORK);
+
+        WorkerTaskResponse six = WorkerTaskResponse.forImplementation(t, null, null, "# 플랜", null, null);
+        WorkerTaskResponse seven = WorkerTaskResponse.forImplementation(t, null, null, "# 플랜", null, null, DB);
+
+        assertThat(six.implementation().db()).isNull();
+        assertThat(seven.implementation().db()).isEqualTo(DB);
+        assertThat(seven.implementation())
+                .isEqualTo(new WorkerTaskResponse.ImplementationSpec("REVIEW", 3, 80, null, "DB_WORK", DB));
+        assertThat(seven.withDbMcp(new DbMcpGrant(null, List.of(), List.of())).implementation().db()).isEqualTo(DB);
+        WorkerTaskResponse back = lenient.readValue(lenient.writeValueAsString(seven), WorkerTaskResponse.class);
+        assertThat(back.implementation().db()).isEqualTo(DB);
+        assertThat(lenient.readTree(lenient.writeValueAsString(seven)).get("implementation").get("db").fieldNames())
+                .toIterable().containsExactlyInAnyOrder("scriptPath", "migrationManaged", "priorWrites");
+    }
+
+    @Test
+    void 옛_페이로드는_db_null() throws Exception {
+        WorkerTaskResponse oldBlock = lenient.readValue(
+                "{\"id\":7,\"githubRepo\":\"acme/widgets\",\"githubBranch\":\"main\",\"kind\":\"IMPLEMENTATION\","
+                        + "\"implementation\":{\"mode\":\"DIRECT\",\"attempt\":1,\"timeoutMinutes\":45,\"taskType\":\"BUG_FIX\"}}",
+                WorkerTaskResponse.class);
+
+        assertThat(oldBlock.implementation().db()).isNull();
+        assertThat(oldBlock.implementation().taskType()).isEqualTo("BUG_FIX");
+    }
+
+    @Test
+    void 구현이_아닌_claim과_db_없는_구현_블록은_db_null() {
+        assertThat(WorkerTaskResponse.forImplementation(task(), null, null, "# 플랜").implementation().db()).isNull();
+        assertThat(WorkerTaskResponse.forDeploy(task()).implementation()).isNull();
+    }
 }

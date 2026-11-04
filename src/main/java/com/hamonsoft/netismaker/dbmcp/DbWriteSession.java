@@ -22,6 +22,12 @@ public interface DbWriteSession extends AutoCloseable {
     /** 그 스키마에 그 종류의 객체가 있는지 — 소유 기록이 가리키는 객체가 실제로 있는지 확인한다(Oracle 동의어는 세지 않는다). */
     boolean exists(DbObjectName name, DbObjectType type) throws SQLException;
 
+    /**
+     * DB가 그 스키마를 시스템(관리) 스키마로 표시하는지 — Oracle {@code all_users.oracle_maintained = 'Y'}(12c부터).
+     * 다른 방언은 이름 규칙({@link WriteTargetScope})으로 충분해 조회하지 않고 늘 false. 스키마는 정규화한 값이다.
+     */
+    boolean systemSchema(String schema) throws SQLException;
+
     /** 한 문장 실행 — 문장 제한시간 {@value DbMcpLimits#STATEMENT_TIMEOUT_SECONDS}초. 반환 = 영향 행 수(DDL은 0). */
     long executeUpdate(String sql) throws SQLException;
 

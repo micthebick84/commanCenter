@@ -589,4 +589,155 @@ class DbWriteServiceTest {
         verify(session, times(3)).close();
         assertThat(saved.stream().map(Saved::id).filter(Objects::nonNull)).isNotEmpty();
     }
+
+    // ── 최종 리뷰 반영 ────────────────────────────────────────────────────────────────────────
+
+    /** Important 1 — 스키마를 적은 시스템 카탈로그는 이름 규칙만으로 분류 전에 거부한다(DB를 보지 않는다). */
+    @Test
+    void PostgreSQL_시스템_스키마는_분류_전에_거부() throws SQLException {
+        DbWriteService.ExecuteResult r = run("DELETE FROM pg_catalog.pg_database WHERE datname = 'other'");
+
+        assertThat(r.classification()).isEqualTo(WriteClassification.REJECTED);
+        assertThat(r.reason()).isEqualTo("시스템 스키마의 객체는 쓸 수 없습니다: pg_catalog.pg_database");
+        assertThat(saved).singleElement().satisfies(s -> assertThat(s.classification()).isEqualTo(WriteClassification.REJECTED));
+        verify(session, never()).executeUpdate(anyString());
+        verify(session, never()).exists(any());
+        verify(session).close();
+    }
+
+    /**
+     * Important 1 — PostgreSQL은 search_path보다 pg_catalog를 먼저 찾는다. 비한정 UPDATE pg_authid는 public.pg_authid로 정규화돼
+     * 남의 테이블(WHERE + 상한이면 바로 실행)로 보이지만 실제로는 시스템 카탈로그에 닿는다 — pg_catalog에 같은 이름이 있으면 거부.
+     */
+    @Test
+    void PostgreSQL_비한정_이름이_pg_catalog에_있으면_거부() throws SQLException {
+        when(session.exists(new DbObjectName("pg_catalog", "pg_authid"))).thenReturn(true);
+
+        DbWriteService.ExecuteResult r = run("UPDATE pg_authid SET rolsuper = true WHERE rolname = 'app'");
+
+        assertThat(r.classification()).isEqualTo(WriteClassification.REJECTED);
+        assertThat(r.reason()).startsWith("시스템 카탈로그와 같은 이름입니다: pg_catalog.pg_authid");
+        verify(session, never()).executeUpdate(anyString());
+
+        // 확인이 예외면 애매하다 — 거부(fail closed), 비밀번호 없음
+        when(session.exists(new DbObjectName("pg_catalog", "legacy"))).thenThrow(new SQLException("timeout S3cret!"));
+        DbWriteService.ExecuteResult failed = run("UPDATE legacy SET a = 1 WHERE id = 1");
+        assertThat(failed.classification()).isEqualTo(WriteClassification.REJECTED);
+        assertThat(failed.reason()).startsWith("존재 확인 실패: pg_catalog.legacy").doesNotContain("S3cret!");
+        verify(session, never()).executeUpdate(anyString());
+
+        // 스키마를 적으면 그 스키마의 객체다 — pg_catalog를 보지 않는다(봤다면 위의 예외로 거부됐다)
+        when(session.executeUpdate("UPDATE public.legacy SET a = 1 WHERE id = 1")).thenReturn(1L);
+        assertThat(run("UPDATE public.legacy SET a = 1 WHERE id = 1").classification()).isEqualTo(WriteClassification.EXECUTED);
+    }
+
+    @Test
+    void MySQL_시스템_스키마와_연결_database_밖은_거부() throws SQLException {
+        useMysql(true);
+
+        for (String sql : List.of(
+                "UPDATE mysql.user SET authentication_string = 'x' WHERE User = 'root'",
+                "INSERT INTO mysql.db (Host, Db, User) VALUES ('%', 'prod', 'app')",
+                "DELETE FROM prod.users WHERE id = 1",
+                "CREATE TABLE prod.t_x (id INT)")) {
+            DbWriteService.ExecuteResult r = run(sql);
+            assertThat(r.classification()).as(sql).isEqualTo(WriteClassification.REJECTED);
+            assertThat(r.reason()).as(sql).matches("(시스템 스키마의 객체는|연결의 데이터베이스 밖 객체는) 쓸 수 없습니다: .*");
+        }
+        verify(session, never()).executeUpdate(anyString());
+        assertThat(store).isEmpty();   // 다른 database에 만든 테이블의 소유를 얻지 않는다
+
+        // 연결의 database는 스키마를 적어도 그대로다
+        when(session.executeUpdate("DELETE FROM app.legacy WHERE id = 1")).thenReturn(1L);
+        assertThat(run("DELETE FROM app.legacy WHERE id = 1").classification()).isEqualTo(WriteClassification.EXECUTED);
+    }
+
+    private void useOracle() throws SQLException {
+        dev.setDbType(DbType.ORACLE);
+        ref = new DbConnectionRef("db-7", "개발DB (Oracle)", "ORACLE", "db.local", 1521, "XE", "writer", "S3cret!");
+        when(connections.writeRefOf(dev)).thenReturn(Optional.of(ref));
+        when(executor.open(ref)).thenReturn(session);
+        when(session.defaultSchema()).thenReturn("APP");
+    }
+
+    /** Important 1 — Oracle 관리 계정은 이름 목록에 없어도 DB 표시(oracle_maintained)로 거부한다. 확인이 예외면 거부. */
+    @Test
+    void Oracle_관리_계정_스키마는_거부() throws SQLException {
+        useOracle();
+        when(session.systemSchema("APEX_230100")).thenReturn(true);
+
+        DbWriteService.ExecuteResult r = run("UPDATE apex_230100.wwv_flows SET a = 1 WHERE id = 1");
+        assertThat(r.classification()).isEqualTo(WriteClassification.REJECTED);
+        assertThat(r.reason()).isEqualTo("시스템 스키마의 객체는 쓸 수 없습니다: APEX_230100");
+
+        // 이름이 알려진 관리 계정은 조회 전에 거부
+        assertThat(run("UPDATE sys.legacy SET a = 1 WHERE id = 1").reason())
+                .isEqualTo("시스템 스키마의 객체는 쓸 수 없습니다: SYS.LEGACY");
+        verify(session, never()).systemSchema("SYS");
+
+        when(session.systemSchema("APP")).thenThrow(new SQLException("ORA-00942 S3cret!"));
+        DbWriteService.ExecuteResult failed = run("UPDATE legacy SET a = 1 WHERE id = 1");
+        assertThat(failed.classification()).isEqualTo(WriteClassification.REJECTED);
+        assertThat(failed.reason()).startsWith("시스템 스키마 확인 실패: APP").doesNotContain("S3cret!");
+        verify(session, never()).executeUpdate(anyString());
+    }
+
+    /**
+     * Important 2 — slug는 한글을 버리므로 한글만 있는 제목의 첫 시도 브랜치는 netismaker/task-42다. 재시도로 head_branch가 비었어도
+     * 그 브랜치를 기준으로 쓰는 작업이 있으면 소유 예외가 꺼져야 한다(Review Focus 5). task-420은 다른 작업이다.
+     */
+    @Test
+    void 한글_제목이라_slug가_없는_옛브랜치를_기준으로_쓰면_의존작업() throws SQLException {
+        task.setHeadBranch(null);
+        own(DbObjectType.TABLE, "public", "t_new", 42L);
+        when(session.exists(new DbObjectName("public", "t_new"), DbObjectType.TABLE)).thenReturn(true);
+        Task korean = other(29L, TaskStatus.APPROVED, "netismaker/task-42", null);
+        Task similarId = other(28L, TaskStatus.APPROVED, "netismaker/task-420", null);
+        when(tasks.findOpenByRepo("a/b", 42L)).thenReturn(List.of(korean, similarId));
+
+        DbWriteService.ExecuteResult r = run("DROP TABLE t_new");
+
+        assertThat(r.classification()).isEqualTo(WriteClassification.REJECTED);
+        assertThat(r.reason()).contains("작업 #29").doesNotContain("#28");
+        verify(session, never()).executeUpdate(anyString());
+        assertThat(store).hasSize(1);
+
+        assertThat(DbWriteService.basedOn("netismaker/task-42", null, 42L)).isTrue();
+        assertThat(DbWriteService.basedOn("netismaker/task-42-r2", null, 42L)).isTrue();
+        assertThat(DbWriteService.basedOn("netismaker/task-42-login", "", 42L)).isTrue();
+        assertThat(DbWriteService.basedOn("task-42", null, 42L)).isTrue();
+        assertThat(DbWriteService.basedOn("netismaker/task-420", null, 42L)).isFalse();
+        assertThat(DbWriteService.basedOn("netismaker/task-4", null, 42L)).isFalse();
+        assertThat(DbWriteService.basedOn("netismaker/task-42x", null, 42L)).isFalse();
+        assertThat(DbWriteService.basedOn("main", null, 42L)).isFalse();
+        assertThat(DbWriteService.basedOn(null, "netismaker/task-42", 42L)).isFalse();
+    }
+
+    /**
+     * Important 3 — 커밋하고 기록을 EXECUTED로 저장한 뒤 닫기가 비검사 예외를 던져도 결과·기록은 EXECUTED다. FAILED로 덮이면
+     * 스크립트 파일·"이미 적용된 SQL"에서 빠지고 세션이 같은 INSERT를 다시 보낼 수 있다.
+     */
+    @Test
+    void 커밋_뒤_닫기가_RuntimeException이어도_기록은_EXECUTED() throws SQLException {
+        when(session.executeUpdate("INSERT INTO legacy (a) VALUES (1)")).thenReturn(1L);
+        doThrow(new IllegalStateException("driver bug")).when(session).close();
+
+        DbWriteService.ExecuteResult r = run("INSERT INTO legacy (a) VALUES (1)");
+
+        verify(session).commit();
+        verify(session).close();
+        assertThat(r).isEqualTo(new DbWriteService.ExecuteResult(WriteClassification.EXECUTED, null, 1L, 100L, null));
+        assertThat(saved).hasSize(2);
+        assertThat(last().classification()).isEqualTo(WriteClassification.EXECUTED);
+        assertThat(last().executedAt()).isNotNull();
+        assertThat(saved).noneMatch(s -> s.classification() == WriteClassification.FAILED);
+
+        // 커밋 전 실패는 그대로 FAILED다 — 닫기 예외가 그 결과도 바꾸지 않는다
+        saved.clear();
+        when(session.executeUpdate("INSERT INTO legacy (a) VALUES (2)")).thenThrow(new SQLException("duplicate key"));
+        DbWriteService.ExecuteResult failed = run("INSERT INTO legacy (a) VALUES (2)");
+        assertThat(failed.classification()).isEqualTo(WriteClassification.FAILED);
+        assertThat(failed.error()).isEqualTo("duplicate key");
+        verify(session, times(1)).commit();
+    }
 }

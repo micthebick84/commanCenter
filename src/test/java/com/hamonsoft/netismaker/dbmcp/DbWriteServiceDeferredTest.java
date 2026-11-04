@@ -243,6 +243,28 @@ class DbWriteServiceDeferredTest {
         verify(executor, times(1)).open(any());
     }
 
+    /**
+     * 최종 리뷰 Important 1 — 대상 경계 밖(시스템 스키마, pg_catalog에 닿는 비한정 이름)은 거부 분류다. 남의 테이블 컬럼 삭제라 승인
+     * 대기로 기록됐던 문장이라도 관리자 실행으로 우회할 수 없다(반목표 "거부 분류를 관리자 실행으로 우회").
+     */
+    @Test
+    void 다시_분류해_대상이_경계_밖이면_관리자도_409() throws SQLException {
+        deferred("ALTER TABLE pg_catalog.pg_class DROP COLUMN relname");
+
+        assertThatThrownBy(() -> service.executeDeferred(42L, 13L, "admin"))
+                .satisfies(t -> assertThat(conflict(t).getMessage()).isEqualTo(
+                        "거부 분류는 관리자도 실행할 수 없습니다 — 시스템 스키마의 객체는 쓸 수 없습니다: pg_catalog.pg_class"));
+        assertUntouched();
+
+        deferred("ALTER TABLE pg_authid DROP COLUMN rolsuper");
+        when(session.exists(new DbObjectName("pg_catalog", "pg_authid"))).thenReturn(true);
+        assertThatThrownBy(() -> service.executeDeferred(42L, 13L, "admin"))
+                .satisfies(t -> assertThat(conflict(t).getMessage()).startsWith(
+                        "거부 분류는 관리자도 실행할 수 없습니다 — 시스템 카탈로그와 같은 이름입니다: pg_catalog.pg_authid"));
+        assertUntouched();
+        verify(session, times(2)).close();
+    }
+
     @Test
     void 쓰기허용_꺼짐_스위치_off_USER_비활성은_409() throws SQLException {
         DbConnectionRepository connectionRepo = mock(DbConnectionRepository.class);

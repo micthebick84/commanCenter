@@ -24,6 +24,11 @@ public record DbObjectName(String schema, String name) {
         return new DbObjectName(schema, fold(d, r.name(), r.nameQuoted()));
     }
 
+    /** 스키마를 생략한 이름이 받는 스키마 — {@link #normalize}와 같은 접기(MySQL·MariaDB 소문자 서버면 소문자, 그 밖은 그대로). */
+    public static String defaultSchemaOf(SqlDialect d, String defaultSchema, boolean mysqlLowerCase) {
+        return d == SqlDialect.MYSQL && mysqlLowerCase ? lower(defaultSchema) : defaultSchema;
+    }
+
     private static String fold(SqlDialect d, String text, boolean quoted) {
         if (quoted) return text;
         return switch (d) {

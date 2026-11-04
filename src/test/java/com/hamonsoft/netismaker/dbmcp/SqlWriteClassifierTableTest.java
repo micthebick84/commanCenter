@@ -77,6 +77,11 @@ class SqlWriteClassifierTableTest {
         return ref -> DbObjectName.normalize(d, ref, defaultSchema(d), true);
     }
 
+    /** 스키마를 생략한 이름이 받는 스키마 — 대상 경계 검사(WriteTargetScope)가 MySQL·MariaDB의 다른 database를 가를 때 쓴다. */
+    static String scopeSchema(SqlDialect d) {
+        return DbObjectName.defaultSchemaOf(d, defaultSchema(d), true);
+    }
+
     static Ownership ownership(SqlDialect d, String owners) {
         if (owners.equals("-")) return Ownership.none();
         Set<Ownership.OwnedObject> owned = new HashSet<>();
@@ -92,7 +97,7 @@ class SqlWriteClassifierTableTest {
     @MethodSource("cases")
     void 분류표(Case c) {
         WriteDecision decision = SqlWriteClassifier.decide(c.sql(), c.dialect(), names(c.dialect()),
-                ownership(c.dialect(), c.owners()), MAX_UPDATE_DELETE_ROWS, MAX_INSERT_ROWS);
+                scopeSchema(c.dialect()), ownership(c.dialect(), c.owners()), MAX_UPDATE_DELETE_ROWS, MAX_INSERT_ROWS);
         String actual = decision.verdict() + (decision.rowCap() == null ? "" : "/" + decision.rowCap());
         assertThat(actual).as(c.dialect() + " | " + c.sql()).isEqualTo(c.expected());
     }

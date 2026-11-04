@@ -10,6 +10,7 @@ import java.util.function.Function;
  * "그 작업의 테이블"은 소유 기록에 있는 객체뿐이고 그 밖은 모두 남의 테이블이다. 의존 작업이 있으면 소유가 없는 것으로 본다(§6.3).
  * 설계와 다름: 트리거는 자기 테이블에 걸어도 승인 대기(본문이 남의 테이블을 바꿀 수 있다), 소유하지 않은 OR REPLACE VIEW는
  * 새 뷰여도 승인 대기, 남의 테이블에서 제약을 지우거나 기본값을 바꾸면 승인 대기.
+ * 이 분류는 대상의 스키마를 보지 않는다 — 시스템 스키마·MySQL·MariaDB의 다른 database는 분류 전에 {@link WriteTargetScope}가 거부한다.
  */
 public final class SqlWriteClassifier {
 
@@ -33,14 +34,24 @@ public final class SqlWriteClassifier {
 
     private SqlWriteClassifier() {}
 
-    /** 분석과 분류를 한 번에 — 분석기가 거부한 문장은 그 사유로 REJECT. */
+    /**
+     * 분석 → 대상 경계(이름 규칙, {@link WriteTargetScope}) → 분류를 한 번에 — 분석기·경계 검사가 거부한 문장은 그 사유로 REJECT.
+     * {@link DbWriteService}도 같은 순서로 부르고, DB를 봐야 하는 경계 검사(PostgreSQL pg_catalog 가림·Oracle 관리 계정)를 사이에 더한다.
+     *
+     * @param scopeSchema 스키마를 생략한 이름이 받는 스키마({@link DbObjectName#defaultSchemaOf})
+     */
     public static WriteDecision decide(String sql, SqlDialect d, Function<DbObjectRef, DbObjectName> names,
-                                       Ownership ownership, int maxUpdateDeleteRows, int maxInsertRows) {
+                                       String scopeSchema, Ownership ownership, int maxUpdateDeleteRows,
+                                       int maxInsertRows) {
+        WriteStatement st;
         try {
-            return classify(SqlWriteParser.parse(sql, d), names, ownership, maxUpdateDeleteRows, maxInsertRows);
+            st = SqlWriteParser.parse(sql, d);
         } catch (SqlWriteRejected e) {
             return WriteDecision.reject(e.getMessage());
         }
+        String outside = WriteTargetScope.check(d, st, names, scopeSchema);
+        if (outside != null) return WriteDecision.reject(outside);
+        return classify(st, names, ownership, maxUpdateDeleteRows, maxInsertRows);
     }
 
     /**

@@ -15,7 +15,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 class SqlWriteClassifierReasonTest {
 
     private static WriteDecision decide(String sql, SqlDialect d, Ownership own) {
-        return SqlWriteClassifier.decide(sql, d, SqlWriteClassifierTableTest.names(d), own, 1000, 10000);
+        return SqlWriteClassifier.decide(sql, d, SqlWriteClassifierTableTest.names(d),
+                SqlWriteClassifierTableTest.scopeSchema(d), own, 1000, 10000);
     }
 
     private static Ownership owns(SqlDialect d, DbObjectType type, String name, String dependentNote) {
@@ -235,5 +236,27 @@ class SqlWriteClassifierReasonTest {
         assertThat(decide("ALTER TABLE legacy DROP COLUMN a", POSTGRES, none()).rowCap()).isNull();
         assertThat(decide("DELETE FROM legacy", POSTGRES, none()).rowCap()).isNull();
         assertThat(decide("DELETE FROM legacy WHERE id = 1", POSTGRES, none()).rowCap()).isEqualTo(1000);
+    }
+
+    /** 최종 리뷰 Important 1 — 분류 전에 대상 경계를 본다. 남의 테이블 규칙(WHERE + 행 상한)을 통과해도 거부다. */
+    @Test
+    void 시스템_스키마와_MySQL_다른_database는_분류_전에_거부() {
+        String outsideApp = " — 이 연결은 app 안에서만 씁니다";
+        assertThat(decide("UPDATE mysql.user SET authentication_string = 'x' WHERE User = 'root'", MYSQL, none()))
+                .isEqualTo(new WriteDecision(WriteDecision.Verdict.REJECT, "시스템 스키마의 객체는 쓸 수 없습니다: mysql.user", null));
+        assertThat(decide("DELETE FROM prod.users WHERE id = 1", MYSQL, none()).reason())
+                .isEqualTo("연결의 데이터베이스 밖 객체는 쓸 수 없습니다: prod.users" + outsideApp);
+        assertThat(decide("CREATE TABLE prod.t_x (id INT)", MYSQL, none()).reason())
+                .isEqualTo("연결의 데이터베이스 밖 객체는 쓸 수 없습니다: prod.t_x" + outsideApp);
+        // 이름 변경의 새 이름도 대상이다 — MySQL RENAME TABLE은 다른 database로 옮긴다
+        assertThat(decide("RENAME TABLE t_new TO prod.t_new", MYSQL, owns(MYSQL, DbObjectType.TABLE, "t_new", null)).reason())
+                .isEqualTo("연결의 데이터베이스 밖 객체는 쓸 수 없습니다: prod.t_new" + outsideApp);
+        assertThat(decide("DELETE FROM pg_catalog.pg_database WHERE datname = 'other'", POSTGRES, none()).reason())
+                .isEqualTo("시스템 스키마의 객체는 쓸 수 없습니다: pg_catalog.pg_database");
+        assertThat(decide("DELETE FROM SYSTEM.help WHERE topic = 'x'", ORACLE, none()).reason())
+                .isEqualTo("시스템 스키마의 객체는 쓸 수 없습니다: SYSTEM.HELP");
+        // 시스템이 아닌 다른 스키마는 PostgreSQL·Oracle에서 남의 테이블이다(같은 database 안)
+        assertThat(decide("UPDATE other.legacy SET a = 1 WHERE id = 1", ORACLE, none()))
+                .isEqualTo(new WriteDecision(WriteDecision.Verdict.EXECUTE, null, 1000));
     }
 }

@@ -103,6 +103,11 @@ public class JdbcWriteExecutor implements DbWriteExecutor {
         }
 
         @Override
+        public boolean systemSchema(String schema) throws SQLException {
+            return d == SqlDialect.ORACLE && count(CatalogSql.oracleMaintained(schema)) > 0;
+        }
+
+        @Override
         public long executeUpdate(String sql) throws SQLException {
             committed = false;
             try (Statement st = c.createStatement()) {
@@ -118,6 +123,10 @@ public class JdbcWriteExecutor implements DbWriteExecutor {
             committed = true;
         }
 
+        /**
+         * 인터페이스 약속대로 예외를 던지지 않는다 — 드라이버가 rollback·close에서 비검사 예외를 던져도 로그만 남긴다.
+         * 던지면 커밋까지 끝난 실행이 호출자의 실패 경로로 가 EXECUTED 기록이 FAILED로 덮일 수 있다(최종 리뷰 Important 3).
+         */
         @Override
         public void close() {
             try {
@@ -125,11 +134,15 @@ public class JdbcWriteExecutor implements DbWriteExecutor {
             } catch (SQLException e) {
                 // SQL·접속정보(호스트·계정·비밀번호)는 남기지 않는다.
                 log.warn("DB 쓰기 롤백 실패 server={} sqlState={} code={}", serverName, e.getSQLState(), e.getErrorCode());
+            } catch (RuntimeException e) {
+                log.warn("DB 쓰기 롤백 실패 server={} ({})", serverName, e.getClass().getSimpleName());
             } finally {
                 try {
                     c.close();
                 } catch (SQLException e) {
                     log.warn("DB 쓰기 연결 닫기 실패 server={} sqlState={} code={}", serverName, e.getSQLState(), e.getErrorCode());
+                } catch (RuntimeException e) {
+                    log.warn("DB 쓰기 연결 닫기 실패 server={} ({})", serverName, e.getClass().getSimpleName());
                 }
             }
         }

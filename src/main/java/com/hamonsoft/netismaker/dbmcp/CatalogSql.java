@@ -52,6 +52,15 @@ public final class CatalogSql {
         return new Query(existsHead(d, lowerCaseNames) + kinds, Arrays.asList(schema, name));
     }
 
+    /**
+     * Oracle 관리 계정(스키마)인지 — 결과는 COUNT(*) 한 칸 (최종 리뷰 Important 1). {@code oracle_maintained}는 12c부터 있다.
+     * schema는 정규화한 값이라 그대로 비교한다.
+     */
+    public static Query oracleMaintained(String schema) {
+        return new Query("SELECT COUNT(*) FROM all_users WHERE username = ? AND oracle_maintained = 'Y'",
+                Arrays.asList(schema));
+    }
+
     private static String existsHead(SqlDialect d, boolean lowerCaseNames) {
         return switch (d) {
             case POSTGRES -> "SELECT COUNT(*) FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace n "

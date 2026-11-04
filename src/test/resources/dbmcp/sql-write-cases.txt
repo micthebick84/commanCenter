@@ -212,3 +212,31 @@ PG ¦ - ¦ REJECT ¦ DROP INDEX ix_legacy_a
 PG ¦ - ¦ REJECT ¦ CREATE RULE r AS ON INSERT TO legacy DO INSTEAD NOTHING
 OR ¦ - ¦ REJECT ¦ CREATE SYNONYM legacy FOR other.legacy
 MY ¦ - ¦ REJECT ¦ CREATE EVENT e ON SCHEDULE EVERY 1 HOUR DO DELETE FROM legacy
+# 거부 — 시스템 스키마 · MySQL·MariaDB의 연결 database 밖 (최종 리뷰 Important 1 — 분류 전 대상 경계 검사 WriteTargetScope)
+MY ¦ - ¦ REJECT ¦ UPDATE mysql.user SET authentication_string = 'x' WHERE User = 'root'
+MY ¦ - ¦ REJECT ¦ INSERT INTO mysql.db (Host, Db, User) VALUES ('%', 'prod', 'app')
+MY ¦ - ¦ REJECT ¦ UPDATE MYSQL.user SET Super_priv = 'Y' WHERE User = 'app'
+MY ¦ - ¦ REJECT ¦ DELETE FROM performance_schema.setup_actors WHERE HOST = '%'
+MY ¦ - ¦ REJECT ¦ UPDATE sys.sys_config SET value = '0' WHERE variable = 'x'
+MY ¦ - ¦ REJECT ¦ DELETE FROM prod.users WHERE id = 1
+MY ¦ - ¦ REJECT ¦ INSERT INTO prod.users (id) VALUES (1)
+MY ¦ - ¦ REJECT ¦ CREATE TABLE prod.t_x (id INT)
+MY ¦ - ¦ REJECT ¦ CREATE INDEX ix_x ON prod.users (id)
+MY ¦ - ¦ REJECT ¦ ALTER TABLE prod.users ADD COLUMN c INT NULL
+MY ¦ t_new ¦ REJECT ¦ RENAME TABLE t_new TO prod.t_new
+MY ¦ t_new ¦ REJECT ¦ ALTER TABLE t_new RENAME TO prod.t_new
+MY ¦ - ¦ EXECUTE/1000 ¦ DELETE FROM app.legacy WHERE id = 1
+MY ¦ - ¦ EXECUTE/1000 ¦ DELETE FROM `APP`.legacy WHERE id = 1
+MY ¦ t_new ¦ EXECUTE ¦ RENAME TABLE t_new TO app.t_old
+PG ¦ - ¦ REJECT ¦ UPDATE pg_catalog.pg_authid SET rolsuper = true WHERE rolname = 'app'
+PG ¦ - ¦ REJECT ¦ DELETE FROM pg_catalog.pg_database WHERE datname = 'other'
+PG ¦ - ¦ REJECT ¦ DELETE FROM PG_CATALOG.pg_database WHERE datname = 'other'
+PG ¦ - ¦ REJECT ¦ INSERT INTO information_schema.sql_features (feature_id) VALUES ('x')
+PG ¦ - ¦ REJECT ¦ CREATE TABLE pg_toast.t_x (id int)
+PG ¦ - ¦ REJECT ¦ CREATE INDEX ix_x ON pg_catalog.pg_class (relname)
+PG ¦ - ¦ REJECT ¦ COMMENT ON TABLE pg_catalog.pg_class IS 'x'
+PG ¦ - ¦ EXECUTE/1000 ¦ UPDATE other_schema.legacy SET a = 1 WHERE id = 1
+OR ¦ - ¦ REJECT ¦ UPDATE sys.legacy SET a = 1 WHERE id = 1
+OR ¦ - ¦ REJECT ¦ DELETE FROM SYSTEM.help WHERE topic = 'x'
+OR ¦ - ¦ REJECT ¦ INSERT INTO mdsys.legacy (a) VALUES ('x')
+OR ¦ - ¦ EXECUTE/1000 ¦ UPDATE other.legacy SET a = 1 WHERE id = 1

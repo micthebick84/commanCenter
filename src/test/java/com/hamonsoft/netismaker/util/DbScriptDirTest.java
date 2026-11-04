@@ -58,6 +58,30 @@ class DbScriptDirTest {
                 .hasMessage(MESSAGE);
     }
 
+    /**
+     * 최종 리뷰 Important 4 — 워커는 모든 구현에서 이 값으로 worktree 경로를 만든다. Windows 금지 문자·제어문자가 저장되면 Windows 워커가
+     * InvalidPathException으로 그 레포의 모든 구현을 커밋 단계에서 실패시키고, NUL은 PostgreSQL text 저장에서 500이 된다.
+     */
+    @ParameterizedTest
+    @ValueSource(strings = {"db<x", "db>x", "db:x", "db/a:b", "db\"x", "db|x", "db?x", "db*x",
+            "db\u0000x", "db/x\u0000", "db\u0001x", "db\tx", "db\nx", "db\u001Fx", "db\u007Fx",
+            "a//b", "a\\\\b", "./db", "db/./x", "db/.", ".git", ".git/x", ".GIT/x", "db/.git", "db/.Git/x",
+            ".netis/x", ".design/x", ".Design"})
+    void Windows_금지_문자_제어문자_빈_단계_점_단계_예약_폴더는_거부한다(String raw) {
+        assertThatThrownBy(() -> DbScriptDir.normalize(raw))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessage(MESSAGE);
+    }
+
+    @Test
+    void 임시_폴더_이름은_첫_단계만_막는다() {
+        assertThat(DbScriptDir.normalize(".gitx/sql")).isEqualTo(".gitx/sql");
+        assertThat(DbScriptDir.normalize(".github/sql")).isEqualTo(".github/sql");
+        assertThat(DbScriptDir.normalize("sql/.netis")).isEqualTo("sql/.netis");
+        // 앞뒤 공백(줄바꿈 포함)은 떼고 본다
+        assertThat(DbScriptDir.normalize("\tdb/sql\n")).isEqualTo("db/sql");
+    }
+
     @Test
     void 이백오십오자까지만_허용한다() {
         String ok = "a".repeat(255);

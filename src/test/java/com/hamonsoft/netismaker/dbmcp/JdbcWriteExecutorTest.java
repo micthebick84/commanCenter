@@ -15,6 +15,7 @@ import java.sql.Statement;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.*;
@@ -115,6 +116,55 @@ class JdbcWriteExecutorTest {
         s.close();
 
         verify(c).close();
+    }
+
+    /** 최종 리뷰 Important 3 — 드라이버가 rollback·close에서 비검사 예외를 던져도 close는 던지지 않는다(인터페이스 약속). */
+    @Test
+    void 닫기에서_비검사_예외가_나도_던지지_않는다() throws SQLException {
+        Connection c = mock(Connection.class);
+        doThrow(new IllegalStateException("driver bug")).when(c).rollback();
+        doThrow(new IllegalStateException("driver bug")).when(c).close();
+
+        DbWriteSession s = new JdbcWriteExecutor(ref -> c).open(PG);
+        assertThatCode(s::close).doesNotThrowAnyException();
+        verify(c).rollback();
+        verify(c).close();
+
+        // 커밋한 뒤 close만 던지는 경우도 같다
+        Connection committed = mock(Connection.class);
+        doThrow(new IllegalStateException("driver bug")).when(committed).close();
+        DbWriteSession s2 = new JdbcWriteExecutor(ref -> committed).open(PG);
+        s2.commit();
+        assertThatCode(s2::close).doesNotThrowAnyException();
+        verify(committed, never()).rollback();
+    }
+
+    /** 최종 리뷰 Important 1 — Oracle만 all_users.oracle_maintained를 바인드로 조회한다. 다른 방언은 조회하지 않고 false. */
+    @Test
+    void 관리_계정_확인은_Oracle만_조회한다() throws SQLException {
+        Connection c = mock(Connection.class);
+        PreparedStatement ps = mock(PreparedStatement.class);
+        ResultSet rs = mock(ResultSet.class);
+        when(c.prepareStatement(anyString())).thenReturn(ps);
+        when(ps.executeQuery()).thenReturn(rs);
+        when(rs.next()).thenReturn(true);
+        when(rs.getLong(1)).thenReturn(1L, 0L);
+
+        DbWriteSession ora = new JdbcWriteExecutor(ref -> c).open(ORA);
+        assertThat(ora.systemSchema("MDSYS")).isTrue();
+        assertThat(ora.systemSchema("APP")).isFalse();
+        verify(c, times(2)).prepareStatement(
+                "SELECT COUNT(*) FROM all_users WHERE username = ? AND oracle_maintained = 'Y'");
+        verify(ps).setString(1, "MDSYS");
+        verify(ps).setString(1, "APP");
+        verify(ps, times(2)).setQueryTimeout(30);
+
+        Connection pgConn = mock(Connection.class);
+        Connection myConn = mock(Connection.class);
+        assertThat(new JdbcWriteExecutor(ref -> pgConn).open(PG).systemSchema("pg_catalog")).isFalse();
+        assertThat(new JdbcWriteExecutor(ref -> myConn).open(MY).systemSchema("mysql")).isFalse();
+        verify(pgConn, never()).prepareStatement(anyString());
+        verify(myConn, never()).prepareStatement(anyString());
     }
 
     @Test

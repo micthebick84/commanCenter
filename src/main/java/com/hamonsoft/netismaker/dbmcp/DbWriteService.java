@@ -36,8 +36,9 @@ import java.util.stream.Collectors;
 /**
  * 구현 단계 개발 DB 쓰기 — MCP execute 한 번 (스펙 2026-11-03 §6.2~§6.5).
  * 트랜잭션 없이 이 순서로 돈다(외부 DB는 앱 DB 트랜잭션 밖): 길이 → 연결 행 한 번 읽기·판정 → 분석 → 같은 행으로 복호화 → 접속
- * → 기본 스키마 확인 → 소유 → 분류 → (바로 실행이면) 소유 대상 존재 확인·새 객체 확인 → 기록 사전 저장 → 실행·상한 → 커밋
- * → 소유 반영 → 기록 완료 → 닫기(커밋하지 않았으면 롤백).
+ * → 기본 스키마 확인 → 대상 경계(시스템 스키마·MySQL 다른 database·pg_catalog 가림) → 소유 → 분류
+ * → (바로 실행이면) 소유 대상 존재 확인·새 객체 확인 → 기록 사전 저장 → 실행·상한 → 커밋
+ * → 소유 반영 → 기록 완료 → 닫기(커밋하지 않았으면 롤백, 닫기 예외는 결과를 바꾸지 않는다).
  * 설계와 다름: 기록 행을 실행 <b>전에</b> EXECUTED·executed_at NULL로 저장하고, 그 저장이 실패하면 실행하지 않는다
  * (반목표 "실행된 SQL이 기록에서 빠짐"). 비밀번호·접속정보는 기록·응답·로그에 싣지 않고(DbMcpTools.safeMessage),
  * SQL은 로그에 싣지 않는다(컨트롤러 감사 로그가 앞 200자만).
@@ -124,11 +125,30 @@ public class DbWriteService {
         Optional<DbConnectionRef> ref = connections.writeRefOf(snapshot);
         if (ref.isEmpty()) return entry.fail(CANNOT_DECRYPT);
         String password = ref.get().password();
-        try (DbWriteSession session = executor.open(ref.get())) {
+        DbWriteSession session;
+        try {
+            session = executor.open(ref.get());
+        } catch (SQLException | RuntimeException e) {
+            return entry.fail(DbMcpTools.safeMessage(e, password));
+        }
+        try {
             return run(task, connectionId, d, st, session, entry, password);
         } catch (SQLException | RuntimeException e) {
-            // 커밋 전 실패만 여기 온다(run은 커밋 뒤 예외를 밖으로 내지 않는다) — 세션은 이미 롤백하고 닫혔다
+            // 커밋 전 실패만 여기 온다(run은 커밋 뒤 예외를 밖으로 내지 않는다) — 커밋하지 않았으니 닫기가 롤백한다
             return entry.fail(DbMcpTools.safeMessage(e, password));
+        } finally {
+            // 닫기는 결과를 바꾸지 못한다 — 커밋까지 끝난 EXECUTED가 닫기 예외로 FAILED가 되면 기록·스크립트에서 빠지고
+            // 세션이 같은 문장을 다시 보낼 수 있다(최종 리뷰 Important 3)
+            closeQuietly(session, task.getId(), connectionId);
+        }
+    }
+
+    private static void closeQuietly(DbWriteSession session, Long taskId, long connectionId) {
+        try {
+            session.close();
+        } catch (RuntimeException e) {
+            log.warn("DB 쓰기 세션 닫기 실패 — 결과는 그대로 task={} conn={} ({})", taskId, connectionId,
+                    e.getClass().getSimpleName());
         }
     }
 
@@ -140,6 +160,9 @@ public class DbWriteService {
         if (schemaProblem != null) return entry.reject(schemaProblem);
         // 분류·소유 기록·존재 확인은 모두 이 정규화 하나를 쓴다
         Function<DbObjectRef, DbObjectName> names = r -> DbObjectName.normalize(d, r, defaultSchema, lowerCaseNames);
+        String outside = targetProblem(d, st, names, DbObjectName.defaultSchemaOf(d, defaultSchema, lowerCaseNames),
+                session, password);
+        if (outside != null) return entry.reject(outside);
 
         Ownership ownership = ownershipFor(task, connectionId);
         WriteDecision decision = SqlWriteClassifier.classify(st, names, ownership,
@@ -181,8 +204,9 @@ public class DbWriteService {
      * 순서(선점 전 단계는 상태를 바꾸지 않으므로 거기서 막히면 되돌릴 것이 없다):
      * ① 이 작업의 DEFERRED 행인지 ② 연결 행을 한 번 읽어 스위치·enabled·REPO·allowWrite를 그 행으로 확인(조건 1·4 — 구현 단계 밖에서
      * 도는 경로라 작업 단계·워커 조건은 보지 않는다) ③ 같은 행으로 복호화해 접속 ④ 다시 분류해 거부면 거부(거부 분류는 관리자도
-     * 못 한다) — 기본 스키마를 모르거나 소유 덕의 EXECUTE인데 소유 대상이 DB에 없어도 막는다(Task 7 리뷰 반영, {@link #execute}와 같은
-     * 메서드) ⑤ transition(DEFERRED→EXECUTED)으로 선점, 0이면 이미 처리됨 ⑥ 영향 행 상한 없이 실행하고 커밋
+     * 못 한다) — 기본 스키마를 모르거나, 대상이 경계 밖이거나(시스템 스키마 등, 최종 리뷰 Important 1), 소유 덕의 EXECUTE인데 소유 대상이
+     * DB에 없어도 막는다(Task 7 리뷰 반영, {@link #execute}와 같은 메서드) ⑤ transition(DEFERRED→EXECUTED)으로 선점, 0이면 이미
+     * 처리됨 ⑥ 영향 행 상한 없이 실행하고 커밋
      * ⑦ 실행·커밋이 실패하면 DEFERRED로 되돌리고 오류를 남긴 뒤 409.
      * 병합 여부·작업 상태로는 막지 않는다. 세션은 항상 닫는다.
      * <p>
@@ -219,6 +243,9 @@ public class DbWriteService {
             String schemaProblem = defaultSchemaProblem(d, defaultSchema, lowerCaseNames);
             if (schemaProblem != null) throw TaskException.conflict(schemaProblem);
             Function<DbObjectRef, DbObjectName> names = r -> DbObjectName.normalize(d, r, defaultSchema, lowerCaseNames);
+            String outside = targetProblem(d, st, names, DbObjectName.defaultSchemaOf(d, defaultSchema, lowerCaseNames),
+                    session, password);
+            if (outside != null) throw TaskException.conflict(ADMIN_REJECTED + " — " + outside);
 
             Ownership ownership = ownershipFor(task, connectionId);
             WriteDecision decision = SqlWriteClassifier.classify(st, names, ownership,
@@ -361,6 +388,46 @@ public class DbWriteService {
     }
 
     /**
+     * 분류 전 대상 경계 검사 — execute와 관리자 실행이 함께 쓴다(최종 리뷰 Important 1). 거부 사유, 괜찮으면 null.
+     * ① 이름 규칙({@link WriteTargetScope}) — 시스템 스키마, MySQL·MariaDB는 연결의 database 밖
+     * ② Oracle — 대상 스키마를 DB가 관리 계정으로 표시하면(oracle_maintained) 거부
+     * ③ PostgreSQL — 스키마를 생략한 대상이 pg_catalog에 같은 이름으로 있으면 거부. 서버는 search_path보다 pg_catalog를 먼저
+     *    찾으므로 비한정 {@code UPDATE pg_authid}는 public.pg_authid로 정규화돼 남의 테이블로 보여도 시스템 카탈로그에 닿는다.
+     *    새로 만드는 CREATE TABLE·VIEW·SEQUENCE는 현재 스키마에 생기므로 보지 않는다(그 이름은 {@link #takenName}이 막는다).
+     * 확인이 예외면 애매하다 — 거부한다(fail closed).
+     */
+    private static String targetProblem(SqlDialect d, WriteStatement st, Function<DbObjectRef, DbObjectName> names,
+                                        String scopeSchema, DbWriteSession session, String password) {
+        String outside = WriteTargetScope.check(d, st, names, scopeSchema);
+        if (outside != null) return outside;
+        if (d == SqlDialect.ORACLE) {
+            List<String> schemas = WriteTargetScope.targets(st, names).stream().map(DbObjectName::schema).distinct().toList();
+            for (String schema : schemas) {
+                try {
+                    if (session.systemSchema(schema)) return WriteTargetScope.SYSTEM_SCHEMA + schema;
+                } catch (SQLException | RuntimeException e) {
+                    return "시스템 스키마 확인 실패: " + schema + " — " + DbMcpTools.safeMessage(e, password);
+                }
+            }
+        }
+        if (d == SqlDialect.POSTGRES && !CREATES.contains(st.kind())) {
+            for (DbObjectRef r : st.targets()) {
+                if (r.schema() != null) continue;
+                DbObjectName shadow = new DbObjectName(PG_CATALOG, names.apply(r).name());
+                try {
+                    if (session.exists(shadow)) {
+                        return "시스템 카탈로그와 같은 이름입니다: " + qualified(shadow)
+                                + " — PostgreSQL은 스키마를 생략한 이름을 pg_catalog에서 먼저 찾습니다. 스키마를 적으세요";
+                    }
+                } catch (SQLException | RuntimeException e) {
+                    return "존재 확인 실패: " + qualified(shadow) + " — " + DbMcpTools.safeMessage(e, password);
+                }
+            }
+        }
+        return null;
+    }
+
+    /**
      * 새로 만드는 CREATE(OR REPLACE 아님)의 대상이 이미 있으면 거부 사유 — IF NOT EXISTS로 남의 객체 소유를 얻지 못하게(§6.3).
      * PostgreSQL은 search_path보다 pg_catalog를 먼저 찾으므로 시스템 카탈로그와 같은 이름도 이미 있는 것으로 본다 — 그 이름을 소유하면
      * 비한정 DELETE·DROP이 소유 확인(그 스키마에 있음)을 통과하고 pg_catalog의 객체에 닿는다(스키마를 적어 만들어도 같다).
@@ -398,27 +465,30 @@ public class DbWriteService {
 
     /**
      * 같은 레포·같은 호스트의 열린 작업 중 이 작업 브랜치를 기준으로 쓰는 것 — 그 작업 코드가 이 작업의 테이블을 쓴다(작업 25 ← 19).
-     * 기준 브랜치가 이 작업의 head 브랜치와 같거나, 마지막 경로 조각이 task-{id}-로 시작하면(재시도 -rN은 head_branch를 비워
-     * 옛 브랜치 netismaker/task-42-…를 기준으로 쓰는 작업을 head 브랜치로는 못 찾는다, Review Focus 5) 의존 작업이다.
+     * 기준 브랜치가 이 작업의 head 브랜치와 같거나, 마지막 경로 조각이 task-{id}와 같거나 task-{id}-로 시작하면(재시도 -rN은
+     * head_branch를 비워 옛 브랜치 netismaker/task-42-…를 기준으로 쓰는 작업을 head 브랜치로는 못 찾는다, Review Focus 5) 의존 작업이다.
+     * 브랜치 이름은 {prefix}task-{id}[-{slug}][-rN]이고 slug는 한글을 버리므로 한글만 있는 제목의 첫 시도는 netismaker/task-42다
+     * (최종 리뷰 Important 2 — 계획 Task 11의 "task-{id}-로 시작"을 넓혔다). task-420-… 같은 다른 번호는 걸리지 않는다.
      * 설계와 다름: findActiveByBaseBranch는 취소된 작업을 포함하고 head_branch가 빈 재시도에서 옛 브랜치를 못 찾아 쓰지 않는다.
      */
     private String dependentNote(Task t) {
         String host = RepoRef.fromSnapshot(t.getGithubRepo(), t.getGitUrl()).host();
-        String prefix = "task-" + t.getId() + "-";
         List<Long> ids = tasks.findOpenByRepo(t.getGithubRepo(), t.getId()).stream()
                 .filter(d -> d.getStatus() != TaskStatus.CLOSED && d.getStatus() != TaskStatus.CANCELLED)
                 .filter(d -> host.equals(RepoRef.fromSnapshot(d.getGithubRepo(), d.getGitUrl()).host()))
-                .filter(d -> basedOn(d.getGithubBranch(), t.getHeadBranch(), prefix))
+                .filter(d -> basedOn(d.getGithubBranch(), t.getHeadBranch(), t.getId()))
                 .map(Task::getId)
                 .toList();
         if (ids.isEmpty()) return null;
         return "작업 #" + ids.stream().map(String::valueOf).collect(Collectors.joining(", #"));
     }
 
-    private static boolean basedOn(String baseBranch, String headBranch, String prefix) {
+    static boolean basedOn(String baseBranch, String headBranch, long taskId) {
         if (baseBranch == null) return false;
         if (headBranch != null && !headBranch.isBlank() && baseBranch.equals(headBranch)) return true;
-        return baseBranch.substring(baseBranch.lastIndexOf('/') + 1).startsWith(prefix);
+        String last = baseBranch.substring(baseBranch.lastIndexOf('/') + 1);
+        String taskPart = "task-" + taskId;
+        return last.equals(taskPart) || last.startsWith(taskPart + "-");
     }
 
     /** 커밋 뒤 소유 기록 반영 — 실패해도 실행 결과는 그대로다(소유가 빠지면 남의 객체로 보일 뿐이라 안전한 쪽). */

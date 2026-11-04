@@ -56,6 +56,21 @@ class InterviewSessionTest {
     }
 
     @Test
+    void 새_세션은_켬() {
+        // 컬럼이 NOT NULL DEFAULT true — 끔은 승인에서 명시적으로 고른 세션만(설계 2026-11-03 §4). 질문 세션도 필드 초기자로 true
+        InterviewSession interview = InterviewSession.create(
+                "o/r", "main", "t", "d", "u1", List.of(), "claude-opus-4-8", "high");
+        InterviewSession question = InterviewSession.createQuestion(
+                "o/r", "main", "t", "q?", "u1", List.of(), "claude-opus-4-8", "high");
+        assertThat(interview.isSuperpowersEnabled()).isTrue();
+        assertThat(question.isSuperpowersEnabled()).isTrue();
+
+        interview.setSuperpowersEnabled(false);
+        assertThat(interview.isSuperpowersEnabled()).isFalse();
+        assertThat(question.isSuperpowersEnabled()).isTrue();   // 인스턴스 간 공유 없음
+    }
+
+    @Test
     void createQuestion_sets_kind_question_keeps_other_columns_and_no_task() {
         InterviewSession s = InterviewSession.createQuestion(
                 "owner/repo", "", "인증 흐름", "로그인은 어디서 처리되나요?", "user1",

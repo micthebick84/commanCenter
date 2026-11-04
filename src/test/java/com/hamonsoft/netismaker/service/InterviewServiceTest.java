@@ -1458,7 +1458,7 @@ class InterviewServiceTest {
         RefRepo fresh = ref(12L, "dev", null, null, null);
         t.setRefRepos(new ArrayList<>(List.of(pinned, fresh)));
 
-        service.createForTask(t, "claude-opus-5-5", "high", List.of());
+        service.createForTask(t, "claude-opus-5-5", "high", List.of(), true);
 
         ArgumentCaptor<InterviewSession> saved = ArgumentCaptor.forClass(InterviewSession.class);
         verify(sessionRepo).save(saved.capture());
@@ -1475,9 +1475,23 @@ class InterviewServiceTest {
         Task t = Task.create("owner/repo", "main", "T", "d", "u1", 3, List.of(), null, null);
         t.setRefRepos(null);
 
-        InterviewSession s = service.createForTask(t, "claude-opus-5-5", "high", List.of());
+        InterviewSession s = service.createForTask(t, "claude-opus-5-5", "high", List.of(), true);
 
         assertThat(s.getRefRepos()).isNotNull().isEmpty();
+    }
+
+    @Test
+    void createForTask는_값을_세션에_저장() {
+        // 승인 바디의 끔/켬은 세션 칸으로 그대로 저장된다(설계 2026-11-03-interview-superpowers-toggle §4)
+        Task t = Task.create("owner/repo", "main", "T", "d", "u1", 3, List.of(), null, null);
+        ReflectionTestUtils.setField(t, "id", 5L);
+
+        service.createForTask(t, "claude-opus-5-5", "high", List.of(), false);
+        service.createForTask(t, "claude-opus-5-5", "high", List.of(), true);
+
+        ArgumentCaptor<InterviewSession> saved = ArgumentCaptor.forClass(InterviewSession.class);
+        verify(sessionRepo, times(2)).save(saved.capture());
+        assertThat(saved.getAllValues()).extracting(InterviewSession::isSuperpowersEnabled).containsExactly(false, true);
     }
 
     // ── 질문 대화 전문 — "이 대화로 작업 등록" (스펙 2026-10-24 §4.1) ─────────────────

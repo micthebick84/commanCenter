@@ -13,6 +13,8 @@ import java.util.List;
  * 바뀌면 새로 들어온 것만 카탈로그 검증. @Valid가 있어야 원소의 @Size(branch 255자)가 적용된다.
  * taskType: 스펙 2026-11-03 §4.2 — {@code TaskType} enum 이름. null·공백 = 등록 값 유지(타입 없음으로 되돌리는 경로는 없다),
  * 같은 값 = 이력 없는 no-op, 다르면 세션을 만들기 전에 바꾸고 이력에 `타입 변경: A → B`. 모르는 값은 400.
+ * superpowersEnabled: 설계 2026-11-03-interview-superpowers-toggle §4 — 인터뷰를 superpowers로 할지. **`false`일 때만 끔**(간단 인터뷰)이고
+ * null(키 없음)·true는 켬이다 — 옛 화면·다른 호출자는 지금과 같다. 끔이면 세션에 저장하고 이력 `인터뷰 방식: 간단(superpowers 끔)`을 남긴다.
  */
 public record ApproveRequest(
         List<Long> mcpCatalogIds,
@@ -21,8 +23,15 @@ public record ApproveRequest(
         List<Long> dbConnectionIds,
         @Valid
         List<RefRepoInput> refRepos,
-        String taskType
+        String taskType,
+        Boolean superpowersEnabled
 ) {
+    /** superpowers 선택 도입 전 6인자 — 기존 호출부·테스트 호환(켬). */
+    public ApproveRequest(List<Long> mcpCatalogIds, String model, String effort, List<Long> dbConnectionIds,
+                          List<RefRepoInput> refRepos, String taskType) {
+        this(mcpCatalogIds, model, effort, dbConnectionIds, refRepos, taskType, null);
+    }
+
     /** 타입 도입 전 5인자 — 기존 호출부·테스트 호환(타입은 등록 값 유지). */
     public ApproveRequest(List<Long> mcpCatalogIds, String model, String effort, List<Long> dbConnectionIds,
                           List<RefRepoInput> refRepos) {

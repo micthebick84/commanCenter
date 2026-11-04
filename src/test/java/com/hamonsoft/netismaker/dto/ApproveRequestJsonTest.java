@@ -40,6 +40,37 @@ class ApproveRequestJsonTest {
     }
 
     @Test
+    void JSON_바인딩() throws Exception {
+        // superpowersEnabled는 Boolean — false는 FALSE, true는 TRUE, 키가 없거나 null이면 null(= 켬, 설계 §4)
+        assertThat(json.readValue("{\"superpowersEnabled\":false}", ApproveRequest.class).superpowersEnabled())
+                .isEqualTo(Boolean.FALSE);
+        assertThat(json.readValue("{\"superpowersEnabled\":true}", ApproveRequest.class).superpowersEnabled())
+                .isEqualTo(Boolean.TRUE);
+        assertThat(json.readValue("{\"model\":\"claude-opus-5-5\"}", ApproveRequest.class).superpowersEnabled()).isNull();
+        assertThat(json.readValue("{\"superpowersEnabled\":null}", ApproveRequest.class).superpowersEnabled()).isNull();
+
+        // 다른 칸과 함께 와도 7칸 정규 생성자로 읽힌다
+        ApproveRequest req = json.readValue("""
+                {"mcpCatalogIds":[1],"model":"claude-opus-5-5","effort":"high","dbConnectionIds":[3],
+                 "refRepos":[{"repoCatalogId":11,"branch":"main"}],"taskType":"DB_WORK","superpowersEnabled":false}
+                """, ApproveRequest.class);
+        assertThat(req).isEqualTo(new ApproveRequest(List.of(1L), "claude-opus-5-5", "high", List.of(3L),
+                List.of(new RefRepoInput(11L, "main")), "DB_WORK", Boolean.FALSE));
+    }
+
+    @Test
+    void 여섯_인자_호환_생성자는_켬으로_읽힌다() {
+        // 승인 때 superpowers 도입 전 6인자 — 기존 호출부·시험은 그대로 켬(null)
+        assertThat(new ApproveRequest(null, null, null, null, null, "DB_WORK").superpowersEnabled()).isNull();
+        assertThat(new ApproveRequest(null, null, null, null, null, "DB_WORK"))
+                .isEqualTo(new ApproveRequest(null, null, null, null, null, "DB_WORK", null));
+        // 5·4·3인자도 그대로 null
+        assertThat(new ApproveRequest(null, null, null, null, List.of(new RefRepoInput(11L, null))).superpowersEnabled()).isNull();
+        assertThat(new ApproveRequest(null, null, null, null).superpowersEnabled()).isNull();
+        assertThat(new ApproveRequest(null, null, null).superpowersEnabled()).isNull();
+    }
+
+    @Test
     void 호환_생성자는_타입_유지() {
         // 5·4·3인자 — 기존 호출부·시험은 그대로 타입을 건드리지 않는다
         assertThat(new ApproveRequest(null, null, null, null, List.of(new RefRepoInput(11L, null))).taskType()).isNull();

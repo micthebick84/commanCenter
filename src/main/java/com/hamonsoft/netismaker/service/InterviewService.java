@@ -153,13 +153,16 @@ public class InterviewService {
      * 관리자 승인 → 해당 task의 인터뷰 세션 생성(QUEUED).
      * task 필드를 스냅샷으로 복사한다 — 워커는 세션만 보고 일하므로 계약이 바뀌지 않는다.
      * task 상태 전이는 호출자(TaskService)가 담당한다.
+     * superpowersEnabled: 관리자가 승인 때 고른 인터뷰 방식(설계 2026-11-03-interview-superpowers-toggle §4) — false면 간단 인터뷰.
+     * 세션 칸으로 그대로 저장한다(호출자가 바디의 null을 true로 풀어서 넘긴다).
      */
     @Transactional
     public InterviewSession createForTask(Task t, String model, String effort,
-                                          List<TaskMcpSpec> extras) {
+                                          List<TaskMcpSpec> extras, boolean superpowersEnabled) {
         InterviewSession s = InterviewSession.create(t.getGithubRepo(), t.getGithubBranch(),
                 t.getTitle(), t.getDescription(), t.getRequesterId(),
                 new ArrayList<>(extras == null ? List.of() : extras), model, effort);
+        s.setSuperpowersEnabled(superpowersEnabled);
         s.setGitUrl(t.getGitUrl());
         s.setRepoAlias(t.getRepoAlias());
         s.setRepoCatalogId(t.getRepoCatalogId());

@@ -141,6 +141,9 @@ OR ¦ t_new ¦ REJECT ¦ DROP TABLE "app".t_new
 MY ¦ t_new ¦ EXECUTE ¦ DROP TABLE APP.T_NEW
 MY ¦ t_new ¦ REJECT ¦ DROP TABLE other.t_new
 MY ¦ t_new ¦ REJECT ¦ DROP TABLE "t_new"
+# 추가 — MySQL lower_case_table_names≠0은 백틱 인용 이름도 소문자로 다룬다(표의 MY는 lowerCase 서버)
+MY ¦ t_new ¦ EXECUTE ¦ DROP TABLE `T_NEW`
+MY ¦ t_new ¦ EXECUTE ¦ DROP TABLE `APP`.t_new
 PG ¦ v_new ¦ EXECUTE ¦ DROP VIEW v_new
 PG ¦ v_new ¦ REJECT ¦ DROP TABLE v_new
 ALL ¦ t_new ¦ EXECUTE ¦ INSERT INTO t_new (a) SELECT a FROM legacy

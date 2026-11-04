@@ -153,6 +153,52 @@ class SqlWriteClassifierReasonTest {
         assertThat(decide("GRANT SELECT ON legacy TO bob", POSTGRES, none()).reason()).contains("GRANT");
     }
 
+    /**
+     * PostgreSQL 서버(scan.l newline [\n\r])와 pgjdbc는 -- 주석을 CR에서도 끝내고, MySQL은 LF에서만 끝낸다.
+     * 단독 CR을 받으면 분석기가 본 문장과 DB가 실행하는 문장이 달라진다 — 끊지 않고 거부한다.
+     */
+    @Test
+    void 줄_주석_안의_단독_CR은_거부() {
+        WriteDecision drop = decide("DROP TABLE t_new --\r, legacy", POSTGRES, owns(POSTGRES, DbObjectType.TABLE, "t_new", null));
+        assertThat(drop.verdict()).isEqualTo(WriteDecision.Verdict.REJECT);
+        assertThat(drop.reason()).contains("CR");
+
+        WriteDecision multi = decide("INSERT INTO legacy (a) VALUES ('x') --\r; DROP TABLE legacy", POSTGRES, none());
+        assertThat(multi.verdict()).isEqualTo(WriteDecision.Verdict.REJECT);
+        assertThat(multi.reason()).contains("CR");
+
+        WriteDecision hiddenWhere = decide("UPDATE legacy SET a = 1 -- \rWHERE id = 3", MYSQL, none());
+        assertThat(hiddenWhere.verdict()).isEqualTo(WriteDecision.Verdict.REJECT);
+        assertThat(hiddenWhere.reason()).contains("CR");
+
+        WriteDecision routine = decide("CREATE FUNCTION f_x() RETURNS int AS $$ SELECT 1 $$ LANGUAGE sql --\r; DROP TABLE legacy",
+                POSTGRES, none());
+        assertThat(routine.verdict()).isEqualTo(WriteDecision.Verdict.REJECT);
+        assertThat(routine.reason()).contains("CR");
+    }
+
+    @Test
+    void 단독_CR은_방언과_자리에_상관없이_따옴표_밖이면_거부() {
+        String[] rejected = {
+                "UPDATE legacy SET a = 1 -- x\rWHERE id = 3",
+                "UPDATE legacy SET a = 1\rWHERE id = 3",
+                "UPDATE legacy SET a = 1 /* x\r */ WHERE id = 3",
+                "UPDATE legacy SET a = 1 WHERE id = 3 --\r",
+        };
+        for (SqlDialect d : SqlDialect.values()) {
+            for (String sql : rejected) {
+                assertThat(decide(sql, d, none()).verdict()).as(d + " | " + sql.replace("\r", "\\r"))
+                        .isEqualTo(WriteDecision.Verdict.REJECT);
+            }
+            assertThat(decide("UPDATE legacy SET a = 1 -- x\r\nWHERE id = 3", d, none())).as(d + " | CRLF")
+                    .isEqualTo(new WriteDecision(WriteDecision.Verdict.EXECUTE, null, 1000));
+            assertThat(decide("INSERT INTO legacy (a) VALUES ('x\ry')", d, none())).as(d + " | 문자열 안 CR")
+                    .isEqualTo(new WriteDecision(WriteDecision.Verdict.EXECUTE, null, 10000));
+        }
+        assertThat(decide("UPDATE legacy SET a = 1 # x\rWHERE id = 3", MYSQL, none()).verdict())
+                .isEqualTo(WriteDecision.Verdict.REJECT);
+    }
+
     @Test
     void 승인_대기와_거부에는_행_상한이_없다() {
         assertThat(decide("ALTER TABLE legacy DROP COLUMN a", POSTGRES, none()).rowCap()).isNull();

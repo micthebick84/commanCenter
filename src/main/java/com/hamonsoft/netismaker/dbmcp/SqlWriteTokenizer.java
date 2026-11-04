@@ -14,6 +14,9 @@ import java.util.regex.Pattern;
  *   <li>중첩 블록 주석(PostgreSQL은 중첩을 세고 MySQL·Oracle은 세지 않는다)</li>
  *   <li>PostgreSQL·MySQL 힌트 주석 {@code /*+ … *}{@code /}(pg_hint_plan의 Set, MySQL SET_VAR가 설정을 바꾼다)</li>
  *   <li>따옴표 밖의 ASCII가 아닌 문자·제어 문자(유니코드 공백을 DB마다 다르게 본다)</li>
+ *   <li>따옴표 밖의 단독 CR(뒤에 LF가 없는 \r) — PostgreSQL 서버와 pgjdbc는 {@code --} 주석을 CR에서도 끝내고
+ *       MySQL은 LF에서만 끝낸다. CR에서 끊든 넘기든 어느 한 DB와는 문장이 달라지므로(주석 뒤의 {@code ;}·이름이 살아나거나
+ *       WHERE가 숨는다) 끊지 않고 거부한다. 공백 자리·블록 주석 안도 같은 규칙으로 막는다.</li>
  * </ul>
  */
 final class SqlWriteTokenizer {
@@ -40,6 +43,8 @@ final class SqlWriteTokenizer {
         }
     }
 
+    private static final String LONE_CR ="따옴표 밖의 단독 CR(뒤에 LF가 없는 \\r)은 허용하지 않습니다 — 줄 끝은 LF나 CRLF로 쓰세요";
+
     private static final Pattern DOLLAR_TAG = Pattern.compile("\\$([A-Za-z_][A-Za-z0-9_]*)?\\$");
 
     private SqlWriteTokenizer() {}
@@ -52,6 +57,7 @@ final class SqlWriteTokenizer {
             char ch = sql.charAt(i);
             int next = at(sql, i + 1);
             if (ch == ' ' || ch == '\t' || ch == '\n' || ch == '\r') {
+                if (ch == '\r' && next != '\n') throw new SqlWriteRejected(LONE_CR);
                 i++;
                 continue;
             }
@@ -136,6 +142,7 @@ final class SqlWriteTokenizer {
         if (close == -1) throw new SqlWriteRejected("닫히지 않은 주석");
         int nested = sql.indexOf("/*", i + 2);
         if (nested != -1 && nested < close) throw new SqlWriteRejected("중첩 주석은 허용하지 않습니다");
+        rejectLoneCr(sql, i + 2, close);
         return close + 2;
     }
 
@@ -171,9 +178,19 @@ final class SqlWriteTokenizer {
         return sql.substring(start + 1, end - 1).replace(q + q, q);
     }
 
-    private static int lineEnd(String sql, int i) {
+    /** 줄 주석의 끝(LF 위치, 없으면 문자열 끝). 그 사이에 단독 CR이 있으면 DB마다 주석 끝이 달라 거부한다. */
+    private static int lineEnd(String sql, int i) throws SqlWriteRejected {
         int e = sql.indexOf('\n', i);
-        return e == -1 ? sql.length() : e;
+        int end = e == -1 ? sql.length() : e;
+        rejectLoneCr(sql, i, end);
+        return end;
+    }
+
+    /** [from, to) 안에 뒤에 LF가 없는 CR이 있으면 거부. */
+    private static void rejectLoneCr(String sql, int from, int to) throws SqlWriteRejected {
+        for (int k = sql.indexOf('\r', from); k != -1 && k < to; k = sql.indexOf('\r', k + 1)) {
+            if (at(sql, k + 1) != '\n') throw new SqlWriteRejected(LONE_CR);
+        }
     }
 
     /** JS 문자열 인덱스처럼 범위 밖은 -1. */

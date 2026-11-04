@@ -9,21 +9,30 @@ import java.util.Locale;
 public record DbObjectName(String schema, String name) {
 
     /**
-     * 비인용 이름은 PostgreSQL이 소문자, Oracle이 대문자로 접는다. MySQL은 서버가 이름을 소문자로 다룰 때
-     * (lower_case_table_names ≠ 0)만 소문자로 접는다. 인용 이름은 그대로 둔다. 스키마를 생략하면 defaultSchema를 쓴다
-     * (호출자가 그 연결의 현재 스키마를 DB가 돌려준 표기 그대로 넘긴다).
+     * PostgreSQL·Oracle은 비인용 이름만 접고(PostgreSQL 소문자, Oracle 대문자) 인용 이름은 그대로 둔다.
+     * MySQL·MariaDB는 따옴표가 대소문자를 보존하지 않고 lower_case_table_names만 대소문자 구분을 정한다 —
+     * {@code mysqlLowerCase}(그 값 ≠ 0)이면 이름과 스키마(생략 때 쓰는 defaultSchema 포함)를 인용 여부와 무관하게
+     * 소문자로 접고, 아니면(= 0) 그대로 둔다. 스키마를 생략하면 defaultSchema를 쓴다(호출자가 그 연결의 현재 스키마를
+     * DB가 돌려준 표기 그대로 넘긴다).
      */
     public static DbObjectName normalize(SqlDialect d, DbObjectRef r, String defaultSchema, boolean mysqlLowerCase) {
-        String schema = r.schema() == null ? defaultSchema : fold(d, r.schema(), r.schemaQuoted(), mysqlLowerCase);
-        return new DbObjectName(schema, fold(d, r.name(), r.nameQuoted(), mysqlLowerCase));
+        if (d == SqlDialect.MYSQL && mysqlLowerCase) {
+            return new DbObjectName(lower(r.schema() == null ? defaultSchema : r.schema()), lower(r.name()));
+        }
+        String schema = r.schema() == null ? defaultSchema : fold(d, r.schema(), r.schemaQuoted());
+        return new DbObjectName(schema, fold(d, r.name(), r.nameQuoted()));
     }
 
-    private static String fold(SqlDialect d, String text, boolean quoted, boolean mysqlLowerCase) {
+    private static String fold(SqlDialect d, String text, boolean quoted) {
         if (quoted) return text;
         return switch (d) {
             case POSTGRES -> text.toLowerCase(Locale.ROOT);
             case ORACLE -> text.toUpperCase(Locale.ROOT);
-            case MYSQL -> mysqlLowerCase ? text.toLowerCase(Locale.ROOT) : text;
+            case MYSQL -> text;
         };
+    }
+
+    private static String lower(String text) {
+        return text == null ? null : text.toLowerCase(Locale.ROOT);
     }
 }

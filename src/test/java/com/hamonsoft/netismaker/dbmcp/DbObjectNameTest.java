@@ -34,10 +34,14 @@ class DbObjectNameTest {
                 .isEqualTo(new DbObjectName("APP", "t_new"));
     }
 
+    /** lower_case_table_names ≠ 0인 MySQL·MariaDB는 백틱 인용과 무관하게 테이블·DB 이름을 소문자로 다룬다. */
     @Test
-    void MySQL_소문자_서버는_비인용만_소문자() {
+    void MySQL_소문자_서버는_인용도_소문자() {
         assertThat(DbObjectName.normalize(MYSQL, ref("Foo"), "app", true).name()).isEqualTo("foo");
-        assertThat(DbObjectName.normalize(MYSQL, quoted("Foo"), "app", true).name()).isEqualTo("Foo");
+        assertThat(DbObjectName.normalize(MYSQL, quoted("Foo"), "app", true).name()).isEqualTo("foo");
+        assertThat(DbObjectName.normalize(MYSQL, ref("t"), "App", true).schema()).isEqualTo("app");
+        assertThat(DbObjectName.normalize(MYSQL, new DbObjectRef("APP", true, "T_New", true), "app", true))
+                .isEqualTo(new DbObjectName("app", "t_new"));
     }
 
     @Test

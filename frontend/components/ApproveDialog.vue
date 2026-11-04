@@ -39,6 +39,12 @@ import ApproveTaskSummary, {
 } from '~/components/tasks/ApproveTaskSummary.vue'
 import { useFullscreenDialog } from '~/composables/dialogLayout'
 import { TASK_TYPES } from '~/composables/taskType'
+import {
+  SIMPLE_INTERVIEW_CAPTION,
+  SUPERPOWERS_TOGGLE_LABEL,
+  defaultSuperpowers,
+  lastSessionSuperpowers,
+} from '~/composables/interviewMode'
 
 // 지난 인터뷰 목록 행 — 백엔드 InterviewSummaryResponse (InterviewHistoryCard와 동일 계약)
 interface SessionSummary {
@@ -48,6 +54,8 @@ interface SessionSummary {
   model: string | null
   effort: string | null
   dbConnectionIds?: number[] | null
+  // 인터뷰 방식(스펙 2026-11-03 간단 인터뷰) — 구 API 행에는 칸이 없다(프리필은 boolean일 때만 쓴다)
+  superpowersEnabled?: boolean | null
   createdAt: string
 }
 
@@ -62,6 +70,18 @@ const effort = ref(DEFAULT_EFFORT)
 // 승인 뒤에는 바꿀 수 없다 — 타입 없음으로 되돌리는 선택지는 없다(null은 "유지"를 뜻한다).
 const taskType = ref<string | null>(null)
 const taskTypeChanged = computed(() => taskType.value != null && taskType.value !== (props.task.taskType ?? null))
+// 인터뷰 방식(스펙 2026-11-03 간단 인터뷰 §6): 켬 = superpowers 인터뷰, 끔 = 간단 인터뷰. 미리 고르는 순서 — 지난 세션 값 → 타입 기본값(DB 작업만 끔).
+// 타입 select를 바꾸면 따라가고(onTaskTypeChange) 관리자가 토글을 직접 바꾼 뒤에는 따라가지 않는다. watch가 아니라 핸들러인 이유:
+// init이 taskType을 다시 넣을 때 watch가 돌면 지난 세션 값으로 채운 프리필을 덮는다. 열 때마다 init이 둘 다 되돌린다.
+const superpowers = ref(true)
+let superpowersTouched = false
+function onSuperpowersToggle(value: boolean) {
+  superpowers.value = value
+  superpowersTouched = true
+}
+function onTaskTypeChange(type: string | null) {
+  if (!superpowersTouched) superpowers.value = defaultSuperpowers(type)
+}
 const mcpCatalogIds = ref<number[]>([])
 // DB 연결(스펙 2026-10-14 §7): 레포 공용 활성 연결을 기본 선택, 마지막 인터뷰 선택이 있으면 그것을 우선.
 // 기능이 꺼져 있으면(enabled=false) 피커를 숨기고 승인 바디에도 싣지 않는다.
@@ -185,6 +205,8 @@ async function init() {
   model.value = DEFAULT_MODEL
   effort.value = DEFAULT_EFFORT
   taskType.value = props.task.taskType ?? null
+  superpowers.value = defaultSuperpowers(taskType.value)
+  superpowersTouched = false
   mcpCatalogIds.value = []
   dbConnectionIds.value = []
   registrantDbIds.value = []
@@ -205,6 +227,10 @@ async function init() {
     previous.value = rows
     const last = rows[0]
     lastDbIds = Array.isArray(last?.dbConnectionIds) ? last.dbConnectionIds : []
+    // 지난 세션의 인터뷰 방식 — 아래 모델 프리필 if 밖이다(박제된 모델이어도 방식은 이어 간다). 칸이 없으면(구 API) 타입 기본값 그대로,
+    // 조회가 오기 전에 관리자가 토글을 직접 바꿨으면 덮어쓰지 않는다.
+    const lastSuperpowers = lastSessionSuperpowers(last)
+    if (lastSuperpowers != null && !superpowersTouched) superpowers.value = lastSuperpowers
     // 박제된 과거 모델(fable-5 등)은 더는 고를 수 없으므로 안내만 하고 초기값은 기본값으로 둔다.
     if (last?.model && MODEL_OPTIONS.some((m) => m.value === last.model)) {
       model.value = last.model
@@ -240,6 +266,8 @@ async function approve() {
         effort: effort.value,
         mcpCatalogIds: mcpCatalogIds.value,
         ...(taskTypeChanged.value ? { taskType: taskType.value } : {}),
+        // 끔일 때만 싣는다 — 서버는 키가 없거나 null이면 켬이라 뜻이 같고, 켬 바디는 예전과 바이트까지 같다
+        ...(superpowers.value ? {} : { superpowersEnabled: false }),
         ...(db.enabled ? { dbConnectionIds: dbConnectionIds.value } : {}),
         ...(refsChanged.value ? { refRepos: toInputs(refs.value) } : {}),
       },
@@ -308,6 +336,7 @@ const fullscreen = useFullscreenDialog()
             map-options
             :disable="approving"
             data-test="approve-task-type"
+            @update:model-value="onTaskTypeChange"
           />
           <!-- DB 작업인데 쓰기 허용 연결을 고르지 않았을 때 (스펙 2026-11-03 §6.5) — 승인은 막지 않는다. 타입 칸 안에 둔다(요약 → 타입 → 안내 순서 유지) -->
           <div
@@ -342,6 +371,24 @@ const fullscreen = useFullscreenDialog()
             v-model:effort="effort"
             :disabled="approving"
           />
+          <!-- 인터뷰 방식 (스펙 2026-11-03 간단 인터뷰 §6) — 모델·추론 아래, MCP 위. 끔일 때만 보조 문구 -->
+          <div class="q-mt-md">
+            <q-toggle
+              :model-value="superpowers"
+              :label="SUPERPOWERS_TOGGLE_LABEL"
+              dense
+              :disable="approving"
+              data-test="approve-superpowers"
+              @update:model-value="onSuperpowersToggle"
+            />
+            <div
+              v-if="!superpowers"
+              class="text-caption text-grey-7 q-mt-xs"
+              data-test="approve-superpowers-caption"
+            >
+              {{ SIMPLE_INTERVIEW_CAPTION }}
+            </div>
+          </div>
           <div class="q-mt-md">
             <McpPicker v-model="mcpCatalogIds" flat />
           </div>

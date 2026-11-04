@@ -180,6 +180,12 @@ export interface InterviewClaimResponse {
    * 구버전 API는 칸이 없다 → 배열이 아니면 안내하지 않는다.
    */
   writableDbConnections?: string[];
+  /**
+   * superpowers 켬/끔 (스펙 2026-11-03 간단 인터뷰 §4) — API가 claim 때 세션 행에서 읽어 싣는다. **`false`일 때만 끔**(간단 인터뷰)이고,
+   * 칸이 없거나(구버전 API) null이거나 true면 켬이라 지금과 같다 — `refsCleared === true` 선례와 같은 엄격 비교(`superpowersOn`).
+   * 질문 세션은 이 값과 무관하다(원래 superpowers가 없다).
+   */
+  superpowersEnabled?: boolean | null;
 }
 
 /** 작업 타입의 와이어 값 — Java `TaskType` enum 이름. */

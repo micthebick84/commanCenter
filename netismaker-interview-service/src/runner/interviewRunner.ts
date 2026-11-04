@@ -10,6 +10,7 @@ import { tryHarvest, type HarvestResult } from './planHarvest.js';
 import { harvestSessionPlanFiles } from './planFiles.js';
 import { relay } from './messageRelay.js';
 import { kickoffLead, taskTypeGuide, writableDbLine } from './kickoffByType.js';
+import { SIMPLE_RESUME_PREFIX, planningOnlyParagraph, processLine, superpowersOn } from './interviewMode.js';
 import {
   ensureRepo as defaultEnsureRepo,
   ensureRefRepos as defaultEnsureRefRepos,
@@ -122,8 +123,10 @@ function inheritedMarker(a: AttachmentRef): string {
  * kickoff 첨부 섹션 (스펙 2026-08-16 §7). 구버전 백엔드 claim에는 attachments 필드가
  * 없으므로 무조건 Array.isArray 가드 (sessionOptions.toMcpServers 선례). 0건이면 빈 문자열.
  * contentType null은 표기 생략 — 리터럴 'null'을 렌더링하지 않는다.
+ * `superpowers`(기본 true)가 false인 간단 인터뷰(스펙 2026-11-03 §5-5)는 brainstorming을 전제한 안내 첫머리만
+ * `계획을 쓰기 전에 `로 바꾼다 — 스킬이 없는 세션에 없는 스킬 이름을 말하지 않으려는 것이고 나머지 안내는 같다.
  */
-function attachmentSection(claim: InterviewClaimResponse): string {
+function attachmentSection(claim: InterviewClaimResponse, superpowers = true): string {
   const atts: AttachmentRef[] = Array.isArray(claim.attachments) ? claim.attachments : [];
   if (atts.length === 0) return '';
   const lines = atts.map((a) => {
@@ -134,7 +137,8 @@ function attachmentSection(claim: InterviewClaimResponse): string {
     '첨부 자료 (요청자가 등록 시 업로드한 파일):\n' +
     lines.join('\n') +
     '\n\n' +
-    'brainstorming 시작 전에 이 파일들을 Read 도구로 읽고 요구사항 파악에 활용하세요. ' +
+    (superpowers ? 'brainstorming 시작 전에 ' : '계획을 쓰기 전에 ') +
+    '이 파일들을 Read 도구로 읽고 요구사항 파악에 활용하세요. ' +
     '오피스 원본(pptx/docx/xlsx 등)은 Read로 열 수 없습니다. ' +
     '슬라이드 그림이 있으면 모두 순서대로 Read해서 화면 레이아웃과 빨간 표시·화살표 같은 주석이 가리키는 변경점을 파악하세요. ' +
     '글은 텍스트 추출본으로 읽고, 작은 글씨는 원본 그림으로 확인하세요. ' +
@@ -152,34 +156,37 @@ function attachmentSection(claim: InterviewClaimResponse): string {
  * 모르는 값은 지금과 같고, resume 입력(답변)은 타입과 무관하다 (스펙 2026-11-03 §5.1).
  * 구현 때 개발 DB 쓰기가 열리는 연결이 있으면(`claim.writableDbConnections`) 지시 문단 바로 뒤에 한 줄 안내(`writableDbLine`)가 붙는다 —
  * 타입과 무관하고 kickoff에만 붙으며, 목록이 비면 지금과 바이트까지 같다.
+ * superpowers 켬/끔(`superpowersOn(claim)` — `claim.superpowersEnabled === false`일 때만 끔, 스펙 2026-11-03 간단 인터뷰 §5)에 따라
+ * 바뀌는 곳은 "진행 방식 절"(`interviewMode.ts`)뿐이다. 켬(칸 없음·null·true)은 지금과 바이트까지 같고, 끔은:
+ *  - kickoff: 첨부 안내의 `brainstorming 시작 전에 `→`계획을 쓰기 전에 `, 타입 지시의 질문 순서 문장, PLANNING-ONLY 문단의
+ *    `(via brainstorming → writing-plans)` 괄호, 마지막 줄(brainstorming 지시 → 간단 인터뷰 지시)만 바뀐다.
+ *  - resume: 답변 앞에 `SIMPLE_RESUME_PREFIX`(질문은 끝 — 더 묻지 말고 정규 형식의 최종 계획)가 붙는다. 참조 절(`everyTurn`) 뒤, 답변 앞.
+ * 이 함수는 시그니처를 바꾸지 않고 claim에서 직접 읽는다.
  */
 async function* promptFor(
   claim: InterviewClaimResponse,
   prefixes: { everyTurn?: string; kickoffOnly?: string } = {},
 ): AsyncIterable<UserTurn> {
   const everyTurn = prefixes.everyTurn ?? '';
+  const superpowers = superpowersOn(claim);
   if (!claim.claudeSessionId) {
     yield userTurn(
       everyTurn +
       (prefixes.kickoffOnly ?? '') +
       kickoffLead(claim) +
         `Title: ${claim.title}\nRequest: ${claim.description}\n\n` +
-        attachmentSection(claim) +
-        taskTypeGuide(claim.taskType) +
+        attachmentSection(claim, superpowers) +
+        taskTypeGuide(claim.taskType, superpowers) +
         writableDbLine(claim.writableDbConnections) +
-        'IMPORTANT — this is a PLANNING-ONLY interview. Your only deliverable is a written ' +
-        'implementation PLAN (via brainstorming → writing-plans), NOT code. Do NOT implement the ' +
-        'feature: do not create or modify source files, do not run builds/installs/tests, do not ' +
-        'git commit or push. Reading the repo for context is fine. Stop once the plan is written — ' +
-        'a human reviews and approves it, and implementation happens later in a separate step.\n\n' +
+        planningOnlyParagraph(superpowers) +
         '최종 plan은 반드시 다음 정규 형식으로 작성하세요(설명은 한국어): ' +
         '최상위 헤딩 `# <기능> 구현 계획`, 그 아래 각 작업을 `### 작업 N: <제목>` 형식으로. ' +
         '영문 `# <Feature> Implementation Plan` / `### Task N:` 도 허용됩니다. ' +
         '이 정확한 구조라야 시스템이 완료를 인식하며, 없으면 인터뷰가 끝나지 않습니다.\n\n' +
-        'Use the brainstorming skill: read the project context, then ask me one clarifying question at a time.',
+        processLine(superpowers),
     );
   } else {
-    yield userTurn(everyTurn + (claim.lastAnswer ?? ''));
+    yield userTurn(everyTurn + (superpowers ? '' : SIMPLE_RESUME_PREFIX) + (claim.lastAnswer ?? ''));
   }
 }
 

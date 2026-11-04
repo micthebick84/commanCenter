@@ -7,6 +7,7 @@ import {
   interviewRefSection,
   refSection,
 } from '../src/runner/interviewRunner.js';
+import { SIMPLE_RESUME_PREFIX } from '../src/runner/interviewMode.js';
 import { taskTypeGuide } from '../src/runner/kickoffByType.js';
 import { REF_PREPARE_FALLBACK_REASON, type RefPrepared } from '../src/runner/repoPrepare.js';
 import type { InterviewClaimResponse, RefRepoClaim } from '../src/types.js';
@@ -20,6 +21,7 @@ import {
   questionClaimWithRefs,
 } from './fixtures/claims.js';
 import { planCompleteStream, questionStream, streamingQuestionStream, usageAwareQuestionStream } from './fixtures/sdkMessages.js';
+import { SIMPLE_PROCESS_LITERAL } from './fixtures/simpleInterview.js';
 import { buildPlanReformatSplice, detectHandoff } from '../src/runner/skillDispatch.js';
 
 function makeClient() {
@@ -536,6 +538,29 @@ describe('InterviewRunner kind=QUESTION (스펙 §6 — plan 경로 미진입, Q
     expect(captured.options.resume).toBe('sess-q-1');
     expect(captured.options.model).toBe('claude-haiku-4-5');
     expect(captured.options.effort).toBe('low');
+  });
+
+  it('QUESTION은 superpowersEnabled false가 와도 칸 없을 때와 같다', async () => {
+    const runOf = async (claim: InterviewClaimResponse) => {
+      const { fakeQuery, captured } = capturing(() => questionStream());
+      await new InterviewRunner(makeClient() as never, fakeQuery as never, deps as never).run(claim);
+      return captured;
+    };
+    const base = await runOf(questionClaim);
+    const off = await runOf({ ...questionClaim, superpowersEnabled: false });
+    // 프롬프트(Q&A 킥오프)와 옵션 둘 다 같다 — 질문 세션은 원래 superpowers가 없다
+    expect(off.prompt).toBe(base.prompt);
+    expect(off.prompt).not.toBe('');
+    for (const c of [base, off]) {
+      expect(c.options.plugins).toEqual([]);
+      expect(c.options.allowedTools).toEqual([]);
+    }
+    // 간단 인터뷰 진행 방식 문구가 질문 세션에 새지 않는다
+    expect(off.prompt).not.toContain('간단 인터뷰입니다');
+    expect(off.prompt).not.toContain('계획 수정 요청');
+    // 끔 resume 접두도 질문 세션 resume에 붙지 않는다
+    const resumed = await runOf({ ...questionClaim, claudeSessionId: 'sess-q-1', lastAnswer: '토큰 검증은요?', turns: turns(1), superpowersEnabled: false });
+    expect(resumed.prompt).toBe('토큰 검증은요?');
   });
 
   it('가드①: forceFinish 턴수(19)에서도 reformat 프롬프트가 아니라 후속 질문을 보낸다', async () => {
@@ -1206,6 +1231,95 @@ describe('InterviewRunner kind=QUESTION (스펙 §6 — plan 경로 미진입, Q
         return captured.prompt;
       };
 
+      /**
+       * 한 claim의 첫 프롬프트 — kickoffOf와 달리 참조 준비기·DB 도구를 고를 수 있다(참조가 붙은 claim은 kickoffOf로 못 본다:
+       * 그쪽 준비기는 `vi.fn()`이라 undefined를 돌려준다).
+       */
+      const promptWith = async (
+        claim: InterviewClaimResponse,
+        opts: { db?: ReturnType<typeof dbOf>; prepared?: RefPrepared[] } = {},
+      ): Promise<string> => {
+        const { fakeQuery, captured } = capturing(() => questionStream());
+        await runnerWith(makeClient(), fakeQuery, preparer(opts.prepared ?? []), { createDbMcp: vi.fn().mockReturnValue(opts.db ?? noDb()) })
+          .run(claim);
+        return captured.prompt;
+      };
+
+      /** 슬라이드 첨부 1건 — 아래 '슬라이드 그림 첨부 프롬프트' describe의 pptx와 같은 모양(슬라이드 그림 2장·추출본·원본 그림). */
+      const SLIDE_DIR = '/data/attachments/task-9/1';
+      const SLIDE_ATT = {
+        id: 31,
+        fileName: '대시보드 "업그레이드" 안.pptx',
+        absolutePath: `${SLIDE_DIR}/1-대시보드 "업그레이드" 안.pptx`,
+        contentType: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+        sizeBytes: 2048,
+        extractedTextPath: `${SLIDE_DIR}/1-대시보드 "업그레이드" 안.pptx.txt`,
+        slideImagePaths: [`${SLIDE_DIR}/slides/1.png`, `${SLIDE_DIR}/slides/2.png`],
+        slideTotalPages: 2,
+        mediaImagePaths: [`${SLIDE_DIR}/media/image1.png`],
+        renderNote: null as string | null,
+        inheritedFromQuestionId: null as number | null,
+      };
+      /** 첨부(슬라이드)·DB 작업·쓰기 연결·참조가 다 붙은 작업 인터뷰 kickoff claim. DB 절은 호출 쪽이 `withDb()`로 붙인다. */
+      const FULL_CLAIM: InterviewClaimResponse = {
+        ...interviewClaimWithRefs,
+        taskType: 'DB_WORK',
+        writableDbConnections: ['개발DB (PostgreSQL)'],
+        attachments: [SLIDE_ATT],
+      };
+      /**
+       * FULL_CLAIM + withDb() + iAvailable()의 kickoff 프롬프트 — superpowers 끔 기능을 고치기 전(c920df0 위 60d11d4) 코드의 출력을
+       * 그대로 옮겨 고정했다. 참조 절 → DB 절 → kickoff(첨부 절 → 타입 지시 → 쓰기 안내 → PLANNING-ONLY → 정규 형식 → brainstorming 줄).
+       * 켬(칸 없음·null·true) 세션의 kickoff는 이 바이트를 지켜야 한다(스펙 2026-11-03 §5·반목표 §9).
+       */
+      const KICKOFF_FULL_GOLDEN =
+        '참조 repo (읽기 전용 — 비교·참고용, 수정 금지):\n' +
+        '- 옛앱 · release/6.5@aaaaaaa : /r/_refs/42/12\n' +
+        '규칙:\n' +
+        '- 대상 repo는 현재 작업 디렉토리다. 참조 repo는 위 절대 경로에서 읽기만 한다.\n' +
+        '- 참조 폴더의 파일은 만들거나 고치거나 지우지 않는다(셸 명령 포함).\n' +
+        '- 위 목록에 없는 참조(앞 턴에 있던 것 포함)는 더 쓰지 않는다. 구현에는 이 목록의 참조만 넘어간다.\n' +
+        '- 설계·계획 문서에는 참조 파일을 절대 경로가 아니라 `별칭:경로:줄`(예: `옛앱:src/a/B.java:12`)로 적는다. 구현 단계에서는 참조 폴더 위치가 다르다.\n' +
+        '- 사용할 수 없는 참조의 내용은 추측하지 않는다.\n\n' +
+        '사용 가능한 DB 도구 (읽기 전용 — SELECT 계열 단일 문장, 최대 200행):\n' +
+        '- mcp__db-7__query / list_tables / describe_table : 운영 DB (MySQL)\n\n' +
+        'I want to change database tables or data used by the repo at acme/widgets (branch main).\n' +
+        'Title: Add CSV export\nRequest: Users want to export the dashboard table as CSV.\n\n' +
+        '첨부 자료 (요청자가 등록 시 업로드한 파일):\n' +
+        '- /data/attachments/task-9/1/1-대시보드 "업그레이드" 안.pptx (application/vnd.openxmlformats-officedocument.presentationml.presentation, 2KB)\n' +
+        '  - 텍스트 추출본: /data/attachments/task-9/1/1-대시보드 "업그레이드" 안.pptx.txt\n' +
+        '  - 슬라이드 그림(2장, 순서대로): /data/attachments/task-9/1/slides/1.png, /data/attachments/task-9/1/slides/2.png\n' +
+        '  - 원본 그림(작은 글씨를 크게 볼 때): /data/attachments/task-9/1/media/image1.png\n\n' +
+        'brainstorming 시작 전에 이 파일들을 Read 도구로 읽고 요구사항 파악에 활용하세요. ' +
+        '오피스 원본(pptx/docx/xlsx 등)은 Read로 열 수 없습니다. ' +
+        '슬라이드 그림이 있으면 모두 순서대로 Read해서 화면 레이아웃과 빨간 표시·화살표 같은 주석이 가리키는 변경점을 파악하세요. ' +
+        '글은 텍스트 추출본으로 읽고, 작은 글씨는 원본 그림으로 확인하세요. ' +
+        '그림이 없는 첨부는 추출본만 읽고, 파일이 없으면 건너뛰고 필요한 내용은 사용자에게 질문으로 확인하세요. ' +
+        '계획에는 슬라이드 번호와 함께 변경점을 적으세요(예: "슬라이드 1: 상단 카드 2개 추가").\n\n' +
+        '작업 타입: DB 작업. 어떤 테이블·데이터를 어떻게 바꿀지부터 질문하세요. ' +
+        '계획에는 실행할 SQL을 순서대로 적고, 문장마다 [바로 실행] 또는 [승인 대기]를 표시하세요. ' +
+        '[바로 실행]: 새 테이블·인덱스·시퀀스·뷰, NULL 허용이거나 DEFAULT 있는 컬럼 추가, INSERT, WHERE 있는 UPDATE/DELETE. ' +
+        '[승인 대기]: 남의 테이블 컬럼 삭제·이름·타입·NULL 여부 변경, NOT NULL이면서 DEFAULT 없는 컬럼 추가, 제약·유니크 인덱스·트리거·프로시저. ' +
+        '기존 테이블 DROP·TRUNCATE와 조건 없는 UPDATE/DELETE는 거부됩니다.\n\n' +
+        '구현 단계에서는 다음 DB 연결의 공용 개발 DB에 변경이 직접 적용됩니다: 개발DB (PostgreSQL). ' +
+        '남의 테이블 컬럼 삭제·변경 등은 승인 대기로 남습니다. ' +
+        'DB 변경이 필요하면 계획에 DB 변경 단계를 넣으세요. 이 인터뷰에서는 읽기 전용입니다.\n\n' +
+        'IMPORTANT — this is a PLANNING-ONLY interview. Your only deliverable is a written implementation PLAN ' +
+        '(via brainstorming → writing-plans), NOT code. Do NOT implement the feature: do not create or modify source files, ' +
+        'do not run builds/installs/tests, do not git commit or push. Reading the repo for context is fine. Stop once the plan ' +
+        'is written — a human reviews and approves it, and implementation happens later in a separate step.\n\n' +
+        '최종 plan은 반드시 다음 정규 형식으로 작성하세요(설명은 한국어): 최상위 헤딩 `# <기능> 구현 계획`, ' +
+        '그 아래 각 작업을 `### 작업 N: <제목>` 형식으로. 영문 `# <Feature> Implementation Plan` / `### Task N:` 도 허용됩니다. ' +
+        '이 정확한 구조라야 시스템이 완료를 인식하며, 없으면 인터뷰가 끝나지 않습니다.\n\n' +
+        'Use the brainstorming skill: read the project context, then ask me one clarifying question at a time.';
+
+      it('켬 가드: 첨부(슬라이드)·DB 작업·쓰기 연결·DB 절·참조가 다 붙은 kickoff는 골든', async () => {
+        for (const v of [undefined, null, true]) {
+          expect(await promptWith({ ...FULL_CLAIM, superpowersEnabled: v } as any, { db: withDb(), prepared: [iAvailable()] }))
+            .toBe(KICKOFF_FULL_GOLDEN);
+        }
+      });
+
       it('작업 타입: 타입 없음·NEW_FEATURE·모르는 값은 골든', async () => {
         for (const t of [undefined, null, 'NEW_FEATURE', 'QA_WORK']) {
           expect(await kickoffOf({ ...freshClaim, taskType: t } as any)).toBe(KICKOFF_GOLDEN);
@@ -1333,6 +1447,83 @@ describe('InterviewRunner kind=QUESTION (스펙 §6 — plan 경로 미진입, Q
         return { fakeQuery, prompts };
       }
 
+      // ── 간단 인터뷰(superpowers 끔) — kickoff·resume 접두 (스펙 2026-11-03 §5) ─────────────────
+      it('켬 가드: superpowersEnabled 없음·null·true는 골든', async () => {
+        for (const v of [undefined, null, true]) {
+          expect(await kickoffOf({ ...freshClaim, superpowersEnabled: v } as any)).toBe(KICKOFF_GOLDEN);
+        }
+      });
+
+      it('끔 kickoff: 진행 방식만 바뀐다', async () => {
+        const p = await kickoffOf({ ...freshClaim, superpowersEnabled: false });
+        expect(p).not.toContain('brainstorming');
+        expect(p).not.toContain('writing-plans');
+        expect(p.endsWith(SIMPLE_PROCESS_LITERAL)).toBe(true);
+        for (const s of [
+          'I want to add a feature to the repo at acme/widgets',
+          'PLANNING-ONLY',
+          'implementation PLAN, NOT code.',
+          '`### 작업 N: <제목>`',
+        ]) {
+          expect(p).toContain(s);
+        }
+        // 골든에서 진행 방식 두 곳((via …) 괄호와 마지막 brainstorming 줄)만 바뀐 것과 바이트까지 같다
+        expect(p).toBe(
+          KICKOFF_GOLDEN.replace(' (via brainstorming → writing-plans)', '').replace(
+            'Use the brainstorming skill: read the project context, then ask me one clarifying question at a time.',
+            SIMPLE_PROCESS_LITERAL,
+          ),
+        );
+      });
+
+      it('끔 kickoff + DB 작업·첨부·쓰기 연결', async () => {
+        const p = await promptWith({ ...FULL_CLAIM, superpowersEnabled: false }, { db: withDb(), prepared: [iAvailable()] });
+        for (const s of [
+          '[바로 실행]',
+          '계획을 쓰기 전에 이 파일들을 Read',
+          '파일이 없으면 건너뛰고',
+          '구현 단계에서는 다음 DB 연결',
+          '슬라이드 그림(2장, 순서대로)',
+          '한 번의 질문 묶음',
+        ]) {
+          expect(p).toContain(s);
+        }
+        expect(p).not.toContain('부터 질문하세요');
+        expect(p).not.toContain('brainstorming');
+        expect(p.startsWith(interviewRefSection([iAvailable()]) + dbSection(withDb()))).toBe(true);
+        // 켬 풀 골든에서 진행 방식 문구 네 곳(첨부 안내의 brainstorming·타입 지시의 질문 순서·(via …) 괄호·마지막 줄)만 다르다
+        expect(p).toBe(
+          KICKOFF_FULL_GOLDEN.replace('brainstorming 시작 전에 이 파일들', '계획을 쓰기 전에 이 파일들')
+            .replace(
+              '어떤 테이블·데이터를 어떻게 바꿀지부터 질문하세요.',
+              '어떤 테이블·데이터를 어떻게 바꿀지는 먼저 자료·코드·DB로 확인하고, 그래도 알 수 없는 것만 한 번의 질문 묶음에 넣으세요.',
+            )
+            .replace(' (via brainstorming → writing-plans)', '')
+            .replace('Use the brainstorming skill: read the project context, then ask me one clarifying question at a time.', SIMPLE_PROCESS_LITERAL),
+        );
+      });
+
+      // 끔 resume 프롬프트는 그 턴 첫 질의(prompts[0])만 비교한다 — 끔 resume 턴이 계획 없이 끝나면 같은 세션에 재요청이 한 번 더
+      // 나가므로(스펙 §5-4) kickoffOf·promptWith처럼 질의마다 프롬프트를 이어 붙이는 캡처는 쓰지 않는다.
+      it('끔 resume: 접두 + 답변', async () => {
+        const { fakeQuery, prompts } = capturingEach(() => questionStream(), () => questionStream());
+        await runnerWith(makeClient(), fakeQuery, vi.fn()).run({ ...resumeClaim, superpowersEnabled: false });
+        expect(prompts[0]).toBe(SIMPLE_RESUME_PREFIX + resumeClaim.lastAnswer);
+        expect(prompts[0]!.startsWith('이 답변(또는 계획 수정 요청)으로 질문은 끝입니다. 더 묻지 말고')).toBe(true);
+      });
+
+      it('끔 resume에 참조가 있으면 참조 절 → 접두 → 답변', async () => {
+        const { fakeQuery, prompts } = capturingEach(() => questionStream(), () => questionStream());
+        await runnerWith(makeClient(), fakeQuery, preparer([iAvailable()])).run({ ...interviewResume, superpowersEnabled: false });
+        expect(prompts[0]).toBe(interviewRefSection([iAvailable()]) + SIMPLE_RESUME_PREFIX + interviewResume.lastAnswer);
+      });
+
+      it('켬 resume는 그대로', async () => {
+        for (const v of [undefined, null, true]) {
+          expect(await kickoffOf({ ...resumeClaim, superpowersEnabled: v } as any)).toBe(resumeClaim.lastAnswer);
+        }
+      });
+
       it('INTERVIEW claim with refs: ensureRepo → ensureRefRepos → createDbMcp → SDK, with tokens, the turn signal and timeoutMs', async () => {
         ensureRepo.mockClear();
         const client = makeClient();
@@ -1364,15 +1555,10 @@ describe('InterviewRunner kind=QUESTION (스펙 §6 — plan 경로 미진입, Q
 
       it('kickoff: INTERVIEW ref section → DB section → existing kickoff', async () => {
         const db = withDb();
-        const promptOf = async (claim: InterviewClaimResponse): Promise<string> => {
-          const { fakeQuery, captured } = capturing(() => questionStream());
-          await runnerWith(makeClient(), fakeQuery, preparer([iAvailable()]), { createDbMcp: vi.fn().mockReturnValue(db) }).run(claim);
-          return captured.prompt;
-        };
         const { refRepos: _refs, ...withoutRefs } = interviewClaimWithRefs;
 
-        const baseline = await promptOf(withoutRefs);
-        const withRefs = await promptOf(interviewClaimWithRefs);
+        const baseline = await promptWith(withoutRefs, { db, prepared: [iAvailable()] });
+        const withRefs = await promptWith(interviewClaimWithRefs, { db, prepared: [iAvailable()] });
 
         expect(baseline).toBe(dbSection(db) + KICKOFF_GOLDEN);
         expect(withRefs).toBe(interviewRefSection([iAvailable()]) + baseline);

@@ -1,6 +1,8 @@
 package com.hamonsoft.netismaker.workerdaemon;
 
+import com.hamonsoft.netismaker.dto.WorkerTaskResponse.DbWriteSpec;
 import com.hamonsoft.netismaker.entity.TaskType;
+import com.hamonsoft.netismaker.util.DbScriptDir;
 import org.junit.jupiter.api.Test;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -73,5 +75,52 @@ class ImplementationPromptsTaskTypeTest {
     void 기본_스크립트_경로() {
         assertThat(ImplementationPrompts.defaultScriptPath(42L)).isEqualTo("db/symphony/task-42.sql");
         assertThat(ImplementationPrompts.defaultScriptPath(7)).isEqualTo("db/symphony/task-7.sql");
+    }
+
+    /** F10 — 기본 경로 규칙은 한 곳(DbScriptDir)이라 워커가 만드는 파일과 세션 파일의 경로가 어긋나지 않는다. */
+    @Test
+    void 기본_스크립트_경로는_DbScriptDir_규칙에_위임() {
+        assertThat(ImplementationPrompts.defaultScriptPath(42L)).isEqualTo(DbScriptDir.resolve(null, 42L));
+        assertThat(ImplementationPrompts.defaultScriptPath(9L)).isEqualTo(DbScriptDir.DEFAULT + "/task-9.sql");
+    }
+
+    @Test
+    void manual_경로는_끝_sql을_manual_sql로_바꾼다() {
+        assertThat(ImplementationPrompts.manualScriptPath("db/symphony/task-42.sql")).isEqualTo("db/symphony/task-42-manual.sql");
+        assertThat(ImplementationPrompts.manualScriptPath("sql/dev/task-7.sql")).isEqualTo("sql/dev/task-7-manual.sql");
+        // .sql로 끝나지 않으면(옛 데이터) 뒤에 붙인다 — 같은 경로를 돌려주면 안 된다
+        assertThat(ImplementationPrompts.manualScriptPath("db/task-7")).isEqualTo("db/task-7-manual.sql");
+        // 경로 가운데의 .sql은 건드리지 않는다
+        assertThat(ImplementationPrompts.manualScriptPath("a.sql/task-7.sql")).isEqualTo("a.sql/task-7-manual.sql");
+    }
+
+    /** 이전 쓰기 기록이 있는데 이번 구현에 쓰기 도구가 없으면 세션 파일은 -manual — 같은 경로면 워커의 누적 기록이 세션이 적은 SQL을 덮어쓴다. */
+    @Test
+    void 이전쓰기가_있는데_쓰기도구가_없으면_manual_경로() {
+        DbWriteSpec prior = new DbWriteSpec("db/symphony/task-42.sql", false, true);
+
+        assertThat(ImplementationPrompts.sessionScriptPath(prior, false)).isEqualTo("db/symphony/task-42-manual.sql");
+        assertThat(ImplementationPrompts.sessionScriptPath(prior, true)).isEqualTo("db/symphony/task-42.sql");
+    }
+
+    @Test
+    void 이전쓰기가_없으면_쓰기도구와_무관하게_원래_경로() {
+        DbWriteSpec none = new DbWriteSpec("db/symphony/task-42.sql", false, false);
+
+        assertThat(ImplementationPrompts.sessionScriptPath(none, false)).isEqualTo("db/symphony/task-42.sql");
+        assertThat(ImplementationPrompts.sessionScriptPath(none, true)).isEqualTo("db/symphony/task-42.sql");
+    }
+
+    /** 카탈로그가 폴더를 바꿨으면 그 폴더가 두 경로 모두에 반영된다. */
+    @Test
+    void 카탈로그_폴더가_세션_경로에도_반영() {
+        DbWriteSpec custom = new DbWriteSpec("sql/dev/task-42.sql", false, true);
+
+        assertThat(ImplementationPrompts.sessionScriptPath(custom, true)).isEqualTo("sql/dev/task-42.sql");
+        assertThat(ImplementationPrompts.sessionScriptPath(custom, false)).isEqualTo("sql/dev/task-42-manual.sql");
+        // taskTypeSection의 scriptPath 인자로 쓰면 DB 작업 지시가 그 파일을 가리킨다
+        assertThat(ImplementationPrompts.taskTypeSection(TaskType.DB_WORK, false, false,
+                ImplementationPrompts.sessionScriptPath(custom, false)))
+                .contains("`sql/dev/task-42-manual.sql` 파일에 실행 순서대로");
     }
 }

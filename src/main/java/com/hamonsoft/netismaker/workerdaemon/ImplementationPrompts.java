@@ -1,8 +1,10 @@
 package com.hamonsoft.netismaker.workerdaemon;
 
 import com.hamonsoft.netismaker.dto.WorkerTaskResponse;
+import com.hamonsoft.netismaker.dto.WorkerTaskResponse.DbWriteSpec;
 import com.hamonsoft.netismaker.entity.ImplementationMode;
 import com.hamonsoft.netismaker.entity.TaskType;
+import com.hamonsoft.netismaker.util.DbScriptDir;
 
 import java.io.IOException;
 import java.io.InputStream;
@@ -31,9 +33,6 @@ final class ImplementationPrompts {
     private static final String REVIEWER = stripLeadingComment(resource("/prompts/implementation-reviewer.md"));
 
     private ImplementationPrompts() {}
-
-    /** 세션이 쓰는 SQL 스크립트 파일의 기본 폴더 — 워커가 기록으로 만드는 파일과 같은 경로 규칙(스펙 2026-11-03 §6.6). */
-    private static final String DEFAULT_SCRIPT_DIR = "db/symphony";
 
     private static final String BUG_FIX_SECTION = "## 작업 타입: 버그 픽스\n"
             + "먼저 계획의 재현 방법으로 오류를 재현하고 원인을 확인한 뒤 고치세요. "
@@ -77,9 +76,32 @@ final class ImplementationPrompts {
                 + "` 파일에 실행 순서대로 적으세요(문장마다 끝에 `;`). 코드 변경은 필요할 때만 하세요.\n";
     }
 
-    /** 작업의 기본 SQL 스크립트 경로 — {@code db/symphony/task-{id}.sql}. 세션이 쓴 파일의 강제 추가도 이 경로를 본다. */
+    /**
+     * 작업의 기본 SQL 스크립트 경로 — {@code db/symphony/task-{id}.sql}. 세션이 쓴 파일의 강제 추가도 이 경로를 본다. 기본 폴더 규칙은
+     * API의 카탈로그 저장과 워커가 같이 쓰는 {@link DbScriptDir} 한 곳이다 — 두 상수로 갈라지면 기본 폴더를 바꿀 때 워커 파일과 세션
+     * 파일의 경로가 어긋난다.
+     */
     static String defaultScriptPath(long taskId) {
-        return DEFAULT_SCRIPT_DIR + "/task-" + taskId + ".sql";
+        return DbScriptDir.resolve(null, taskId);
+    }
+
+    /**
+     * 쓰기 도구 없이 이전 쓰기 기록이 있을 때 세션이 SQL을 적는 파일 — 끝의 {@code .sql}을 {@code -manual.sql}로 바꾼다
+     * ({@code db/symphony/task-42.sql} → {@code db/symphony/task-42-manual.sql}). 같은 경로를 주면 세션이 적은 새 SQL을 워커가
+     * 누적 기록으로 덮어써 PR에서 사라진다(계획 "설계와 다름 ②"). {@code .sql}로 끝나지 않으면 뒤에 붙인다 — 어떤 경우에도 원래 경로와 다르다.
+     */
+    static String manualScriptPath(String scriptPath) {
+        return scriptPath.endsWith(".sql")
+                ? scriptPath.substring(0, scriptPath.length() - ".sql".length()) + "-manual.sql"
+                : scriptPath + "-manual.sql";
+    }
+
+    /**
+     * 이 구현에서 세션이 SQL을 직접 적는 파일 — {@link #taskTypeSection}의 {@code scriptPath}로 쓴다. 쓰기 도구가 없고 이전 시도·회차가 남긴
+     * 쓰기 기록이 있으면 {@link #manualScriptPath}, 아니면 워커가 만드는 파일과 같은 {@code db.scriptPath()}.
+     */
+    static String sessionScriptPath(DbWriteSpec db, boolean writeTools) {
+        return !writeTools && db.priorWrites() ? manualScriptPath(db.scriptPath()) : db.scriptPath();
     }
 
     /** {commit_rule} — SDD만 태스크별 커밋, 나머지는 기존 문구(라이브 yml과 같은 글자). */

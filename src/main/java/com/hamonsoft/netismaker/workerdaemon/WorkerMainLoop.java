@@ -1,5 +1,6 @@
 package com.hamonsoft.netismaker.workerdaemon;
 
+import com.hamonsoft.netismaker.dto.DbChangeView;
 import com.hamonsoft.netismaker.dto.WorkerHeartbeatRequest;
 import com.hamonsoft.netismaker.dto.WorkerResultRequest;
 import com.hamonsoft.netismaker.dto.WorkerStartupResponse;
@@ -45,6 +46,8 @@ import java.util.function.LongSupplier;
  *        대상 fetch보다 먼저 한다 — 대상 fetch와 worktree 생성 사이가 짧아야 worktree 기준과 baseSha가 같다
  *     2) git fetch/clone (베이스 브랜치 최신화) — 실패하면 만든 참조를 지우고 구현실패
  *     3) WorktreeService.create → 새 브랜치 worktree (재시도는 -rN) + 워커 임시 파일 info/exclude
+ *        → 쓰기 도구가 있거나 이전 쓰기 기록이 있으면(자동 마이그레이션 레포 제외) 이 작업의 DB 변경 기록을 사전 조회 — 실패하면
+ *        claude 없이 구현실패(스펙 2026-11-03 §5.2). 수정 회차도 같다
  *     4) 방식 준비(계획·설계 파일 — 계획 파일 머리에 참조 절, 대신 진행 판정) → 방식별 구현 prompt(끝에 참조 절)
  *        + claude -p exec (worktree에서, --add-dir 없음)
  *        → claude가 어떻게 끝나든 참조 폴더 변경 검사(경고는 PR 본문·결과 보고, 실패면 사유 끝)
@@ -354,6 +357,16 @@ public class WorkerMainLoop {
         }
         Path wtPath = wt.dir().toPath();
 
+        // 이 작업의 DB 변경 기록 사전 조회 — worktree 생성 뒤·프롬프트 조립 전, 쓰기 도구가 있거나 이전 쓰기 기록이 있을 때만 (스펙 2026-11-03 §5.2).
+        // 못 읽으면 claude를 돌리지 않는다 — 이미 적용한 SQL을 모르고 같은 문장을 공용 DB에 다시 실행하게 된다
+        DbLog dbLog;
+        try {
+            dbLog = fetchDbLog(task);
+        } catch (Exception e) {
+            safePostImplementationFailure(task, attempt, dbLogFailureReason(e), wt.branchName(), null, null);
+            return;
+        }
+
         // 승인된 디자인이 있으면 목업을 워크트리에 배치 (참조용 — 커밋 전 삭제)
         File designDir = placeMockups(task, wt.dir());
 
@@ -395,15 +408,21 @@ public class WorkerMainLoop {
         //    worktree는 격리 환경이라 워커 머신 다른 곳에 영향 없음.
         //    참조 절은 템플릿 밖 DB 절 뒤에 붙는다(운영자 템플릿을 바꿔도 빠지지 않게). 참조 폴더는 절대 경로로 읽으므로
         //    --add-dir를 주지 않는다 — 참조 repo의 .claude 설정이 이 세션에 붙으면 안 된다 (스펙 2026-10-24 §6.4·§6.7)
-        //    작업 타입 절은 템플릿 안({plan_section} 바로 뒤) — 이 구현에는 아직 개발 DB 쓰기 도구가 없어 DB 작업은 SQL을 파일에 적게 한다
+        //    작업 타입 절은 템플릿 안({plan_section} 바로 뒤) — DB 작업의 세 갈래는 쓰기 도구 유무(execute로 한 문장씩 / 파일에 적기)와
+        //    자동 마이그레이션 레포(마이그레이션 관례대로)가 정한다. 파일에 적는 경우 경로는 이전 쓰기 기록이 있으면 -manual
+        //    (워커의 누적 기록 파일을 덮어쓰지 않게 — 계획 "설계와 다름 ②"). DB 쪽은 DB 절 → 자동 마이그레이션 절 → 이미 적용된 SQL 절 순서
         TaskType taskType = taskTypeOf(task);
+        WorkerTaskResponse.DbWriteSpec db = dbSpecOf(task);
+        boolean writeTools = DbMcpWorkerSupport.anyWritable(task.dbMcp());
         String prompt = renderImplementationPrompt(task, repo.commitSha(), wt.branchName(),
                 ImplementationPrompts.planSection(task, mode.effective(), repo.commitSha(), designWritten,
                         !ready.isEmpty()),
                 ImplementationPrompts.commitRule(mode.effective()),
-                ImplementationPrompts.taskTypeSection(taskType, false, false,
-                        ImplementationPrompts.defaultScriptPath(task.id())))
-                + DbMcpWorkerSupport.promptSection(task.dbMcp())
+                ImplementationPrompts.taskTypeSection(taskType, writeTools, db.migrationManaged(),
+                        ImplementationPrompts.sessionScriptPath(db, writeTools)))
+                + DbMcpWorkerSupport.promptSection(task.dbMcp(), true)
+                + DbMcpWorkerSupport.migrationManagedSection(db)
+                + DbMcpWorkerSupport.appliedSqlSection(dbLog.prior())
                 + RefRepoPrompts.promptSection(ready);
         List<String> extraArgs = mode.effective() == ImplementationMode.SDD
                 ? List.of("--plugin-dir", sddPlugin.orElseThrow().toString())   // SDD는 sddPlugin이 있을 때만 나온다
@@ -436,8 +455,10 @@ public class WorkerMainLoop {
             return;
         }
 
-        // 리뷰 메모는 PR 본문으로 회수하고 .netis/(계획·설계·메모)는 커밋 전에 지운다 — exclude가 실패했어도 안 섞이게
-        Optional<String> reviewNotes = ImplementationScratch.readReviewNotes(wtPath);
+        // 리뷰 메모는 PR 본문으로 회수하고 .netis/(계획·설계·메모)는 커밋 전에 지운다 — exclude가 실패했어도 안 섞이게.
+        // DB 메모(세션이 PR 본문을 못 쓰니 .netis/db-notes.md로 남긴 것)는 리뷰 메모 뒤에 빈 줄로 이어 같은 절로 옮긴다
+        Optional<String> reviewNotes = joinNotes(
+                ImplementationScratch.readReviewNotes(wtPath), ImplementationScratch.readDbNotes(wtPath));
         ImplementationScratch.deleteRoot(wtPath);
 
         // 목업 참조 파일은 커밋 대상에서 제외
@@ -555,13 +576,26 @@ public class WorkerMainLoop {
         String logHead = notes.isEmpty() ? "" : "[" + label + "] " + String.join("\n[" + label + "] ", notes) + "\n\n";
         String reasonTail = remoteAhead ? "\n" + notes.get(0) : "";
 
+        // 이 작업의 DB 변경 기록 사전 조회 — 일반 구현과 같다(쓰기 도구가 있거나 이전 쓰기 기록이 있을 때만). 못 읽으면 claude 없이 구현실패.
+        // 원격 브랜치 끝은 그대로(tip)라 보고에 싣는다
+        DbLog dbLog;
+        try {
+            dbLog = fetchDbLog(task);
+        } catch (Exception e) {
+            safePostImplementationFailure(task, attempt, dbLogFailureReason(e) + reasonTail, branch, tip, null);
+            return;
+        }
+
         // 승인된 디자인 목업은 지금 구현처럼 참조용으로 둔다(커밋 전 삭제). 임시 파일 exclude는 실패해도 아래에서 지우고 커밋한다
         File designDir = placeMockups(task, wt.dir());
         worktrees.ensureWorkerExcludes(wt.dir());
 
-        // 3. 회차 프롬프트 + claude exec (참조 절은 끝에, --add-dir 없음 — 지금 구현과 같다)
+        // 3. 회차 프롬프트 + claude exec (참조 절은 끝에, --add-dir 없음 — 지금 구현과 같다). 타입 절은 없고 DB 쪽은 DB 절(쓰기 연결이면 쓰기 절)에
+        //    자동 마이그레이션 절·이미 적용된 SQL 절을 dbExtra로 붙인다
+        String dbExtra = DbMcpWorkerSupport.migrationManagedSection(dbSpecOf(task))
+                + DbMcpWorkerSupport.appliedSqlSection(dbLog.prior());
         String prompt = FixRoundPrompts.render(task, fix, tip, remoteAhead, mode,
-                ImplementationPrompts.commitRule(mode), ready);
+                ImplementationPrompts.commitRule(mode), ready, dbExtra);
         ClaudeExecAdapter.ExecResult exec;
         try {
             exec = claude.exec(prompt, wt.dir(), claudeLimit,
@@ -589,8 +623,9 @@ public class WorkerMainLoop {
             return;
         }
 
-        // 4. 리뷰 메모는 구현 로그로(PR 본문을 고치는 경로가 없다), 임시 파일은 커밋 전에 지운다
-        Optional<String> reviewNotes = ImplementationScratch.readReviewNotes(wtPath);
+        // 4. 리뷰 메모는 구현 로그로(PR 본문을 고치는 경로가 없다) — DB 메모도 그 뒤에 이어 같은 곳으로. 임시 파일은 커밋 전에 지운다
+        Optional<String> reviewNotes = joinNotes(
+                ImplementationScratch.readReviewNotes(wtPath), ImplementationScratch.readDbNotes(wtPath));
         ImplementationScratch.deleteRoot(wtPath);
         if (designDir != null) deleteDesignDir(designDir.toPath());
         List<EnvTemplateItem> envTemplate = DeployEnvManifest.harvest(wtPath);
@@ -710,6 +745,67 @@ public class WorkerMainLoop {
     static TaskType taskTypeOf(WorkerTaskResponse task) {
         WorkerTaskResponse.ImplementationSpec s = task.implementation();
         return s == null ? null : TaskType.fromWireOrNull(s.taskType());
+    }
+
+    /**
+     * claim의 개발 DB 쓰기 재료 — 구현 블록이나 재료가 없으면(구버전 API·재료를 못 만든 호출) 기본 경로·쓰기 기록 없음·자동 마이그레이션 아님
+     * (스펙 2026-11-03 §6.6). 경로만 비어 온 재료는 기본 경로로 채우고 플래그는 지킨다.
+     */
+    static WorkerTaskResponse.DbWriteSpec dbSpecOf(WorkerTaskResponse task) {
+        WorkerTaskResponse.ImplementationSpec s = task.implementation();
+        WorkerTaskResponse.DbWriteSpec db = s == null ? null : s.db();
+        if (db == null) return new WorkerTaskResponse.DbWriteSpec(ImplementationPrompts.defaultScriptPath(task.id()), false, false);
+        if (db.scriptPath() == null || db.scriptPath().isBlank()) {
+            return new WorkerTaskResponse.DbWriteSpec(ImplementationPrompts.defaultScriptPath(task.id()),
+                    db.migrationManaged(), db.priorWrites());
+        }
+        return db;
+    }
+
+    /**
+     * 구현 전에 이 작업의 DB 변경 기록을 조회해야 하는가 — 자동 마이그레이션 레포가 아니고(그 레포는 기록·스크립트 파일이 생기지 않는다)
+     * 이 구현에 쓰기 도구가 있거나 이전 시도·회차가 남긴 쓰기 기록이 있을 때 (스펙 2026-11-03 §5.2·§6.6).
+     */
+    static boolean needsDbLog(WorkerTaskResponse task) {
+        WorkerTaskResponse.DbWriteSpec db = dbSpecOf(task);
+        return !db.migrationManaged() && (DbMcpWorkerSupport.anyWritable(task.dbMcp()) || db.priorWrites());
+    }
+
+    /** 구현 전 DB 변경 기록 사전 조회 결과 — 기록(이미 적용된 SQL 절의 재료)과 기준 id(이번 시도가 새로 남긴 기록은 이 id보다 크다). */
+    record DbLog(List<DbChangeView> prior, long baselineId) {
+        static final DbLog NONE = new DbLog(List.of(), 0L);
+    }
+
+    /** needsDbLog일 때만 조회한다 — 아니면 HTTP 호출 없이 NONE. 조회가 실패하면 예외를 그대로 던진다(호출부가 구현실패로 끝낸다). */
+    private DbLog fetchDbLog(WorkerTaskResponse task) {
+        if (!needsDbLog(task)) return DbLog.NONE;
+        List<DbChangeView> fetched = http.dbChanges(task.id());
+        List<DbChangeView> prior = fetched == null ? List.of() : fetched;
+        long baseline = baselineIdOf(prior);
+        log.info("DB 변경 기록 사전 조회: task={} {}건, 기준 id={}", task.id(), prior.size(), baseline);
+        return new DbLog(prior, baseline);
+    }
+
+    /** 기록 전체의 최대 id(없으면 0) — 거부·실패 기록도 센다. 이번 시도의 쓰기 판정은 이 id보다 큰 기록만 본다. */
+    static long baselineIdOf(List<DbChangeView> changes) {
+        long max = 0L;
+        if (changes == null) return max;
+        for (DbChangeView c : changes) {
+            if (c.id() != null && c.id() > max) max = c.id();
+        }
+        return max;
+    }
+
+    /** 사전 조회 실패 사유 — 같은 SQL이 두 번 실행되지 않게 claude를 돌리지 않고 끝낸다. 메시지가 없으면 예외 이름. */
+    static String dbLogFailureReason(Exception e) {
+        String msg = e.getMessage();
+        return "DB 변경 기록 조회 실패: " + (msg == null || msg.isBlank() ? e.getClass().getSimpleName() : msg);
+    }
+
+    /** 리뷰 메모 뒤에 DB 메모를 빈 줄 하나로 이어 붙인다 — 하나만 있으면 그것만, 둘 다 없으면 empty. */
+    static Optional<String> joinNotes(Optional<String> reviewNotes, Optional<String> dbNotes) {
+        if (reviewNotes.isPresent() && dbNotes.isPresent()) return Optional.of(reviewNotes.get() + "\n\n" + dbNotes.get());
+        return reviewNotes.isPresent() ? reviewNotes : dbNotes;
     }
 
     /** claim의 참조 repo — 없으면(구버전 API·다른 kind) 빈 목록. */

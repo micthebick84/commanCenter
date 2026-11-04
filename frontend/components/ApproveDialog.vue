@@ -22,6 +22,7 @@ import {
   fetchDbConnections,
   type DbConnectionView,
 } from '~/composables/dbConnections'
+import { hasWritableSelection } from '~/composables/taskDbChips'
 import ModelEffortFields from '~/components/ModelEffortFields.vue'
 import ClaudeUsagePanel from '~/components/ClaudeUsagePanel.vue'
 import RefRepoChips from '~/components/RefRepoChips.vue'
@@ -64,8 +65,18 @@ const taskTypeChanged = computed(() => taskType.value != null && taskType.value 
 const mcpCatalogIds = ref<number[]>([])
 // DB 연결(스펙 2026-10-14 §7): 레포 공용 활성 연결을 기본 선택, 마지막 인터뷰 선택이 있으면 그것을 우선.
 // 기능이 꺼져 있으면(enabled=false) 피커를 숨기고 승인 바디에도 싣지 않는다.
-const db = reactive({ enabled: false, items: [] as DbConnectionView[] })
+// writeEnabled(스펙 2026-11-03 §6.5)는 그 레포에서 구현 단계 쓰기가 열릴 수 있는지 — 옛 응답에는 없어 false(예전 문구 그대로).
+const db = reactive({ enabled: false, writeEnabled: false, items: [] as DbConnectionView[] })
 const dbConnectionIds = ref<number[]>([])
+// 고른 연결에 쓰기 허용 공용 연결이 있는가 — 쓰기 배지·캡션·"DB 작업" 경고가 이 값을 본다. 작업 단위로 쓰기를 끄는 칸은 없다(스펙 §6.5).
+const writableSelected = computed(() =>
+  hasWritableSelection(dbConnectionIds.value, { writeEnabled: db.writeEnabled, items: db.items }),
+)
+const DB_CAPTION_READ_ONLY = 'DB 연결 — 인터뷰·디자인·구현에서 읽기 전용으로 조회합니다'
+const DB_CAPTION_WRITABLE =
+  'DB 연결 — 인터뷰·디자인에서는 읽기 전용으로 조회하고, 구현 단계에서는 쓰기 허용 연결에 직접 적용할 수 있습니다'
+// 타입이 DB 작업인데 쓰기 허용 연결을 고르지 않았으면 경고한다 — 승인은 막지 않는다. DB 목록을 읽는 중에는 선택이 정해지기 전이라 내지 않는다.
+const dbWorkWarning = computed(() => taskType.value === 'DB_WORK' && !dbLoading.value && !writableSelected.value)
 // 승인은 관리자만 하지만 서버는 선택을 작업 등록자 기준으로 검증한다(스펙 §7). 목록은 보는 사람 기준이라
 // 승인자 ≠ 등록자면 승인자 본인의 USER 연결은 쓸 수 없고 등록자의 USER 연결은 안 보인다 →
 // 공용(REPO)만 보이고 "새 접속 추가"를 숨기며, 지난 인터뷰의 안 보이는 id(등록자 개인 연결)는 버리지 않고 유지한다.
@@ -112,12 +123,14 @@ async function loadDb(seq: number, mode: 'seed' | 'keep', preferred: number[] = 
   const repoId = props.task.repoCatalogId
   if (!repoId) {
     db.enabled = false
+    db.writeEnabled = false
     db.items = []
     return
   }
   const r = await fetchDbConnections(repoId)
   if (seq !== loadSeq || !show.value) return
   db.enabled = r.enabled
+  db.writeEnabled = r.writeEnabled === true
   const registrant = isRegistrant.value
   db.items = registrant ? r.items : r.items.filter((i) => i.scope === 'REPO')
   if (mode === 'seed') {
@@ -166,6 +179,7 @@ const previousHint = computed(() => {
 async function init() {
   const seq = ++loadSeq
   db.enabled = false
+  db.writeEnabled = false
   db.items = []
   dbLoading.value = !!props.task.repoCatalogId
   model.value = DEFAULT_MODEL
@@ -295,6 +309,15 @@ const fullscreen = useFullscreenDialog()
             :disable="approving"
             data-test="approve-task-type"
           />
+          <!-- DB 작업인데 쓰기 허용 연결을 고르지 않았을 때 (스펙 2026-11-03 §6.5) — 승인은 막지 않는다. 타입 칸 안에 둔다(요약 → 타입 → 안내 순서 유지) -->
+          <div
+            v-if="dbWorkWarning"
+            class="db-work-warning row items-start no-wrap q-mt-sm"
+            data-test="approve-db-work-warning"
+          >
+            <q-icon name="warning_amber" size="16px" class="q-mr-xs db-work-warning-icon" />
+            <span>구현 때 개발 DB에 바로 적용할 수 없습니다 — SQL은 스크립트 파일로만 남습니다</span>
+          </div>
         </q-card-section>
 
         <q-card-section v-if="previousHint" class="q-pt-none">
@@ -323,15 +346,15 @@ const fullscreen = useFullscreenDialog()
             <McpPicker v-model="mcpCatalogIds" flat />
           </div>
           <div v-if="db.enabled && task.repoCatalogId" class="q-mt-md" data-test="approve-db">
-            <div class="text-caption text-grey-7 q-mb-xs">
-              DB 연결 — 인터뷰·디자인·구현에서 읽기 전용으로 조회합니다
-            </div>
+            <!-- 쓰기 허용 연결을 고른 상태일 때만 문구를 바꾼다 — 인터뷰·디자인은 늘 읽기 전용이고 구현 단계에서만 쓰기가 열린다 -->
+            <div class="text-caption text-grey-7 q-mb-xs" data-test="approve-db-caption">{{ writableSelected ? DB_CAPTION_WRITABLE : DB_CAPTION_READ_ONLY }}</div>
             <DbConnectionPicker
               v-model="dbConnectionIds"
               :items="db.items"
               :repo-catalog-id="task.repoCatalogId"
               :allow-add="isRegistrant"
               :registrant-ids="registrantDbIds"
+              :show-write="db.writeEnabled"
               @reload="reloadDb"
             />
           </div>
@@ -402,6 +425,14 @@ const fullscreen = useFullscreenDialog()
   border-bottom: 1px solid rgba(0, 0, 0, 0.12);
   min-height: 52px;
   padding-top: env(safe-area-inset-top, 0px);
+}
+.db-work-warning {
+  font-size: 13px;
+  color: #bf360c;
+  line-height: 1.4;
+}
+.db-work-warning-icon {
+  margin-top: 2px;
 }
 .previous-hint {
   font-size: 13px;

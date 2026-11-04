@@ -18,6 +18,7 @@ import { toInputs, useRefDraft, type RefRepoView } from '~/composables/refRepos'
 import { taskPrefillFromQuestion, type QuestionDetail } from '~/composables/questions'
 import { taskPrefillFromTask, type FollowUpSource } from '~/composables/taskFix'
 import { TASK_TYPES, TASK_TYPE_FILTERS, taskTypeLabel } from '~/composables/taskType'
+import { fetchDeferredWarning } from '~/composables/taskDbChanges'
 
 definePageMeta({ layout: 'default' })
 
@@ -177,7 +178,9 @@ async function applyMove(id: number, move: MoveDef) {
   }
   // 종료 전이(close/approve·close/retry)는 병합이 끼어 있어 되돌릴 수 없음을 확인창에 밝힌다
   const warn = move.path.startsWith('close/') ? ' PR 병합·배포 중지·브랜치 삭제는 되돌릴 수 없습니다.' : ''
-  if (move.confirm && !(await confirmDialog($q, `작업 #${id} — ${move.label}을(를) 실행할까요?${warn}`, { ok: move.label }))) return
+  // 종료 승인은 승인 대기 SQL이 남아 있으면 건수 한 줄을 더 붙인다(스펙 2026-11-03 §6.5) — 조회가 실패하면 경고 없이 그대로 승인할 수 있다
+  const deferred = move.confirm && move.path === 'close/approve' ? await fetchDeferredWarning(id) : ''
+  if (move.confirm && !(await confirmDialog($q, `작업 #${id} — ${move.label}을(를) 실행할까요?${warn}${deferred}`, { ok: move.label }))) return
   moving.value = true
   try {
     await useApi(`/api/tasks/${id}/${move.path}`, { method: 'POST' })

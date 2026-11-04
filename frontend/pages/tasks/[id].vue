@@ -3,7 +3,8 @@ import { useQuasar } from 'quasar'
 import { confirmDialog } from '~/composables/confirmDialog'
 import ApproveDialog from '~/components/ApproveDialog.vue'
 import { fetchDbConnections } from '~/composables/dbConnections'
-import { dbChipLabels } from '~/composables/taskDbChips'
+import { dbChipLabels, hasWritableSelection } from '~/composables/taskDbChips'
+import { fetchDeferredWarning } from '~/composables/taskDbChanges'
 import InterviewPanel from '~/components/InterviewPanel.vue'
 import InterviewHistoryCard from '~/components/InterviewHistoryCard.vue'
 import TaskProgressStepper from '~/components/tasks/TaskProgressStepper.vue'
@@ -14,6 +15,7 @@ import DeployEnvDialog from '~/components/tasks/DeployEnvDialog.vue'
 import ImplementationRetryDialog from '~/components/tasks/ImplementationRetryDialog.vue'
 import FixRequestDialog from '~/components/tasks/FixRequestDialog.vue'
 import FixRequestHistory from '~/components/tasks/FixRequestHistory.vue'
+import TaskDbChanges from '~/components/tasks/TaskDbChanges.vue'
 import { stageSteps, nextAction, ageOf, type NextActionKind } from '~/composables/taskStages'
 import { renderMarkdown } from '~/composables/useMarkdown'
 import { mrNoun, mrRef } from '~/composables/mergeRequestLabel'
@@ -169,6 +171,8 @@ const { data: task, refresh } = useTaskPolling<TaskResponse>(() =>
 )
 
 const dbChips = ref<string[]>([])
+// 고른 연결 중 구현 단계 쓰기가 열릴 수 있는 것이 있는가(스펙 2026-11-03 §6.1) — 있을 때만 "읽기 전용" 문구를 바꾼다. 응답에 칸이 없으면 false(옛 API).
+const dbWritable = ref(false)
 // 폴링이 5초마다 task 객체를 통째로 교체하므로, 값(repo·ids 키)이 바뀔 때만 다시 조회한다.
 watch(
   [() => task.value?.repoCatalogId, () => task.value?.dbConnectionIds?.join(',') ?? ''],
@@ -176,12 +180,14 @@ watch(
     const ids = task.value?.dbConnectionIds ?? []
     if (!ids.length) {
       dbChips.value = []
+      dbWritable.value = false
       return
     }
     const r = repoId ? await fetchDbConnections(repoId) : { enabled: false, items: [] }
     // 대기 중에 repo/ids가 바뀌었으면 이 응답은 버린다
     if (repoId !== task.value?.repoCatalogId || key !== (task.value?.dbConnectionIds?.join(',') ?? '')) return
     dbChips.value = dbChipLabels(ids, r.items)
+    dbWritable.value = hasWritableSelection(ids, r)
   },
   { immediate: true },
 )
@@ -397,7 +403,9 @@ async function requestClose() {
 }
 
 async function approveClose() {
-  if (!(await confirmDialog($q, 'PR을 main에 병합하고, 배포를 중지하고, 옵시디언 노트를 쓴 뒤 브랜치를 삭제합니다. 되돌릴 수 없습니다.', { title: '종료 승인' }))) return
+  // 승인 대기 SQL이 남아 있으면 확인창에 건수 한 줄을 덧붙인다(스펙 2026-11-03 §6.5) — 조회가 실패하면 경고 없이 그대로 승인할 수 있다
+  const warning = await fetchDeferredWarning(taskId.value)
+  if (!(await confirmDialog($q, `PR을 main에 병합하고, 배포를 중지하고, 옵시디언 노트를 쓴 뒤 브랜치를 삭제합니다. 되돌릴 수 없습니다.${warning}`, { title: '종료 승인' }))) return
   await closeAction('close/approve', '종료 큐 등록')
 }
 
@@ -543,13 +551,18 @@ const fixBannerText = computed(() => {
 })
 // 기록 카드는 작업이 다시 읽혀 상태·갱신 시각·회차 수가 바뀔 때만 다시 조회한다 — 5초 폴링마다 갈아끼워지는 task 객체가 아니라 값으로 비교.
 const fixHistoryKey = ref(0)
+// DB 변경 카드(스펙 2026-11-03 §6.5)도 같은 때 다시 읽는다 — 마운트되며 스스로 조회하는 것도 같다.
+const dbChangesKey = ref(0)
 watch(
   () => {
     const t = task.value
     return t ? `${t.status}|${t.updatedAt}|${t.fix?.activeRound ?? ''}|${t.fix?.approvedRounds ?? ''}` : ''
   },
   (_now, before) => {
-    if (before) fixHistoryKey.value++ // 처음 읽힌 순간(before 없음)은 기록 카드가 마운트되며 스스로 조회한다
+    if (before) {
+      fixHistoryKey.value++ // 처음 읽힌 순간(before 없음)은 기록 카드가 마운트되며 스스로 조회한다
+      dbChangesKey.value++
+    }
   },
 )
 
@@ -876,6 +889,7 @@ function onAction(kind: NextActionKind) {
           :is-admin="auth.isAdmin"
           :steps="steps"
           :history-count="historyCount"
+          :db-writable="dbWritable"
           @retry="retry"
           @download="downloadAttachment"
         >
@@ -898,6 +912,8 @@ function onAction(kind: NextActionKind) {
           </template>
         </TaskDetailMobile>
         <FixRequestHistory v-if="task.fix" class="q-mt-md" :task-id="String(task.id)" :refresh-key="fixHistoryKey" />
+        <!-- DB 변경 (스펙 2026-11-03 §6.5) — 수정 요청 기록 옆. 기록이 없으면 카드 자체가 없다 -->
+        <TaskDbChanges class="q-mt-md" :task-id="String(task.id)" :is-admin="auth.isAdmin" :refresh-key="dbChangesKey" @changed="refresh" />
         <!-- 좁은 화면: 인라인 패널은 하단 액션 바와 겹쳐 입력이 답답하다 → 카드에는 열기 버튼만, 대화는 전체화면 시트(스펙 §4.2) -->
         <q-card v-if="isInterviewPhase && task.interviewSessionId" id="interview-card" flat bordered class="q-mt-md">
           <q-card-section class="row items-center no-wrap q-gutter-sm">
@@ -1056,7 +1072,10 @@ function onAction(kind: NextActionKind) {
         </q-card-section>
         <q-separator v-if="dbChips.length" />
         <q-card-section v-if="dbChips.length" data-test="task-db-chips">
-          <div class="text-caption q-mb-xs">DB 연결 (읽기 전용 조회)</div>
+          <!-- 쓰기 허용 연결이 있을 때만 문구를 바꾼다 — 인터뷰·디자인은 늘 읽기 전용이고 구현 단계에서만 쓰기가 열린다(스펙 §6.1) -->
+          <div class="text-caption q-mb-xs" data-test="task-db-caption">
+            {{ dbWritable ? 'DB 연결 (인터뷰·디자인은 읽기 전용 조회 · 구현 단계에서는 쓰기 가능)' : 'DB 연결 (읽기 전용 조회)' }}
+          </div>
           <q-chip
             v-for="(label, idx) in dbChips"
             :key="idx"
@@ -1275,6 +1294,9 @@ function onAction(kind: NextActionKind) {
           </q-card-section>
         </q-expansion-item>
       </q-card>
+
+      <!-- DB 변경 카드 (스펙 2026-11-03 §6.5) — 구현 결과 카드 뒤. 구현이 PR 없이 실패했어도 쓴 SQL이 있으면 보이도록 구현 결과 카드 조건과 따로 둔다 -->
+      <TaskDbChanges :task-id="String(task.id)" :is-admin="auth.isAdmin" :refresh-key="dbChangesKey" @changed="refresh" />
 
       <!-- 배포 카드 -->
       <q-card

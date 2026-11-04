@@ -5,6 +5,8 @@
 // (해제할 길이 없으면 대화가 그 id에 갇히고, 서버도 이미 있던 id는 검증하지 않는다 — 스펙 §5.3).
 // 승인 다이얼로그(스펙 2026-10-14 §7)에서 승인자 ≠ 등록자면 allowAdd=false(관리자 소유 연결은 등록자 기준 검증에서 거절)이고,
 // registrantIds(보는 사람에게 안 보이는 등록자 개인 연결)는 "등록자 개인 연결 #id"로 따로 보여 해제만 허용한다.
+// showWrite(스펙 2026-11-03 §6.5)는 승인 다이얼로그만 켠다 — 구현 단계에서 쓰기가 열릴 수 있는 레포일 때 쓰기 허용 공용 연결에 "쓰기" 배지.
+// 질문 화면도 같은 목록을 쓰지만 질문 세션은 늘 읽기 전용이라 배지를 달지 않는다(기본 false).
 import { useQuasar } from 'quasar'
 import DbConnectionDialog from '~/components/DbConnectionDialog.vue'
 import { MAX_DB_SELECTION, dbTypeLabel, type DbConnectionChip, type DbConnectionView } from '~/composables/dbConnections'
@@ -16,8 +18,9 @@ const props = withDefaults(
     knownChips?: DbConnectionChip[]
     allowAdd?: boolean
     registrantIds?: number[]
+    showWrite?: boolean
   }>(),
-  { knownChips: undefined, allowAdd: true, registrantIds: () => [] },
+  { knownChips: undefined, allowAdd: true, registrantIds: () => [], showWrite: false },
 )
 const model = defineModel<number[]>({ default: () => [] })
 const emit = defineEmits<{ reload: [] }>()
@@ -71,7 +74,10 @@ defineExpose({ toggle })
           <q-checkbox :model-value="model.includes(i.id)" :disable="!i.enabled && !model.includes(i.id)" dense @update:model-value="toggle(i.id)" />
         </q-item-section>
         <q-item-section>
-          <q-item-label>{{ i.name }} <q-badge outline color="grey-7" :label="dbTypeLabel(i.dbType)" /></q-item-label>
+          <q-item-label>
+            {{ i.name }} <q-badge outline color="grey-7" :label="dbTypeLabel(i.dbType)" />
+            <q-badge v-if="showWrite && i.allowWrite && i.enabled" color="orange-8" label="쓰기" class="q-ml-xs" data-test="db-write-badge" />
+          </q-item-label>
           <q-item-label caption>{{ i.host }}:{{ i.port }}/{{ i.databaseName }}</q-item-label>
         </q-item-section>
       </q-item>

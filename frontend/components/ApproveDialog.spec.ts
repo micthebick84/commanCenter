@@ -2,6 +2,7 @@ import { mount, flushPromises } from '@vue/test-utils'
 import { describe, it, expect, afterEach, beforeEach, vi } from 'vitest'
 import { QSelect } from 'quasar'
 import ApproveDialog from './ApproveDialog.vue'
+import DbConnectionPicker from './DbConnectionPicker.vue'
 import RefRepoChips from './RefRepoChips.vue'
 import RefRepoAddForm from './RefRepoAddForm.vue'
 import { useApiMock, authStub } from '../test/mocks/nuxt'
@@ -883,6 +884,158 @@ describe('ApproveDialog 작업 타입 (스펙 2026-11-03 §4.2)', () => {
     await w.setProps({ modelValue: true })
     await flushPromises()
     expect(typeSelect(w).props('modelValue')).toBe('FEATURE_CHANGE')
+    w.unmount()
+  })
+})
+
+// 구현 단계 쓰기 표시 (스펙 2026-11-03 §6.5) — 쓰기 배지·캡션·"DB 작업인데 쓰기 연결 없음" 경고.
+// 기본 선택 규칙(공용 활성 연결 전부, 상한 3)은 그대로라 쓰기 허용 연결도 공용이면 미리 골라진다.
+describe('ApproveDialog DB 쓰기 표시 (스펙 2026-11-03 §6.5)', () => {
+  const conn = (id: number, over: Record<string, unknown> = {}) => ({
+    id, repoCatalogId: 9, scope: 'REPO', name: `연결${id}`, dbType: 'POSTGRESQL', host: 'h', port: 5432,
+    databaseName: 'dev', username: 'u', enabled: true, mine: false, allowWrite: false, ...over,
+  })
+  const READ_ONLY = 'DB 연결 — 인터뷰·디자인·구현에서 읽기 전용으로 조회합니다'
+  const DB_WORK_WARNING = '구현 때 개발 DB에 바로 적용할 수 없습니다 — SQL은 스크립트 파일로만 남습니다'
+  const caption = () => document.body.querySelector('[data-test="approve-db-caption"]')
+  const warning = () => document.body.querySelector('[data-test="approve-db-work-warning"]')
+  const badges = () => document.body.querySelectorAll('[data-test="db-write-badge"]')
+
+  beforeEach(() => {
+    ;(authStub as any).me = { user_id: 1, username: 'admin', email: null, authorities: ['ROLE_ADMIN'] }
+  })
+  afterEach(() => {
+    delete (authStub as any).me
+  })
+
+  it('쓰기 허용 연결을 고른 상태면 쓰기 배지가 붙고 캡션이 "구현 단계에서는"으로 바뀐다', async () => {
+    routeApi({ db: { enabled: true, writeEnabled: true, items: [conn(3, { allowWrite: true }), conn(4)] } })
+    const w = mountDialog({ repoCatalogId: 9 })
+    await flushPromises()
+    expect(badges()).toHaveLength(1) // 3번만
+    expect(caption()!.textContent).toContain('구현 단계에서는')
+    expect(caption()!.textContent).not.toBe(READ_ONLY)
+    w.unmount()
+  })
+
+  it('쓰기 허용 연결의 선택을 풀면 캡션이 읽기 전용 문구로 돌아간다(배지는 목록에 그대로)', async () => {
+    routeApi({ db: { enabled: true, writeEnabled: true, items: [conn(3, { allowWrite: true }), conn(4)] } })
+    const w = mountDialog({ repoCatalogId: 9 })
+    await flushPromises()
+    w.findComponent(DbConnectionPicker).vm.$emit('update:modelValue', [4])
+    await flushPromises()
+    expect(caption()!.textContent!.trim()).toBe(READ_ONLY)
+    expect(badges()).toHaveLength(1)
+    w.unmount()
+  })
+
+  it('쓰기 허용 연결이 없으면 배지도 없고 캡션은 지금 문구 그대로다', async () => {
+    routeApi({ db: { enabled: true, writeEnabled: true, items: [conn(3), conn(4)] } })
+    const w = mountDialog({ repoCatalogId: 9 })
+    await flushPromises()
+    expect(badges()).toHaveLength(0)
+    expect(caption()!.textContent!.trim()).toBe(READ_ONLY)
+    w.unmount()
+  })
+
+  it('레포에서 쓰기가 안 열렸거나(writeEnabled false) 옛 응답(키 없음)이면 allowWrite 연결이어도 배지·쓰기 캡션이 없다', async () => {
+    for (const db of [
+      { enabled: true, writeEnabled: false, items: [conn(3, { allowWrite: true })] },
+      { enabled: true, items: [conn(3, { allowWrite: true })] },
+    ]) {
+      routeApi({ db })
+      const w = mountDialog({ repoCatalogId: 9 })
+      await flushPromises()
+      expect(badges()).toHaveLength(0)
+      expect(caption()!.textContent!.trim()).toBe(READ_ONLY)
+      w.unmount()
+      document.body.innerHTML = ''
+    }
+  })
+
+  it('타입이 DB 작업인데 쓰기 허용 연결을 고르지 않았으면 경고를 띄우되 승인은 막지 않는다', async () => {
+    routeApi({ db: { enabled: true, writeEnabled: true, items: [conn(4)] } })
+    const w = mountDialog({ repoCatalogId: 9, taskType: 'DB_WORK' })
+    await flushPromises()
+    expect(warning()!.textContent).toContain(DB_WORK_WARNING)
+    const submit = document.body.querySelector('[data-test="approve-submit"]')!
+    expect(submit.hasAttribute('disabled') || submit.getAttribute('aria-disabled') === 'true').toBe(false)
+    await (w.vm as any).approve()
+    await flushPromises()
+    expect(approveCall()).toBeDefined()
+    w.unmount()
+  })
+
+  it('경고는 작업 타입 칸 안에 있다 — 요약 → 타입 → 지난 인터뷰 안내 순서를 깨지 않는다', async () => {
+    routeApi({ db: { enabled: true, writeEnabled: true, items: [conn(4)] }, interviews: [session(21, 'CANCELLED', '취소됨', 'claude-sonnet-5', 'max')] })
+    const w = mountDialog({ repoCatalogId: 9, taskType: 'DB_WORK' })
+    await flushPromises()
+    const field = document.body.querySelector('[data-test="approve-task-type"]')!.closest('.q-card__section')!
+    expect(field.contains(warning())).toBe(true)
+    expect(field.nextElementSibling).toBe(document.body.querySelector('[data-test="previous-hint"]')!.closest('.q-card__section'))
+    w.unmount()
+  })
+
+  it('DB 작업이어도 쓰기 허용 연결을 골랐으면 경고가 없다 — 고르기를 풀면 나타난다', async () => {
+    routeApi({ db: { enabled: true, writeEnabled: true, items: [conn(3, { allowWrite: true })] } })
+    const w = mountDialog({ repoCatalogId: 9, taskType: 'DB_WORK' })
+    await flushPromises()
+    expect(warning()).toBeNull()
+    w.findComponent(DbConnectionPicker).vm.$emit('update:modelValue', [])
+    await flushPromises()
+    expect(warning()!.textContent).toContain(DB_WORK_WARNING)
+    w.unmount()
+  })
+
+  it('select를 DB 작업으로 바꾸면 경고가 생기고 다른 타입으로 바꾸면 사라진다 — 작업 타입이 없으면 경고 없음', async () => {
+    routeApi({ db: { enabled: true, writeEnabled: true, items: [conn(4)] } })
+    const w = mountDialog({ repoCatalogId: 9, taskType: 'BUG_FIX' })
+    await flushPromises()
+    const select = () =>
+      w.findAllComponents(QSelect).find((c) => (c.vm.$attrs as Record<string, unknown>)['data-test'] === 'approve-task-type')!
+    expect(warning()).toBeNull()
+    select().vm.$emit('update:modelValue', 'DB_WORK')
+    await flushPromises()
+    expect(warning()).not.toBeNull()
+    select().vm.$emit('update:modelValue', 'NEW_FEATURE')
+    await flushPromises()
+    expect(warning()).toBeNull()
+    w.unmount()
+  })
+
+  it('DB 기능이 꺼져 있어도 DB 작업이면 경고한다(연결을 고를 수 없으므로 쓰기 불가)', async () => {
+    routeApi({ db: { enabled: false, items: [] } })
+    const w = mountDialog({ repoCatalogId: 9, taskType: 'DB_WORK' })
+    await flushPromises()
+    expect(document.body.querySelector('[data-test="approve-db"]')).toBeNull()
+    expect(warning()!.textContent).toContain(DB_WORK_WARNING)
+    w.unmount()
+  })
+
+  it('DB 목록을 읽는 중에는 경고를 내지 않는다(선택이 정해지기 전 깜빡임 방지)', async () => {
+    routeApi({})
+    const pending: Array<(v: unknown) => void> = []
+    const base = useApiMock.getMockImplementation()!
+    useApiMock.mockImplementation((url: string, ...rest: unknown[]) => {
+      if (url.startsWith('/api/db-connections?repoCatalogId=')) return new Promise((res) => pending.push(res))
+      return (base as any)(url, ...rest)
+    })
+    const w = mountDialog({ repoCatalogId: 9, taskType: 'DB_WORK' })
+    await flushPromises()
+    expect(warning()).toBeNull()
+    pending[0]!({ enabled: true, writeEnabled: true, items: [conn(3, { allowWrite: true })] })
+    await flushPromises()
+    expect(warning()).toBeNull() // 쓰기 허용 연결이 기본 선택됨
+    w.unmount()
+  })
+
+  it('쓰기 표시 때문에 승인 바디가 달라지지 않는다 — 연결 id만 그대로 싣는다', async () => {
+    routeApi({ db: { enabled: true, writeEnabled: true, items: [conn(3, { allowWrite: true }), conn(4)] } })
+    const w = mountDialog({ repoCatalogId: 9 })
+    await flushPromises()
+    await (w.vm as any).approve()
+    await flushPromises()
+    expect(approveCall()?.[1].body).toEqual({ model: 'claude-opus-5-5', effort: 'medium', mcpCatalogIds: [], dbConnectionIds: [3, 4] })
     w.unmount()
   })
 })

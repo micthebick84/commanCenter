@@ -3,9 +3,9 @@ import { describe, it, expect } from 'vitest'
 import DbConnectionPicker from '../components/DbConnectionPicker.vue'
 import type { DbConnectionView } from '../composables/dbConnections'
 
-const item = (id: number, scope: 'REPO' | 'USER', enabled = true): DbConnectionView => ({
+const item = (id: number, scope: 'REPO' | 'USER', enabled = true, allowWrite = false): DbConnectionView => ({
   id, scope, repoCatalogId: 1, name: `conn${id}`, dbType: 'POSTGRESQL', host: 'h', port: 5432,
-  databaseName: 'app', username: 'u', enabled, mine: scope === 'USER', allowWrite: false,
+  databaseName: 'app', username: 'u', enabled, mine: scope === 'USER', allowWrite,
 })
 
 describe('DbConnectionPicker', () => {
@@ -106,5 +106,27 @@ describe('DbConnectionPicker', () => {
     ;(w.vm as any).toggle(42)
     expect(w.emitted('update:modelValue')!.at(-1)![0]).toEqual([1])
     w.unmount()
+  })
+
+  // 쓰기 허용 표시 (스펙 2026-11-03 §6.5) — 승인 다이얼로그만 showWrite를 켠다. 질문 화면은 같은 목록을 쓰지만 읽기 전용이다.
+  describe('쓰기 배지 (showWrite)', () => {
+    const items = [item(1, 'REPO', true, true), item(2, 'REPO'), item(3, 'USER'), item(4, 'REPO', false, true)]
+
+    it('showWrite이면 쓰기 허용 공용 연결(활성)에만 배지가 붙는다', async () => {
+      const w = mount(DbConnectionPicker, { props: { modelValue: [], items, repoCatalogId: 1, showWrite: true } })
+      await flushPromises()
+      const badges = w.findAll('[data-test="db-write-badge"]')
+      expect(badges).toHaveLength(1) // 1번만 — 쓰기 허용 아님(2)·개인(3)·비활성(4)에는 없다
+      expect(badges[0]!.text()).toBe('쓰기')
+      expect(badges[0]!.element.closest('.q-item')!.textContent).toContain('conn1') // 그 연결 행 안에 있다
+      w.unmount()
+    })
+
+    it('showWrite가 없으면(질문 화면) allowWrite여도 배지가 없다', async () => {
+      const w = mount(DbConnectionPicker, { props: { modelValue: [], items, repoCatalogId: 1 } })
+      await flushPromises()
+      expect(w.find('[data-test="db-write-badge"]').exists()).toBe(false)
+      w.unmount()
+    })
   })
 })

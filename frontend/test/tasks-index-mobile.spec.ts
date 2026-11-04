@@ -146,6 +146,78 @@ describe('pages/tasks — 모바일 리스트 (스펙 2026-09-06 §4.1)', () => 
     w.unmount()
   })
 
+  describe('종료 승인 확인창의 승인 대기 SQL 경고 (스펙 2026-11-03 §6.5)', () => {
+    const MERGE_WARN = 'PR 병합·배포 중지·브랜치 삭제는 되돌릴 수 없습니다.'
+    const deferred = (id: number) => ({ id, classification: 'DEFERRED' })
+    const closeTasks = [t(30, 'CLOSE_REVIEW', '종료승인대기', '2026-08-24T03:00:00Z'), tasks[1]]
+
+    /** 목록·db-changes를 URL로 가른다 — 건수는 db-changes 응답이 정한다(Promise 또는 값). */
+    function stubClose(dbChanges: () => unknown) {
+      useApiMock.mockImplementation((url: string) => {
+        if (url === '/api/tasks/30/db-changes') return dbChanges()
+        return url.startsWith('/api/tasks')
+          ? Promise.resolve({ content: closeTasks, totalElements: 2, totalPages: 1 })
+          : Promise.resolve(null)
+      })
+    }
+    async function openCloseApprove() {
+      await setViewportWidth(390)
+      const w = mount(PageWrapper, { attachTo: document.body })
+      await flushPromises()
+      await w.findAll('[data-test="card-menu"]')[0]!.trigger('click') // #30 종료승인대기(확인 필요 그룹 첫 카드)
+      await flushPromises()
+      ;(document.body.querySelector('[data-test="sheet-move"]') as HTMLElement).click()
+      await flushPromises()
+      return w
+    }
+
+    it('승인 대기 SQL이 있으면 병합 문장 뒤에 건수 한 줄이 붙고, 승인은 그대로 POST한다', async () => {
+      stubClose(() => Promise.resolve([deferred(1), deferred(2), { id: 3, classification: 'EXECUTED' }]))
+      const w = await openCloseApprove()
+      expect(useApiMock).toHaveBeenCalledWith('/api/tasks/30/db-changes')
+      expect(document.body.textContent).toContain(`${MERGE_WARN} 승인 대기 SQL 2건 — 병합 뒤 실행 필요`)
+      await confirmOk()
+      expect(useApiMock).toHaveBeenCalledWith('/api/tasks/30/close/approve', { method: 'POST' })
+      w.unmount()
+    })
+
+    it('승인 대기가 없으면 문장은 그대로다', async () => {
+      stubClose(() => Promise.resolve([{ id: 3, classification: 'EXECUTED' }]))
+      const w = await openCloseApprove()
+      expect(document.body.textContent).toContain(MERGE_WARN)
+      expect(document.body.textContent).not.toContain('승인 대기 SQL')
+      w.unmount()
+    })
+
+    it('건수 조회가 실패하면 경고 없이 확인창을 띄우고 승인할 수 있다', async () => {
+      stubClose(() => Promise.reject(new Error('500')))
+      const w = await openCloseApprove()
+      expect(document.body.textContent).toContain(MERGE_WARN)
+      expect(document.body.textContent).not.toContain('승인 대기 SQL')
+      await confirmOk()
+      expect(useApiMock).toHaveBeenCalledWith('/api/tasks/30/close/approve', { method: 'POST' })
+      w.unmount()
+    })
+
+    it('종료 재시도는 건수를 조회하지 않고 문장도 그대로다 — 병합이 이미 끝난 뒤의 마무리라 경고 대상이 아니다', async () => {
+      useApiMock.mockImplementation((url: string) =>
+        url.startsWith('/api/tasks')
+          ? Promise.resolve({ content: [t(31, 'CLOSE_FAILED', '종료실패', '2026-08-24T03:00:00Z')], totalElements: 1, totalPages: 1 })
+          : Promise.resolve(null),
+      )
+      await setViewportWidth(390)
+      const w = mount(PageWrapper, { attachTo: document.body })
+      await flushPromises()
+      await w.findAll('[data-test="card-menu"]')[0]!.trigger('click')
+      await flushPromises()
+      ;(document.body.querySelector('[data-test="sheet-move"]') as HTMLElement).click()
+      await flushPromises()
+      expect(document.body.textContent).toContain(MERGE_WARN)
+      expect(useApiMock.mock.calls.some((c) => String(c[0]).endsWith('/db-changes'))).toBe(false)
+      w.unmount()
+    })
+  })
+
   it('데스크톱(1024)에서는 기존 보드가 그대로다', async () => {
     const w = mount(PageWrapper, { attachTo: document.body })
     await flushPromises()

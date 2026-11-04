@@ -137,6 +137,16 @@ function apiResponse(path) {
       decidedBy: 'admin', decidedAt: NOW, decisionReason: null, attempt: 1, outcome: 'DEPLOYED', closedAt: NOW,
     }]
   }
+  // DB 변경 기록(시간순, 스펙 2026-11-03 §6.5) — 작업 상세 카드. 작업 1만 실행됨 1·승인 대기 1(관리자 실행·실행 안 함 버튼), 나머지는 빈 목록(카드 없음)
+  const dbc = path.match(/^\/api\/tasks\/(\d+)\/db-changes$/)
+  if (dbc) {
+    if (Number(dbc[1]) !== 1) return []
+    const base = { connectionId: 1, connectionName: '개발 DB', attempt: 1, fixRequestId: null, reason: null, affectedRows: null, error: null, createdAt: NOW, executedBy: null }
+    return [
+      { ...base, id: 1, sqlText: 'CREATE TABLE t_smoke (id int)', classification: 'EXECUTED', executedAt: NOW },
+      { ...base, id: 2, sqlText: 'ALTER TABLE t_old DROP COLUMN c_old', classification: 'DEFERRED', reason: '남의 테이블 컬럼 삭제는 승인 대기로 기록됩니다', executedAt: null },
+    ]
+  }
   if (path === '/api/questions') return [QUESTION]
   if (/^\/api\/questions\/\d+$/.test(path)) return QUESTION
   if (path === '/api/usage/claude') return { limits: [] }

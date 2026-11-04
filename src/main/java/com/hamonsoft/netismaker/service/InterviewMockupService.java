@@ -10,9 +10,11 @@ import com.hamonsoft.netismaker.repository.InterviewSessionRepository;
 import org.springframework.context.annotation.Profile;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.nio.charset.StandardCharsets;
+import java.util.List;
 import java.util.regex.Pattern;
 
 /**
@@ -98,6 +100,31 @@ public class InterviewMockupService {
                 description.isEmpty() ? null : description, html));
         return new InterviewMockupSummary(m.getId(), m.getN(), m.getName(), m.getVersion(), m.getTitle(),
                 m.getDescription(), m.getTurnSeq(), m.getTurnKind(), m.getCreatedAt());
+    }
+
+    /**
+     * 턴 도중 올라온(안 묶인) 목업을 그 턴에 묶는다 — 턴이 질문(question|design)이나 계획(design 턴)으로 끝날 때.
+     * 호출자({@code InterviewService.recordQuestion}·{@code recordPlan})의 트랜잭션 안에서만 부른다: 그 트랜잭션이 잡은
+     * 세션 행 잠금이 업로드({@link #upload})와 묶기를 직렬화하고, 턴 저장과 묶기가 함께 커밋·롤백돼야 한다.
+     */
+    @Transactional(propagation = Propagation.MANDATORY)
+    public void bindUnbound(Long sessionId, int turnSeq, String turnKind) {
+        repo.bindUnbound(sessionId, turnSeq, turnKind);
+    }
+
+    /**
+     * 끊긴 턴의 안 묶인 목업을 버린다 — 세션이 RUNNING을 떠나 그 턴이 질문·계획으로 끝나지 못할 때(재기동 재큐·실패·취소·만료·작업 삭제).
+     * 버린 목업은 목록·상한·확정에서 빠진다. 호출자의 상태 전이 트랜잭션 안에서만 부른다(전이와 함께 커밋·롤백).
+     */
+    @Transactional(propagation = Propagation.MANDATORY)
+    public void discardUnbound(Long sessionId) {
+        repo.discardUnbound(sessionId);
+    }
+
+    /** 세션의 목업 목록(html 없음, 버린 것 제외, n 순) — 보고 뒤 SSE push·세션 상세·목록 조회가 쓴다. */
+    @Transactional(readOnly = true)
+    public List<InterviewMockupSummary> list(Long sessionId) {
+        return repo.findSummaries(sessionId);
     }
 
     /** 줄바꿈·제어문자·연속 공백을 공백 하나로 바꾸고 앞뒤를 자른다. null은 빈 문자열. */

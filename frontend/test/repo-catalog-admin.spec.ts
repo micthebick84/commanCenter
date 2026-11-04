@@ -294,4 +294,89 @@ describe('admin/repo-catalog', () => {
     expect(put[1].body).not.toHaveProperty('noteFolder')
     w.unmount()
   })
+
+  // 구현 단계 DB 쓰기 칸 (스펙 2026-11-03 task-type-db-write §6.6·§6.8)
+  const dbRow = {
+    ...noteRow, id: 21, alias: '라이나 생명',
+    dbMigrationManaged: true, dbScriptDir: 'db/sql',
+  }
+
+  it('목록에는 자동 마이그레이션으로 켠 항목에만 칩이 보인다', async () => {
+    const w = await mountPage([dbRow, { ...dbRow, id: 22, alias: '일반 레포', dbMigrationManaged: false, dbScriptDir: null }])
+    const chips = w.findAll('[data-test="catalog-db-migration-chip"]')
+    expect(chips).toHaveLength(1)
+    expect(chips[0].text()).toBe('자동 마이그레이션')
+    w.unmount()
+  })
+
+  it('수정 창이 자동 마이그레이션 표시·스크립트 폴더를 채우고, 빈 폴더 칸은 db/symphony를 안내한다', async () => {
+    const w = await mountPage([dbRow])
+    await openEditOf(w)
+    expect((document.querySelector('[data-test="form-db-migration-managed"]') as HTMLElement).getAttribute('aria-checked')).toBe('true')
+    expect((document.querySelector('[data-test="form-db-script-dir"]') as HTMLInputElement).value).toBe('db/sql')
+    expect((document.querySelector('[data-test="form-db-script-dir"]') as HTMLInputElement).placeholder).toBe('db/symphony')
+    w.unmount()
+  })
+
+  it('DB 칸을 안 바꾸고 저장하면 PUT 바디에 두 키가 없다', async () => {
+    const w = await mountPage([dbRow])
+    await openEditOf(w)
+    const body = await submitAndBody()
+    expect(body).not.toHaveProperty('dbMigrationManaged')
+    expect(body).not.toHaveProperty('dbScriptDir')
+    w.unmount()
+  })
+
+  it('카탈로그 저장은 바꾼 칸만 — 자동 마이그레이션만 바꾸면 dbScriptDir 키가 없다', async () => {
+    const w = await mountPage([dbRow])
+    await openEditOf(w)
+    ;(document.querySelector('[data-test="form-db-migration-managed"]') as HTMLElement).click()
+    await flushPromises()
+    const body = await submitAndBody()
+    expect(body).toMatchObject({ dbMigrationManaged: false })
+    expect(body).not.toHaveProperty('dbScriptDir')
+    w.unmount()
+  })
+
+  it('스크립트 폴더만 바꾸면 다듬은 값만 보내고 dbMigrationManaged 키가 없다', async () => {
+    const w = await mountPage([dbRow])
+    await openEditOf(w)
+    setInput('[data-test="form-db-script-dir"]', ' db/changes ')
+    await flushPromises()
+    const body = await submitAndBody()
+    expect(body).toMatchObject({ dbScriptDir: 'db/changes' })
+    expect(body).not.toHaveProperty('dbMigrationManaged')
+    w.unmount()
+  })
+
+  it('스크립트 폴더를 지우면 빈 문자열을 보낸다 — 기본 폴더로 되돌림', async () => {
+    const w = await mountPage([dbRow])
+    await openEditOf(w)
+    setInput('[data-test="form-db-script-dir"]', '')
+    await flushPromises()
+    expect(await submitAndBody()).toMatchObject({ dbScriptDir: '' })
+    w.unmount()
+  })
+
+  it('옛 응답(두 칸 없음)으로 연 수정 창은 저장해도 두 키를 보내지 않는다', async () => {
+    const w = await mountPage([noteRow])
+    await openEditOf(w)
+    expect((document.querySelector('[data-test="form-db-script-dir"]') as HTMLInputElement).value).toBe('')
+    const body = await submitAndBody()
+    expect(body).not.toHaveProperty('dbMigrationManaged')
+    expect(body).not.toHaveProperty('dbScriptDir')
+    w.unmount()
+  })
+
+  it('등록 때 두 칸을 건드렸을 때만 싣는다', async () => {
+    const w = await mountPage([])
+    await w.find('[data-test="open-create"]').trigger('click')
+    await flushPromises()
+    await fillRequired()
+    ;(document.querySelector('[data-test="form-db-migration-managed"]') as HTMLElement).click()
+    setInput('[data-test="form-db-script-dir"]', 'db/changes')
+    await flushPromises()
+    expect(await submitAndBody()).toMatchObject({ dbMigrationManaged: true, dbScriptDir: 'db/changes' })
+    w.unmount()
+  })
 })

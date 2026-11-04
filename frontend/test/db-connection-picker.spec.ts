@@ -5,7 +5,7 @@ import type { DbConnectionView } from '../composables/dbConnections'
 
 const item = (id: number, scope: 'REPO' | 'USER', enabled = true): DbConnectionView => ({
   id, scope, repoCatalogId: 1, name: `conn${id}`, dbType: 'POSTGRESQL', host: 'h', port: 5432,
-  databaseName: 'app', username: 'u', enabled, mine: scope === 'USER',
+  databaseName: 'app', username: 'u', enabled, mine: scope === 'USER', allowWrite: false,
 })
 
 describe('DbConnectionPicker', () => {

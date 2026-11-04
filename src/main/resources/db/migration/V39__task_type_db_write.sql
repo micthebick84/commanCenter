@@ -1,3 +1,5 @@
+-- 정정: V24__db_connection.sql:25의 "인터뷰 세션은 항상 []" 주석은 낡았다 — 작업 인터뷰 세션은 승인 때 작업이 고른 연결 id를 복사해 받는다
+-- (V28, InterviewService.createForTask). 적용이 끝난 V24는 Flyway 체크섬 때문에 고치지 않고 여기에 바로잡는다.
 -- 작업 타입 (스펙 2026-11-03 §4.2·§7). NULL = 타입 없음 — 기존 행은 NULL로 두고 지금 동작 그대로.
 -- 값: NEW_FEATURE(신규 개발) | FEATURE_CHANGE(기능 수정) | BUG_FIX(버그 픽스) | DB_WORK(DB 작업).
 -- 제약에 이름을 붙인다(V29의 ck_task_implementation_mode와 같은 방식) — 이름 없는 인라인 CHECK면

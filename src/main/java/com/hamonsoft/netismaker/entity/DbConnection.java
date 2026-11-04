@@ -58,6 +58,14 @@ public class DbConnection {
     @Column(nullable = false)
     private boolean enabled;
 
+    /**
+     * 구현 단계 쓰기 허용 (스펙 2026-11-03 §6.1 조건 4). REPO 연결에만 켤 수 있다(DB CHECK ck_db_connection_allow_write_repo).
+     * 일반 등록·수정 바디로는 바꾸지 않고 관리자 전용 경로(DbConnectionService.setAllowWrite)로만 바꾼다.
+     * 접속 대상(db_type·host·port·database_name·username)이 바뀌면 서비스가 같은 트랜잭션에서 끈다.
+     */
+    @Column(name = "allow_write", nullable = false)
+    private boolean allowWrite;
+
     @Column(name = "created_by", length = 20)
     private String createdBy;
 

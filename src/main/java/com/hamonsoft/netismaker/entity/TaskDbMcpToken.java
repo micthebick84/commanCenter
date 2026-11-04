@@ -4,6 +4,7 @@ import jakarta.persistence.*;
 import lombok.AccessLevel;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
+import lombok.Setter;
 
 import java.time.OffsetDateTime;
 
@@ -32,6 +33,14 @@ public class TaskDbMcpToken {
 
     @Column(name = "expires_at", nullable = false)
     private OffsetDateTime expiresAt;
+
+    /**
+     * 발급 때 쓰기가 허가됐는지 (스펙 2026-11-03 §6.1 조건 6 — 쓰기를 지원하는 워커가 받은 구현 단계 토큰).
+     * 옛 워커가 받은 토큰은 false라, 실행 시점에 이 값으로 쓰기 도구를 막는다.
+     */
+    @Column(name = "write_granted", nullable = false)
+    @Setter
+    private boolean writeGranted;
 
     public static TaskDbMcpToken issue(Long taskId, String tokenHash, String stage,
                                        OffsetDateTime issuedAt, OffsetDateTime expiresAt) {

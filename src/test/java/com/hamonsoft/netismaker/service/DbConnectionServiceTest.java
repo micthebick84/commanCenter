@@ -1,11 +1,13 @@
 package com.hamonsoft.netismaker.service;
 
+import com.hamonsoft.netismaker.dbmcp.DbWriteProperties;
 import com.hamonsoft.netismaker.dto.DbConnectionDto;
 import com.hamonsoft.netismaker.entity.DbConnection;
 import com.hamonsoft.netismaker.entity.DbConnectionScope;
 import com.hamonsoft.netismaker.entity.DbType;
 import com.hamonsoft.netismaker.repository.DbConnectionRepository;
 import com.hamonsoft.netismaker.repository.RepoCatalogRepository;
+import com.hamonsoft.netismaker.repository.TaskDbObjectRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
@@ -23,8 +25,10 @@ import static org.mockito.Mockito.*;
 class DbConnectionServiceTest {
 
     private static final String SALT = "0123456789abcdef";
+    private static final DbWriteProperties WRITE_PROPS = new DbWriteProperties(false, 1000, 10000);
     private DbConnectionRepository repo;
     private RepoCatalogRepository repoCatalogRepo;
+    private TaskDbObjectRepository dbObjects;
     private DbConnectionTester tester;
     private DbSecretCipher cipher;
     private DbConnectionService service;
@@ -33,9 +37,10 @@ class DbConnectionServiceTest {
     void setUp() {
         repo = mock(DbConnectionRepository.class);
         repoCatalogRepo = mock(RepoCatalogRepository.class);
+        dbObjects = mock(TaskDbObjectRepository.class);
         tester = mock(DbConnectionTester.class);
         cipher = new DbSecretCipher("test-key", SALT);
-        service = new DbConnectionService(repo, cipher, tester, repoCatalogRepo);
+        service = new DbConnectionService(repo, cipher, tester, repoCatalogRepo, dbObjects, WRITE_PROPS);
         when(repo.save(any())).thenAnswer(i -> {
             DbConnection c = i.getArgument(0);
             if (c.getId() == null) ReflectionTestUtils.setField(c, "id", 42L);
@@ -83,7 +88,7 @@ class DbConnectionServiceTest {
 
     @Test
     void list_when_disabled_returns_enabled_false() {
-        service = new DbConnectionService(repo, new DbSecretCipher("", ""), tester, repoCatalogRepo);
+        service = new DbConnectionService(repo, new DbSecretCipher("", ""), tester, repoCatalogRepo, dbObjects, WRITE_PROPS);
         assertThat(service.list(1L, "user1", false)).isEqualTo(new DbConnectionDto.ListResponse(false, List.of()));
         assertStatus(() -> service.create(upsert(DbConnectionScope.USER, "pw"), "user1", false), HttpStatus.SERVICE_UNAVAILABLE);
     }
@@ -178,7 +183,7 @@ class DbConnectionServiceTest {
     @Test
     void validate_selection_when_disabled_is_400_not_503() {
         // 선택 검증의 "기능 켜짐" 위반은 400(스펙 §5.3) — CRUD/test 엔드포인트의 503과 구분
-        service = new DbConnectionService(repo, new DbSecretCipher("", ""), tester, repoCatalogRepo);
+        service = new DbConnectionService(repo, new DbSecretCipher("", ""), tester, repoCatalogRepo, dbObjects, WRITE_PROPS);
         assertStatus(() -> service.validateSelection(1L, "user1", List.of(1L)), HttpStatus.BAD_REQUEST);
         assertThat(service.validateSelection(1L, "user1", null)).isEmpty();
         assertThat(service.validateSelection(1L, "user1", List.of())).isEmpty();
@@ -213,7 +218,7 @@ class DbConnectionServiceTest {
 
     @Test
     void resolve_for_claim_when_disabled_gives_single_notice() {
-        service = new DbConnectionService(repo, new DbSecretCipher("", ""), tester, repoCatalogRepo);
+        service = new DbConnectionService(repo, new DbSecretCipher("", ""), tester, repoCatalogRepo, dbObjects, WRITE_PROPS);
         DbConnectionService.ClaimDb db = service.resolveForClaim(List.of(1L));
         assertThat(db.refs()).isEmpty();
         assertThat(db.notices()).containsExactly("DB 접속정보 기능이 꺼져 있어 DB 도구를 붙이지 않았습니다");

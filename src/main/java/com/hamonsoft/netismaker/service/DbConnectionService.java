@@ -1,11 +1,13 @@
 package com.hamonsoft.netismaker.service;
 
+import com.hamonsoft.netismaker.dbmcp.DbWriteProperties;
 import com.hamonsoft.netismaker.dto.DbConnectionDto;
 import com.hamonsoft.netismaker.dto.InterviewClaimResponse;
 import com.hamonsoft.netismaker.entity.DbConnection;
 import com.hamonsoft.netismaker.entity.DbConnectionScope;
 import com.hamonsoft.netismaker.repository.DbConnectionRepository;
 import com.hamonsoft.netismaker.repository.RepoCatalogRepository;
+import com.hamonsoft.netismaker.repository.TaskDbObjectRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.context.annotation.Profile;
@@ -25,6 +27,9 @@ import java.util.Optional;
  * DB 접속정보 (스펙 2026-10-02 §5). 보이는 범위: REPO = 그 레포를 고르는 모든 사용자(비활성은 관리자만),
  * USER = 본인만(관리자도 남의 USER는 못 본다 — 존재 노출 방지로 404). 편집: REPO = 관리자, USER = 본인.
  * 저장된 비밀번호를 쓰는 접속 테스트(id 지정)는 편집 권한자만 — 다른 host로 저장 비밀번호를 보내는 경로 차단.
+ *
+ * 구현 단계 쓰기 허용(스펙 2026-11-03 §6.1 조건 4): allow_write는 관리자 전용 경로 setAllowWrite로만 바꾼다 — 일반 등록·수정
+ * 바디에는 칸이 없다. REPO 연결에만 켤 수 있고, 접속 대상이 바뀌는 수정은 같은 트랜잭션에서 끄고 소유 기록을 지운다.
  */
 @Service
 @Profile("api")
@@ -38,13 +43,18 @@ public class DbConnectionService {
     private final DbSecretCipher cipher;
     private final DbConnectionTester tester;
     private final RepoCatalogRepository repoCatalogRepo;
+    private final TaskDbObjectRepository dbObjects;
+    private final DbWriteProperties writeProps;
 
     public DbConnectionService(DbConnectionRepository repo, DbSecretCipher cipher, DbConnectionTester tester,
-                               RepoCatalogRepository repoCatalogRepo) {
+                               RepoCatalogRepository repoCatalogRepo, TaskDbObjectRepository dbObjects,
+                               DbWriteProperties writeProps) {
         this.repo = repo;
         this.cipher = cipher;
         this.tester = tester;
         this.repoCatalogRepo = repoCatalogRepo;
+        this.dbObjects = dbObjects;
+        this.writeProps = writeProps;
     }
 
     /** claim 보강 결과 — refs는 복호화된 접속정보(내부 API 전용), notices는 프롬프트에 붙일 안내. */
@@ -56,12 +66,18 @@ public class DbConnectionService {
 
     @Transactional(readOnly = true)
     public DbConnectionDto.ListResponse list(Long repoCatalogId, String viewerId, boolean isAdmin) {
-        if (!cipher.isEnabled()) return new DbConnectionDto.ListResponse(false, List.of());
+        if (!cipher.isEnabled()) return new DbConnectionDto.ListResponse(false, List.of(), false);
         List<DbConnectionDto.View> items = repo.findByRepoCatalogIdOrderByScopeAscNameAsc(repoCatalogId).stream()
                 .filter(c -> canView(c, viewerId, isAdmin))
                 .map(c -> DbConnectionDto.View.of(c, viewerId))
                 .toList();
-        return new DbConnectionDto.ListResponse(true, items);
+        return new DbConnectionDto.ListResponse(true, items, writeEnabledFor(repoCatalogId));
+    }
+
+    /** 전역 스위치(조건 1)가 켜져 있고 레포가 자동 마이그레이션이 아닐 때(조건 5) — 카탈로그 항목이 없으면 false. */
+    private boolean writeEnabledFor(Long repoCatalogId) {
+        return writeProps.enabled()
+                && repoCatalogRepo.findById(repoCatalogId).map(e -> !e.isDbMigrationManaged()).orElse(false);
     }
 
     @Transactional
@@ -84,6 +100,8 @@ public class DbConnectionService {
     public DbConnection update(Long id, DbConnectionDto.UpsertRequest req, String actorId, boolean isAdmin) {
         requireEnabled();
         DbConnection c = requireEditable(id, actorId, isAdmin);
+        // 접속 대상이 같은지는 기존 값을 덮어쓰기 전에 본다. 이름·활성 토글의 같은 값 재전송·공백 차이는 같은 대상이다
+        boolean sameTarget = sameTarget(c, req);
         c.setName(req.name().strip());
         c.setDbType(req.dbType());
         c.setHost(req.host().strip());
@@ -92,8 +110,45 @@ public class DbConnectionService {
         c.setUsername(req.username().strip());
         if (!isBlank(req.password())) c.setPasswordEnc(cipher.encrypt(req.password()));
         if (req.enabled() != null) c.setEnabled(req.enabled());
+        if (!sameTarget) {
+            // 다른 DB로 쓰기가 새는 것과 옛 소유 기록이 새 DB의 같은 이름 객체에 적용되는 것을 막는다(§6.1 조건 4).
+            // 표시가 이미 꺼져 있어도 기록은 지운다 — 꺼 둔 사이에 대상을 바꾸고 다시 켜는 경우를 막기 위해서다.
+            c.setAllowWrite(false);
+            dbObjects.deleteByConnectionId(c.getId());
+        }
         c.setUpdatedAt(OffsetDateTime.now());
         return c;
+    }
+
+    /**
+     * 구현 단계 쓰기 허용 표시를 바꾼다(스펙 2026-11-03 §6.1 조건 4). 관리자 전용 — 컨트롤러가 @PreAuthorize로 막고,
+     * 일반 등록·수정(update)은 이 값을 건드리지 않는다. 개인(USER) 연결은 켤 수 없다(소유자가 접속 대상을 언제든 바꿀 수 있고
+     * 관리자가 볼 수도 없다). 전역 스위치가 꺼져 있어도 표시는 바꿀 수 있다 — 스위치는 쓰기가 열리는 조건일 뿐이다.
+     */
+    @Transactional
+    public DbConnection setAllowWrite(Long id, boolean allow) {
+        requireEnabled();
+        DbConnection c = repo.findById(id).orElseThrow(TaskException::notFound);
+        if (c.getScope() != DbConnectionScope.REPO) {
+            throw new TaskException(HttpStatus.BAD_REQUEST, "개인 연결에는 쓰기 허용을 켤 수 없습니다");
+        }
+        c.setAllowWrite(allow);
+        c.setUpdatedAt(OffsetDateTime.now());
+        return c;
+    }
+
+    /** 저장된 연결과 수정 요청의 접속 대상(db_type·host·port·database_name·username)이 같은지 — strip한 값끼리 비교한다. */
+    static boolean sameTarget(DbConnection c, DbConnectionDto.UpsertRequest req) {
+        return c.getDbType() == req.dbType()
+                && Objects.equals(c.getHost(), strip(req.host()))
+                && Objects.equals(c.getPort(), req.port())
+                && Objects.equals(c.getDatabaseName(), strip(req.databaseName()))
+                && Objects.equals(c.getUsername(), strip(req.username()));
+    }
+
+    /** claim·기록에 쓰는 연결 표시 이름 — 인터뷰·구현 프롬프트의 label과 쓰기 기록의 connection_name이 같은 문구를 쓴다. */
+    public static String claimLabel(DbConnection c) {
+        return c.getName() + " (" + c.getDbType().getLabel() + ")";
     }
 
     @Transactional
@@ -190,17 +245,28 @@ public class DbConnectionService {
                 continue;
             }
             DbConnection c = found.get();
-            Optional<String> pw = cipher.tryDecrypt(c.getPasswordEnc());
-            if (pw.isEmpty()) {
-                log.warn("DB 접속정보 복호화 실패 id={}", id);
+            Optional<InterviewClaimResponse.DbConnectionRef> ref = refOf(c);
+            if (ref.isEmpty()) {
                 notices.add("DB 연결 '" + c.getName() + "'를 복호화할 수 없습니다 — 접속정보를 다시 저장해야 합니다");
                 continue;
             }
-            refs.add(new InterviewClaimResponse.DbConnectionRef(SERVER_PREFIX + id,
-                    c.getName() + " (" + c.getDbType().getLabel() + ")", c.getDbType().name(),
-                    c.getHost(), c.getPort(), c.getDatabaseName(), c.getUsername(), pw.get()));
+            refs.add(ref.get());
         }
         return new ClaimDb(refs, notices);
+    }
+
+    /**
+     * 연결 행 하나로 복호화한 접속정보(claim·쓰기 실행이 함께 쓴다 — 복호화·조립 코드를 한 곳에 둔다). 다시 읽지 않고 넘겨받은 행만 본다.
+     * 복호화할 수 없으면 empty(경고 로그 — 비밀번호·암호문은 싣지 않는다). 기능이 꺼졌는지는 호출자가 본다.
+     */
+    Optional<InterviewClaimResponse.DbConnectionRef> refOf(DbConnection c) {
+        Optional<String> pw = cipher.tryDecrypt(c.getPasswordEnc());
+        if (pw.isEmpty()) {
+            log.warn("DB 접속정보 복호화 실패 id={}", c.getId());
+            return Optional.empty();
+        }
+        return Optional.of(new InterviewClaimResponse.DbConnectionRef(SERVER_PREFIX + c.getId(), claimLabel(c),
+                c.getDbType().name(), c.getHost(), c.getPort(), c.getDatabaseName(), c.getUsername(), pw.get()));
     }
 
     static boolean canView(DbConnection c, String viewerId, boolean isAdmin) {
@@ -233,5 +299,9 @@ public class DbConnectionService {
 
     private static boolean isBlank(String s) {
         return s == null || s.isBlank();
+    }
+
+    private static String strip(String s) {
+        return s == null ? null : s.strip();
     }
 }

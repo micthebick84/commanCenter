@@ -81,7 +81,7 @@
   2) 지금의 WAR·JAR 검색(CLOSE_ARTIFACT_SEARCH_DIRS, -maxdepth 2, 정확히 1개) — 동작·문구 그대로
 ```
 
-1)을 2)보다 먼저 보는 이유: 경북대 이미지에는 `webapps/ROOT.war`(대구)와 `/opt/netis-artifact/knu-wars.zip`(대구+상주)이 함께 있다. 1)은 2)와 같은 방식(임시 컨테이너 `find`, 오류 출력·종료 코드는 무시하고 `/`로 시작하는 줄만)으로 한다 — 두 번 `docker run` 하지 않고 한 번에 묶을지는 빌더 판단.
+1)을 2)보다 먼저 보는 이유: 경북대 이미지에는 `webapps/ROOT.war`(대구)와 `/opt/netis-artifact/knu-wars.zip`(대구+상주)이 함께 있다. 1)은 2)와 같은 방식(임시 컨테이너 `find`, `/opt/netis-artifact/`로 시작하는 줄만)으로 하되, `find`가 0이 아닌 코드로 끝나고 출력이 "폴더 없음"(`No such file or directory`)이나 "find 없음"(`executable file not found`)이 아니면 **종료실패**(`산출물: 납품 폴더 확인 실패 — … — 데몬 상태를 확인하고 재시도`)한다. 데몬·ssh 일시 오류를 "납품 파일 없음"으로 보면 2)가 `ROOT.war`를 조용히 보관해 되돌릴 수 없이 작업종료되기 때문이다(최종 검토 반영, 2026-11-04 원격 데몬에서 busybox·GNU `find`와 없는 실행 파일의 실제 문구 확인).
 
 꺼내기(`docker create` → `docker cp <상자>:<경로> <로컬 파일>` → `docker rm -f`)·sha256·업로드·작업 폴더 정리는 지금과 같다.
 

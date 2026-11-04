@@ -148,8 +148,16 @@ public class ArtifactPublisher {
         if (spec != null && spec.path() != null && !spec.path().isBlank()) {
             path = spec.path().trim();
         } else {
-            List<String> bundle = bundleFiles(run(List.of("run", "--rm", "--entrypoint", "find", image,
-                    ArtifactNames.IMAGE_DIR, "-mindepth", "1", "-maxdepth", "1", "-type", "f"), SHORT_TIMEOUT_SECONDS).stdout());
+            ProcessRunner.Result probe = run(List.of("run", "--rm", "--entrypoint", "find", image,
+                    ArtifactNames.IMAGE_DIR, "-mindepth", "1", "-maxdepth", "1", "-type", "f"), SHORT_TIMEOUT_SECONDS);
+            List<String> bundle = bundleFiles(probe.stdout());
+            // 폴더 없음·find 없음만 "납품 파일 없음"으로 본다. 데몬·ssh 오류까지 그렇게 보면 경북대처럼 ROOT.war도 있는
+            // 이미지에서 WAR 하나가 조용히 보관돼 되돌릴 수 없이 작업종료된다(inspect와 같은 원칙).
+            if (probe.exitCode() != 0 && bundle.isEmpty() && !bundleAbsent(probe.stdout())) {
+                String why = tail(probe.stdout() == null ? "" : probe.stdout().replaceAll("\\s+", " "));
+                throw new ArtifactException("산출물: 납품 폴더 확인 실패" + (why.isBlank() ? "" : " — " + why)
+                        + " — 데몬 상태를 확인하고 재시도");
+            }
             if (bundle.size() > 1) {
                 throw new ArtifactException("산출물: " + ArtifactNames.IMAGE_DIR + "/에 파일이 여러 개입니다 — 하나만 두거나 "
                         + "카탈로그에 경로를 지정하세요(후보: " + String.join(", ", bundle) + ")");
@@ -213,6 +221,13 @@ public class ArtifactPublisher {
         if (last.length() > 100) last = last.substring(0, 100);
         String ext = ArtifactNames.extension(path).orElseThrow();
         return last + "-task-" + task.id() + "-" + DeployService.shortSha(task.headSha()) + "." + ext;
+    }
+
+    /** 납품 폴더 find가 실패한 출력이 "폴더 없음"(find) 또는 "find 없음"(이미지)인지 — 그때만 WAR 검색으로 넘어간다. */
+    static boolean bundleAbsent(String output) {
+        if (output == null) return false;
+        String lower = output.toLowerCase(Locale.ROOT);
+        return lower.contains("no such file or directory") || lower.contains("executable file not found");
     }
 
     /** 납품 폴더 find 출력에서 그 폴더 아래 경로 줄만 — 없는 폴더 오류("find: ...")·빈 줄은 버린다. */

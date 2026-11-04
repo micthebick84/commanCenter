@@ -49,6 +49,8 @@ export interface PendingActivity {
 
 export interface InterviewSnapshot {
   statusName?: string | null
+  /** 인터뷰 방식 — false면 간단 인터뷰(superpowers 끔). 칸이 없거나 null이면 켬(구 API·질문 세션). 패널의 "계획 고쳐 달라기" 판정에만 쓴다. */
+  superpowersEnabled?: boolean | null
   turns?: Array<{
     seq: number
     role: string

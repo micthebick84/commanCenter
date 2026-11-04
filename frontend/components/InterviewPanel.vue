@@ -11,6 +11,7 @@ import PendingBubble from '~/components/chat/PendingBubble.vue'
 import ImplementationModePicker from '~/components/ImplementationModePicker.vue'
 import { DEFAULT_IMPLEMENTATION_MODE, type ImplementationMode } from '~/composables/implementationMode'
 import RefRepoChips from '~/components/RefRepoChips.vue'
+import { canRequestPlanFix, PLAN_FIX_PLACEHOLDER, PLAN_FIX_SEND } from '~/composables/interviewMode'
 // defineProps 타입이므로 상대 경로 — vitest는 .nuxt 없이 돌아 SFC 매크로 타입의 `~/` import를 못 푼다.
 import { splitConfirmRefs, type RefRepoInput, type RefRepoView } from '../composables/refRepos'
 
@@ -93,9 +94,27 @@ const lastQuestionSeq = computed(() => {
   return null
 })
 
-const canAnswer = computed(
-  () => status.value === 'AWAITING_INPUT' && !sending.value && !!answer.value.trim(),
+// 계획 고쳐 달라기의 낙관적 턴 seq — 지금까지의 모든 턴 뒤에 놓는다. turns에는 design 턴이 없어 길이로 잡으면 뒤의 답변 앞으로 밀리고,
+// 정수 seq(서버 턴)와 겹치면 pushTurn이 그 턴을 중복으로 버리므로, 마지막 턴과 다음 정수의 중간(여러 번 고쳐도 서로 다른 소수)으로 잡는다.
+function seqAfterAllTurns(): number {
+  const last = Math.max(0, ...turns.value.map((t) => t.seq))
+  return (last + Math.floor(last) + 1) / 2
+}
+
+// 세션의 인터뷰 방식 — 마운트 스냅샷에서만 채운다. 스냅샷이 실패하면 null이고 켬으로 본다(계획 고쳐 달라기가 닫힌 채 — 지금 동작).
+const sessionSuperpowers = ref<boolean | null>(null)
+// 계획 고쳐 달라기(스펙 2026-11-03 간단 인터뷰 §4.1·§6) — 간단 인터뷰(끔)로 나온 계획(PLAN_READY)에만 답변창이 열린다.
+const planFix = computed(() => canRequestPlanFix(status.value, sessionSuperpowers.value, isQuestion.value))
+// 입력창·보내기·sendAnswer 가드가 같은 조건을 쓴다 — 하나라도 어긋나면 버튼은 켜지는데 눌러도 아무 일이 없다.
+const canInput = computed(() => status.value === 'AWAITING_INPUT' || planFix.value)
+// 계획 고쳐 달라기일 때 바뀌는 건 입력 안내와 보내기 이름뿐이다. "구현 진행"은 그대로다.
+const composerText = computed(() =>
+  planFix.value
+    ? { send: PLAN_FIX_SEND, placeholder: PLAN_FIX_PLACEHOLDER }
+    : { send: ui.value.send, placeholder: ui.value.placeholder },
 )
+
+const canAnswer = computed(() => canInput.value && !sending.value && !!answer.value.trim())
 
 // 화면 표시 전용 한글 라벨 (공유 상수 — interviewLabels.ts).
 // 상태 비교/터미널 판정은 영문 enum 이름으로만 한다.
@@ -200,8 +219,11 @@ type AskExtra = { model?: string; effort?: string; mcpCatalogIds?: number[]; dbC
 
 async function sendAnswer(extra?: AskExtra): Promise<boolean> {
   const text = answer.value.trim()
-  if (!text || status.value !== 'AWAITING_INPUT') return false
-  const replyToSeq = lastQuestionSeq.value
+  if (!text || !canInput.value) return false
+  // 계획 고쳐 달라기는 어느 질문에 대한 답이 아니다 — replyToSeq를 null로 보낸다. 마지막 question seq를 싣으면 이미 답한 질문과
+  // 겹쳐 서버가 중복 답변 no-op으로 받고(InterviewService), 세션은 PLAN_READY 그대로인데 화면만 QUEUED에 머문다.
+  const fixingPlan = planFix.value
+  const replyToSeq = fixingPlan ? null : lastQuestionSeq.value
   const body: Record<string, unknown> = { answer: text, replyToSeq }
   const files = isQuestion.value ? (extra?.files ?? []) : []
   // 질문 세션만: 서버가 검증 후 세션 값을 갱신해 다음 claim부터 적용한다. 인터뷰 answer 바디는 참조만(아래 else).
@@ -236,7 +258,7 @@ async function sendAnswer(extra?: AskExtra): Promise<boolean> {
     turns.value = [
       ...turns.value,
       {
-        seq: (replyToSeq ?? turns.value.length) + 0.5,
+        seq: fixingPlan ? seqAfterAllTurns() : (replyToSeq ?? turns.value.length) + 0.5,
         role: 'user',
         kind: 'answer',
         content: text,
@@ -322,6 +344,8 @@ onMounted(async () => {
   // REST 스냅샷으로 먼저 시드한 뒤 스트림을 연다(seq dedup으로 중복 없음). 스냅샷 실패는 비치명적.
   try {
     const snapshot = await useApi<InterviewSnapshot>(`${apiBase.value}/${props.sessionId}`)
+    // 인터뷰 방식은 스냅샷에서만 안다(SSE는 보내지 않는다) — boolean이 아니면(칸 없음·null) 켬으로 둔다
+    sessionSuperpowers.value = typeof snapshot?.superpowersEnabled === 'boolean' ? snapshot.superpowersEnabled : null
     stream.hydrate(snapshot)
   } catch {
     /* 스냅샷 실패 — 스트림만으로 진행 */
@@ -476,8 +500,8 @@ defineExpose({
               outlined
               dense
               autogrow
-              :disable="status !== 'AWAITING_INPUT' || sending"
-              :placeholder="ui.placeholder"
+              :disable="!canInput || sending"
+              :placeholder="composerText.placeholder"
               @keydown.enter.exact.prevent="sendAnswer()"
             />
             <div class="row justify-end q-mt-xs">
@@ -486,7 +510,7 @@ defineExpose({
                 unelevated
                 color="primary"
                 icon="send"
-                :label="ui.send"
+                :label="composerText.send"
                 :loading="sending"
                 :disable="!canAnswer"
                 @click="sendAnswer()"

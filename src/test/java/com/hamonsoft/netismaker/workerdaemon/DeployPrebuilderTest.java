@@ -228,7 +228,77 @@ class DeployPrebuilderTest {
                 .contains("ROOT.war")
                 .contains("jar")
                 .doesNotContain("<이름>")
-                .doesNotContain("<산출물 경로>");
+                .doesNotContain("<산출물 경로>")
+                .contains("`.netis-prebuild/artifact/`가 있으면 워커가 COPY를 따로 붙입니다.");
+    }
+
+    // ── 납품 파일 (.netis-artifact/ → .netis-prebuild/artifact/) ──
+
+    @Test
+    void 납품_폴더가_없으면_비어_있다() throws Exception {
+        assertThat(DeployPrebuilder.stageDelivery(root, l -> {})).isEmpty();
+    }
+
+    @Test
+    void 납품_파일_하나를_스테이징한다() throws Exception {
+        Files.createDirectories(root.resolve(".netis-artifact"));
+        Files.writeString(root.resolve(".netis-artifact/knu-wars.zip"), "zip");
+        List<String> out = new CopyOnWriteArrayList<>();
+        assertThat(DeployPrebuilder.stageDelivery(root, out::add)).contains("knu-wars.zip");
+        assertThat(root.resolve(".netis-prebuild/artifact/knu-wars.zip")).hasContent("zip");
+        assertThat(out).containsExactly("[미리 빌드 납품] knu-wars.zip (0.0MB) → .netis-prebuild/artifact/");
+    }
+
+    @Test
+    void 납품_폴더에_하위_폴더만_있으면_파일_없음으로_실패한다() throws Exception {
+        Files.createDirectories(root.resolve(".netis-artifact/sub"));
+        Files.writeString(root.resolve(".netis-artifact/sub/a.zip"), "x");
+        assertThatThrownBy(() -> DeployPrebuilder.stageDelivery(root, l -> {}))
+                .isInstanceOf(PrebuildException.class)
+                .hasMessage("미리 빌드 납품 파일은 .netis-artifact/ 바로 아래 하나여야 함(파일 없음)");
+    }
+
+    @Test
+    void 납품_파일이_여러_개면_실패한다() throws Exception {
+        Files.createDirectories(root.resolve(".netis-artifact"));
+        Files.writeString(root.resolve(".netis-artifact/b.zip"), "b");
+        Files.writeString(root.resolve(".netis-artifact/a.zip"), "a");
+        assertThatThrownBy(() -> DeployPrebuilder.stageDelivery(root, l -> {}))
+                .hasMessage("미리 빌드 납품 파일은 .netis-artifact/ 바로 아래 하나여야 함(여러 개: a.zip, b.zip)");
+    }
+
+    @Test
+    void 납품_파일_확장자가_목록_밖이면_실패한다() throws Exception {
+        Files.createDirectories(root.resolve(".netis-artifact"));
+        Files.writeString(root.resolve(".netis-artifact/x.txt"), "x");
+        assertThatThrownBy(() -> DeployPrebuilder.stageDelivery(root, l -> {}))
+                .hasMessage("미리 빌드 납품 파일은 .netis-artifact/ 바로 아래 하나여야 함(확장자 밖: x.txt — .war·.jar·.zip·.tar.gz·.tgz)");
+    }
+
+    @Test
+    void run_납품_파일까지_스테이징한다() throws Exception {
+        String cmd = WINDOWS
+                ? makeWarCommand() + "& mkdir .netis-artifact& echo zip> .netis-artifact\\d.zip"
+                : makeWarCommand() + " && mkdir -p .netis-artifact && echo zip > .netis-artifact/d.zip";
+        List<String> sink = new CopyOnWriteArrayList<>();
+        Staged staged = prebuilder(Duration.ofMinutes(1), Map.of())
+                .run(new PrebuildSpec(cmd, "t/*.war", null), root, sink::add);
+
+        assertThat(staged.fileName()).isEqualTo("a.war");
+        assertThat(staged.deliveryName()).isEqualTo("d.zip");
+        assertThat(root.resolve(".netis-prebuild/artifact/d.zip")).isRegularFile();
+        assertThat(sink.get(sink.size() - 1)).startsWith("[미리 빌드 납품] d.zip (");
+    }
+
+    @Test
+    void run_납품_파일이_잘못되면_꼬리와_함께_실패한다() {
+        String cmd = WINDOWS
+                ? makeWarCommand() + "& mkdir .netis-artifact& echo x> .netis-artifact\\x.txt"
+                : makeWarCommand() + " && mkdir -p .netis-artifact && echo x > .netis-artifact/x.txt";
+        PrebuildException e = catchThrowableOfType(PrebuildException.class, () -> prebuilder(Duration.ofMinutes(1), Map.of())
+                .run(new PrebuildSpec(cmd, "t/*.war", null), root, line -> {}));
+        assertThat(e.getMessage()).startsWith("미리 빌드 납품 파일은 .netis-artifact/ 바로 아래 하나여야 함(확장자 밖: x.txt");
+        assertThat(e.getLogTail()).contains("built");
     }
 
     @Test
@@ -257,6 +327,7 @@ class DeployPrebuilderTest {
         assertThat(staged.fileName()).isEqualTo("a.war");
         assertThat(staged.sourceRelative()).isEqualTo("t/a.war");
         assertThat(staged.sizeBytes()).isEqualTo(Files.size(stagedFile)).isPositive();
+        assertThat(staged.deliveryName()).isNull();
         assertThat(sink.get(0)).isEqualTo("[미리 빌드] $ " + makeWarCommand() + " (도구=워커 env)");
         assertThat(sink).contains("built");
         assertThat(sink.get(sink.size() - 1))

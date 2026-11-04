@@ -103,6 +103,10 @@ describe('admin/repo-catalog', () => {
     ;(document.querySelector('[data-test="form-artifact-enabled"]') as HTMLElement).click()
     await flushPromises()
     const pathInput = document.querySelector('[data-test="form-artifact-path"]') as HTMLInputElement
+    expect(document.querySelector('[data-test="form-artifact-enabled"]')!.textContent)
+      .toContain('종료 때 산출물 보관 (WAR·JAR·zip, 등록자 메일)')
+    expect(pathInput.getAttribute('placeholder'))
+      .toBe('비우면 자동: /opt/netis-artifact/의 파일 하나 → 없으면 webapps·/app의 WAR·JAR 하나')
     pathInput.value = '/usr/local/tomcat/webapps/ROOT.war'
     pathInput.dispatchEvent(new Event('input'))
     await flushPromises()

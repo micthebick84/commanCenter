@@ -3,6 +3,8 @@ package com.hamonsoft.netismaker.controller;
 import com.fasterxml.jackson.databind.DeserializationFeature;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.hamonsoft.netismaker.dbmcp.DbMcpGrantService;
+import com.hamonsoft.netismaker.dbmcp.DbWriteService;
+import com.hamonsoft.netismaker.dto.DbChangeView;
 import com.hamonsoft.netismaker.dto.DbMcpGrant;
 import com.hamonsoft.netismaker.dto.WorkerTaskResponse;
 import com.hamonsoft.netismaker.entity.Task;
@@ -27,7 +29,8 @@ class WorkerControllerDbWriteTest {
 
     private final WorkerService workerService = mock(WorkerService.class);
     private final DbMcpGrantService grants = mock(DbMcpGrantService.class);
-    private final WorkerController controller = new WorkerController(workerService, grants);
+    private final DbWriteService writes = mock(DbWriteService.class);
+    private final WorkerController controller = new WorkerController(workerService, grants, writes);
 
     private static WorkerTaskResponse implementation() {
         Task t = Task.create("a/b", "main", "t", "d", "user1", 3, List.of(), null, null);
@@ -100,5 +103,15 @@ class WorkerControllerDbWriteTest {
         DbMcpGrant old = lenient.readValue("{\"token\":\"tok\",\"servers\":[{\"name\":\"db-7\",\"path\":\"/mcp/db/7\","
                 + "\"label\":\"개발DB (PostgreSQL)\",\"dbType\":\"POSTGRESQL\"}],\"notices\":[]}", DbMcpGrant.class);
         assertThat(old.servers()).extracting(DbMcpGrant.Server::writable).containsExactly(false);
+    }
+
+    @Test
+    void 워커는_작업의_DB_변경_기록을_받는다() {
+        DbChangeView v = new DbChangeView(13L, 7L, "개발DB (PostgreSQL)", 1, null, "CREATE TABLE t (id int)", "EXECUTED",
+                null, null, null, java.time.OffsetDateTime.parse("2026-11-04T00:00:00Z"), null, null);
+        when(writes.list(42L)).thenReturn(List.of(v));
+
+        assertThat(controller.dbChanges(42L)).containsExactly(v);
+        verify(writes).list(42L);
     }
 }

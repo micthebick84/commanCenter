@@ -1,7 +1,9 @@
 package com.hamonsoft.netismaker.controller;
 
 import com.hamonsoft.netismaker.dbmcp.DbMcpGrantService;
+import com.hamonsoft.netismaker.dbmcp.DbWriteService;
 import com.hamonsoft.netismaker.dto.ActiveWorktreeTaskSummary;
+import com.hamonsoft.netismaker.dto.DbChangeView;
 import com.hamonsoft.netismaker.dto.DbMcpGrant;
 import com.hamonsoft.netismaker.dto.DeployLogChunkRequest;
 import com.hamonsoft.netismaker.dto.CloseProgressRequest;
@@ -32,6 +34,7 @@ import java.util.Set;
  *   POST /worker/heartbeat        ─► worker_heartbeat upsert
  *   GET  /worker/next-task         ─► PENDING/APPROVED 작업 1건 또는 204 (supports=refRepos·fixRounds 없으면 참조 있는·수정 회차 구현은 제외, dbWrite 없으면 DB 쓰기 도구 없음, kinds로 종류 제한)
  *   POST /worker/tasks/{id}/result ─► 분석/구현 완료/실패 보고
+ *   GET  /worker/tasks/{id}/db-changes ─► 그 작업의 DB 변경 기록(시간순) — PR 스크립트 파일·프롬프트 재료
  *   POST /worker/tasks/{id}/close-progress ─► 종료 단계(병합·배포 중지·노트·브랜치 정리) 완료 보고
  *   GET  /worker/deployed-tasks    ─► 배포 런타임 정합·GC 보호 대상 목록(배포완료·배포중단됨 + 배포 계열 진행 중·종료 단계·수정승인대기·열린 수정 회차 — 대사는 앞 둘만)
  *   GET  /worker/active-worktree-tasks ─► worktree 정리 보호 목록(구현중·디자인중·배포중·배포중지중, soft-delete 제외)
@@ -57,10 +60,13 @@ public class WorkerController {
 
     private final WorkerService workerService;
     private final DbMcpGrantService dbMcpGrantService;
+    private final DbWriteService dbWriteService;
 
-    public WorkerController(WorkerService workerService, DbMcpGrantService dbMcpGrantService) {
+    public WorkerController(WorkerService workerService, DbMcpGrantService dbMcpGrantService,
+                            DbWriteService dbWriteService) {
         this.workerService = workerService;
         this.dbMcpGrantService = dbMcpGrantService;
+        this.dbWriteService = dbWriteService;
     }
 
     @PostMapping("/heartbeat")
@@ -144,6 +150,15 @@ public class WorkerController {
     @ResponseStatus(HttpStatus.NO_CONTENT)
     public void result(@PathVariable Long id, @RequestBody @Valid WorkerResultRequest req) {
         workerService.recordResult(id, req);
+    }
+
+    /**
+     * 이 작업의 DB 변경 기록(시간순) — 워커가 구현 세션이 끝난 뒤 PR 스크립트 파일을 만들고 프롬프트의 적용한 SQL 절에 쓴다
+     * (스펙 2026-11-03 §6.6). 화면용 {@code GET /api/tasks/{id}/db-changes}와 같은 모양이다.
+     */
+    @GetMapping("/tasks/{id}/db-changes")
+    public List<DbChangeView> dbChanges(@PathVariable Long id) {
+        return dbWriteService.list(id);
     }
 
     @PostMapping("/tasks/{id}/close-progress")

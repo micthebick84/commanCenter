@@ -1,5 +1,6 @@
 package com.hamonsoft.netismaker.dbmcp;
 
+import com.hamonsoft.netismaker.dto.DbChangeView;
 import com.hamonsoft.netismaker.dto.InterviewClaimResponse.DbConnectionRef;
 import com.hamonsoft.netismaker.entity.DbConnection;
 import com.hamonsoft.netismaker.entity.DbObjectType;
@@ -7,15 +8,19 @@ import com.hamonsoft.netismaker.entity.Task;
 import com.hamonsoft.netismaker.entity.TaskDbObject;
 import com.hamonsoft.netismaker.entity.TaskDbWriteLog;
 import com.hamonsoft.netismaker.entity.TaskStatus;
+import com.hamonsoft.netismaker.entity.TaskStatusHistory;
 import com.hamonsoft.netismaker.entity.WriteClassification;
 import com.hamonsoft.netismaker.git.RepoRef;
 import com.hamonsoft.netismaker.repository.TaskDbObjectRepository;
 import com.hamonsoft.netismaker.repository.TaskDbWriteLogRepository;
 import com.hamonsoft.netismaker.repository.TaskRepository;
+import com.hamonsoft.netismaker.repository.TaskStatusHistoryRepository;
 import com.hamonsoft.netismaker.service.DbConnectionService;
+import com.hamonsoft.netismaker.service.TaskException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.context.annotation.Profile;
+import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 
 import java.sql.SQLException;
@@ -36,6 +41,9 @@ import java.util.stream.Collectors;
  * 설계와 다름: 기록 행을 실행 <b>전에</b> EXECUTED·executed_at NULL로 저장하고, 그 저장이 실패하면 실행하지 않는다
  * (반목표 "실행된 SQL이 기록에서 빠짐"). 비밀번호·접속정보는 기록·응답·로그에 싣지 않고(DbMcpTools.safeMessage),
  * SQL은 로그에 싣지 않는다(컨트롤러 감사 로그가 앞 200자만).
+ * <p>
+ * 승인 대기(DEFERRED)로 남은 문장은 관리자가 나중에 {@link #executeDeferred 실행}하거나 {@link #dismiss 실행 안 함}으로 정리한다
+ * (§6.5) — 같은 서비스가 {@link #list 목록}도 낸다. 관리자 실행도 외부 DB 때문에 앱 DB 트랜잭션 밖이다.
  */
 @Service
 @Profile("api")
@@ -49,6 +57,10 @@ public class DbWriteService {
     static final String UNKNOWN_DEFAULT_SCHEMA = "기본 스키마를 알 수 없습니다 — 연결의 기본 스키마를 정하세요";
     static final String UNSAFE_DEFAULT_SCHEMA = "기본 스키마 이름에 서버와 대소문자 접기가 다를 수 있는 문자가 있습니다"
             + " — ASCII 이름의 데이터베이스를 연결의 기본으로 정하세요";
+    static final String ONLY_DEFERRED_EXECUTE = "승인 대기 항목만 실행할 수 있습니다";
+    static final String ONLY_DEFERRED_DISMISS = "승인 대기 항목만 실행 안 함으로 처리할 수 있습니다";
+    static final String ALREADY_HANDLED = "이미 처리된 항목입니다";
+    static final String ADMIN_REJECTED = "거부 분류는 관리자도 실행할 수 없습니다";
 
     /** 소유 덕에 바로 실행될 때 대상이 실제로 있는지 확인하는 문장 — CREATE_*·COMMENT_ON은 빼고 유니크 인덱스는 넣는다. */
     private static final Set<WriteKind> OWNED_TARGET_KINDS = EnumSet.of(
@@ -74,10 +86,11 @@ public class DbWriteService {
     private final TaskDbWriteLogRepository logs;
     private final TaskRepository tasks;
     private final DbWriteProperties props;
+    private final TaskStatusHistoryRepository history;
 
     public DbWriteService(DbWriteGate gate, DbConnectionService connections, DbWriteExecutor executor,
                           TaskDbObjectRepository objects, TaskDbWriteLogRepository logs, TaskRepository tasks,
-                          DbWriteProperties props) {
+                          DbWriteProperties props, TaskStatusHistoryRepository history) {
         this.gate = gate;
         this.connections = connections;
         this.executor = executor;
@@ -85,6 +98,7 @@ public class DbWriteService {
         this.logs = logs;
         this.tasks = tasks;
         this.props = props;
+        this.history = history;
     }
 
     /**
@@ -153,6 +167,153 @@ public class DbWriteService {
         session.commit();
         reflectOwnership(task.getId(), connectionId, d, st, names);
         return entry.executed(DML.contains(st.kind()) ? affected : null);
+    }
+
+    /** 작업의 DB 변경 기록 — 시간순(같은 시각이면 id순). 화면과 워커가 같은 순서를 쓴다. 조회 권한은 호출자가 본다. */
+    public List<DbChangeView> list(Long taskId) {
+        return logs.findByTaskIdOrderByCreatedAtAscIdAsc(taskId).stream().map(DbChangeView::of).toList();
+    }
+
+    /**
+     * 승인 대기(DEFERRED) SQL을 관리자가 실행한다 (스펙 §6.5). 같은 연결로 하고, 성공하면 기록 행이 EXECUTED(실행자·시각)로 바뀌고
+     * 작업 이력에 한 줄이 남는다. 응답은 갱신된 행이다. 막히면 409(없는 기록·남의 작업 기록은 404).
+     * <p>
+     * 순서(선점 전 단계는 상태를 바꾸지 않으므로 거기서 막히면 되돌릴 것이 없다):
+     * ① 이 작업의 DEFERRED 행인지 ② 연결 행을 한 번 읽어 스위치·enabled·REPO·allowWrite를 그 행으로 확인(조건 1·4 — 구현 단계 밖에서
+     * 도는 경로라 작업 단계·워커 조건은 보지 않는다) ③ 같은 행으로 복호화해 접속 ④ 다시 분류해 거부면 거부(거부 분류는 관리자도
+     * 못 한다) — 기본 스키마를 모르거나 소유 덕의 EXECUTE인데 소유 대상이 DB에 없어도 막는다(Task 7 리뷰 반영, {@link #execute}와 같은
+     * 메서드) ⑤ transition(DEFERRED→EXECUTED)으로 선점, 0이면 이미 처리됨 ⑥ 영향 행 상한 없이 실행하고 커밋
+     * ⑦ 실행·커밋이 실패하면 DEFERRED로 되돌리고 오류를 남긴 뒤 409.
+     * 병합 여부·작업 상태로는 막지 않는다. 세션은 항상 닫는다.
+     * <p>
+     * 설계와 다름: 설계는 관리자 실행 때 쓰기 허용을 다시 확인하라고 정하지 않았다. 반목표 "허용 안 된 연결에 쓰기"를 막으려고
+     * 다시 확인한다. 상태를 바꾸는 저장은 모두 칸 단위 UPDATE다 — 미리 읽은 행을 save하면 그 사이 바뀐 칸이 옛 값으로 덮인다.
+     */
+    public DbChangeView executeDeferred(Long taskId, Long logId, String adminId) {
+        Task task = tasks.findActiveById(taskId).orElseThrow(TaskException::notFound);
+        TaskDbWriteLog row = deferredRow(taskId, logId, ONLY_DEFERRED_EXECUTE);
+
+        Long rowConnectionId = row.getConnectionId();   // 연결을 지웠으면 null — 판정이 거부한다
+        DbConnection snapshot = rowConnectionId == null ? null : connections.findForWrite(rowConnectionId).orElse(null);
+        DbWriteGate.Check check = gate.connectionCheck(snapshot);
+        if (!check.allowed()) throw TaskException.conflict(check.reason());
+        Optional<DbConnectionRef> ref = connections.writeRefOf(snapshot);
+        if (ref.isEmpty()) throw TaskException.conflict(CANNOT_DECRYPT);
+
+        long connectionId = snapshot.getId();
+        SqlDialect d = SqlDialect.of(snapshot.getDbType());
+        WriteStatement st;
+        try {
+            st = SqlWriteParser.parse(row.getSqlText(), d);
+        } catch (SqlWriteRejected e) {
+            throw TaskException.conflict(ADMIN_REJECTED + " — " + e.getMessage());
+        }
+
+        String password = ref.get().password();
+        boolean claimed = false;
+        boolean committed = false;
+        long affected = 0;
+        try (DbWriteSession session = executor.open(ref.get())) {
+            String defaultSchema = session.defaultSchema();
+            boolean lowerCaseNames = session.lowerCaseNames();
+            String schemaProblem = defaultSchemaProblem(d, defaultSchema, lowerCaseNames);
+            if (schemaProblem != null) throw TaskException.conflict(schemaProblem);
+            Function<DbObjectRef, DbObjectName> names = r -> DbObjectName.normalize(d, r, defaultSchema, lowerCaseNames);
+
+            Ownership ownership = ownershipFor(task, connectionId);
+            WriteDecision decision = SqlWriteClassifier.classify(st, names, ownership,
+                    props.maxUpdateDeleteRows(), props.maxInsertRows());
+            if (decision.verdict() == WriteDecision.Verdict.REJECT) {
+                throw TaskException.conflict(ADMIN_REJECTED + " — " + decision.reason());
+            }
+            String missing = missingOwnedObject(connectionId, taskId, st, decision, ownership, names, session);
+            if (missing != null) throw TaskException.conflict(missing);
+
+            // 선점 — 두 번 누르거나 두 관리자가 동시에 눌러도 조건부 UPDATE 한 번만 1을 돌려준다(Review Focus 2)
+            if (logs.transition(logId, taskId, WriteClassification.DEFERRED, WriteClassification.EXECUTED, adminId) == 0) {
+                throw TaskException.conflict(ALREADY_HANDLED);
+            }
+            claimed = true;
+            affected = session.executeUpdate(st.executableSql());   // 영향 행 상한은 걸지 않는다 — 관리자가 정한 실행이다
+            session.commit();
+            committed = true;
+        } catch (TaskException e) {
+            throw e;
+        } catch (SQLException | RuntimeException e) {
+            String safe = DbMcpTools.safeMessage(e, password);
+            if (!claimed) throw TaskException.conflict("실행 준비에 실패했습니다: " + safe);
+            if (!committed) {
+                revertToDeferred(taskId, logId, safe);
+                throw TaskException.conflict("실행에 실패했습니다: " + safe + " — 승인 대기로 되돌렸습니다");
+            }
+            // 커밋은 끝났다 — 닫을 때의 예외로 결과를 뒤집지 않는다
+            log.warn("DB 쓰기(관리자 실행) 세션 닫기 실패 — 커밋은 끝남 task={} log={} ({})", taskId, logId,
+                    e.getClass().getSimpleName());
+        }
+
+        try {
+            logs.completeExecution(logId, taskId, DML.contains(st.kind()) ? affected : null);
+        } catch (RuntimeException e) {
+            log.warn("DB 쓰기(관리자 실행) 영향 행 저장 실패 — 실행은 끝남 task={} log={} ({})", taskId, logId,
+                    e.getClass().getSimpleName());
+        }
+        recordHistory(task, adminId, "DB 변경 실행: #" + logId + " (" + row.getConnectionName() + ")");
+        log.info("DB 쓰기(관리자 실행) task={} conn={} log={} by={}", taskId, connectionId, logId, adminId);
+        return refreshed(logId);
+    }
+
+    /**
+     * 승인 대기(DEFERRED) SQL을 실행하지 않기로 한다 (스펙 §6.5) — DISMISSED가 되고 작업 이력에 남으며 스크립트 파일의
+     * "병합 뒤 실행" 절에서 빠진다. DB에는 닿지 않으므로 스위치·연결 상태와 무관하게 정리할 수 있다.
+     * 두 번 누르거나 두 관리자가 동시에 눌러도 한 번만 바뀌고 나머지는 409다. 응답은 갱신된 행이다.
+     */
+    public DbChangeView dismiss(Long taskId, Long logId, String adminId) {
+        Task task = tasks.findActiveById(taskId).orElseThrow(TaskException::notFound);
+        deferredRow(taskId, logId, ONLY_DEFERRED_DISMISS);
+        if (logs.transition(logId, taskId, WriteClassification.DEFERRED, WriteClassification.DISMISSED, adminId) == 0) {
+            throw TaskException.conflict(ALREADY_HANDLED);
+        }
+        recordHistory(task, adminId, "DB 변경 실행 안 함: #" + logId);
+        return refreshed(logId);
+    }
+
+    /** 이 작업의 기록 행 — 없거나 다른 작업의 것이면 404(기록 id로 남의 작업을 건드리지 못하게), 승인 대기가 아니면 409. */
+    private TaskDbWriteLog deferredRow(Long taskId, Long logId, String onlyDeferredMessage) {
+        TaskDbWriteLog row = logs.findById(logId).filter(l -> taskId.equals(l.getTaskId()))
+                .orElseThrow(() -> new TaskException(HttpStatus.NOT_FOUND, "DB 변경 기록을 찾을 수 없습니다"));
+        if (row.getClassification() != WriteClassification.DEFERRED) {
+            throw TaskException.conflict(onlyDeferredMessage);
+        }
+        return row;
+    }
+
+    /** 칸 단위 UPDATE 뒤에는 행을 다시 읽어 응답한다(미리 읽은 행은 옛 분류다). */
+    private DbChangeView refreshed(Long logId) {
+        return DbChangeView.of(logs.findById(logId).orElseThrow(TaskException::notFound));
+    }
+
+    /**
+     * 선점한 행(EXECUTED)을 승인 대기로 되돌리고 오류를 남긴다. 되돌리기가 실패해도 호출자의 409는 그대로 나간다 — 그때 행은
+     * EXECUTED로 남지만 처리자·시각이 있어 관리자가 알아볼 수 있고, 로그에 남긴다(Task 11 "설계와 다름 ②"와 같은 쪽의 한계).
+     */
+    private void revertToDeferred(Long taskId, Long logId, String error) {
+        try {
+            if (logs.revertToDeferred(logId, taskId, error) == 0) {
+                log.warn("DB 쓰기(관리자 실행) 승인 대기로 되돌릴 행이 없음 task={} log={}", taskId, logId);
+            }
+        } catch (RuntimeException e) {
+            log.warn("DB 쓰기(관리자 실행) 승인 대기로 되돌리기 실패 — 행이 EXECUTED로 남음 task={} log={} ({})", taskId, logId,
+                    e.getClass().getSimpleName());
+        }
+    }
+
+    /** 같은 상태 행 — 처리한 관리자가 사람으로 남는다. 저장이 실패해도 이미 한 처리는 그대로다(로그만). */
+    private void recordHistory(Task task, String adminId, String reason) {
+        try {
+            history.save(TaskStatusHistory.log(task.getId(), task.getStatus(), task.getStatus(), "user", adminId, reason));
+        } catch (RuntimeException e) {
+            log.warn("DB 변경 이력 저장 실패 — 처리는 끝남 task={} ({})", task.getId(), e.getClass().getSimpleName());
+        }
     }
 
     /**

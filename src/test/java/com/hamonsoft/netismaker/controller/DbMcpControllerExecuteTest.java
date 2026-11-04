@@ -22,6 +22,7 @@ import com.hamonsoft.netismaker.repository.RepoCatalogRepository;
 import com.hamonsoft.netismaker.repository.TaskDbObjectRepository;
 import com.hamonsoft.netismaker.repository.TaskDbWriteLogRepository;
 import com.hamonsoft.netismaker.repository.TaskRepository;
+import com.hamonsoft.netismaker.repository.TaskStatusHistoryRepository;
 import com.hamonsoft.netismaker.service.DbConnectionService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -95,7 +96,8 @@ class DbMcpControllerExecuteTest {
 
         DbWriteProperties props = new DbWriteProperties(true, 1000, 10000);
         DbWriteGate gate = new DbWriteGate(props, connectionRepo, catalogs);
-        DbWriteService writes = new DbWriteService(gate, db, executor, objects, logs, taskRepo, props);
+        DbWriteService writes = new DbWriteService(gate, db, executor, objects, logs, taskRepo, props,
+                mock(TaskStatusHistoryRepository.class));
         mvc = MockMvcBuilders.standaloneSetup(new DbMcpController(tokens, db, new DbMcpTools(readOnly), gate, writes)).build();
     }
 

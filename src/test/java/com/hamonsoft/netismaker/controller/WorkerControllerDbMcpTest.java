@@ -1,6 +1,7 @@
 package com.hamonsoft.netismaker.controller;
 
 import com.hamonsoft.netismaker.dbmcp.DbMcpGrantService;
+import com.hamonsoft.netismaker.dbmcp.DbWriteService;
 import com.hamonsoft.netismaker.dto.DbMcpGrant;
 import com.hamonsoft.netismaker.dto.WorkerTaskResponse;
 import com.hamonsoft.netismaker.entity.Task;
@@ -21,7 +22,7 @@ class WorkerControllerDbMcpTest {
 
     private final WorkerService workerService = mock(WorkerService.class);
     private final DbMcpGrantService grants = mock(DbMcpGrantService.class);
-    private final WorkerController controller = new WorkerController(workerService, grants);
+    private final WorkerController controller = new WorkerController(workerService, grants, mock(DbWriteService.class));
     /** supports 없이 온 요청 = 기능을 하나도 모르는 구버전 워커. */
     private static final WorkerCapabilities NO_SUPPORT = new WorkerCapabilities(false, false);
 

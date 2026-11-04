@@ -47,4 +47,35 @@ public interface TaskDbWriteLogRepository extends JpaRepository<TaskDbWriteLog, 
     int transitionAt(@Param("id") Long id, @Param("taskId") Long taskId,
                      @Param("fromClass") WriteClassification from, @Param("toClass") WriteClassification to,
                      @Param("executedBy") String executedBy, @Param("now") OffsetDateTime now);
+
+    /**
+     * 관리자 실행이 실패했을 때 선점한 행(EXECUTED)을 승인 대기로 되돌리고 오류를 남긴다 — 반환 = 바뀐 행 수(0 또는 1).
+     * 처리한 시각·사람(executed_at·executed_by)은 지운다(실행하지 않았으므로). 칸 단위 UPDATE다 — 미리 읽은 행을 save하면
+     * 그 사이 바뀐 분류·처리자가 옛 값으로 덮인다(transition도 엔티티를 거치지 않는다).
+     */
+    @Transactional
+    @Modifying
+    @Query("""
+            UPDATE TaskDbWriteLog l
+               SET l.classification = com.hamonsoft.netismaker.entity.WriteClassification.DEFERRED,
+                   l.error = :error, l.executedAt = NULL, l.executedBy = NULL
+             WHERE l.id = :id AND l.taskId = :taskId
+               AND l.classification = com.hamonsoft.netismaker.entity.WriteClassification.EXECUTED
+            """)
+    int revertToDeferred(@Param("id") Long id, @Param("taskId") Long taskId, @Param("error") String error);
+
+    /**
+     * 관리자 실행이 끝난 행(EXECUTED)에 영향 행 수(DML만, 아니면 null)를 적고 이전 시도의 오류를 지운다 — 반환 = 바뀐 행 수.
+     * 분류·처리자·시각은 건드리지 않는다(선점한 transition이 이미 적었다).
+     */
+    @Transactional
+    @Modifying
+    @Query("""
+            UPDATE TaskDbWriteLog l
+               SET l.affectedRows = :affectedRows, l.error = NULL
+             WHERE l.id = :id AND l.taskId = :taskId
+               AND l.classification = com.hamonsoft.netismaker.entity.WriteClassification.EXECUTED
+            """)
+    int completeExecution(@Param("id") Long id, @Param("taskId") Long taskId,
+                          @Param("affectedRows") Long affectedRows);
 }

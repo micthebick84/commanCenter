@@ -13,6 +13,7 @@ import com.hamonsoft.netismaker.entity.WriteClassification;
 import com.hamonsoft.netismaker.repository.TaskDbObjectRepository;
 import com.hamonsoft.netismaker.repository.TaskDbWriteLogRepository;
 import com.hamonsoft.netismaker.repository.TaskRepository;
+import com.hamonsoft.netismaker.repository.TaskStatusHistoryRepository;
 import com.hamonsoft.netismaker.service.DbConnectionService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -49,6 +50,7 @@ class DbWriteServiceTest {
     private final TaskDbObjectRepository objects = mock(TaskDbObjectRepository.class);
     private final TaskDbWriteLogRepository logs = mock(TaskDbWriteLogRepository.class);
     private final TaskRepository tasks = mock(TaskRepository.class);
+    private final TaskStatusHistoryRepository history = mock(TaskStatusHistoryRepository.class);
 
     /** 소유 기록(task_db_object) 흉내. */
     private final List<TaskDbObject> store = new ArrayList<>();
@@ -117,7 +119,7 @@ class DbWriteServiceTest {
         doAnswer(i -> store.remove(i.<TaskDbObject>getArgument(0))).when(objects).delete(any(TaskDbObject.class));
 
         service = new DbWriteService(gate, connections, executor, objects, logs, tasks,
-                new DbWriteProperties(true, 1000, 10000));
+                new DbWriteProperties(true, 1000, 10000), history);
     }
 
     private TaskDbObject own(DbObjectType type, String schema, String name, long taskId) {

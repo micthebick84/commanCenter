@@ -30,7 +30,7 @@ import java.util.Set;
  *  워커 API (X-Worker-API-Key 인증).
  *
  *   POST /worker/heartbeat        ─► worker_heartbeat upsert
- *   GET  /worker/next-task         ─► PENDING/APPROVED 작업 1건 또는 204 (supports=refRepos·fixRounds 없으면 참조 있는·수정 회차 구현은 제외, kinds로 종류 제한)
+ *   GET  /worker/next-task         ─► PENDING/APPROVED 작업 1건 또는 204 (supports=refRepos·fixRounds 없으면 참조 있는·수정 회차 구현은 제외, dbWrite 없으면 DB 쓰기 도구 없음, kinds로 종류 제한)
  *   POST /worker/tasks/{id}/result ─► 분석/구현 완료/실패 보고
  *   POST /worker/tasks/{id}/close-progress ─► 종료 단계(병합·배포 중지·노트·브랜치 정리) 완료 보고
  *   GET  /worker/deployed-tasks    ─► 배포 런타임 정합·GC 보호 대상 목록(배포완료·배포중단됨 + 배포 계열 진행 중·종료 단계·수정승인대기·열린 수정 회차 — 대사는 앞 둘만)
@@ -49,6 +49,11 @@ public class WorkerController {
     static final String SUPPORTS_REF_REPOS = "refRepos";
     /** next-task의 supports 토큰 — 수정 회차(같은 브랜치에서 이어 구현)를 아는 새 워커가 보낸다 (스펙 2026-11-03 §7). */
     static final String SUPPORTS_FIX_ROUNDS = "fixRounds";
+    /**
+     * next-task의 supports 토큰 — 실행한 SQL을 PR 스크립트로 남기는 새 워커가 보낸다 (스펙 2026-11-03 §6.1 조건 6).
+     * 큐 필터가 아니라 DB MCP grant의 쓰기 판정에만 쓴다.
+     */
+    static final String SUPPORTS_DB_WRITE = "dbWrite";
 
     private final WorkerService workerService;
     private final DbMcpGrantService dbMcpGrantService;
@@ -67,7 +72,8 @@ public class WorkerController {
     /**
      * supports: 워커가 아는 기능 목록(쉼표 구분). {@value #SUPPORTS_REF_REPOS}가 없으면(구버전 워커) 참조 repo가 있는
      * 구현대기는 넘기지 않는다 (스펙 2026-10-24 §4.7). {@value #SUPPORTS_FIX_ROUNDS}가 없으면 수정 회차가 열린
-     * 구현대기를 넘기지 않는다 (스펙 2026-11-03 §7).
+     * 구현대기를 넘기지 않는다 (스펙 2026-11-03 §7). {@value #SUPPORTS_DB_WRITE}는 큐를 거르지 않는다 — 있을 때만 구현 claim의
+     * DB 연결에 쓰기 도구가 열릴 수 있고, 없으면(옛 워커) 작업은 그대로 받되 모든 연결이 읽기 전용이다 (스펙 2026-11-03 §6.1 조건 6).
      * kinds: 이 워커가 받을 작업 종류(쉼표 구분, {@link WorkerTaskResponse.Kind} 이름). 없거나 비면 전부 —
      * 다른 PC의 워커가 볼트·미리 빌드 도구가 필요한 종료·배포를 잡지 않게 구현·디자인만 받을 때 쓴다.
      */
@@ -75,10 +81,10 @@ public class WorkerController {
     public ResponseEntity<WorkerTaskResponse> nextTask(@RequestParam String workerId,
                                                        @RequestParam(required = false) String supports,
                                                        @RequestParam(required = false) String kinds) {
-        WorkerCapabilities caps = new WorkerCapabilities(
-                supports(supports, SUPPORTS_REF_REPOS), supports(supports, SUPPORTS_FIX_ROUNDS));
+        WorkerCapabilities caps = new WorkerCapabilities(supports(supports, SUPPORTS_REF_REPOS),
+                supports(supports, SUPPORTS_FIX_ROUNDS), supports(supports, SUPPORTS_DB_WRITE));
         Optional<WorkerTaskResponse> claimed = workerService.claimNextTask(workerId, caps, parseKinds(kinds))
-                .map(this::withDbMcp);
+                .map(r -> withDbMcp(r, caps));
         return claimed.map(ResponseEntity::ok)
                       .orElseGet(() -> ResponseEntity.noContent().build());
     }
@@ -120,12 +126,13 @@ public class WorkerController {
 
     /**
      * 구현·디자인 claim에 DB MCP 지시를 붙인다 (스펙 2026-10-14 §6.4). claim 트랜잭션은 이미 커밋됐으므로
-     * 여기서 실패해도 claim 응답을 깨지 않는다 — DB 없이 진행.
+     * 여기서 실패해도 claim 응답을 깨지 않는다 — DB 없이 진행. caps.dbWrite()가 거짓이면(쓰기를 모르는 워커) 모든 연결이 읽기 전용이다
+     * (스펙 2026-11-03 §6.1 조건 6).
      */
-    private WorkerTaskResponse withDbMcp(WorkerTaskResponse r) {
+    private WorkerTaskResponse withDbMcp(WorkerTaskResponse r, WorkerCapabilities caps) {
         if (r.kind() != WorkerTaskResponse.Kind.IMPLEMENTATION && r.kind() != WorkerTaskResponse.Kind.DESIGN) return r;
         try {
-            DbMcpGrant g = dbMcpGrantService.grantFor(r.id());
+            DbMcpGrant g = dbMcpGrantService.grantFor(r.id(), caps.dbWrite());
             return g == null ? r : r.withDbMcp(g);
         } catch (RuntimeException e) {
             log.warn("claim DB MCP 준비 실패 task={}: {}", r.id(), e.getClass().getSimpleName());

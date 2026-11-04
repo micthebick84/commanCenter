@@ -13,6 +13,7 @@ import java.util.List;
 import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.Mockito.*;
 
@@ -34,14 +35,14 @@ class WorkerControllerDbMcpTest {
     void implementation_claim_carries_grant() {
         when(workerService.claimNextTask("w1", NO_SUPPORT, null)).thenReturn(Optional.of(implementation()));
         DbMcpGrant g = new DbMcpGrant("tok", List.of(new DbMcpGrant.Server("db-12", "/mcp/db/12", "운영", "MYSQL")), List.of());
-        when(grants.grantFor(5L)).thenReturn(g);
+        when(grants.grantFor(5L, false)).thenReturn(g);
         assertThat(controller.nextTask("w1", null).getBody().dbMcp()).isEqualTo(g);
     }
 
     @Test
     void claim_survives_grant_failure() {
         when(workerService.claimNextTask("w1", NO_SUPPORT, null)).thenReturn(Optional.of(implementation()));
-        when(grants.grantFor(anyLong())).thenThrow(new RuntimeException("db down"));
+        when(grants.grantFor(anyLong(), anyBoolean())).thenThrow(new RuntimeException("db down"));
         var body = controller.nextTask("w1", null).getBody();
         assertThat(body.dbMcp().token()).isNull();
         assertThat(body.dbMcp().notices()).containsExactly("DB 연결을 준비하지 못해 DB 도구 없이 진행합니다");

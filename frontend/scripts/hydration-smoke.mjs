@@ -169,7 +169,8 @@ async function startServer() {
       HOST: '127.0.0.1',
       NITRO_PORT: String(PORT),
       NITRO_HOST: '127.0.0.1',
-      // routeRules 프록시 타깃은 빌드 때 박힌다 — 런타임 보호는 브라우저 목이 맡고, 여기서는 기록용으로만 둔다.
+      // routeRules 프록시 타깃은 빌드 때 박힌다 — 런타임 보호는 브라우저 목이 맡는다. NUXT_API_PROXY_TARGET는 앱 로그 서버 라우트의
+      // runtimeConfig.apiProxyTarget을 기동 때 덮어 닫힌 포트로 보낸다(checkAppLogRoute가 502를 기대한다).
       NUXT_API_PROXY_TARGET: 'http://127.0.0.1:9',
       NUXT_AUTH_PROXY_TARGET: 'http://127.0.0.1:9',
     },
@@ -194,6 +195,34 @@ async function startServer() {
 // ── 점검 ──────────────────────────────────────────────────────────────────────
 const HYDRATION_RE = /hydrat/i
 
+/**
+ * 앱 로그 서버 라우트(server/routes/stream/tasks/[id]/app-logs.get.ts)를 Node fetch로 직접 두드린다 — 브라우저 가로채기는
+ * /stream/을 204로 막으므로 빠진 API 목록에 뜨지 않는다. 토큰 없음 → 401, API(닫힌 포트)에 닿지 못함 → 502이고
+ * Nuxt 오류 페이지(text/html)가 아니어야 한다(라우트가 머리를 직접 쓰고 끝냈다는 뜻).
+ */
+async function checkAppLogRoute() {
+  const failures = []
+  const cases = [
+    { label: '앱 로그 라우트 토큰 없음', path: '/stream/tasks/1/app-logs', status: 401 },
+    { label: '앱 로그 라우트 API 연결 실패', path: '/stream/tasks/1/app-logs?access_token=x', status: 502 },
+  ]
+  for (const c of cases) {
+    const problems = []
+    try {
+      const r = await fetch(BASE + c.path)
+      await r.arrayBuffer()
+      if (r.status !== c.status) problems.push(`상태 ${r.status} (기대 ${c.status})`)
+      const type = r.headers.get('content-type') ?? ''
+      if (type.includes('text/html')) problems.push(`content-type ${type} — 라우트가 아니라 Nuxt 오류 페이지가 답했다`)
+    } catch (e) {
+      problems.push(`fetch: ${e.message}`)
+    }
+    if (problems.length) failures.push({ label: c.label, finalPath: c.path, problems })
+    else console.log(`  ok   ${c.label} ${c.path} → ${c.status}`)
+  }
+  return failures
+}
+
 async function runCase(browser, { viewport, loggedIn, cookie, listHidden = false, paths: onlyPaths }) {
   const context = await browser.newContext({ viewport: { width: viewport.width, height: viewport.height } })
   if (cookie) {
@@ -206,9 +235,10 @@ async function runCase(browser, { viewport, loggedIn, cookie, listHidden = false
     await context.addInitScript((v) => { try { localStorage.setItem('netis-maker-auth', v) } catch { /* noop */ } }, AUTH_STORAGE)
   }
   const unmocked = new Set()
-  await context.route((url) => url.pathname.startsWith('/api/') || url.pathname.startsWith('/oauth2/'), async (route) => {
+  await context.route((url) => url.pathname.startsWith('/api/') || url.pathname.startsWith('/oauth2/') || url.pathname.startsWith('/stream/'), async (route) => {
     const path = new URL(route.request().url()).pathname
-    if (path.endsWith('/stream')) return route.fulfill({ status: 204, body: '' })
+    // SSE(EventSource)는 204로 닫는다 — /api/…/stream과 앱 로그 서버 라우트 /stream/…(직접 확인은 main의 checkAppLogRoute)
+    if (path.endsWith('/stream') || path.startsWith('/stream/')) return route.fulfill({ status: 204, body: '' })
     const body = apiResponse(path)
     if (body === undefined) unmocked.add(`${route.request().method()} ${path}`)
     return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(body ?? null) })
@@ -254,6 +284,7 @@ async function main() {
         : { channel: process.env.SMOKE_BROWSER_CHANNEL ?? 'chrome' }),
     })
     const failures = []
+    failures.push(...(await checkAppLogRoute()))
     const unmocked = new Set()
     for (const viewport of VIEWPORTS) {
       const matching = viewport.width >= 1024 ? 'wide' : 'narrow'

@@ -30,6 +30,9 @@ export default defineNuxtConfig({
   },
 
   runtimeConfig: {
+    // 서버 전용 — 앱 로그 SSE 서버 라우트(server/routes/stream/…)가 API를 부르는 주소. 런타임 env NUXT_API_PROXY_TARGET가 덮는다
+    // (routeRules 프록시 타깃은 빌드 때 박히지만 이 값은 기동 때 읽는다).
+    apiProxyTarget: process.env.NUXT_API_PROXY_TARGET || 'http://localhost:8090',
     public: {
       apiBaseUrl: process.env.NUXT_PUBLIC_API_BASE_URL || '/api',
       authIssuer: process.env.NUXT_PUBLIC_AUTH_ISSUER || 'http://localhost:9000',

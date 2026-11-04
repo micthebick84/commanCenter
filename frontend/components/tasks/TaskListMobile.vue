@@ -7,7 +7,8 @@ import QueueStatsBar from '~/components/QueueStatsBar.vue'
 import { sortForMobile, ATTENTION_GROUPS, CHIP, type AttentionGroup, type MoveDef } from '~/composables/taskStages'
 import { TASK_TYPE_FILTERS, matchesTypeFilter } from '~/composables/taskType'
 
-const props = defineProps<{ tasks: CardTask[]; isAdmin: boolean }>()
+// viewerId = 보는 사람의 requesterId 값 — 시트가 DB 작업 PR생성의 종료 요청 항목을 등록자에게 보일 때 쓴다(스펙 2026-11-03 §6.9)
+const props = defineProps<{ tasks: CardTask[]; isAdmin: boolean; viewerId?: string }>()
 const mine = defineModel<boolean>('mine', { default: true })
 const emit = defineEmits<{
   (e: 'create'): void
@@ -15,6 +16,7 @@ const emit = defineEmits<{
   (e: 'move', task: CardTask, move: MoveDef): void
   (e: 'cancel', task: CardTask): void
   (e: 'remove', task: CardTask): void
+  (e: 'request-close', task: CardTask): void
 }>()
 
 const filter = ref<AttentionGroup | 'all'>('all')
@@ -264,10 +266,12 @@ function openSheet(task: CardTask) {
       v-model="sheetOpen"
       :task="sheetTask"
       :is-admin="isAdmin"
+      :viewer-id="viewerId"
       @detail="sheetTask && emit('open', sheetTask)"
       @move="(m) => sheetTask && emit('move', sheetTask, m)"
       @cancel="sheetTask && emit('cancel', sheetTask)"
       @remove="sheetTask && emit('remove', sheetTask)"
+      @request-close="sheetTask && emit('request-close', sheetTask)"
     />
   </div>
 </template>

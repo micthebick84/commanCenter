@@ -222,3 +222,31 @@ describe('TaskCardCompact (스펙 2026-09-06 §4.1 카드)', () => {
     }
   })
 })
+
+// 스펙 2026-11-03 §6.9 — DB 작업은 PR생성에서 배포 없이 종료를 요청한다. 카드의 배포 세그먼트는 거치지 않았으면 건너뜀이다.
+describe('TaskCardCompact — DB 작업의 배포 세그먼트 (스펙 2026-11-03 §6.9)', () => {
+  const dbClose = { ...base, status: 'CLOSE_REVIEW', statusLabel: '종료승인대기', designRequested: false, taskType: 'DB_WORK', deployment: null }
+  const states = (task: Record<string, unknown>) => {
+    const w = mount(TaskCardCompact, { props: { task: task as typeof base, isAdmin: true } })
+    const r = w.findAll('[data-test="card-step"]').map((x) => x.attributes('data-state'))
+    w.unmount()
+    return r
+  }
+
+  it('배포 없이 종료 단계에 온 DB 작업: 배포 세그먼트는 skipped', () => {
+    expect(states(dbClose)).toEqual(['done', 'skipped', 'done', 'skipped', 'current'])
+  })
+
+  it('배포까지 한 DB 작업·다른 타입·타입 없음은 배포 세그먼트가 done', () => {
+    expect(states({ ...dbClose, deployment: { deployUrl: 'http://x:8080' } })[3]).toBe('done')
+    expect(states({ ...dbClose, taskType: 'BUG_FIX' })[3]).toBe('done')
+    expect(states({ ...dbClose, taskType: null })[3]).toBe('done')
+  })
+
+  it('PR생성의 DB 작업 카드는 완료 그룹 그대로라 다음 할 일 줄을 그리지 않는다 — 구현 current·배포 future', () => {
+    const w = mount(TaskCardCompact, { props: { task: { ...base, designRequested: false, taskType: 'DB_WORK' }, isAdmin: true } })
+    expect(w.findAll('[data-test="card-step"]').map((x) => x.attributes('data-state'))).toEqual(['done', 'skipped', 'current', 'future', 'future'])
+    expect(w.text()).not.toContain('종료를 요청하세요')
+    w.unmount()
+  })
+})

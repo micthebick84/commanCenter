@@ -3,7 +3,7 @@ import { useQuasar } from 'quasar'
 import { confirmDialog } from '~/composables/confirmDialog'
 import TaskListMobile from '~/components/tasks/TaskListMobile.vue'
 import type { CardTask } from '~/components/tasks/TaskCardCompact.vue'
-import { buildStages, stageAccepts, cancelable, DEPLOY_ACTIVE_STATUSES, type MoveDef, type StageCard } from '~/composables/taskStages'
+import { buildStages, stageAccepts, cancelable, DB_WORK_CLOSE_REQUEST_CONFIRM, DEPLOY_ACTIVE_STATUSES, type MoveDef, type StageCard } from '~/composables/taskStages'
 import { mrRef } from '~/composables/mergeRequestLabel'
 import { elapsedLabel } from '~/composables/implementationMode'
 import { useNowTick } from '~/composables/useNowTick'
@@ -63,7 +63,10 @@ interface PageResponse<T> {
 const $q = useQuasar()
 const route = useRoute()
 // 관리자 분기는 SSR(비로그인)과 하이드레이션 결과가 같도록 게이트된 값으로 그린다
-const { isAdmin } = useHydrationSafeAuth()
+const { isAdmin, me } = useHydrationSafeAuth()
+// 보는 사람의 requesterId — 서버 AuthContext.requireUserId와 같은 값(JWT username → user_id)이라 상세 화면 myRequesterId와 같은 규칙이다.
+// 모바일 시트가 DB 작업 PR생성의 종료 요청 항목을 등록자에게 보일 때 쓴다(스펙 2026-11-03 §6.9). 하이드레이션 전에는 null이라 undefined로 둔다.
+const viewerId = computed(() => me.value?.username ?? (me.value?.user_id != null ? String(me.value.user_id) : undefined))
 const mine = ref(true)
 const statusFilter = ref<string | null>(null)
 // 타입 필터(스펙 2026-11-03 §4.3): null = 전체 타입, 'NONE' = 타입 없음, 그 밖에는 타입 enum 이름
@@ -190,6 +193,23 @@ async function applyMove(id: number, move: MoveDef) {
     $q.notify({ type: 'negative', message: e?.data?.message ?? `${move.label} 실패` })
   } finally {
     moving.value = false
+  }
+}
+
+// DB 작업 PR생성의 "확인 완료 — 종료 요청"(스펙 2026-11-03 §6.9) — 모바일 시트가 부른다. 배포가 없으니 개발 DB 반영 결과를 묻는다.
+let closeRequestBusy = false
+async function requestClose(t: CardTask) {
+  if (closeRequestBusy) return // 확인창이 떠 있거나 요청이 끝나기 전의 중복 클릭은 무시한다
+  closeRequestBusy = true
+  try {
+    if (!(await confirmDialog($q, DB_WORK_CLOSE_REQUEST_CONFIRM, { title: '종료 요청' }))) return
+    await useApi(`/api/tasks/${t.id}/close-request`, { method: 'POST' })
+    $q.notify({ type: 'positive', message: `작업 #${t.id} — 종료 요청 등록` })
+    refresh()
+  } catch (e: unknown) {
+    $q.notify({ type: 'negative', message: (e as { data?: { message?: string } })?.data?.message ?? '종료 요청 실패' })
+  } finally {
+    closeRequestBusy = false
   }
 }
 
@@ -568,12 +588,14 @@ const fullscreen = useFullscreenDialog()
       v-model:mine="mine"
       :tasks="tasks"
       :is-admin="isAdmin"
+      :viewer-id="viewerId"
       @update:mine="refresh"
       @create="openCreate"
       @open="openTaskDetail"
       @move="(t, m) => applyMove(t.id, m)"
       @cancel="cancel"
       @remove="remove"
+      @request-close="requestClose"
     />
     <template v-else>
     <QueueStatsBar />

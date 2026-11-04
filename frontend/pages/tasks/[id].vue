@@ -16,7 +16,7 @@ import ImplementationRetryDialog from '~/components/tasks/ImplementationRetryDia
 import FixRequestDialog from '~/components/tasks/FixRequestDialog.vue'
 import FixRequestHistory from '~/components/tasks/FixRequestHistory.vue'
 import TaskDbChanges from '~/components/tasks/TaskDbChanges.vue'
-import { stageSteps, nextAction, ageOf, type NextActionKind } from '~/composables/taskStages'
+import { stageSteps, nextAction, ageOf, isDbWorkPrCreated, DB_WORK_CLOSE_REQUEST_CONFIRM, type NextActionKind } from '~/composables/taskStages'
 import { renderMarkdown } from '~/composables/useMarkdown'
 import { mrNoun, mrRef } from '~/composables/mergeRequestLabel'
 import { elapsedLabel, implementationModeLabel, implementationModeText } from '~/composables/implementationMode'
@@ -398,7 +398,11 @@ async function closeAction(
 }
 
 async function requestClose() {
-  if (!(await confirmDialog($q, '배포 결과를 확인했나요? 관리자가 승인하면 PR을 main에 병합하고, 배포를 중지하고, 브랜치를 삭제합니다. 병합은 되돌릴 수 없습니다.', { title: '종료 요청' }))) return
+  // DB 작업 PR생성(스펙 2026-11-03 §6.9)은 띄운 앱이 없으니 배포 결과가 아니라 개발 DB 반영 결과를 묻는다
+  const message = task.value && isDbWorkPrCreated(task.value)
+    ? DB_WORK_CLOSE_REQUEST_CONFIRM
+    : '배포 결과를 확인했나요? 관리자가 승인하면 PR을 main에 병합하고, 배포를 중지하고, 브랜치를 삭제합니다. 병합은 되돌릴 수 없습니다.'
+  if (!(await confirmDialog($q, message, { title: '종료 요청' }))) return
   await closeAction('close-request', '종료 요청 등록')
 }
 
@@ -416,6 +420,9 @@ async function retryClose() {
 
 // 배포중단됨에서 관리자의 주 행동은 재배포라 종료 요청은 보조 버튼으로 — 관리자가 직접 등록한 작업은 이것 말고 종료할 길이 없다(API는 허용)
 const canAdminRequestCloseLost = computed(() => auth.isAdmin && task.value?.status === 'DEPLOY_LOST')
+
+// DB 작업 PR생성에서 관리자의 주 행동은 종료 요청(스펙 2026-11-03 §6.9)이라 배포는 보조 버튼 — DB 작업도 앱을 다시 띄우고 싶을 수 있어 길은 그대로 둔다
+const canAdminDeploySecondary = computed(() => auth.isAdmin && !!task.value && isDbWorkPrCreated(task.value))
 
 // 병합 전(MERGED 없음) 종료실패만 취소할 수 있다 — 서버도 같은 규칙으로 409를 낸다
 const canCancelClose = computed(
@@ -776,6 +783,7 @@ function onAction(kind: NextActionKind) {
               <template #extra>
                 <q-btn v-if="auth.isAdmin && task.implementation?.prUrl" outline color="primary" icon="open_in_new" :label="`${mrRef(task.implementation.prUrl, task.implementation.prNumber!)} 열기`" :href="task.implementation.prUrl" target="_blank" />
                 <q-btn v-if="!$q.screen.lt.md && canAdminRequestCloseLost" outline color="primary" icon="task_alt" label="종료 요청" data-test="close-request-secondary" @click="requestClose" />
+                <q-btn v-if="!$q.screen.lt.md && canAdminDeploySecondary" outline color="primary" icon="rocket_launch" label="배포" data-test="deploy-secondary" @click="openDeployDialog('deploy')" />
                 <q-btn v-if="!$q.screen.lt.md && showFollowUp" outline color="primary" icon="add_circle_outline" label="새 작업으로 등록" :href="followUpHref" data-test="fix-request-new-task" />
               </template>
             </TaskNextAction>
@@ -993,6 +1001,10 @@ function onAction(kind: NextActionKind) {
                   <q-item v-if="canAbort" v-close-popup clickable class="text-warning" data-test="bar-more-fix-abort" @click="abortFix">
                     <q-item-section avatar><q-icon name="stop_circle" color="warning" /></q-item-section>
                     <q-item-section>수정 중단</q-item-section>
+                  </q-item>
+                  <q-item v-if="canAdminDeploySecondary" v-close-popup clickable data-test="bar-more-deploy" @click="openDeployDialog('deploy')">
+                    <q-item-section avatar><q-icon name="rocket_launch" /></q-item-section>
+                    <q-item-section>배포</q-item-section>
                   </q-item>
                   <q-item v-if="canAdminRequestCloseLost" v-close-popup clickable data-test="bar-more-close-request" @click="requestClose">
                     <q-item-section avatar><q-icon name="task_alt" /></q-item-section>

@@ -38,6 +38,8 @@ const AUTH_PATHS = [
   // 질문 대화에서 이어서 등록 — 마운트 뒤 질문을 읽어 창을 열고 쿼리를 뺀다(서버 렌더는 쿼리를 보지 않는다)
   '/tasks?fromQuestion=3',
   '/tasks/1',
+  // DB 작업 PR생성(스펙 2026-11-03 §6.9) — 관리자 상세가 주 행동 '확인 완료 — 종료 요청'과 보조 배포 버튼(deploy-secondary)을 그린다
+  '/tasks/11',
   '/questions',
   '/questions/3',
   '/requests',
@@ -85,6 +87,11 @@ const TASKS = [
     },
   }),
   task(2, 'AWAITING_APPROVAL', '승인대기'),
+  // DB 작업 PR생성 — 배포 없이 종료를 요청할 수 있다(스펙 2026-11-03 §6.9): 상세(1280)의 주 행동 종료 요청과 보조 배포 버튼, 390px 하단 바의 종료 요청, 보드·카드의 DB 작업 칩
+  task(11, 'PR_CREATED', 'PR생성', {
+    implementation: { prUrl: 'https://github.com/acme/widgets/pull/11', prNumber: 11, headBranch: 'netismaker/task-11', headSha: 'def456', implementationLog: '완료' },
+    taskType: 'DB_WORK',
+  }),
   // 수정승인대기 — 보드 배포 단계 그룹과 칩 색(스펙 2026-11-03 §6)
   task(10, 'FIX_REVIEW', '수정승인대기', { fix: { activeRound: null, activeMode: null, approvedRounds: 0, maxRounds: 3 } }),
   task(3, 'CANCELLED', '취소됨'),

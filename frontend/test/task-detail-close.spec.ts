@@ -505,4 +505,128 @@ describe('pages/tasks/[id] — 작업 종료 (스펙 2026-10-13 §6)', () => {
       w.unmount()
     })
   })
+
+  // 스펙 2026-11-03 §6.9 — DB 작업은 PR생성에서 배포 없이 종료를 요청한다. 주 행동은 종료 요청, 관리자의 배포는 보조로 남는다.
+  describe('DB 작업 PR생성의 "확인 완료 — 종료 요청" (스펙 2026-11-03 §6.9)', () => {
+    const dbPr = { ...baseTask, status: 'PR_CREATED', statusLabel: 'PR생성', taskType: 'DB_WORK', requesterId: 'alice', deployment: null }
+
+    async function confirmAndExpectDbPost() {
+      await flushPromises()
+      // 배포가 없으니 배포 결과가 아니라 개발 DB 반영 결과를 묻는다 — 되돌릴 수 없다는 배포 문구도 아니다
+      expect(document.body.textContent).toContain('개발 DB 반영 결과를 확인했나요? 승인되면 PR을 병합하고 노트 작성·브랜치 정리를 진행합니다.')
+      expect(document.body.textContent).not.toContain('배포 결과를 확인했나요?')
+      ;(document.body.querySelector('[data-test="confirm-dialog-ok"]') as HTMLElement).click()
+      await flushPromises()
+      expect(useApiMock).toHaveBeenCalledWith('/api/tasks/42/close-request', { method: 'POST', body: undefined })
+    }
+
+    it('관리자 상세: 주 행동은 종료 요청, 보조 버튼 "배포"가 환경변수 다이얼로그를 연다', async () => {
+      authStub.isAdmin = true
+      setMe('admin')
+      const w = await mountWith(dbPr)
+      expect(w.find('[data-test="next-action-text"]').text()).toBe('DB 작업 — 개발 DB 반영을 확인했으면 종료를 요청하세요')
+      expect(w.find('[data-test="next-action-primary"]').text()).toContain('확인 완료 — 종료 요청')
+      const secondary = w.find('[data-test="deploy-secondary"]')
+      expect(secondary.exists()).toBe(true)
+      expect(secondary.text()).toContain('배포')
+      useApiMock.mockClear()
+      await secondary.trigger('click')
+      await flushPromises()
+      expect(useApiMock).toHaveBeenCalledWith('/api/tasks/42/deploy-env')
+      expect(useApiMock).not.toHaveBeenCalledWith('/api/tasks/42/close-request', expect.anything())
+      w.unmount()
+    })
+
+    it('390px: 하단 바 주 행동은 종료 요청이고 "더 보기" 메뉴에 "배포"가 있다 — 배너·카드에 버튼이 겹치지 않는다', async () => {
+      authStub.isAdmin = true
+      setMe('admin')
+      await setViewportWidth(390)
+      try {
+        const w = await mountWith(dbPr)
+        expect(w.find('.next-action--bar [data-test="next-action-primary"]').text()).toContain('확인 완료 — 종료 요청')
+        expect(w.find('[data-test="deploy-secondary"]').exists()).toBe(false)
+        await w.find('[data-test="bar-more"]').trigger('click')
+        await flushPromises()
+        const item = document.body.querySelector('[data-test="bar-more-deploy"]') as HTMLElement
+        expect(item).not.toBeNull()
+        expect(item.textContent).toContain('배포')
+        useApiMock.mockClear()
+        item.click()
+        await flushPromises()
+        expect(useApiMock).toHaveBeenCalledWith('/api/tasks/42/deploy-env')
+        w.unmount()
+      } finally {
+        await setViewportWidth(1024)
+      }
+    })
+
+    it('DB 작업 종료 요청 문구: 확인 뒤 close-request를 POST한다 (관리자 주 행동)', async () => {
+      authStub.isAdmin = true
+      setMe('admin')
+      const w = await mountWith(dbPr)
+      useApiMock.mockClear()
+      await w.find('[data-test="next-action-primary"]').trigger('click')
+      await confirmAndExpectDbPost()
+      w.unmount()
+    })
+
+    it('등록자(비관리자)도 주 행동이 종료 요청이고 보조 배포는 없다 — 문구·POST는 같다', async () => {
+      setMe('alice')
+      const w = await mountWith(dbPr)
+      expect(w.find('[data-test="next-action-primary"]').text()).toContain('확인 완료 — 종료 요청')
+      expect(w.find('[data-test="deploy-secondary"]').exists()).toBe(false)
+      useApiMock.mockClear()
+      await w.find('[data-test="next-action-primary"]').trigger('click')
+      await confirmAndExpectDbPost()
+      w.unmount()
+    })
+
+    it('다른 사람(비관리자·비등록자)은 종료 요청도 배포도 없다 — 지금처럼 PR 열기', async () => {
+      setMe('bob')
+      const w = await mountWith(dbPr)
+      expect(w.find('[data-test="next-action-primary"]').text()).toContain('열기')
+      expect(w.find('[data-test="next-action-primary"]').text()).not.toContain('종료 요청')
+      expect(w.find('[data-test="deploy-secondary"]').exists()).toBe(false)
+      w.unmount()
+    })
+
+    it('다른 타입·타입 없음 관리자는 지금처럼 배포가 주 행동이고 보조 버튼·종료 요청이 없다', async () => {
+      authStub.isAdmin = true
+      setMe('admin')
+      for (const taskType of ['BUG_FIX', null, undefined]) {
+        const w = await mountWith({ ...dbPr, taskType, requesterId: 'admin' })
+        expect(w.find('[data-test="next-action-primary"]').text()).toContain('배포')
+        expect(w.find('[data-test="next-action-primary"]').text()).not.toContain('종료 요청')
+        expect(w.find('[data-test="deploy-secondary"]').exists()).toBe(false)
+        w.unmount()
+        document.body.innerHTML = ''
+      }
+    })
+
+    it('배포중단됨 DB 작업의 종료 요청은 배포 문구 그대로다 — 배포를 한 작업이다', async () => {
+      authStub.isAdmin = true
+      setMe('admin')
+      const w = await mountWith({ ...dbPr, status: 'DEPLOY_LOST', statusLabel: '배포중단됨', requesterId: 'admin', deployment })
+      useApiMock.mockClear()
+      await w.find('[data-test="close-request-secondary"]').trigger('click')
+      await flushPromises()
+      expect(document.body.textContent).toContain('배포 결과를 확인했나요?')
+      expect(document.body.textContent).not.toContain('개발 DB 반영 결과')
+      expect(w.find('[data-test="deploy-secondary"]').exists()).toBe(false)
+      w.unmount()
+    })
+
+    it('종료승인대기의 배포 없는 DB 작업은 스테퍼의 배포 단계가 건너뜀이고, 배포한 DB 작업은 완료다', async () => {
+      authStub.isAdmin = true
+      let w = await mountWith({ ...dbPr, status: 'CLOSE_REVIEW', statusLabel: '종료승인대기', close: emptyClose })
+      expect(w.find('[data-test="step-deploy"]').attributes('data-state')).toBe('skipped')
+      expect(w.find('[data-test="step-close"]').attributes('data-state')).toBe('current')
+      w.unmount()
+      document.body.innerHTML = ''
+
+      w = await mountWith({ ...dbPr, status: 'CLOSE_REVIEW', statusLabel: '종료승인대기', deployment, close: emptyClose })
+      expect(w.find('[data-test="step-deploy"]').attributes('data-state')).toBe('done')
+      w.unmount()
+    })
+  })
 })

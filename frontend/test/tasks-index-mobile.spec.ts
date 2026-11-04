@@ -218,6 +218,130 @@ describe('pages/tasks — 모바일 리스트 (스펙 2026-09-06 §4.1)', () => 
     })
   })
 
+  // 스펙 2026-11-03 §6.9 — DB 작업은 PR생성에서 배포 없이 종료를 요청한다. 시트 항목은 등록자(viewerId)와 관리자에게만 보인다.
+  describe('DB 작업 PR생성 ⋮ 시트의 "확인 완료 — 종료 요청" (스펙 2026-11-03 §6.9)', () => {
+    const dbTask = (extra: Record<string, unknown> = {}) =>
+      t(50, 'PR_CREATED', 'PR생성', '2026-08-24T03:00:00Z', {
+        taskType: 'DB_WORK', requesterId: 'alice', deployment: null,
+        implementation: { prUrl: 'https://x/pull/50', prNumber: 50, headBranch: 'b', headSha: 's' }, ...extra,
+      })
+    const setMe = (username: string | null) => {
+      ;(authStub as any).me = username === null ? null : { user_id: 7, username, email: null, authorities: [] }
+    }
+    function stubList(list: unknown[]) {
+      useApiMock.mockImplementation((url: string) =>
+        url.startsWith('/api/tasks')
+          ? Promise.resolve({ content: list, totalElements: list.length, totalPages: 1 })
+          : Promise.resolve(null),
+      )
+    }
+    async function openSheet(w: ReturnType<typeof mount>) {
+      await w.findAll('[data-test="card-menu"]')[0]!.trigger('click')
+      await flushPromises()
+    }
+    const requestItem = () => document.body.querySelector('[data-test="sheet-request-close"]') as HTMLElement | null
+    afterEach(() => setMe(null))
+
+    it('모바일 시트에서 등록자가 종료 요청: 항목 → 확인창 → close-request POST → 목록 재조회', async () => {
+      authStub.isAdmin = false
+      setMe('alice')
+      stubList([dbTask()])
+      await setViewportWidth(390)
+      const w = mount(PageWrapper, { attachTo: document.body })
+      await flushPromises()
+      await openSheet(w)
+      expect(document.body.querySelector('[data-test="sheet-move"]')).toBeNull() // 요청자에게 배포 전이는 없다
+      requestItem()!.click()
+      await flushPromises()
+      // 배포가 없으니 개발 DB 반영 결과를 묻는다. 확인 전에는 POST하지 않는다
+      expect(document.body.textContent).toContain('개발 DB 반영 결과를 확인했나요? 승인되면 PR을 병합하고 노트 작성·브랜치 정리를 진행합니다.')
+      expect(useApiMock).not.toHaveBeenCalledWith('/api/tasks/50/close-request', expect.anything())
+      useApiMock.mockClear()
+      await confirmOk()
+      expect(useApiMock).toHaveBeenCalledWith('/api/tasks/50/close-request', { method: 'POST' })
+      expect(useApiMock.mock.calls.map((c) => c[0])).toContain('/api/tasks') // 성공하면 목록을 다시 읽는다
+      w.unmount()
+    })
+
+    it('확인창에서 취소하면 POST하지 않는다', async () => {
+      authStub.isAdmin = false
+      setMe('alice')
+      stubList([dbTask()])
+      await setViewportWidth(390)
+      const w = mount(PageWrapper, { attachTo: document.body })
+      await flushPromises()
+      await openSheet(w)
+      requestItem()!.click()
+      await flushPromises()
+      ;(document.body.querySelector('[data-test="confirm-dialog-cancel"]') as HTMLElement).click()
+      await flushPromises()
+      expect(useApiMock).not.toHaveBeenCalledWith('/api/tasks/50/close-request', expect.anything())
+      w.unmount()
+    })
+
+    it('실패하면 서버가 준 메시지를 알린다', async () => {
+      authStub.isAdmin = false
+      setMe('alice')
+      useApiMock.mockImplementation((url: string, opts?: { method?: string }) => {
+        if (url === '/api/tasks/50/close-request' && opts?.method === 'POST') {
+          return Promise.reject({ data: { message: '이미 종료 요청된 작업입니다' } })
+        }
+        return url.startsWith('/api/tasks')
+          ? Promise.resolve({ content: [dbTask()], totalElements: 1, totalPages: 1 })
+          : Promise.resolve(null)
+      })
+      await setViewportWidth(390)
+      const w = mount(PageWrapper, { attachTo: document.body })
+      await flushPromises()
+      const notifySpy = vi.spyOn((w.findComponent(TasksIndex).vm as unknown as { $q: { notify: (o: unknown) => void } }).$q, 'notify')
+      await openSheet(w)
+      requestItem()!.click()
+      await flushPromises()
+      await confirmOk()
+      expect(notifySpy).toHaveBeenCalledWith({ type: 'negative', message: '이미 종료 요청된 작업입니다' })
+      w.unmount()
+    })
+
+    it('다른 사람의 DB 작업 시트에는 항목이 없다 (비관리자, viewerId 불일치)', async () => {
+      authStub.isAdmin = false
+      setMe('bob')
+      stubList([dbTask()])
+      await setViewportWidth(390)
+      const w = mount(PageWrapper, { attachTo: document.body })
+      await flushPromises()
+      await openSheet(w)
+      expect(document.body.querySelector('[data-test="task-action-sheet"]')).not.toBeNull()
+      expect(requestItem()).toBeNull()
+      w.unmount()
+    })
+
+    it('관리자 시트에는 종료 요청과 배포가 함께 보이고, 배포는 여전히 환경변수 다이얼로그로 간다', async () => {
+      authStub.isAdmin = true
+      setMe('admin')
+      stubList([dbTask({ requesterId: 'alice' })])
+      await setViewportWidth(390)
+      const w = mount(PageWrapper, { attachTo: document.body })
+      await flushPromises()
+      await openSheet(w)
+      expect(requestItem()).not.toBeNull()
+      const move = document.body.querySelector('[data-test="sheet-move"]') as HTMLElement
+      expect(move.textContent).toContain('배포')
+      w.unmount()
+    })
+
+    it('DB 작업이 아니면(다른 타입·타입 없음) 등록자 시트에도 항목이 없다', async () => {
+      authStub.isAdmin = false
+      setMe('alice')
+      stubList([dbTask({ taskType: 'BUG_FIX' })])
+      await setViewportWidth(390)
+      const w = mount(PageWrapper, { attachTo: document.body })
+      await flushPromises()
+      await openSheet(w)
+      expect(requestItem()).toBeNull()
+      w.unmount()
+    })
+  })
+
   it('데스크톱(1024)에서는 기존 보드가 그대로다', async () => {
     const w = mount(PageWrapper, { attachTo: document.body })
     await flushPromises()

@@ -4,6 +4,7 @@ import com.hamonsoft.netismaker.dto.ArtifactInfo;
 import com.hamonsoft.netismaker.dto.CloseArtifactSpec;
 import com.hamonsoft.netismaker.dto.WorkerTaskResponse;
 import com.hamonsoft.netismaker.git.GitRemotes;
+import com.hamonsoft.netismaker.util.ArtifactNames;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.annotation.Profile;
@@ -25,7 +26,8 @@ import java.util.Locale;
 import java.util.Optional;
 
 /**
- * 종료 산출물 꺼내기·업로드 (스펙 2026-10-14 §4). 배포 이미지에서 docker create/cp로 WAR·JAR를 꺼내
+ * 종료 산출물 꺼내기·업로드 (스펙 2026-10-14 §4, 납품 파일 2026-11-04). 배포 이미지에서 docker create/cp로
+ * 납품 파일(WAR·JAR·zip 등)을 꺼내
  * API에 올린다. docker는 워커 프로세스의 DOCKER_HOST(원격 데몬)를 물려받아 파일이 원격에서 워커 PC로 복사된다.
  */
 @Component
@@ -135,27 +137,42 @@ public class ArtifactPublisher {
                 + (why.isBlank() ? "" : " — " + why) + " — 데몬 상태를 확인하고 재시도");
     }
 
+    /**
+     * 경로 정하기(스펙 2026-11-04 §5.1): 카탈로그 경로 → 이미지 {@link ArtifactNames#IMAGE_DIR} 바로 아래 파일 하나
+     * → 지금의 WAR·JAR 검색. 납품 폴더를 먼저 보는 이유: 경북대 이미지에는 webapps/ROOT.war(대구)와
+     * 납품 zip(대구+상주)이 함께 있다.
+     */
     private String resolvePath(WorkerTaskResponse task, String image) throws ArtifactException, InterruptedException {
         CloseArtifactSpec spec = task.closeArtifact();
         String path;
         if (spec != null && spec.path() != null && !spec.path().isBlank()) {
             path = spec.path().trim();
         } else {
-            List<String> args = new ArrayList<>(List.of("run", "--rm", "--entrypoint", "find", image));
-            args.addAll(cfg.searchDirs());
-            args.addAll(List.of("-maxdepth", "2", "-type", "f", "(", "-name", "*.war", "-o", "-name", "*.jar", ")"));
-            List<String> found = candidates(run(args, SHORT_TIMEOUT_SECONDS).stdout());
-            if (found.size() != 1) {
-                throw new ArtifactException("산출물: 경로를 정할 수 없습니다 — 레포 카탈로그에 이미지 안 산출물 경로를 지정하세요(후보: "
-                        + (found.isEmpty() ? "없음" : String.join(", ", found)) + ")");
+            List<String> bundle = bundleFiles(run(List.of("run", "--rm", "--entrypoint", "find", image,
+                    ArtifactNames.IMAGE_DIR, "-mindepth", "1", "-maxdepth", "1", "-type", "f"), SHORT_TIMEOUT_SECONDS).stdout());
+            if (bundle.size() > 1) {
+                throw new ArtifactException("산출물: " + ArtifactNames.IMAGE_DIR + "/에 파일이 여러 개입니다 — 하나만 두거나 "
+                        + "카탈로그에 경로를 지정하세요(후보: " + String.join(", ", bundle) + ")");
             }
-            path = found.get(0);
+            path = bundle.size() == 1 ? bundle.get(0) : searchWarOrJar(image);
         }
-        String lower = path.toLowerCase(Locale.ROOT);
-        if (!lower.endsWith(".war") && !lower.endsWith(".jar")) {
-            throw new ArtifactException("산출물: .war 또는 .jar만 보관합니다: " + path);
+        if (ArtifactNames.extension(path).isEmpty()) {
+            throw new ArtifactException("산출물: " + ArtifactNames.ALLOWED_LABEL + "만 보관합니다: " + path);
         }
         return path;
+    }
+
+    /** 납품 폴더가 비었을 때 — 1차 설계의 자동 검색(정확히 1개). */
+    private String searchWarOrJar(String image) throws ArtifactException, InterruptedException {
+        List<String> args = new ArrayList<>(List.of("run", "--rm", "--entrypoint", "find", image));
+        args.addAll(cfg.searchDirs());
+        args.addAll(List.of("-maxdepth", "2", "-type", "f", "(", "-name", "*.war", "-o", "-name", "*.jar", ")"));
+        List<String> found = candidates(run(args, SHORT_TIMEOUT_SECONDS).stdout());
+        if (found.size() != 1) {
+            throw new ArtifactException("산출물: 경로를 정할 수 없습니다 — 레포 카탈로그에 이미지 안 산출물 경로를 지정하세요(후보: "
+                    + (found.isEmpty() ? "없음" : String.join(", ", found)) + ")");
+        }
+        return found.get(0);
     }
 
     private void copyOut(long taskId, String image, String path, Path local) throws ArtifactException, InterruptedException {
@@ -185,14 +202,25 @@ public class ArtifactPublisher {
         }
     }
 
-    /** {레포 경로 마지막 조각}-task-{id}-{sha7}.{war|jar}, 허용 밖 문자는 '_' (API ArtifactStore.validName과 같은 규칙). */
+    /**
+     * {레포 경로 마지막 조각}-task-{id}-{sha7}.{원본 확장자 소문자}, 허용 밖 문자는 '_' (API ArtifactStore.validName과 같은 규칙).
+     * 경로 판정을 통과한 경로에만 부른다(확장자가 목록 안).
+     */
     static String fileName(WorkerTaskResponse task, String path) {
         String repo = task.repoRef().path();
         String last = repo.substring(repo.lastIndexOf('/') + 1).replaceAll("[^A-Za-z0-9._-]", "_");
         if (last.isBlank() || last.startsWith(".")) last = "repo" + last;
         if (last.length() > 100) last = last.substring(0, 100);
-        String ext = path.toLowerCase(Locale.ROOT).endsWith(".jar") ? "jar" : "war";
+        String ext = ArtifactNames.extension(path).orElseThrow();
         return last + "-task-" + task.id() + "-" + DeployService.shortSha(task.headSha()) + "." + ext;
+    }
+
+    /** 납품 폴더 find 출력에서 그 폴더 아래 경로 줄만 — 없는 폴더 오류("find: ...")·빈 줄은 버린다. */
+    static List<String> bundleFiles(String stdout) {
+        if (stdout == null) return List.of();
+        return stdout.lines().map(String::strip)
+                .filter(l -> l.startsWith(ArtifactNames.IMAGE_DIR + "/"))
+                .distinct().toList();
     }
 
     /** find 출력에서 산출물 경로 줄만 — 없는 폴더 오류("find: ...")·빈 줄은 버린다. 종료 코드는 보지 않는다. */

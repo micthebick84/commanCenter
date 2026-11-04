@@ -1,6 +1,7 @@
 package com.hamonsoft.netismaker.workerdaemon;
 
 import com.hamonsoft.netismaker.dto.WorkerTaskResponse;
+import com.hamonsoft.netismaker.util.ArtifactNames;
 import com.hamonsoft.netismaker.util.StackSecretEnv;
 import jakarta.annotation.PostConstruct;
 import lombok.extern.slf4j.Slf4j;
@@ -42,6 +43,10 @@ public class DeployPrebuilder {
 
     /** worktree 루트 기준 스테이징 폴더. deploy worktree는 커밋하지 않으므로 info/exclude에 넣지 않는다. */
     static final String STAGE_DIR = ".netis-prebuild";
+    /** 미리 빌드 명령이 납품 파일 하나를 두는 곳(스펙 2026-11-04 §6) — deploy worktree에만 생긴다. */
+    static final String DELIVERY_SOURCE_DIR = ".netis-artifact";
+    /** 납품 파일 스테이징 — 생성 Dockerfile에 붙이는 COPY가 이 폴더를 이미지 /opt/netis-artifact/로 옮긴다. */
+    static final String DELIVERY_STAGE_DIR = STAGE_DIR + "/artifact";
     /** Dockerfile을 생성했을 때 빌드 컨텍스트를 스테이징 폴더로만 좁히는 .dockerignore. */
     static final String DOCKERIGNORE = "*\n!.netis-prebuild/\n!.netis-prebuild/**\n";
 
@@ -67,7 +72,12 @@ public class DeployPrebuilder {
         log.info("미리 빌드 도구: {}", configured.isEmpty() ? "없음" : configured);
     }
 
-    public record Staged(String fileName, long sizeBytes, String sourceRelative) {}
+    /** deliveryName = 스테이징한 납품 파일 이름, 없으면 null. */
+    public record Staged(String fileName, long sizeBytes, String sourceRelative, String deliveryName) {
+        public Staged(String fileName, long sizeBytes, String sourceRelative) {
+            this(fileName, sizeBytes, sourceRelative, null);
+        }
+    }
 
     /** 미리 빌드 실패. 메시지 = 배포실패 사유, logTail = deploy_log에 남길 출력 꼬리. */
     public static class PrebuildException extends Exception {
@@ -148,7 +158,57 @@ public class DeployPrebuilder {
         }
         sink.accept("[미리 빌드 산출물] " + sourceRelative + " ("
                 + String.format(Locale.ROOT, "%.1f", size / (1024.0 * 1024.0)) + "MB) → " + STAGE_DIR + "/" + fileName);
-        return new Staged(fileName, size, sourceRelative);
+        String delivery;
+        try {
+            delivery = stageDelivery(worktree, sink).orElse(null);
+        } catch (PrebuildException e) {
+            throw new PrebuildException(e.getMessage(), tail(buf));
+        }
+        return new Staged(fileName, size, sourceRelative, delivery);
+    }
+
+    /**
+     * 미리 빌드가 {@link #DELIVERY_SOURCE_DIR}에 남긴 납품 파일을 {@link #DELIVERY_STAGE_DIR}로 복사한다(스펙 2026-11-04 §6.1).
+     * 폴더가 없으면 empty. 있으면 바로 아래 일반 파일(링크 따라가지 않음, 하위 폴더 무시)이 정확히 하나이고 확장자가
+     * 허용 목록이어야 한다 — 아니면 카탈로그 명령이 잘못된 것이라 배포실패로 바로 알린다.
+     */
+    static Optional<String> stageDelivery(Path worktree, Consumer<String> sink) throws PrebuildException {
+        Path dir = worktree.resolve(DELIVERY_SOURCE_DIR);
+        if (!Files.isDirectory(dir, LinkOption.NOFOLLOW_LINKS)) return Optional.empty();
+        List<Path> files = new ArrayList<>();
+        try (DirectoryStream<Path> entries = Files.newDirectoryStream(dir)) {
+            for (Path entry : entries) {
+                if (Files.isRegularFile(entry, LinkOption.NOFOLLOW_LINKS)) files.add(entry);
+            }
+        } catch (IOException e) {
+            throw deliveryError("읽기 실패: " + e.getMessage());
+        }
+        if (files.isEmpty()) throw deliveryError("파일 없음");
+        if (files.size() > 1) {
+            List<String> names = files.stream().map(p -> p.getFileName().toString()).sorted().toList();
+            throw deliveryError("여러 개: " + String.join(", ", names.subList(0, Math.min(MAX_LISTED, names.size())))
+                    + (names.size() > MAX_LISTED ? ", …" : ""));
+        }
+        Path source = files.get(0);
+        String name = source.getFileName().toString();
+        if (ArtifactNames.extension(name).isEmpty()) {
+            throw deliveryError("확장자 밖: " + name + " — " + ArtifactNames.ALLOWED_LABEL);
+        }
+        long size;
+        try {
+            Path target = Files.createDirectories(worktree.resolve(DELIVERY_STAGE_DIR)).resolve(name);
+            Files.copy(source, target, StandardCopyOption.REPLACE_EXISTING);
+            size = Files.size(target);
+        } catch (IOException e) {
+            throw deliveryError("복사 실패: " + e.getMessage());
+        }
+        sink.accept("[미리 빌드 납품] " + name + " (" + String.format(Locale.ROOT, "%.1f", size / (1024.0 * 1024.0))
+                + "MB) → " + DELIVERY_STAGE_DIR + "/");
+        return Optional.of(name);
+    }
+
+    private static PrebuildException deliveryError(String reason) {
+        return new PrebuildException("미리 빌드 납품 파일은 " + DELIVERY_SOURCE_DIR + "/ 바로 아래 하나여야 함(" + reason + ")");
     }
 
     /**
@@ -247,7 +307,8 @@ public class DeployPrebuilder {
                 + "- Dockerfile에 빌드 단계(mvn·gradle·npm 등)와 빌드 도구 이미지를 넣지 마세요. 런타임 이미지 하나에 이 파일을 COPY만 하세요.\n"
                 + "- 빌드 컨텍스트에는 `.netis-prebuild/`만 들어갑니다. 레포의 다른 파일을 COPY하지 마세요.\n"
                 + "- war라면 Tomcat `webapps/ROOT.war`로 복사하고 이미지 안에서 풀지 마세요(JRE 이미지에는 jar 명령이 없습니다).\n"
-                + "- 런타임 버전(JRE·Tomcat 등)은 레포의 빌드 설정(pom 등)을 읽고 맞추세요.\n";
+                + "- 런타임 버전(JRE·Tomcat 등)은 레포의 빌드 설정(pom 등)을 읽고 맞추세요.\n"
+                + "- `" + DELIVERY_STAGE_DIR + "/`가 있으면 워커가 COPY를 따로 붙입니다. Dockerfile에서 다루지 마세요.\n";
     }
 
     /** Dockerfile이 스테이징 폴더를 쓰는지 — 안 쓰면 DeployService가 경고한다(미리 빌드 산출물이 이미지에 안 들어감). */

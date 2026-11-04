@@ -136,6 +136,19 @@ app:
   question:
     max-active-per-user: 3          # 사용자당 활성(QUEUED/RUNNING/AWAITING_INPUT) 질문 세션 상한 → 초과 시 429
     max-qa-turns: 10                # 세션당 assistant 답변 상한 → ask 시 초과면 400. 불변식: < 러너 INTERVIEW_MAX_TURNS(20)
+  app-log:                          # 배포된 앱 컨테이너 로그 실시간 보기 — API가 docker logs --follow를 읽어 SSE로 중계 (스펙 2026-11-03-deploy-app-log-stream)
+    enabled: ${APP_LOG_ENABLED:true}      # false면 구독이 end(disabled)로 끝난다
+    docker-path: ${APP_LOG_DOCKER_PATH:}  # 비우면 PATH → Windows 기본 설치 위치 순으로 docker를 찾는다(못 찾으면 기능만 꺼짐)
+    tail-lines: 500                 # 접속 때 먼저 보내는 최근 줄 수 (docker logs --tail)
+    max-streams: 6                  # 동시 구독 전체 상한 — 넘으면 end(too-many)
+    max-streams-per-task: 3         # 작업 하나당 동시 구독 상한
+    max-duration-minutes: 30        # 한 연결의 최대 시간 — 지나면 end(time-limit)로 닫고 docker·ssh 프로세스를 끝낸다
+    ping-seconds: 10                # SSE 주석 핑 간격(초) — Cloudflare 유휴 끊김 방지 + 끊긴 브라우저를 다음 쓰기 실패로 빨리 알아챈다
+    batch-millis: 300               # 읽은 줄을 모아 보내는 간격(ms)
+    batch-lines: 200                # 이벤트 하나에 담는 줄 수 상한
+    max-line-chars: 4000            # 줄 하나의 상한 — 비밀을 가린 뒤에 자르고 …(잘림)을 붙인다
+  deploy-log:
+    sse-ping-interval-ms: 20000     # 빌드 로그 SSE 주석 핑 간격(ms) — 조용한 빌드 구간에 Cloudflare가 연결을 끊지 않게
   db-secret:                        # 질문 세션 DB 접속정보 암호화 (스펙 2026-10-02 §4.1). 둘 다 있어야 기능이 켜진다
     key: ${NETISMAKER_DB_SECRET_KEY:}
     salt: ${NETISMAKER_DB_SECRET_SALT:}   # hex, 짝수 길이 16자 이상

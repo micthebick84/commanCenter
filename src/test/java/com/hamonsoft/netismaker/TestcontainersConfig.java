@@ -43,7 +43,9 @@ public class TestcontainersConfig implements ApplicationContextInitializer<Confi
                 // 03:50에 컨텍스트가 살아 있으면 테스트 DB 기준으로 실제 체크아웃을 고아로 오판해 지울 수 있다. 위와 같은 이유.
                 "app.interview.checkout-cleanup.enabled=false",
                 // 슬라이드 렌더링 잡 차단 — 통합 테스트가 실제 soffice를 띄우지 않게 한다(켜짐 여부는 soffice 유무에 달림)
-                "app.attachment.render.enabled=false"
+                "app.attachment.render.enabled=false",
+                // 앱 로그 중계 차단 — 통합 테스트가 실제 docker 프로세스를 띄우지 않게 한다(켜짐 여부는 docker 유무에 달림). 위 렌더링 차단과 같은 이유
+                "app.app-log.enabled=false"
         ).applyTo(ctx.getEnvironment());
     }
 }

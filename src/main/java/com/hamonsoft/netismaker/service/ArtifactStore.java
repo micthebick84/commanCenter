@@ -1,6 +1,7 @@
 package com.hamonsoft.netismaker.service;
 
 import com.hamonsoft.netismaker.dto.ArtifactInfo;
+import com.hamonsoft.netismaker.util.ArtifactNames;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Profile;
 import org.springframework.stereotype.Component;
@@ -30,9 +31,10 @@ public class ArtifactStore {
         this.root = Path.of(dir).toAbsolutePath().normalize();
     }
 
+    /** 허용 문자·점으로 시작 금지 + 허용 확장자(소문자 끝 — 워커가 소문자로 보낸다, ArtifactNames). */
     public static boolean validName(String name) {
-        return name != null && NAME.matcher(name).matches() && (name.endsWith(".war") || name.endsWith(".jar"))
-                && !name.startsWith(".");
+        return name != null && NAME.matcher(name).matches() && !name.startsWith(".")
+                && ArtifactNames.extension(name).filter(e -> name.endsWith("." + e)).isPresent();
     }
 
     public Path dir(long taskId) {

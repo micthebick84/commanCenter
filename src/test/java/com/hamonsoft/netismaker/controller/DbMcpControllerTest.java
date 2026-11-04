@@ -2,6 +2,8 @@ package com.hamonsoft.netismaker.controller;
 
 import com.hamonsoft.netismaker.dbmcp.DbMcpTokenService;
 import com.hamonsoft.netismaker.dbmcp.DbMcpTools;
+import com.hamonsoft.netismaker.dbmcp.DbWriteGate;
+import com.hamonsoft.netismaker.dbmcp.DbWriteService;
 import com.hamonsoft.netismaker.dto.InterviewClaimResponse.DbConnectionRef;
 import com.hamonsoft.netismaker.entity.Task;
 import com.hamonsoft.netismaker.service.DbConnectionService;
@@ -27,16 +29,18 @@ class DbMcpControllerTest {
     private final DbMcpTokenService tokens = mock(DbMcpTokenService.class);
     private final DbConnectionService db = mock(DbConnectionService.class);
     private final DbMcpTools tools = mock(DbMcpTools.class);
+    private final DbWriteGate gate = mock(DbWriteGate.class);
+    private final DbWriteService writes = mock(DbWriteService.class);
     private MockMvc mvc;
     private final DbConnectionRef ref =
             new DbConnectionRef("db-12", "운영 (MySQL)", "MYSQL", "h", 3306, "app", "u", "pw");
 
     @BeforeEach
     void setUp() {
-        mvc = MockMvcBuilders.standaloneSetup(new DbMcpController(tokens, db, tools)).build();
+        mvc = MockMvcBuilders.standaloneSetup(new DbMcpController(tokens, db, tools, gate, writes)).build();
         Task t = Task.create("a/b", "main", "t", "d", "user1", 3, List.of(), null, null);
         t.setDbConnectionIds(new ArrayList<>(List.of(12L)));
-        when(tokens.authenticate("good")).thenReturn(Optional.of(t));
+        when(tokens.authenticateWithGrant("good")).thenReturn(Optional.of(new DbMcpTokenService.TokenAuth(t, false)));
         when(db.resolveForClaim(List.of(12L))).thenReturn(new DbConnectionService.ClaimDb(List.of(ref), List.of()));
     }
 
@@ -69,7 +73,7 @@ class DbMcpControllerTest {
 
     @Test
     void tools_list_and_call() throws Exception {
-        when(tools.toolDefinitions("운영 (MySQL)")).thenReturn(List.of(Map.of("name", "query")));
+        when(tools.toolDefinitions("운영 (MySQL)", false)).thenReturn(List.of(Map.of("name", "query")));
         rpc("good", 12, "{\"jsonrpc\":\"2.0\",\"id\":\"a\",\"method\":\"tools/list\"}")
                 .andExpect(jsonPath("$.result.tools[0].name").value("query"));
 

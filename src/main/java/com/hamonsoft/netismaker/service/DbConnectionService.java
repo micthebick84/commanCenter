@@ -256,6 +256,24 @@ public class DbConnectionService {
     }
 
     /**
+     * 구현 단계 쓰기용 연결 행 — 한 번 읽어 판정(DbWriteGate)과 접속({@link #writeRefOf})에 같은 행을 넘긴다
+     * (스펙 2026-11-03 §6.1 조건 4). 따로 읽으면 그 사이 관리자가 접속 대상을 바꿨을 때 이미 통과한 판정으로 새 대상에 쓴다.
+     */
+    @Transactional(readOnly = true)
+    public Optional<DbConnection> findForWrite(long id) {
+        return repo.findById(id);
+    }
+
+    /**
+     * 넘겨받은 행에서 복호화한 접속정보 — 다시 읽지 않는다({@link #resolveForClaim}은 다시 읽으므로 쓰기에 쓰지 않는다).
+     * 기능이 꺼졌거나(키 없음) 복호화에 실패하면 empty.
+     */
+    public Optional<InterviewClaimResponse.DbConnectionRef> writeRefOf(DbConnection snapshot) {
+        if (snapshot == null || !cipher.isEnabled()) return Optional.empty();
+        return refOf(snapshot);
+    }
+
+    /**
      * 연결 행 하나로 복호화한 접속정보(claim·쓰기 실행이 함께 쓴다 — 복호화·조립 코드를 한 곳에 둔다). 다시 읽지 않고 넘겨받은 행만 본다.
      * 복호화할 수 없으면 empty(경고 로그 — 비밀번호·암호문은 싣지 않는다). 기능이 꺼졌는지는 호출자가 본다.
      */

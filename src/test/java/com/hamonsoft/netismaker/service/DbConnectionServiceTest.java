@@ -216,6 +216,27 @@ class DbConnectionServiceTest {
         assertThat(String.join("\n", db.notices())).doesNotContain("pw");
     }
 
+    /** 쓰기 실행(스펙 2026-11-03 §6.1 조건 4) — 판정과 접속이 같은 행을 보게, 넘겨받은 행에서만 복호화한다. */
+    @Test
+    void write_ref_decrypts_the_given_row_without_reading_again() {
+        DbConnection c = row(1, DbConnectionScope.REPO, null, 1, true);
+        assertThat(service.findForWrite(1L)).containsSame(c);
+        verify(repo, times(1)).findById(1L);
+
+        c.setHost("other.local");   // 읽은 뒤 바뀐 값이 아니라 넘겨받은 행 그대로
+        var ref = service.writeRefOf(c).orElseThrow();
+        assertThat(ref.host()).isEqualTo("other.local");
+        assertThat(ref.password()).isEqualTo("pw1");
+        assertThat(ref.label()).isEqualTo("conn1 (PostgreSQL)");
+        verify(repo, times(1)).findById(1L);
+
+        c.setPasswordEnc(new DbSecretCipher("other-key", SALT).encrypt("x"));
+        assertThat(service.writeRefOf(c)).isEmpty();
+        assertThat(service.writeRefOf(null)).isEmpty();
+        service = new DbConnectionService(repo, new DbSecretCipher("", ""), tester, repoCatalogRepo, dbObjects, WRITE_PROPS);
+        assertThat(service.writeRefOf(row(2, DbConnectionScope.REPO, null, 1, true))).isEmpty();
+    }
+
     @Test
     void resolve_for_claim_when_disabled_gives_single_notice() {
         service = new DbConnectionService(repo, new DbSecretCipher("", ""), tester, repoCatalogRepo, dbObjects, WRITE_PROPS);

@@ -316,6 +316,11 @@ public class DeployPrebuilder {
         return dockerfileText != null && dockerfileText.contains(STAGE_DIR);
     }
 
+    /** Dockerfile이 납품 스테이징 폴더를 쓰는지 — 레포 Dockerfile이 안 쓰면 DeployService가 경고한다. */
+    static boolean dockerfileUsesDeliveryStage(String dockerfileText) {
+        return dockerfileText != null && dockerfileText.contains(DELIVERY_STAGE_DIR);
+    }
+
     /** 출력 꼬리 — 잘렸으면 "…" + 끝 8000자(LocalDockerTarget.tail과 같은 규칙). */
     static String tail(StringBuilder buf) {
         synchronized (buf) {

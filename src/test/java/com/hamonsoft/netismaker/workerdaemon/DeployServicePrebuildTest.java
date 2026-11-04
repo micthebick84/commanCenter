@@ -2,6 +2,7 @@ package com.hamonsoft.netismaker.workerdaemon;
 
 import com.hamonsoft.netismaker.dto.WorkerTaskResponse;
 import com.hamonsoft.netismaker.workerdaemon.deploy.DeployTarget;
+import com.hamonsoft.netismaker.workerdaemon.deploy.DockerfileSupport;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -29,6 +30,10 @@ class DeployServicePrebuildTest {
             new WorkerTaskResponse.PrebuildSpec("mvn -q package", "hm-dash/target/*.war", "jdk8-maven");
     private static final DeployPrebuilder.Staged STAGED =
             new DeployPrebuilder.Staged("hm-dash.war", 1024, "hm-dash/target/hm-dash.war");
+    private static final DeployPrebuilder.Staged STAGED_WITH_DELIVERY = new DeployPrebuilder.Staged(
+            "hm-dash-daegu.war", 1024, "hm-dash/target/hm-dash-daegu.war", "knu-wars.zip");
+    private static final String NO_DELIVERY_WARNING =
+            "[경고] Dockerfile이 .netis-prebuild/artifact/를 쓰지 않음 — 납품 파일이 이미지에 들어가지 않음";
     private static final String NO_IGNORE_WARNING =
             "[경고] Dockerfile이 .netis-prebuild/를 쓰지 않음 — 미리 빌드 산출물이 이미지에 들어가지 않을 수 있음";
 
@@ -78,6 +83,68 @@ class DeployServicePrebuildTest {
             out.accept("[미리 빌드 산출물] hm-dash/target/hm-dash.war (0.0MB) → .netis-prebuild/hm-dash.war");
             return STAGED;
         });
+    }
+
+    private void prebuilderStagesDelivery() throws Exception {
+        when(prebuilder.run(eq(SPEC), any(), any())).thenReturn(STAGED_WITH_DELIVERY);
+    }
+
+    private void claudeWritesDockerfile(String content) throws Exception {
+        when(claude.exec(anyString(), any(), any(), anyList(), anyBoolean())).thenAnswer(inv -> {
+            File dir = inv.getArgument(1);
+            Files.writeString(dir.toPath().resolve("Dockerfile"), content);
+            return new ClaudeExecAdapter.ExecResult(0, "ok", 10, null);
+        });
+    }
+
+    @Test
+    void 생성한_Dockerfile에_납품_파일이_있으면_로케일_뒤에_COPY를_붙인다() throws Exception {
+        prebuilderStagesDelivery();
+        claudeWritesDockerfile("FROM tomcat:8.5\nCOPY .netis-prebuild/hm-dash-daegu.war /usr/local/tomcat/webapps/ROOT.war\n");
+
+        var result = service().deploy(task(SPEC), sink::add);
+
+        String dockerfile = Files.readString(wt.toPath().resolve("Dockerfile"));
+        assertThat(dockerfile).endsWith(DockerfileSupport.ARTIFACT_COPY_BLOCK);
+        assertThat(dockerfile.indexOf(DockerfileSupport.JAVA_LOCALE_BLOCK))
+                .isPositive().isLessThan(dockerfile.indexOf(DockerfileSupport.ARTIFACT_COPY_BLOCK));
+        assertThat(result.log()).contains("[납품 파일] COPY .netis-prebuild/artifact/ → /opt/netis-artifact/ 추가")
+                .doesNotContain("[경고]");
+    }
+
+    @Test
+    void 납품_파일이_없으면_COPY를_붙이지_않는다() throws Exception {
+        prebuilderStages();
+        claudeWritesDockerfile("FROM tomcat:8.5\nCOPY .netis-prebuild/hm-dash.war /usr/local/tomcat/webapps/ROOT.war\n");
+
+        var result = service().deploy(task(SPEC), sink::add);
+
+        assertThat(Files.readString(wt.toPath().resolve("Dockerfile"))).doesNotContain(".netis-prebuild/artifact");
+        assertThat(result.log()).doesNotContain("[납품 파일]");
+    }
+
+    @Test
+    void 레포_Dockerfile이_납품_폴더를_안_쓰면_경고만_한다() throws Exception {
+        prebuilderStagesDelivery();
+        String repoDockerfile = "FROM x\nCOPY .netis-prebuild/hm-dash-daegu.war /a.war\n";
+        Files.writeString(wt.toPath().resolve("Dockerfile"), repoDockerfile);
+
+        var result = service().deploy(task(SPEC), sink::add);
+
+        assertThat(Files.readString(wt.toPath().resolve("Dockerfile"))).isEqualTo(repoDockerfile);
+        assertThat(result.log()).contains(NO_DELIVERY_WARNING).doesNotContain("[납품 파일]");
+        verifyNoInteractions(claude);
+    }
+
+    @Test
+    void 레포_Dockerfile이_납품_폴더를_쓰면_경고가_없다() throws Exception {
+        prebuilderStagesDelivery();
+        Files.writeString(wt.toPath().resolve("Dockerfile"),
+                "FROM x\nCOPY .netis-prebuild/hm-dash-daegu.war /a.war\nCOPY .netis-prebuild/artifact/ /opt/netis-artifact/\n");
+
+        var result = service().deploy(task(SPEC), sink::add);
+
+        assertThat(result.log()).doesNotContain("[경고]");
     }
 
     @Test

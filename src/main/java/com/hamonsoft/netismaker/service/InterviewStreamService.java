@@ -3,13 +3,16 @@ package com.hamonsoft.netismaker.service;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.hamonsoft.netismaker.dto.DesignEvent;
+import com.hamonsoft.netismaker.dto.InterviewMockupSummary;
 import com.hamonsoft.netismaker.dto.PlanReadyEvent;
 import com.hamonsoft.netismaker.dto.QuestionEvent;
 import com.hamonsoft.netismaker.dto.WorkerActivityRequest;
 import com.hamonsoft.netismaker.entity.InterviewStatus;
 import com.hamonsoft.netismaker.entity.InterviewTurn;
+import com.hamonsoft.netismaker.repository.InterviewMockupRepository;
 import com.hamonsoft.netismaker.repository.InterviewTurnRepository;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.annotation.Profile;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
@@ -17,6 +20,7 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
 import java.io.IOException;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
@@ -25,15 +29,16 @@ import java.util.concurrent.CopyOnWriteArrayList;
 /**
  * 인터뷰 SSE 스트리밍 (api 프로파일).
  *
- *  이벤트: question | design | plan_ready | status | done | activity | note
- *  - subscribe: 접속 시 keepalive ping + 기존 turn replay 후 live 구독 (system 턴은 note로 replay).
- *  - pushQuestion/pushDesign/pushPlanReady/pushStatus/pushNote: 라이브 fan-out.
+ *  이벤트: question | design | plan_ready | status | done | activity | note | mockup
+ *  - subscribe: 접속 시 keepalive ping + 기존 turn replay + 목업 replay 후 live 구독 (system 턴은 note로 replay).
+ *  - pushQuestion/pushDesign/pushPlanReady/pushStatus/pushNote/pushMockup: 라이브 fan-out.
  *  - finish: done 이벤트 + emitter complete (세션 terminal 시).
  *
  *  LOCKED CONTRACT v2:
  *    status 페이로드 = InterviewStatus.name() (영문 enum, 예 "AWAITING_INPUT") — 한글 dbValue 아님.
  *    plan_ready 페이로드 = {designMarkdown, planMarkdown, planJson} JSON 객체 — bare string 아님.
  *    activity 페이로드 = {events:[{seq,type,label,detail,content}]} JSON — transient(미저장)·no-replay.
+ *    mockup 페이로드 = InterviewMockupSummary JSON({id,n,name,version,title,description,turnSeq,turnKind,createdAt}) — html 없음.
  *
  *  api 단일 인스턴스 전제 — emitter 레지스트리 in-memory.
  */
@@ -45,10 +50,17 @@ public class InterviewStreamService {
     private final InterviewTurnRepository turnRepo;
     private final ObjectMapper json;
     private final Map<Long, List<SseEmitter>> emitters = new ConcurrentHashMap<>();
+    /** replay의 목업 목록 조회용 — setter 주입(생성자를 바꾸지 않아 기존 시험의 2인자 생성이 그대로다). 없으면 replay에 목업이 없다. */
+    private InterviewMockupRepository mockupRepo;
 
     public InterviewStreamService(InterviewTurnRepository turnRepo, ObjectMapper json) {
         this.turnRepo = turnRepo;
         this.json = json;
+    }
+
+    @Autowired(required = false)
+    void setInterviewMockupRepository(InterviewMockupRepository mockupRepo) {
+        this.mockupRepo = mockupRepo;
     }
 
     @Transactional(readOnly = true)
@@ -57,22 +69,9 @@ public class InterviewStreamService {
         try {
             // 0) keepalive ping — 프록시/브라우저가 연결을 살아있게 유지
             emitter.send(SseEmitter.event().comment("ping"));
-            // 1) 지금까지의 assistant turn replay (재연결 시 누락 복구)
-            for (InterviewTurn t : turnRepo.findBySessionIdOrderBySeqAsc(sessionId)) {
-                if ("user".equals(t.getRole())) continue; // 사용자 답변은 클라가 이미 가짐
-                String content = t.getContent() == null ? "" : t.getContent();
-                // 라이브와 동일한 JSON 객체 포맷으로 replay (프론트는 question={seq,content},
-                // design={key,title,body,approved}를 JSON.parse한다). writeValueAsString의
-                // JsonProcessingException은 IOException 하위라 아래 catch가 함께 처리한다.
-                String event = replayEventName(t);
-                if ("design".equals(event)) {
-                    emitter.send(SseEmitter.event().name("design").data(
-                            json.writeValueAsString(new DesignEvent("design-" + t.getSeq(), "설계", content, false))));
-                } else {
-                    // question | note — 둘 다 {seq, content} 객체 (프론트가 seq로 dedup)
-                    emitter.send(SseEmitter.event().name(event).data(
-                            json.writeValueAsString(new QuestionEvent(t.getSeq(), content))));
-                }
+            // 1) 지금까지의 turn + 목업 replay (재연결 시 누락 복구). 직렬화 실패(IOException 하위)도 아래 catch가 함께 처리한다.
+            for (ReplayEvent ev : replayEvents(sessionId)) {
+                emitter.send(SseEmitter.event().name(ev.name()).data(ev.data()));
             }
         } catch (IOException e) {
             emitter.completeWithError(e);
@@ -84,6 +83,38 @@ public class InterviewStreamService {
         emitter.onTimeout(() -> remove(sessionId, emitter));
         emitter.onError(ex -> remove(sessionId, emitter));
         return emitter;
+    }
+
+    /** replay로 보낼 이벤트 한 건 — 이름과 JSON 본문. */
+    record ReplayEvent(String name, String data) {}
+
+    /**
+     * 접속 시 다시 보낼 이벤트 목록: assistant·system 턴(seq 순) 뒤에 그 세션의 목업(버린 것 제외, n 순)을 {@code mockup}으로 잇는다 —
+     * 화면이 목업을 질문·계획 턴에 붙이려면 턴이 먼저 도착해 있어야 한다. 목업이 없으면(저장소 미주입 포함) 예전과 같은 이벤트열이다.
+     */
+    List<ReplayEvent> replayEvents(Long sessionId) throws IOException {
+        List<ReplayEvent> events = new ArrayList<>();
+        for (InterviewTurn t : turnRepo.findBySessionIdOrderBySeqAsc(sessionId)) {
+            if ("user".equals(t.getRole())) continue; // 사용자 답변은 클라가 이미 가짐
+            String content = t.getContent() == null ? "" : t.getContent();
+            // 라이브와 동일한 JSON 객체 포맷으로 replay (프론트는 question={seq,content},
+            // design={key,title,body,approved}를 JSON.parse한다). writeValueAsString의
+            // JsonProcessingException은 IOException 하위다.
+            String event = replayEventName(t);
+            if ("design".equals(event)) {
+                events.add(new ReplayEvent("design",
+                        json.writeValueAsString(new DesignEvent("design-" + t.getSeq(), "설계", content, false))));
+            } else {
+                // question | note — 둘 다 {seq, content} 객체 (프론트가 seq로 dedup)
+                events.add(new ReplayEvent(event, json.writeValueAsString(new QuestionEvent(t.getSeq(), content))));
+            }
+        }
+        if (mockupRepo != null) {
+            for (InterviewMockupSummary m : mockupRepo.findSummaries(sessionId)) {
+                events.add(new ReplayEvent("mockup", json.writeValueAsString(m)));
+            }
+        }
+        return events;
     }
 
     /**
@@ -129,6 +160,14 @@ public class InterviewStreamService {
         } catch (JsonProcessingException e) {
             log.error("plan_ready 직렬화 실패 session={}", sessionId, e);
         }
+    }
+
+    /**
+     * mockup 페이로드 = {@link InterviewMockupSummary} JSON 객체 — 목업이 올라올 때와 턴에 묶일 때 보낸다(화면이 id로 거른다).
+     * html은 싣지 않는다 — 본문은 단건 조회로만 나간다.
+     */
+    public void pushMockup(Long sessionId, InterviewMockupSummary m) {
+        sendJson(sessionId, "mockup", m);
     }
 
     /**

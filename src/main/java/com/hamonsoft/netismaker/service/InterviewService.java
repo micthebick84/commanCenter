@@ -972,7 +972,8 @@ public class InterviewService {
         return sessionRepo.findByIdForUpdate(sessionId).orElseThrow(TaskException::notFound);
     }
 
-    private void requireWorker(InterviewSession s, String workerId) {
+    /** 그 세션을 잡은 워커만 쓸 수 있다. 목업 업로드({@link InterviewMockupService#upload})도 같은 규칙·문구를 쓰려고 package-private static이다. */
+    static void requireWorker(InterviewSession s, String workerId) {
         if (s.getWorkerId() != null && !s.getWorkerId().equals(workerId)) {
             throw TaskException.conflict("다른 워커가 잡은 인터뷰입니다 (소유: " + s.getWorkerId() + ")");
         }

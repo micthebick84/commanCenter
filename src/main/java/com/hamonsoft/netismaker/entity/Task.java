@@ -85,6 +85,24 @@ public class Task {
     private List<Long> dbConnectionIds = new ArrayList<>();
 
     /**
+     * 구현에 넘기기로 한 인터뷰 목업 id (스펙 2026-11-03 §7) — 계획 확정 때 관리자가 고른 interview_mockup.id.
+     * 세션 행이 남으므로 복사하지 않고 id만 참조한다. 기본 빈 목록(기존 작업·목업 없는 인터뷰).
+     */
+    @JdbcTypeCode(SqlTypes.JSON)
+    @Column(name = "implementation_mockup_ids", nullable = false, columnDefinition = "jsonb")
+    @Setter
+    private List<Long> implementationMockupIds = new ArrayList<>();
+
+    /**
+     * 계획이 가리켰는데 구현에 넘기지 않은 목업 번호(interview_mockup.n) — 확정 때 채운다(스펙 §7 "전달하지 않은 목업").
+     * 구현 프롬프트가 "전달되지 않은 목업은 찾지 말고 계획 글만 따르라"를 넣는 근거다. 기본 빈 목록.
+     */
+    @JdbcTypeCode(SqlTypes.JSON)
+    @Column(name = "implementation_mockup_excluded", nullable = false, columnDefinition = "jsonb")
+    @Setter
+    private List<Integer> implementationMockupExcluded = new ArrayList<>();
+
+    /**
      * 읽기 전용 참조 repo (스펙 2026-10-24 §3.2) — 등록·승인 때 고른 스냅샷, 계획 확정 뒤에는 인터뷰가 고정한 커밋(sha)까지.
      * 원소는 질문 세션과 같은 RefRepo. 구현(재시도·재기동 재큐 포함)은 이 값을 그대로 쓴다.
      */

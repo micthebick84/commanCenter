@@ -120,6 +120,18 @@ body {
 .markdown pre {
   overflow-x: auto;
 }
+/* 빌드 로그(배포중·배포중지중) 로그 상자 — 데스크톱 배포 카드([id].vue)와 모바일 칸(TaskDetailMobile)이 함께 쓴다.
+   페이지의 scoped 스타일에 두면 자식 컴포넌트의 pre에는 적용되지 않는다. */
+.deploy-log {
+  max-height: 240px;
+  overflow: auto;
+  background: #1e1e1e;
+  color: #d4d4d4;
+  padding: 8px;
+  border-radius: 4px;
+  font-size: 0.75rem;
+  white-space: pre-wrap;
+}
 /* 안전망: 페이지 레벨 가로 스크롤 금지 */
 .q-page {
   overflow-x: clip;

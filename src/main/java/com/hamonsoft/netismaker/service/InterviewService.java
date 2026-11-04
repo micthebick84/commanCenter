@@ -36,6 +36,7 @@ import java.util.stream.Collectors;
  *   claim         ─► QUEUED → RUNNING (워커, SKIP LOCKED)
  *   recordQuestion─► RUNNING → AWAITING_INPUT (워커가 질문 emit, 반납)
  *   submitAnswer  ─► AWAITING_INPUT → QUEUED (사용자 답변, 재큐; idempotent)
+ *                    | PLAN_READY → QUEUED (간단 인터뷰(superpowers 끔)의 계획 고쳐 달라기)
  *   submitAnswerWithRefs ─► submitAnswer + 참조 repo 변경(작업 인터뷰 답변, 한 트랜잭션)
  *   recordPlan    ─► RUNNING → PLAN_READY (writing-plans 완료)
  *   confirm       ─► PLAN_READY → REGISTERED (기존 task 갱신: analysis 프리필 + 구현/디자인 큐)
@@ -497,6 +498,13 @@ public class InterviewService {
     /**
      * writing-plans 완료 → PLAN_READY. design+plan 영속화, 비용 누적, 참조 repo 준비 결과 반영, 워커 반납.
      * 참조 결과도 반영해야 마지막 답변에서 더한 참조가 계획 턴에 처음 받아졌을 때 커밋이 고정된다 (스펙 2026-10-24 §4.5).
+     * <p>계획 고쳐 달라기 (설계 2026-11-03-interview-superpowers-toggle §4.1):
+     * <ul>
+     *   <li>claudeSessionId가 비어 있지 않으면 저장한다(recordQuestion과 같은 규칙) — 첫 턴에 바로 계획이 나온 간단 인터뷰는
+     *       질문 보고가 없으므로 여기서 저장해야 고쳐 달라기가 새 kickoff가 아니라 같은 대화의 resume이 된다.</li>
+     *   <li>interview_plan은 PK가 session_id라 고친 계획이 같은 행을 덮어쓴다 — confirm·구현 claim은 늘 최신 계획을 읽는다.
+     *       이전 계획 본문은 design 턴에 남기려고 간단 인터뷰(끔)만 design 턴 본문에 계획 본문을 함께 담는다({@link #designTurnContent}).</li>
+     * </ul>
      */
     @Transactional
     public InterviewPlan recordPlan(Long sessionId, String workerId, WorkerPlanRequest req) {
@@ -507,6 +515,9 @@ public class InterviewService {
                     + s.getStatus().dbValue() + ")");
         }
         requireWorker(s, workerId);
+        if (req.claudeSessionId() != null && !req.claudeSessionId().isBlank()) {
+            s.setClaudeSessionId(req.claudeSessionId());
+        }
         addUsage(s, req.costUsd(), req.inputTokens(), req.outputTokens(),
                 req.cacheCreationTokens(), req.cacheReadTokens());
         applyRefStates(s, req.refStates());
@@ -514,8 +525,7 @@ public class InterviewService {
         InterviewPlan plan = planRepo.save(InterviewPlan.create(sessionId,
                 req.designMarkdown(), req.planMarkdown(), req.planJson(),
                 req.durationMs(), s.getTotalCostUsd()));
-        appendTurn(sessionId, "assistant", "design",
-                req.designMarkdown() == null ? "" : req.designMarkdown());
+        appendTurn(sessionId, "assistant", "design", designTurnContent(s, req));
         s.setStatus(InterviewStatus.PLAN_READY);
         s.setWorkerId(null);
         s.setClaimedAt(null);
@@ -523,6 +533,20 @@ public class InterviewService {
         touch(s);
         mirrorTask(s, TaskStatus.INTERVIEW_REVIEW, workerId, "플랜 생성 완료 → 확정 대기");
         return plan;
+    }
+
+    /**
+     * 계획 보고의 design 턴 본문. 켬은 지금처럼 design만(null이면 "") — 바이트 그대로.
+     * 끔(간단 인터뷰)은 계획 본문을 함께 담는다: design이 있으면 design + 빈 줄 + 계획, 없으면(공백뿐 포함) 계획만.
+     * 간단 인터뷰는 design이 대개 비어 있고 interview_plan 행은 고친 계획이 덮어쓰므로, 이렇게 해야 고치기 전 계획이 대화 기록에 남는다
+     * (설계 2026-11-03-interview-superpowers-toggle §4.1). 계획 본문이 비어 오면 덧붙일 것이 없어 켬과 같다.
+     * interview_plan의 design 칸은 보고 그대로다 — confirm이 그 값을 task_analysis.markdown_result(design 전용)로 옮긴다.
+     */
+    private static String designTurnContent(InterviewSession s, WorkerPlanRequest req) {
+        String design = req.designMarkdown() == null ? "" : req.designMarkdown();
+        String plan = req.planMarkdown();
+        if (s.isSuperpowersEnabled() || plan == null || plan.isBlank()) return design;
+        return design.isBlank() ? plan : design + "\n\n" + plan;
     }
 
     /**
@@ -586,6 +610,10 @@ public class InterviewService {
     /**
      * 사용자 답변 → AWAITING_INPUT → QUEUED 재큐. idempotent:
      * 같은 replyToSeq에 응답하는 user answer 턴이 이미 있으면 무시 (reply_to_seq 컬럼이 키).
+     * <p>계획 고쳐 달라기 (설계 2026-11-03-interview-superpowers-toggle §4.1): 간단 인터뷰(superpowers 끔) 작업 세션은
+     * PLAN_READY에서도 받는다 — 같은 user/answer 턴으로 남기고 PLAN_READY → QUEUED, 작업은 플랜승인대기 → 인터뷰중
+     * (이력 {@code 계획 수정 요청 → 인터뷰 재개}). 화면은 replyToSeq를 null로 보내므로(계획의 design 턴 seq를 모른다) 중복 no-op이 아니라
+     * 두 번째 제출은 아래 상태 검사의 409로 막힌다. 켬 세션의 PLAN_READY는 지금처럼 409·같은 메시지다.
      */
     @Transactional
     public AnswerOutcome submitAnswer(Long sessionId, String actorId, boolean isAdmin, AnswerRequest req) {
@@ -600,14 +628,18 @@ public class InterviewService {
                             && req.replyToSeq().equals(t.getReplyToSeq()));
             if (already) return new AnswerOutcome(s, null); // no-op, 상태 유지, 턴 없음
         }
-        if (s.getStatus() != InterviewStatus.AWAITING_INPUT) {
+        // 질문 세션은 PLAN_READY가 되지 않는다 — !isQuestion()은 방어다(질문 세션은 superpowers 값을 보지 않는다)
+        boolean planFix = s.getStatus() == InterviewStatus.PLAN_READY
+                && !s.isSuperpowersEnabled() && !s.isQuestion();
+        if (s.getStatus() != InterviewStatus.AWAITING_INPUT && !planFix) {
             throw TaskException.conflict("입력대기 상태에서만 답변할 수 있습니다 (현재: "
                     + s.getStatus().dbValue() + ")");
         }
         InterviewTurn answer = appendTurn(sessionId, "user", "answer", req.answer(), req.replyToSeq());
         s.setStatus(InterviewStatus.QUEUED);
         touch(s);
-        mirrorTask(s, TaskStatus.INTERVIEWING, actorId, "관리자 답변 → 인터뷰 재개");
+        mirrorTask(s, TaskStatus.INTERVIEWING, actorId,
+                planFix ? "계획 수정 요청 → 인터뷰 재개" : "관리자 답변 → 인터뷰 재개");
         return new AnswerOutcome(s, answer.getSeq());
     }
 

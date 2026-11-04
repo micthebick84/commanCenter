@@ -12,6 +12,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.EnumSource;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.mockito.ArgumentCaptor;
 import org.springframework.http.HttpStatus;
 import org.springframework.test.util.ReflectionTestUtils;
@@ -1492,6 +1493,250 @@ class InterviewServiceTest {
         ArgumentCaptor<InterviewSession> saved = ArgumentCaptor.forClass(InterviewSession.class);
         verify(sessionRepo, times(2)).save(saved.capture());
         assertThat(saved.getAllValues()).extracting(InterviewSession::isSuperpowersEnabled).containsExactly(false, true);
+    }
+
+    // ── 계획 고쳐 달라기 — 간단 인터뷰 플랜완료 답변·계획 보고 세션 id·이전 계획 보존 (설계 2026-11-03-interview-superpowers-toggle §4.1) ──
+
+    /** 세션을 작업 77에 연결하고, 미러링이 잠그는 그 작업(상태 taskStatus)을 돌려준다. */
+    private Task linkTask(InterviewSession s, TaskStatus taskStatus) {
+        s.setTaskId(77L);
+        Task t = Task.create("owner/repo", "main", "T", "d", "u1", 3, List.of(), "claude-opus-4-8", "high");
+        ReflectionTestUtils.setField(t, "id", 77L);
+        t.setStatus(taskStatus);
+        when(taskRepo.findActiveByIdForUpdate(77L)).thenReturn(Optional.of(t));
+        return t;
+    }
+
+    /** 플랜완료(PLAN_READY) 간단 인터뷰(끔) 작업 세션 — 작업은 플랜승인대기. */
+    private InterviewSession simplePlanReady(long id) {
+        InterviewSession s = session(id, InterviewStatus.PLAN_READY);
+        s.setSuperpowersEnabled(false);
+        when(sessionRepo.findByIdForUpdate(id)).thenReturn(Optional.of(s));
+        return s;
+    }
+
+    @Test
+    void 간단_인터뷰_플랜완료에_답하면_재큐와_계획수정_이력() {
+        InterviewSession s = simplePlanReady(20L);
+        Task t = linkTask(s, TaskStatus.INTERVIEW_REVIEW);
+        // 이미 답한 질문(seq 2)·계획(design seq 4)이 있는 세션 — replyToSeq null이라 중복 검사에 걸리지 않는다 (RF2)
+        when(turnRepo.findBySessionIdOrderBySeqAsc(20L)).thenReturn(List.of(
+                InterviewTurn.of(20L, 2, "assistant", "question", "어느 테이블인가요?", null),
+                InterviewTurn.of(20L, 3, "user", "answer", "회원 테이블", 2),
+                InterviewTurn.of(20L, 4, "assistant", "design", "# 계획 v1", null)));
+        when(turnRepo.findMaxSeq(20L)).thenReturn(4);
+
+        InterviewService.AnswerOutcome out = service.submitAnswer(20L, "admin", true,
+                new AnswerRequest("컬럼명을 바꿔 주세요", null));
+
+        assertThat(s.getStatus()).isEqualTo(InterviewStatus.QUEUED);
+        ArgumentCaptor<InterviewTurn> turn = ArgumentCaptor.forClass(InterviewTurn.class);
+        verify(turnRepo).save(turn.capture());
+        assertThat(turn.getValue().getRole()).isEqualTo("user");
+        assertThat(turn.getValue().getKind()).isEqualTo("answer");   // 새 kind를 만들지 않는다
+        assertThat(turn.getValue().getContent()).isEqualTo("컬럼명을 바꿔 주세요");
+        assertThat(turn.getValue().getReplyToSeq()).isNull();
+        assertThat(turn.getValue().getSeq()).isEqualTo(5);
+        assertThat(out.turnSeq()).isEqualTo(5);
+        assertThat(t.getStatus()).isEqualTo(TaskStatus.INTERVIEWING);
+        ArgumentCaptor<TaskStatusHistory> h = ArgumentCaptor.forClass(TaskStatusHistory.class);
+        verify(historyRepo).save(h.capture());
+        assertThat(h.getValue().getFromStatus()).isEqualTo(TaskStatus.INTERVIEW_REVIEW.dbValue());
+        assertThat(h.getValue().getToStatus()).isEqualTo(TaskStatus.INTERVIEWING.dbValue());
+        assertThat(h.getValue().getReason()).isEqualTo("계획 수정 요청 → 인터뷰 재개");
+    }
+
+    @Test
+    void 간단_인터뷰_계획_고쳐_달라기를_두번_보내면_두번째는_409() {
+        // replyToSeq null이라 중복 no-op이 아니다 — 첫 요청이 QUEUED로 바꾼 뒤의 재제출은 상태 검사가 막는다 (설계와 다름 ②)
+        InterviewSession s = simplePlanReady(21L);
+        linkTask(s, TaskStatus.INTERVIEW_REVIEW);
+        when(turnRepo.findMaxSeq(21L)).thenReturn(4);
+        service.submitAnswer(21L, "admin", true, new AnswerRequest("컬럼명을 바꿔 주세요", null));
+
+        assertThatThrownBy(() -> service.submitAnswer(21L, "admin", true,
+                new AnswerRequest("컬럼명을 바꿔 주세요", null)))
+                .isInstanceOfSatisfying(TaskException.class, e -> {
+                    assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT);
+                    assertThat(e.getMessage()).isEqualTo("입력대기 상태에서만 답변할 수 있습니다 (현재: 인터뷰대기)");
+                });
+        verify(turnRepo, times(1)).save(any());
+        assertThat(s.getStatus()).isEqualTo(InterviewStatus.QUEUED);
+    }
+
+    @Test
+    void 켬_플랜완료_답변은_409와_기존_메시지() {
+        InterviewSession s = session(22L, InterviewStatus.PLAN_READY);   // 켬(기본)
+        when(sessionRepo.findByIdForUpdate(22L)).thenReturn(Optional.of(s));
+        when(turnRepo.findBySessionIdOrderBySeqAsc(22L)).thenReturn(List.of(
+                InterviewTurn.of(22L, 4, "assistant", "design", "# 설계", null)));
+
+        assertThatThrownBy(() -> service.submitAnswer(22L, "admin", true, new AnswerRequest("고쳐 주세요", 99)))
+                .isInstanceOfSatisfying(TaskException.class, e -> {
+                    assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT);
+                    assertThat(e.getMessage()).startsWith("입력대기 상태에서만 답변할 수 있습니다 (현재: ");
+                    assertThat(e.getMessage()).isEqualTo("입력대기 상태에서만 답변할 수 있습니다 (현재: "
+                            + InterviewStatus.PLAN_READY.dbValue() + ")");
+                });
+        verify(turnRepo, never()).save(any());
+        verify(taskRepo, never()).findActiveByIdForUpdate(any());
+        assertThat(s.getStatus()).isEqualTo(InterviewStatus.PLAN_READY);
+    }
+
+    @ParameterizedTest
+    @EnumSource(value = InterviewStatus.class, names = {"QUEUED", "RUNNING", "FAILED", "EXPIRED", "CANCELLED", "REGISTERED"})
+    void 간단_인터뷰도_입력대기_플랜완료_밖에서는_409(InterviewStatus st) {
+        InterviewSession s = session(23L, st);
+        s.setSuperpowersEnabled(false);
+        when(sessionRepo.findByIdForUpdate(23L)).thenReturn(Optional.of(s));
+
+        assertThatThrownBy(() -> service.submitAnswer(23L, "admin", true, new AnswerRequest("고쳐 주세요", null)))
+                .isInstanceOfSatisfying(TaskException.class, e -> {
+                    assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT);
+                    assertThat(e.getMessage()).isEqualTo("입력대기 상태에서만 답변할 수 있습니다 (현재: " + st.dbValue() + ")");
+                });
+        verify(turnRepo, never()).save(any());
+        assertThat(s.getStatus()).isEqualTo(st);
+    }
+
+    @Test
+    void 질문_세션은_끔이어도_플랜완료_답변이_409() {
+        // 방어: 질문 세션은 PLAN_READY가 되지 않고 superpowers 값도 보지 않는다 — 혹시 그런 행이 있어도 넓힌 조건을 타지 않는다
+        InterviewSession s = questionSession(24L, InterviewStatus.PLAN_READY);
+        s.setSuperpowersEnabled(false);
+        when(sessionRepo.findByIdForUpdate(24L)).thenReturn(Optional.of(s));
+
+        assertThatThrownBy(() -> service.submitAnswer(24L, "u1", false, new AnswerRequest("추가 질문", null)))
+                .isInstanceOfSatisfying(TaskException.class,
+                        e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT));
+        verify(turnRepo, never()).save(any());
+        assertThat(s.getStatus()).isEqualTo(InterviewStatus.PLAN_READY);
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {true, false})
+    void 입력대기_답변_이력은_그대로(boolean superpowersEnabled) {
+        InterviewSession s = session(25L, InterviewStatus.AWAITING_INPUT);
+        s.setSuperpowersEnabled(superpowersEnabled);
+        when(sessionRepo.findByIdForUpdate(25L)).thenReturn(Optional.of(s));
+        Task t = linkTask(s, TaskStatus.INTERVIEW_INPUT);
+        when(turnRepo.findMaxSeq(25L)).thenReturn(2);
+
+        service.submitAnswer(25L, "admin", true, new AnswerRequest("회원 테이블", 2));
+
+        assertThat(s.getStatus()).isEqualTo(InterviewStatus.QUEUED);
+        assertThat(t.getStatus()).isEqualTo(TaskStatus.INTERVIEWING);
+        ArgumentCaptor<TaskStatusHistory> h = ArgumentCaptor.forClass(TaskStatusHistory.class);
+        verify(historyRepo).save(h.capture());
+        assertThat(h.getValue().getFromStatus()).isEqualTo(TaskStatus.INTERVIEW_INPUT.dbValue());
+        assertThat(h.getValue().getReason()).isEqualTo("관리자 답변 → 인터뷰 재개");
+    }
+
+    /** 계획 보고 — claudeSessionId·design/plan만 다르고 나머지는 고정. */
+    private static WorkerPlanRequest planReport(String design, String plan, String claudeSessionId) {
+        return new WorkerPlanRequest(design, plan, "[]", BigDecimal.ZERO, null, null, null, null, 1000L,
+                null, claudeSessionId);
+    }
+
+    /** RUNNING(w1) 작업 인터뷰 세션 — superpowersEnabled 지정. */
+    private InterviewSession runningInterview(long id, boolean superpowersEnabled) {
+        InterviewSession s = session(id, InterviewStatus.RUNNING);
+        s.setWorkerId("w1");
+        s.setSuperpowersEnabled(superpowersEnabled);
+        when(sessionRepo.findByIdForUpdate(id)).thenReturn(Optional.of(s));
+        return s;
+    }
+
+    /** 이 세션에 저장된 assistant/design 턴 본문들(저장 순서). */
+    private List<String> designTurnContents() {
+        ArgumentCaptor<InterviewTurn> turns = ArgumentCaptor.forClass(InterviewTurn.class);
+        verify(turnRepo, atLeastOnce()).save(turns.capture());
+        return turns.getAllValues().stream()
+                .filter(t -> "assistant".equals(t.getRole()) && "design".equals(t.getKind()))
+                .map(InterviewTurn::getContent)
+                .toList();
+    }
+
+    @Test
+    void recordPlan이_claudeSessionId를_저장() {
+        // RF1: 첫 턴에 바로 계획이 나온 간단 인터뷰는 질문 보고가 없어 세션 id가 비어 있다 — 계획 보고가 저장해야 고쳐 달라기가 같은 대화를 잇는다
+        InterviewSession s = runningInterview(30L, false);
+        assertThat(s.getClaudeSessionId()).isNull();
+
+        service.recordPlan(30L, "w1", planReport(null, "# 계획 v1", "sess-1"));
+
+        assertThat(s.getClaudeSessionId()).isEqualTo("sess-1");
+        assertThat(s.getStatus()).isEqualTo(InterviewStatus.PLAN_READY);
+
+        // null·공백이면 기존 값을 지우지 않는다 (recordQuestion과 같은 규칙) — 켬·구버전 러너는 키를 보내지 않는다
+        for (String blank : new String[]{null, "  ", ""}) {
+            s.setStatus(InterviewStatus.RUNNING);
+            s.setWorkerId("w1");
+            service.recordPlan(30L, "w1", planReport(null, "# 계획 v2", blank));
+            assertThat(s.getClaudeSessionId()).isEqualTo("sess-1");
+        }
+    }
+
+    @Test
+    void 켬_recordPlan은_세션_id_키가_없으면_기존_값_유지() {
+        // 켬 러너의 계획 보고에는 claudeSessionId 키가 없다(바디 바이트 그대로) — 질문 보고가 저장한 값이 남는다
+        InterviewSession s = runningInterview(31L, true);
+        s.setClaudeSessionId("sess-q");
+
+        service.recordPlan(31L, "w1", new WorkerPlanRequest("# 설계", "# 플랜", "[]",
+                BigDecimal.ZERO, null, null, null, null, 1000L));
+
+        assertThat(s.getClaudeSessionId()).isEqualTo("sess-q");
+    }
+
+    @Test
+    void 끔_recordPlan의_design_턴에_계획_본문() {
+        // 끔: design 없음 → 계획 본문만
+        InterviewSession s = runningInterview(32L, false);
+        service.recordPlan(32L, "w1", planReport(null, "# 계획 v1", "sess-1"));
+        // 끔: design 있음 → design + 빈 줄 + 계획 (이전 계획이 대화 기록에 남는다 — interview_plan 행은 덮어써진다)
+        s.setStatus(InterviewStatus.RUNNING);
+        s.setWorkerId("w1");
+        service.recordPlan(32L, "w1", planReport("# 설계", "# 계획 v1", "sess-1"));
+        // 끔: design이 공백뿐이면 비어 있는 것으로 본다
+        s.setStatus(InterviewStatus.RUNNING);
+        s.setWorkerId("w1");
+        service.recordPlan(32L, "w1", planReport("  ", "# 계획 v1", "sess-1"));
+
+        assertThat(designTurnContents()).containsExactly(
+                "# 계획 v1",
+                "# 설계\n\n# 계획 v1",
+                "# 계획 v1");
+        // interview_plan 행은 보고 그대로 (design 칸에 계획을 섞지 않는다 — confirm의 markdown_result는 design 전용)
+        ArgumentCaptor<InterviewPlan> plans = ArgumentCaptor.forClass(InterviewPlan.class);
+        verify(planRepo, times(3)).save(plans.capture());
+        assertThat(plans.getAllValues()).extracting(InterviewPlan::getDesignMarkdown)
+                .containsExactly(null, "# 설계", "  ");
+        assertThat(plans.getAllValues()).extracting(InterviewPlan::getPlanMarkdown)
+                .containsOnly("# 계획 v1");
+    }
+
+    @Test
+    void 켬_recordPlan의_design_턴은_design만_그대로() {
+        InterviewSession s = runningInterview(33L, true);
+        service.recordPlan(33L, "w1", planReport("# 설계", "# 계획 v1", null));
+        s.setStatus(InterviewStatus.RUNNING);
+        s.setWorkerId("w1");
+        service.recordPlan(33L, "w1", planReport(null, "# 계획 v1", null));
+
+        assertThat(designTurnContents()).containsExactly("# 설계", "");
+    }
+
+    @Test
+    void 끔_recordPlan에_계획_본문이_없으면_design_턴은_지금처럼() {
+        // 방어: 러너는 계획 없이 보고하지 않지만, 비어 오면 design 턴에 덧붙일 것이 없다
+        InterviewSession s = runningInterview(34L, false);
+        service.recordPlan(34L, "w1", planReport("# 설계", null, "sess-1"));
+        s.setStatus(InterviewStatus.RUNNING);
+        s.setWorkerId("w1");
+        service.recordPlan(34L, "w1", planReport(null, "   ", "sess-1"));
+
+        assertThat(designTurnContents()).containsExactly("# 설계", "");
     }
 
     // ── 질문 대화 전문 — "이 대화로 작업 등록" (스펙 2026-10-24 §4.1) ─────────────────

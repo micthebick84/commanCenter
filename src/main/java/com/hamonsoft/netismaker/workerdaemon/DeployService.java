@@ -179,7 +179,9 @@ public class DeployService {
                     "netis-task-" + task.id(),
                     containerPort,
                     env,
-                    Map.of("netis-maker.task", String.valueOf(task.id())));
+                    Map.of("netis-maker.task", String.valueOf(task.id())),
+                    task.headSha() == null || task.headSha().isBlank()
+                            ? Map.of() : Map.of("NETIS_GIT_SHA", task.headSha()));
 
             DeployTarget.DeployResult r = target.deploy(spec, logSink);
             // 컨테이너는 이미지로 돈다 — 빌드 컨텍스트(worktree)는 더 쓰지 않는다. 재배포는 createForDeploy가 새로 만든다.

@@ -94,7 +94,7 @@ class DnsRegisteringDeployTargetTest {
 
     private static DeployTarget.DeploySpec spec() {
         return new DeployTarget.DeploySpec(7, Path.of("wt"), "netis-task-7:abc1234", "netis-task-7", 8080,
-                Map.of(), Map.of("netis-maker.task", "7"));
+                Map.of(), Map.of("netis-maker.task", "7"), Map.of());
     }
 
     @Test

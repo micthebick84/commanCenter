@@ -148,6 +148,17 @@ class DeployServicePrebuildTest {
     }
 
     @Test
+    void 배포_빌드에_head_sha를_NETIS_GIT_SHA로_넘긴다() throws Exception {
+        Files.writeString(wt.toPath().resolve("Dockerfile"), "FROM x\nEXPOSE 8080\n");
+
+        service().deploy(task(null), sink::add);
+
+        ArgumentCaptor<DeployTarget.DeploySpec> spec = ArgumentCaptor.forClass(DeployTarget.DeploySpec.class);
+        verify(target).deploy(spec.capture(), any());
+        assertThat(spec.getValue().buildArgs()).containsExactly(java.util.Map.entry("NETIS_GIT_SHA", "abc1234def"));
+    }
+
+    @Test
     void prebuild_null이면_예전과_같다() throws Exception {
         Files.writeString(wt.toPath().resolve("Dockerfile"), "FROM x\nEXPOSE 8080\n");
 

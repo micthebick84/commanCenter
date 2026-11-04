@@ -10,7 +10,7 @@ import java.util.List;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * 결과 보고 JSON — 레코드에 생성자가 넷(정규 25개 + 호환 24개·23개·22개)이어도 Jackson은 정규 생성자로 읽는다.
+ * 결과 보고 JSON — 레코드에 생성자가 여섯(정규 27개 + 호환 26개·25개·24개·23개·22개)이어도 Jackson은 정규 생성자로 읽는다.
  * 워커 전송·API 수신·dead-letter 재전송이 모두 이 경로다 (스펙 2026-10-07 §5, §9).
  */
 class WorkerResultRequestJsonTest {
@@ -110,6 +110,62 @@ class WorkerResultRequestJsonTest {
         WorkerResultRequest old = json.readValue("{\"workerId\":\"w1\",\"status\":\"PR_CREATED\"}", WorkerResultRequest.class);
         assertThat(old.refWarnings()).isNull();
         assertThat(old.masked().refWarnings()).isNull();
+    }
+
+    /** 수정 회차 안 시도 번호 (스펙 2026-11-03 §7) — 다른 사본·JSON·가림을 지나도 남고, 옛 보고는 null이다. */
+    @Test
+    void the_fix_attempt_survives_json_masking_and_the_other_copies() throws Exception {
+        var lenient = json.copy().configure(
+                com.fasterxml.jackson.databind.DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false);
+        WorkerResultRequest req = new WorkerResultRequest("w1", TaskStatus.PR_CREATED,
+                null, null, null, 10L, null,
+                null, null, "netismaker/task-1", "abc123", "log",
+                null, null, null, null, null,
+                null, null, null, null, null)
+                .withFixAttempt(2)
+                .withImplementationAttempt(1)
+                .withRefWarnings(List.of("옛앱: 파일 3개"));
+
+        assertThat(req.fixAttempt()).isEqualTo(2);
+        assertThat(req.implementationAttempt()).isEqualTo(1);
+        assertThat(req.refWarnings()).containsExactly("옛앱: 파일 3개");
+        assertThat(req.masked().fixAttempt()).isEqualTo(2);
+        assertThat(lenient.readValue(json.writeValueAsString(req), WorkerResultRequest.class)).isEqualTo(req);
+        assertThat(req.withFixAttempt(null).fixAttempt()).isNull();
+        assertThat(req.withFixAttempt(null).headSha()).isEqualTo("abc123");
+        assertThat(json.readValue("{\"workerId\":\"w1\",\"status\":\"PR_CREATED\"}", WorkerResultRequest.class)
+                .fixAttempt()).isNull();
+    }
+
+    /** 수정 회차 요청 id (스펙 2026-11-03 §7) — 다른 사본·JSON·가림을 지나도 남고, 옛 보고는 null이다. */
+    @Test
+    void the_fix_request_id_survives_json_masking_and_the_other_copies() throws Exception {
+        var lenient = json.copy().configure(
+                com.fasterxml.jackson.databind.DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false);
+        WorkerResultRequest req = WorkerResultRequest.closed("w1", null)
+                .withFixRequestId(502L)
+                .withFixAttempt(2)
+                .withImplementationAttempt(1)
+                .withRefWarnings(List.of("경고"));
+
+        assertThat(req.fixRequestId()).isEqualTo(502L);
+        assertThat(req.fixAttempt()).isEqualTo(2);
+        assertThat(req.masked().fixRequestId()).isEqualTo(502L);
+        assertThat(lenient.readValue(json.writeValueAsString(req), WorkerResultRequest.class)).isEqualTo(req);
+        assertThat(req.withFixRequestId(null).fixRequestId()).isNull();
+        assertThat(req.withFixRequestId(null).fixAttempt()).isEqualTo(2);
+        assertThat(json.readValue("{\"workerId\":\"w1\",\"status\":\"PR_CREATED\"}", WorkerResultRequest.class)
+                .fixRequestId()).isNull();
+    }
+
+    @Test
+    void the_deployed_report_can_carry_the_built_commit() {
+        WorkerResultRequest built = WorkerResultRequest.deployed("w1", "http://h:19001", "c1", 19001, "img", 5L, "log",
+                "fedcba9876543210fedcba9876543210fedcba98");
+        assertThat(built.status()).isEqualTo(TaskStatus.DEPLOYED);
+        assertThat(built.headSha()).isEqualTo("fedcba9876543210fedcba9876543210fedcba98");
+        assertThat(built.deployUrl()).isEqualTo("http://h:19001");
+        assertThat(WorkerResultRequest.deployed("w1", "http://h:19001", "c1", 19001, "img", 5L, "log").headSha()).isNull();
     }
 
     @Test

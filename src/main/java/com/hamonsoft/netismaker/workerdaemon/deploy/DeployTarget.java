@@ -61,8 +61,17 @@ public interface DeployTarget {
         }
     }
 
-    /** @param log build+run 합본 출력 tail. */
-    record DeployResult(String url, String containerId, int hostPort, String image, String log) {}
+    /**
+     * @param log      build+run 합본 출력 tail.
+     * @param builtSha 실제로 빌드한 커밋(전체 40자) — DeployService가 deploy worktree의 HEAD로 채운다(스펙 2026-11-03 §7).
+     *                 타깃은 모르므로 null, 못 읽었을 때도 null.
+     */
+    record DeployResult(String url, String containerId, int hostPort, String image, String log, String builtSha) {
+        /** 빌드 커밋 없는 결과 — 타깃 구현·기존 호출부. */
+        public DeployResult(String url, String containerId, int hostPort, String image, String log) {
+            this(url, containerId, hostPort, image, log, null);
+        }
+    }
 
     enum DeployStatus { RUNNING, STOPPED, UNKNOWN }
 

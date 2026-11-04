@@ -145,6 +145,14 @@ public class Task {
     @Setter
     private int restartRequeueCount;
 
+    /**
+     * 지금 진행 중인 수정 요청 회차의 TaskFixRequest id (스펙 2026-11-03 §4·§8). null = 수정 회차 없음.
+     * 승인(또는 관리자 직접 요청)에서 채우고 회차가 닫힐 때 비운다. 기록용이라 FK가 없다.
+     */
+    @Column(name = "active_fix_request_id")
+    @Setter
+    private Long activeFixRequestId;
+
     /** 이번 시도의 구현 상한(분) — claim 때 방식별 설정값으로 기록, 화면 경과 표시용. 그 전에는 null. */
     @Column(name = "implementation_timeout_minutes")
     @Setter
@@ -314,6 +322,21 @@ public class Task {
         this.headSha = null;
         this.prUrl = null;
         this.prNumber = null;
+        this.implementationLog = null;
+        this.implementationTimeoutMinutes = null;
+        this.workerId = null;
+        this.claimedAt = null;
+        this.updatedAt = OffsetDateTime.now();
+    }
+
+    /**
+     * 수정 회차의 구현을 같은 회차·같은 브랜치에서 다시 큐에 넣을 준비 (스펙 2026-11-03 §7) — 구현대기(APPROVED), 직전 시도의
+     * 결과·점유 흔적만 비운다. 이어 갈 브랜치·head_sha·PR 칸과 시도 번호는 그대로 둔다 — {@link #prepareImplementationRequeue()}처럼
+     * 지우면 워커가 base에서 -rN 브랜치를 새로 딴다. 회차 안 시도 번호(요청 기록의 attempt)는 호출자가 올린다.
+     */
+    public void prepareFixRoundRequeue() {
+        this.status = TaskStatus.APPROVED;
+        this.failureReason = null;
         this.implementationLog = null;
         this.implementationTimeoutMinutes = null;
         this.workerId = null;

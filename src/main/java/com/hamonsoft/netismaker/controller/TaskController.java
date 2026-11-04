@@ -15,6 +15,7 @@ import com.hamonsoft.netismaker.entity.TaskStatus;
 import com.hamonsoft.netismaker.service.DeployLogStreamService;
 import com.hamonsoft.netismaker.service.InterviewService;
 import com.hamonsoft.netismaker.service.TaskException;
+import com.hamonsoft.netismaker.service.TaskFixService;
 import com.hamonsoft.netismaker.service.TaskService;
 import jakarta.validation.Valid;
 import org.springframework.context.annotation.Profile;
@@ -60,12 +61,14 @@ public class TaskController {
     private final TaskService taskService;
     private final DeployLogStreamService deployLogStream;
     private final InterviewService interviewService;
+    private final TaskFixService fixService;
 
     public TaskController(TaskService taskService, DeployLogStreamService deployLogStream,
-                          InterviewService interviewService) {
+                          InterviewService interviewService, TaskFixService fixService) {
         this.taskService = taskService;
         this.deployLogStream = deployLogStream;
         this.interviewService = interviewService;
+        this.fixService = fixService;
     }
 
     /**
@@ -138,6 +141,8 @@ public class TaskController {
         if (INTERVIEW_STAGE.contains(t.getStatus()) && latest.isPresent()) {
             r = r.withRefRepos(latest.get().refRepos());
         }
+        // 수정 요청 회차 현황은 상세에서만 — 목록은 null (스펙 2026-11-03 §6)
+        r = r.withFix(fixService.fixViewOf(t));
         return forViewer(r, isAdmin);
     }
 

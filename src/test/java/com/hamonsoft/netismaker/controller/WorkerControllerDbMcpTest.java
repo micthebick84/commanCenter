@@ -4,6 +4,7 @@ import com.hamonsoft.netismaker.dbmcp.DbMcpGrantService;
 import com.hamonsoft.netismaker.dto.DbMcpGrant;
 import com.hamonsoft.netismaker.dto.WorkerTaskResponse;
 import com.hamonsoft.netismaker.entity.Task;
+import com.hamonsoft.netismaker.service.WorkerCapabilities;
 import com.hamonsoft.netismaker.service.WorkerService;
 import org.junit.jupiter.api.Test;
 import org.springframework.test.util.ReflectionTestUtils;
@@ -20,6 +21,8 @@ class WorkerControllerDbMcpTest {
     private final WorkerService workerService = mock(WorkerService.class);
     private final DbMcpGrantService grants = mock(DbMcpGrantService.class);
     private final WorkerController controller = new WorkerController(workerService, grants);
+    /** supports 없이 온 요청 = 기능을 하나도 모르는 구버전 워커. */
+    private static final WorkerCapabilities NO_SUPPORT = new WorkerCapabilities(false, false);
 
     private static WorkerTaskResponse implementation() {
         Task t = Task.create("a/b", "main", "t", "d", "user1", 3, List.of(), null, null);
@@ -29,7 +32,7 @@ class WorkerControllerDbMcpTest {
 
     @Test
     void implementation_claim_carries_grant() {
-        when(workerService.claimNextTask("w1", false)).thenReturn(Optional.of(implementation()));
+        when(workerService.claimNextTask("w1", NO_SUPPORT, null)).thenReturn(Optional.of(implementation()));
         DbMcpGrant g = new DbMcpGrant("tok", List.of(new DbMcpGrant.Server("db-12", "/mcp/db/12", "운영", "MYSQL")), List.of());
         when(grants.grantFor(5L)).thenReturn(g);
         assertThat(controller.nextTask("w1", null).getBody().dbMcp()).isEqualTo(g);
@@ -37,7 +40,7 @@ class WorkerControllerDbMcpTest {
 
     @Test
     void claim_survives_grant_failure() {
-        when(workerService.claimNextTask("w1", false)).thenReturn(Optional.of(implementation()));
+        when(workerService.claimNextTask("w1", NO_SUPPORT, null)).thenReturn(Optional.of(implementation()));
         when(grants.grantFor(anyLong())).thenThrow(new RuntimeException("db down"));
         var body = controller.nextTask("w1", null).getBody();
         assertThat(body.dbMcp().token()).isNull();
@@ -48,7 +51,7 @@ class WorkerControllerDbMcpTest {
     void analysis_claim_is_untouched() {
         Task t = Task.create("a/b", "main", "t", "d", "user1", 3, List.of(), null, null);
         ReflectionTestUtils.setField(t, "id", 6L);
-        when(workerService.claimNextTask("w1", false)).thenReturn(Optional.of(WorkerTaskResponse.forAnalysis(t)));
+        when(workerService.claimNextTask("w1", NO_SUPPORT, null)).thenReturn(Optional.of(WorkerTaskResponse.forAnalysis(t)));
         assertThat(controller.nextTask("w1", null).getBody().dbMcp()).isNull();
         verifyNoInteractions(grants);
     }
@@ -68,11 +71,11 @@ class WorkerControllerDbMcpTest {
 
     @Test
     void next_task_passes_ref_support_through() {
-        when(workerService.claimNextTask("w1", true)).thenReturn(Optional.empty());
+        when(workerService.claimNextTask("w1", new WorkerCapabilities(true, false), null)).thenReturn(Optional.empty());
 
         assertThat(controller.nextTask("w1", "refRepos").getStatusCode().value()).isEqualTo(204);
 
-        verify(workerService).claimNextTask("w1", true);
-        verify(workerService, never()).claimNextTask("w1", false);
+        verify(workerService).claimNextTask("w1", new WorkerCapabilities(true, false), null);
+        verify(workerService, never()).claimNextTask("w1", NO_SUPPORT, null);
     }
 }

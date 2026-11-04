@@ -1,8 +1,11 @@
 package com.hamonsoft.netismaker.service;
 
+import com.hamonsoft.netismaker.entity.FixOutcome;
 import com.hamonsoft.netismaker.entity.Task;
+import com.hamonsoft.netismaker.entity.TaskFixRequest;
 import com.hamonsoft.netismaker.entity.TaskStatus;
 import com.hamonsoft.netismaker.entity.TaskStatusHistory;
+import com.hamonsoft.netismaker.repository.TaskFixRequestRepository;
 import com.hamonsoft.netismaker.repository.TaskStatusHistoryRepository;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.annotation.Profile;
@@ -17,8 +20,8 @@ import java.time.OffsetDateTime;
  *  호출자가 트랜잭션과 행 잠금을 쥔다 — 여기서는 엔티티를 바꾸고 이력만 남긴다.
  *
  *  회수 전이: 분석중→PENDING(재시도)/FAILED, 디자인중→DESIGN_PENDING(idempotent 재큐잉), 구현중→IMPLEMENTATION_FAILED
- *            (워커 재기동이면 상한 안에서 APPROVED로 자동 재큐),
- *            배포중→DEPLOY_FAILED, 배포중지중→UNDEPLOY_PENDING(idempotent 재큐잉),
+ *            (워커 재기동이면 상한 안에서 APPROVED로 자동 재큐 — 수정 회차면 같은 브랜치에서, 2026-11-03 §7),
+ *            배포중→DEPLOY_FAILED(수정 회차의 자동 재배포였으면 회차도 닫는다), 배포중지중→UNDEPLOY_PENDING(idempotent 재큐잉),
  *            종료중→CLOSE_PENDING(재큐잉 — close_progress가 남아 있어 재claim이 남은 단계부터 이어간다).
  */
 @Component
@@ -48,10 +51,14 @@ public class TaskRecovery {
 
     private final TaskStatusHistoryRepository historyRepo;
     private final DeployLogStreamService deployLogStream;
+    /** 수정 회차 요청 기록 — 회차 구현의 재큐(회차 안 시도 번호)·회차 배포의 회수(회차 닫기)에 쓴다. */
+    private final TaskFixRequestRepository fixRequestRepo;
 
-    public TaskRecovery(TaskStatusHistoryRepository historyRepo, DeployLogStreamService deployLogStream) {
+    public TaskRecovery(TaskStatusHistoryRepository historyRepo, DeployLogStreamService deployLogStream,
+                        TaskFixRequestRepository fixRequestRepo) {
         this.historyRepo = historyRepo;
         this.deployLogStream = deployLogStream;
+        this.fixRequestRepo = fixRequestRepo;
     }
 
     /** 회수 전이를 적용하고 전이 후 상태를 돌려준다. 호출자가 트랜잭션과 행 잠금을 쥔다. */
@@ -68,6 +75,8 @@ public class TaskRecovery {
                     t.setFailureReason(label + " (구현 중단)");
                     logTransition(t, from, TaskStatus.IMPLEMENTATION_FAILED, cause, "구현중 stale → 구현실패");
                     log.error("{}: task={} → IMPLEMENTATION_FAILED", label, t.getId());
+                } else if (t.getRestartRequeueCount() < MAX_RESTART_REQUEUES && t.getActiveFixRequestId() != null) {
+                    requeueFixRound(t, from, cause);
                 } else if (t.getRestartRequeueCount() < MAX_RESTART_REQUEUES) {
                     // 워커 재기동: 처음부터 다시 구현(시도 번호 +1). 상한 안에서만 자동으로.
                     t.prepareImplementationRequeue();
@@ -90,8 +99,11 @@ public class TaskRecovery {
                 t.setFailureReason(label + " (배포 중단)");
                 deployLogStream.consolidate(t.getId()).ifPresent(t::setDeployLog); // 부분 로그 보존
                 deployLogStream.finish(t.getId());
+                // 수정 회차의 자동 재배포였으면 배포실패로 회차가 닫힌다(스펙 2026-11-03 §4) — 표시를 남기면 GC 보호가 영원히 남는다
+                String closed = t.getActiveFixRequestId() == null ? ""
+                        : FixRounds.closedSuffix(FixRounds.closeActive(fixRequestRepo, t, FixOutcome.DEPLOY_FAILED));
                 logTransition(t, from, TaskStatus.DEPLOY_FAILED, cause,
-                        reason(cause, TaskStatus.DEPLOY_FAILED, "배포중 stale → 배포실패"));
+                        reason(cause, TaskStatus.DEPLOY_FAILED, "배포중 stale → 배포실패") + closed);
                 log.error("{}: task={} → DEPLOY_FAILED", label, t.getId());
             }
             case UNDEPLOYING -> {
@@ -131,6 +143,34 @@ public class TaskRecovery {
             }
         }
         return t.getStatus();
+    }
+
+    /**
+     * 워커 재기동으로 끊긴 수정 회차 구현의 자동 재큐 (스펙 2026-11-03 §7) — 같은 회차를 같은 브랜치에서 다시: 브랜치·head_sha·PR·시도 번호를
+     * 그대로 두고(prepareFixRoundRequeue) 회차 안 시도 번호를 올린다. 처음부터 다시(prepareImplementationRequeue)는 브랜치를 지워
+     * 워커가 base에서 -rN을 새로 딴다. 회차 기록이 없거나 깨졌으면 재큐하지 않고 구현실패 — 재큐해도 claim이 다시 구현실패로 치우고,
+     * 관리자는 수정 중단으로 빠져나온다.
+     */
+    private void requeueFixRound(Task t, TaskStatus from, RecoveryCause cause) {
+        String label = cause.label();
+        TaskFixRequest r = FixRounds.openRequest(fixRequestRepo, t);
+        if (r == null) {
+            String reason = label + " (열린 수정 회차 기록(요청 #" + t.getActiveFixRequestId() + ")이 없어 자동 재큐하지 않음)";
+            t.setStatus(TaskStatus.IMPLEMENTATION_FAILED);
+            t.setFailureReason(reason);
+            logTransition(t, from, TaskStatus.IMPLEMENTATION_FAILED, cause, reason);
+            log.error("{}: task={} → IMPLEMENTATION_FAILED(수정 회차 기록 없음 #{})", label, t.getId(), t.getActiveFixRequestId());
+            return;
+        }
+        t.prepareFixRoundRequeue();
+        t.setRestartRequeueCount(t.getRestartRequeueCount() + 1);
+        r.setAttempt(r.getAttempt() + 1);
+        fixRequestRepo.save(r);
+        logTransition(t, from, TaskStatus.APPROVED, cause,
+                label + " → 자동 재큐 (" + FixRounds.label(r) + " " + r.getAttempt() + "회째 시도, 재기동 재큐 "
+                        + t.getRestartRequeueCount() + "/" + MAX_RESTART_REQUEUES + ")");
+        log.warn("{}: task={} → APPROVED({} 자동 재큐 {}/{})", label, t.getId(), FixRounds.label(r),
+                t.getRestartRequeueCount(), MAX_RESTART_REQUEUES);
     }
 
     /** 이력 사유 — stale 원인은 기존 고정 문구, 워커 재기동 원인은 "{label} → {전이 후 상태}". */

@@ -3,6 +3,7 @@ package com.hamonsoft.netismaker.controller;
 import com.hamonsoft.netismaker.dbmcp.DbMcpGrantService;
 import com.hamonsoft.netismaker.dto.WorkerTaskResponse;
 import com.hamonsoft.netismaker.service.TaskException;
+import com.hamonsoft.netismaker.service.WorkerCapabilities;
 import com.hamonsoft.netismaker.service.WorkerService;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.HttpStatus;
@@ -45,23 +46,23 @@ class WorkerControllerKindsTest {
 
     @Test
     void kinds_route_to_the_filtered_claim() {
-        when(workerService.claimNextTask(anyString(), anyBoolean(), any())).thenReturn(Optional.empty());
+        when(workerService.claimNextTask(anyString(), any(WorkerCapabilities.class), any())).thenReturn(Optional.empty());
 
         assertThat(controller.nextTask("remote-1", "refRepos", "IMPLEMENTATION,DESIGN").getStatusCode())
                 .isEqualTo(HttpStatus.NO_CONTENT);
 
-        verify(workerService).claimNextTask("remote-1", true,
+        verify(workerService).claimNextTask("remote-1", new WorkerCapabilities(true, false),
                 EnumSet.of(WorkerTaskResponse.Kind.IMPLEMENTATION, WorkerTaskResponse.Kind.DESIGN));
-        verify(workerService, never()).claimNextTask(anyString(), anyBoolean());
+        verify(workerService, never()).claimNextTask(anyString(), anyBoolean(), any());
     }
 
     @Test
     void no_kinds_keeps_the_full_queue() {
-        when(workerService.claimNextTask("w1", true)).thenReturn(Optional.empty());
+        when(workerService.claimNextTask("w1", new WorkerCapabilities(true, false), null)).thenReturn(Optional.empty());
 
         controller.nextTask("w1", "refRepos", null);
 
-        verify(workerService).claimNextTask("w1", true);
+        verify(workerService).claimNextTask("w1", new WorkerCapabilities(true, false), null);
         verify(workerService, never()).claimNextTask(anyString(), anyBoolean(), any());
     }
 }

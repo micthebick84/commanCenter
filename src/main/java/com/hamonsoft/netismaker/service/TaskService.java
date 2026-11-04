@@ -14,6 +14,7 @@ import com.hamonsoft.netismaker.entity.Task;
 import com.hamonsoft.netismaker.entity.TaskAnalysis;
 import com.hamonsoft.netismaker.entity.TaskAttachment;
 import com.hamonsoft.netismaker.entity.TaskDesign;
+import com.hamonsoft.netismaker.entity.TaskFixRequest;
 import com.hamonsoft.netismaker.entity.TaskMcpSpec;
 import com.hamonsoft.netismaker.entity.TaskStatus;
 import com.hamonsoft.netismaker.entity.TaskStatusHistory;
@@ -23,11 +24,13 @@ import com.hamonsoft.netismaker.repository.QuestionAttachmentRepository;
 import com.hamonsoft.netismaker.repository.TaskAnalysisRepository;
 import com.hamonsoft.netismaker.repository.TaskAttachmentRepository;
 import com.hamonsoft.netismaker.repository.TaskDesignRepository;
+import com.hamonsoft.netismaker.repository.TaskFixRequestRepository;
 import com.hamonsoft.netismaker.repository.TaskRepository;
 import com.hamonsoft.netismaker.repository.TaskStageUsageRepository;
 import com.hamonsoft.netismaker.repository.TaskStatusHistoryRepository;
 import com.hamonsoft.netismaker.service.render.AttachmentRenderRequested;
 import com.hamonsoft.netismaker.service.render.RenderTargetPolicy;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.context.annotation.Profile;
 import org.springframework.beans.factory.annotation.Value;
@@ -97,6 +100,14 @@ public class TaskService {
 
     @Value("${app.task.max-retry:3}")
     private int maxRetry;
+
+    /** 수정 회차의 구현 재시도가 읽는 요청 기록 (스펙 2026-11-03 §7). 생성자를 바꾸지 않으려고 setter 주입 — 회차 없는 단위 테스트에서는 null. */
+    private TaskFixRequestRepository fixRequestRepo;
+
+    @Autowired
+    void setFixRequestRepository(TaskFixRequestRepository fixRequestRepo) {
+        this.fixRequestRepo = fixRequestRepo;
+    }
 
     public TaskService(TaskRepository taskRepo,
                        TaskAnalysisRepository analysisRepo,
@@ -474,7 +485,16 @@ public class TaskService {
             case CLOSE_REVIEW, CLOSE_PENDING, CLOSING, CLOSE_FAILED ->
                     throw TaskException.conflict("종료 처리 중인 작업은 삭제할 수 없습니다 — 종료를 마치거나 반려한 뒤 삭제하세요 (현재: "
                             + t.getStatus().dbValue() + ")");
+            // 수정 요청 승인 대기: 이전에 배포된 컨테이너를 사용자가 아직 보고 있다 (회차 id는 승인 때 채워지므로 아래 검사로는 못 막는다).
+            case FIX_REVIEW ->
+                    throw TaskException.conflict("수정 회차 진행 중에는 삭제할 수 없습니다 (현재: "
+                            + t.getStatus().dbValue() + ")");
             default -> { }
+        }
+        // 열린 수정 회차: 구현중·구현실패·PR생성 등 어느 상태든 이전 배포 컨테이너가 살아 있다 — 회차가 닫혀야 삭제할 수 있다.
+        if (t.getActiveFixRequestId() != null) {
+            throw TaskException.conflict("수정 회차 진행 중에는 삭제할 수 없습니다 (현재: "
+                    + t.getStatus().dbValue() + ")");
         }
         interviewService.closeOpenSessionsForTask(t.getId(), actorId);
         t.setDeletedAt(OffsetDateTime.now());
@@ -677,6 +697,7 @@ public class TaskService {
      * 새 브랜치(-rN)로 다시 구현한다 — 이어하기 아님. rawMode가 null·공백이면 지금 방식 유지, 모르는 값이면 400.
      * 이전 실패 사유는 직전 이력에 남는다. 이전 브랜치는 이전 시도가 push했을 때(head_sha 있음)만 이 이력 사유에 적는다 —
      * 구현실패 보고의 head_branch는 push 여부와 무관해서, head_sha 없는 브랜치는 원격에 없을 수 있다.
+     * 예외: 수정 회차가 열린 구현실패는 같은 회차를 같은 브랜치에서 다시 돈다(스펙 2026-11-03 §7, {@link #requeueFixRound}).
      */
     @Transactional
     public Task retryImplementation(Long taskId, String adminId, String rawMode) {
@@ -705,19 +726,10 @@ public class TaskService {
         if (!present.containsAll(removeIds)) {
             throw new TaskException(HttpStatus.BAD_REQUEST, "작업에 없는 참조는 뺄 수 없습니다");
         }
-        ImplementationMode before = t.getImplementationMode();
-        ImplementationMode after = requested == null ? before : requested;
-        boolean pushed = t.getHeadSha() != null && !t.getHeadSha().isBlank();
-        String previousBranch = pushed ? t.getHeadBranch() : null;
         TaskStatus from = t.getStatus();
-
-        t.prepareImplementationRequeue();
-        t.setImplementationMode(after);
-        t.setRestartRequeueCount(0);
-
-        String modeText = before == after ? after.label() : before.label() + " → " + after.label();
-        String reason = "구현 재시도 (" + t.getImplementationAttempt() + "회째, 구현 방식: " + modeText
-                + (previousBranch == null || previousBranch.isBlank() ? "" : ", 이전 브랜치: " + previousBranch) + ")";
+        String reason = t.getActiveFixRequestId() != null
+                ? requeueFixRound(t, rawMode, requested)
+                : requeueFromScratch(t, requested);
         historyRepo.save(TaskStatusHistory.log(t.getId(), from, TaskStatus.APPROVED, "user", adminId, reason));
 
         if (!removeIds.isEmpty()) {
@@ -727,6 +739,49 @@ public class TaskService {
                     "참조 제외(구현 재시도): " + removed.stream().map(RefRepo::label).collect(Collectors.joining(", "))));
         }
         return t;
+    }
+
+    /** 첫 구현의 재시도 — 시도 번호 +1, 베이스부터 새 브랜치(-rN). 이력 사유를 돌려준다. */
+    private static String requeueFromScratch(Task t, ImplementationMode requested) {
+        ImplementationMode before = t.getImplementationMode();
+        ImplementationMode after = requested == null ? before : requested;
+        boolean pushed = t.getHeadSha() != null && !t.getHeadSha().isBlank();
+        String previousBranch = pushed ? t.getHeadBranch() : null;
+
+        t.prepareImplementationRequeue();
+        t.setImplementationMode(after);
+        t.setRestartRequeueCount(0);
+
+        return "구현 재시도 (" + t.getImplementationAttempt() + "회째, 구현 방식: " + modeChange(before, after)
+                + (previousBranch == null || previousBranch.isBlank() ? "" : ", 이전 브랜치: " + previousBranch) + ")";
+    }
+
+    /**
+     * 수정 회차의 재시도 (스펙 2026-11-03 §7) — 같은 회차를 같은 브랜치에서 다시 돈다. 작업의 시도 번호·브랜치·head_sha·PR·구현 방식은
+     * 그대로 두고(prepareFixRoundRequeue) 회차 안 시도 번호만 올린다. 방식은 회차 기록의 것을 바꾼다 — 직접·리뷰만(parseFixMode, SDD 400),
+     * 고르지 않으면 회차의 방식 그대로. 회차 기록이 없거나 깨졌으면 409 — 수정 중단(TaskFixService.abort)이 회차를 닫는 출구다.
+     * 바꾸기 전에 모든 검증을 끝낸다. 이력 사유를 돌려준다.
+     */
+    private String requeueFixRound(Task t, String rawMode, ImplementationMode requested) {
+        TaskFixRequest r = FixRounds.openRequest(fixRequestRepo, t);
+        if (r == null) {
+            throw TaskException.conflict("열린 수정 회차 기록(요청 #" + t.getActiveFixRequestId()
+                    + ")이 없어 구현을 재시도할 수 없습니다 — 수정 중단으로 회차를 닫으세요");
+        }
+        ImplementationMode before = FixRounds.modeOf(r);
+        ImplementationMode after = requested == null ? before : TaskFixService.parseFixMode(rawMode);
+
+        t.prepareFixRoundRequeue();
+        t.setRestartRequeueCount(0);
+        r.setAttempt(r.getAttempt() + 1);
+        r.setImplementationMode(after);
+        fixRequestRepo.save(r);
+
+        return FixRounds.label(r) + " 구현 재시도 (" + r.getAttempt() + "회째, 구현 방식: " + modeChange(before, after) + ")";
+    }
+
+    private static String modeChange(ImplementationMode before, ImplementationMode after) {
+        return before == after ? after.label() : before.label() + " → " + after.label();
     }
 
     /** PR생성 → 배포대기. admin 한정. 워커가 다음 폴링에 claim해 배포 수행. */

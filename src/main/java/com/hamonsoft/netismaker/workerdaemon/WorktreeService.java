@@ -157,6 +157,37 @@ public class WorktreeService {
     }
 
     /**
+     * 수정 회차용 worktree (스펙 2026-11-03 §7). 새 브랜치를 따지 않고 회차 브랜치 끝(origin/{headBranch})을 구현 worktree
+     * 자리(task-{id})에 detached로 체크아웃한다 — 워커는 고친 뒤 {@code HEAD:refs/heads/{headBranch}}로 fast-forward push만 한다
+     * (force 없음 — 그 사이 원격이 앞서면 push가 거절된다). 같은 자리에 이전 worktree(처음 구현·이전 시도가 실패해 남긴 것)가 있으면
+     * 지우고 다시 만든다. 레포 락 안에서(create와 같은 .git/worktrees 메타 보호).
+     *
+     * @param repoCacheDir GitRepoCache.fetchOnly(ref, headBranch)가 돌려준 캐시 (origin/{headBranch} fetch 상태)
+     * @return worktree + branchName = headBranch (push 대상)
+     */
+    public CreatedWorktree createOnBranch(File repoCacheDir, String repoKey, String headBranch, long taskId)
+            throws IOException, InterruptedException {
+        return repos.withRepoLock(repoKey,
+                () -> doCreateOnBranch(repoCacheDir, repoKey, headBranch, taskId));
+    }
+
+    private CreatedWorktree doCreateOnBranch(File repoCacheDir, String repoKey, String headBranch, long taskId)
+            throws IOException, InterruptedException {
+        Path worktreeDir = worktreeDir(repoKey, WorktreeKind.TASK, taskId);
+        Files.createDirectories(worktreeDir.getParent());
+        if (Files.exists(worktreeDir, LinkOption.NOFOLLOW_LINKS)) {
+            log.warn("기존 worktree 발견, 강제 제거(수정 회차): {}", worktreeDir);
+            removeWorktree(TARGET_GIT, repoCacheDir, worktreeDir, false);
+        }
+        ProcessRunner.requireSuccess(repoCacheDir,
+                List.of("git", "worktree", "add", "--force", "--detach",
+                        worktreeDir.toString(), "origin/" + headBranch),
+                GIT_TIMEOUT_SECONDS);
+        log.info("수정 회차 worktree 생성: task={} branch={} dir={}", taskId, headBranch, worktreeDir);
+        return new CreatedWorktree(worktreeDir.toFile(), headBranch);
+    }
+
+    /**
      * WORKER_EXCLUDES를 레포 info/exclude에 없는 줄만 더한다(worktree면 공용 git 디렉터리의 파일 — 워커 전용 이름이라
      * 다른 작업에도 무해). 실패는 경고만 남기고 false — 호출부가 SDD를 리뷰로 대신 진행한다 (스펙 §6.5).
      */

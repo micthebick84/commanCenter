@@ -17,6 +17,7 @@ import com.hamonsoft.netismaker.repository.InterviewSessionRepository;
 import com.hamonsoft.netismaker.repository.RepoCatalogRepository;
 import com.hamonsoft.netismaker.repository.TaskAnalysisRepository;
 import com.hamonsoft.netismaker.repository.TaskDesignRepository;
+import com.hamonsoft.netismaker.repository.TaskFixRequestRepository;
 import com.hamonsoft.netismaker.repository.TaskRepository;
 import com.hamonsoft.netismaker.repository.TaskStageUsageRepository;
 import com.hamonsoft.netismaker.repository.TaskStatusHistoryRepository;
@@ -56,7 +57,10 @@ import java.util.Set;
  *                       COMPLETED           : task_analysis upsert + status=COMPLETED
  *                       FAILED              : failure_reason + status=FAILED
  *                       PR_CREATED          : pr_url/pr_number/head_* + status=PR_CREATED
+ *                                             (수정 회차면 head_sha만 새 끝으로 → 자동 재배포 DEPLOY_PENDING, 2026-11-03 §7)
  *                       IMPLEMENTATION_FAILED: failure_reason + (있으면)log + status=IMPLEMENTATION_FAILED
+ *                       DEPLOYED/DEPLOY_FAILED: 배포 결과 — 수정 회차가 열려 있으면 회차를 닫는다(FixRounds.closeActive),
+ *                                             DEPLOYED가 빌드한 커밋(headSha)을 실으면 head_sha로 기록
  *                       DESIGN_REVIEW       : task_design upsert(반려 이력 보존) + status=DESIGN_REVIEW
  *                       DESIGN_FAILED       : failure_reason + status=DESIGN_FAILED
  *                       CLOSED              : 이 작업에 필요한 종료 단계(CloseStep.required)가 모두 보고된 뒤에만 (status=CLOSED)
@@ -108,6 +112,14 @@ public class WorkerService {
         this.implementationModePolicy = policy;
     }
 
+    /** 수정 회차 claim의 요청 기록 조회 (스펙 2026-11-03 §7). 생성자를 바꾸지 않으려고 setter 주입 — 회차 없는 단위 테스트에서는 null. */
+    private TaskFixRequestRepository fixRequestRepo;
+
+    @Autowired
+    void setFixRequestRepository(TaskFixRequestRepository fixRequestRepo) {
+        this.fixRequestRepo = fixRequestRepo;
+    }
+
     public WorkerService(TaskRepository taskRepo,
                          TaskAnalysisRepository analysisRepo,
                          TaskDesignRepository designRepo,
@@ -156,34 +168,57 @@ public class WorkerService {
      * 반환된 WorkerTaskResponse.kind를 보고 워커가 분기:
      *  - ANALYSIS       → 기존 분석 흐름 (analysis 필드 null)
      *  - IMPLEMENTATION → worktree 구현 흐름 (analysis 마크다운 + subtasks 동봉)
+     *
+     * 1인자 = 모든 기능을 아는 워커(거르는 조건 없음).
      */
     @Transactional
     public Optional<WorkerTaskResponse> claimNextTask(String workerId) {
-        return claimNextTask(workerId, true);
+        return claimNextTask(workerId, WorkerCapabilities.ALL, null);
     }
 
     /**
      * supportsRefRepos=false(구버전 워커 — next-task에 supports=refRepos 없음)면 참조 repo가 있는 구현대기를 건너뛴다
      * (스펙 2026-10-24 §4.7) — 모르는 필드를 버리고 참조 없이 구현해 버리지 않게. 그 작업은 대기로 남는다.
+     * 이 오버로드는 fixRounds를 모르는 워커로 본다(수정 회차 구현대기도 건너뜀) — 둘 다 알리는 워커는
+     * {@link #claimNextTask(String, WorkerCapabilities, Set)}를 쓴다.
      */
     @Transactional
     public Optional<WorkerTaskResponse> claimNextTask(String workerId, boolean supportsRefRepos) {
-        List<Task> candidates = supportsRefRepos
-                ? taskRepo.findClaimableForUpdateSkipLocked(PageRequest.of(0, 1))
-                : taskRepo.findClaimableExcludingRefImplementationsForUpdateSkipLocked();
-        return candidates.isEmpty() ? Optional.empty() : Optional.of(claim(candidates.get(0), workerId));
+        return claimNextTask(workerId, new WorkerCapabilities(supportsRefRepos, false), null);
     }
 
     /**
      * 받을 작업 종류를 고른 워커(next-task kinds)용 claim — 그 종류의 대기 상태만 후보로 같은 FIFO 순서로 잡는다.
      * 다른 PC의 워커가 이 PC에만 있는 볼트(종료 노트)·미리 빌드 도구(배포)가 필요한 일을 잡지 않게 한다.
+     * fixRounds를 모르는 워커로 본다 — {@link #claimNextTask(String, boolean)} 참고.
      */
     @Transactional
     public Optional<WorkerTaskResponse> claimNextTask(String workerId, boolean supportsRefRepos,
                                                       Set<WorkerTaskResponse.Kind> kinds) {
-        List<TaskStatus> statuses = kinds.stream().map(WorkerService::claimableStatusFor).toList();
-        List<Task> candidates = taskRepo.findClaimableAmongForUpdateSkipLocked(statuses, supportsRefRepos);
-        return candidates.isEmpty() ? Optional.empty() : Optional.of(claim(candidates.get(0), workerId));
+        return claimNextTask(workerId, new WorkerCapabilities(supportsRefRepos, false), kinds);
+    }
+
+    /**
+     * 워커가 알린 기능(caps)에 맞춰 claim — 모르는 기능이 필요한 구현대기는 건너뛴다(참조 repo가 있는 것 §4.7, 수정 회차가 열린 것
+     * 2026-11-03 §7). 구버전 jar는 그런 작업의 모르는 필드를 버리고 엉뚱하게 구현하기 때문이다. 어느 경로(종류를 골랐든 아니든)에서도
+     * 같은 조건이 걸린다. kinds가 null이면 전부, 아니면 그 종류의 대기 상태만 후보로 같은 FIFO 순서로 잡는다.
+     * 두 기능을 다 알고 종류도 안 골랐으면 거를 것이 없어 기존 전체 큐(JPQL)를 그대로 쓴다.
+     */
+    @Transactional
+    public Optional<WorkerTaskResponse> claimNextTask(String workerId, WorkerCapabilities caps,
+                                                      Set<WorkerTaskResponse.Kind> kinds) {
+        List<Task> candidates;
+        if (kinds == null) {
+            candidates = caps.needsFilteredQueue()
+                    ? taskRepo.findClaimableAmongForUpdateSkipLocked(TaskRepository.CLAIMABLE_STATUSES,
+                            caps.refRepos(), caps.fixRounds())
+                    : taskRepo.findClaimableForUpdateSkipLocked(PageRequest.of(0, 1));
+        } else {
+            List<TaskStatus> statuses = kinds.stream().map(WorkerService::claimableStatusFor).toList();
+            candidates = taskRepo.findClaimableAmongForUpdateSkipLocked(statuses, caps.refRepos(), caps.fixRounds());
+        }
+        // claim이 null이면(수정 회차 기록이 깨진 작업을 구현실패로 치웠다) 이번 poll은 빈 응답 — 큐 머리가 치워졌으니 다음 poll이 뒤를 잡는다
+        return candidates.isEmpty() ? Optional.empty() : Optional.ofNullable(claim(candidates.get(0), workerId));
     }
 
     /** 작업 종류 → 워커가 그 종류를 claim하는 대기 상태 ({@link TaskRepository#CLAIMABLE_STATUSES}의 한 값). */
@@ -198,15 +233,30 @@ public class WorkerService {
         };
     }
 
+    /**
+     * 후보 1건을 claim해 응답을 만든다. 수정 회차 기록이 깨진 구현대기는 claim하지 않고 구현실패로 치운 뒤 null을 돌려준다.
+     */
     private WorkerTaskResponse claim(Task t, String workerId) {
         TaskStatus from = t.getStatus();
+
+        // 수정 회차가 열린 구현대기 — 회차의 방식·본문·브랜치를 싣는다 (스펙 2026-11-03 §7). 다른 상태의 회차 표시(자동 재배포 등)는 보지 않는다.
+        OpenFixRound round = null;
+        if (from == TaskStatus.APPROVED && t.getActiveFixRequestId() != null) {
+            round = openFixRoundOf(t);
+            if (round == null) {
+                failBrokenFixRound(t);
+                return null;
+            }
+        }
 
         if (from == TaskStatus.PENDING) {
             t.setStatus(TaskStatus.IN_PROGRESS);
         } else if (from == TaskStatus.APPROVED) {
             t.setStatus(TaskStatus.IMPLEMENTING);
-            // 이번 시도의 상한을 기록 — claim 응답과 작업 화면이 같은 값을 쓴다 (스펙 2026-10-15 §5.3)
-            t.setImplementationTimeoutMinutes(implementationModePolicy.timeoutMinutes(t.getImplementationMode()));
+            // 이번 시도의 상한을 기록 — claim 응답과 작업 화면이 같은 값을 쓴다 (스펙 2026-10-15 §5.3).
+            // 수정 회차는 회차의 방식으로 정한다 — 방식은 작업이 아니라 요청 기록에 있다 (스펙 2026-11-03 §6.2)
+            t.setImplementationTimeoutMinutes(implementationModePolicy.timeoutMinutes(
+                    round != null ? round.mode() : t.getImplementationMode()));
         } else if (from == TaskStatus.DESIGN_PENDING) {
             t.setStatus(TaskStatus.DESIGNING);
         } else if (from == TaskStatus.DEPLOY_PENDING) {
@@ -243,7 +293,8 @@ public class WorkerService {
             TaskAnalysis a = analysisRepo.findById(t.getId()).orElse(null);
             TaskDesign d = designRepo.findById(t.getId()).orElse(null);
             return WorkerTaskResponse.forImplementation(t, a,
-                    (d != null && d.isApproved()) ? d : null, registeredPlanMarkdown(t.getId()));
+                    (d != null && d.isApproved()) ? d : null, registeredPlanMarkdown(t.getId()),
+                    round == null ? null : round.spec(), round == null ? null : round.mode());
         }
         if (from == TaskStatus.DEPLOY_PENDING) {
             return WorkerTaskResponse.forDeploy(t, prebuildFor(t));
@@ -255,6 +306,39 @@ public class WorkerService {
             return WorkerTaskResponse.forClose(t, closeContext(t), closeArtifactSpec(t));
         }
         return WorkerTaskResponse.forAnalysis(t);
+    }
+
+    /** claim 때 읽은 열린 수정 회차 — 회차의 구현 방식과 워커에 보낼 지시. */
+    private record OpenFixRound(ImplementationMode mode, WorkerTaskResponse.FixRoundSpec spec) {}
+
+    /**
+     * 작업이 가리키는 열린 수정 회차. 승인된 요청(회차 번호 있음)이어야 하고, 아니면 null — 데이터가 깨진 것이다.
+     * 이전 본문은 승인된 앞 회차(round 미만)의 요청 본문, 오래된 회차부터. 구현 방식이 비어 있으면(있을 수 없다) 작업 방식이 아니라
+     * 리뷰로 본다 — 수정 회차는 직접·리뷰만이라 작업 방식(SDD일 수 있다)으로 떨어지면 원래 플랜 전체를 다시 구현한다(§6.2).
+     */
+    private OpenFixRound openFixRoundOf(Task t) {
+        TaskFixRequest r = FixRounds.openRequest(fixRequestRepo, t);
+        if (r == null) return null;
+        List<String> previous = fixRequestRepo
+                .findByTaskIdAndStatusAndRoundLessThanOrderByRoundAsc(t.getId(), FixRequestStatus.APPROVED, r.getRound())
+                .stream().map(TaskFixRequest::getBody).toList();
+        ImplementationMode mode = FixRounds.modeOf(r);
+        return new OpenFixRound(mode, new WorkerTaskResponse.FixRoundSpec(r.getId(), r.getRound(), r.getAttempt(),
+                r.getBody(), previous, t.getHeadBranch(), t.getHeadSha()));
+    }
+
+    /**
+     * 회차 표시는 있는데 승인된 요청 기록이 없는 구현대기 — 이대로 claim하면 회차 없는 구현으로 가서 base에서 -rN 브랜치를
+     * 새로 따 버린다. 워커에게 내주지 않고 구현실패로 두어 사람이 보게 하고, 큐 머리를 막지 않는다.
+     */
+    private void failBrokenFixRound(Task t) {
+        TaskStatus from = t.getStatus();
+        String reason = "수정 회차 기록을 찾을 수 없어 구현을 시작하지 않았습니다 (회차 요청 #" + t.getActiveFixRequestId() + ")";
+        log.error("claim 거부: 작업 {}의 수정 회차 요청 #{} 기록이 없거나 승인 상태가 아님", t.getId(), t.getActiveFixRequestId());
+        t.setStatus(TaskStatus.IMPLEMENTATION_FAILED);
+        t.setFailureReason(reason);
+        t.setUpdatedAt(OffsetDateTime.now());
+        historyRepo.save(TaskStatusHistory.log(t.getId(), from, t.getStatus(), "system", null, reason));
     }
 
     /** 종료 노트 재료 — 확정 플랜·분석·구현 로그 끝·이력(시간순)·단계별 비용. 본문 상한은 CloseContext.of. */
@@ -332,6 +416,15 @@ public class WorkerService {
             return;
         }
 
+        // 수정 회차의 구현 결과(스펙 2026-11-03 §7) — 회차 표지(fixAttempt·fixRequestId)를 단 보고는 어느 상태에서든, 표지가 없는
+        // 구현 결과는 회차 표시가 있을 때 회차 규칙으로만 처리한다. 아래 지각 정합화(→ PR생성)나 배포 단계의 PR생성(= 배포 중지 성공)으로
+        // 새면 회차가 열린 채 갇히거나 배포 중지로 읽힌다. 배포중지중에 온 표지 없는 PR생성만 배포 중지 결과로 아래로 보낸다.
+        if (isImplementationResult(req)
+                && (isFixRoundReport(req) || (t.getActiveFixRequestId() != null && current != TaskStatus.UNDEPLOYING))) {
+            recordFixRoundImplementationResult(t, req);
+            return;
+        }
+
         // 지각 보고 정합화: stale 회수로 IMPLEMENTATION_FAILED가 됐지만 워커가 실제로는
         // PR 생성까지 성공한 경우, 늦게 도착한 PR_CREATED 보고를 받아 정합화한다.
         // (PR 메타가 유효할 때만 — undeploy 복귀(prUrl 없는 PR_CREATED)와 구분됨)
@@ -394,9 +487,14 @@ public class WorkerService {
             t.setDeployLog(req.deployLog());
             t.setFailureReason(null);
             t.setUpdatedAt(OffsetDateTime.now());
+            String reconciled = "지각 보고 정합화: stale 회수 → 배포완료" + applyBuiltSha(t, req);
+            // 배포실패로 가는 길은 모두 회차를 닫지만, 표시가 남아 있으면 여기서도 닫는다(GC 보호가 영원히 남지 않게)
+            if (t.getActiveFixRequestId() != null) {
+                reconciled += FixRounds.closedSuffix(FixRounds.closeActive(fixRequestRepo, t, FixOutcome.DEPLOYED));
+            }
             historyRepo.save(TaskStatusHistory.log(t.getId(),
                     TaskStatus.DEPLOY_FAILED, TaskStatus.DEPLOYED,
-                    "worker", req.workerId(), "지각 보고 정합화: stale 회수 → 배포완료"));
+                    "worker", req.workerId(), reconciled));
             // stale 회수가 이미 finish했을 수 있으나 finish는 멱등
             // (emitters.remove → null no-op, deleteByTaskId → 0건 no-op).
             deployLogStream.finish(t.getId());
@@ -552,6 +650,172 @@ public class WorkerService {
         return req.implementationAttempt() != t.getImplementationAttempt();
     }
 
+    private static boolean isImplementationResult(WorkerResultRequest req) {
+        return req.status() == TaskStatus.PR_CREATED || req.status() == TaskStatus.IMPLEMENTATION_FAILED;
+    }
+
+    /** 수정 회차 구현 보고의 표지(회차 안 시도 번호·요청 id)를 하나라도 단 보고 — fixRounds를 아는 워커가 회차 구현에만 붙인다. */
+    private static boolean isFixRoundReport(WorkerResultRequest req) {
+        return req.fixAttempt() != null || req.fixRequestId() != null;
+    }
+
+    /**
+     * 수정 회차의 구현 결과 (스펙 2026-11-03 §7). 늦은 보고를 먼저 가려낸 뒤({@link #ignoredFixReport}), 지금 시도의 성공은 같은 브랜치의
+     * 새 끝(head_sha)을 저장하고 저장된 env 그대로 자동 재배포(배포대기)로, 실패는 회차를 연 채 구현실패로 둔다.
+     */
+    private void recordFixRoundImplementationResult(Task t, WorkerResultRequest req) {
+        TaskStatus current = t.getStatus();
+        TaskFixRequest round = FixRounds.openRequest(fixRequestRepo, t);
+        IgnoredFixReport ignored = ignoredFixReport(t, round, req);
+        if (ignored != null) {
+            historyRepo.save(TaskStatusHistory.log(t.getId(), current, current, "worker", req.workerId(),
+                    ignored.reason() + ": " + req.status().dbValue() + ignoredWorkDetail(req)));
+            if (ignored.countUsage()) accumulateUsage(t.getId(), TaskStageUsage.STAGE_IMPLEMENTATION, req);
+            return;
+        }
+
+        if (current == TaskStatus.IMPLEMENTATION_FAILED) {
+            // 지각 보고 정합화: stale 회수로 구현실패가 됐지만 워커는 같은 시도를 끝내 push했다 — 성공만 받는다(실패 재보고는 기존처럼 409)
+            if (req.status() != TaskStatus.PR_CREATED) {
+                throw new TaskException(HttpStatus.CONFLICT, "현재 처리중 상태가 아닙니다 (현재: " + current.dbValue() + ")");
+            }
+            fixRoundSucceeded(t, round, req, "지각 보고 정합화: stale 회수 → ");
+            return;
+        }
+        if (t.getWorkerId() != null && !t.getWorkerId().equals(req.workerId())) {
+            throw new TaskException(HttpStatus.CONFLICT, "다른 워커가 잡은 작업입니다 (소유: " + t.getWorkerId() + ")");
+        }
+        if (req.status() == TaskStatus.PR_CREATED) {
+            fixRoundSucceeded(t, round, req, "");
+        } else {
+            fixRoundFailed(t, round, req);
+        }
+    }
+
+    /** 무시할 회차 보고 — 이력 사유 앞부분과, 사용량을 쌓을지. */
+    private record IgnoredFixReport(String reason, boolean countUsage) {}
+
+    /**
+     * 열린 회차의 지금 시도 결과가 아니면 무시한다(상태는 그대로, 같은 상태의 이력 한 줄). null = 지금 시도의 결과.
+     *  - 표지가 없다(회차 표시만 있다): 회차는 fixRounds를 아는 워커만 받으므로 회차 전 구현 보고의 재전송이다 — 받으면 옛 커밋을 재배포한다.
+     *  - 요청 id가 열린 회차와 다르다(또는 열린 회차가 없다): 다른·닫힌 회차의 보고. 회차 안 시도 번호는 회차마다 1부터라
+     *    요청 id로만 가를 수 있다(예: 1회차를 중단하고 연 2회차의 1회째에 1회차 1회째 보고가 늦게 온 경우).
+     *  - 요청 id 없이 열린 회차가 없다: 닫힌 회차의 보고(요청 id를 싣지 않는 워커).
+     *  - 회차 안 시도 번호가 지금 시도와 다르다: 같은 회차의 이전 시도(재시도·재기동 재큐 전).
+     *  - 같은 시도인데 작업이 구현대기다: 아직 claim 전이라 이 회차의 보고일 수 없다 — 요청 id를 싣지 않은 다른 회차의 보고.
+     *  - 같은 시도인데 자동 재배포로 넘어갔다: 받은 보고의 재전송. 배포중에 받으면 배포 중지 성공으로 읽혀 회차가 갇힌다.
+     *
+     * 사용량은 보고의 시도가 그 요청 기록의 지금 시도보다 앞설 때만 쌓는다 — 재시도·재큐로 밀린 시도의 결과는 반영된 적이 없을 수 있다
+     * (회차 밖 구현의 이전 시도 보고와 같은 규칙). 회차 전 구현·회차의 마지막 시도·어느 요청인지 모르는 보고는 이미 반영된 보고의 재전송일 수
+     * 있어 쌓지 않는다 — 두 번 세느니 덜 센다.
+     */
+    private IgnoredFixReport ignoredFixReport(Task t, TaskFixRequest round, WorkerResultRequest req) {
+        Integer fixAttempt = req.fixAttempt();
+        Long requestId = req.fixRequestId();
+        if (!isFixRoundReport(req)) {
+            return new IgnoredFixReport("수정 회차 전 구현의 늦은 보고 무시", false);
+        }
+        if (requestId != null && (round == null || !requestId.equals(round.getId()))) {
+            TaskFixRequest of = fixRequestRepo.findById(requestId)
+                    .filter(r -> t.getId().equals(r.getTaskId())).orElse(null);
+            return new IgnoredFixReport((round == null ? "닫힌" : "다른") + " 수정 회차(요청 #" + requestId + ")의 늦은 보고 무시",
+                    isSuperseded(of, fixAttempt));
+        }
+        if (round == null) {
+            return new IgnoredFixReport("닫힌 수정 회차의 늦은 보고 무시", false);
+        }
+        if (fixAttempt == null) {
+            return new IgnoredFixReport("회차 안 시도 번호가 없는 수정 회차 보고 무시", false);
+        }
+        if (fixAttempt != round.getAttempt()) {
+            return new IgnoredFixReport("이전 수정 시도(" + fixAttempt + "회째)의 늦은 보고 무시", isSuperseded(round, fixAttempt));
+        }
+        if (t.getStatus() == TaskStatus.APPROVED) {
+            return new IgnoredFixReport("다른 수정 회차의 늦은 보고 무시", false);
+        }
+        if (t.getStatus() != TaskStatus.IMPLEMENTING && t.getStatus() != TaskStatus.IMPLEMENTATION_FAILED) {
+            return new IgnoredFixReport("이미 끝난 수정 시도(" + fixAttempt + "회째)의 늦은 보고 무시", false);
+        }
+        return null;
+    }
+
+    /** 보고의 시도가 그 요청 기록의 지금 시도보다 앞선다 — 재시도·재큐로 밀린 시도. 요청을 모르면 false. */
+    private static boolean isSuperseded(TaskFixRequest r, Integer fixAttempt) {
+        return r != null && fixAttempt != null && fixAttempt < r.getAttempt();
+    }
+
+    /**
+     * 회차 구현 성공 → 자동 재배포. PR/MR은 새로 만들지 않으므로 prUrl은 받지 않고, 브랜치는 회차 브랜치여야 한다(다른 브랜치의 커밋을
+     * head_sha로 두면 배포(브랜치 끝)·종료 병합(head_sha 고정)이 어긋난다). 배포 전에 head_sha를 새 끝으로 바꾼다(§7).
+     * 배포 env 템플릿은 보통 구현 성공처럼 받는다 — 자동 재배포는 저장된 env 값(envVars)을 그대로 쓰고, 템플릿은 다음 배포 다이얼로그의 안내다.
+     * 이력은 두 줄 — 구현 완료(워커) → 자동 재배포(system). PR생성은 거쳐 가기만 한다.
+     */
+    private void fixRoundSucceeded(Task t, TaskFixRequest round, WorkerResultRequest req, String reasonPrefix) {
+        if (!isRoundBranch(t, req)) {
+            throw new TaskException(HttpStatus.BAD_REQUEST, "수정 회차 구현 완료 보고의 브랜치가 회차 브랜치("
+                    + t.getHeadBranch() + ")가 아닙니다: " + (req.headBranch() == null ? "" : req.headBranch().strip()));
+        }
+        if (req.headSha() == null || req.headSha().isBlank()) {
+            throw new TaskException(HttpStatus.BAD_REQUEST, "수정 회차 구현 완료 시 headSha 필수");
+        }
+        TaskStatus from = t.getStatus();
+        String label = FixRounds.label(round);
+        t.setHeadSha(req.headSha().strip());
+        t.setImplementationLog(req.implementationLog());
+        applyEnvTemplate(t, req);   // 회차가 새 env를 남겼으면 템플릿 갱신 — 보통 구현 성공과 같다(null이면 기존 유지)
+        historyRepo.save(TaskStatusHistory.log(t.getId(), from, TaskStatus.PR_CREATED, "worker", req.workerId(),
+                reasonPrefix + label + " 구현 완료: " + FixRounds.shortSha(req.headSha())));
+        logRefWarnings(t, req);
+        accumulateUsage(t.getId(), TaskStageUsage.STAGE_IMPLEMENTATION, req);
+
+        // 자동 재배포 — 저장된 env 그대로, TaskService.toDeployPending과 같은 칸 정리. 사람이 누른 게 아니라 actor는 system
+        t.setStatus(TaskStatus.DEPLOY_PENDING);
+        t.setFailureReason(null);
+        t.setClaimedAt(null);
+        t.setWorkerId(null);
+        t.setUpdatedAt(OffsetDateTime.now());
+        historyRepo.save(TaskStatusHistory.log(t.getId(), TaskStatus.PR_CREATED, TaskStatus.DEPLOY_PENDING,
+                "system", null, label + " 구현 완료 → 자동 재배포"));
+    }
+
+    /**
+     * 회차 구현 실패 — 회차는 열어 둔다(관리자가 구현 재시도 또는 수정 중단을 고른다). 브랜치는 회차 브랜치 그대로 두고, 보고가 회차 브랜치의
+     * 끝을 실었을 때만 head_sha로 받는다 — wip 커밋을 push했을 수 있어 수정 중단 뒤 배포·종료 병합의 기준이 된다(§7.1).
+     * 브랜치가 다르거나 없는 보고의 커밋은 회차 브랜치의 것인지 알 수 없어 버린다.
+     */
+    private void fixRoundFailed(Task t, TaskFixRequest round, WorkerResultRequest req) {
+        TaskStatus from = t.getStatus();
+        t.setStatus(TaskStatus.IMPLEMENTATION_FAILED);
+        t.setFailureReason(req.failureReason() == null ? "원인 미상" : req.failureReason());
+        t.setImplementationLog(req.implementationLog());
+        if (req.headSha() != null && !req.headSha().isBlank() && isRoundBranch(t, req)) t.setHeadSha(req.headSha().strip());
+        t.setUpdatedAt(OffsetDateTime.now());
+        historyRepo.save(TaskStatusHistory.log(t.getId(), from, TaskStatus.IMPLEMENTATION_FAILED, "worker", req.workerId(),
+                FixRounds.label(round) + " 구현 실패: " + t.getFailureReason()));
+        accumulateUsage(t.getId(), TaskStageUsage.STAGE_IMPLEMENTATION, req);
+    }
+
+    /** 보고의 브랜치가 회차 브랜치(task.head_branch)와 같다(앞뒤 공백 무시). 보고에 브랜치가 없으면 false. */
+    private static boolean isRoundBranch(Task t, WorkerResultRequest req) {
+        return req.headBranch() != null && req.headBranch().strip().equals(t.getHeadBranch());
+    }
+
+    /**
+     * 배포완료 보고가 실제로 빌드한 커밋(headSha)을 실었으면 task.head_sha로 기록한다 (스펙 2026-11-03 §7) — 배포는 브랜치 끝을 빌드하므로
+     * 사람이 MR에 push했거나 끊긴 시도가 남긴 커밋이 있으면 기록과 다를 수 있고, 종료 병합이 head_sha를 고정한다. 수정 회차와 무관하게
+     * 모든 배포에 적용한다. 바뀌었으면 이력 사유에 붙일 말({@code  (head_sha abc1234→def5678)})을, 같거나 값이 없으면(예전 워커)
+     * 빈 문자열을 돌려준다.
+     */
+    private static String applyBuiltSha(Task t, WorkerResultRequest req) {
+        if (req.headSha() == null || req.headSha().isBlank()) return "";
+        String built = req.headSha().strip();
+        String before = t.getHeadSha();
+        t.setHeadSha(built);
+        if (built.equals(before)) return "";
+        String from = before == null || before.isBlank() ? "없음" : FixRounds.shortSha(before);
+        return " (head_sha " + from + "→" + FixRounds.shortSha(built) + ")";
+    }
+
     /**
      * 무시한 이전 시도 보고가 가리키던 PR·브랜치 — 그 작업물이 어디 남아 있는지 이력에서 찾을 수 있게 뒤에 붙인다
      * (예: ` (PR: https://…/pull/9, 브랜치: netismaker/task-7-x)`). 둘 다 없으면 빈 문자열.
@@ -584,7 +848,7 @@ public class WorkerService {
                 t.setDeployImage(req.deployImage());
                 t.setDeployedAt(OffsetDateTime.now());
                 t.setDeployLog(req.deployLog());
-                reason = "배포 완료: " + req.deployUrl();
+                reason = "배포 완료: " + req.deployUrl() + applyBuiltSha(t, req);   // 빌드한 커밋 → head_sha
             }
             case DEPLOY_FAILED -> {
                 t.setStatus(TaskStatus.DEPLOY_FAILED);
@@ -605,6 +869,12 @@ public class WorkerService {
             }
             default -> throw new TaskException(HttpStatus.BAD_REQUEST,
                     "배포 단계에서 허용되지 않는 status: " + req.status());
+        }
+        // 수정 회차의 자동 재배포가 끝났다(성공·실패) — 회차를 닫는다 (스펙 2026-11-03 §4)
+        if (t.getActiveFixRequestId() != null && t.getStatus() == TaskStatus.DEPLOYED) {
+            reason += FixRounds.closedSuffix(FixRounds.closeActive(fixRequestRepo, t, FixOutcome.DEPLOYED));
+        } else if (t.getActiveFixRequestId() != null && t.getStatus() == TaskStatus.DEPLOY_FAILED) {
+            reason += FixRounds.closedSuffix(FixRounds.closeActive(fixRequestRepo, t, FixOutcome.DEPLOY_FAILED));
         }
         t.setUpdatedAt(OffsetDateTime.now());
         historyRepo.save(TaskStatusHistory.log(t.getId(), from, t.getStatus(),
@@ -805,7 +1075,12 @@ public class WorkerService {
         deployLogStream.ingestChunk(taskId, req.seq() == null ? 0 : req.seq(), req.content());
     }
 
-    /** 배포 런타임 정합 대상(배포완료 + 배포중단됨) 목록. 워커 DeployReconcileJob이 주기 조회. */
+    /**
+     * 배포 런타임 정합·GC 보호 대상 목록. 워커 DeployReconcileJob·DockerGcJob이 주기 조회.
+     * 배포완료·배포중단됨뿐 아니라 배포 계열 진행 중·종료 단계·수정승인대기와 열린 수정 회차(active_fix_request_id)가 있는 작업도
+     * 담는다({@code TaskRepository.findDeployReconcilable}) — 대사는 앞 둘만 하고 나머지는 GC 보호용이다.
+     * 응답에 수정승인대기가 나가므로 이를 모르는 구 워커 jar는 역직렬화에 실패해 그 주기를 건너뛴다(컨테이너는 안전).
+     */
     @Transactional(readOnly = true)
     public List<DeployedTaskSummary> listDeployReconcilable() {
         return taskRepo.findDeployReconcilable().stream()

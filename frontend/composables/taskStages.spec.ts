@@ -14,6 +14,7 @@ const ALL_STATUSES = [
   'DESIGN_PENDING', 'DESIGNING', 'DESIGN_REVIEW', 'DESIGN_FAILED',
   'INTERVIEWING', 'INTERVIEW_INPUT', 'INTERVIEW_REVIEW',
   'CLOSE_REVIEW', 'CLOSE_PENDING', 'CLOSING', 'CLOSED', 'CLOSE_FAILED',
+  'FIX_REVIEW',
   'CANCELLED',
 ]
 
@@ -253,6 +254,7 @@ describe('nextAction (스펙 2026-09-06 §4.2 표)', () => {
     expect(DEPLOY_ACTIVE_STATUSES).toEqual([
       'DEPLOYED', 'DEPLOY_LOST', 'DEPLOY_PENDING', 'DEPLOYING', 'UNDEPLOY_PENDING', 'UNDEPLOYING',
       'CLOSE_REVIEW', 'CLOSE_PENDING', 'CLOSING', 'CLOSE_FAILED',
+      'FIX_REVIEW',
     ])
   })
 })
@@ -305,5 +307,43 @@ describe('종료 단계 (스펙 2026-10-13)', () => {
     for (const s of ['CLOSE_REVIEW', 'CLOSE_PENDING', 'CLOSING', 'CLOSE_FAILED']) {
       expect(DEPLOY_ACTIVE_STATUSES).toContain(s)
     }
+  })
+})
+
+describe('수정 요청 단계 (스펙 2026-11-03 §6, 수정승인대기)', () => {
+  it('수정승인대기는 배포 단계 열에 들어가고 칩 색이 있다', () => {
+    const deploy = STAGES.find((s) => s.key === 'deploy')!
+    expect(deploy.statuses).toContain('FIX_REVIEW')
+    expect(STAGES.filter((s) => s.statuses.includes('FIX_REVIEW'))).toHaveLength(1)
+    expect(CHIP.FIX_REVIEW).toBeDefined()
+  })
+  it('드래그 전이는 없다 (승인에 구현 방식 선택이 필요하다)', () => {
+    expect(MOVES.FIX_REVIEW).toBeUndefined()
+    expect(moveFor({ status: 'FIX_REVIEW' })).toBeNull()
+  })
+  it('배포 단계 카드로 묶이고 라벨은 서버 statusLabel을 쓴다', () => {
+    const stages = buildStages([task({ status: 'FIX_REVIEW', statusLabel: '수정승인대기' })], { now: NOW, isAdmin: true })
+    const deploy = stages.find((s) => s.key === 'deploy')!
+    expect(deploy.groups.map((g) => g.label)).toEqual(['수정승인대기'])
+    expect(deploy.groups[0]!.cards[0]!.move).toBeNull()
+  })
+  it('다음 할 일: 관리자는 수정 승인, 등록자는 요청 철회, 그 외는 문구만', () => {
+    expect(nextAction({ status: 'FIX_REVIEW' }, true, false)?.primary).toMatchObject({ label: '수정 승인', kind: 'approve-fix' })
+    expect(nextAction({ status: 'FIX_REVIEW' }, true, true)?.primary?.kind).toBe('approve-fix')
+    expect(nextAction({ status: 'FIX_REVIEW' }, false, true)?.primary).toMatchObject({ label: '수정 요청 철회', kind: 'withdraw-fix' })
+    const other = nextAction({ status: 'FIX_REVIEW' }, false, false)
+    expect(other?.primary).toBeUndefined()
+    expect(other?.text).toContain('수정 요청')
+  })
+  it('주의 그룹: 관리자에게만 확인 필요', () => {
+    expect(attentionGroup({ status: 'FIX_REVIEW' }, true)).toBe('attention')
+    expect(attentionGroup({ status: 'FIX_REVIEW' }, false)).toBe('active')
+  })
+  it('스테퍼: 배포 단계가 current (실패 아님)', () => {
+    const steps = stageSteps({ status: 'FIX_REVIEW', designRequested: false })
+    expect(steps.find((s) => s.key === 'deploy')!.state).toBe('current')
+  })
+  it('삭제 가드 집합에 있다 (서버 softDelete 가드와 같다)', () => {
+    expect(DEPLOY_ACTIVE_STATUSES).toContain('FIX_REVIEW')
   })
 })

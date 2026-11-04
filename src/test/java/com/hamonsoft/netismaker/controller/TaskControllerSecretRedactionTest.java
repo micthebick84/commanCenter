@@ -6,6 +6,7 @@ import com.hamonsoft.netismaker.entity.EnvVar;
 import com.hamonsoft.netismaker.entity.Task;
 import com.hamonsoft.netismaker.service.DeployLogStreamService;
 import com.hamonsoft.netismaker.service.InterviewService;
+import com.hamonsoft.netismaker.service.TaskFixService;
 import com.hamonsoft.netismaker.service.TaskService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -40,7 +41,8 @@ class TaskControllerSecretRedactionTest {
     @BeforeEach
     void setUp() {
         taskService = mock(TaskService.class);
-        controller = new TaskController(taskService, mock(DeployLogStreamService.class), mock(InterviewService.class));
+        controller = new TaskController(taskService, mock(DeployLogStreamService.class), mock(InterviewService.class),
+                mock(TaskFixService.class));
         task = Task.create("owner/repo", "main", "T", "desc", "user1", 3, List.of(), "claude-opus-5-5", "high");
         ReflectionTestUtils.setField(task, "id", 5L);
         task.setEnvVars(new ArrayList<>(List.of(

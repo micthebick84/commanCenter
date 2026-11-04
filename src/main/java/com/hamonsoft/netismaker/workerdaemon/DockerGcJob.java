@@ -14,7 +14,7 @@ import java.util.stream.Collectors;
  * docker 자원 GC 리퍼 (worker 프로파일). gc-interval-minutes마다 DeployTarget.gc 호출.
  * gc-enabled=false면 no-op. 부팅 직후엔 initialDelay로 한 텀 쉰다(배포 직후 경합 회피).
  *
- * 배포완료/배포중단됨 task의 컨테이너는 보호 목록으로 넘겨 제거하지 않는다 —
+ * 배포완료/배포중단됨 task(와 배포 진행 중·종료 단계·수정 회차 task)의 컨테이너는 보호 목록으로 넘겨 제거하지 않는다 —
  * DB가 '배포 살아있음'이라 믿는 컨테이너를 GC가 지워 괴리를 영구화하던 문제의 방지책.
  * 보호 목록 조회 실패 시 이번 주기를 통째로 건너뛴다(fail-closed: 모르면 안 지운다).
  */

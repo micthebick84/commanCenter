@@ -70,8 +70,15 @@ final class ImplementationPrompts {
         String requirements = hasPlan
                 ? "The approved plan is in `" + ImplementationScratch.planPath(task.id()) + "`. Read it in full."
                 : "There is no plan file. The task requirements are quoted under [DESCRIPTION] above; review against them.";
-        String reviewer = REVIEWER.replace("__REQUIREMENTS__", requirements).replace("__BASE_SHA__", baseSha);
-        return planBlock + REVIEW_SECTION.replace("__REVIEWER__", reviewer);
+        return planBlock + REVIEW_SECTION.replace("__REVIEWER__", reviewer(requirements, baseSha));
+    }
+
+    /**
+     * 리뷰어 지시(code-reviewer.md 사본)에 리뷰 기준(requirements)과 기준 커밋을 채운 것 — 구현 리뷰와 수정 회차 리뷰
+     * (FixRoundPrompts)가 같이 쓴다. 리뷰어는 baseSha 대비 커밋되지 않은 변경을 본다.
+     */
+    static String reviewer(String requirements, String baseSha) {
+        return REVIEWER.replace("__REQUIREMENTS__", requirements).replace("__BASE_SHA__", baseSha);
     }
 
     private static String sddPlanSection(WorkerTaskResponse task, boolean designWritten, boolean refsInPlanFile) {
@@ -130,7 +137,8 @@ final class ImplementationPrompts {
         return word + (finalConsonant == 0 || finalConsonant == 8 ? "로" : "으로");
     }
 
-    private static String resource(String path) {
+    /** 클래스패스 프롬프트 리소스(UTF-8, 줄바꿈 LF) — FixRoundPrompts도 쓴다. 없으면 IllegalStateException. */
+    static String resource(String path) {
         try (InputStream in = ImplementationPrompts.class.getResourceAsStream(path)) {
             if (in == null) throw new IllegalStateException("프롬프트 리소스 없음: " + path);
             // Windows 작업본(core.autocrlf)에서 빌드해도 프롬프트 줄바꿈은 LF로

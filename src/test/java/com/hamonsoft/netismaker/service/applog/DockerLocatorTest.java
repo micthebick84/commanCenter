@@ -29,9 +29,10 @@ class DockerLocatorTest {
 
     @Test
     void 윈도우는_PATH의_docker_exe를_먼저_본다() {
-        Path inPath = Path.of("C:/bin", "docker.exe");
+        // 드라이브 문자(C:)를 쓰지 않는다 — Linux CI에서는 PATH 구분자가 ':'라 "C:/bin"이 "C"와 "/bin"으로 쪼개진다
+        Path inPath = Path.of("/bin", "docker.exe");
         var found = DockerLocator.resolve(null, "Windows 11", p -> p.equals(inPath) || p.equals(WIN_LOCAL_BIN),
-                "C:/none" + File.pathSeparator + "C:/bin", WIN_HOME);
+                "/none" + File.pathSeparator + "/bin", WIN_HOME);
         assertThat(found).contains(inPath);
     }
 
@@ -44,8 +45,9 @@ class DockerLocatorTest {
 
     @Test
     void 윈도우는_확장자_없는_docker는_PATH에서_찾지_않는다() {
-        Path bare = Path.of("C:/bin", "docker");
-        assertThat(DockerLocator.resolve(null, "Windows 11", bare::equals, "C:/bin", WIN_HOME)).isEmpty();
+        // PATH를 드라이브 문자 없이 "/bin" 하나로 — Linux에서도 "/bin"으로 제대로 쪼개져 docker.exe만 후보가 된다
+        Path bare = Path.of("/bin", "docker");
+        assertThat(DockerLocator.resolve(null, "Windows 11", bare::equals, "/bin", WIN_HOME)).isEmpty();
     }
 
     @Test

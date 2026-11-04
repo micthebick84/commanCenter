@@ -144,6 +144,37 @@ class SqlWriteClassifierReasonTest {
                 .isEqualTo(WriteDecision.Verdict.EXECUTE);
     }
 
+    /**
+     * MySQL·MariaDB는 lower_case_table_names≠0이면 서버가 이름을 자기 표로 소문자로 접는다. ASCII 밖 대소문자 문자는
+     * 그 표와 이 JVM의 접기가 Unicode 판마다 어긋날 수 있다 — 어긋나면 레거시 테이블에 IF NOT EXISTS로 소유 기록만 얻고
+     * CREATE OR REPLACE로 교체하는 경로가 열린다. 객체 이름 자리에서만 거부하고 컬럼 이름은 그대로 받는다.
+     */
+    @Test
+    void MySQL_객체_이름에_대소문자가_있는_ASCII_밖_문자는_거부() {
+        WriteDecision ifNotExists = decide("CREATE TABLE IF NOT EXISTS `EQUİPMENT` (id INT)", MYSQL, none());
+        assertThat(ifNotExists).isEqualTo(WriteDecision.reject(SqlWriteParser.MYSQL_CASED_NON_ASCII + "EQUİPMENT"));
+        assertThat(ifNotExists.reason()).contains("대소문자");
+
+        // 소유 기록이 JVM이 접은 이름(ა U+10D0)이어도, 서버가 접지 않는 Ა(U+1C90)로 교체하는 문장은 거부
+        Ownership own = owns(MYSQL, DbObjectType.TABLE, "ა", null);
+        Ownership tNew = owns(MYSQL, DbObjectType.TABLE, "t_new", null);
+        assertThat(decide("CREATE OR REPLACE TABLE `Ა` (id INT)", MYSQL, own).reason())
+                .startsWith(SqlWriteParser.MYSQL_CASED_NON_ASCII);
+        assertThat(decide("DROP TABLE `Équipe`.t_new", MYSQL, tNew).reason())
+                .as("스키마 자리").startsWith(SqlWriteParser.MYSQL_CASED_NON_ASCII);
+        assertThat(decide("RENAME TABLE t_new TO `Ꭰ`", MYSQL, tNew).reason())
+                .as("새 이름 자리").startsWith(SqlWriteParser.MYSQL_CASED_NON_ASCII);
+
+        assertThat(decide("CREATE TABLE `장비_목록` (id INT)", MYSQL, none()).verdict())
+                .as("대소문자 없는 한글").isEqualTo(WriteDecision.Verdict.EXECUTE);
+        assertThat(decide("ALTER TABLE legacy ADD COLUMN `Größe` INT", MYSQL, none()).verdict())
+                .as("컬럼 이름").isEqualTo(WriteDecision.Verdict.EXECUTE);
+        assertThat(decide("CREATE TABLE \"EQUİPMENT\" (id int)", POSTGRES, none()).verdict())
+                .as("PostgreSQL 인용 이름은 접지 않는다").isEqualTo(WriteDecision.Verdict.EXECUTE);
+        assertThat(decide("CREATE TABLE \"EQUİPMENT\" (id NUMBER)", ORACLE, none()).verdict())
+                .as("Oracle 인용 이름은 접지 않는다").isEqualTo(WriteDecision.Verdict.EXECUTE);
+    }
+
     @Test
     void 분석기_거부_사유를_그대로_돌려준다() {
         assertThat(decide("INSERT INTO legacy (a) VALUES ('x'); DROP TABLE legacy", POSTGRES, none()).reason())

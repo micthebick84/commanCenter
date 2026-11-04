@@ -44,6 +44,32 @@ class DbObjectNameTest {
                 .isEqualTo(new DbObjectName("app", "t_new"));
     }
 
+    /**
+     * 소문자 접기는 코드포인트마다 단순 대응이다. String.toLowerCase는 특수 규칙으로 İ(U+0130)를 i + U+0307 두 글자로,
+     * 단어 끝 Σ를 ς로 바꿔 MySQL·MariaDB(İ→i, Σ→σ)와 다른 이름을 낸다.
+     */
+    @Test
+    void MySQL_소문자_접기는_코드포인트마다_단순_대응() {
+        assertThat(DbObjectName.normalize(MYSQL, quoted("EQUİPMENT"), "app", true).name()).isEqualTo("equipment");
+        assertThat(DbObjectName.normalize(MYSQL, quoted("ΑΣ"), "app", true).name()).isEqualTo("ασ");
+        assertThat(DbObjectName.normalize(MYSQL, ref("t"), "İNV", true).schema()).isEqualTo("inv");
+    }
+
+    @Test
+    void 대소문자_접기가_어긋날_수_있는_문자() {
+        // ASCII 밖에서 대소문자가 있는 문자 — 서버의 Unicode 판에 따라 접기가 달라질 수 있다
+        assertThat(DbObjectName.caseFoldMayDiffer("EQUİPMENT")).isTrue();   // İ
+        assertThat(DbObjectName.caseFoldMayDiffer("σ")).isTrue();           // σ(소문자도 짝이 있다)
+        assertThat(DbObjectName.caseFoldMayDiffer("Ა")).isTrue();           // 조지아 Mtavruli(Unicode 11)
+        assertThat(DbObjectName.caseFoldMayDiffer("Ꭰ")).isTrue();           // 체로키(Unicode 8에 소문자 추가)
+        assertThat(DbObjectName.caseFoldMayDiffer("Key")).isTrue();         // 켈빈 기호 K → k
+        assertThat(DbObjectName.caseFoldMayDiffer("͸")).isTrue();           // 미배정
+        // ASCII, 대소문자 없는 문자는 그대로 받는다
+        assertThat(DbObjectName.caseFoldMayDiffer("T_New")).isFalse();
+        assertThat(DbObjectName.caseFoldMayDiffer("장비_목록")).isFalse();
+        assertThat(DbObjectName.caseFoldMayDiffer("設備·1")).isFalse();
+    }
+
     @Test
     void MySQL_대소문자_구분_서버는_그대로() {
         assertThat(DbObjectName.normalize(MYSQL, ref("Foo"), "app", false).name()).isEqualTo("Foo");

@@ -29,6 +29,8 @@ public final class SqlWriteParser {
     static final String ADD_INDEX = "ALTER TABLE … ADD INDEX는 받지 않습니다 — CREATE INDEX를 쓰세요";
     static final String DEFINER = "DEFINER 지정은 트리거·프로시저·함수에만 받습니다 — 빼고 실행하세요";
     static final String UNKNOWN_ALTER_ACTION = "분석할 수 없는 ALTER TABLE 동작: ";
+    static final String MYSQL_CASED_NON_ASCII = "MySQL·MariaDB 객체 이름에는 대소문자가 있는 ASCII 밖 문자를 쓸 수 없습니다"
+            + "(서버와 대소문자 접기가 달라 다른 객체를 가리킬 수 있음) — ASCII나 한글처럼 대소문자가 없는 문자로 쓰세요: ";
 
     private static final int PG_MAX_IDENT_BYTES = 63;
 
@@ -336,6 +338,13 @@ public final class SqlWriteParser {
 
         private DbObjectRef objectName() throws SqlWriteRejected {
             List<Part> parts = qualifiedParts(2);
+            // MySQL·MariaDB는 lower_case_table_names≠0이면 서버가 이름을 자기 표로 접는다 — 접기가 어긋날 수 있는 이름은 받지 않는다.
+            // 분석기는 그 설정을 모르므로 MySQL이면 늘 본다(= 0 서버에서는 필요 없는 거부지만 그런 이름은 드물다).
+            if (d == SqlDialect.MYSQL) {
+                for (Part part : parts) {
+                    if (DbObjectName.caseFoldMayDiffer(part.text())) throw new SqlWriteRejected(MYSQL_CASED_NON_ASCII + part.text());
+                }
+            }
             Part name = parts.get(parts.size() - 1);
             Part schema = parts.size() == 2 ? parts.get(0) : null;
             return schema == null

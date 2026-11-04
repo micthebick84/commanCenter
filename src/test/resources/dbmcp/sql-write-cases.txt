@@ -144,6 +144,11 @@ MY ¦ t_new ¦ REJECT ¦ DROP TABLE "t_new"
 # 추가 — MySQL lower_case_table_names≠0은 백틱 인용 이름도 소문자로 다룬다(표의 MY는 lowerCase 서버)
 MY ¦ t_new ¦ EXECUTE ¦ DROP TABLE `T_NEW`
 MY ¦ t_new ¦ EXECUTE ¦ DROP TABLE `APP`.t_new
+# 추가 — MySQL 객체 이름에 대소문자가 있는 ASCII 밖 문자는 거부(서버의 소문자 접기와 어긋날 수 있다), 대소문자 없는 문자는 받는다
+MY ¦ - ¦ REJECT ¦ CREATE TABLE IF NOT EXISTS `EQUİPMENT` (id INT)
+MY ¦ - ¦ REJECT ¦ CREATE TABLE `Équipe` (id INT)
+MY ¦ - ¦ EXECUTE ¦ CREATE TABLE `장비_목록` (id INT)
+PG ¦ - ¦ EXECUTE ¦ CREATE TABLE "Équipe" (id int)
 PG ¦ v_new ¦ EXECUTE ¦ DROP VIEW v_new
 PG ¦ v_new ¦ REJECT ¦ DROP TABLE v_new
 ALL ¦ t_new ¦ EXECUTE ¦ INSERT INTO t_new (a) SELECT a FROM legacy

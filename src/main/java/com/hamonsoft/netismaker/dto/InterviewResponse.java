@@ -46,7 +46,12 @@ public record InterviewResponse(
         /** 칩 표시용 {id,name,dbType} — 현재 행 기준. QuestionService.get이 withDbConnections로 채운다. 항상 non-null. */
         List<DbConnectionDto.Chip> dbConnections,
         /** 읽기 전용 참조 repo 칩 (스펙 2026-10-22 §4.3) — 세션에 박제된 순서 그대로. 항상 non-null(없으면 []). */
-        List<RefRepoView> refRepos
+        List<RefRepoView> refRepos,
+        /**
+         * 인터뷰 방식 — false면 간단 인터뷰(superpowers 끔). 인터뷰 패널이 이 값으로 칩과 PLAN_READY 입력창을 가른다
+         * (설계 2026-11-03-interview-superpowers-toggle §4·§6). 질문 세션은 보지 않는다(기본 켬).
+         */
+        Boolean superpowersEnabled
 ) {
     public InterviewResponse {
         mcpCatalogIds = mcpCatalogIds == null ? List.of() : List.copyOf(mcpCatalogIds);
@@ -62,7 +67,8 @@ public record InterviewResponse(
     public InterviewResponse withDbConnections(List<DbConnectionDto.Chip> chips) {
         return new InterviewResponse(id, githubRepo, githubBranch, title, description, status, statusName, currentPhase,
                 workDir, taskId, model, effort, turns, plan, createdAt, updatedAt, kind, totalCostUsd, contextTokens,
-                contextWindow, mcpCatalogIds, attachments, repoCatalogId, dbConnectionIds, chips, refRepos);
+                contextWindow, mcpCatalogIds, attachments, repoCatalogId, dbConnectionIds, chips, refRepos,
+                superpowersEnabled);
     }
 
     /** attachments = 이 턴(user answer)에 첨부된 파일. 항상 non-null. */
@@ -125,7 +131,7 @@ public record InterviewResponse(
                 s.getModel(), s.getEffort(), tvs, pv, s.getCreatedAt(), s.getUpdatedAt(),
                 s.getKind().name(), s.getTotalCostUsd(), s.getContextTokens(), s.getContextWindow(),
                 s.getMcpCatalogIds(), attachments,
-                s.getRepoCatalogId(), s.getDbConnectionIds(), List.of(), refViews(s));
+                s.getRepoCatalogId(), s.getDbConnectionIds(), List.of(), refViews(s), s.isSuperpowersEnabled());
     }
 
     /** 세션의 참조 repo → 칩 뷰. 세션 쪽 값이 null이어도 []. */

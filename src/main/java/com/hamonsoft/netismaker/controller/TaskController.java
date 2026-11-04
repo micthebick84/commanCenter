@@ -133,7 +133,7 @@ public class TaskController {
         String userId = AuthContext.requireUserId(auth);
         boolean isAdmin = AuthContext.isAdmin(auth);
         Task t = taskService.getForView(id, userId, isAdmin);
-        // 최신 세션은 한 번만 읽는다 — 상세가 열 세션 id와, 인터뷰 단계면 보여 줄 그 세션의 참조
+        // 최신 세션은 한 번만 읽는다 — 상세가 열 세션 id와, 인터뷰 단계면 보여 줄 그 세션의 참조, 그 세션의 인터뷰 방식
         Optional<InterviewService.LatestSession> latest = interviewService.latestSessionForTask(id);
         TaskResponse r = TaskResponse.ofWithUsage(t, taskService.getAnalysis(id).orElse(null),
                 taskService.getDesign(id).orElse(null),
@@ -143,6 +143,8 @@ public class TaskController {
         if (INTERVIEW_STAGE.contains(t.getStatus()) && latest.isPresent()) {
             r = r.withRefRepos(latest.get().refRepos());
         }
+        // 인터뷰 방식(superpowers 끔 칩·계획 고쳐 달라기 안내)은 상태와 무관하게 최신 세션 값 — 세션이 없으면 null (설계 2026-11-03-interview-superpowers-toggle §4)
+        r = r.withInterviewSuperpowersEnabled(latest.map(InterviewService.LatestSession::superpowersEnabled).orElse(null));
         // 수정 요청 회차 현황은 상세에서만 — 목록은 null (스펙 2026-11-03 §6)
         r = r.withFix(fixService.fixViewOf(t));
         return forViewer(r, isAdmin);

@@ -20,12 +20,18 @@ public record InterviewSummaryResponse(
         OffsetDateTime createdAt,
         OffsetDateTime updatedAt,
         /** 세션 DB 연결 id — 승인 다이얼로그가 마지막 설정을 프리필할 때 쓴다 (스펙 2026-10-14 §7). */
-        List<Long> dbConnectionIds
+        List<Long> dbConnectionIds,
+        /**
+         * 그 세션의 인터뷰 방식 — false면 간단 인터뷰(superpowers 끔). 승인 다이얼로그가 지난 세션 값을 프리필할 때 쓴다
+         * (설계 2026-11-03-interview-superpowers-toggle §4).
+         */
+        Boolean superpowersEnabled
 ) {
     public static InterviewSummaryResponse of(InterviewSession s) {
         return new InterviewSummaryResponse(
                 s.getId(), s.getStatus().dbValue(), s.getStatus().name(), s.getCurrentPhase(),
                 s.getModel(), s.getEffort(), s.getCreatedAt(), s.getUpdatedAt(),
-                s.getDbConnectionIds() == null ? List.of() : List.copyOf(s.getDbConnectionIds()));
+                s.getDbConnectionIds() == null ? List.of() : List.copyOf(s.getDbConnectionIds()),
+                s.isSuperpowersEnabled());
     }
 }

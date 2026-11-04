@@ -75,7 +75,13 @@ public record TaskResponse(
         /** 수정 요청 회차 현황 (스펙 2026-11-03 §6). 작업 상세 응답에서만 non-null — 목록·다른 엔드포인트는 null. */
         FixView fix,
         /** 작업 타입 NEW_FEATURE|FEATURE_CHANGE|BUG_FIX|DB_WORK (스펙 2026-11-03 §4.2). 타입 없음은 null 그대로 나간다. */
-        String taskType
+        String taskType,
+        /**
+         * 지금(최신) 인터뷰 세션의 방식 (설계 2026-11-03-interview-superpowers-toggle §4) — false면 간단 인터뷰(superpowers 끔),
+         * true면 켬, 세션이 없으면 null(키는 항상 나간다). 작업 상세 응답에서만 채운다(TaskController.get이
+         * withInterviewSuperpowersEnabled로) — 목록·다른 엔드포인트는 세션을 읽지 않으므로 null.
+         */
+        Boolean interviewSuperpowersEnabled
 ) {
     public record AnalysisView(
             String markdownResult,
@@ -252,7 +258,8 @@ public record TaskResponse(
                 r.refRepos(),
                 r.sourceQuestionId(),
                 r.fix(),
-                r.taskType()
+                r.taskType(),
+                r.interviewSuperpowersEnabled()
         );
     }
 
@@ -263,7 +270,7 @@ public record TaskResponse(
                 model, effort, designRequested, analysis, design, implementation, deployment, interviewSessionId,
                 attachments, stageUsage, totalCostUsd, totalTokens, close, repoCatalogId, dbConnectionIds,
                 implementationMode, implementationAttempt, claimedAt, implementationTimeoutMinutes,
-                refViews(refs), sourceQuestionId, fix, taskType);
+                refViews(refs), sourceQuestionId, fix, taskType, interviewSuperpowersEnabled);
     }
 
     /** 수정 요청 회차 현황만 바꾼 사본 — 작업 상세 응답이 싣는다(목록은 null). */
@@ -273,7 +280,20 @@ public record TaskResponse(
                 model, effort, designRequested, analysis, design, implementation, deployment, interviewSessionId,
                 attachments, stageUsage, totalCostUsd, totalTokens, close, repoCatalogId, dbConnectionIds,
                 implementationMode, implementationAttempt, claimedAt, implementationTimeoutMinutes,
-                refRepos, sourceQuestionId, fixView, taskType);
+                refRepos, sourceQuestionId, fixView, taskType, interviewSuperpowersEnabled);
+    }
+
+    /**
+     * 지금 인터뷰 세션의 방식만 바꾼 사본 — 작업 상세 응답이 싣는다(목록은 null, 세션이 없어도 null).
+     * 비관리자 사본({@link #redactSecretValues})을 거쳐도 값이 남는다(끔 칩·PLAN_READY 입력 안내).
+     */
+    public TaskResponse withInterviewSuperpowersEnabled(Boolean enabled) {
+        return new TaskResponse(id, githubRepo, repoAlias, githubBranch, title, description, status, statusLabel,
+                requesterId, retryCount, maxRetry, failureReason, mcpsExtra, envVars, createdAt, updatedAt,
+                model, effort, designRequested, analysis, design, implementation, deployment, interviewSessionId,
+                attachments, stageUsage, totalCostUsd, totalTokens, close, repoCatalogId, dbConnectionIds,
+                implementationMode, implementationAttempt, claimedAt, implementationTimeoutMinutes,
+                refRepos, sourceQuestionId, fix, taskType, enabled);
     }
 
     private static List<InterviewResponse.RefRepoView> refViews(List<RefRepo> refs) {
@@ -293,7 +313,7 @@ public record TaskResponse(
                 model, effort, designRequested, analysis, design, implementation, deployment, interviewSessionId,
                 attachments, stageUsage, totalCostUsd, totalTokens, close, repoCatalogId, dbConnectionIds,
                 implementationMode, implementationAttempt, claimedAt, implementationTimeoutMinutes,
-                refRepos, sourceQuestionId, fix, taskType);
+                refRepos, sourceQuestionId, fix, taskType, interviewSuperpowersEnabled);
     }
 
     private static TaskResponse build(Task t, TaskAnalysis a, TaskDesign d, Long interviewSessionId,
@@ -374,7 +394,8 @@ public record TaskResponse(
                 refViews(t.getRefRepos()),
                 t.getSourceQuestionId(),
                 null,
-                t.getTaskType() == null ? null : t.getTaskType().name()
+                t.getTaskType() == null ? null : t.getTaskType().name(),
+                null
         );
     }
 }

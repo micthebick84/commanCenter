@@ -38,6 +38,8 @@ const AUTH_PATHS = [
   // 질문 대화에서 이어서 등록 — 마운트 뒤 질문을 읽어 창을 열고 쿼리를 뺀다(서버 렌더는 쿼리를 보지 않는다)
   '/tasks?fromQuestion=3',
   '/tasks/1',
+  // DB 작업 PR생성(스펙 2026-11-03 §6.9) — 관리자 상세가 주 행동 '확인 완료 — 종료 요청'과 보조 배포 버튼(deploy-secondary)을 그린다
+  '/tasks/11',
   '/questions',
   '/questions/3',
   '/requests',
@@ -69,6 +71,8 @@ const TASKS = [
   task(1, 'PR_CREATED', 'PR생성', {
     implementation: { prUrl: 'https://github.com/acme/widgets/pull/1', prNumber: 1, headBranch: 'netismaker/task-1', headSha: 'abc123', implementationLog: '완료' },
     totalCostUsd: 1.23,
+    // 작업 타입 — 보드 카드·모바일 카드·상세 머리줄(1280)·요청 상세 섹션 머리(390)의 타입 칩이 같은 마크업으로 하이드레이션돼야 한다(나머지 작업은 타입 없음 = 칩 없음)
+    taskType: 'NEW_FEATURE',
     // 수정 요청 회차 현황 — 작업 상세가 수정 요청 기록 카드를 마운트 뒤에 불러와 그린다(위 fix-requests 목)
     fix: { activeRound: null, activeMode: null, approvedRounds: 1, maxRounds: 3 },
     // 작업 상세의 참조 칩 줄(DB 칩 다음)과 "레포" 옆 출처 질문 링크(/questions/3)
@@ -83,6 +87,11 @@ const TASKS = [
     },
   }),
   task(2, 'AWAITING_APPROVAL', '승인대기'),
+  // DB 작업 PR생성 — 배포 없이 종료를 요청할 수 있다(스펙 2026-11-03 §6.9): 상세(1280)의 주 행동 종료 요청과 보조 배포 버튼, 390px 하단 바의 종료 요청, 보드·카드의 DB 작업 칩
+  task(11, 'PR_CREATED', 'PR생성', {
+    implementation: { prUrl: 'https://github.com/acme/widgets/pull/11', prNumber: 11, headBranch: 'netismaker/task-11', headSha: 'def456', implementationLog: '완료' },
+    taskType: 'DB_WORK',
+  }),
   // 수정승인대기 — 보드 배포 단계 그룹과 칩 색(스펙 2026-11-03 §6)
   task(10, 'FIX_REVIEW', '수정승인대기', { fix: { activeRound: null, activeMode: null, approvedRounds: 0, maxRounds: 3 } }),
   task(3, 'CANCELLED', '취소됨'),
@@ -145,6 +154,16 @@ function apiResponse(path) {
       id: 1, round: 1, status: 'APPROVED', implementationMode: 'REVIEW', body: '스모크 수정 요청 **본문**', requestedBy: 'admin', requestedAt: NOW,
       decidedBy: 'admin', decidedAt: NOW, decisionReason: null, attempt: 1, outcome: 'DEPLOYED', closedAt: NOW,
     }]
+  }
+  // DB 변경 기록(시간순, 스펙 2026-11-03 §6.5) — 작업 상세 카드. 작업 1만 실행됨 1·승인 대기 1(관리자 실행·실행 안 함 버튼), 나머지는 빈 목록(카드 없음)
+  const dbc = path.match(/^\/api\/tasks\/(\d+)\/db-changes$/)
+  if (dbc) {
+    if (Number(dbc[1]) !== 1) return []
+    const base = { connectionId: 1, connectionName: '개발 DB', attempt: 1, fixRequestId: null, reason: null, affectedRows: null, error: null, createdAt: NOW, executedBy: null }
+    return [
+      { ...base, id: 1, sqlText: 'CREATE TABLE t_smoke (id int)', classification: 'EXECUTED', executedAt: NOW },
+      { ...base, id: 2, sqlText: 'ALTER TABLE t_old DROP COLUMN c_old', classification: 'DEFERRED', reason: '남의 테이블 컬럼 삭제는 승인 대기로 기록됩니다', executedAt: null },
+    ]
   }
   if (path === '/api/questions') return [QUESTION]
   if (/^\/api\/questions\/\d+$/.test(path)) return QUESTION

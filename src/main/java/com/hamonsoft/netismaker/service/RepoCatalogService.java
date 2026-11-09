@@ -6,6 +6,7 @@ import com.hamonsoft.netismaker.entity.RefRepo;
 import com.hamonsoft.netismaker.entity.RepoCatalogEntry;
 import com.hamonsoft.netismaker.git.RepoRef;
 import com.hamonsoft.netismaker.repository.RepoCatalogRepository;
+import com.hamonsoft.netismaker.util.DbScriptDir;
 import com.hamonsoft.netismaker.util.NoteFolderPath;
 import com.hamonsoft.netismaker.util.RepoUrlParser;
 import org.springframework.beans.factory.annotation.Value;
@@ -69,6 +70,7 @@ public class RepoCatalogService {
         applyArtifact(e, req);
         applyPrebuild(e, req);
         applyNoteFolder(e, req, true);
+        applyDbWrite(e, req);
         return repo.save(e);
     }
 
@@ -97,6 +99,7 @@ public class RepoCatalogService {
         applyArtifact(e, req);
         applyPrebuild(e, req);
         applyNoteFolder(e, req, false);
+        applyDbWrite(e, req);
         e.setUpdatedAt(OffsetDateTime.now());
         return e;
     }
@@ -274,6 +277,25 @@ public class RepoCatalogService {
         } catch (IllegalArgumentException ex) {
             throw badRequest(ex.getMessage());
         }
+    }
+
+    /**
+     * 구현 단계 DB 쓰기 설정 (스펙 2026-11-03 task-type-db-write §6.6·§6.8). 두 칸 모두 null이면 그대로 둔다 — 활성 토글(5칸 바디)이나
+     * 이 칸을 안 바꾼 저장이 관리자가 정한 값을 덮지 않게. 스크립트 폴더는 빈 문자열(공백 포함)이면 비움(기본 폴더 `db/symphony`),
+     * 그 밖은 {@link DbScriptDir#normalize} 검증 후 저장하고 위반이면 400. 폴더 검증이 실패하면 표시도 바꾸지 않는다.
+     * 등록 때 null은 기본값(꺼짐·비움)이다.
+     */
+    static void applyDbWrite(RepoCatalogEntry e, RepoCatalogDto.UpsertRequest req) {
+        String dir = null;
+        if (req.dbScriptDir() != null) {
+            try {
+                dir = DbScriptDir.normalize(req.dbScriptDir());
+            } catch (IllegalArgumentException ex) {
+                throw badRequest(ex.getMessage());
+            }
+        }
+        if (req.dbMigrationManaged() != null) e.setDbMigrationManaged(req.dbMigrationManaged());
+        if (req.dbScriptDir() != null) e.setDbScriptDir(dir);
     }
 
     private static final Pattern PREBUILD_TOOLCHAIN = Pattern.compile("^[A-Za-z0-9._-]{1,50}$");

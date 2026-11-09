@@ -13,8 +13,8 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
 /**
- * next-task 요청이 참조 repo·수정 회차 지원을 알린다 — API는 알리지 않은 워커에게 참조 있는 구현(스펙 2026-10-24 §4.7)과
- * 수정 회차 구현(스펙 2026-11-03 §7)을 넘기지 않는다.
+ * next-task 요청이 참조 repo·수정 회차·개발 DB 쓰기 지원을 알린다 — API는 알리지 않은 워커에게 참조 있는 구현(스펙 2026-10-24 §4.7)과
+ * 수정 회차 구현(스펙 2026-11-03 §7)을 넘기지 않고, 개발 DB 쓰기 도구를 붙이지 않는다(task-type-db-write §6.1 조건 6).
  */
 class WorkerHttpClientNextTaskTest {
 
@@ -41,13 +41,13 @@ class WorkerHttpClientNextTaskTest {
     }
 
     @Test
-    void next_task_tells_the_api_it_supports_ref_repos_and_fix_rounds() throws Exception {
+    void next_task_tells_the_api_it_supports_ref_repos_fix_rounds_and_db_write() throws Exception {
         AtomicReference<String> seen = new AtomicReference<>();
         WorkerProperties props = propsFor(seen);
 
         assertThat(new WorkerHttpClient(props).nextTask()).isEmpty();
-        assertThat(seen.get()).isEqualTo("GET /worker/next-task?workerId=w1&supports=refRepos,fixRounds");
-        assertThat(WorkerHttpClient.SUPPORTS).isEqualTo("refRepos,fixRounds");
+        assertThat(seen.get()).isEqualTo("GET /worker/next-task?workerId=w1&supports=refRepos,fixRounds,dbWrite");
+        assertThat(WorkerHttpClient.SUPPORTS).isEqualTo("refRepos,fixRounds,dbWrite");
     }
 
     /** WORKER_KINDS를 준 워커(다른 PC)는 받을 종류를 알린다 — 비면 예전 요청 그대로(위 테스트). */
@@ -58,7 +58,7 @@ class WorkerHttpClientNextTaskTest {
 
         assertThat(new WorkerHttpClient(props, " design, implementation ").nextTask()).isEmpty();
         assertThat(seen.get())
-                .isEqualTo("GET /worker/next-task?workerId=w1&supports=refRepos,fixRounds&kinds=IMPLEMENTATION,DESIGN");
+                .isEqualTo("GET /worker/next-task?workerId=w1&supports=refRepos,fixRounds,dbWrite&kinds=IMPLEMENTATION,DESIGN");
     }
 
     @Test

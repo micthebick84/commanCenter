@@ -48,6 +48,9 @@ if [ "$DEPLOY_PUBLIC_ACCESS_ENABLED" = "auto" ]; then
 fi
 
 GRADLE="./gradlew"
+# bootRun은 모두 --no-daemon: 다른 곳(개발 빌드·Claude 셸)이 띄운 유휴 Gradle 데몬을 재사용하지 않고,
+# 이 스크립트가 띄운 일회용 데몬(빌드가 끝나면 같이 내려감)에서만 돈다. 계기 = 2026-11-07 Windows 사고
+# (scripts/start-public.ps1의 "1) netis-auth" 절 위 주석).
 
 # 이미 떠 있는지 검사 후 기동하는 헬퍼
 is_alive() {  # $1 = pidfile
@@ -84,7 +87,7 @@ if is_alive "$RUN_DIR/api.pid"; then
 else
   echo "● API 기동 중... (:$API_PORT)"
   CORS_ALLOWED_ORIGINS="$CORS_ALLOWED_ORIGINS" \
-  nohup "$GRADLE" bootRun -q > "$RUN_DIR/api.log" 2>&1 &
+  nohup "$GRADLE" bootRun -q --no-daemon > "$RUN_DIR/api.log" 2>&1 &
   echo $! > "$RUN_DIR/api.pid"
   if wait_for_log "$RUN_DIR/api.log" 'Started NetisMakerApplication|APPLICATION FAILED|BUILD FAILED' "API"; then
     if grep -qE 'Started NetisMakerApplication' "$RUN_DIR/api.log"; then
@@ -127,7 +130,7 @@ for n in $(seq 1 "$WORKERS"); do
     DEPLOY_PUBLIC_ACCESS_ENABLED="$DEPLOY_PUBLIC_ACCESS_ENABLED" \
     ${CLAUDE_CLI:+CLAUDE_CLI="$CLAUDE_CLI"} \
     ${SUPERPOWERS_PLUGIN_PATH:+SUPERPOWERS_PLUGIN_PATH="$SUPERPOWERS_PLUGIN_PATH"} \
-    "$GRADLE" bootRun --args='--spring.profiles.active=worker' -q > "$logf" 2>&1 &
+    "$GRADLE" bootRun --args='--spring.profiles.active=worker' -q --no-daemon > "$logf" 2>&1 &
   echo $! > "$pidf"
   if wait_for_log "$logf" 'Started NetisMakerApplication|APPLICATION FAILED|BUILD FAILED' "$wid"; then
     grep -qE 'Started NetisMakerApplication' "$logf" \

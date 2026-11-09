@@ -124,6 +124,7 @@ async function save() {
   if (!canSubmit.value) return
   submitting.value = true
   try {
+    const wasWritable = props.editing?.allowWrite === true
     const saved = await saveDbConnection(
       { scope: props.scope, repoCatalogId: props.repoCatalogId, name: form.name.trim(), ...fields() },
       props.editing?.id,
@@ -131,6 +132,10 @@ async function save() {
     emit('saved', saved)
     emit('update:modelValue', false)
     $q.notify({ type: 'positive', message: 'DB 접속정보를 저장했습니다' })
+    // 쓰기 허용 연결의 접속 대상을 바꾸면 서버가 같은 저장에서 쓰기 허용을 끈다(스펙 2026-11-03 §6.1 조건 4)
+    if (wasWritable && saved?.allowWrite === false) {
+      $q.notify({ type: 'warning', message: '접속 대상이 바뀌어 쓰기 허용을 껐습니다', timeout: 8000 })
+    }
   } catch (e: any) {
     $q.notify({ type: 'negative', message: e?.data?.message ?? 'DB 접속정보 저장 실패' })
   } finally {
@@ -155,7 +160,12 @@ defineExpose({ form, save, runTest, testResult, testStatus, dbNameLabel, canSubm
     <div class="column q-gutter-y-sm db-form">
       <div class="row items-start no-wrap text-caption text-grey-8 db-hint">
         <q-icon name="shield" color="amber-9" size="16px" class="q-mr-xs q-mt-xs" />
-        <span>읽기 전용 계정을 권장합니다. 쓰기 SQL은 질문 세션에서 차단되지만 완전하지 않습니다.</span>
+        <span v-if="scope === 'USER'" data-test="db-dialog-caption">
+          개인 연결은 늘 읽기 전용으로만 쓰입니다. 읽기 전용 계정을 권장합니다. 쓰기 SQL은 질문 세션에서 차단되지만 완전하지 않습니다.
+        </span>
+        <span v-else data-test="db-dialog-caption">
+          관리자가 '쓰기 허용'을 켠 공용 연결은 구현 단계에서 쓰기가 가능합니다. 켜지 않은 연결은 읽기 전용 계정을 권장합니다 — 질문 세션의 쓰기 SQL 차단은 완전하지 않습니다.
+        </span>
       </div>
 
       <q-input

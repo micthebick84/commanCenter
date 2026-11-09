@@ -347,3 +347,68 @@ describe('수정 요청 단계 (스펙 2026-11-03 §6, 수정승인대기)', () 
     expect(DEPLOY_ACTIVE_STATUSES).toContain('FIX_REVIEW')
   })
 })
+
+describe('DB 작업 PR생성의 "확인 완료 — 종료 요청" (스펙 2026-11-03 §6.9)', () => {
+  const dbPr = { status: 'PR_CREATED', taskType: 'DB_WORK', implementation: { prUrl: 'https://x/pull/1' }, deployment: null }
+
+  it('DB 작업 PR생성: 관리자·등록자는 종료 요청, 다른 타입은 지금처럼 배포', () => {
+    expect(nextAction({ status: 'PR_CREATED', taskType: 'DB_WORK' }, true)?.primary?.kind).toBe('request-close')
+    expect(nextAction({ status: 'PR_CREATED', taskType: 'DB_WORK' }, false, true)?.primary?.kind).toBe('request-close')
+    expect(nextAction({ status: 'PR_CREATED', taskType: 'BUG_FIX' }, true)?.primary?.kind).toBe('deploy')
+  })
+
+  it('문구와 주 행동은 정해진 값이다', () => {
+    expect(nextAction(dbPr, true)).toEqual({
+      text: 'DB 작업 — 개발 DB 반영을 확인했으면 종료를 요청하세요',
+      primary: { label: '확인 완료 — 종료 요청', icon: 'task_alt', kind: 'request-close' },
+    })
+    expect(nextAction(dbPr, false, true)).toEqual(nextAction(dbPr, true))
+  })
+
+  it('등록자도 관리자도 아니면 지금처럼 PR 열기 — 타입 없음·null·다른 타입도 그대로', () => {
+    expect(nextAction(dbPr, false, false)?.primary?.kind).toBe('open-pr')
+    const pr = { implementation: { prUrl: 'https://x/pull/1' } }
+    expect(nextAction({ status: 'PR_CREATED', ...pr }, true)?.primary?.kind).toBe('deploy')
+    expect(nextAction({ status: 'PR_CREATED', taskType: null, ...pr }, true)?.primary?.kind).toBe('deploy')
+    expect(nextAction({ status: 'PR_CREATED', taskType: null, ...pr }, false, true)?.primary?.kind).toBe('open-pr')
+    expect(nextAction({ status: 'PR_CREATED', taskType: 'NEW_FEATURE', ...pr }, false, true)?.primary?.kind).toBe('open-pr')
+  })
+
+  it('PR생성이 아닌 DB 작업은 타입과 무관하게 지금 표 그대로', () => {
+    expect(nextAction({ status: 'IMPLEMENTATION_FAILED', taskType: 'DB_WORK' }, true)?.primary?.kind).toBe('retry-implementation')
+    expect(nextAction({ status: 'DEPLOYED', taskType: 'DB_WORK', deployment: { deployUrl: 'https://t' } }, false, false)?.primary?.kind).toBe('open-url')
+  })
+
+  it('attentionGroup: DB 작업 PR생성도 배포완료처럼 done — 소유자 인자가 없어 전역 배지 수를 늘리지 않는다', () => {
+    const t = { status: 'PR_CREATED', taskType: 'DB_WORK' }
+    expect(attentionGroup(t, true)).toBe('done')
+    expect(attentionGroup(t, false)).toBe('done')
+    expect(attentionGroup({ status: 'DEPLOYED' }, true)).toBe('done')
+  })
+
+  it('stageSteps: 배포 없이 종료한 DB 작업은 deploy skipped, 배포했으면 done', () => {
+    const deployState = (task: Record<string, unknown>) => stageSteps(task as { status: string }).find((s) => s.key === 'deploy')!.state
+    // 종료승인대기·작업종료까지 배포 없이 온 DB 작업 — 배포 단계는 건너뜀
+    expect(deployState({ status: 'CLOSE_REVIEW', taskType: 'DB_WORK', deployment: null })).toBe('skipped')
+    expect(deployState({ status: 'CLOSING', taskType: 'DB_WORK' })).toBe('skipped') // deployment 키 없음도 "없음"
+    expect(deployState({ status: 'CLOSED', taskType: 'DB_WORK', deployment: null })).toBe('skipped')
+    // 배포까지 한 DB 작업은 다른 작업과 같다
+    expect(deployState({ status: 'CLOSE_REVIEW', taskType: 'DB_WORK', deployment: { deployUrl: 'http://x' } })).toBe('done')
+    expect(deployState({ status: 'CLOSED', taskType: 'DB_WORK', deployment: { deployUrl: null } })).toBe('done')
+    // 다른 타입·타입 없음은 배포 없이 종료 단계에 있어도 건드리지 않는다
+    expect(deployState({ status: 'CLOSE_REVIEW', taskType: 'BUG_FIX', deployment: null })).toBe('done')
+    expect(deployState({ status: 'CLOSE_REVIEW', taskType: null, deployment: null })).toBe('done')
+    expect(deployState({ status: 'CLOSED', deployment: null })).toBe('done')
+  })
+
+  it('stageSteps: PR생성의 DB 작업은 아직 배포를 고를 수 있으니 deploy는 future 그대로', () => {
+    expect(stageSteps({ status: 'PR_CREATED', designRequested: false, taskType: 'DB_WORK', deployment: null }).map((s) => s.state))
+      .toEqual(['done', 'skipped', 'current', 'future', 'future'])
+  })
+
+  it('stageSteps: 배포를 거치는 중(배포 실패·진행)인 DB 작업의 deploy는 current·failed 그대로', () => {
+    const deploy = (status: string) => stageSteps({ status, taskType: 'DB_WORK', deployment: { deployUrl: null } }).find((s) => s.key === 'deploy')!.state
+    expect(deploy('DEPLOYING')).toBe('current')
+    expect(deploy('DEPLOY_FAILED')).toBe('failed')
+  })
+})

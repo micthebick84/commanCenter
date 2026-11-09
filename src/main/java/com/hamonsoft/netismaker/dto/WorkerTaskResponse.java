@@ -106,13 +106,38 @@ public record WorkerTaskResponse(
      * 구현 지시 블록. mode는 ImplementationMode 이름, timeoutMinutes는 claim 때 작업에 기록한 상한.
      * fix는 수정 회차가 열린 구현대기를 claim했을 때만 채운다(스펙 2026-11-03 §7) — 이 경우 mode·timeoutMinutes는 회차의
      * 구현 방식을 따르고(작업의 방식이 아니라), attempt는 작업의 시도 번호 그대로다. null이면 지금 구현과 같다.
+     * taskType은 작업 타입 enum 이름(스펙 2026-11-03 §4) — 타입 없음·구버전 API는 null이고 워커는 모르는 값도 타입 없음으로 읽는다
+     * ({@code TaskType.fromWireOrNull}). 구현 claim에서만 쓰는 값이라 최상위가 아니라 이 블록에 둔다(32칸 정규 생성자와
+     * 호환 생성자들을 바꾸는 연쇄를 피한다).
+     * db는 개발 DB 쓰기 재료(스펙 2026-11-03 §6.6·§6.8) — API가 구현 claim마다 채우고, 구버전 API·재료를 못 만든 호출은 null이라
+     * 워커가 기본 경로·쓰기 없음으로 읽는다. taskType과 같은 이유로 이 블록에 둔다.
      */
-    public record ImplementationSpec(String mode, Integer attempt, Integer timeoutMinutes, FixRoundSpec fix) {
-        /** 수정 회차 도입 전 3인자 생성자 — 회차 없는 구현(fix=null). 기존 팩토리·테스트 호환. */
+    public record ImplementationSpec(String mode, Integer attempt, Integer timeoutMinutes, FixRoundSpec fix,
+                                     String taskType, DbWriteSpec db) {
+        /** 개발 DB 쓰기 도입 전 5인자 생성자 — 쓰기 재료 없음(db=null). 기존 팩토리·테스트 호환. */
+        public ImplementationSpec(String mode, Integer attempt, Integer timeoutMinutes, FixRoundSpec fix,
+                                  String taskType) {
+            this(mode, attempt, timeoutMinutes, fix, taskType, null);
+        }
+
+        /** 작업 타입 도입 전 4인자 생성자 — 타입 없음(taskType=null), 쓰기 재료 없음. 기존 팩토리·테스트 호환. */
+        public ImplementationSpec(String mode, Integer attempt, Integer timeoutMinutes, FixRoundSpec fix) {
+            this(mode, attempt, timeoutMinutes, fix, null, null);
+        }
+
+        /** 수정 회차 도입 전 3인자 생성자 — 회차 없는 구현(fix=null), 타입 없음, 쓰기 재료 없음. 기존 팩토리·테스트 호환. */
         public ImplementationSpec(String mode, Integer attempt, Integer timeoutMinutes) {
-            this(mode, attempt, timeoutMinutes, null);
+            this(mode, attempt, timeoutMinutes, null, null, null);
         }
     }
+
+    /**
+     * 구현 claim의 개발 DB 쓰기 재료 (스펙 2026-11-03 §6.6·§6.8). scriptPath는 레포 안 상대 경로로 워커가 만드는 SQL 스크립트
+     * 파일(카탈로그 폴더 또는 기본 `db/symphony` 아래 `task-{id}.sql`), migrationManaged는 대상 레포가 자동 마이그레이션 레포인지,
+     * priorWrites는 이 작업의 이전 시도·회차가 반영했거나 승인 대기로 남긴 SQL 기록이 있는지(EXECUTED·DEFERRED).
+     * 쓰기 가능 여부(연결별 writable)는 여기가 아니라 {@link DbMcpGrant}에 있다.
+     */
+    public record DbWriteSpec(String scriptPath, boolean migrationManaged, boolean priorWrites) {}
 
     /**
      * 수정 회차 구현 지시 — 같은 브랜치에서 이어 고친다(스펙 2026-11-03 §7). requestId는 task_fix_request.id, round는 승인 때
@@ -254,6 +279,15 @@ public record WorkerTaskResponse(
      */
     public static WorkerTaskResponse forImplementation(Task t, TaskAnalysis a, TaskDesign d, String planMarkdown,
                                                        FixRoundSpec fix, ImplementationMode mode) {
+        return forImplementation(t, a, d, planMarkdown, fix, mode, null);
+    }
+
+    /**
+     * 개발 DB 쓰기 재료(db)를 구현 블록에 싣는다 (스펙 2026-11-03 §6.6·§6.8). WorkerService.claim이 {@code dbWriteSpecFor(t)}를 넘긴다 —
+     * null이면 재료 없음(위 6인자판·재료를 모르는 호출).
+     */
+    public static WorkerTaskResponse forImplementation(Task t, TaskAnalysis a, TaskDesign d, String planMarkdown,
+                                                       FixRoundSpec fix, ImplementationMode mode, DbWriteSpec db) {
         return new WorkerTaskResponse(t.getId(), t.getGithubRepo(), t.getGithubBranch(),
                 t.getTitle(), t.getDescription(), Kind.IMPLEMENTATION,
                 t.getMcpsExtra() == null ? List.of() : List.copyOf(t.getMcpsExtra()),
@@ -265,13 +299,16 @@ public record WorkerTaskResponse(
                 d == null ? null : d.getDesignUrl(),
                 null, null, t.getGitUrl(), hostOf(t), planMarkdown,
                 null, null, null, null, null, null,
-                implementationSpecOf(t, fix, mode), refReposOf(t));
+                implementationSpecOf(t, fix, mode, db), refReposOf(t));
     }
 
-    private static ImplementationSpec implementationSpecOf(Task t, FixRoundSpec fix, ImplementationMode modeOverride) {
+    private static ImplementationSpec implementationSpecOf(Task t, FixRoundSpec fix, ImplementationMode modeOverride,
+                                                           DbWriteSpec db) {
         ImplementationMode mode = modeOverride != null ? modeOverride
                 : t.getImplementationMode() == null ? ImplementationMode.DIRECT : t.getImplementationMode();
-        return new ImplementationSpec(mode.name(), t.getImplementationAttempt(), t.getImplementationTimeoutMinutes(), fix);
+        String taskType = t.getTaskType() == null ? null : t.getTaskType().name();
+        return new ImplementationSpec(mode.name(), t.getImplementationAttempt(), t.getImplementationTimeoutMinutes(),
+                fix, taskType, db);
     }
 
     /** 작업 참조(task.ref_repos)를 그대로 싣는다 — 고정 커밋이 없거나 틀린 원소는 워커가 claude 실행 전에 구현실패로 끝낸다. */

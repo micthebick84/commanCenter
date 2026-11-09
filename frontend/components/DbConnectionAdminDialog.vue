@@ -4,7 +4,7 @@
 import { useQuasar } from 'quasar'
 import DbConnectionDialog from '~/components/DbConnectionDialog.vue'
 import {
-  deleteDbConnection, dbTypeLabel, fetchDbConnections, saveDbConnection, type DbConnectionView,
+  deleteDbConnection, dbTypeLabel, fetchDbConnections, saveDbConnection, setDbConnectionAllowWrite, type DbConnectionView,
 } from '~/composables/dbConnections'
 import { useFullscreenDialog } from '~/composables/dialogLayout'
 
@@ -14,6 +14,8 @@ const emit = defineEmits<{ 'update:modelValue': [value: boolean] }>()
 const $q = useQuasar()
 const rows = ref<DbConnectionView[]>([])
 const featureEnabled = ref(true)
+// 구현 단계 쓰기가 이 레포에서 지금 열릴 수 있는지 — 옛 응답에는 없다(undefined = 모름, 안내하지 않는다)
+const writeEnabled = ref<boolean | undefined>(undefined)
 const editOpen = ref(false)
 const editing = ref<DbConnectionView | null>(null)
 
@@ -21,6 +23,7 @@ async function load() {
   if (!props.repo) return
   const r = await fetchDbConnections(props.repo.id)
   featureEnabled.value = r.enabled
+  writeEnabled.value = r.writeEnabled
   rows.value = r.items.filter((i) => i.scope === 'REPO')
 }
 watch(() => [props.modelValue, props.repo?.id], ([open]) => { if (open) load() }, { immediate: true })
@@ -46,6 +49,16 @@ async function toggleEnabled(r: DbConnectionView) {
   }
 }
 
+/** 구현 단계 쓰기 허용 — 활성 토글과 따로, 전용 경로로만 바꾼다(접속 대상을 바꿔 저장하면 서버가 끈다). */
+async function toggleAllowWrite(r: DbConnectionView) {
+  try {
+    await setDbConnectionAllowWrite(r.id, !r.allowWrite)
+    await load()
+  } catch (e) {
+    $q.notify({ type: 'negative', message: (e as { data?: { message?: string } })?.data?.message ?? '쓰기 허용 변경 실패' })
+  }
+}
+
 function remove(r: DbConnectionView) {
   $q.dialog({ title: '삭제', message: `'${r.name}' 접속정보를 삭제할까요? 이 연결을 고른 질문 세션은 다음 질문부터 DB 도구 없이 답합니다.`, cancel: true })
     .onOk(async () => {
@@ -58,7 +71,7 @@ function remove(r: DbConnectionView) {
     })
 }
 
-defineExpose({ rows, featureEnabled, toggleEnabled, load })
+defineExpose({ rows, featureEnabled, writeEnabled, toggleEnabled, toggleAllowWrite, load })
 // 폰에서만 전체화면 — 태블릿은 일반 너비 (composables/dialogLayout.ts)
 const fullscreen = useFullscreenDialog()
 </script>
@@ -75,12 +88,29 @@ const fullscreen = useFullscreenDialog()
           DB 접속정보 기능이 꺼져 있습니다 (NETISMAKER_DB_SECRET_KEY / NETISMAKER_DB_SECRET_SALT 미설정).
         </q-card-section>
         <template v-else>
+          <q-card-section class="q-py-none text-caption text-grey-8" data-test="db-admin-write-hint">
+            '쓰기 허용'을 켠 연결은 구현 단계에서 개발 DB에 쓰기 SQL을 실행합니다 — 계정에 쓰기 권한이 있어야 합니다.
+            접속 대상(호스트·포트·DB·사용자)을 바꿔 저장하면 쓰기 허용은 꺼집니다.
+          </q-card-section>
+          <q-card-section v-if="writeEnabled === false" class="q-py-sm text-caption text-orange-9" data-test="db-admin-write-off">
+            지금은 이 레포에서 구현 단계 쓰기가 열리지 않습니다 — 개발 DB 쓰기 스위치가 꺼져 있거나 자동 마이그레이션 레포입니다.
+            표시는 미리 켜 둘 수 있습니다.
+          </q-card-section>
           <q-list separator>
             <q-item v-if="rows.length === 0"><q-item-section class="text-grey-6">등록된 공용 접속정보가 없습니다</q-item-section></q-item>
             <q-item v-for="r in rows" :key="r.id" :class="{ 'text-grey-6': !r.enabled }">
               <q-item-section>
                 <q-item-label>{{ r.name }} <q-badge outline color="grey-7" :label="dbTypeLabel(r.dbType)" /></q-item-label>
                 <q-item-label caption>{{ r.host }}:{{ r.port }}/{{ r.databaseName }} · {{ r.username }}</q-item-label>
+                <q-toggle
+                  :model-value="r.allowWrite"
+                  dense
+                  color="warning"
+                  label="구현 단계 쓰기 허용"
+                  class="q-mt-xs"
+                  :data-test="`db-allow-write-${r.id}`"
+                  @update:model-value="toggleAllowWrite(r)"
+                />
               </q-item-section>
               <q-item-section side class="row no-wrap items-center">
                 <q-toggle :model-value="r.enabled" dense @update:model-value="toggleEnabled(r)" />

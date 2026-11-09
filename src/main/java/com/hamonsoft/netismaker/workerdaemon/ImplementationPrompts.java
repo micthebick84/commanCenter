@@ -1,7 +1,10 @@
 package com.hamonsoft.netismaker.workerdaemon;
 
 import com.hamonsoft.netismaker.dto.WorkerTaskResponse;
+import com.hamonsoft.netismaker.dto.WorkerTaskResponse.DbWriteSpec;
 import com.hamonsoft.netismaker.entity.ImplementationMode;
+import com.hamonsoft.netismaker.entity.TaskType;
+import com.hamonsoft.netismaker.util.DbScriptDir;
 
 import java.io.IOException;
 import java.io.InputStream;
@@ -30,6 +33,76 @@ final class ImplementationPrompts {
     private static final String REVIEWER = stripLeadingComment(resource("/prompts/implementation-reviewer.md"));
 
     private ImplementationPrompts() {}
+
+    private static final String BUG_FIX_SECTION = "## 작업 타입: 버그 픽스\n"
+            + "먼저 계획의 재현 방법으로 오류를 재현하고 원인을 확인한 뒤 고치세요. "
+            + "고친 뒤 같은 오류가 다시 나지 않는지 확인하세요(가능하면 회귀 테스트 추가).\n";
+
+    /**
+     * {task_type_section} — 타입별 추가 지시(스펙 2026-11-03 §5.2). 버그 픽스와 DB 작업만 있고, 타입 없음·신규 개발·기능 수정은
+     * 빈 문자열이라 구현 프롬프트가 타입이 생기기 전과 바이트까지 같다. 절은 제목 줄로 시작해 줄바꿈으로 끝난다
+     * (템플릿은 {@code {plan_section}{task_type_section}}처럼 계획 절 바로 뒤에 둔다).
+     *
+     * <p>DB 작업의 세 갈래 — 쓰기 도구가 없으면 SQL을 scriptPath 파일에 적게 하고(§6.6 "쓰기를 못 쓸 때"), 있으면 {@code execute}로
+     * 한 문장씩 적용하게 하고(§5.2), 자동 마이그레이션 레포(§6.8)면 레포의 마이그레이션 관례대로 파일을 만들게 한다(가데이터도 관례가 허용하면 그 방식으로,
+     * 개발 DB에는 시험 컨테이너가 뜰 때 적용된다는 것, 다른 사람 화면을 깨뜨리지 않게 옛 컬럼은 두고 새 컬럼을 추가하라는 기준까지 —
+     * 서버가 강제할 수 없는 기준이라 이 지시가 유일한 전달 경로다). 쓰기 도구와
+     * 자동 마이그레이션은 함께 켜질 수 없지만(§6.1 조건 5) 겹쳐 들어오면 DB에 직접 쓰지 않는 쪽(마이그레이션)을 따른다.
+     *
+     * @param writeTools        이 구현에 개발 DB 쓰기 도구({@code execute})가 있는가
+     * @param migrationManaged  대상 레포가 자동 마이그레이션 레포인가
+     * @param scriptPath        쓰기 도구가 없을 때 세션이 SQL을 적을 파일(worktree 상대 경로)
+     */
+    static String taskTypeSection(TaskType type, boolean writeTools, boolean migrationManaged, String scriptPath) {
+        if (type == TaskType.BUG_FIX) return BUG_FIX_SECTION;
+        if (type != TaskType.DB_WORK) return "";
+        if (migrationManaged) {
+            return "## 작업 타입: DB 작업\n"
+                    + "이 레포는 앱이 뜰 때 마이그레이션 파일을 DB에 자동 적용합니다. "
+                    + "계획의 SQL을 DB에 직접 실행하지 말고 레포의 마이그레이션 관례대로 파일로 만드세요. "
+                    + "가데이터도 레포의 마이그레이션 관례가 허용하면 그 방식으로 넣으세요. "
+                    + "개발 DB에는 시험 컨테이너가 뜰 때 적용됩니다. "
+                    + "같은 DB를 다른 사람도 씁니다. 기존 컬럼을 지우거나 이름·타입을 바꿔야 하면 "
+                    + "다른 사람 화면을 깨뜨리지 않게 옛 컬럼은 두고 새 컬럼을 추가해 그쪽을 쓰세요. "
+                    + "코드 변경은 필요할 때만 하세요.\n";
+        }
+        if (writeTools) {
+            return "## 작업 타입: DB 작업\n"
+                    + "계획의 SQL을 `execute` 도구로 한 문장씩 적용하고, 적용할 때마다 `query`·`describe_table`로 결과를 확인하세요. "
+                    + "코드 변경은 필요할 때만 하세요.\n";
+        }
+        return "## 작업 타입: DB 작업\n"
+                + "이 구현에는 개발 DB 쓰기 도구가 없습니다. 계획의 SQL을 실행하지 말고 `" + scriptPath
+                + "` 파일에 실행 순서대로 적으세요(문장마다 끝에 `;`). 코드 변경은 필요할 때만 하세요.\n";
+    }
+
+    /**
+     * 작업의 기본 SQL 스크립트 경로 — {@code db/symphony/task-{id}.sql}. 세션이 쓴 파일의 강제 추가도 이 경로를 본다. 기본 폴더 규칙은
+     * API의 카탈로그 저장과 워커가 같이 쓰는 {@link DbScriptDir} 한 곳이다 — 두 상수로 갈라지면 기본 폴더를 바꿀 때 워커 파일과 세션
+     * 파일의 경로가 어긋난다.
+     */
+    static String defaultScriptPath(long taskId) {
+        return DbScriptDir.resolve(null, taskId);
+    }
+
+    /**
+     * 쓰기 도구 없이 이전 쓰기 기록이 있을 때 세션이 SQL을 적는 파일 — 끝의 {@code .sql}을 {@code -manual.sql}로 바꾼다
+     * ({@code db/symphony/task-42.sql} → {@code db/symphony/task-42-manual.sql}). 같은 경로를 주면 세션이 적은 새 SQL을 워커가
+     * 누적 기록으로 덮어써 PR에서 사라진다(계획 "설계와 다름 ②"). {@code .sql}로 끝나지 않으면 뒤에 붙인다 — 어떤 경우에도 원래 경로와 다르다.
+     */
+    static String manualScriptPath(String scriptPath) {
+        return scriptPath.endsWith(".sql")
+                ? scriptPath.substring(0, scriptPath.length() - ".sql".length()) + "-manual.sql"
+                : scriptPath + "-manual.sql";
+    }
+
+    /**
+     * 이 구현에서 세션이 SQL을 직접 적는 파일 — {@link #taskTypeSection}의 {@code scriptPath}로 쓴다. 쓰기 도구가 없고 이전 시도·회차가 남긴
+     * 쓰기 기록이 있으면 {@link #manualScriptPath}, 아니면 워커가 만드는 파일과 같은 {@code db.scriptPath()}.
+     */
+    static String sessionScriptPath(DbWriteSpec db, boolean writeTools) {
+        return !writeTools && db.priorWrites() ? manualScriptPath(db.scriptPath()) : db.scriptPath();
+    }
 
     /** {commit_rule} — SDD만 태스크별 커밋, 나머지는 기존 문구(라이브 yml과 같은 글자). */
     static String commitRule(ImplementationMode effective) {

@@ -776,6 +776,182 @@ class InterviewServiceTest {
         assertThat(c.refsCleared()).isFalse();
     }
 
+    // ── 작업 타입 (스펙 2026-11-03 §5.1) — 세션 칸이 아니라 claim 때 작업 행에서 읽는다 ───────────────
+
+    private Task typedTask(long id, TaskType type) {
+        Task t = Task.create("owner/repo", "main", "T", "d", "u1", 3, List.of(), "claude-opus-4-8", "high");
+        ReflectionTestUtils.setField(t, "id", id);
+        t.setTaskType(type);
+        return t;
+    }
+
+    @Test
+    void 작업_인터뷰_claim은_작업_타입() {
+        InterviewSession s = session(1L, InterviewStatus.QUEUED);
+        s.setTaskId(77L);
+        when(sessionRepo.findClaimableForUpdateSkipLocked(any(), any())).thenReturn(List.of(s));
+        when(turnRepo.findBySessionIdOrderBySeqAsc(1L)).thenReturn(List.of());
+        when(taskRepo.findActiveById(77L)).thenReturn(Optional.of(typedTask(77L, TaskType.BUG_FIX)));
+
+        InterviewClaimResponse c = service.claim("w1").orElseThrow();
+
+        assertThat(c.taskType()).isEqualTo("BUG_FIX");
+    }
+
+    @Test
+    void 질문_세션_claim의_taskType은_null이고_작업을_읽지_않는다() {
+        InterviewSession s = questionSession(1L, InterviewStatus.QUEUED);
+        when(sessionRepo.findClaimableForUpdateSkipLocked(any(), any())).thenReturn(List.of(s));
+        when(turnRepo.findBySessionIdOrderBySeqAsc(1L)).thenReturn(List.of());
+
+        InterviewClaimResponse c = service.claim("w1").orElseThrow();
+
+        assertThat(c.taskType()).isNull();
+        verify(taskRepo, never()).findActiveById(any());
+    }
+
+    @Test
+    void 타입_없는_작업_작업_없는_세션_지워진_작업은_taskType_null() {
+        // 타입 없는 작업(기존 작업)
+        InterviewSession untyped = session(1L, InterviewStatus.QUEUED);
+        untyped.setTaskId(77L);
+        when(sessionRepo.findClaimableForUpdateSkipLocked(any(), any())).thenReturn(List.of(untyped));
+        when(turnRepo.findBySessionIdOrderBySeqAsc(1L)).thenReturn(List.of());
+        when(taskRepo.findActiveById(77L)).thenReturn(Optional.of(typedTask(77L, null)));
+        assertThat(service.claim("w1").orElseThrow().taskType()).isNull();
+
+        // 작업이 없는 레거시 인터뷰 세션 — 작업을 읽지 않는다
+        InterviewSession noTask = session(1L, InterviewStatus.QUEUED);
+        when(sessionRepo.findClaimableForUpdateSkipLocked(any(), any())).thenReturn(List.of(noTask));
+        assertThat(service.claim("w1").orElseThrow().taskType()).isNull();
+        verify(taskRepo, times(1)).findActiveById(any());
+
+        // 소프트 삭제된 작업 — 인터뷰는 계속 claim되고 타입만 없다
+        InterviewSession deleted = session(1L, InterviewStatus.QUEUED);
+        deleted.setTaskId(78L);
+        when(sessionRepo.findClaimableForUpdateSkipLocked(any(), any())).thenReturn(List.of(deleted));
+        when(taskRepo.findActiveById(78L)).thenReturn(Optional.empty());
+        assertThat(service.claim("w1").orElseThrow().taskType()).isNull();
+    }
+
+    @Test
+    void 타입이_있는_작업의_resume_claim도_같은_타입을_싣는다() {
+        InterviewSession s = session(1L, InterviewStatus.QUEUED);
+        s.setTaskId(77L);
+        s.setClaudeSessionId("sess-1");
+        when(sessionRepo.findClaimableForUpdateSkipLocked(any(), any())).thenReturn(List.of(s));
+        when(turnRepo.findBySessionIdOrderBySeqAsc(1L)).thenReturn(List.of());
+        when(taskRepo.findActiveById(77L)).thenReturn(Optional.of(typedTask(77L, TaskType.DB_WORK)));
+
+        assertThat(service.claim("w1").orElseThrow().taskType()).isEqualTo("DB_WORK");
+    }
+
+    // ── 구현 단계에서 쓰기가 열릴 연결 label (스펙 2026-11-03 §5.1) — 판정은 DbWriteGate, 계산은 claim ───────
+
+    /** 연결 7을 고른 작업 77의 인터뷰 세션 — 세션이 가진 연결 id가 판정 입력이다. */
+    private InterviewSession writableSession(Task task) {
+        InterviewSession s = session(1L, InterviewStatus.QUEUED);
+        s.setTaskId(77L);
+        s.setDbConnectionIds(new ArrayList<>(List.of(7L)));
+        when(sessionRepo.findClaimableForUpdateSkipLocked(any(), any())).thenReturn(List.of(s));
+        when(turnRepo.findBySessionIdOrderBySeqAsc(1L)).thenReturn(List.of());
+        when(taskRepo.findActiveById(77L)).thenReturn(Optional.of(task));
+        return s;
+    }
+
+    @Test
+    void 인터뷰claim_쓰기연결_label() {
+        com.hamonsoft.netismaker.dbmcp.DbWriteGate gate = mock(com.hamonsoft.netismaker.dbmcp.DbWriteGate.class);
+        service.setDbWriteGate(gate);
+        Task task = typedTask(77L, TaskType.DB_WORK);
+        writableSession(task);
+        when(gate.writableLabels(task, List.of(7L))).thenReturn(List.of("개발DB (PostgreSQL)"));
+
+        InterviewClaimResponse c = service.claim("w1").orElseThrow();
+
+        assertThat(c.writableDbConnections()).containsExactly("개발DB (PostgreSQL)");
+        assertThat(c.taskType()).isEqualTo("DB_WORK");
+        // 작업은 한 번만 읽는다 — taskType과 쓰기 판정이 같은 행을 쓴다
+        verify(taskRepo, times(1)).findActiveById(77L);
+    }
+
+    @Test
+    void 질문_세션은_쓰기목록이_비고_판정도_작업_조회도_없다() {
+        com.hamonsoft.netismaker.dbmcp.DbWriteGate gate = mock(com.hamonsoft.netismaker.dbmcp.DbWriteGate.class);
+        service.setDbWriteGate(gate);
+        InterviewSession s = questionSession(1L, InterviewStatus.QUEUED);
+        s.setDbConnectionIds(new ArrayList<>(List.of(7L)));
+        when(sessionRepo.findClaimableForUpdateSkipLocked(any(), any())).thenReturn(List.of(s));
+        when(turnRepo.findBySessionIdOrderBySeqAsc(1L)).thenReturn(List.of());
+
+        InterviewClaimResponse c = service.claim("w1").orElseThrow();
+
+        assertThat(c.writableDbConnections()).isNotNull().isEmpty();
+        verifyNoInteractions(gate);
+        verify(taskRepo, never()).findActiveById(any());
+    }
+
+    @Test
+    void 연결을_고르지_않았거나_작업이_없으면_판정하지_않는다() {
+        com.hamonsoft.netismaker.dbmcp.DbWriteGate gate = mock(com.hamonsoft.netismaker.dbmcp.DbWriteGate.class);
+        service.setDbWriteGate(gate);
+        // 작업은 있는데 고른 연결이 없다
+        InterviewSession noDb = session(1L, InterviewStatus.QUEUED);
+        noDb.setTaskId(77L);
+        when(sessionRepo.findClaimableForUpdateSkipLocked(any(), any())).thenReturn(List.of(noDb));
+        when(turnRepo.findBySessionIdOrderBySeqAsc(1L)).thenReturn(List.of());
+        when(taskRepo.findActiveById(77L)).thenReturn(Optional.of(typedTask(77L, null)));
+        assertThat(service.claim("w1").orElseThrow().writableDbConnections()).isNotNull().isEmpty();
+
+        // 작업이 지워졌다(소프트 삭제) — 인터뷰는 계속 claim되고 쓰기 목록만 빈다
+        InterviewSession deleted = session(1L, InterviewStatus.QUEUED);
+        deleted.setTaskId(78L);
+        deleted.setDbConnectionIds(new ArrayList<>(List.of(7L)));
+        when(sessionRepo.findClaimableForUpdateSkipLocked(any(), any())).thenReturn(List.of(deleted));
+        when(taskRepo.findActiveById(78L)).thenReturn(Optional.empty());
+        assertThat(service.claim("w1").orElseThrow().writableDbConnections()).isNotNull().isEmpty();
+
+        // 작업 없는 레거시 인터뷰 세션
+        InterviewSession legacy = session(1L, InterviewStatus.QUEUED);
+        legacy.setDbConnectionIds(new ArrayList<>(List.of(7L)));
+        when(sessionRepo.findClaimableForUpdateSkipLocked(any(), any())).thenReturn(List.of(legacy));
+        assertThat(service.claim("w1").orElseThrow().writableDbConnections()).isNotNull().isEmpty();
+
+        verifyNoInteractions(gate);
+    }
+
+    @Test
+    void 판정기가_없으면_쓰기목록은_빈_목록() {
+        // 옛 구성·단위 시험 호환 — setDbWriteGate를 안 부른 서비스도 claim이 깨지지 않는다
+        writableSession(typedTask(77L, TaskType.DB_WORK));
+
+        InterviewClaimResponse c = service.claim("w1").orElseThrow();
+
+        assertThat(c.writableDbConnections()).isNotNull().isEmpty();
+        assertThat(c.taskType()).isEqualTo("DB_WORK");
+    }
+
+    @Test
+    void 판정기가_아무것도_열지_않으면_빈_목록() {
+        com.hamonsoft.netismaker.dbmcp.DbWriteGate gate = mock(com.hamonsoft.netismaker.dbmcp.DbWriteGate.class);
+        service.setDbWriteGate(gate);
+        writableSession(typedTask(77L, null));   // mock의 기본 반환은 빈 목록
+
+        assertThat(service.claim("w1").orElseThrow().writableDbConnections()).isNotNull().isEmpty();
+    }
+
+    @Test
+    void resume_claim도_같은_쓰기목록을_싣는다() {
+        com.hamonsoft.netismaker.dbmcp.DbWriteGate gate = mock(com.hamonsoft.netismaker.dbmcp.DbWriteGate.class);
+        service.setDbWriteGate(gate);
+        Task task = typedTask(77L, TaskType.DB_WORK);
+        InterviewSession s = writableSession(task);
+        s.setClaudeSessionId("sess-1");
+        when(gate.writableLabels(task, List.of(7L))).thenReturn(List.of("개발DB (PostgreSQL)"));
+
+        assertThat(service.claim("w1").orElseThrow().writableDbConnections()).containsExactly("개발DB (PostgreSQL)");
+    }
+
     private static InterviewTurn note(int seq, String content) {
         return InterviewTurn.of(1L, seq, "system", "note", content, null);
     }

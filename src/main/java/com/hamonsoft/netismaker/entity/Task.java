@@ -135,6 +135,15 @@ public class Task {
     @Setter
     private ImplementationMode implementationMode = ImplementationMode.DIRECT;
 
+    /**
+     * 작업 타입 (스펙 2026-11-03 §4). null = 타입 없음(기존 작업·옛 화면이 등록한 작업) — 권한이 아니라 성격 표시와
+     * 인터뷰·구현 지시, 커밋·PR 제목 앞머리용. 등록 때 정하고 승인 때 관리자가 바꿀 수 있다.
+     */
+    @Enumerated(EnumType.STRING)
+    @Column(name = "task_type", length = 20)
+    @Setter
+    private TaskType taskType;
+
     /** 구현 시도 번호 — 구현 재시도마다 +1. 2회째부터 브랜치 이름에 -rN, 결과 보고의 시도 번호와 대조한다. */
     @Column(name = "implementation_attempt", nullable = false)
     @Setter

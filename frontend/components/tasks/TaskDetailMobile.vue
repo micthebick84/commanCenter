@@ -9,6 +9,7 @@ import { implementationModeText } from '~/composables/implementationMode'
 import RefRepoChips from '~/components/RefRepoChips.vue'
 // DetailTask는 defineProps 타입에 쓰이므로 상대 경로 — vitest는 .nuxt 없이 돌아 SFC 매크로 타입의 `~/` import를 못 푼다.
 import { taskRefContext, type RefRepoView } from '../../composables/refRepos'
+import { taskTypeLabel } from '../../composables/taskType'
 
 // [id].vue의 TaskResponse 중 이 컴포넌트가 읽는 부분집합
 export interface DetailTask {
@@ -40,6 +41,8 @@ export interface DetailTask {
   refRepos?: RefRepoView[]
   /** 질문 대화에서 이어 등록했으면 그 질문 id — 정보 영역 출처 링크 */
   sourceQuestionId?: number | null
+  /** 작업 타입(스펙 2026-11-03 §4) — 요청 상세 섹션 머리의 칩. null·없음은 타입 없음이라 칩이 없다. */
+  taskType?: string | null
 }
 
 const props = defineProps<{
@@ -48,6 +51,8 @@ const props = defineProps<{
   steps: StageStep[]
   /** 진행 이력 아코디언 헤더 캡션용 건수 — null/undefined면 캡션을 아예 안 보여준다(아직 조회 전). */
   historyCount?: number | null
+  /** 고른 DB 연결 중 구현 단계 쓰기가 열릴 수 있는 것이 있는가(스펙 2026-11-03 §6.1) — 정보 영역 "읽기 전용" 문구를 바꾼다. 없으면 읽기 전용 그대로. */
+  dbWritable?: boolean
 }>()
 const emit = defineEmits<{
   (e: 'retry'): void
@@ -125,6 +130,10 @@ const deployCaption = computed(() => {
           <q-item-section>
             <q-item-label>요청 상세</q-item-label>
             <q-item-label caption>{{ task.repoAlias ?? task.githubRepo }} · {{ task.githubBranch }}</q-item-label>
+          </q-item-section>
+          <!-- 타입 칩 — 접힌 채로도 보이게 첫 섹션 머리에 둔다. 타입 없음(기존 작업 전부)이면 칩을 그리지 않는다 -->
+          <q-item-section v-if="task.taskType" side>
+            <q-chip dense size="sm" outline :label="taskTypeLabel(task.taskType)" data-test="task-type-chip" />
           </q-item-section>
           <q-item-section side><q-icon :name="open.request ? 'expand_less' : 'expand_more'" /></q-item-section>
         </q-item>
@@ -241,7 +250,7 @@ const deployCaption = computed(() => {
               <div v-if="modeText" data-test="info-impl-mode"><span class="k">구현</span>{{ modeText }}</div>
               <div v-if="task.totalCostUsd != null"><span class="k">사용량</span>{{ fmtTokens(task.totalTokens ?? 0) }} 토큰 · ${{ Number(task.totalCostUsd).toFixed(2) }}</div>
               <div v-if="task.mcpsExtra.length"><span class="k">MCP</span>{{ task.mcpsExtra.map((m) => m.name).join(', ') }}</div>
-              <div v-if="task.dbConnectionIds?.length"><span class="k">DB</span>{{ task.dbConnectionIds.length }}개 연결 (읽기 전용)</div>
+              <div v-if="task.dbConnectionIds?.length" data-test="task-db-caption"><span class="k">DB</span>{{ task.dbConnectionIds.length }}개 연결 ({{ dbWritable ? '구현 단계에서는 쓰기 가능' : '읽기 전용' }})</div>
               <div v-if="task.refRepos?.length" data-test="info-refs"><RefRepoChips :items="task.refRepos" :context="taskRefContext(task.status)" /></div>
               <div v-if="task.sourceQuestionId"><span class="k">출처</span><NuxtLink :to="`/questions/${task.sourceQuestionId}`" data-test="info-source-question">↩ 질문 #{{ task.sourceQuestionId }}에서 이어짐</NuxtLink></div>
               <div v-if="task.attachments.length" class="column" style="gap: 4px">

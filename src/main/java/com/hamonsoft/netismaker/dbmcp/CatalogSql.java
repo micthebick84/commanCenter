@@ -1,11 +1,14 @@
 package com.hamonsoft.netismaker.dbmcp;
 
+import com.hamonsoft.netismaker.entity.DbObjectType;
+
 import java.util.Arrays;
 import java.util.List;
 
 /**
  * list_tables·describe_table용 방언별 SQL — 인터뷰 서비스 db/catalog.ts 이식.
  * 사용자 값(schema·table)은 바인딩 파라미터로만. schema가 null이면 기본 스키마.
+ * 구현 단계 쓰기 실행기의 존재 확인(objectExists)도 여기 둔다 — 이쪽은 schema·name이 정규화한 값이라 null이 없다.
  */
 public final class CatalogSql {
 
@@ -16,6 +19,58 @@ public final class CatalogSql {
     private static final int LIMIT = DbMcpLimits.MAX_CATALOG_ROWS + 1;
 
     private CatalogSql() {}
+
+    /**
+     * 쓰기 실행기의 존재 확인(종류 무관) — 그 스키마에 그 이름이 쓰였는지, 결과는 COUNT(*) 한 칸 (스펙 2026-11-03 §6.3).
+     * schema·name은 {@link DbObjectName#normalize}가 방언 규칙으로 정규화한 값이라 그대로 비교한다(정확 비교). 단 MySQL·MariaDB
+     * 소문자 서버(lower_case_table_names ≠ 0, {@code lowerCaseNames})는 카탈로그 표기가 원래 대소문자일 수 있어 LOWER로 비교한다 —
+     * 값은 normalize가 이미 소문자로 접었다. PostgreSQL은 pg_class 전부(테이블·뷰·시퀀스·인덱스가 이름을 함께 쓴다).
+     */
+    public static Query objectExists(SqlDialect d, String schema, String name, boolean lowerCaseNames) {
+        return new Query(existsHead(d, lowerCaseNames), Arrays.asList(schema, name));
+    }
+
+    /**
+     * 종류별 존재 확인 — 그 스키마의 그 종류만 센다. 소유 기록이 가리키는 객체가 실제로 있는지 볼 때 쓴다(Task 7 리뷰 반영 ①②):
+     * PostgreSQL relkind(TABLE r·p / VIEW v·m / SEQUENCE S), MySQL·MariaDB TABLE_TYPE(TABLE은 SYSTEM VERSIONED 포함,
+     * SEQUENCE는 MariaDB), Oracle object_type — SYNONYM은 세지 않는다(비한정 이름이 공개 동의어로 다른 객체에 닿는 경우).
+     */
+    public static Query objectExists(SqlDialect d, String schema, String name, DbObjectType type, boolean lowerCaseNames) {
+        String kinds = switch (d) {
+            case POSTGRES -> " AND c.relkind IN " + switch (type) {
+                case TABLE -> "('r', 'p')";
+                case VIEW -> "('v', 'm')";
+                case SEQUENCE -> "('S')";
+            };
+            case MYSQL -> " AND TABLE_TYPE IN " + switch (type) {
+                case TABLE -> "('BASE TABLE', 'SYSTEM VERSIONED')";
+                case VIEW -> "('VIEW')";
+                case SEQUENCE -> "('SEQUENCE')";
+            };
+            case ORACLE -> " AND object_type IN ('" + type.name() + "')";
+        };
+        return new Query(existsHead(d, lowerCaseNames) + kinds, Arrays.asList(schema, name));
+    }
+
+    /**
+     * Oracle 관리 계정(스키마)인지 — 결과는 COUNT(*) 한 칸 (최종 리뷰 Important 1). {@code oracle_maintained}는 12c부터 있다.
+     * schema는 정규화한 값이라 그대로 비교한다.
+     */
+    public static Query oracleMaintained(String schema) {
+        return new Query("SELECT COUNT(*) FROM all_users WHERE username = ? AND oracle_maintained = 'Y'",
+                Arrays.asList(schema));
+    }
+
+    private static String existsHead(SqlDialect d, boolean lowerCaseNames) {
+        return switch (d) {
+            case POSTGRES -> "SELECT COUNT(*) FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace n "
+                    + "ON n.oid = c.relnamespace WHERE n.nspname = ? AND c.relname = ?";
+            case MYSQL -> lowerCaseNames
+                    ? "SELECT COUNT(*) FROM information_schema.TABLES WHERE LOWER(TABLE_SCHEMA) = ? AND LOWER(TABLE_NAME) = ?"
+                    : "SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ?";
+            case ORACLE -> "SELECT COUNT(*) FROM all_objects WHERE owner = ? AND object_name = ?";
+        };
+    }
 
     public static Query of(SqlDialect d, Kind k, String schema, String table) {
         String t = table == null ? "" : table;

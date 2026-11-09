@@ -5,19 +5,22 @@ import {
   CHIP,
   moveFor,
   cancelable,
+  isDbWorkPrCreated,
   DEPLOY_ACTIVE_STATUSES,
   type MoveDef,
 } from '~/composables/taskStages'
 import type { CardTask } from '~/components/tasks/TaskCardCompact.vue'
 import { mrRef } from '~/composables/mergeRequestLabel'
 
-const props = defineProps<{ task: CardTask | null; isAdmin: boolean }>()
+// viewerId = 보는 사람의 requesterId 값(상세 화면 myRequesterId와 같은 규칙) — DB 작업 PR생성의 종료 요청 항목을 등록자에게 보일 때 쓴다
+const props = defineProps<{ task: CardTask | null; isAdmin: boolean; viewerId?: string }>()
 const show = defineModel<boolean>({ default: false })
 const emit = defineEmits<{
   (e: 'detail'): void
   (e: 'move', move: MoveDef): void
   (e: 'cancel'): void
   (e: 'remove'): void
+  (e: 'request-close'): void
 }>()
 
 const chip = computed(() =>
@@ -27,6 +30,13 @@ const chip = computed(() =>
 )
 const move = computed(() =>
   props.task && props.isAdmin ? moveFor(props.task) : null,
+)
+// DB 작업 PR생성(스펙 2026-11-03 §6.9): 배포 없이 종료를 요청한다 — 관리자와 등록자(둘 다 값이 있고 같을 때)에게만. 관리자의 배포 전이(move)는 그대로 남는다.
+const canRequestClose = computed(
+  () =>
+    !!props.task &&
+    isDbWorkPrCreated(props.task) &&
+    (props.isAdmin || (!!props.viewerId && props.task.requesterId === props.viewerId)),
 )
 const deployActive = computed(
   () => !!props.task && DEPLOY_ACTIVE_STATUSES.includes(props.task.status),
@@ -98,6 +108,24 @@ const moveIcon = computed(() =>
           <q-item-section
             >{{ mrRef(task.implementation.prUrl, task.implementation.prNumber!) }} 열기</q-item-section
           >
+        </q-item>
+        <q-item
+          v-if="canRequestClose"
+          v-close-popup
+          clickable
+          class="sheet-item text-primary"
+          data-test="sheet-request-close"
+          @click="emit('request-close')"
+        >
+          <q-item-section avatar
+            ><q-icon name="task_alt" color="primary"
+          /></q-item-section>
+          <q-item-section>
+            <q-item-label class="text-weight-medium"
+              >확인 완료 — 종료 요청</q-item-label
+            >
+            <q-item-label caption>개발 DB 반영을 확인했을 때 요청하세요</q-item-label>
+          </q-item-section>
         </q-item>
         <q-item
           v-if="move"

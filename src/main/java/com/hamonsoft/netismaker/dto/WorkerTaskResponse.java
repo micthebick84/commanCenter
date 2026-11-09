@@ -77,14 +77,55 @@ public record WorkerTaskResponse(
          * DEPLOY 전용: 배포 전 레포 명령으로 먼저 빌드하라는 지시 (스펙 2026-10-28 §3). 꺼진 레포·다른 kind·구버전 API는
          * null — 워커는 지금처럼 Dockerfile 빌드만 한다.
          */
-        PrebuildSpec prebuild
+        PrebuildSpec prebuild,
+        /**
+         * IMPLEMENTATION(수정 회차 포함)·DESIGN 전용: 인터뷰에서 구현에 넘기기로 한 목업 파일(n 순, html 포함) (스펙 2026-11-03 §7).
+         * 없는 작업·구버전 API의 null도 빈 목록으로 읽는다.
+         */
+        List<InterviewMockupFile> interviewMockups,
+        /**
+         * 계획이 가리켰지만 구현에 넘기지 않은 목업 번호(interview_mockup.n) — 구현 프롬프트가 "전달되지 않은 목업은 찾지 말고
+         * 계획 글만 따르라"를 넣는 근거. 없으면(null 포함) 빈 목록.
+         */
+        List<Integer> excludedMockupNumbers
 ) {
     public WorkerTaskResponse {
         if (refRepos == null) refRepos = List.of();
+        if (interviewMockups == null) interviewMockups = List.of();
+        if (excludedMockupNumbers == null) excludedMockupNumbers = List.of();
+    }
+
+    /**
+     * 구현 claim에 싣는 인터뷰 목업 파일 1개. title·name은 업로드 때 정규화된 값이고 html은 에이전트가 만든 문서 그대로다.
+     * html이 로그·예외 메시지에 새지 않도록 {@code toString()}은 길이만 보인다.
+     */
+    public record InterviewMockupFile(Integer n, String name, Integer version, String title, String html) {
+        @Override
+        public String toString() {
+            return "InterviewMockupFile[n=" + n + ", name=" + name + ", version=" + version + ", title=" + title
+                    + ", htmlLength=" + (html == null ? 0 : html.length()) + "]";
+        }
     }
 
     /** 미리 빌드 지시. toolchain은 워커 설정의 도구 이름(null이면 워커 환경 그대로). */
     public record PrebuildSpec(String command, String artifact, String toolchain) {}
+
+    /** 인터뷰 목업(interviewMockups·excludedMockupNumbers) 도입 전 32개 인자 정규 생성자 — 기존 팩토리·테스트 호환. */
+    public WorkerTaskResponse(Long id, String githubRepo, String githubBranch, String title, String description,
+                              Kind kind, List<TaskMcpSpec> mcpsExtra, String analysisMarkdown, String subtasksJson,
+                              String headBranch, String headSha, List<EnvVar> envVars, String model, String effort,
+                              String designMarkdown, String mockupFilesJson, String feedbackHistoryJson,
+                              String designUrl, String designSystemProjectId, String designOutputProjectId,
+                              String gitUrl, String repoHost, String planMarkdown,
+                              Integer prNumber, String prUrl, String closeProgress, CloseContext closeContext,
+                              CloseArtifactSpec closeArtifact, DbMcpGrant dbMcp, ImplementationSpec implementation,
+                              List<TaskRefRepo> refRepos, PrebuildSpec prebuild) {
+        this(id, githubRepo, githubBranch, title, description, kind, mcpsExtra, analysisMarkdown, subtasksJson,
+                headBranch, headSha, envVars, model, effort, designMarkdown, mockupFilesJson, feedbackHistoryJson,
+                designUrl, designSystemProjectId, designOutputProjectId, gitUrl, repoHost, planMarkdown,
+                prNumber, prUrl, closeProgress, closeContext, closeArtifact, dbMcp, implementation, refRepos, prebuild,
+                List.of(), List.of());
+    }
 
     /** 미리 빌드(prebuild) 도입 전 31개 인자 정규 생성자 — 기존 팩토리·테스트 호환. */
     public WorkerTaskResponse(Long id, String githubRepo, String githubBranch, String title, String description,
@@ -237,7 +278,16 @@ public record WorkerTaskResponse(
                 analysisMarkdown, subtasksJson, headBranch, headSha, envVars, model, effort, designMarkdown,
                 mockupFilesJson, feedbackHistoryJson, designUrl, designSystemProjectId, designOutputProjectId,
                 gitUrl, repoHost, planMarkdown, prNumber, prUrl, closeProgress, closeContext, closeArtifact, grant,
-                implementation, refRepos, prebuild);
+                implementation, refRepos, prebuild, interviewMockups, excludedMockupNumbers);
+    }
+
+    /** 인터뷰 목업 파일과 '전달되지 않은' 번호 두 칸만 바꾼 사본 — 둘은 함께 움직인다. */
+    public WorkerTaskResponse withInterviewMockups(List<InterviewMockupFile> files, List<Integer> excludedNumbers) {
+        return new WorkerTaskResponse(id, githubRepo, githubBranch, title, description, kind, mcpsExtra,
+                analysisMarkdown, subtasksJson, headBranch, headSha, envVars, model, effort, designMarkdown,
+                mockupFilesJson, feedbackHistoryJson, designUrl, designSystemProjectId, designOutputProjectId,
+                gitUrl, repoHost, planMarkdown, prNumber, prUrl, closeProgress, closeContext, closeArtifact, dbMcp,
+                implementation, refRepos, prebuild, files, excludedNumbers);
     }
 
     /** 워커가 clone/폴더/MR에 쓰는 저장소 참조. 새 필드가 없는 페이로드는 GitHub로 복원된다. */

@@ -150,4 +150,76 @@ class InterviewConfirmMockupFlowIntegrationTest {
         mvc.perform(get("/api/tasks/" + taskId).with(adminJwt("admin")))
                 .andExpect(jsonPath("$.status").value("INTERVIEW_REVIEW"));
     }
+
+    private static final String SUPPORTS_ALL = "refRepos,fixRounds,dbWrite,mockups";
+
+    @Test
+    void 확정한_목업이_next_task_응답에_html까지_실린다() throws Exception {
+        Long taskId = createTask();
+        long[] ids = prepareReview(taskId);
+        mvc.perform(post("/api/interviews/" + ids[0] + "/confirm").with(adminJwt("admin"))
+                        .contentType(APPLICATION_JSON)
+                        .content("{\"designRequested\":false,\"mockupIds\":[" + ids[1] + "]}"))
+                .andExpect(status().isOk());
+
+        mvc.perform(get("/worker/next-task").header(KEY_HEADER, apiKey)
+                        .param("workerId", "w").param("supports", SUPPORTS_ALL))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.kind").value("IMPLEMENTATION"))
+                .andExpect(jsonPath("$.interviewMockups.length()").value(1))
+                .andExpect(jsonPath("$.interviewMockups[0].n").value(1))
+                .andExpect(jsonPath("$.interviewMockups[0].name").value("list-a"))
+                .andExpect(jsonPath("$.interviewMockups[0].version").value(1))
+                .andExpect(jsonPath("$.interviewMockups[0].html").value("<!doctype html><html><body>A</body></html>"))
+                .andExpect(jsonPath("$.excludedMockupNumbers.length()").value(0));
+    }
+
+    @Test
+    void 모두_해제한_확정은_next_task에_제외번호만() throws Exception {
+        Long taskId = createTask();
+        long[] ids = prepareReview(taskId);
+        mvc.perform(post("/api/interviews/" + ids[0] + "/confirm").with(adminJwt("admin"))
+                        .contentType(APPLICATION_JSON).content("{\"designRequested\":false}"))
+                .andExpect(status().isOk());
+
+        mvc.perform(get("/worker/next-task").header(KEY_HEADER, apiKey)
+                        .param("workerId", "w").param("supports", SUPPORTS_ALL))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.kind").value("IMPLEMENTATION"))
+                .andExpect(jsonPath("$.interviewMockups.length()").value(0))
+                .andExpect(jsonPath("$.excludedMockupNumbers[0]").value(1))
+                .andExpect(jsonPath("$.excludedMockupNumbers.length()").value(1));
+    }
+
+    @Test
+    void 디자인_단계를_켜면_DESIGN_claim에도_실린다() throws Exception {
+        Long taskId = createTask();
+        long[] ids = prepareReview(taskId);
+        mvc.perform(post("/api/interviews/" + ids[0] + "/confirm").with(adminJwt("admin"))
+                        .contentType(APPLICATION_JSON)
+                        .content("{\"designRequested\":true,\"mockupIds\":[" + ids[1] + "]}"))
+                .andExpect(status().isOk());
+
+        mvc.perform(get("/worker/next-task").header(KEY_HEADER, apiKey)
+                        .param("workerId", "w").param("supports", SUPPORTS_ALL))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.kind").value("DESIGN"))
+                .andExpect(jsonPath("$.interviewMockups[0].n").value(1))
+                .andExpect(jsonPath("$.interviewMockups[0].html").value("<!doctype html><html><body>A</body></html>"))
+                .andExpect(jsonPath("$.excludedMockupNumbers.length()").value(0));
+    }
+
+    @Test
+    void 옛_워커는_목업을_고른_확정을_받지_못한다() throws Exception {
+        Long taskId = createTask();
+        long[] ids = prepareReview(taskId);
+        mvc.perform(post("/api/interviews/" + ids[0] + "/confirm").with(adminJwt("admin"))
+                        .contentType(APPLICATION_JSON)
+                        .content("{\"designRequested\":false,\"mockupIds\":[" + ids[1] + "]}"))
+                .andExpect(status().isOk());
+
+        mvc.perform(get("/worker/next-task").header(KEY_HEADER, apiKey)
+                        .param("workerId", "old").param("supports", "refRepos,fixRounds,dbWrite"))
+                .andExpect(status().isNoContent());
+    }
 }

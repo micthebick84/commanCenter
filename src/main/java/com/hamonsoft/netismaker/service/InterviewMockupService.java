@@ -3,6 +3,7 @@ package com.hamonsoft.netismaker.service;
 import com.hamonsoft.netismaker.dto.InterviewMockupSummary;
 import com.hamonsoft.netismaker.dto.InterviewMockupView;
 import com.hamonsoft.netismaker.dto.WorkerMockupRequest;
+import com.hamonsoft.netismaker.dto.WorkerTaskResponse;
 import com.hamonsoft.netismaker.entity.InterviewMockup;
 import com.hamonsoft.netismaker.entity.InterviewSession;
 import com.hamonsoft.netismaker.entity.InterviewStatus;
@@ -34,6 +35,8 @@ import java.util.stream.Collectors;
 @Service
 @Profile("api")
 public class InterviewMockupService {
+
+    private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(InterviewMockupService.class);
 
     /** 목업 하나의 상한 — html의 UTF-8 바이트(글자 수 아님). 디자인 단계({@code DesignResultHarvester})와 같은 값이다. */
     public static final int MAX_BYTES = 200 * 1024;
@@ -155,6 +158,24 @@ public class InterviewMockupService {
      * 확정에서 정한 목업 선택 — {@code idsByN}은 구현에 넘길 목업 id(n 순), {@code excludedNumbers}는 계획이 가리켰는데
      * 넘기지 않은 번호(오름차순), {@code historyReason}은 상태 이력에 남길 문구(둘 다 비면 null — 이력을 남기지 않는다).
      */
+    /**
+     * 구현·디자인 claim에 실을 목업 파일 — n 순, 없는(버려졌거나 지워진) 행은 빼고 id만 경고 로그에 남긴다. html은 로그에 싣지 않는다.
+     * ids는 {@code task.implementation_mockup_ids}라 JSONB에서 Integer로 읽혀 올 수 있어 Number로 받아 longValue로 바꾼다.
+     */
+    @Transactional(readOnly = true)
+    public List<WorkerTaskResponse.InterviewMockupFile> filesFor(List<? extends Number> ids) {
+        if (ids == null || ids.isEmpty()) return List.of();
+        List<Long> wanted = ids.stream().map(Number::longValue).distinct().toList();
+        List<InterviewMockup> found = repo.findByIdInAndDiscardedFalseOrderByNAsc(wanted).stream()
+                .sorted(java.util.Comparator.comparingInt(InterviewMockup::getN)).toList();
+        Set<Long> foundIds = found.stream().map(InterviewMockup::getId).collect(Collectors.toSet());
+        List<Long> missing = wanted.stream().filter(id -> !foundIds.contains(id)).toList();
+        if (!missing.isEmpty()) log.warn("claim 목업 파일: 없는 행을 뺍니다 ids={}", missing);
+        return found.stream()
+                .map(m -> new WorkerTaskResponse.InterviewMockupFile(m.getN(), m.getName(), m.getVersion(), m.getTitle(), m.getHtml()))
+                .toList();
+    }
+
     public record ConfirmSelection(List<Long> idsByN, List<Integer> excludedNumbers, String historyReason) {
         static final ConfirmSelection EMPTY = new ConfirmSelection(List.of(), List.of(), null);
     }

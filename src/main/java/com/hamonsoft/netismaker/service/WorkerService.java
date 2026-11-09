@@ -143,6 +143,17 @@ public class WorkerService {
         this.dbWriteGate = dbWriteGate;
     }
 
+    /**
+     * 구현·디자인 claim의 인터뷰 목업 파일 (스펙 2026-11-03 §7). 생성자를 바꾸지 않으려고 setter 주입 — 안 부른 단위 시험에서는 null이고
+     * 목업 없이 응답한다.
+     */
+    private InterviewMockupService interviewMockupService;
+
+    @Autowired(required = false)
+    void setInterviewMockupService(InterviewMockupService interviewMockupService) {
+        this.interviewMockupService = interviewMockupService;
+    }
+
     public WorkerService(TaskRepository taskRepo,
                          TaskAnalysisRepository analysisRepo,
                          TaskDesignRepository designRepo,
@@ -234,11 +245,12 @@ public class WorkerService {
         if (kinds == null) {
             candidates = caps.needsFilteredQueue()
                     ? taskRepo.findClaimableAmongForUpdateSkipLocked(TaskRepository.CLAIMABLE_STATUSES,
-                            caps.refRepos(), caps.fixRounds())
+                            caps.refRepos(), caps.fixRounds(), caps.mockups())
                     : taskRepo.findClaimableForUpdateSkipLocked(PageRequest.of(0, 1));
         } else {
             List<TaskStatus> statuses = kinds.stream().map(WorkerService::claimableStatusFor).toList();
-            candidates = taskRepo.findClaimableAmongForUpdateSkipLocked(statuses, caps.refRepos(), caps.fixRounds());
+            candidates = taskRepo.findClaimableAmongForUpdateSkipLocked(statuses, caps.refRepos(), caps.fixRounds(),
+                    caps.mockups());
         }
         // claim이 null이면(수정 회차 기록이 깨진 작업을 구현실패로 치웠다) 이번 poll은 빈 응답 — 큐 머리가 치워졌으니 다음 poll이 뒤를 잡는다
         return candidates.isEmpty() ? Optional.empty() : Optional.ofNullable(claim(candidates.get(0), workerId));
@@ -310,14 +322,14 @@ public class WorkerService {
                     outProjectId = cat.getDesignOutputProjectId();
                 }
             }
-            return WorkerTaskResponse.forDesign(t, a, prev, dsProjectId, outProjectId);
+            return withInterviewMockups(t, WorkerTaskResponse.forDesign(t, a, prev, dsProjectId, outProjectId));
         }
         if (t.getStatus() == TaskStatus.IMPLEMENTING) {
             TaskAnalysis a = analysisRepo.findById(t.getId()).orElse(null);
             TaskDesign d = designRepo.findById(t.getId()).orElse(null);
-            return WorkerTaskResponse.forImplementation(t, a,
+            return withInterviewMockups(t, WorkerTaskResponse.forImplementation(t, a,
                     (d != null && d.isApproved()) ? d : null, registeredPlanMarkdown(t.getId()),
-                    round == null ? null : round.spec(), round == null ? null : round.mode(), dbWriteSpecFor(t));
+                    round == null ? null : round.spec(), round == null ? null : round.mode(), dbWriteSpecFor(t)));
         }
         if (from == TaskStatus.DEPLOY_PENDING) {
             return WorkerTaskResponse.forDeploy(t, prebuildFor(t));
@@ -329,6 +341,22 @@ public class WorkerService {
             return WorkerTaskResponse.forClose(t, closeContext(t), closeArtifactSpec(t));
         }
         return WorkerTaskResponse.forAnalysis(t);
+    }
+
+    /**
+     * 구현(수정 회차 포함)·디자인 claim에 인터뷰 목업 파일과 '전달되지 않은' 번호를 싣는다 (스펙 2026-11-03 §7). 고른 목업도 제외 번호도
+     * 없으면 응답을 그대로 둔다(빈 목록이 기본). 모두 해제한 작업(ids 빔·제외 번호만)은 파일 조회 없이 제외 번호만 싣는다.
+     * ids 원소는 JSONB에서 Integer로 올 수 있어(Number로 읽는다) filesFor가 longValue로 바꾼다.
+     */
+    private WorkerTaskResponse withInterviewMockups(Task t, WorkerTaskResponse r) {
+        if (interviewMockupService == null) return r;
+        List<? extends Number> ids = t.getImplementationMockupIds();
+        List<Integer> excluded = t.getImplementationMockupExcluded();
+        boolean noIds = ids == null || ids.isEmpty();
+        boolean noExcluded = excluded == null || excluded.isEmpty();
+        if (noIds && noExcluded) return r;
+        List<WorkerTaskResponse.InterviewMockupFile> files = noIds ? List.of() : interviewMockupService.filesFor(ids);
+        return r.withInterviewMockups(files, noExcluded ? List.of() : List.copyOf(excluded));
     }
 
     /** claim 때 읽은 열린 수정 회차 — 회차의 구현 방식과 워커에 보낼 지시. */

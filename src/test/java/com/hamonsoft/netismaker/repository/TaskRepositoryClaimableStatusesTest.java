@@ -39,7 +39,8 @@ class TaskRepositoryClaimableStatusesTest {
     @Test
     void the_native_claim_queue_keeps_the_jpql_order_and_lock_and_both_filters() throws Exception {
         String sql = TaskRepository.class
-                .getMethod("findClaimableAmong", java.util.Collection.class, String.class, boolean.class, boolean.class)
+                .getMethod("findClaimableAmong", java.util.Collection.class, String.class, String.class,
+                        boolean.class, boolean.class, boolean.class)
                 .getAnnotation(Query.class).value();
 
         assertThat(sql)

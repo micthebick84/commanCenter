@@ -867,7 +867,8 @@ public class InterviewService {
         InterviewSession s = getForView(id, viewerId, isAdmin);
         List<InterviewTurn> turns = turnRepo.findBySessionIdOrderBySeqAsc(id);
         InterviewPlan plan = planRepo.findById(id).orElse(null);
-        if (!s.isQuestion()) return InterviewResponse.of(s, turns, plan);
+        // INTERVIEW — 목업 요약(html 없음)을 스냅샷에 싣는다: 패널이 스트림이 늦거나 끊겨도 목록·확정 체크 목록을 채운다. QUESTION은 []
+        if (!s.isQuestion()) return InterviewResponse.of(s, turns, plan).withMockups(mockupSummaries(id));
         List<InterviewResponse.AttachmentView> kickoff = new ArrayList<>();
         Map<Integer, List<InterviewResponse.AttachmentView>> byTurn = new LinkedHashMap<>();
         // 정리 잡은 종료된 질문의 첨부만 지운다 — 진행 중이면 파일 검사 없이 false(없으면 실제 유실, 다운로드가 404로 알린다)

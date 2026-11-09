@@ -51,7 +51,12 @@ public record InterviewResponse(
          * 인터뷰 방식 — false면 간단 인터뷰(superpowers 끔). 인터뷰 패널이 이 값으로 칩과 PLAN_READY 입력창을 가른다
          * (설계 2026-11-03-interview-superpowers-toggle §4·§6). 질문 세션은 보지 않는다(기본 켬).
          */
-        Boolean superpowersEnabled
+        Boolean superpowersEnabled,
+        /**
+         * 인터뷰 목업 요약 (스펙 2026-11-03 §5) — 버린 것 제외, n 순, html 없음(본문은 단건 조회로만). 패널이 스트림이 늦거나 끊겨도
+         * 목록·확정 체크 목록을 채우는 스냅샷이다. 질문 세션과 목업 서비스가 없는 구성은 []. 항상 non-null.
+         */
+        List<InterviewMockupSummary> mockups
 ) {
     public InterviewResponse {
         mcpCatalogIds = mcpCatalogIds == null ? List.of() : List.copyOf(mcpCatalogIds);
@@ -61,6 +66,7 @@ public record InterviewResponse(
                 .map(o -> ((Number) o).longValue()).toList();
         dbConnections = dbConnections == null ? List.of() : List.copyOf(dbConnections);
         refRepos = refRepos == null ? List.of() : List.copyOf(refRepos);
+        mockups = mockups == null ? List.of() : List.copyOf(mockups);
     }
 
     /** 칩만 바꾼 사본 (QuestionService.get이 DbConnectionService.chipsFor 결과로 채운다). */
@@ -68,7 +74,15 @@ public record InterviewResponse(
         return new InterviewResponse(id, githubRepo, githubBranch, title, description, status, statusName, currentPhase,
                 workDir, taskId, model, effort, turns, plan, createdAt, updatedAt, kind, totalCostUsd, contextTokens,
                 contextWindow, mcpCatalogIds, attachments, repoCatalogId, dbConnectionIds, chips, refRepos,
-                superpowersEnabled);
+                superpowersEnabled, mockups);
+    }
+
+    /** 목업 요약만 바꾼 사본 (InterviewService.getResponse가 INTERVIEW 세션에 채운다). withDbConnections가 그대로 실어 나른다. */
+    public InterviewResponse withMockups(List<InterviewMockupSummary> mockups) {
+        return new InterviewResponse(id, githubRepo, githubBranch, title, description, status, statusName, currentPhase,
+                workDir, taskId, model, effort, turns, plan, createdAt, updatedAt, kind, totalCostUsd, contextTokens,
+                contextWindow, mcpCatalogIds, attachments, repoCatalogId, dbConnectionIds, dbConnections, refRepos,
+                superpowersEnabled, mockups);
     }
 
     /** attachments = 이 턴(user answer)에 첨부된 파일. 항상 non-null. */
@@ -131,7 +145,7 @@ public record InterviewResponse(
                 s.getModel(), s.getEffort(), tvs, pv, s.getCreatedAt(), s.getUpdatedAt(),
                 s.getKind().name(), s.getTotalCostUsd(), s.getContextTokens(), s.getContextWindow(),
                 s.getMcpCatalogIds(), attachments,
-                s.getRepoCatalogId(), s.getDbConnectionIds(), List.of(), refViews(s), s.isSuperpowersEnabled());
+                s.getRepoCatalogId(), s.getDbConnectionIds(), List.of(), refViews(s), s.isSuperpowersEnabled(), List.of());
     }
 
     /** 세션의 참조 repo → 칩 뷰. 세션 쪽 값이 null이어도 []. */

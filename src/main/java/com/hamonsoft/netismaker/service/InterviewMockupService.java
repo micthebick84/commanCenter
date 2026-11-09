@@ -1,6 +1,7 @@
 package com.hamonsoft.netismaker.service;
 
 import com.hamonsoft.netismaker.dto.InterviewMockupSummary;
+import com.hamonsoft.netismaker.dto.InterviewMockupView;
 import com.hamonsoft.netismaker.dto.WorkerMockupRequest;
 import com.hamonsoft.netismaker.entity.InterviewMockup;
 import com.hamonsoft.netismaker.entity.InterviewSession;
@@ -125,6 +126,20 @@ public class InterviewMockupService {
     @Transactional(readOnly = true)
     public List<InterviewMockupSummary> list(Long sessionId) {
         return repo.findSummaries(sessionId);
+    }
+
+    /**
+     * 목업 단건(html 포함) — {@code GET /api/interviews/{sid}/mockups/{id}}. 세션 조회 권한은 호출자가 이미 확인했다(컨트롤러).
+     * 다른 세션의 id·버린 목업은 존재를 숨겨 404다({@code QuestionService.getAttachment}와 같은 선례): 소속과 버림은 조회 조건에
+     * 들어 있어 행을 읽은 뒤 비교하지 않는다. {@code taskId}는 세션에서 읽는다(새 탭의 "인터뷰로" 링크·부제).
+     */
+    @Transactional(readOnly = true)
+    public InterviewMockupView get(Long sessionId, Long mockupId) {
+        InterviewMockup m = repo.findByIdAndSessionIdAndDiscardedFalse(mockupId, sessionId)
+                .orElseThrow(TaskException::notFound);
+        InterviewSession s = sessionRepo.findById(sessionId).orElseThrow(TaskException::notFound);
+        return new InterviewMockupView(m.getId(), sessionId, s.getTaskId(), m.getN(), m.getName(), m.getVersion(),
+                m.getTitle(), m.getDescription(), m.getTurnSeq(), m.getTurnKind(), m.getCreatedAt(), m.getHtml());
     }
 
     /** 줄바꿈·제어문자·연속 공백을 공백 하나로 바꾸고 앞뒤를 자른다. null은 빈 문자열. */

@@ -1,6 +1,7 @@
 package com.hamonsoft.netismaker.service;
 
 import com.hamonsoft.netismaker.dto.InterviewMockupSummary;
+import com.hamonsoft.netismaker.dto.InterviewResponse;
 import com.hamonsoft.netismaker.dto.WorkerPlanRequest;
 import com.hamonsoft.netismaker.dto.WorkerQuestionRequest;
 import com.hamonsoft.netismaker.entity.*;
@@ -207,6 +208,44 @@ class InterviewServiceMockupBindTest {
         when(mockupService.list(5L)).thenReturn(List.of(m));
 
         assertThat(service.mockupSummaries(5L)).containsExactly(m);
+    }
+
+    @Test
+    void 세션_상세에_목업_요약() {
+        InterviewMockupSummary a = new InterviewMockupSummary(1L, 1, "list-a", 1, "목록 A안", null,
+                7, "question", OffsetDateTime.now());
+        InterviewMockupSummary b = new InterviewMockupSummary(2L, 2, "list-b", 1, "목록 B안", "표로 둔다",
+                null, null, OffsetDateTime.now());
+        when(mockupService.list(5L)).thenReturn(List.of(a, b));
+
+        // INTERVIEW — 스냅샷의 mockups가 목록 조회 결과 그대로(html 없는 요약). 패널이 스트림보다 먼저 이 값으로 목록을 채운다
+        InterviewSession interview = session(5L, InterviewStatus.AWAITING_INPUT);
+        when(sessionRepo.findActiveById(5L)).thenReturn(Optional.of(interview));
+        InterviewResponse r = service.getResponse(5L, "u1", false);
+        assertThat(r.kind()).isEqualTo("INTERVIEW");
+        assertThat(r.mockups()).containsExactly(a, b);
+        verify(mockupService).list(5L);
+
+        // QUESTION — 업로드가 막혀 있어 목업이 없다: 빈 목록이고 조회도 하지 않는다
+        clearInvocations(mockupService);
+        InterviewSession question = InterviewSession.createQuestion("owner/repo", "main", "T", "q?", "u1",
+                List.of(), "claude-opus-4-8", "high");
+        ReflectionTestUtils.setField(question, "id", 6L);
+        question.setStatus(InterviewStatus.AWAITING_INPUT);
+        when(sessionRepo.findActiveById(6L)).thenReturn(Optional.of(question));
+        InterviewResponse q = service.getResponse(6L, "u1", false);
+        assertThat(q.kind()).isEqualTo("QUESTION");
+        assertThat(q.mockups()).isNotNull().isEmpty();
+        verify(mockupService, never()).list(anyLong());
+    }
+
+    @Test
+    void 목업_서비스가_없으면_세션_상세의_mockups는_빈_목록() {
+        InterviewService bare = newService();
+        InterviewSession interview = session(5L, InterviewStatus.AWAITING_INPUT);
+        when(sessionRepo.findActiveById(5L)).thenReturn(Optional.of(interview));
+
+        assertThat(bare.getResponse(5L, "u1", false).mockups()).isNotNull().isEmpty();
     }
 
     @Test

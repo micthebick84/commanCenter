@@ -1,4 +1,5 @@
 import type { SdkMessage } from '../sdk/sdkAdapter.js';
+import { MOCKUP_SERVER, MOCKUP_TOOL } from '../sdk/mockupMcp.js';
 import type { ActivityInput, RateLimitInfo } from '../types.js';
 
 export interface RelayResult {
@@ -28,7 +29,13 @@ export interface RelayOpts {
 
 const MAX_DETAIL = 120;
 
-/** tool_use input에서 사람이 읽을 detail 추출 (Read→file_path, Grep/Glob→pattern, Skill→skill). */
+/** 켬 인터뷰의 목업 도구 전체 이름(`mcp__<서버>__<도구>`) — 스펙 2026-11-03 인터뷰 목업 §4. */
+const MOCKUP_TOOL_USE = `mcp__${MOCKUP_SERVER}__${MOCKUP_TOOL}`;
+
+/**
+ * tool_use input에서 사람이 읽을 detail 추출 (Read→file_path, Grep/Glob→pattern, Skill→skill, 목업 도구→title).
+ * 목업 도구는 제목만 싣는다 — html은 활동 스트림에 넣지 않는다(Global Constraints 보안).
+ */
 export function summarizeToolUse(
   name: string,
   input: Record<string, unknown> | undefined,
@@ -42,7 +49,9 @@ export function summarizeToolUse(
         ? input.pattern
         : name === 'Skill'
           ? input.skill
-          : undefined;
+          : name === MOCKUP_TOOL_USE
+            ? input.title
+            : undefined;
   if (typeof raw !== 'string' || raw.length === 0) return undefined;
   let detail = raw;
   if (workDir && detail.startsWith(workDir)) detail = detail.slice(workDir.length).replace(/^\//, '');

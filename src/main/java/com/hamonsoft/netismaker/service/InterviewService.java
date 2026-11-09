@@ -709,6 +709,7 @@ public class InterviewService {
         s.setRestartRequeueCount(s.getRestartRequeueCount() + 1);
         touch(s);
         discardUnboundMockups(s); // 같은 턴을 처음부터 다시 돌리므로 끊긴 턴이 올린 목업은 버린다
+        // 문구 앞부분("인터뷰 서비스가 다시 시작돼")을 인터뷰 서비스 interviewMode.ts resumedAfterRestart가 본다 — 바꾸면 둘 다 고친다
         InterviewTurn note = appendTurn(sessionId, "system", "note",
                 "인터뷰 서비스가 다시 시작돼 이 단계를 다시 진행합니다.");
         mirrorTask(s, TaskStatus.INTERVIEWING, "worker-restart", "인터뷰 서비스 재기동 → 인터뷰 재개");

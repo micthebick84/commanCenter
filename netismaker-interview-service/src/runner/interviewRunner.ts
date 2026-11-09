@@ -1,6 +1,14 @@
-import type { JavaApiClient } from '../api/javaClient.js';
+import type { JavaApiClient, PostMockupResult } from '../api/javaClient.js';
 import type { SdkMessage, SdkQuery } from '../sdk/sdkAdapter.js';
-import type { ActivityInput, AttachmentRef, InterviewClaimResponse, RateLimitInfo, RefRepoClaim, RefState } from '../types.js';
+import type {
+  ActivityInput,
+  AttachmentRef,
+  InterviewClaimResponse,
+  RateLimitInfo,
+  RefRepoClaim,
+  RefState,
+  WorkerMockupRequest,
+} from '../types.js';
 import { ActivityPoster } from './activityPoster.js';
 import { RateLimitReporter } from './rateLimitReport.js';
 import { buildOptions } from '../sdk/sessionOptions.js';
@@ -10,7 +18,15 @@ import { tryHarvest, type HarvestResult } from './planHarvest.js';
 import { harvestSessionPlanFiles } from './planFiles.js';
 import { relay } from './messageRelay.js';
 import { kickoffLead, taskTypeGuide, writableDbLine } from './kickoffByType.js';
-import { SIMPLE_RESUME_PREFIX, planningOnlyParagraph, processLine, superpowersOn } from './interviewMode.js';
+import {
+  MOCKUP_GUIDE,
+  MOCKUP_RESTART_NOTE,
+  SIMPLE_RESUME_PREFIX,
+  planningOnlyParagraph,
+  processLine,
+  resumedAfterRestart,
+  superpowersOn,
+} from './interviewMode.js';
 import {
   ensureRepo as defaultEnsureRepo,
   ensureRefRepos as defaultEnsureRefRepos,
@@ -23,6 +39,7 @@ import { maskSecrets, type GitTokens } from '../sdk/gitRemote.js';
 import { buildWritingPlansSplice, buildPlanReformatSplice, detectHandoff, detectPlanIntent } from './skillDispatch.js';
 import { HeartbeatTicker } from './heartbeat.js';
 import { createDbMcp, type PreparedDbMcp } from '../sdk/dbMcp.js';
+import { createMockupMcp, type PreparedMockupMcp } from '../sdk/mockupMcp.js';
 import { MAX_TIMER_MS } from '../config.js';
 
 export interface RunnerDeps {
@@ -67,6 +84,11 @@ export interface RunnerDeps {
   gitTokens?: GitTokens;
   /** 테스트용 주입 — 기본 dbMcp.createDbMcp (질문 세션 내장 DB 도구, 스펙 2026-10-02 §6). */
   createDbMcp?: (claim: InterviewClaimResponse) => PreparedDbMcp;
+  /**
+   * 테스트용 주입 — 기본 mockupMcp.createMockupMcp (켬 인터뷰의 `show_mockup` 도구, 스펙 2026-11-03 인터뷰 목업 §4).
+   * `post`는 이 세션 id로 `client.postMockup`을 부르는 함수다.
+   */
+  createMockupMcp?: (post: (body: WorkerMockupRequest) => Promise<PostMockupResult>) => PreparedMockupMcp;
   /** 테스트용 주입 — 기본 planFiles.harvestSessionPlanFiles (채팅 추출 실패 시 세션 plan 파일로 대체 판정). */
   harvestPlanFiles?: (workDir: string) => Promise<HarvestResult>;
 }
@@ -157,10 +179,13 @@ function attachmentSection(claim: InterviewClaimResponse, superpowers = true): s
  * 구현 때 개발 DB 쓰기가 열리는 연결이 있으면(`claim.writableDbConnections`) 지시 문단 바로 뒤에 한 줄 안내(`writableDbLine`)가 붙는다 —
  * 타입과 무관하고 kickoff에만 붙으며, 목록이 비면 지금과 바이트까지 같다.
  * superpowers 켬/끔(`superpowersOn(claim)` — `claim.superpowersEnabled === false`일 때만 끔, 스펙 2026-11-03 간단 인터뷰 §5)에 따라
- * 바뀌는 곳은 "진행 방식 절"(`interviewMode.ts`)뿐이다. 켬(칸 없음·null·true)은 지금과 바이트까지 같고, 끔은:
+ * 바뀌는 곳은 "진행 방식 절"(`interviewMode.ts`)뿐이다. 켬(칸 없음·null·true)은 간단 인터뷰 전과 바이트까지 같고(아래 화면 목업 문구 제외), 끔은:
  *  - kickoff: 첨부 안내의 `brainstorming 시작 전에 `→`계획을 쓰기 전에 `, 타입 지시의 질문 순서 문장, PLANNING-ONLY 문단의
  *    `(via brainstorming → writing-plans)` 괄호, 마지막 줄(brainstorming 지시 → 간단 인터뷰 지시)만 바뀐다.
  *  - resume: 답변 앞에 `SIMPLE_RESUME_PREFIX`(질문은 끝 — 더 묻지 말고 정규 형식의 최종 계획)가 붙는다. 참조 절(`everyTurn`) 뒤, 답변 앞.
+ * 화면 목업(스펙 2026-11-03 인터뷰 목업 §4)은 켬에만 붙는다:
+ *  - kickoff: 마지막 줄(`processLine(true)`) 바로 뒤에 `MOCKUP_GUIDE`.
+ *  - resume: 재기동으로 되돌린 턴이면(`resumedAfterRestart(claim.turns)`) 참조 절 뒤·답변 바로 앞에 `MOCKUP_RESTART_NOTE`. 그 밖의 resume은 답변 그대로.
  * 이 함수는 시그니처를 바꾸지 않고 claim에서 직접 읽는다.
  */
 async function* promptFor(
@@ -183,10 +208,13 @@ async function* promptFor(
         '최상위 헤딩 `# <기능> 구현 계획`, 그 아래 각 작업을 `### 작업 N: <제목>` 형식으로. ' +
         '영문 `# <Feature> Implementation Plan` / `### Task N:` 도 허용됩니다. ' +
         '이 정확한 구조라야 시스템이 완료를 인식하며, 없으면 인터뷰가 끝나지 않습니다.\n\n' +
-        processLine(superpowers),
+        processLine(superpowers) +
+        (superpowers ? MOCKUP_GUIDE : ''),
     );
   } else {
-    yield userTurn(everyTurn + (superpowers ? '' : SIMPLE_RESUME_PREFIX) + (claim.lastAnswer ?? ''));
+    // 켬: 재기동으로 되돌린 턴을 다시 돌리면 끊긴 턴이 올린 목업은 API가 버렸다 — 답변 바로 앞에서 알린다.
+    const restartNote = superpowers && resumedAfterRestart(claim.turns) ? MOCKUP_RESTART_NOTE : '';
+    yield userTurn(everyTurn + (superpowers ? restartNote : SIMPLE_RESUME_PREFIX) + (claim.lastAnswer ?? ''));
   }
 }
 
@@ -606,6 +634,12 @@ export class InterviewRunner {
 
       // 작업 DB MCP(스펙 2026-10-14 §5): 질문 세션과 같은 내장 서버. 턴마다 새로 만들고 finally에서 닫는다.
       const db = (this.deps.createDbMcp ?? createDbMcp)(claim);
+      // 화면 목업 MCP(스펙 2026-11-03 인터뷰 목업 §4): 켬만 붙인다(간단 인터뷰·QUESTION은 없음). 턴마다 새로 만들어 이 턴의 모든 relay
+      // (본 질의·handoff·near-miss)에 같은 서버를 넘긴다 — 동시에 도는 세션끼리 섞이지 않고, SDK는 연결 중인 서버 인스턴스의 재사용을
+      // 조용히 버리기 때문이다. 닫을 연결이 없어 finally 정리는 없다.
+      const mockup = on
+        ? (this.deps.createMockupMcp ?? createMockupMcp)((body) => this.client.postMockup(claim.sessionId, body))
+        : null;
       try {
         // 참조 폴더는 refRoots로 넘기지 않는다 — 인터뷰는 Read/Grep/Glob이 사전 승인이라 게이트·옵션이 그대로다(스펙 2026-10-24 §5.1).
         const options = buildOptions({
@@ -621,6 +655,7 @@ export class InterviewRunner {
           superpowers: on,
           dbMcpServers: db.servers,
           dbDialects: db.dialects,
+          mockupMcpServers: mockup?.servers,
         });
         const stream: AsyncIterable<SdkMessage> = this.query({
           prompt:
@@ -680,6 +715,7 @@ export class InterviewRunner {
                 superpowers: on,
                 dbMcpServers: db.servers,
                 dbDialects: db.dialects,
+                mockupMcpServers: mockup?.servers,
               }),
             }),
             { onActivity, onRateLimit, workDir: claim.workDir },
@@ -735,6 +771,7 @@ export class InterviewRunner {
                 superpowers: on,
                 dbMcpServers: db.servers,
                 dbDialects: db.dialects,
+                mockupMcpServers: mockup?.servers,
               }),
             }),
             { onActivity, onRateLimit, workDir: claim.workDir },

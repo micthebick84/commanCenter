@@ -60,6 +60,22 @@ describe('relay — activity callback (includePartialMessages)', () => {
     expect(out.assistantText).toBe('레포를 먼저 읽겠습니다\n\nWhich columns?');
     expect(out.completed).toBe(true);
   });
+
+  it('목업 도구 tool_use 활동에는 제목만 실리고 html은 실리지 않는다', async () => {
+    const html = '<!doctype html><html><body><p>목업 본문 표식</p></body></html>';
+    async function* mockupToolStream(): AsyncIterable<SdkMessage> {
+      yield { type: 'system', subtype: 'init', session_id: 'sess-mockup' } as SdkMessage;
+      yield {
+        type: 'assistant',
+        message: { content: [{ type: 'tool_use', name: 'mcp__mockup__show_mockup', input: { name: 'list-a', title: 'A안', html } }] },
+      } as SdkMessage;
+      yield { type: 'result', subtype: 'success', duration_ms: 10, total_cost_usd: 0, usage: {} } as SdkMessage;
+    }
+    const events: ActivityInput[] = [];
+    await relay(mockupToolStream(), { onActivity: (e) => events.push(e) });
+    expect(events).toEqual([{ type: 'tool', label: 'mcp__mockup__show_mockup', detail: 'A안' }]);
+    expect(JSON.stringify(events)).not.toContain('목업 본문 표식');
+  });
 });
 
 describe('summarizeToolUse', () => {
@@ -75,6 +91,13 @@ describe('summarizeToolUse', () => {
     expect(summarizeToolUse('Grep', { pattern: long })!.length).toBe(121); // 120 + '…'
     expect(summarizeToolUse('WebFetch', { url: 'http://x' })).toBeUndefined();
     expect(summarizeToolUse('Read', undefined)).toBeUndefined();
+  });
+
+  it('목업 도구 활동은 제목만', () => {
+    const html = '<!doctype html><html><body><h1>목록</h1></body></html>';
+    expect(summarizeToolUse('mcp__mockup__show_mockup', { name: 'list-a', title: 'A안', html })).toBe('A안');
+    // html·name은 활동에 싣지 않는다 — 제목이 없으면 detail도 없다
+    expect(summarizeToolUse('mcp__mockup__show_mockup', { name: 'list-a', html })).toBeUndefined();
   });
 });
 

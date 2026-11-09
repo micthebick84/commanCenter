@@ -102,8 +102,26 @@ public record WorkerTaskResponse(
                 prNumber, prUrl, closeProgress, closeContext, closeArtifact, dbMcp, implementation, refRepos, null);
     }
 
-    /** 구현 지시 블록. mode는 ImplementationMode 이름, timeoutMinutes는 claim 때 작업에 기록한 상한. */
-    public record ImplementationSpec(String mode, Integer attempt, Integer timeoutMinutes) {}
+    /**
+     * 구현 지시 블록. mode는 ImplementationMode 이름, timeoutMinutes는 claim 때 작업에 기록한 상한.
+     * fix는 수정 회차가 열린 구현대기를 claim했을 때만 채운다(스펙 2026-11-03 §7) — 이 경우 mode·timeoutMinutes는 회차의
+     * 구현 방식을 따르고(작업의 방식이 아니라), attempt는 작업의 시도 번호 그대로다. null이면 지금 구현과 같다.
+     */
+    public record ImplementationSpec(String mode, Integer attempt, Integer timeoutMinutes, FixRoundSpec fix) {
+        /** 수정 회차 도입 전 3인자 생성자 — 회차 없는 구현(fix=null). 기존 팩토리·테스트 호환. */
+        public ImplementationSpec(String mode, Integer attempt, Integer timeoutMinutes) {
+            this(mode, attempt, timeoutMinutes, null);
+        }
+    }
+
+    /**
+     * 수정 회차 구현 지시 — 같은 브랜치에서 이어 고친다(스펙 2026-11-03 §7). requestId는 task_fix_request.id, round는 승인 때
+     * 확정한 회차 번호, attempt는 회차 안의 구현 시도 번호, body는 이번 회차의 수정 요청 본문, previousBodies는 앞선 승인
+     * 회차의 요청 본문(오래된 것부터). headBranch·headSha는 이어 갈 브랜치와 기대하는 끝 커밋(원격이 앞서 있으면 워커가
+     * 원격 끝을 쓴다).
+     */
+    public record FixRoundSpec(Long requestId, int round, int attempt, String body, List<String> previousBodies,
+                               String headBranch, String headSha) {}
 
     /**
      * 구현 claim의 참조 repo 1개 — task.ref_repos 원소(RefRepo)의 스냅샷. githubRepo는 경로(GitHub owner/repo, GitLab 전체 경로),
@@ -221,6 +239,21 @@ public record WorkerTaskResponse(
     }
 
     public static WorkerTaskResponse forImplementation(Task t, TaskAnalysis a, TaskDesign d, String planMarkdown) {
+        return forImplementation(t, a, d, planMarkdown, null);
+    }
+
+    /** fix가 있으면 수정 회차 구현 — 방식은 작업의 것(회차의 방식은 {@link #forImplementation(Task, TaskAnalysis, TaskDesign, String, FixRoundSpec, ImplementationMode)}). */
+    public static WorkerTaskResponse forImplementation(Task t, TaskAnalysis a, TaskDesign d, String planMarkdown,
+                                                       FixRoundSpec fix) {
+        return forImplementation(t, a, d, planMarkdown, fix, null);
+    }
+
+    /**
+     * 수정 회차의 구현 방식은 작업이 아니라 요청 기록에 있다(스펙 2026-11-03 §6.2) — mode가 null이 아니면 그 방식을 싣는다.
+     * 상한(timeoutMinutes)은 호출자가 claim 때 작업에 기록한 값을 그대로 쓴다.
+     */
+    public static WorkerTaskResponse forImplementation(Task t, TaskAnalysis a, TaskDesign d, String planMarkdown,
+                                                       FixRoundSpec fix, ImplementationMode mode) {
         return new WorkerTaskResponse(t.getId(), t.getGithubRepo(), t.getGithubBranch(),
                 t.getTitle(), t.getDescription(), Kind.IMPLEMENTATION,
                 t.getMcpsExtra() == null ? List.of() : List.copyOf(t.getMcpsExtra()),
@@ -232,12 +265,13 @@ public record WorkerTaskResponse(
                 d == null ? null : d.getDesignUrl(),
                 null, null, t.getGitUrl(), hostOf(t), planMarkdown,
                 null, null, null, null, null, null,
-                implementationSpecOf(t), refReposOf(t));
+                implementationSpecOf(t, fix, mode), refReposOf(t));
     }
 
-    private static ImplementationSpec implementationSpecOf(Task t) {
-        ImplementationMode mode = t.getImplementationMode() == null ? ImplementationMode.DIRECT : t.getImplementationMode();
-        return new ImplementationSpec(mode.name(), t.getImplementationAttempt(), t.getImplementationTimeoutMinutes());
+    private static ImplementationSpec implementationSpecOf(Task t, FixRoundSpec fix, ImplementationMode modeOverride) {
+        ImplementationMode mode = modeOverride != null ? modeOverride
+                : t.getImplementationMode() == null ? ImplementationMode.DIRECT : t.getImplementationMode();
+        return new ImplementationSpec(mode.name(), t.getImplementationAttempt(), t.getImplementationTimeoutMinutes(), fix);
     }
 
     /** 작업 참조(task.ref_repos)를 그대로 싣는다 — 고정 커밋이 없거나 틀린 원소는 워커가 claude 실행 전에 구현실패로 끝낸다. */

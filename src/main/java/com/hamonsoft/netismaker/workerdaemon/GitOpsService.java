@@ -8,6 +8,8 @@ import org.springframework.stereotype.Component;
 
 import java.io.File;
 import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.LinkOption;
 import java.util.List;
 
 /**
@@ -163,9 +165,26 @@ public class GitOpsService {
         }
     }
 
-    private static String headSha(File worktreeDir) throws IOException, InterruptedException {
-        return ProcessRunner.requireSuccess(worktreeDir,
-                List.of("git", "rev-parse", "HEAD"), GIT_TIMEOUT_SECONDS).trim();
+    /**
+     * worktree의 HEAD 커밋(전체 sha) — {@code git rev-parse HEAD}. 수정 회차가 회차 브랜치 끝을 읽을 때도 쓴다
+     * (스펙 2026-11-03 §7). 실패는 IOException(규칙은 {@link #revParseHead}).
+     */
+    public String headSha(File worktreeDir) throws IOException, InterruptedException {
+        return revParseHead(worktreeDir);
+    }
+
+    /**
+     * dir의 HEAD 커밋. 출력에서 전체 sha 줄(40·64자 16진수)만 고른다 — 합쳐 받은 stderr 경고 줄이 섞여도 sha만 돌려준다.
+     * dir에 {@code .git}(worktree는 파일, clone은 폴더)이 없으면 git이 위쪽 폴더의 다른 repo를 볼 수 있어 부르지 않고 IOException.
+     * 배포(DeployService)도 빌드한 커밋을 이것으로 읽는다.
+     */
+    static String revParseHead(File dir) throws IOException, InterruptedException {
+        if (!Files.exists(dir.toPath().resolve(".git"), LinkOption.NOFOLLOW_LINKS)) {
+            throw new IOException("git 작업 폴더가 아님(.git 없음): " + dir);
+        }
+        String out = ProcessRunner.requireSuccess(dir, List.of("git", "rev-parse", "HEAD"), GIT_TIMEOUT_SECONDS);
+        return out.lines().map(String::strip).filter(GitRepoCache::isFullSha).reduce((a, b) -> b)
+                .orElseThrow(() -> new IOException("HEAD 커밋을 읽지 못했습니다: " + GitRemotes.mask(out.strip())));
     }
 
     private static int commitsSince(File worktreeDir, String baseSha) throws IOException, InterruptedException {

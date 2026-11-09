@@ -16,6 +16,7 @@ import RefRepoChips from '~/components/RefRepoChips.vue'
 import RefRepoAddForm from '~/components/RefRepoAddForm.vue'
 import { toInputs, useRefDraft, type RefRepoView } from '~/composables/refRepos'
 import { taskPrefillFromQuestion, type QuestionDetail } from '~/composables/questions'
+import { taskPrefillFromTask, type FollowUpSource } from '~/composables/taskFix'
 
 definePageMeta({ layout: 'default' })
 
@@ -294,9 +295,9 @@ async function loadRepoCatalog() {
 }
 
 // 별칭 선택 → catalogId로 브랜치 로드 + 기본 브랜치 프리필.
-// preferredBranch(질문에서 넘어온 브랜치)가 있으면 기본 브랜치 대신 그 브랜치를 목록이 온 뒤에 고른다 — 목록에 없거나 조회가 실패하면
-// 기본 브랜치로 조용히 바꾸지 않고 비운 채 알린다 (스펙 2026-10-24 §7.2).
-function onRepoSelected(catalogId: number | null, preferredBranch?: string) {
+// preferredBranch(질문·원래 작업에서 넘어온 브랜치)가 있으면 기본 브랜치 대신 그 브랜치를 목록이 온 뒤에 고른다 — 목록에 없거나 조회가 실패하면
+// 기본 브랜치로 조용히 바꾸지 않고 비운 채 알린다 (스펙 2026-10-24 §7.2). origin은 그 알림이 가리킬 출처 이름.
+function onRepoSelected(catalogId: number | null, preferredBranch?: string, origin = '질문') {
   removeRef(catalogId) // 새 대상과 같은 레포를 참조로 두지 않는다 — 그 참조만 빠지고 나머지는 유지 (스펙 2026-10-24 §7.2)
   draft.githubBranch = ''
   resetBranchState()
@@ -320,7 +321,7 @@ function onRepoSelected(catalogId: number | null, preferredBranch?: string) {
     draft.githubBranch = ''
     $q.notify({
       type: 'warning',
-      message: `질문의 브랜치 ${preferredBranch}를 찾을 수 없습니다 — 브랜치를 골라 주세요`,
+      message: `${origin}의 브랜치 ${preferredBranch}를 찾을 수 없습니다 — 브랜치를 골라 주세요`,
     })
   })
 }
@@ -452,8 +453,41 @@ async function prefillFromQuestion() {
     $q.notify({ type: 'warning', message: `카탈로그에 없는 참조는 뺐습니다: ${names}` })
   }
 }
+
+// 원래 작업에서 넘어온 경우(`/tasks?fromTask={id}`, 스펙 2026-11-03 §6.5) — 상한을 다 쓴 작업이나 종료된 작업의 후속 등록.
+// 질문에서 넘어온 경우와 같은 원리: 마운트 뒤에만, 무엇보다 먼저 주소에서 쿼리를 뺀다. 작업을 읽어 창을 열고 같은 레포·브랜치,
+// 제목 `[작업 {id} 후속] …`, 설명 첫 줄 `원래 작업: #{id}`로 채운다(참조·첨부·출처 질문은 옮기지 않는다 — 원래 작업 화면에서 본다).
+// fromQuestion이 같이 있으면 질문이 먼저다(둘 다 창을 열면 서로 덮어쓴다).
+async function prefillFromTask() {
+  const raw = route.query?.fromTask
+  if (raw == null || route.query?.fromQuestion != null) return
+  await navigateTo({ path: '/tasks', query: {} }, { replace: true })
+  const id = Number(Array.isArray(raw) ? raw[0] : raw)
+  if (!Number.isInteger(id) || id <= 0) return
+  let t: FollowUpSource
+  try {
+    t = await useApi<FollowUpSource>(`/api/tasks/${id}`)
+  } catch (e) {
+    $q.notify({
+      type: 'negative',
+      message: (e as { data?: { message?: string } })?.data?.message ?? '원래 작업을 불러오지 못했습니다',
+    })
+    return
+  }
+  await openCreate()
+  const p = taskPrefillFromTask(t, repoCatalog.value)
+  draft.title = p.title
+  draft.description = p.description
+  if (p.repoCatalogId != null) {
+    draft.repoCatalogId = p.repoCatalogId
+    onRepoSelected(p.repoCatalogId, p.branch, '원래 작업') // 브랜치는 목록이 온 뒤 — 카탈로그 기본 브랜치보다 나중에 적용된다
+  } else {
+    $q.notify({ type: 'warning', message: '원래 작업의 대상 레포를 카탈로그에서 찾을 수 없습니다 — 레포를 골라 주세요' })
+  }
+}
 onMounted(() => {
   prefillFromQuestion()
+  prefillFromTask()
 })
 
 const canSubmit = computed(
@@ -549,6 +583,7 @@ const fullscreen = useFullscreenDialog()
           { label: '구현중', value: 'IMPLEMENTING' },
           { label: 'PR생성', value: 'PR_CREATED' },
           { label: '구현실패', value: 'IMPLEMENTATION_FAILED' },
+          { label: '수정승인대기', value: 'FIX_REVIEW' },
           { label: '종료승인대기', value: 'CLOSE_REVIEW' },
           { label: '종료대기', value: 'CLOSE_PENDING' },
           { label: '종료중', value: 'CLOSING' },

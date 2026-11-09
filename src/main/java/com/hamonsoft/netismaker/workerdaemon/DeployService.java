@@ -23,7 +23,8 @@ import java.util.StringJoiner;
 
 /**
  * 배포 단계 오케스트레이션 (워커):
- *   1) head 브랜치 fetch + deploy worktree 체크아웃
+ *   1) head 브랜치 fetch + deploy worktree 체크아웃 → 그 HEAD(브랜치 끝)가 빌드 커밋 — 이미지 태그·배포완료 보고에 쓴다
+ *      (스펙 2026-11-03 §7, 못 읽으면 기록된 head_sha)
  *   1.5) 카탈로그에 미리 빌드가 켜졌으면(task.prebuild) 워커에서 빌드해 산출물을 .netis-prebuild/로 (스펙 2026-10-28 §5.2)
  *   2) Dockerfile 있으면 사용, 없으면 claude로 생성(미리 빌드면 산출물 안내 포함 + .dockerignore를 산출물만 보내도록 씀)
  *      — 생성했으면 FROM 이미지가 레지스트리에 있는지 확인해 없으면 한 번 다시 생성, 그래도 없으면 배포실패
@@ -78,6 +79,8 @@ public class DeployService {
             GitRepoCache.CheckedOutRepo repo = repos.fetchOnly(task.repoRef(), task.headBranch());
             File wt = worktrees.createForDeploy(repo.dir(), GitRemotes.localKey(task.repoRef()),
                     task.headBranch(), task.id());
+            // 브랜치 끝을 빌드한다 — 이미지 태그와 배포완료 보고는 기록된 head_sha가 아니라 실제로 체크아웃한 커밋으로
+            String builtSha = builtCommit(wt, task.headSha(), log);
             Path dockerfile = wt.toPath().resolve("Dockerfile");
 
             // 미리 빌드 — Dockerfile 확인·생성보다 먼저(생성 프롬프트가 산출물 이름을 쓴다).
@@ -172,22 +175,23 @@ public class DeployService {
             }
             log.append("[env 주입: ").append(env.size()).append("개 키]\n");
 
+            // 이미지 태그와 NETIS_GIT_SHA는 같은 커밋 — 실제로 빌드한 커밋, 못 읽으면 기록된 head_sha
+            String imageSha = builtSha != null ? builtSha : task.headSha();
             DeployTarget.DeploySpec spec = new DeployTarget.DeploySpec(
                     task.id(),
                     wt.toPath(),
-                    imageName(task.id(), task.headSha()),
+                    imageName(task.id(), imageSha),
                     "netis-task-" + task.id(),
                     containerPort,
                     env,
                     Map.of("netis-maker.task", String.valueOf(task.id())),
-                    task.headSha() == null || task.headSha().isBlank()
-                            ? Map.of() : Map.of("NETIS_GIT_SHA", task.headSha()));
+                    imageSha == null || imageSha.isBlank() ? Map.of() : Map.of("NETIS_GIT_SHA", imageSha));
 
             DeployTarget.DeployResult r = target.deploy(spec, logSink);
             // 컨테이너는 이미지로 돈다 — 빌드 컨텍스트(worktree)는 더 쓰지 않는다. 재배포는 createForDeploy가 새로 만든다.
             worktrees.discard(GitRemotes.localKey(task.repoRef()), WorktreeKind.DEPLOY, task.id());
             return new DeployTarget.DeployResult(r.url(), r.containerId(), r.hostPort(),
-                    r.image(), log + r.log());
+                    r.image(), log + r.log(), builtSha);
         } catch (DeployException e) {
             throw e;
         } catch (com.hamonsoft.netismaker.workerdaemon.deploy.DeployFailedException e) {
@@ -197,6 +201,31 @@ public class DeployService {
         } catch (Exception e) {
             throw new DeployException(e.getClass().getSimpleName() + ": " + e.getMessage(),
                     log.toString());
+        }
+    }
+
+    /**
+     * deploy worktree가 실제로 체크아웃한 커밋(origin/{head} 끝) — 이미지 태그와 배포완료 보고의 빌드 커밋(스펙 2026-11-03 §7).
+     * API가 이 값으로 head_sha(VARCHAR(40))를 바꾸고 종료 병합이 전체 sha로 비교하므로 40자 sha만 받는다. 기록된 head_sha와 다르면
+     * (사람이 MR에 push·끊긴 수정 시도가 남긴 커밋) 배포 로그에 남긴다. 못 읽으면 경고만 남기고 null — 호출부가 예전처럼 기록된
+     * head_sha로 태그를 달고 빌드 커밋은 보고하지 않는다.
+     */
+    static String builtCommit(File wt, String recordedSha, StringBuilder deployLog) {
+        try {
+            String sha = GitOpsService.revParseHead(wt).toLowerCase(java.util.Locale.ROOT);
+            if (sha.length() != 40) throw new java.io.IOException("40자 커밋이 아님: " + sha);
+            deployLog.append("[빌드 커밋] ").append(shortSha(sha));
+            String recorded = recordedSha == null ? "" : recordedSha.strip().toLowerCase(java.util.Locale.ROOT);
+            if (!recorded.isEmpty() && !sha.startsWith(recorded)) {
+                deployLog.append(" — 기록된 head_sha는 ").append(shortSha(recorded)).append(", 브랜치 끝을 빌드");
+            }
+            deployLog.append('\n');
+            return sha;
+        } catch (Exception e) {
+            if (e instanceof InterruptedException) Thread.currentThread().interrupt();
+            log.warn("빌드 커밋 확인 실패(기록된 head_sha로 이미지 태그): {} ({})", wt, GitRemotes.mask(e.getMessage()));
+            deployLog.append("[빌드 커밋] 확인 못 함 — 기록된 head_sha로 이미지 태그\n");
+            return null;
         }
     }
 

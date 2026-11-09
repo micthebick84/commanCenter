@@ -1,8 +1,11 @@
 package com.hamonsoft.netismaker.service;
 
+import com.hamonsoft.netismaker.entity.ImplementationMode;
 import com.hamonsoft.netismaker.entity.Task;
+import com.hamonsoft.netismaker.entity.TaskFixRequest;
 import com.hamonsoft.netismaker.entity.TaskStatus;
 import com.hamonsoft.netismaker.entity.WorkerHeartbeat;
+import com.hamonsoft.netismaker.repository.TaskFixRequestRepository;
 import com.hamonsoft.netismaker.repository.TaskRepository;
 import com.hamonsoft.netismaker.repository.WorkerHeartbeatRepository;
 import com.hamonsoft.netismaker.service.TaskRecovery.RecoveryCause;
@@ -68,6 +71,8 @@ public class StaleTaskRecoveryJob {
     private int closeStaleThresholdMinutes;
 
     private final ImplementationModePolicy implementationModePolicy;
+    /** 수정 회차의 구현 방식(요청 기록) — 회차 구현중의 행업 판정에 쓴다. */
+    private final TaskFixRequestRepository fixRequestRepo;
 
     // API 기동 시각 — InterviewStaleRecoveryJob.startedAt과 같은 방식. 테스트가 덮어쓴다.
     private OffsetDateTime startedAt = OffsetDateTime.now();
@@ -75,11 +80,13 @@ public class StaleTaskRecoveryJob {
     public StaleTaskRecoveryJob(TaskRepository taskRepo,
                                 WorkerHeartbeatRepository heartbeatRepo,
                                 TaskRecovery taskRecovery,
-                                ImplementationModePolicy implementationModePolicy) {
+                                ImplementationModePolicy implementationModePolicy,
+                                TaskFixRequestRepository fixRequestRepo) {
         this.taskRepo = taskRepo;
         this.heartbeatRepo = heartbeatRepo;
         this.taskRecovery = taskRecovery;
         this.implementationModePolicy = implementationModePolicy;
+        this.fixRequestRepo = fixRequestRepo;
     }
 
     @Scheduled(fixedRateString = "${app.task.stale-check-interval-ms:60000}")
@@ -117,8 +124,8 @@ public class StaleTaskRecoveryJob {
             boolean workerDead = apiUpLongEnough && claimedLongEnough && (hb == null || hb.isBefore(workerDeadBefore));
 
             int ceilingMin = switch (from) {
-                // 방식별 판정 — SDD는 몇 시간 돈다 (스펙 2026-10-15 §5.4)
-                case IMPLEMENTING -> implementationModePolicy.staleThresholdMinutes(t.getImplementationMode());
+                // 방식별 판정 — SDD는 몇 시간 돈다 (스펙 2026-10-15 §5.4). 수정 회차는 회차의 방식으로 (claim의 상한과 같은 기준)
+                case IMPLEMENTING -> implementationModePolicy.staleThresholdMinutes(implementationModeOf(t));
                 case DESIGNING -> designStaleThresholdMinutes;
                 case CLOSING -> closeStaleThresholdMinutes;
                 case DEPLOYING, UNDEPLOYING -> deployStaleThresholdMinutes;
@@ -131,5 +138,15 @@ public class StaleTaskRecoveryJob {
             String why = workerDead ? "워커 " + workerId + " 응답 없음(heartbeat)" : "처리 시간 초과(" + ceilingMin + "분)";
             taskRecovery.recover(t, RecoveryCause.stale(why));
         }
+    }
+
+    /**
+     * 구현중 작업의 판정 방식 — 수정 회차가 열려 있으면 회차의 방식(요청 기록, 스펙 2026-11-03 §6.2), 아니면 작업의 방식.
+     * claim(WorkerService)이 상한을 정한 기준과 같다. 회차 기록이 없으면(claim이 거부하므로 구현중일 수 없다) 작업의 방식.
+     */
+    private ImplementationMode implementationModeOf(Task t) {
+        if (t.getActiveFixRequestId() == null) return t.getImplementationMode();
+        TaskFixRequest r = FixRounds.openRequest(fixRequestRepo, t);
+        return r == null ? t.getImplementationMode() : FixRounds.modeOf(r);
     }
 }

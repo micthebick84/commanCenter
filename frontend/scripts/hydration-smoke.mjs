@@ -69,6 +69,8 @@ const TASKS = [
   task(1, 'PR_CREATED', 'PR생성', {
     implementation: { prUrl: 'https://github.com/acme/widgets/pull/1', prNumber: 1, headBranch: 'netismaker/task-1', headSha: 'abc123', implementationLog: '완료' },
     totalCostUsd: 1.23,
+    // 수정 요청 회차 현황 — 작업 상세가 수정 요청 기록 카드를 마운트 뒤에 불러와 그린다(위 fix-requests 목)
+    fix: { activeRound: null, activeMode: null, approvedRounds: 1, maxRounds: 3 },
     // 작업 상세의 참조 칩 줄(DB 칩 다음)과 "레포" 옆 출처 질문 링크(/questions/3)
     refRepos: REF_REPOS,
     sourceQuestionId: 3,
@@ -81,6 +83,8 @@ const TASKS = [
     },
   }),
   task(2, 'AWAITING_APPROVAL', '승인대기'),
+  // 수정승인대기 — 보드 배포 단계 그룹과 칩 색(스펙 2026-11-03 §6)
+  task(10, 'FIX_REVIEW', '수정승인대기', { fix: { activeRound: null, activeMode: null, approvedRounds: 0, maxRounds: 3 } }),
   task(3, 'CANCELLED', '취소됨'),
   // 구현중 작업 — 경과 문구는 마운트 뒤에만 그려지므로(useNowTick) 하이드레이션 불일치가 없어야 한다
   task(9, 'IMPLEMENTING', '구현중', { implementationMode: 'REVIEW', claimedAt: NOW, implementationTimeoutMinutes: 80 }),
@@ -124,6 +128,13 @@ function apiResponse(path) {
   const t = path.match(/^\/api\/tasks\/(\d+)$/)
   if (t) return TASKS.find((x) => x.id === Number(t[1])) ?? null
   if (/^\/api\/tasks\/\d+\/(history|interviews)$/.test(path)) return []
+  // 수정 요청 기록(최신순) — 작업 상세 카드
+  if (/^\/api\/tasks\/\d+\/fix-requests$/.test(path)) {
+    return [{
+      id: 1, round: 1, status: 'APPROVED', implementationMode: 'REVIEW', body: '스모크 수정 요청 **본문**', requestedBy: 'admin', requestedAt: NOW,
+      decidedBy: 'admin', decidedAt: NOW, decisionReason: null, attempt: 1, outcome: 'DEPLOYED', closedAt: NOW,
+    }]
+  }
   if (path === '/api/questions') return [QUESTION]
   if (/^\/api\/questions\/\d+$/.test(path)) return QUESTION
   if (path === '/api/usage/claude') return { limits: [] }

@@ -117,9 +117,10 @@ public class WorkerHttpClient {
 
     /**
      * next-task의 supports — 이 워커가 아는 기능(쉼표 구분). API는 refRepos가 없는 요청(구버전 워커)에게 참조 repo가 있는
-     * 구현을 넘기지 않는다 (스펙 2026-10-24 §4.7).
+     * 구현을 넘기지 않고(스펙 2026-10-24 §4.7), fixRounds가 없는 요청에게 수정 회차 구현을 넘기지 않는다(스펙 2026-11-03 §7 —
+     * 구버전은 회차 정보를 버리고 base에서 -rN 브랜치를 새로 딴다).
      */
-    static final String SUPPORTS = "refRepos";
+    static final String SUPPORTS = "refRepos,fixRounds";
 
     public Optional<WorkerTaskResponse> nextTask() {
         try {
@@ -161,7 +162,7 @@ public class WorkerHttpClient {
                 seq, com.hamonsoft.netismaker.git.GitRemotes.mask(content));
     }
 
-    /** 배포 런타임 정합 대상(배포완료+배포중단됨) 목록. 실패 시 예외 전파 — 호출부가 스킵 판단. */
+    /** 배포 런타임 정합·GC 보호 대상 목록(배포완료·배포중단됨 + 진행 중·종료 단계·수정 회차 상태). 실패 시 예외 전파 — 호출부가 스킵 판단. */
     public List<DeployedTaskSummary> deployedTasks() {
         List<DeployedTaskSummary> body = http.get().uri("/worker/deployed-tasks")
                 .retrieve()

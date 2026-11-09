@@ -50,6 +50,13 @@ import java.util.function.LongSupplier;
  *     6) GitOpsService.createDraftPr → prUrl/prNumber (본문에 방식 줄·참조 절·리뷰 메모)
  *     7) POST result (status=PR_CREATED 또는 IMPLEMENTATION_FAILED, 시도 번호·참조 경고 포함)
  *     8) 참조 worktree는 모든 경로에서 지운다(대상 worktree는 지금처럼 성공이면 지우고 실패면 남긴다)
+ *
+ *   수정 회차(claim의 implementation.fix — 스펙 2026-11-03 §7)는 1) 참조 준비 뒤 갈라진다(implementFixRound):
+ *     회차 브랜치가 비었거나 베이스 브랜치면 fetch·claude 없이 구현실패 → 회차 브랜치만 fetch(fetchOnly) → 그 끝에 detached worktree(createOnBranch, 새 브랜치 없음) → 끝 커밋이 기록된 head_sha와 다르면
+ *     (사람이 MR에 push) 그 위에서 고치고 프롬프트·구현 로그에 남김 → 회차 프롬프트(직접·리뷰, SDD는 리뷰로) + claude
+ *     → 실패면 wip 커밋을 같은 브랜치에 push / 성공이면 같은 브랜치에 fast-forward push(PR/MR은 새로 만들지 않음)
+ *     → 보고는 성공·실패 모두 회차 표지(작업 시도 번호·회차 안 시도 번호·요청 id)와 회차 브랜치를 싣는다
+ *   회차가 아닌 구현 보고에는 회차 표지를 싣지 않는다 — 실으면 API가 닫힌 회차의 늦은 보고로 무시한다.
  */
 @Component
 @Profile("worker")
@@ -181,7 +188,7 @@ public class WorkerMainLoop {
             // 마스킹한 뒤 찍는다. 프레임/cause 체인은 그대로 남아 진단성 손실이 없다.
             log.error("작업 처리 중 예외 task={}: {}", task.id(), safeReason(stackTrace(t)));
             switch (task.kind()) {
-                case IMPLEMENTATION -> safePostImplementationFailure(task.id(), implementationAttemptOf(task),
+                case IMPLEMENTATION -> safePostImplementationFailure(task, implementationAttemptOf(task),
                         "처리 중 예외: " + t.getClass().getSimpleName() + ": " + t.getMessage(),
                         null, null, null);
                 case DEPLOY, UNDEPLOY -> safePostDeployFailure(task.id(),
@@ -277,7 +284,7 @@ public class WorkerMainLoop {
                 } catch (Exception e) {
                     // 참조를 다 준비하지 못하면 claude를 실행하지 않는다 — 대상은 fetch도 worktree도 하지 않는다
                     discardRefWorktrees(task.id(), attempted);
-                    safePostImplementationFailure(task.id(), attempt,
+                    safePostImplementationFailure(task, attempt,
                             RefRepoPrompts.prepFailureReason(ref, e), null, null, null);
                     return;
                 }
@@ -290,10 +297,21 @@ public class WorkerMainLoop {
             claudeLimit = limit.minus(prep);
             if (claudeLimit.isZero() || claudeLimit.isNegative()) {
                 discardRefWorktrees(task.id(), attempted);
-                safePostImplementationFailure(task.id(), attempt, "시간 초과: 참조 repo 준비에 " + prep.toSeconds()
+                safePostImplementationFailure(task, attempt, "시간 초과: 참조 repo 준비에 " + prep.toSeconds()
                         + "초를 써 구현 상한(" + limit.toMinutes() + "분)이 남지 않았습니다", null, null, null);
                 return;
             }
+        }
+
+        // 수정 회차 — 베이스가 아니라 회차 브랜치 끝에서 이어 고친다 (스펙 2026-11-03 §7). 참조는 위와 같고 어떤 경로로 끝나든 지운다
+        WorkerTaskResponse.FixRoundSpec fix = fixOf(task);
+        if (fix != null) {
+            try {
+                implementFixRound(task, fix, requested, attempt, ready, claudeLimit);
+            } finally {
+                discardRefWorktrees(task.id(), attempted);
+            }
+            return;
         }
 
         // 2. 베이스 브랜치 최신화 — 대상 worktree 생성 바로 앞 (worktree add 시 origin/{base} 참조).
@@ -303,7 +321,7 @@ public class WorkerMainLoop {
             repo = repos.ensureFresh(task.repoRef(), task.githubBranch());
         } catch (Exception e) {
             discardRefWorktrees(task.id(), attempted);
-            safePostImplementationFailure(task.id(), attempt,
+            safePostImplementationFailure(task, attempt,
                     "레포 fetch 실패: " + e.getMessage(), null, null, null);
             return;
         }
@@ -326,25 +344,14 @@ public class WorkerMainLoop {
             wt = worktrees.create(repo.dir(), GitRemotes.localKey(task.repoRef()),
                     task.githubBranch(), task.id(), task.title(), attempt);
         } catch (Exception e) {
-            safePostImplementationFailure(task.id(), attempt,
+            safePostImplementationFailure(task, attempt,
                     "worktree 생성 실패: " + e.getMessage(), null, null, null);
             return;
         }
         Path wtPath = wt.dir().toPath();
 
         // 승인된 디자인이 있으면 목업을 워크트리에 배치 (참조용 — 커밋 전 삭제)
-        File designDir = null;
-        if (task.mockupFilesJson() != null && !task.mockupFilesJson().isBlank()) {
-            try {
-                designDir = new File(wt.dir(), ".design");
-                writeMockupFiles(designDir, task.mockupFilesJson());
-                java.nio.file.Files.writeString(new File(designDir, "DESIGN.md").toPath(),
-                        nvl(task.designMarkdown(), ""));
-            } catch (Exception e) {
-                log.warn("목업 배치 실패 (디자인 없이 진행): {}", e.getMessage());
-                designDir = null;
-            }
-        }
+        File designDir = placeMockups(task, wt.dir());
 
         // 4. 구현 방식 준비 — 임시 파일 exclude, 계획·설계 파일, 대신 진행 판정 (스펙 2026-10-15 §6.1·§6.5)
         boolean excludesReady = worktrees.ensureWorkerExcludes(wt.dir());
@@ -404,7 +411,7 @@ public class WorkerMainLoop {
             String refNote = RefRepoPrompts.failureSuffix(refChangeWarnings(task.id(), ready));
             String why = e.getMessage() != null && e.getMessage().startsWith("claude timeout") ? "시간 초과" : "실행 오류";
             PartialOutcome kept = preservePartialWork(task, wt, repo.commitSha(), why);
-            safePostImplementationFailure(task.id(), attempt,
+            safePostImplementationFailure(task, attempt,
                     "claude exec 실패: " + e.getMessage() + kept.reasonSuffix() + fallbackNote + refNote,
                     wt.branchName(), kept.headSha(), null);
             return;
@@ -415,7 +422,7 @@ public class WorkerMainLoop {
         if (exec.exitCode() != 0) {
             PartialOutcome kept = preservePartialWork(task, wt, repo.commitSha(), "비정상 종료");
             String tail = tail(exec.stdout(), 4000);
-            safePostImplementationFailure(task.id(), attempt,
+            safePostImplementationFailure(task, attempt,
                     "claude exit=" + exec.exitCode() + "\n" + tail + kept.reasonSuffix() + fallbackNote + refNote,
                     wt.branchName(), kept.headSha(), exec.stdout(), usageOf(exec));
             return;
@@ -439,7 +446,7 @@ public class WorkerMainLoop {
                     + "\n\nCo-Authored-By: netisMaker <" + props.gitUserEmail() + ">";
             headSha = gitOps.commitAndPush(wt.dir(), task.repoRef(), wt.branchName(), commitMsg, repo.commitSha());
         } catch (Exception e) {
-            safePostImplementationFailure(task.id(), attempt,
+            safePostImplementationFailure(task, attempt,
                     "commit/push 실패: " + e.getMessage() + fallbackNote + refNote,
                     wt.branchName(), null, exec.stdout(), usageOf(exec));
             return;
@@ -454,7 +461,7 @@ public class WorkerMainLoop {
                     task.githubBranch(), wt.branchName(),
                     task.title(), body);
         } catch (Exception e) {
-            safePostImplementationFailure(task.id(), attempt,
+            safePostImplementationFailure(task, attempt,
                     "PR/MR 생성 실패: " + e.getMessage() + fallbackNote + refNote,
                     wt.branchName(), headSha, exec.stdout(), usageOf(exec));
             return;
@@ -477,6 +484,197 @@ public class WorkerMainLoop {
                 task.id(), pr.number(), pr.url(), mode.effective(), attempt, envTemplate.size());
         // 산출물은 원격 브랜치·PR에 있다 — worktree는 더 쓰지 않으므로 바로 정리(실패해도 결과 무관, 주기 정리가 재시도)
         worktrees.discard(GitRemotes.localKey(task.repoRef()), WorktreeKind.TASK, task.id());
+    }
+
+    /**
+     * 수정 회차 구현 (스펙 2026-11-03 §7) — 회차 브랜치 끝에서 이어 고치고 같은 브랜치에 fast-forward push만 한다.
+     * PR/MR은 새로 만들지 않는다(기존 PR/MR이 같은 브랜치를 가리킨다). 대상 worktree는 성공이면 지우고 실패면 남긴다(지금 구현과 같다).
+     *  - 끝 커밋(tip)이 기록된 head_sha와 다르면(사람이 MR에 push) 그 끝 위에서 고친다 — 프롬프트·구현 로그·실패 사유에 남긴다.
+     *    commit/push·wip 보존의 기준 커밋도 tip이다(에이전트 커밋 수용·"변경 없음" 판정).
+     *  - 실패 보고의 headSha는 원격 브랜치 끝 — wip을 올렸으면 그 커밋, 아니면 tip. API는 회차 브랜치일 때만 이 값으로 head_sha를 맞춘다
+     *    (수정 중단 뒤 배포·종료 병합의 기준, §7.1). 원격 끝을 읽기 전 실패는 null.
+     */
+    private void implementFixRound(WorkerTaskResponse task, WorkerTaskResponse.FixRoundSpec fix,
+                                   ImplementationMode requested, int attempt,
+                                   List<WorktreeService.RefWorktree> ready, Duration claudeLimit) throws Exception {
+        String branch = fix.headBranch();
+        String label = FixRoundPrompts.label(fix);
+        String repoKey = GitRemotes.localKey(task.repoRef());
+
+        // 0. 이어 고칠 브랜치 확인 — 비었거나 베이스 브랜치면 fetch·claude 없이 구현실패(베이스에 직접 push하면 안 된다).
+        //    API가 요청 때 막지만 claim 값은 믿지 않는다(깨진 데이터·구버전 API)
+        if (!isUsableFixBranch(branch, task.githubBranch())) {
+            String shown = branch == null || branch.isBlank() ? "없음" : branch.strip();
+            safePostImplementationFailure(task, attempt,
+                    label + ": 이어 고칠 브랜치가 비었거나 베이스 브랜치와 같음(" + shown + ") — 진행하지 않음",
+                    branch, null, null);
+            return;
+        }
+
+        // 1. 회차 브랜치만 fetch(캐시 HEAD·베이스는 그대로) → 그 끝에 detached worktree(구현 자리 task-{id}, 새 브랜치 없음)
+        GitRepoCache.CheckedOutRepo repo;
+        try {
+            repo = repos.fetchOnly(task.repoRef(), branch);
+        } catch (Exception e) {
+            safePostImplementationFailure(task, attempt, "레포 fetch 실패: " + e.getMessage(), branch, null, null);
+            return;
+        }
+        WorktreeService.CreatedWorktree wt;
+        try {
+            wt = worktrees.createOnBranch(repo.dir(), repoKey, branch, task.id());
+        } catch (Exception e) {
+            safePostImplementationFailure(task, attempt, "worktree 생성 실패: " + e.getMessage(), branch, null, null);
+            return;
+        }
+        String tip;
+        try {
+            tip = gitOps.headSha(wt.dir());
+        } catch (Exception e) {
+            safePostImplementationFailure(task, attempt, "브랜치 끝 커밋 확인 실패: " + e.getMessage(), branch, null, null);
+            return;
+        }
+        Path wtPath = wt.dir().toPath();
+
+        // 2. 원격 끝이 기록과 다르면 그 위에서 고친다 (Review Focus 1) / 방식은 직접·리뷰만 — SDD는 원래 플랜 전체를 다시 구현해 리뷰로
+        boolean remoteAhead = FixRoundPrompts.remoteAhead(tip, fix.headSha());
+        List<String> notes = new ArrayList<>();
+        if (remoteAhead) notes.add(FixRoundPrompts.remoteAheadNote(tip, fix.headSha()));
+        ImplementationMode mode = requested == ImplementationMode.SDD ? ImplementationMode.REVIEW : requested;
+        if (requested == ImplementationMode.SDD) notes.add("SDD 요청 — 수정 회차는 직접·리뷰만 되어 리뷰로 진행");
+        for (String note : notes) log.warn("{}: task={} {}", label, task.id(), note);
+        String logHead = notes.isEmpty() ? "" : "[" + label + "] " + String.join("\n[" + label + "] ", notes) + "\n\n";
+        String reasonTail = remoteAhead ? "\n" + notes.get(0) : "";
+
+        // 승인된 디자인 목업은 지금 구현처럼 참조용으로 둔다(커밋 전 삭제). 임시 파일 exclude는 실패해도 아래에서 지우고 커밋한다
+        File designDir = placeMockups(task, wt.dir());
+        worktrees.ensureWorkerExcludes(wt.dir());
+
+        // 3. 회차 프롬프트 + claude exec (참조 절은 끝에, --add-dir 없음 — 지금 구현과 같다)
+        String prompt = FixRoundPrompts.render(task, fix, tip, remoteAhead, mode,
+                ImplementationPrompts.commitRule(mode), ready);
+        ClaudeExecAdapter.ExecResult exec;
+        try {
+            exec = claude.exec(prompt, wt.dir(), claudeLimit,
+                    DbMcpWorkerSupport.withDbServers(task.mcpsExtra(), task.dbMcp(), props.apiBaseUrl()),
+                    true, task.model(), task.effort(),
+                    new ClaudeExecAdapter.ExecOptions(List.of(),
+                            gitAuthorEnv(props.gitUserName(), props.gitUserEmail())));
+        } catch (Exception e) {
+            String refNote = RefRepoPrompts.failureSuffix(refChangeWarnings(task.id(), ready));
+            String why = e.getMessage() != null && e.getMessage().startsWith("claude timeout") ? "시간 초과" : "실행 오류";
+            PartialOutcome kept = preservePartialWork(task, wt, tip, label, why);
+            safePostImplementationFailure(task, attempt,
+                    "claude exec 실패: " + e.getMessage() + kept.reasonSuffix() + reasonTail + refNote,
+                    branch, remoteEnd(kept, tip), logHead.isEmpty() ? null : logHead);
+            return;
+        }
+        List<String> refWarnings = refChangeWarnings(task.id(), ready);
+        String refNote = RefRepoPrompts.failureSuffix(refWarnings);
+        if (exec.exitCode() != 0) {
+            PartialOutcome kept = preservePartialWork(task, wt, tip, label, "비정상 종료");
+            safePostImplementationFailure(task, attempt,
+                    "claude exit=" + exec.exitCode() + "\n" + tail(exec.stdout(), 4000) + kept.reasonSuffix()
+                            + reasonTail + refNote,
+                    branch, remoteEnd(kept, tip), logHead + nvl(exec.stdout(), ""), usageOf(exec));
+            return;
+        }
+
+        // 4. 리뷰 메모는 구현 로그로(PR 본문을 고치는 경로가 없다), 임시 파일은 커밋 전에 지운다
+        Optional<String> reviewNotes = ImplementationScratch.readReviewNotes(wtPath);
+        ImplementationScratch.deleteRoot(wtPath);
+        if (designDir != null) deleteDesignDir(designDir.toPath());
+        List<EnvTemplateItem> envTemplate = DeployEnvManifest.harvest(wtPath);
+        String implementationLog = logHead
+                + reviewNotes.map(n -> "## 리뷰 메모\n" + n + "\n\n").orElse("")
+                + nvl(exec.stdout(), "");
+
+        // 5. 같은 브랜치에 fast-forward push(force 없음 — 그 사이 원격이 앞섰으면 거절된다). 에이전트 커밋도 tip 이후면 받아들인다
+        String headSha;
+        try {
+            String commitMsg = "fix: " + label + " — " + task.title()
+                    + "\n\n" + "task #" + task.id()
+                    + "\n\nCo-Authored-By: netisMaker <" + props.gitUserEmail() + ">";
+            headSha = gitOps.commitAndPush(wt.dir(), task.repoRef(), branch, commitMsg, tip);
+        } catch (Exception e) {
+            // 고칠 게 없다며 아무것도 바꾸지 않았으면 사유를 분명히 — 관리자가 수정 중단으로 빠져나온다 (Review Focus 2)
+            String reason = isNothingToCommit(e)
+                    ? label + ": 변경 없음 — Claude가 고칠 곳을 찾지 못함"
+                    : "commit/push 실패: " + e.getMessage() + (isPushRejected(e) ? PUSH_REJECTED_NOTE : "");
+            safePostImplementationFailure(task, attempt, reason + reasonTail + refNote,
+                    branch, tip, implementationLog, usageOf(exec));
+            return;
+        }
+
+        // 6. 성공 보고 — PR 없이 같은 브랜치의 새 끝. API가 head_sha를 바꾸고 저장된 env로 자동 재배포한다
+        reporter.reportTerminal(task.id(), withFixMarks(new WorkerResultRequest(
+                props.id(),
+                TaskStatus.PR_CREATED,
+                null, null, null, exec.durationMs(), null,
+                null, null, branch, headSha, implementationLog,
+                null, null, null, null, null,
+                null, null, null, null,
+                usageOf(exec),
+                envTemplate,
+                attempt,
+                refWarnings.isEmpty() ? null : refWarnings), fix));
+        log.info("{} 구현 완료: task={} {}@{} (방식 {}, 회차 안 {}회째{})", label, task.id(), branch,
+                RefRepoPrompts.sha7(headSha), mode, fix.attempt(), remoteAhead ? ", 원격 끝 위에서" : "");
+        worktrees.discard(repoKey, WorktreeKind.TASK, task.id());
+    }
+
+    /** 회차가 이어 push할 브랜치로 쓸 수 있다 — 비어 있지 않고 베이스 브랜치와 다르다(앞뒤 공백 무시). */
+    static boolean isUsableFixBranch(String headBranch, String baseBranch) {
+        if (headBranch == null || headBranch.isBlank()) return false;
+        return baseBranch == null || !headBranch.strip().equals(baseBranch.strip());
+    }
+
+    /** 실패 보고에 실을 원격 브랜치 끝 — wip을 올렸으면 그 커밋, 아니면 처음 받은 끝(tip). */
+    private static String remoteEnd(PartialOutcome kept, String tip) {
+        return kept.headSha() != null ? kept.headSha() : tip;
+    }
+
+    /** GitOpsService.commitAndPush의 "변경도 tip 이후 커밋도 없음"(또는 git commit의 같은 뜻 출력). */
+    static boolean isNothingToCommit(Exception e) {
+        return e.getMessage() != null && e.getMessage().contains("nothing to commit");
+    }
+
+    /** 수정 회차 push가 fast-forward가 아니라 거절됐을 때 사유 끝에 붙이는 설명. */
+    static final String PUSH_REJECTED_NOTE = " — 작업하는 동안 원격 브랜치에 다른 커밋이 올라와 fast-forward push가 거절됐습니다"
+            + "(force push는 하지 않습니다). 구현 재시도는 새 원격 끝에서 다시 고칩니다";
+
+    /** git push의 거절(non-fast-forward) 출력인가 — 원격이 worktree를 만든 뒤에 앞섰다. */
+    static boolean isPushRejected(Exception e) {
+        String m = e.getMessage();
+        return m != null && (m.contains("[rejected]") || m.contains("non-fast-forward") || m.contains("fetch first"));
+    }
+
+    /** claim의 수정 회차 — 없으면(회차 아닌 구현·다른 kind·구버전 API) null. */
+    static WorkerTaskResponse.FixRoundSpec fixOf(WorkerTaskResponse task) {
+        WorkerTaskResponse.ImplementationSpec s = task.implementation();
+        return s == null ? null : s.fix();
+    }
+
+    /**
+     * 수정 회차 구현 보고의 표지 — 회차 안 시도 번호와 요청 id(스펙 2026-11-03 §7). 회차가 아니면(fix null) 그대로 둔다: 회차가 아닌 보고에
+     * 표지를 달면 API가 닫힌 회차의 늦은 보고로 무시한다.
+     */
+    static WorkerResultRequest withFixMarks(WorkerResultRequest req, WorkerTaskResponse.FixRoundSpec fix) {
+        return fix == null ? req : req.withFixAttempt(fix.attempt()).withFixRequestId(fix.requestId());
+    }
+
+    /** 승인된 디자인 목업을 worktree의 .design/에 둔다(참조용 — 커밋 전 삭제). 없거나 실패하면 null(디자인 없이 진행). */
+    private File placeMockups(WorkerTaskResponse task, File worktreeDir) {
+        if (task.mockupFilesJson() == null || task.mockupFilesJson().isBlank()) return null;
+        try {
+            File designDir = new File(worktreeDir, ".design");
+            writeMockupFiles(designDir, task.mockupFilesJson());
+            java.nio.file.Files.writeString(new File(designDir, "DESIGN.md").toPath(),
+                    nvl(task.designMarkdown(), ""));
+            return designDir;
+        } catch (Exception e) {
+            log.warn("목업 배치 실패 (디자인 없이 진행): {}", e.getMessage());
+            return null;
+        }
     }
 
     /** claim의 시도 번호 — 없거나(옛 API) 1보다 작으면 1. */
@@ -546,10 +744,19 @@ public class WorkerMainLoop {
     /** claude가 중간에 끝났을 때 — 임시 파일을 지우고 남은 변경을 WIP 커밋으로 push (스펙 2026-10-15 §6.6). */
     private PartialOutcome preservePartialWork(WorkerTaskResponse task, WorktreeService.CreatedWorktree wt,
                                                String baseSha, String why) {
+        return preservePartialWork(task, wt, baseSha, "구현", why);
+    }
+
+    /**
+     * what은 WIP 커밋 메시지의 무엇이 중단됐는지("구현"·"수정 N회차"). 수정 회차는 baseSha가 회차 브랜치 끝(tip)이고 같은 브랜치에
+     * fast-forward로 올린다 — 다음 재시도가 그 위에서 이어 간다(스펙 2026-11-03 §7).
+     */
+    private PartialOutcome preservePartialWork(WorkerTaskResponse task, WorktreeService.CreatedWorktree wt,
+                                               String baseSha, String what, String why) {
         // git add -A가 .netis/·.design/·배포 env 목록을 WIP 커밋에 담지 않도록 먼저 지운다
         ImplementationScratch.deleteAll(wt.dir().toPath());
         GitOpsService.PartialWork w = gitOps.preservePartialWork(wt.dir(), task.repoRef(), wt.branchName(), baseSha,
-                "wip: 구현 중단(" + why + ") — task #" + task.id());
+                "wip: " + what + " 중단(" + why + ") — task #" + task.id());
         return PartialOutcome.of(w, wt.branchName());
     }
 
@@ -677,10 +884,12 @@ public class WorkerMainLoop {
             return;
         }
         long durationMs = System.currentTimeMillis() - start;
+        // 실제로 빌드한 커밋(브랜치 끝, 전체 40자)도 싣는다 — API가 head_sha를 그 값으로 맞춘다(스펙 2026-11-03 §7, 못 읽었으면 null)
         reporter.reportTerminal(task.id(), WorkerResultRequest.deployed(
                 props.id(), result.url(), result.containerId(), result.hostPort(),
-                result.image(), durationMs, result.log()));
-        log.info("배포 완료: task={} url={}", task.id(), result.url());
+                result.image(), durationMs, result.log(), result.builtSha()));
+        log.info("배포 완료: task={} url={} 빌드 커밋={}", task.id(), result.url(),
+                result.builtSha() == null ? "(모름)" : DeployService.shortSha(result.builtSha()));
     }
 
     private void processUndeploy(WorkerTaskResponse task) {
@@ -763,8 +972,11 @@ public class WorkerMainLoop {
                 + DEPLOY_ENV_INSTRUCTION;
     }
 
-    /** 승인된 디자인이 있으면 구현 프롬프트에 삽입할 블록, 없으면 빈 문자열 (기존 작업 불변). */
-    private static String renderDesignSection(WorkerTaskResponse task) {
+    /**
+     * 승인된 디자인이 있으면 구현 프롬프트에 삽입할 블록, 없으면 빈 문자열 (기존 작업 불변). 수정 회차 프롬프트는 이 절 대신
+     * 참고용 H3(FixRoundPrompts.designSection)를 쓴다.
+     */
+    static String renderDesignSection(WorkerTaskResponse task) {
         if (task.designMarkdown() == null || task.designMarkdown().isBlank()) return "";
         return """
 
@@ -915,20 +1127,26 @@ public class WorkerMainLoop {
                 null, null, null, null, usage));
     }
 
-    private void safePostImplementationFailure(Long taskId, int attempt, String reason,
+    private void safePostImplementationFailure(WorkerTaskResponse task, int attempt, String reason,
                                                String headBranch, String headSha, String log_) {
-        safePostImplementationFailure(taskId, attempt, reason, headBranch, headSha, log_, null);
+        safePostImplementationFailure(task, attempt, reason, headBranch, headSha, log_, null);
     }
 
-    private void safePostImplementationFailure(Long taskId, int attempt, String reason,
+    /**
+     * 구현실패 보고. 수정 회차면 회차 표지(withFixMarks)를 달고, 브랜치를 주지 않은 경로(참조 준비·처리 중 예외 등)도 회차 브랜치를
+     * 싣는다 — API는 회차 브랜치일 때만 headSha를 받는다. 회차가 아니면 예전 그대로.
+     */
+    private void safePostImplementationFailure(WorkerTaskResponse task, int attempt, String reason,
                                                String headBranch, String headSha, String log_,
                                                WorkerResultRequest.UsageReport usage) {
-        reporter.reportTerminal(taskId, new WorkerResultRequest(
+        WorkerTaskResponse.FixRoundSpec fix = fixOf(task);
+        String branch = headBranch == null && fix != null ? fix.headBranch() : headBranch;
+        reporter.reportTerminal(task.id(), withFixMarks(new WorkerResultRequest(
                 props.id(), TaskStatus.IMPLEMENTATION_FAILED,
                 null, null, null, null, safeReason(reason),
-                null, null, headBranch, headSha, log_,
+                null, null, branch, headSha, log_,
                 null, null, null, null, null,
-                null, null, null, null, usage).withImplementationAttempt(attempt));
+                null, null, null, null, usage).withImplementationAttempt(attempt), fix));
     }
 
     /** 실패 사유를 보고/로그로 내보내기 직전 경계에서 자격증명을 마스킹한다(F2). */

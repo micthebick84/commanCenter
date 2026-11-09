@@ -71,7 +71,9 @@ public record TaskResponse(
          */
         List<InterviewResponse.RefRepoView> refRepos,
         /** 이 작업을 등록한 질문 세션 id. 질문에서 등록하지 않았으면 null. */
-        Long sourceQuestionId
+        Long sourceQuestionId,
+        /** 수정 요청 회차 현황 (스펙 2026-11-03 §6). 작업 상세 응답에서만 non-null — 목록·다른 엔드포인트는 null. */
+        FixView fix
 ) {
     public record AnalysisView(
             String markdownResult,
@@ -148,6 +150,12 @@ public record TaskResponse(
     public record ArtifactView(String name, long sizeBytes, String sha256, OffsetDateTime uploadedAt) {}
 
     public record MailView(String status, OffsetDateTime at) {}
+
+    /**
+     * 수정 요청 회차 현황. activeRound·activeMode는 열린 회차가 없으면 null(activeMode는 DIRECT|REVIEW),
+     * approvedRounds는 승인된 요청 수, maxRounds는 작업당 승인 한도(app.task.fix-request-max-rounds).
+     */
+    public record FixView(Integer activeRound, String activeMode, int approvedRounds, int maxRounds) {}
 
     private static final Set<TaskStatus> CLOSE_PHASE = EnumSet.of(
             TaskStatus.CLOSE_REVIEW, TaskStatus.CLOSE_PENDING, TaskStatus.CLOSING,
@@ -240,7 +248,8 @@ public record TaskResponse(
                 r.claimedAt(),
                 r.implementationTimeoutMinutes(),
                 r.refRepos(),
-                r.sourceQuestionId()
+                r.sourceQuestionId(),
+                r.fix()
         );
     }
 
@@ -251,7 +260,17 @@ public record TaskResponse(
                 model, effort, designRequested, analysis, design, implementation, deployment, interviewSessionId,
                 attachments, stageUsage, totalCostUsd, totalTokens, close, repoCatalogId, dbConnectionIds,
                 implementationMode, implementationAttempt, claimedAt, implementationTimeoutMinutes,
-                refViews(refs), sourceQuestionId);
+                refViews(refs), sourceQuestionId, fix);
+    }
+
+    /** 수정 요청 회차 현황만 바꾼 사본 — 작업 상세 응답이 싣는다(목록은 null). */
+    public TaskResponse withFix(FixView fixView) {
+        return new TaskResponse(id, githubRepo, repoAlias, githubBranch, title, description, status, statusLabel,
+                requesterId, retryCount, maxRetry, failureReason, mcpsExtra, envVars, createdAt, updatedAt,
+                model, effort, designRequested, analysis, design, implementation, deployment, interviewSessionId,
+                attachments, stageUsage, totalCostUsd, totalTokens, close, repoCatalogId, dbConnectionIds,
+                implementationMode, implementationAttempt, claimedAt, implementationTimeoutMinutes,
+                refRepos, sourceQuestionId, fixView);
     }
 
     private static List<InterviewResponse.RefRepoView> refViews(List<RefRepo> refs) {
@@ -271,7 +290,7 @@ public record TaskResponse(
                 model, effort, designRequested, analysis, design, implementation, deployment, interviewSessionId,
                 attachments, stageUsage, totalCostUsd, totalTokens, close, repoCatalogId, dbConnectionIds,
                 implementationMode, implementationAttempt, claimedAt, implementationTimeoutMinutes,
-                refRepos, sourceQuestionId);
+                refRepos, sourceQuestionId, fix);
     }
 
     private static TaskResponse build(Task t, TaskAnalysis a, TaskDesign d, Long interviewSessionId,
@@ -350,7 +369,8 @@ public record TaskResponse(
                 t.getClaimedAt(),
                 t.getImplementationTimeoutMinutes(),
                 refViews(t.getRefRepos()),
-                t.getSourceQuestionId()
+                t.getSourceQuestionId(),
+                null
         );
     }
 }

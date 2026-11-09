@@ -3,6 +3,7 @@ package com.hamonsoft.netismaker.service;
 import com.hamonsoft.netismaker.entity.Task;
 import com.hamonsoft.netismaker.entity.TaskStatus;
 import com.hamonsoft.netismaker.entity.TaskStatusHistory;
+import com.hamonsoft.netismaker.repository.TaskFixRequestRepository;
 import com.hamonsoft.netismaker.repository.TaskStatusHistoryRepository;
 import com.hamonsoft.netismaker.service.TaskRecovery.RecoveryCause;
 import org.junit.jupiter.api.BeforeEach;
@@ -35,7 +36,7 @@ class TaskRecoveryTest {
         deployLogStream = mock(DeployLogStreamService.class);
         when(deployLogStream.consolidate(any())).thenReturn(Optional.empty());
         when(historyRepo.save(any())).thenAnswer(i -> i.getArgument(0));
-        recovery = new TaskRecovery(historyRepo, deployLogStream);
+        recovery = new TaskRecovery(historyRepo, deployLogStream, mock(TaskFixRequestRepository.class));
     }
 
     private Task task(long id, TaskStatus status, int retry) {

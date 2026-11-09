@@ -88,6 +88,8 @@ class DeployBuiltShaTest {
 
         assertThat(head).hasSize(40);
         assertThat(deployedSpec().imageName()).isEqualTo("netis-task-20:" + head.substring(0, 7));
+        // 레포 Dockerfile이 묶음 이름에 쓰는 커밋도 이미지 태그와 같은 실제 빌드 커밋이어야 한다(PR #124 NETIS_GIT_SHA)
+        assertThat(deployedSpec().buildArgs()).containsExactly(java.util.Map.entry("NETIS_GIT_SHA", head));
         assertThat(result.builtSha()).isEqualTo(head);
         assertThat(result.log()).contains("[빌드 커밋] " + head.substring(0, 7));
     }
@@ -99,6 +101,7 @@ class DeployBuiltShaTest {
         DeployTarget.DeployResult result = service.deploy(task(), line -> { });
 
         assertThat(deployedSpec().imageName()).isEqualTo("netis-task-20:abc1234");
+        assertThat(deployedSpec().buildArgs()).containsExactly(java.util.Map.entry("NETIS_GIT_SHA", task().headSha()));
         assertThat(result.builtSha()).isNull();
         assertThat(result.log()).contains("[빌드 커밋] 확인 못 함");
     }

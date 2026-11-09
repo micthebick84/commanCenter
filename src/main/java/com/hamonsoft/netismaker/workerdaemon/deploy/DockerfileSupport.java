@@ -65,6 +65,22 @@ public final class DockerfileSupport {
     }
 
     /**
+     * 생성한 Dockerfile 끝에 붙이는 납품 파일 COPY(스펙 2026-11-04 §6.2) — 미리 빌드가 .netis-prebuild/artifact/에
+     * 스테이징한 파일을 이미지 /opt/netis-artifact/로. 파일 끝 = 마지막 FROM 뒤(최종 단계)라 종료 때 꺼낼 이미지에 들어간다.
+     */
+    public static final String ARTIFACT_COPY_BLOCK = """
+            # 종료 산출물 납품 파일 (Symphony 워커가 붙임)
+            COPY .netis-prebuild/artifact/ /opt/netis-artifact/
+            """;
+
+    /** ARTIFACT_COPY_BLOCK을 끝에 붙인 내용(언제나 붙인다 — 생성 Dockerfile 전용). 줄바꿈 규칙은 appendJavaLocale과 같다. */
+    public static String appendArtifactCopy(String dockerfileContent) {
+        String content = dockerfileContent == null ? "" : dockerfileContent;
+        String sep = content.isEmpty() || content.endsWith("\n") ? "" : "\n";
+        return content + sep + ARTIFACT_COPY_BLOCK;
+    }
+
+    /**
      * FROM 지시어가 가리키는 레지스트리 이미지 목록(나온 순서, 중복 없이).
      * 앞 단계 이름(FROM build — 대소문자 무시)·scratch·변수가 든 이름(${BASE} — 값을 알 수 없다)은 뺀다.
      * --platform 같은 플래그는 건너뛴다.

@@ -21,9 +21,21 @@ function setMe(username: string | null) {
   ;(authStub as any).me = username === null ? null : { user_id: 7, username, email: null, authorities: [] }
 }
 
+// confirmDialog($q)가 여는 Dialog 플러그인 다이얼로그는 페이지와 별개의 Vue 앱(#q-portal--dialog--N, 루트 컨테이너에 __vue_app__)이라
+// w.unmount()로 같이 내려가지 않는다. 그런데 QDialog는 show 때 300ms 타이머(showPortal(true) → 포커스 대기 해제)를 걸고,
+// 확인·취소 없이 끝난 시험(배포중단됨 DB 작업의 종료 요청 문구 확인)이나 hide 전환이 남은 시험이 이 타이머를 단 채 끝나면
+// 파일이 끝나 환경이 내려간 뒤에 터져 "document is not defined"로 전체 실행이 unhandled error가 된다(부하 의존 경합).
+// DOM만 지워서는 앱과 타이머가 그대로라, 앱을 unmount해 QDialog가 자기 타이머를 지우게 한다(onBeforeUnmount → removeTimeout).
+function disposeGlobalDialogs() {
+  document.body.querySelectorAll<HTMLElement>('[id^="q-portal--dialog"]').forEach((el) => {
+    ;(el as unknown as { __vue_app__?: { unmount: () => void } }).__vue_app__?.unmount()
+  })
+}
+
 describe('pages/tasks/[id] — 작업 종료 (스펙 2026-10-13 §6)', () => {
   beforeEach(() => { authStub.isAdmin = false; setMe(null) })
   afterEach(() => {
+    disposeGlobalDialogs()
     document.body.innerHTML = ''
     setMe(null)
     useRuntimeConfigMock.mockImplementation(() => ({ public: { apiBaseUrl: '/api', pollIntervalMs: 5000 } }))

@@ -94,15 +94,22 @@ public class LocalDockerTarget implements DeployTarget {
         return run;
     }
 
+    /** docker build -t 이미지 + 라벨 + 빌드 인자(맵 순서) + 컨텍스트 ".". */
+    static List<String> buildCommand(DeploySpec spec) {
+        List<String> build = new ArrayList<>(List.of(DOCKER, "build", "-t", spec.imageName()));
+        spec.labels().forEach((k, v) -> { build.add("--label"); build.add(k + "=" + v); });
+        spec.buildArgs().forEach((k, v) -> { build.add("--build-arg"); build.add(k + "=" + v); });
+        build.add(".");
+        return build;
+    }
+
     @Override
     public DeployResult deploy(DeploySpec spec, java.util.function.Consumer<String> logSink) throws Exception {
         StringBuilder logBuf = new StringBuilder();
         java.util.function.Consumer<String> sink = logSink == null ? (s -> {}) : logSink;
 
         // 1. build (이미지에도 라벨 부착 → GC가 소유 이미지를 식별 가능)
-        List<String> build = new ArrayList<>(List.of(DOCKER, "build", "-t", spec.imageName()));
-        spec.labels().forEach((k, v) -> { build.add("--label"); build.add(k + "=" + v); });
-        build.add(".");
+        List<String> build = buildCommand(spec);
         logBuf.append("$ ").append(String.join(" ", build)).append('\n');
         sink.accept("$ " + String.join(" ", build));
         ProcessRunner.Result buildRes = ProcessRunner.runStreaming(

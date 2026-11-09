@@ -46,6 +46,8 @@ const AUTH_PATHS = [
   '/requests/1',
   // 디자인 목업 크게 보기(blank 레이아웃) — 작업 1의 design 목업을 마운트 뒤에 읽어 sandbox iframe에 그린다
   '/designs/1',
+  // 인터뷰 목업 새 탭 보기(blank 레이아웃) — 마운트 뒤에 단건·목록을 읽어 sandbox iframe에 그린다
+  '/interviews/7/mockups/1',
   '/admin/repo-catalog',
   '/admin/mcp-catalog',
   '/admin/workers',
@@ -71,8 +73,13 @@ const TASKS = [
   task(1, 'PR_CREATED', 'PR생성', {
     implementation: { prUrl: 'https://github.com/acme/widgets/pull/1', prNumber: 1, headBranch: 'netismaker/task-1', headSha: 'abc123', implementationLog: '완료' },
     totalCostUsd: 1.23,
+    // 작업 상세의 "인터뷰 목업 — 구현 기준" 절 — 마운트 뒤에 목록을 받아 링크만 그린다
+    interviewSessionId: 7,
+    implementationMockupIds: [1],
     // 작업 타입 — 보드 카드·모바일 카드·상세 머리줄(1280)·요청 상세 섹션 머리(390)의 타입 칩이 같은 마크업으로 하이드레이션돼야 한다(나머지 작업은 타입 없음 = 칩 없음)
     taskType: 'NEW_FEATURE',
+    // 간단 인터뷰(superpowers 끔) — 상세 머리줄(1280)의 칩과 정보 섹션(390)의 줄이 같은 마크업으로 하이드레이션돼야 한다(나머지 작업은 칸 없음 = 켬 = 칩 없음)
+    interviewSuperpowersEnabled: false,
     // 수정 요청 회차 현황 — 작업 상세가 수정 요청 기록 카드를 마운트 뒤에 불러와 그린다(위 fix-requests 목)
     fix: { activeRound: null, activeMode: null, approvedRounds: 1, maxRounds: 3 },
     // 작업 상세의 참조 칩 줄(DB 칩 다음)과 "레포" 옆 출처 질문 링크(/questions/3)
@@ -97,6 +104,10 @@ const TASKS = [
   task(3, 'CANCELLED', '취소됨'),
   // 구현중 작업 — 경과 문구는 마운트 뒤에만 그려지므로(useNowTick) 하이드레이션 불일치가 없어야 한다
   task(9, 'IMPLEMENTING', '구현중', { implementationMode: 'REVIEW', claimedAt: NOW, implementationTimeoutMinutes: 80 }),
+]
+const MOCKUPS = [
+  { id: 1, n: 1, name: 'a-plan', version: 1, title: 'A안', description: '왼쪽 메뉴형', turnSeq: 1, turnKind: 'design', createdAt: NOW },
+  { id: 2, n: 2, name: 'b-plan', version: 1, title: 'B안', description: null, turnSeq: 1, turnKind: 'question', createdAt: NOW },
 ]
 const QUESTION = {
   id: 3, title: '인증 흐름 확인', githubRepo: 'acme/widgets', githubBranch: 'main', repoAlias: 'Widgets',
@@ -153,6 +164,13 @@ function apiResponse(path) {
       { ...base, id: 1, sqlText: 'CREATE TABLE t_smoke (id int)', classification: 'EXECUTED', executedAt: NOW },
       { ...base, id: 2, sqlText: 'ALTER TABLE t_old DROP COLUMN c_old', classification: 'DEFERRED', reason: '남의 테이블 컬럼 삭제는 승인 대기로 기록됩니다', executedAt: null },
     ]
+  }
+  // 인터뷰 목업 — 목록(2건)과 단건(html 포함, taskId 1)
+  if (/^\/api\/interviews\/\d+\/mockups$/.test(path)) return MOCKUPS
+  const mk = path.match(/^\/api\/interviews\/\d+\/mockups\/(\d+)$/)
+  if (mk) {
+    const m = MOCKUPS.find((x) => x.id === Number(mk[1]))
+    return m ? { ...m, taskId: 1, html: '<!doctype html><p>목업</p>' } : null
   }
   if (path === '/api/questions') return [QUESTION]
   if (/^\/api\/questions\/\d+$/.test(path)) return QUESTION

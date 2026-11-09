@@ -1,6 +1,7 @@
 package com.hamonsoft.netismaker.controller;
 
 import com.hamonsoft.netismaker.dto.InterviewClaimResponse;
+import com.hamonsoft.netismaker.dto.InterviewMockupSummary;
 import com.hamonsoft.netismaker.dto.InterviewStartupResponse;
 import com.hamonsoft.netismaker.dto.WorkerActivityRequest;
 import com.hamonsoft.netismaker.dto.WorkerPlanRequest;
@@ -30,8 +31,8 @@ import java.util.Optional;
  *   POST /worker/interviews/claim?workerId=…   ─► QUEUED 세션 1건 claim (SKIP LOCKED) 또는 204
  *                                                  (claim이 work_dir 할당/반환 — Phase 1)
  *   POST /worker/interviews/startup?workerId=… ─► 재기동으로 중단된 RUNNING 세션을 QUEUED로 되돌림(턴당 2회, 소진 시 FAILED)
- *   POST /worker/interviews/{id}/question       ─► assistant turn 저장 + SSE question|design/status + AWAITING_INPUT
- *   POST /worker/interviews/{id}/plan           ─► interview_plan 저장 + SSE plan_ready(객체)/status + PLAN_READY
+ *   POST /worker/interviews/{id}/question       ─► assistant turn 저장(+ 목업 묶기) + SSE question|design/mockup(목업마다)/status + AWAITING_INPUT
+ *   POST /worker/interviews/{id}/plan           ─► interview_plan 저장(+ 목업 묶기) + SSE plan_ready(객체)/mockup(목업마다)/status + PLAN_READY
  *   POST /worker/interviews/{id}/activity?workerId=… ─► SSE activity fan-out (transient, DB 미접근)
  *   POST /worker/interviews/{id}/heartbeat?workerId=… ─► last_activity_at 갱신
  *   POST /worker/interviews/{id}/fail?workerId=…&reason=… ─► FAILED + SSE status/done
@@ -122,6 +123,7 @@ public class InterviewWorkerController {
         InterviewTurn turn = interviewService.recordQuestion(id, workerId, req);
         if ("design".equals(turn.getKind())) interviewStream.pushDesign(id, turn.getSeq(), turn.getContent());
         else interviewStream.pushQuestion(id, turn.getSeq(), turn.getContent());
+        pushMockups(id);
         interviewStream.pushStatus(id, InterviewStatus.AWAITING_INPUT); // 영문 enum name
     }
 
@@ -133,7 +135,25 @@ public class InterviewWorkerController {
         // plan_ready = {designMarkdown, planMarkdown, planJson} JSON 객체 (LOCKED CONTRACT v2)
         interviewStream.pushPlanReady(id,
                 plan.getDesignMarkdown(), plan.getPlanMarkdown(), plan.getPlanJson());
+        pushMockups(id);
         interviewStream.pushStatus(id, InterviewStatus.PLAN_READY);
+    }
+
+    /**
+     * 보고(질문·계획) 뒤 그 세션의 목업을 전부 다시 민다 (스펙 2026-11-03 §5) — 방금 묶인 목업의 turnSeq를 화면에 알린다.
+     * 턴 이벤트 뒤·status 앞이어야 한다: 화면은 status 이벤트 때 안 묶인 목업을 지우므로 묶인 목업이 먼저 가야 한다.
+     * recordPlan이 design 턴 seq를 돌려주지 않아 방금 묶인 것만 고르지 않고 전부 보낸다(세션당 40개 이하, html 없음, 화면은 id로 덮어쓴다).
+     * 보고는 이미 커밋됐으므로 조회·push가 실패해도 경고만 남긴다 — 던지면 status가 안 가고 워커는 이미 반영된 보고를 실패로 안다
+     * (claim의 {@code withDb}와 같은 이유).
+     */
+    private void pushMockups(Long id) {
+        try {
+            for (InterviewMockupSummary m : interviewService.mockupSummaries(id)) {
+                interviewStream.pushMockup(id, m);
+            }
+        } catch (RuntimeException e) {
+            log.warn("보고 뒤 목업 push 실패 session={}: {}", id, e.getClass().getSimpleName());
+        }
     }
 
     /**

@@ -9,6 +9,7 @@ import com.hamonsoft.netismaker.entity.InterviewStatus;
 import com.hamonsoft.netismaker.service.ImplementationModePolicy;
 import com.hamonsoft.netismaker.service.InterviewService;
 import com.hamonsoft.netismaker.service.InterviewStreamService;
+import com.fasterxml.jackson.annotation.JsonCreator;
 import jakarta.validation.Valid;
 import org.springframework.context.annotation.Profile;
 import org.springframework.http.MediaType;
@@ -16,6 +17,8 @@ import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.security.oauth2.server.resource.authentication.JwtAuthenticationToken;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
+
+import java.util.List;
 
 /**
  * 대화형 분석 API (JWT). DESIGN §8 표면 그대로.
@@ -82,7 +85,8 @@ public class InterviewController {
         ImplementationMode mode = ImplementationModePolicy.parse(
                 body == null ? null : body.implementationMode(), ImplementationMode.DIRECT);
         Long taskId = interviewService.confirm(id, adminId,
-                body != null && Boolean.TRUE.equals(body.designRequested()), mode);
+                body != null && Boolean.TRUE.equals(body.designRequested()), mode,
+                body == null ? null : body.mockupIds());
         interviewStream.pushStatus(id, InterviewStatus.REGISTERED);
         interviewStream.finish(id); // terminal → done 이벤트
         return new RegisterResponse(taskId);
@@ -90,9 +94,19 @@ public class InterviewController {
 
     /**
      * confirm 요청 바디 — designRequested 미지정 시 false, implementationMode 미지정 시 DIRECT
-     * (옛 화면·다른 호출자는 지금과 같음, 스펙 2026-10-15 §5.1).
+     * (옛 화면·다른 호출자는 지금과 같음, 스펙 2026-10-15 §5.1). mockupIds는 구현에 넘길 인터뷰 목업 id —
+     * 키가 없으면 null(스펙 2026-11-03 §7).
      */
-    public record InterviewConfirmRequest(Boolean designRequested, String implementationMode) {}
+    public record InterviewConfirmRequest(Boolean designRequested, String implementationMode, List<Long> mockupIds) {
+        @JsonCreator
+        public InterviewConfirmRequest {
+        }
+
+        /** 목업을 모르는 호출자용 — mockupIds 없음. */
+        public InterviewConfirmRequest(Boolean designRequested, String implementationMode) {
+            this(designRequested, implementationMode, null);
+        }
+    }
 
     @PostMapping("/{id}/cancel")
     @PreAuthorize("hasAuthority('ROLE_ADMIN')")

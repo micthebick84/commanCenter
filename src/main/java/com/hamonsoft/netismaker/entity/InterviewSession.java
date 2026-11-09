@@ -155,6 +155,15 @@ public class InterviewSession {
     @Setter
     private List<RefRepo> refRepos = new ArrayList<>();
 
+    /**
+     * superpowers 인터뷰 켬/끔 (설계 2026-11-03-interview-superpowers-toggle §4). false = 간단 인터뷰(플러그인 없이 질문을 최대 한 번 모아서 묻고
+     * 바로 계획) — 승인 때 관리자가 고르고({@code InterviewService.createForTask}) 세션 생애 동안 바뀌지 않는다.
+     * 기본 true: 기존 세션·질문 세션(인터뷰 서비스가 이 값을 보지 않음)·바디 없는 승인은 지금과 같다. 컬럼은 NOT NULL DEFAULT true(V40).
+     */
+    @Setter
+    @Column(name = "superpowers_enabled", nullable = false)
+    private boolean superpowersEnabled = true;
+
     /** 작업 등록 시 선택된 Claude 모델. 워커가 claude --model에 사용.
      *  기본값은 ModelEffortPolicy.DEFAULT_MODEL과 반드시 일치해야 한다(둘 다 바꿀 것). */
     @Column(name = "model", nullable = false, length = 64)

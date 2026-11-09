@@ -1,5 +1,6 @@
 package com.hamonsoft.netismaker.workerdaemon;
 
+import com.hamonsoft.netismaker.dto.WorkerTaskResponse;
 import com.hamonsoft.netismaker.git.GitRemotes;
 import lombok.extern.slf4j.Slf4j;
 
@@ -8,6 +9,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.LinkOption;
 import java.nio.file.Path;
+import java.util.Locale;
 import java.util.Optional;
 import java.util.regex.Pattern;
 
@@ -42,6 +44,21 @@ final class ImplementationScratch {
 
     static String designPath(long taskId) {
         return ROOT + "/plan/task-" + taskId + "-design.md";
+    }
+
+    /** 인터뷰 목업 파일 폴더 — 커밋되지 않는다(.netis/ 전체가 info/exclude). */
+    static final String MOCKUPS_DIR = ROOT + "/mockups";
+    private static final int MOCKUP_NAME_MAX_CHARS = 40;
+
+    /** `.netis/mockups/{n}-{safe}-v{version}.html` — safe는 이름을 소문자 `[a-z0-9-]`로 접은 40자, 비면 `mockup`. */
+    static String mockupPath(WorkerTaskResponse.InterviewMockupFile m) {
+        String safe = m.name() == null ? "" : m.name().toLowerCase(Locale.ROOT)
+                .replaceAll("[^a-z0-9-]", "-").replaceAll("-{2,}", "-").replaceAll("^-|-$", "");
+        if (safe.length() > MOCKUP_NAME_MAX_CHARS) {
+            safe = safe.substring(0, MOCKUP_NAME_MAX_CHARS).replaceAll("-$", "");
+        }
+        if (safe.isEmpty()) safe = "mockup";
+        return MOCKUPS_DIR + "/" + m.n() + "-" + safe + "-v" + m.version() + ".html";
     }
 
     static void write(Path worktree, String relPath, String content) throws IOException {

@@ -895,3 +895,447 @@ describe('InterviewPanel — 질문 채팅 셸 연동 (스펙 2026-09-05 §2)', 
     w.unmount()
   })
 })
+
+// 계획 고쳐 달라기 (스펙 2026-11-03 간단 인터뷰 §4.1·§6) — 간단 인터뷰(superpowers 끔)로 나온 계획에만 답변창이 열린다.
+// 켬(칸 없음·null·true)·모름(스냅샷 실패)·질문 세션은 지금처럼 PLAN_READY에서 입력이 막힌다(반목표 §9).
+describe('InterviewPanel 계획 고쳐 달라기 (스펙 2026-11-03 간단 인터뷰 §4.1·§6)', () => {
+  const PLAN = { designMarkdown: '# 설계', planMarkdown: '# 플랜', planJson: '[]' }
+  const FIX = '컬럼명을 바꿔 주세요'
+  /** 간단 인터뷰(끔) PLAN_READY 스냅샷 — 이미 답한 질문이 하나 있다(RF2) */
+  const SIMPLE_PLAN_READY = {
+    statusName: 'PLAN_READY',
+    superpowersEnabled: false,
+    turns: [
+      { seq: 1, role: 'assistant', kind: 'question', content: '범위는?' },
+      { seq: 2, role: 'user', kind: 'answer', content: '대시보드만' },
+    ],
+    plan: PLAN,
+  }
+  const answerCalls = () => useApiMock.mock.calls.filter((c) => String(c[0]).endsWith('/answer'))
+
+  afterEach(() => {
+    document.querySelectorAll('.q-dialog').forEach((n) => n.remove())
+  })
+
+  it('간단 인터뷰 PLAN_READY: 입력창이 열리고 문구가 바뀌며 구현 진행도 켜져 있다', async () => {
+    const w = await mountPanel(9, SIMPLE_PLAN_READY)
+    const ta = w.find('textarea')
+    expect(ta.attributes('disabled')).toBeUndefined()
+    expect(ta.attributes('placeholder')).toBe('계획에서 고칠 점을 적어 주세요 — 질문 없이 고친 계획을 다시 냅니다')
+    const send = w.find('[data-test="send-answer"]')
+    expect(send.text()).toContain('계획 고쳐 달라기')
+    expect(send.text()).not.toContain('전송')
+    expect(send.attributes('disabled')).toBeDefined() // 입력이 비면 막힌다
+    await ta.setValue(FIX)
+    expect(w.find('[data-test="send-answer"]').attributes('disabled')).toBeUndefined()
+    expect(w.find('[data-test="confirm"]').attributes('disabled')).toBeUndefined() // 구현 진행은 그대로
+    w.unmount()
+  })
+
+  it('간단 인터뷰라도 입력대기(질문)에서는 예전 문구 그대로', async () => {
+    const w = await mountPanel(9, { statusName: 'AWAITING_INPUT', superpowersEnabled: false, turns: SIMPLE_PLAN_READY.turns.slice(0, 1), plan: null })
+    expect(w.find('textarea').attributes('placeholder')).toBe('답변을 입력하세요…')
+    expect(w.find('[data-test="send-answer"]').text()).toContain('전송')
+    expect(w.find('[data-test="send-answer"]').text()).not.toContain('계획 고쳐 달라기')
+    w.unmount()
+  })
+
+  it('보내면 replyToSeq null — 이미 답한 질문이 있어도', async () => {
+    // [RF2] 마지막 question seq(1)를 싣으면 이미 답한 질문과 겹쳐 서버가 중복 no-op으로 받고 화면만 QUEUED에 머문다
+    const w = await mountPanel(9, SIMPLE_PLAN_READY)
+    await w.find('textarea').setValue(FIX)
+    useApiMock.mockResolvedValueOnce({})
+    await w.find('[data-test="send-answer"]').trigger('click')
+    await flushPromises()
+
+    expect(useApiMock).toHaveBeenCalledWith('/api/interviews/9/answer', {
+      method: 'POST',
+      body: { answer: FIX, replyToSeq: null },
+    })
+    // 낙관적 턴·QUEUED 처리는 그대로 — 입력이 비고, 고칠 점이 말풍선으로 붙고, 구현 진행은 큐에 있는 동안 막힌다
+    expect((w.find('textarea').element as HTMLTextAreaElement).value).toBe('')
+    expect(w.text()).toContain(FIX)
+    expect(w.text()).toContain('대기 중') // QUEUED 라벨
+    expect(w.find('[data-test="confirm"]').attributes('disabled')).toBeDefined()
+    expect(w.find('textarea').attributes('disabled')).toBeDefined()
+    w.unmount()
+  })
+
+  it('보낸 고칠 점은 앞선 턴 뒤에 놓인다 — 설계 턴이 끼어 seq가 성긴 대화에서도', async () => {
+    // 화면의 turns에는 design 턴이 없다(설계 섹션으로 간다) — 낙관적 seq를 turns.length로 잡으면 뒤의 답변 앞으로 밀린다
+    const w = await mountPanel(9, {
+      statusName: 'PLAN_READY',
+      superpowersEnabled: false,
+      turns: [
+        { seq: 1, role: 'assistant', kind: 'question', content: '첫질문' },
+        { seq: 2, role: 'user', kind: 'answer', content: '첫답' },
+        { seq: 3, role: 'assistant', kind: 'design', content: '설계 섹션' },
+        { seq: 4, role: 'assistant', kind: 'question', content: '둘째질문' },
+        { seq: 5, role: 'user', kind: 'answer', content: '둘째답' },
+        { seq: 6, role: 'assistant', kind: 'design', content: '설계 섹션2' },
+      ],
+      plan: PLAN,
+    })
+    await w.find('textarea').setValue(FIX)
+    useApiMock.mockResolvedValueOnce({})
+    await w.find('[data-test="send-answer"]').trigger('click')
+    await flushPromises()
+    FakeEventSource.last().emit('note', { seq: 20, content: '뒤에 오는 노트' }) // pushTurn이 seq로 정렬한다
+    await flushPromises()
+
+    const t = w.find('.transcript').text()
+    expect(t.indexOf('둘째답')).toBeGreaterThan(-1)
+    expect(t.indexOf(FIX)).toBeGreaterThan(t.indexOf('둘째답'))
+    expect(t.indexOf('뒤에 오는 노트')).toBeGreaterThan(t.indexOf(FIX))
+    w.unmount()
+  })
+
+  it('두 번 고쳐 달라고 해도 말풍선이 서로 겹치지 않고 서버 턴도 버려지지 않는다', async () => {
+    const w = await mountPanel(9, SIMPLE_PLAN_READY)
+    for (const fix of ['첫 수정 요청', '둘째 수정 요청']) {
+      await w.find('textarea').setValue(fix)
+      useApiMock.mockResolvedValueOnce({})
+      await w.find('[data-test="send-answer"]').trigger('click')
+      await flushPromises()
+      FakeEventSource.last().emit('plan_ready', PLAN) // 고친 계획이 돌아와 다시 PLAN_READY
+      await flushPromises()
+    }
+    FakeEventSource.last().emit('note', { seq: 3, content: '서버가 붙인 3번 턴' }) // 낙관적 seq가 정수와 겹치면 중복으로 버려진다
+    await flushPromises()
+
+    const t = w.find('.transcript').text()
+    expect(t.indexOf('첫 수정 요청')).toBeGreaterThan(t.indexOf('대시보드만'))
+    expect(t.indexOf('둘째 수정 요청')).toBeGreaterThan(t.indexOf('첫 수정 요청'))
+    expect(t.indexOf('서버가 붙인 3번 턴')).toBeGreaterThan(t.indexOf('둘째 수정 요청'))
+    expect(answerCalls()).toHaveLength(2)
+    w.unmount()
+  })
+
+  it('Enter로 보내도 같은 바디', async () => {
+    const w = await mountPanel(9, SIMPLE_PLAN_READY)
+    await w.find('textarea').setValue(FIX)
+    useApiMock.mockResolvedValueOnce({})
+    await w.find('textarea').trigger('keydown', { key: 'Enter' })
+    await flushPromises()
+
+    expect(answerCalls()).toHaveLength(1)
+    expect(useApiMock).toHaveBeenCalledWith('/api/interviews/9/answer', {
+      method: 'POST',
+      body: { answer: FIX, replyToSeq: null },
+    })
+    w.unmount()
+  })
+
+  // 켬 세션은 지금처럼 PLAN_READY에서 입력이 막힌다 — 반목표 §9 가드. 칸이 없는 구 API 응답·null·true가 모두 켬이다.
+  // 입력창이 비활성이면 VTU의 trigger가 이벤트를 건너뛰므로, 가드가 실제로 막는지 보려고 입력대기에서 글을 쓴 뒤
+  // plan_ready로 넘기고 네이티브 이벤트를 직접 보낸다.
+  it.each([
+    ['칸 없음', {}],
+    ['null', { superpowersEnabled: null }],
+    ['true', { superpowersEnabled: true }],
+  ])('켬(%s) PLAN_READY: 입력창 비활성·보내기 막힘·Enter도 POST 없음', async (_name, extra) => {
+    const w = await mountPanel(9, { statusName: 'AWAITING_INPUT', turns: SIMPLE_PLAN_READY.turns.slice(0, 1), plan: null, ...extra })
+    await w.find('textarea').setValue(FIX) // 입력대기라 열려 있다
+    FakeEventSource.last().emit('plan_ready', PLAN)
+    await flushPromises()
+
+    expect(w.find('textarea').attributes('disabled')).toBeDefined()
+    expect(w.find('textarea').attributes('placeholder')).toBe('답변을 입력하세요…') // 문구도 그대로
+    expect(w.find('[data-test="send-answer"]').attributes('disabled')).toBeDefined()
+    expect(w.find('[data-test="send-answer"]').text()).toContain('전송')
+    expect(w.find('[data-test="confirm"]').attributes('disabled')).toBeUndefined() // 구현 진행만 켜져 있다
+    await w.find('[data-test="send-answer"]').trigger('click')
+    w.find('textarea').element.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }))
+    await flushPromises()
+
+    expect(answerCalls()).toHaveLength(0)
+    w.unmount()
+  })
+
+  it('스냅샷이 실패하면 켬으로 본다', async () => {
+    authStub.accessToken = 'jwt'
+    useApiMock.mockRejectedValueOnce(new Error('snapshot 실패'))
+    const w = mount(InterviewPanel, { props: { sessionId: 9 } })
+    await flushPromises()
+    FakeEventSource.last().emit('plan_ready', PLAN)
+    await flushPromises()
+
+    expect(w.find('[data-test="send-answer"]').attributes('disabled')).toBeDefined()
+    expect(w.find('textarea').attributes('disabled')).toBeDefined()
+    expect(w.find('[data-test="send-answer"]').text()).toContain('전송')
+    expect(w.find('[data-test="confirm"]').attributes('disabled')).toBeUndefined()
+    w.unmount()
+  })
+
+  it('readonly면 간단 인터뷰 PLAN_READY에도 답변창이 없다', async () => {
+    const w = await mountPanel(9, SIMPLE_PLAN_READY, { readonly: true })
+    expect(w.find('textarea').exists()).toBe(false)
+    expect(w.find('[data-test="send-answer"]').exists()).toBe(false)
+    w.unmount()
+  })
+
+  it('질문 세션(QUESTION)은 간단 인터뷰 값과 무관하게 PLAN_READY에서 막힌다', async () => {
+    const w = await mountPanel(9, { statusName: 'PLAN_READY', superpowersEnabled: false, turns: [], plan: null }, { kind: 'QUESTION' })
+    expect(w.find('textarea').attributes('disabled')).toBeDefined()
+    expect(w.find('[data-test="send-answer"]').text()).toContain('추가 질문')
+    expect(w.find('[data-test="send-answer"]').text()).not.toContain('계획 고쳐 달라기')
+    w.unmount()
+  })
+})
+
+describe('InterviewPanel 인터뷰 목업 (스펙 2026-11-03 인터뷰 목업 §6)', () => {
+  const mk = (id: number, over: Record<string, unknown> = {}) => ({
+    id,
+    n: id,
+    name: `m${id}`,
+    version: 1,
+    title: `안${id}`,
+    description: null,
+    turnSeq: 1,
+    turnKind: 'question',
+    ...over,
+  })
+  const base = (mockups: unknown[]) => ({
+    statusName: 'AWAITING_INPUT',
+    turns: [{ seq: 1, role: 'assistant', kind: 'question', content: '어느 안이 좋나요?' }],
+    plan: null,
+    mockups,
+  })
+
+  // 카드의 단건 GET이 마운트 GET 수에 섞이지 않게, 콜백이 불리지 않는 관찰자로 덮는다.
+  function stubObserver() {
+    vi.stubGlobal(
+      'IntersectionObserver',
+      class {
+        observe() {}
+        disconnect() {}
+      },
+    )
+  }
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  it('묶인 질문 말풍선 안에 카드, 계획 목업은 목록에만 "계획"', async () => {
+    stubObserver()
+    const w = await mountPanel(9, base([mk(1), mk(2, { turnSeq: 7, turnKind: 'design' })]))
+    expect(w.find('.bubble-stack-assistant [data-test="mockup-card-1"]').exists()).toBe(true)
+    expect(w.find('[data-test="mockup-card-2"]').exists()).toBe(false)
+    expect(w.find('[data-test="mockup-list"]').exists()).toBe(true)
+    expect(w.find('[data-test="mockup-plan-2"]').exists()).toBe(true)
+    expect(w.find('[data-test="mockup-plan-1"]').exists()).toBe(false)
+    w.unmount()
+  })
+
+  it('말풍선이 먼저 그려진 뒤 mockup 이벤트로 묶이면 카드가 나타난다', async () => {
+    stubObserver()
+    const w = await mountPanel(9, base([]))
+    expect(w.find('[data-test="mockup-card-1"]').exists()).toBe(false)
+    FakeEventSource.last().emit('mockup', mk(1))
+    await flushPromises()
+    expect(w.find('.bubble-stack-assistant [data-test="mockup-card-1"]').exists()).toBe(true)
+    w.unmount()
+  })
+
+  it('목록: 이름별 묶음, 이전 버전은 접혀 있다', async () => {
+    stubObserver()
+    const w = await mountPanel(
+      9,
+      base([mk(1, { name: 'a', version: 1 }), mk(3, { n: 2, name: 'a', version: 2 })]),
+    )
+    expect(w.find('[data-test="mockup-row-3"]').text()).toContain('2 · 안3 (v2)')
+    expect(w.find('[data-test="mockup-row-1"]').exists()).toBe(false)
+    await w.find('[data-test="mockup-older-a"]').trigger('click')
+    expect(w.find('[data-test="mockup-row-1"]').exists()).toBe(true)
+    w.unmount()
+  })
+
+  it('읽기 전용(요청자)도 카드와 목록이 보인다', async () => {
+    stubObserver()
+    const w = await mountPanel(9, base([mk(1)]), { readOnly: true })
+    expect(w.find('[data-test="mockup-card-1"]').exists()).toBe(true)
+    expect(w.find('[data-test="mockup-list"]').exists()).toBe(true)
+    w.unmount()
+  })
+
+  it('질문 세션은 목록·탭 배지가 없다', async () => {
+    stubObserver()
+    const w = await mountPanel(9, base([mk(1)]), { kind: 'QUESTION' })
+    expect(w.find('[data-test="mockup-list"]').exists()).toBe(false)
+    expect(w.find('[data-test="mockup-tab-badge"]').exists()).toBe(false)
+    w.unmount()
+  })
+
+  it('탭 배지는 목업 수, 없으면 없다', async () => {
+    stubObserver()
+    const w = await mountPanel(9, base([mk(1), mk(2)]))
+    expect(w.find('[data-test="mockup-tab-badge"]').text()).toBe('2')
+    w.unmount()
+    const w2 = await mountPanel(9, base([]))
+    expect(w2.find('[data-test="mockup-tab-badge"]').exists()).toBe(false)
+    expect(w2.find('[data-test="mockup-list"]').exists()).toBe(false)
+    w2.unmount()
+  })
+
+  it('목업이 없으면 GET은 스냅샷 1회 그대로', async () => {
+    const w = await mountPanel(9, base([]))
+    expect(useApiMock).toHaveBeenCalledTimes(1)
+    w.unmount()
+  })
+})
+
+describe('InterviewPanel 구현에 넘길 목업 (스펙 2026-11-03 인터뷰 목업 §6 ③)', () => {
+  // 기본 id = n. 필요하면 id를 덮어쓴다.
+  const m = (n: number, over: Record<string, unknown> = {}) => ({
+    id: n,
+    n,
+    name: `m${n}`,
+    version: 1,
+    title: `안${n}`,
+    description: null,
+    turnSeq: 1,
+    turnKind: 'design',
+    ...over,
+  })
+  const snap = (plan: string | null, mockups: unknown[], statusName = 'PLAN_READY') => ({
+    statusName,
+    turns: [],
+    plan: plan == null ? null : { designMarkdown: 'd', planMarkdown: plan, planJson: '[]' },
+    mockups,
+  })
+  const planEvent = (planMarkdown: string) => ({ designMarkdown: 'd', planMarkdown, planJson: '[]' })
+
+  async function confirmBody(w: Awaited<ReturnType<typeof mountPanel>>) {
+    useApiMock.mockResolvedValueOnce({ taskId: 1 })
+    await w.find('[data-test="confirm"]').trigger('click')
+    await flushPromises()
+    const call = useApiMock.mock.calls.find((c) => String(c[0]).endsWith('/confirm'))
+    return call?.[1].body
+  }
+
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+  function stubObserver() {
+    vi.stubGlobal(
+      'IntersectionObserver',
+      class {
+        observe() {}
+        disconnect() {}
+      },
+    )
+  }
+  const eleven = () => Array.from({ length: 11 }, (_, i) => m(i + 1, { id: 100 + i + 1 }))
+  const elevenPlan = () => eleven().map((x) => `목업 ${x.n}`).join(' ')
+
+  it('목업이 없으면 영역이 없고 바디는 지금과 같다', async () => {
+    const w = await mountPanel(9, snap('목업 3을 따른다', []))
+    expect(w.find('[data-test="confirm-mockups"]').exists()).toBe(false)
+    expect(await confirmBody(w)).toEqual({ designRequested: false, implementationMode: 'REVIEW' })
+    w.unmount()
+  })
+
+  it('계획이 가리킨 목업이 미리 체크되고 바디에 mockupIds', async () => {
+    stubObserver()
+    const w = await mountPanel(9, snap('목업 3을 따른다', [m(3, { id: 10 }), m(1, { id: 11 })]))
+    expect(w.find('[data-test="confirm-mockups"]').exists()).toBe(true)
+    expect(w.find('[data-test="confirm-mockup-10"]').attributes('aria-checked')).toBe('true')
+    expect(w.find('[data-test="confirm-mockup-11"]').attributes('aria-checked')).toBe('false')
+    expect(w.find('[data-test="confirm-mockup-view-10"]').attributes('href')).toBe('/interviews/9/mockups/10')
+    expect(w.find('[data-test="confirm-mockup-view-10"]').attributes('target')).toBe('_blank')
+    expect(w.find('[data-test="confirm-mockup-warning"]').exists()).toBe(false)
+    expect(await confirmBody(w)).toEqual({ designRequested: false, implementationMode: 'REVIEW', mockupIds: [10] })
+    w.unmount()
+  })
+
+  it('새로고침: plan이 먼저, 목업이 replay로 나중에 와도 기본 체크', async () => {
+    stubObserver()
+    const w = await mountPanel(9, { statusName: null, turns: [], plan: null })
+    const es = FakeEventSource.last()
+    es.emit('plan_ready', planEvent('목업 3을 따른다'))
+    await flushPromises()
+    expect(w.find('[data-test="confirm-mockups"]').exists()).toBe(false)
+    es.emit('mockup', m(3, { id: 10 }))
+    await flushPromises()
+    expect(w.find('[data-test="confirm-mockup-10"]').attributes('aria-checked')).toBe('true')
+    w.unmount()
+  })
+
+  it('스트림 이벤트 없이 스냅샷 mockups만으로 체크 목록과 기본 체크', async () => {
+    stubObserver()
+    const w = await mountPanel(9, snap('목업 2', [m(2, { id: 22 })]))
+    expect(w.find('[data-test="confirm-mockup-22"]').attributes('aria-checked')).toBe('true')
+    w.unmount()
+  })
+
+  it('관리자가 바꾼 뒤에는 따라가지 않는다', async () => {
+    stubObserver()
+    const w = await mountPanel(9, snap('목업 3', [m(3, { id: 10 }), m(1, { id: 11 })]))
+    await w.find('[data-test="confirm-mockup-11"]').trigger('click')
+    await flushPromises()
+    FakeEventSource.last().emit('plan_ready', planEvent('목업 1'))
+    FakeEventSource.last().emit('mockup', m(4, { id: 14 }))
+    await flushPromises()
+    expect(w.find('[data-test="confirm-mockup-10"]').attributes('aria-checked')).toBe('true')
+    expect(w.find('[data-test="confirm-mockup-11"]').attributes('aria-checked')).toBe('true')
+    expect(w.find('[data-test="confirm-mockup-14"]').attributes('aria-checked')).toBe('false')
+    w.unmount()
+  })
+
+  it('전부 해제하면 키 없음과 경고 줄', async () => {
+    stubObserver()
+    const w = await mountPanel(9, snap('목업 3을 따른다', [m(3, { id: 10 })]))
+    await w.find('[data-test="confirm-mockup-10"]').trigger('click')
+    await flushPromises()
+    expect(w.find('[data-test="confirm-mockup-warning"]').text()).toBe('계획이 가리키는 목업 3을 넘기지 않습니다')
+    expect(await confirmBody(w)).toEqual({ designRequested: false, implementationMode: 'REVIEW' })
+    w.unmount()
+  })
+
+  it('계획이 11개를 가리키면 10개만 미리 체크하고 바디도 10개', async () => {
+    stubObserver()
+    const w = await mountPanel(9, snap(elevenPlan(), eleven()))
+    expect(w.find('[data-test="confirm-mockup-warning"]').text()).toBe('계획이 가리키는 목업 11을 넘기지 않습니다')
+    expect(w.find('[data-test="confirm-mockup-limit"]').text()).toBe('구현에 넘길 목업은 10개까지입니다')
+    const body = await confirmBody(w)
+    expect(body.mockupIds).toHaveLength(10)
+    expect(body.mockupIds).not.toContain(111)
+    w.unmount()
+  })
+
+  it('10개를 고르면 11번째 체크는 막힌다', async () => {
+    stubObserver()
+    const w = await mountPanel(9, snap(elevenPlan(), eleven()))
+    const last = w.find('[data-test="confirm-mockup-111"]')
+    expect(last.attributes('aria-disabled')).toBe('true')
+    await last.trigger('click')
+    await flushPromises()
+    expect((await confirmBody(w)).mockupIds).toHaveLength(10)
+    w.unmount()
+  })
+
+  it('디자인 단계 포함이면 안내 한 줄', async () => {
+    stubObserver()
+    const w = await mountPanel(9, snap('목업 3', [m(3, { id: 10 })]))
+    expect(w.find('[data-test="confirm-mockup-design-note"]').exists()).toBe(false)
+    await w.find('.q-toggle').trigger('click')
+    await flushPromises()
+    expect(w.find('[data-test="confirm-mockup-design-note"]').text()).toBe('디자인 단계의 출발점으로도 쓰입니다')
+    w.unmount()
+  })
+
+  it('묶이지 않은 목업은 후보가 아니다', async () => {
+    stubObserver()
+    const w = await mountPanel(9, snap('목업 3', [m(3, { id: 10, turnSeq: null, turnKind: null })]))
+    expect(w.find('[data-test="confirm-mockups"]').exists()).toBe(false)
+    expect(await confirmBody(w)).toEqual({ designRequested: false, implementationMode: 'REVIEW' })
+    w.unmount()
+  })
+
+  it('첫 .q-toggle은 여전히 디자인 토글', async () => {
+    stubObserver()
+    const w = await mountPanel(9, snap('목업 3', [m(3, { id: 10 })]))
+    expect(w.find('.q-toggle').text()).toContain('디자인 단계 포함')
+    w.unmount()
+  })
+})

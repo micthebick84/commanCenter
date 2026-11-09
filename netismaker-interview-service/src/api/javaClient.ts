@@ -2,6 +2,8 @@ import type {
   InterviewClaimResponse,
   WorkerActivityRequest,
   WorkerHeartbeatRequest,
+  WorkerMockupRequest,
+  WorkerMockupResponse,
   WorkerPlanRequest,
   WorkerQuestionRequest,
   WorkerRateLimitRequest,
@@ -13,6 +15,13 @@ interface ClientConfig {
   workerApiKey: string;
   workerId: string;
 }
+
+/** 목업 게시 1회 상한(ms) — 200KB 본문 + DB 쓰기. */
+export const MOCKUP_POST_TIMEOUT_MS = 30_000;
+
+export type PostMockupResult =
+  | { ok: true; mockup: WorkerMockupResponse }
+  | { ok: false; status: number | null; message: string };
 
 /** HTTP 상태를 보존하는 에러 — ActivityPoster가 404(구 Java)를 식별해 비활성화한다. */
 export class HttpStatusError extends Error {
@@ -146,6 +155,35 @@ export class JavaApiClient {
       body: JSON.stringify(body),
     });
     if (!res.ok) throw new HttpStatusError(res.status, `activity failed: ${res.status}`);
+  }
+
+  /**
+   * 목업 게시 — 던지지 않고 재시도하지 않는다(멱등이 아니라 report() 금지: 같은 name을 두 번 보내면 버전이 둘 생긴다).
+   * 실패 사유는 서버 JSON `message`(비어 있지 않은 문자열), 없으면 `HTTP {status}`, 네트워크 오류·시간 초과는 status null.
+   */
+  async postMockup(sessionId: number, body: WorkerMockupRequest): Promise<PostMockupResult> {
+    try {
+      const res = await this.fetchFn(this.url(`/worker/interviews/${sessionId}/mockups?${this.wq()}`), {
+        method: 'POST',
+        headers: this.headers(),
+        body: JSON.stringify(body),
+        signal: AbortSignal.timeout(MOCKUP_POST_TIMEOUT_MS),
+      });
+      if (res.ok) {
+        return { ok: true, mockup: (await res.json()) as WorkerMockupResponse };
+      }
+      let message = `HTTP ${res.status}`;
+      try {
+        const parsed = (await res.json()) as { message?: unknown } | null;
+        const m = parsed && typeof parsed === 'object' ? parsed.message : undefined;
+        if (typeof m === 'string' && m.trim() !== '') message = m;
+      } catch {
+        // JSON이 아닌 오류 바디(프록시 HTML 등) — 상태 코드로 대신한다
+      }
+      return { ok: false, status: res.status, message };
+    } catch {
+      return { ok: false, status: null, message: '네트워크 오류' };
+    }
   }
 
   /** 구독 한도 스냅샷 보고 (스펙 2026-09-05 §4.1). 실패 처리(비활성/경고)는 RateLimitReporter 책임 — 404 식별용 HttpStatusError. */

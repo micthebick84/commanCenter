@@ -1,6 +1,14 @@
-import type { JavaApiClient } from '../api/javaClient.js';
+import type { JavaApiClient, PostMockupResult } from '../api/javaClient.js';
 import type { SdkMessage, SdkQuery } from '../sdk/sdkAdapter.js';
-import type { ActivityInput, AttachmentRef, InterviewClaimResponse, RateLimitInfo, RefRepoClaim, RefState } from '../types.js';
+import type {
+  ActivityInput,
+  AttachmentRef,
+  InterviewClaimResponse,
+  RateLimitInfo,
+  RefRepoClaim,
+  RefState,
+  WorkerMockupRequest,
+} from '../types.js';
 import { ActivityPoster } from './activityPoster.js';
 import { RateLimitReporter } from './rateLimitReport.js';
 import { buildOptions } from '../sdk/sessionOptions.js';
@@ -10,6 +18,15 @@ import { tryHarvest, type HarvestResult } from './planHarvest.js';
 import { harvestSessionPlanFiles } from './planFiles.js';
 import { relay } from './messageRelay.js';
 import { kickoffLead, taskTypeGuide, writableDbLine } from './kickoffByType.js';
+import {
+  MOCKUP_GUIDE,
+  MOCKUP_RESTART_NOTE,
+  SIMPLE_RESUME_PREFIX,
+  planningOnlyParagraph,
+  processLine,
+  resumedAfterRestart,
+  superpowersOn,
+} from './interviewMode.js';
 import {
   ensureRepo as defaultEnsureRepo,
   ensureRefRepos as defaultEnsureRefRepos,
@@ -22,6 +39,7 @@ import { maskSecrets, type GitTokens } from '../sdk/gitRemote.js';
 import { buildWritingPlansSplice, buildPlanReformatSplice, detectHandoff, detectPlanIntent } from './skillDispatch.js';
 import { HeartbeatTicker } from './heartbeat.js';
 import { createDbMcp, type PreparedDbMcp } from '../sdk/dbMcp.js';
+import { createMockupMcp, type PreparedMockupMcp } from '../sdk/mockupMcp.js';
 import { MAX_TIMER_MS } from '../config.js';
 
 export interface RunnerDeps {
@@ -30,7 +48,7 @@ export interface RunnerDeps {
   claudeCliPath: string;
   /** 세션 최대 assistant 질문 턴(초과 시 FAILED). */
   maxTurns: number;
-  /** 이 턴 수 이상이면 force-finish 프롬프트 사용. */
+  /** 이 턴 수 이상이면 force-finish 프롬프트 사용(superpowers 켬만 — 간단 인터뷰는 문턱에서도 resume 접두 + 답변). */
   forceFinishTurns: number;
   /**
    * ~/.claude.json 글로벌+프로젝트 MCP 합본 스냅샷 (부팅 시 loadBaseMcpServers 1회) —
@@ -66,6 +84,11 @@ export interface RunnerDeps {
   gitTokens?: GitTokens;
   /** 테스트용 주입 — 기본 dbMcp.createDbMcp (질문 세션 내장 DB 도구, 스펙 2026-10-02 §6). */
   createDbMcp?: (claim: InterviewClaimResponse) => PreparedDbMcp;
+  /**
+   * 테스트용 주입 — 기본 mockupMcp.createMockupMcp (켬 인터뷰의 `show_mockup` 도구, 스펙 2026-11-03 인터뷰 목업 §4).
+   * `post`는 이 세션 id로 `client.postMockup`을 부르는 함수다.
+   */
+  createMockupMcp?: (post: (body: WorkerMockupRequest) => Promise<PostMockupResult>) => PreparedMockupMcp;
   /** 테스트용 주입 — 기본 planFiles.harvestSessionPlanFiles (채팅 추출 실패 시 세션 plan 파일로 대체 판정). */
   harvestPlanFiles?: (workDir: string) => Promise<HarvestResult>;
 }
@@ -122,8 +145,10 @@ function inheritedMarker(a: AttachmentRef): string {
  * kickoff 첨부 섹션 (스펙 2026-08-16 §7). 구버전 백엔드 claim에는 attachments 필드가
  * 없으므로 무조건 Array.isArray 가드 (sessionOptions.toMcpServers 선례). 0건이면 빈 문자열.
  * contentType null은 표기 생략 — 리터럴 'null'을 렌더링하지 않는다.
+ * `superpowers`(기본 true)가 false인 간단 인터뷰(스펙 2026-11-03 §5-5)는 brainstorming을 전제한 안내 첫머리만
+ * `계획을 쓰기 전에 `로 바꾼다 — 스킬이 없는 세션에 없는 스킬 이름을 말하지 않으려는 것이고 나머지 안내는 같다.
  */
-function attachmentSection(claim: InterviewClaimResponse): string {
+function attachmentSection(claim: InterviewClaimResponse, superpowers = true): string {
   const atts: AttachmentRef[] = Array.isArray(claim.attachments) ? claim.attachments : [];
   if (atts.length === 0) return '';
   const lines = atts.map((a) => {
@@ -134,7 +159,8 @@ function attachmentSection(claim: InterviewClaimResponse): string {
     '첨부 자료 (요청자가 등록 시 업로드한 파일):\n' +
     lines.join('\n') +
     '\n\n' +
-    'brainstorming 시작 전에 이 파일들을 Read 도구로 읽고 요구사항 파악에 활용하세요. ' +
+    (superpowers ? 'brainstorming 시작 전에 ' : '계획을 쓰기 전에 ') +
+    '이 파일들을 Read 도구로 읽고 요구사항 파악에 활용하세요. ' +
     '오피스 원본(pptx/docx/xlsx 등)은 Read로 열 수 없습니다. ' +
     '슬라이드 그림이 있으면 모두 순서대로 Read해서 화면 레이아웃과 빨간 표시·화살표 같은 주석이 가리키는 변경점을 파악하세요. ' +
     '글은 텍스트 추출본으로 읽고, 작은 글씨는 원본 그림으로 확인하세요. ' +
@@ -152,34 +178,43 @@ function attachmentSection(claim: InterviewClaimResponse): string {
  * 모르는 값은 지금과 같고, resume 입력(답변)은 타입과 무관하다 (스펙 2026-11-03 §5.1).
  * 구현 때 개발 DB 쓰기가 열리는 연결이 있으면(`claim.writableDbConnections`) 지시 문단 바로 뒤에 한 줄 안내(`writableDbLine`)가 붙는다 —
  * 타입과 무관하고 kickoff에만 붙으며, 목록이 비면 지금과 바이트까지 같다.
+ * superpowers 켬/끔(`superpowersOn(claim)` — `claim.superpowersEnabled === false`일 때만 끔, 스펙 2026-11-03 간단 인터뷰 §5)에 따라
+ * 바뀌는 곳은 "진행 방식 절"(`interviewMode.ts`)뿐이다. 켬(칸 없음·null·true)은 간단 인터뷰 전과 바이트까지 같고(아래 화면 목업 문구 제외), 끔은:
+ *  - kickoff: 첨부 안내의 `brainstorming 시작 전에 `→`계획을 쓰기 전에 `, 타입 지시의 질문 순서 문장, PLANNING-ONLY 문단의
+ *    `(via brainstorming → writing-plans)` 괄호, 마지막 줄(brainstorming 지시 → 간단 인터뷰 지시)만 바뀐다.
+ *  - resume: 답변 앞에 `SIMPLE_RESUME_PREFIX`(질문은 끝 — 더 묻지 말고 정규 형식의 최종 계획)가 붙는다. 참조 절(`everyTurn`) 뒤, 답변 앞.
+ * 화면 목업(스펙 2026-11-03 인터뷰 목업 §4)은 켬에만 붙는다:
+ *  - kickoff: 마지막 줄(`processLine(true)`) 바로 뒤에 `MOCKUP_GUIDE`.
+ *  - resume: 재기동으로 되돌린 턴이면(`resumedAfterRestart(claim.turns)`) 참조 절 뒤·답변 바로 앞에 `MOCKUP_RESTART_NOTE`. 그 밖의 resume은 답변 그대로.
+ * 이 함수는 시그니처를 바꾸지 않고 claim에서 직접 읽는다.
  */
 async function* promptFor(
   claim: InterviewClaimResponse,
   prefixes: { everyTurn?: string; kickoffOnly?: string } = {},
 ): AsyncIterable<UserTurn> {
   const everyTurn = prefixes.everyTurn ?? '';
+  const superpowers = superpowersOn(claim);
   if (!claim.claudeSessionId) {
     yield userTurn(
       everyTurn +
       (prefixes.kickoffOnly ?? '') +
       kickoffLead(claim) +
         `Title: ${claim.title}\nRequest: ${claim.description}\n\n` +
-        attachmentSection(claim) +
-        taskTypeGuide(claim.taskType) +
+        attachmentSection(claim, superpowers) +
+        taskTypeGuide(claim.taskType, superpowers) +
         writableDbLine(claim.writableDbConnections) +
-        'IMPORTANT — this is a PLANNING-ONLY interview. Your only deliverable is a written ' +
-        'implementation PLAN (via brainstorming → writing-plans), NOT code. Do NOT implement the ' +
-        'feature: do not create or modify source files, do not run builds/installs/tests, do not ' +
-        'git commit or push. Reading the repo for context is fine. Stop once the plan is written — ' +
-        'a human reviews and approves it, and implementation happens later in a separate step.\n\n' +
+        planningOnlyParagraph(superpowers) +
         '최종 plan은 반드시 다음 정규 형식으로 작성하세요(설명은 한국어): ' +
         '최상위 헤딩 `# <기능> 구현 계획`, 그 아래 각 작업을 `### 작업 N: <제목>` 형식으로. ' +
         '영문 `# <Feature> Implementation Plan` / `### Task N:` 도 허용됩니다. ' +
         '이 정확한 구조라야 시스템이 완료를 인식하며, 없으면 인터뷰가 끝나지 않습니다.\n\n' +
-        'Use the brainstorming skill: read the project context, then ask me one clarifying question at a time.',
+        processLine(superpowers) +
+        (superpowers ? MOCKUP_GUIDE : ''),
     );
   } else {
-    yield userTurn(everyTurn + (claim.lastAnswer ?? ''));
+    // 켬: 재기동으로 되돌린 턴을 다시 돌리면 끊긴 턴이 올린 목업은 API가 버렸다 — 답변 바로 앞에서 알린다.
+    const restartNote = superpowers && resumedAfterRestart(claim.turns) ? MOCKUP_RESTART_NOTE : '';
+    yield userTurn(everyTurn + (superpowers ? restartNote : SIMPLE_RESUME_PREFIX) + (claim.lastAnswer ?? ''));
   }
 }
 
@@ -587,8 +622,24 @@ export class InterviewRunner {
         return;
       }
 
+      // superpowers 켬/끔(스펙 2026-11-03 간단 인터뷰 §5) — 켬은 아래 흐름이 지금과 같다. 끔(간단 인터뷰)은:
+      //  - SDK 옵션에 `superpowers: false`(첫 질의·재요청 — handoff relay는 타지 않는다) — 플러그인 없음, 'Skill' 막음(§5-1)
+      //  - 프롬프트는 늘 `promptFor` — 끔 resume 접두가 곧 마무리 요청이라 force-finish의 "재요청 문구만" 분기를 타지 않는다
+      //    (그 분기는 lastAnswer = 이번 턴의 답변·고칠 점을 버린다)
+      //  - writing-plans handoff splice 없음
+      //  - resume 턴은 채팅 본문만 계획으로 판정하고(plan 파일 대체 판정 없음), 계획이 없으면 같은 세션에 재요청 1회(§5-4)
+      //  - 계획 보고에 Claude 세션 id(`claudeSessionId`) — 첫 턴에 바로 계획을 낸 세션도 "계획 고쳐 달라기"가 같은 대화를 잇도록
+      const on = superpowersOn(claim);
+      const resume = !!claim.claudeSessionId;
+
       // 작업 DB MCP(스펙 2026-10-14 §5): 질문 세션과 같은 내장 서버. 턴마다 새로 만들고 finally에서 닫는다.
       const db = (this.deps.createDbMcp ?? createDbMcp)(claim);
+      // 화면 목업 MCP(스펙 2026-11-03 인터뷰 목업 §4): 켬만 붙인다(간단 인터뷰·QUESTION은 없음). 턴마다 새로 만들어 이 턴의 모든 relay
+      // (본 질의·handoff·near-miss)에 같은 서버를 넘긴다 — 동시에 도는 세션끼리 섞이지 않고, SDK는 연결 중인 서버 인스턴스의 재사용을
+      // 조용히 버리기 때문이다. 닫을 연결이 없어 finally 정리는 없다.
+      const mockup = on
+        ? (this.deps.createMockupMcp ?? createMockupMcp)((body) => this.client.postMockup(claim.sessionId, body))
+        : null;
       try {
         // 참조 폴더는 refRoots로 넘기지 않는다 — 인터뷰는 Read/Grep/Glob이 사전 승인이라 게이트·옵션이 그대로다(스펙 2026-10-24 §5.1).
         const options = buildOptions({
@@ -601,18 +652,21 @@ export class InterviewRunner {
           model: claim.model,
           effort: claim.effort,
           abortController: controller,
+          superpowers: on,
           dbMcpServers: db.servers,
           dbDialects: db.dialects,
+          mockupMcpServers: mockup?.servers,
         });
         const stream: AsyncIterable<SdkMessage> = this.query({
           prompt:
             // Invariant: forceFinishTurns > 0 means at least one assistant turn has been recorded,
             // which requires a claudeSessionId (the session id is set on the FIRST assistant turn).
             // Therefore `forceFinish && !claudeSessionId` is unreachable in production; the else
-            // branch (`promptFor`) only executes on the genuine fresh-start path (turns == 0).
+            // branch (`promptFor`) only executes on the genuine fresh-start path (turns == 0) — 켬 기준.
+            // 끔은 force-finish여도 `promptFor`(참조 절 + 끔 resume 접두 + 답변)다 — 접두가 이미 "더 묻지 말고 최종 계획"이다.
             // 참조 절은 매 턴 접두(kickoff·resume), DB 절은 kickoff 전용 (스펙 2026-10-24 §5.2). 강제 마무리·handoff·near-miss
             // splice에는 참조 절을 붙이지 않는다 — 보고(refStates)는 그 경우에도 한다.
-            forceFinish && claim.claudeSessionId
+            on && forceFinish && claim.claudeSessionId
               ? (async function* () { yield userTurn(buildPlanReformatSplice()); })()
               : promptFor(claim, {
                   everyTurn: interviewRefPrefix(refs, claim.refsCleared === true),
@@ -637,7 +691,8 @@ export class InterviewRunner {
         // Skill-dispatch shim: if brainstorming announced the writing-plans handoff
         // but no plan was produced, splice the writing-plans SKILL.md into the SAME
         // session and run one more turn (fallback when 'Skill' did not auto-fire).
-        const handoff = detectHandoff(assistantText);
+        // 켬 전용 — 간단 인터뷰(끔)는 superpowers를 쓰지 않으므로 writing-plans를 주입하지 않는다(재요청은 아래 한 블록뿐).
+        const handoff = on && detectHandoff(assistantText);
         const hasPlan = tryHarvest(assistantText).ok;
         if (handoff && !hasPlan && sessionId) {
           controller.signal.throwIfAborted(); // relay 사이 gap에서 abort됐으면 SDK 재진입 금지
@@ -657,8 +712,10 @@ export class InterviewRunner {
                 model: claim.model,
                 effort: claim.effort,
                 abortController: controller,
+                superpowers: on,
                 dbMcpServers: db.servers,
                 dbDialects: db.dialects,
+                mockupMcpServers: mockup?.servers,
               }),
             }),
             { onActivity, onRateLimit, workDir: claim.workDir },
@@ -680,14 +737,22 @@ export class InterviewRunner {
 
         // 채팅 본문 추출이 실패하면 이번 세션이 저장한 plan 파일로 한 번 더 판정한다 — writing-plans가
         // plan을 파일에만 쓰고 채팅엔 요약만 남기면 완료를 영영 못 알아본다(2026-10-08 세션 21).
+        // 예외: 끔 resume 턴은 채팅 본문만 본다 — 매 턴 `git reset --hard`가 untracked plan 파일을 지우지 않아(planFiles.ts
+        // `changedFiles`) 앞 턴의 계획이 다시 잡히고, 그러면 고치기 전 계획이 새 계획으로 기록된다. 끔 kickoff은 새 체크아웃이라
+        // 앞 턴 파일이 없으므로 켬과 같은 안전망을 둔다.
+        const fileFallback = on || !resume;
         const harvestTurn = async (text: string): Promise<HarvestResult> => {
           const fromText = tryHarvest(text);
-          return fromText.ok ? fromText : this.harvestPlanFiles(claim.workDir);
+          return fromText.ok || !fileFallback ? fromText : this.harvestPlanFiles(claim.workDir);
         };
         let harvested = await harvestTurn(assistantText);
-        // near-miss 보정: 추출 실패 + plan 의도 신호 시, 같은 세션에 정규 형식 재요청 1회.
-        // force-finish는 이미 reformat 프롬프트이므로 이중 splice 방지.
-        if (!harvested.ok && !forceFinish && detectPlanIntent(assistantText) && sessionId) {
+        // 정규 형식 재요청 1회(같은 세션) — 추출 실패일 때:
+        //  - near-miss 보정(켬, 끔 kickoff): plan 의도 신호가 있을 때만. force-finish는 이미 reformat 프롬프트이므로 이중 splice 방지.
+        //    사용자에게 묻는 턴(물음표)은 신호가 아니다 — 간단 인터뷰도 질문을 한 번 모아 묻는 것은 허용한다.
+        //  - 끔 resume(답변·계획 수정 요청 뒤): 신호와 무관하게 늘 — 질문은 끝났으므로 질문으로 끝난 턴도 계획을 다시 청한다(§5-4).
+        //    force-finish 문턱에서도 같다(끔은 문턱에서 재요청 문구를 미리 보내지 않으므로 이중 splice가 아니다).
+        const reformatOnce = (!on && resume) || (!forceFinish && detectPlanIntent(assistantText));
+        if (!harvested.ok && reformatOnce && sessionId) {
           controller.signal.throwIfAborted(); // relay 사이 gap에서 abort됐으면 SDK 재진입 금지
           const reformatSplice = buildPlanReformatSplice();
           const retry = await relay(
@@ -703,8 +768,10 @@ export class InterviewRunner {
                 model: claim.model,
                 effort: claim.effort,
                 abortController: controller,
+                superpowers: on,
                 dbMcpServers: db.servers,
                 dbDialects: db.dialects,
+                mockupMcpServers: mockup?.servers,
               }),
             }),
             { onActivity, onRateLimit, workDir: claim.workDir },
@@ -742,6 +809,9 @@ export class InterviewRunner {
             durationMs,
             // 계획 턴에 처음 받은 참조도 커밋이 고정되도록 계획 보고에도 싣는다(API recordPlan → applyRefStates).
             ...refReport,
+            // 끔 세션만 Claude 세션 id를 싣는다 — 세션 id는 질문 보고에서만 저장되므로, 첫 턴에 바로 계획을 낸 간단 인터뷰도
+            // "계획 고쳐 달라기"가 새 kickoff이 아니라 같은 대화의 resume이 되도록. 켬 바디는 키 자체가 없다(지금과 같다).
+            ...(!on && sessionId ? { claudeSessionId: sessionId } : {}),
           });
           return;
         }

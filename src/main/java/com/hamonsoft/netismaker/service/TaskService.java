@@ -541,6 +541,9 @@ public class TaskService {
      * 작업 타입(스펙 2026-11-03 §4.2): null·공백 = 등록 값 유지, 같은 값 = 이력 없는 no-op, 다르면 세션을 만들기 전에 바꾸고
      * 참조 이력 다음에 `타입 변경: A → B` 행을 남긴다. 모르는 값은 다른 검증과 같이 세션 생성 전에 400.
      * 인터뷰가 실패·만료·취소되면 승인대기로 돌아오므로(InterviewService) 다시 승인할 때 한 번 더 바꿀 수 있다.
+     * 인터뷰 방식(설계 2026-11-03-interview-superpowers-toggle §4): 끔은 {@code superpowersEnabled == FALSE}일 때만이다 — 바디가 없거나
+     * 키가 없거나 true면 켬이다. 끔이면 세션에 false를 저장하고 타입 이력 다음에(마지막) `인터뷰 방식: 간단(superpowers 끔)` 행을 남긴다.
+     * 레거시 분석완료 승인은 바디를 보지 않으므로 이 값도 무시된다.
      */
     private void startInterview(Task t, String adminId, ApproveRequest req) {
         List<TaskMcpSpec> extras = resolveMcpExtras(req == null ? null : req.mcpCatalogIds());
@@ -555,6 +558,7 @@ public class TaskService {
                 req == null ? null : req.dbConnectionIds());
         RefRepoChanges.Change refChange = RefRepoChanges.diff(t.getRepoCatalogId(), t.getRefRepos(),
                 req == null ? null : req.refRepos(), repoCatalogService);
+        boolean superpowers = req == null || !Boolean.FALSE.equals(req.superpowersEnabled());
 
         t.setModel(model);
         t.setEffort(effort);
@@ -563,7 +567,7 @@ public class TaskService {
         if (refChange != null) t.setRefRepos(new ArrayList<>(refChange.next()));
         if (typeChanged) t.setTaskType(requestedType);
         t.setFailureReason(null);
-        interviewService.createForTask(t, model, effort, extras);
+        interviewService.createForTask(t, model, effort, extras, superpowers);
 
         TaskStatus from = t.getStatus();
         t.setStatus(TaskStatus.INTERVIEWING);
@@ -577,6 +581,10 @@ public class TaskService {
         if (typeChanged) {
             historyRepo.save(TaskStatusHistory.log(t.getId(), TaskStatus.INTERVIEWING, TaskStatus.INTERVIEWING,
                     "user", adminId, "타입 변경: " + TaskType.labelOf(typeBefore) + " → " + TaskType.labelOf(requestedType)));
+        }
+        if (!superpowers) {
+            historyRepo.save(TaskStatusHistory.log(t.getId(), TaskStatus.INTERVIEWING, TaskStatus.INTERVIEWING,
+                    "user", adminId, "인터뷰 방식: 간단(superpowers 끔)"));
         }
     }
 

@@ -116,6 +116,77 @@ class ImplementationPromptsTest {
                 .isEqualTo(ImplementationPrompts.planSection(task(PLAN), DIRECT, "abc1234", false));
     }
 
+    // ---- 인터뷰 목업 (설계 2026-11-03 §7 — SDD는 계획 파일 머리를 넘기라는 줄, 리뷰는 리뷰어 요구 한 줄) ----
+
+    private static final List<WorkerTaskResponse.InterviewMockupFile> MOCKUPS = List.of(
+            new WorkerTaskResponse.InterviewMockupFile(3, "list-filter-a", 2, "A안", "<html>a</html>"));
+
+    private static WorkerTaskResponse withDesign(WorkerTaskResponse t) {
+        return new WorkerTaskResponse(t.id(), t.githubRepo(), t.githubBranch(), t.title(), t.description(), t.kind(),
+                t.mcpsExtra(), t.analysisMarkdown(), t.subtasksJson(), t.headBranch(), t.headSha(), t.envVars(),
+                t.model(), t.effort(), "# 승인 디자인", null, null, null, null, null, t.gitUrl(), t.repoHost(),
+                t.planMarkdown(), null, null, null, null, null, null, t.implementation(), t.refRepos(), null,
+                t.interviewMockups(), t.excludedMockupNumbers());
+    }
+
+    @Test
+    void sdd_section_carries_the_mockup_line_only_when_the_plan_file_has_mockups() {
+        WorkerTaskResponse t = task(PLAN).withInterviewMockups(MOCKUPS, List.of());
+        String base = ImplementationPrompts.planSection(t, SDD, "abc1234", false, false);
+
+        assertThat(ImplementationPrompts.planSection(t, SDD, "abc1234", false, false, true))
+                .isEqualTo(base + InterviewMockupPrompts.SDD_MOCKUP_LINE);
+        // 참조 줄 다음에 목업 줄
+        assertThat(ImplementationPrompts.planSection(t, SDD, "abc1234", false, true, true))
+                .isEqualTo(base + ImplementationPrompts.SDD_REF_LINE + InterviewMockupPrompts.SDD_MOCKUP_LINE);
+        // 5인자판은 목업 줄 없음(false)과 같다
+        assertThat(ImplementationPrompts.planSection(t, SDD, "abc1234", false, true))
+                .isEqualTo(ImplementationPrompts.planSection(t, SDD, "abc1234", false, true, false))
+                .doesNotContain(InterviewMockupPrompts.SDD_MOCKUP_LINE);
+        // SDD 리뷰어에는 리뷰어 한 줄을 넣지 않는다 — 계획 파일 머리와 SDD 줄로 전한다(계획 "설계와 다름 ②")
+        assertThat(ImplementationPrompts.planSection(t, SDD, "abc1234", false, false, true))
+                .doesNotContain("interview mockups");
+    }
+
+    @Test
+    void review_reviewer_checks_the_visible_result_against_the_mockups() {
+        WorkerTaskResponse t = task(PLAN).withInterviewMockups(MOCKUPS, List.of());
+
+        String s = ImplementationPrompts.planSection(t, REVIEW, "abc1234", false, false, true);
+        assertThat(s).contains("The approved plan is in `.netis/plan/task-13-plan.md`. Read it in full."
+                        + InterviewMockupPrompts.reviewerRequirement(MOCKUPS, false) + "\n")
+                .contains("matches the interview mockups listed under \"인터뷰 목업\"")
+                .doesNotContain("the design wins")
+                .doesNotContain(InterviewMockupPrompts.SDD_MOCKUP_LINE);
+        // 플래그와 무관하다 — 리뷰는 claim의 목업으로 정한다
+        assertThat(ImplementationPrompts.planSection(t, REVIEW, "abc1234", false, false, false)).isEqualTo(s);
+
+        // 승인된 디자인이 있으면 디자인이 이긴다
+        assertThat(ImplementationPrompts.planSection(withDesign(t), REVIEW, "abc1234", false, false, true))
+                .contains(InterviewMockupPrompts.reviewerRequirement(MOCKUPS, true))
+                .contains("Where they differ from the approved design in `.design/`, the design wins.");
+    }
+
+    /** 넘긴 목업이 없으면(제외 번호만 있어도) 리뷰·SDD·직접 절은 지금과 같다. */
+    @Test
+    void without_mockups_every_plan_section_is_unchanged() {
+        WorkerTaskResponse excludedOnly = task(PLAN).withInterviewMockups(List.of(), List.of(2));
+        for (var mode : List.of(DIRECT, REVIEW, SDD)) {
+            assertThat(ImplementationPrompts.planSection(excludedOnly, mode, "abc1234", true, false, false))
+                    .isEqualTo(ImplementationPrompts.planSection(task(PLAN), mode, "abc1234", true))
+                    .doesNotContain("interview mockups")
+                    .doesNotContain(InterviewMockupPrompts.SDD_MOCKUP_LINE);
+        }
+        // 계획 파일이 없는 리뷰도 리뷰어 요구가 없다 — 목업 목록이 계획 파일 머리에만 있기 때문
+        assertThat(ImplementationPrompts.planSection(task(null).withInterviewMockups(MOCKUPS, List.of()), REVIEW,
+                "abc1234", false, false, true))
+                .isEqualTo(ImplementationPrompts.planSection(task(null), REVIEW, "abc1234", false));
+        // 직접 방식은 목업이 있어도 계획 절이 같다 — 목업 절은 템플릿 밖에 붙는다
+        assertThat(ImplementationPrompts.planSection(task(PLAN).withInterviewMockups(MOCKUPS, List.of()), DIRECT,
+                "abc1234", false, false, true))
+                .isEqualTo(ImplementationPrompts.planSection(task(PLAN), DIRECT, "abc1234", false));
+    }
+
     @Test
     void mode_line_names_attempt_and_fallback_with_korean_particles() {
         assertThat(ImplementationPrompts.modeLine(REVIEW, REVIEW, 1, null)).isEqualTo("- **구현 방식**: 리뷰\n");

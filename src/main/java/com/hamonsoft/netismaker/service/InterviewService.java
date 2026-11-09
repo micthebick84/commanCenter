@@ -3,6 +3,7 @@ package com.hamonsoft.netismaker.service;
 import com.hamonsoft.netismaker.dbmcp.DbWriteGate;
 import com.hamonsoft.netismaker.dto.AnswerRequest;
 import com.hamonsoft.netismaker.dto.InterviewClaimResponse;
+import com.hamonsoft.netismaker.dto.InterviewMockupSummary;
 import com.hamonsoft.netismaker.dto.InterviewResponse;
 import com.hamonsoft.netismaker.dto.InterviewSummaryResponse;
 import com.hamonsoft.netismaker.dto.WorkerPlanRequest;
@@ -36,6 +37,7 @@ import java.util.stream.Collectors;
  *   claim         ─► QUEUED → RUNNING (워커, SKIP LOCKED)
  *   recordQuestion─► RUNNING → AWAITING_INPUT (워커가 질문 emit, 반납)
  *   submitAnswer  ─► AWAITING_INPUT → QUEUED (사용자 답변, 재큐; idempotent)
+ *                    | PLAN_READY → QUEUED (간단 인터뷰(superpowers 끔)의 계획 고쳐 달라기)
  *   submitAnswerWithRefs ─► submitAnswer + 참조 repo 변경(작업 인터뷰 답변, 한 트랜잭션)
  *   recordPlan    ─► RUNNING → PLAN_READY (writing-plans 완료)
  *   confirm       ─► PLAN_READY → REGISTERED (기존 task 갱신: analysis 프리필 + 구현/디자인 큐)
@@ -43,6 +45,10 @@ import java.util.stream.Collectors;
  *   expire        ─► AWAITING_INPUT → EXPIRED (idle TTL) | QUEUED → EXPIRED (인터뷰 서비스 미처리 TTL)
  *   fail          ─► QUEUED/RUNNING/AWAITING_INPUT → FAILED
  *   releaseForRestart ─► RUNNING → QUEUED (인터뷰 서비스 재기동 정합, 턴당 최대 2회; 소진 시 FAILED)
+ *
+ * 인터뷰 목업(스펙 2026-11-03 §5): recordQuestion·recordPlan이 턴 도중 올라온(안 묶인) 목업을 그 턴에 묶고,
+ * 세션을 RUNNING 밖으로 보내 턴이 끝나지 못하는 releaseForRestart(재큐)·fail·cancel·expire·closeOpenSessionsForTask는
+ * 안 묶인 목업을 버린다(같은 트랜잭션, 세션 행 잠금 아래).
  *
  * task_id가 있는 세션은 각 전이마다 소유 task 상태도 함께 미러링한다:
  *   recordQuestion → INTERVIEW_INPUT, submitAnswer → INTERVIEWING, recordPlan → INTERVIEW_REVIEW,
@@ -110,6 +116,17 @@ public class InterviewService {
         this.dbWriteGate = dbWriteGate;
     }
 
+    /**
+     * 인터뷰 목업 묶기·버리기·조회 (스펙 2026-11-03 §5). 생성자를 바꾸지 않으려고 setter 주입 —
+     * 없는 구성(setter를 안 부른 단위 시험)에서는 셋 다 아무것도 하지 않고 조회는 빈 목록이다.
+     */
+    private InterviewMockupService mockupService;
+
+    @Autowired(required = false)
+    void setInterviewMockupService(InterviewMockupService mockupService) {
+        this.mockupService = mockupService;
+    }
+
     /** claim이 첨부 슬라이드 렌더링을 기다리는 최대 시간(초, 스펙 2026-10-27 §7.2). 0이면 기다리지 않는다. 생성자를 바꾸지 않으려고 setter 주입. */
     private int claimWaitSeconds = 180;
 
@@ -153,13 +170,16 @@ public class InterviewService {
      * 관리자 승인 → 해당 task의 인터뷰 세션 생성(QUEUED).
      * task 필드를 스냅샷으로 복사한다 — 워커는 세션만 보고 일하므로 계약이 바뀌지 않는다.
      * task 상태 전이는 호출자(TaskService)가 담당한다.
+     * superpowersEnabled: 관리자가 승인 때 고른 인터뷰 방식(설계 2026-11-03-interview-superpowers-toggle §4) — false면 간단 인터뷰.
+     * 세션 칸으로 그대로 저장한다(호출자가 바디의 null을 true로 풀어서 넘긴다).
      */
     @Transactional
     public InterviewSession createForTask(Task t, String model, String effort,
-                                          List<TaskMcpSpec> extras) {
+                                          List<TaskMcpSpec> extras, boolean superpowersEnabled) {
         InterviewSession s = InterviewSession.create(t.getGithubRepo(), t.getGithubBranch(),
                 t.getTitle(), t.getDescription(), t.getRequesterId(),
                 new ArrayList<>(extras == null ? List.of() : extras), model, effort);
+        s.setSuperpowersEnabled(superpowersEnabled);
         s.setGitUrl(t.getGitUrl());
         s.setRepoAlias(t.getRepoAlias());
         s.setRepoCatalogId(t.getRepoCatalogId());
@@ -422,6 +442,7 @@ public class InterviewService {
         String kind = req.kind() == null || req.kind().isBlank() ? "question" : req.kind();
         InterviewTurn turn = appendTurn(sessionId, "assistant", kind,
                 req.content() == null ? "" : req.content());
+        bindMockups(s, turn);
         s.setStatus(InterviewStatus.AWAITING_INPUT);
         s.setWorkerId(null);
         s.setClaimedAt(null);
@@ -494,6 +515,13 @@ public class InterviewService {
     /**
      * writing-plans 완료 → PLAN_READY. design+plan 영속화, 비용 누적, 참조 repo 준비 결과 반영, 워커 반납.
      * 참조 결과도 반영해야 마지막 답변에서 더한 참조가 계획 턴에 처음 받아졌을 때 커밋이 고정된다 (스펙 2026-10-24 §4.5).
+     * <p>계획 고쳐 달라기 (설계 2026-11-03-interview-superpowers-toggle §4.1):
+     * <ul>
+     *   <li>claudeSessionId가 비어 있지 않으면 저장한다(recordQuestion과 같은 규칙) — 첫 턴에 바로 계획이 나온 간단 인터뷰는
+     *       질문 보고가 없으므로 여기서 저장해야 고쳐 달라기가 새 kickoff가 아니라 같은 대화의 resume이 된다.</li>
+     *   <li>interview_plan은 PK가 session_id라 고친 계획이 같은 행을 덮어쓴다 — confirm·구현 claim은 늘 최신 계획을 읽는다.
+     *       이전 계획 본문은 design 턴에 남기려고 간단 인터뷰(끔)만 design 턴 본문에 계획 본문을 함께 담는다({@link #designTurnContent}).</li>
+     * </ul>
      */
     @Transactional
     public InterviewPlan recordPlan(Long sessionId, String workerId, WorkerPlanRequest req) {
@@ -504,6 +532,9 @@ public class InterviewService {
                     + s.getStatus().dbValue() + ")");
         }
         requireWorker(s, workerId);
+        if (req.claudeSessionId() != null && !req.claudeSessionId().isBlank()) {
+            s.setClaudeSessionId(req.claudeSessionId());
+        }
         addUsage(s, req.costUsd(), req.inputTokens(), req.outputTokens(),
                 req.cacheCreationTokens(), req.cacheReadTokens());
         applyRefStates(s, req.refStates());
@@ -511,8 +542,8 @@ public class InterviewService {
         InterviewPlan plan = planRepo.save(InterviewPlan.create(sessionId,
                 req.designMarkdown(), req.planMarkdown(), req.planJson(),
                 req.durationMs(), s.getTotalCostUsd()));
-        appendTurn(sessionId, "assistant", "design",
-                req.designMarkdown() == null ? "" : req.designMarkdown());
+        InterviewTurn design = appendTurn(sessionId, "assistant", "design", designTurnContent(s, req));
+        bindMockups(s, design); // 계획 턴의 목업은 design 턴에 묶인다(turn_kind = design)
         s.setStatus(InterviewStatus.PLAN_READY);
         s.setWorkerId(null);
         s.setClaimedAt(null);
@@ -520,6 +551,20 @@ public class InterviewService {
         touch(s);
         mirrorTask(s, TaskStatus.INTERVIEW_REVIEW, workerId, "플랜 생성 완료 → 확정 대기");
         return plan;
+    }
+
+    /**
+     * 계획 보고의 design 턴 본문. 켬은 지금처럼 design만(null이면 "") — 바이트 그대로.
+     * 끔(간단 인터뷰)은 계획 본문을 함께 담는다: design이 있으면 design + 빈 줄 + 계획, 없으면(공백뿐 포함) 계획만.
+     * 간단 인터뷰는 design이 대개 비어 있고 interview_plan 행은 고친 계획이 덮어쓰므로, 이렇게 해야 고치기 전 계획이 대화 기록에 남는다
+     * (설계 2026-11-03-interview-superpowers-toggle §4.1). 계획 본문이 비어 오면 덧붙일 것이 없어 켬과 같다.
+     * interview_plan의 design 칸은 보고 그대로다 — confirm이 그 값을 task_analysis.markdown_result(design 전용)로 옮긴다.
+     */
+    private static String designTurnContent(InterviewSession s, WorkerPlanRequest req) {
+        String design = req.designMarkdown() == null ? "" : req.designMarkdown();
+        String plan = req.planMarkdown();
+        if (s.isSuperpowersEnabled() || plan == null || plan.isBlank()) return design;
+        return design.isBlank() ? plan : design + "\n\n" + plan;
     }
 
     /**
@@ -576,6 +621,7 @@ public class InterviewService {
         s.setWorkerId(null);
         s.setClaimedAt(null);
         touch(s);
+        discardUnboundMockups(s);
         mirrorTask(s, TaskStatus.AWAITING_APPROVAL, actor, "인터뷰 실패 → 승인대기 복귀");
         return new FailOutcome(s, note);
     }
@@ -583,6 +629,10 @@ public class InterviewService {
     /**
      * 사용자 답변 → AWAITING_INPUT → QUEUED 재큐. idempotent:
      * 같은 replyToSeq에 응답하는 user answer 턴이 이미 있으면 무시 (reply_to_seq 컬럼이 키).
+     * <p>계획 고쳐 달라기 (설계 2026-11-03-interview-superpowers-toggle §4.1): 간단 인터뷰(superpowers 끔) 작업 세션은
+     * PLAN_READY에서도 받는다 — 같은 user/answer 턴으로 남기고 PLAN_READY → QUEUED, 작업은 플랜승인대기 → 인터뷰중
+     * (이력 {@code 계획 수정 요청 → 인터뷰 재개}). 화면은 replyToSeq를 null로 보내므로(계획의 design 턴 seq를 모른다) 중복 no-op이 아니라
+     * 두 번째 제출은 아래 상태 검사의 409로 막힌다. 켬 세션의 PLAN_READY는 지금처럼 409·같은 메시지다.
      */
     @Transactional
     public AnswerOutcome submitAnswer(Long sessionId, String actorId, boolean isAdmin, AnswerRequest req) {
@@ -597,14 +647,18 @@ public class InterviewService {
                             && req.replyToSeq().equals(t.getReplyToSeq()));
             if (already) return new AnswerOutcome(s, null); // no-op, 상태 유지, 턴 없음
         }
-        if (s.getStatus() != InterviewStatus.AWAITING_INPUT) {
+        // 질문 세션은 PLAN_READY가 되지 않는다 — !isQuestion()은 방어다(질문 세션은 superpowers 값을 보지 않는다)
+        boolean planFix = s.getStatus() == InterviewStatus.PLAN_READY
+                && !s.isSuperpowersEnabled() && !s.isQuestion();
+        if (s.getStatus() != InterviewStatus.AWAITING_INPUT && !planFix) {
             throw TaskException.conflict("입력대기 상태에서만 답변할 수 있습니다 (현재: "
                     + s.getStatus().dbValue() + ")");
         }
         InterviewTurn answer = appendTurn(sessionId, "user", "answer", req.answer(), req.replyToSeq());
         s.setStatus(InterviewStatus.QUEUED);
         touch(s);
-        mirrorTask(s, TaskStatus.INTERVIEWING, actorId, "관리자 답변 → 인터뷰 재개");
+        mirrorTask(s, TaskStatus.INTERVIEWING, actorId,
+                planFix ? "계획 수정 요청 → 인터뷰 재개" : "관리자 답변 → 인터뷰 재개");
         return new AnswerOutcome(s, answer.getSeq());
     }
 
@@ -654,6 +708,8 @@ public class InterviewService {
         s.setClaimedAt(null);
         s.setRestartRequeueCount(s.getRestartRequeueCount() + 1);
         touch(s);
+        discardUnboundMockups(s); // 같은 턴을 처음부터 다시 돌리므로 끊긴 턴이 올린 목업은 버린다
+        // 문구 앞부분("인터뷰 서비스가 다시 시작돼")을 인터뷰 서비스 interviewMode.ts resumedAfterRestart가 본다 — 바꾸면 둘 다 고친다
         InterviewTurn note = appendTurn(sessionId, "system", "note",
                 "인터뷰 서비스가 다시 시작돼 이 단계를 다시 진행합니다.");
         mirrorTask(s, TaskStatus.INTERVIEWING, "worker-restart", "인터뷰 서비스 재기동 → 인터뷰 재개");
@@ -675,6 +731,7 @@ public class InterviewService {
         s.setWorkerId(null);
         s.setClaimedAt(null);
         touch(s);
+        discardUnboundMockups(s);
         mirrorTask(s, TaskStatus.AWAITING_APPROVAL, actorId, "인터뷰 취소 → 승인대기 복귀");
         return s;
     }
@@ -694,6 +751,7 @@ public class InterviewService {
         appendTurn(sessionId, "system", "note", "만료: " + (reason == null ? "idle TTL 초과" : reason));
         s.setStatus(InterviewStatus.EXPIRED);
         touch(s);
+        discardUnboundMockups(s);
         mirrorTask(s, TaskStatus.AWAITING_APPROVAL, "system", "인터뷰 만료 → 승인대기 복귀");
         return s;
     }
@@ -716,6 +774,16 @@ public class InterviewService {
     /** mode: 확정 때 고른 구현 방식 — null이면 직접 (스펙 2026-10-15 §5.1). */
     @Transactional
     public Long confirm(Long sessionId, String adminId, boolean designRequested, ImplementationMode mode) {
+        return confirm(sessionId, adminId, designRequested, mode, List.of());
+    }
+
+    /**
+     * mockupIds: 확정 때 고른 인터뷰 목업 id (스펙 2026-11-03 §7) — null·빈 목록이면 고른 것 없음. 이 세션의 버리지 않은
+     * 목업이 아니거나 10개를 넘으면 상태를 바꾸기 전에 400.
+     */
+    @Transactional
+    public Long confirm(Long sessionId, String adminId, boolean designRequested, ImplementationMode mode,
+                        List<Long> mockupIds) {
         InterviewSession s = requireSessionForUpdate(sessionId);
         requireNotQuestion(s, "확정");
         if (s.getStatus() != InterviewStatus.PLAN_READY) {
@@ -735,6 +803,10 @@ public class InterviewService {
         }
         InterviewPlan plan = planRepo.findById(sessionId)
                 .orElseThrow(() -> TaskException.conflict("인터뷰 플랜이 없습니다"));
+        // 고른 목업 검증은 첫 상태 변경 전에 — 400이면 아무것도 바뀌지 않는다 (서비스가 없는 구성은 목업 없음)
+        InterviewMockupService.ConfirmSelection mockups = mockupService == null
+                ? InterviewMockupService.ConfirmSelection.EMPTY
+                : mockupService.resolveForConfirm(sessionId, mockupIds, plan.getPlanMarkdown());
 
         TaskAnalysis a = TaskAnalysis.create(t.getId(), plan.getDesignMarkdown(),
                 plan.getPlanJson(), null, plan.getDurationMs());
@@ -753,6 +825,11 @@ public class InterviewService {
                 "플랜 확정 → " + to.dbValue() + " (interview_session " + sessionId
                         + ", 구현 방식: " + t.getImplementationMode().label() + ")"));
         copyPinnedRefs(s, t, to, adminId);
+        t.setImplementationMockupIds(new ArrayList<>(mockups.idsByN()));
+        t.setImplementationMockupExcluded(new ArrayList<>(mockups.excludedNumbers()));
+        if (mockups.historyReason() != null) {
+            historyRepo.save(TaskStatusHistory.log(t.getId(), to, to, "user", adminId, mockups.historyReason()));
+        }
 
         // 인터뷰 사용량 이관 (스펙 §4.2) — 세션당 confirm 1회(PLAN_READY 가드)라 이중 누적 없음.
         if ((s.getTotalCostUsd() != null && s.getTotalCostUsd().signum() > 0)
@@ -810,7 +887,8 @@ public class InterviewService {
         InterviewSession s = getForView(id, viewerId, isAdmin);
         List<InterviewTurn> turns = turnRepo.findBySessionIdOrderBySeqAsc(id);
         InterviewPlan plan = planRepo.findById(id).orElse(null);
-        if (!s.isQuestion()) return InterviewResponse.of(s, turns, plan);
+        // INTERVIEW — 목업 요약(html 없음)을 스냅샷에 싣는다: 패널이 스트림이 늦거나 끊겨도 목록·확정 체크 목록을 채운다. QUESTION은 []
+        if (!s.isQuestion()) return InterviewResponse.of(s, turns, plan).withMockups(mockupSummaries(id));
         List<InterviewResponse.AttachmentView> kickoff = new ArrayList<>();
         Map<Integer, List<InterviewResponse.AttachmentView>> byTurn = new LinkedHashMap<>();
         // 정리 잡은 종료된 질문의 첨부만 지운다 — 진행 중이면 파일 검사 없이 false(없으면 실제 유실, 다운로드가 404로 알린다)
@@ -825,6 +903,15 @@ public class InterviewService {
         return InterviewResponse.of(s, turns, plan, kickoff, byTurn);
     }
 
+    /**
+     * 세션의 목업 목록(html 없음, 버린 것 제외, n 순, 스펙 2026-11-03 §5) — 워커 보고 뒤 SSE로 다시 밀 목록.
+     * ACL 없음(호출자가 정한다). 목업 서비스가 없는 구성이면 빈 목록. 질문 세션은 업로드가 막혀 행이 없으므로 빈 목록이 나온다.
+     */
+    @Transactional(readOnly = true)
+    public List<InterviewMockupSummary> mockupSummaries(Long sessionId) {
+        return mockupService == null ? List.of() : mockupService.list(sessionId);
+    }
+
     /** task 상세가 열 세션 — 최신 1건. */
     @Transactional(readOnly = true)
     public Optional<Long> latestSessionIdForTask(Long taskId) {
@@ -834,17 +921,24 @@ public class InterviewService {
     /**
      * task 상세가 열 세션(최신 1건)의 id와 참조 사본 — 상세 조회가 최신 세션을 한 번만 읽도록 둘을 함께 돌려준다.
      * 참조는 인터뷰 단계일 때 보여 줄 값이다(고정 커밋·실패 사유 포함, 스펙 2026-10-24 §4.9). 세션이 없으면 empty,
-     * 세션 값이 null이면 [].
+     * 세션 값이 null이면 []. 인터뷰 방식(superpowersEnabled)은 세션 상태와 무관하게 그 세션 값이다
+     * (설계 2026-11-03-interview-superpowers-toggle §4 — 작업 상세 {@code interviewSuperpowersEnabled}).
      */
     @Transactional(readOnly = true)
     public Optional<LatestSession> latestSessionForTask(Long taskId) {
         return sessionRepo.findTopByTaskIdOrderByCreatedAtDesc(taskId)
                 .map(s -> new LatestSession(s.getId(),
-                        s.getRefRepos() == null ? List.of() : List.copyOf(s.getRefRepos())));
+                        s.getRefRepos() == null ? List.of() : List.copyOf(s.getRefRepos()),
+                        s.isSuperpowersEnabled()));
     }
 
-    /** {@link #latestSessionForTask}의 결과 — 최신 세션 id와 그 참조 사본. */
-    public record LatestSession(Long id, List<RefRepo> refRepos) {}
+    /** {@link #latestSessionForTask}의 결과 — 최신 세션 id와 그 참조 사본, 그 세션의 인터뷰 방식(false = 간단 인터뷰). */
+    public record LatestSession(Long id, List<RefRepo> refRepos, boolean superpowersEnabled) {
+        /** 인터뷰 방식을 모르는 호출처(켬이 기본) — 2인자 호환. */
+        public LatestSession(Long id, List<RefRepo> refRepos) {
+            this(id, refRepos, true);
+        }
+    }
 
     /**
      * task의 전체 세션 이력 (최신순, 경량 — turns/plan 미포함).
@@ -875,6 +969,7 @@ public class InterviewService {
             s.setWorkerId(null);
             s.setClaimedAt(null);
             touch(s);
+            discardUnboundMockups(s);
         }
     }
 
@@ -930,7 +1025,8 @@ public class InterviewService {
         return sessionRepo.findByIdForUpdate(sessionId).orElseThrow(TaskException::notFound);
     }
 
-    private void requireWorker(InterviewSession s, String workerId) {
+    /** 그 세션을 잡은 워커만 쓸 수 있다. 목업 업로드({@link InterviewMockupService#upload})도 같은 규칙·문구를 쓰려고 package-private static이다. */
+    static void requireWorker(InterviewSession s, String workerId) {
         if (s.getWorkerId() != null && !s.getWorkerId().equals(workerId)) {
             throw TaskException.conflict("다른 워커가 잡은 인터뷰입니다 (소유: " + s.getWorkerId() + ")");
         }
@@ -953,6 +1049,25 @@ public class InterviewService {
         OffsetDateTime now = OffsetDateTime.now();
         s.setUpdatedAt(now);
         s.setLastActivityAt(now);
+    }
+
+    /**
+     * 턴 도중 올라온(안 묶인) 목업을 방금 끝난 턴(질문 보고의 question|design 턴, 계획 보고의 design 턴)에 묶는다 (스펙 2026-11-03 §5).
+     * 질문 세션은 목업을 받지 않으므로(업로드 404) 묶지 않는다.
+     */
+    private void bindMockups(InterviewSession s, InterviewTurn turn) {
+        if (mockupService == null || s.isQuestion()) return;
+        mockupService.bindUnbound(s.getId(), turn.getSeq(), turn.getKind());
+    }
+
+    /**
+     * 세션이 RUNNING 밖(재큐·실패·취소·만료·작업 삭제)으로 가서 그 턴이 질문·계획으로 끝나지 못할 때, 안 묶인 목업을 버린다
+     * (스펙 2026-11-03 §5). 버림은 SSE로 따로 알리지 않는다 — 화면은 status 이벤트 때 안 묶인 목업을 지운다.
+     * 질문 세션은 목업이 없으므로 건너뛴다(질문 세션의 실패·취소·만료 쿼리를 늘리지 않는다).
+     */
+    private void discardUnboundMockups(InterviewSession s) {
+        if (mockupService == null || s.isQuestion()) return;
+        mockupService.discardUnbound(s.getId());
     }
 
     /**

@@ -17,6 +17,7 @@ import FixRequestDialog from '~/components/tasks/FixRequestDialog.vue'
 import FixRequestHistory from '~/components/tasks/FixRequestHistory.vue'
 import AppLogCard from '~/components/tasks/AppLogCard.vue'
 import { appLogViewable } from '~/composables/appLog'
+import TaskInterviewMockups from '~/components/tasks/TaskInterviewMockups.vue'
 import TaskDbChanges from '~/components/tasks/TaskDbChanges.vue'
 import { stageSteps, nextAction, ageOf, isDbWorkPrCreated, DB_WORK_CLOSE_REQUEST_CONFIRM, type NextActionKind } from '~/composables/taskStages'
 import { renderMarkdown } from '~/composables/useMarkdown'
@@ -25,6 +26,7 @@ import { elapsedLabel, implementationModeLabel, implementationModeText } from '~
 import { canAbortFix, canFollowUp, canRequestFix, fixLimitReached, followUpPath, type FixView } from '~/composables/taskFix'
 import { useNowTick } from '~/composables/useNowTick'
 import { taskTypeLabel } from '~/composables/taskType'
+import { SIMPLE_INTERVIEW_LABEL } from '~/composables/interviewMode'
 import { downloadAttachment as downloadBlob } from '~/composables/attachmentDownload'
 import {
   closeSteps,
@@ -135,6 +137,8 @@ interface TaskResponse {
   mcpsExtra: TaskMcpSpec[]
   envVars: EnvVar[]
   interviewSessionId: number | null
+  /** 확정 때 구현에 넘긴 인터뷰 목업 id (스펙 2026-11-03 인터뷰 목업) — 없으면 키 없음. */
+  implementationMockupIds?: number[]
   createdAt: string
   updatedAt: string
   model: string
@@ -161,6 +165,8 @@ interface TaskResponse {
   fix?: FixView | null
   /** 작업 타입 (스펙 2026-11-03 §4) — null·없음은 타입 없음(기존 작업). 칩은 타입이 있을 때만 그린다. */
   taskType?: string | null
+  /** 이 작업 인터뷰의 superpowers 켬/끔 (설계 2026-11-03 interview-superpowers-toggle §4) — false(간단 인터뷰)일 때만 칩을 그린다. null·없음은 켬이다. */
+  interviewSuperpowersEnabled?: boolean | null
 }
 
 const route = useRoute()
@@ -766,6 +772,7 @@ function onAction(kind: NextActionKind) {
           <q-chip dense size="sm" outline icon="tune" :label="task.effort" />
           <q-chip v-if="task.taskType" dense size="sm" outline :label="taskTypeLabel(task.taskType)" data-test="task-type-chip" />
           <q-chip v-if="modeChip" dense size="sm" outline icon="account_tree" :label="modeChip" data-test="impl-mode-chip" />
+          <q-chip v-if="task.interviewSuperpowersEnabled === false" dense size="sm" outline :label="SIMPLE_INTERVIEW_LABEL" data-test="simple-interview-chip" />
           <q-chip v-if="task.totalCostUsd != null" dense size="sm" outline
                   icon="paid" color="primary"
                   :label="`${fmtTokens(task.totalTokens ?? 0)} 토큰 · ${fmtCost(task.totalCostUsd)}`" />
@@ -937,6 +944,12 @@ function onAction(kind: NextActionKind) {
           </template>
         </TaskDetailMobile>
         <FixRequestHistory v-if="task.fix" class="q-mt-md" :task-id="String(task.id)" :refresh-key="fixHistoryKey" />
+        <TaskInterviewMockups
+          v-if="task.implementationMockupIds?.length && task.interviewSessionId"
+          class="q-mt-md"
+          :session-id="task.interviewSessionId"
+          :ids="task.implementationMockupIds"
+        />
         <!-- DB 변경 (스펙 2026-11-03 §6.5) — 수정 요청 기록 옆. 기록이 없으면 카드 자체가 없다 -->
         <TaskDbChanges class="q-mt-md" :task-id="String(task.id)" :is-admin="auth.isAdmin" :refresh-key="dbChangesKey" @changed="refresh" />
         <!-- 좁은 화면: 인라인 패널은 하단 액션 바와 겹쳐 입력이 답답하다 → 카드에는 열기 버튼만, 대화는 전체화면 시트(스펙 §4.2) -->
@@ -1236,6 +1249,13 @@ function onAction(kind: NextActionKind) {
 
       <!-- 지난 인터뷰 이력 — 인터뷰 phase 여부와 무관하게 항상 마운트 (카드 스스로 숨김 판단) -->
       <InterviewHistoryCard :task-id="task.id" :task-status="task.status" />
+
+      <!-- 구현에 넘긴 인터뷰 목업 — 링크만(스펙 2026-11-03 인터뷰 목업 §6) -->
+      <TaskInterviewMockups
+        v-if="task.implementationMockupIds?.length && task.interviewSessionId"
+        :session-id="task.interviewSessionId"
+        :ids="task.implementationMockupIds"
+      />
 
       <!-- 구현 결과 카드 (PR 생성 또는 구현 실패 시 노출) -->
       <q-card

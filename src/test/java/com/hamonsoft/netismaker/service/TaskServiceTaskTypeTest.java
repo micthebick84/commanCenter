@@ -186,14 +186,14 @@ class TaskServiceTaskTypeTest {
             Task t = i.getArgument(0);
             typeAtSessionCreation.set(t.getTaskType());
             return null;
-        }).when(interviewService).createForTask(any(), any(), any(), any());
+        }).when(interviewService).createForTask(any(), any(), any(), any(), anyBoolean());
         task.setTaskType(TaskType.NEW_FEATURE);
 
         service.approve(5L, "admin", approveWith("FEATURE_CHANGE"));
 
         assertThat(typeAtSessionCreation.get()).isEqualTo(TaskType.FEATURE_CHANGE);
         InOrder o = inOrder(interviewService, historyRepo);
-        o.verify(interviewService).createForTask(eq(task), anyString(), anyString(), anyList());
+        o.verify(interviewService).createForTask(eq(task), anyString(), anyString(), anyList(), anyBoolean());
         o.verify(historyRepo, atLeast(1)).save(any());
     }
 
@@ -248,7 +248,7 @@ class TaskServiceTaskTypeTest {
                     assertThat(e.getMessage()).isEqualTo("알 수 없는 작업 타입: bug_fix");
                 });
 
-        verify(interviewService, never()).createForTask(any(), any(), any(), any());
+        verify(interviewService, never()).createForTask(any(), any(), any(), any(), anyBoolean());
         verify(historyRepo, never()).save(any());
         assertThat(task.getStatus()).isEqualTo(TaskStatus.AWAITING_APPROVAL);
         assertThat(task.getTaskType()).isEqualTo(TaskType.NEW_FEATURE);
@@ -270,7 +270,7 @@ class TaskServiceTaskTypeTest {
         service.approve(5L, "admin", approveWith("DB_WORK"));
         assertThat(task.getTaskType()).isEqualTo(TaskType.NEW_FEATURE);
         assertThat(reasons()).allMatch(r -> !r.startsWith("타입 변경"));
-        verify(interviewService, never()).createForTask(any(), any(), any(), any());
+        verify(interviewService, never()).createForTask(any(), any(), any(), any(), anyBoolean());
     }
 
     // ── 목록 필터 (스펙 §4.3) ──

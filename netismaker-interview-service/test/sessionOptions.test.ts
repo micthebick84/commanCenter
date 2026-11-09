@@ -353,3 +353,138 @@ describe('buildOptions — DB MCP (스펙 2026-10-02 §6.4)', () => {
     expect((await gate('mcp__db-7__query', { sql: 'DELETE FROM t' })).behavior).toBe('deny');
   });
 });
+
+describe('buildOptions — superpowers 끔 (스펙 2026-11-03 간단 인터뷰 §5-1)', () => {
+  type Gate = (t: string, i: Record<string, unknown>) => Promise<{ behavior: string }>;
+  // canUseTool은 호출마다 새 함수이고 env는 process.env 사본이라 값 비교에서 뺀다.
+  const comparable = (o: Record<string, unknown>) => {
+    const { canUseTool: _gate, env: _env, ...rest } = o;
+    return rest;
+  };
+
+  it('끔: 플러그인 없음, Skill은 사전 승인에서 빼고 목록에서도 뺀다', () => {
+    const o = buildOptions({ ...base, claudeSessionId: null, superpowers: false, mcpsBase: { obsidian: { command: 'x' } } });
+    expect(o.plugins).toEqual([]);
+    expect(o.allowedTools).toEqual(['Read', 'Grep', 'Glob', 'mcp__obsidian']);
+    expect(o.disallowedTools).toEqual(['AskUserQuestion', 'Skill']);
+    expect(o.settingSources).toEqual([]);
+    expect(o.strictMcpConfig).toBe(true);
+  });
+
+  it('끔은 세 값(plugins·allowedTools의 Skill·disallowedTools)만 바꾼다 — 나머지 옵션은 켬과 같다', () => {
+    const input = {
+      ...base,
+      claudeSessionId: 'sess-abc',
+      model: 'claude-sonnet-5',
+      effort: 'medium',
+      mcpsBase: { obsidian: { command: 'x' } },
+      mcpsExtra: [{ name: 'ctx7', url: 'https://ctx7', transport: 'http' }],
+    };
+    const on = buildOptions({ ...input, superpowers: true });
+    const off = buildOptions({ ...input, superpowers: false });
+    const { plugins: _p, allowedTools: _a, disallowedTools: _d, ...onRest } = comparable(on);
+    const { plugins: _p2, allowedTools: _a2, disallowedTools: _d2, ...offRest } = comparable(off);
+    expect(offRest).toEqual(onRest);
+    expect(off.allowedTools).toEqual((on.allowedTools as string[]).filter((t) => t !== 'Skill'));
+    expect(typeof off.canUseTool).toBe('function');
+    expect(off.env).toEqual(on.env);
+  });
+
+  it('끔: DB 서버·db-N 이름은 켬과 같이 사전 승인에서 빠지고 INTERVIEW 게이트도 그대로다', async () => {
+    const o = buildOptions({
+      ...base,
+      claudeSessionId: null,
+      superpowers: false,
+      mcpsBase: { 'db-9': { type: 'http', url: 'http://fake' }, obsidian: { type: 'http', url: 'http://o' } },
+      dbMcpServers: { 'db-7': { type: 'sdk', name: 'db-7', instance: {} } },
+      dbDialects: { 'db-7': 'mysql' },
+    });
+    expect(o.allowedTools).toEqual(['Read', 'Grep', 'Glob', 'mcp__obsidian']);
+    expect(Object.keys(o.mcpServers as object)).toEqual(expect.arrayContaining(['db-7', 'db-9', 'obsidian']));
+    const gate = o.canUseTool as Gate;
+    expect((await gate('Write', { file_path: '/tmp/repo/docs/superpowers/x.md' })).behavior).toBe('allow');
+    expect((await gate('Write', { file_path: '/tmp/repo/src/a.ts' })).behavior).toBe('deny');
+    expect((await gate('mcp__db-7__query', { sql: 'DELETE FROM t' })).behavior).toBe('deny');
+  });
+
+  it('켬 가드: 생략·true는 지금과 같다', () => {
+    const omitted = buildOptions({ ...base, claudeSessionId: null });
+    const on = buildOptions({ ...base, claudeSessionId: null, superpowers: true });
+    expect(comparable(on)).toEqual(comparable(omitted));
+    expect(on.plugins).toEqual([{ type: 'local', path: base.superpowersPluginPath }]);
+    expect((on.allowedTools as string[])[0]).toBe('Skill');
+    expect(on.disallowedTools).toEqual(['AskUserQuestion']);
+    // 생략과 true가 같이 어긋나도 잡도록 켬의 전체 모양도 값으로 고정한다.
+    expect(comparable(omitted)).toEqual({
+      pathToClaudeCodeExecutable: base.claudeCliPath,
+      plugins: [{ type: 'local', path: base.superpowersPluginPath }],
+      settingSources: [],
+      strictMcpConfig: true,
+      allowedTools: ['Skill', 'Read', 'Grep', 'Glob'],
+      disallowedTools: ['AskUserQuestion'],
+      cwd: base.workDir,
+      permissionMode: 'default',
+      includePartialMessages: true,
+    });
+  });
+
+  it('QUESTION은 superpowers 값과 무관', () => {
+    for (const superpowers of [true, false]) {
+      const o = buildOptions({ ...base, claudeSessionId: null, sessionKind: 'QUESTION', superpowers });
+      expect(o.plugins).toEqual([]);
+      expect(o.allowedTools).toEqual([]);
+      expect(o.disallowedTools).toEqual(['AskUserQuestion']);
+    }
+    const none = buildOptions({ ...base, claudeSessionId: null, sessionKind: 'QUESTION' });
+    for (const superpowers of [true, false]) {
+      const o = buildOptions({ ...base, claudeSessionId: null, sessionKind: 'QUESTION', superpowers });
+      expect(comparable(o)).toEqual(comparable(none));
+    }
+  });
+});
+
+describe('buildOptions — 목업 MCP (스펙 2026-11-03 인터뷰 목업 §4)', () => {
+  // canUseTool은 호출마다 새 함수이고 env는 process.env 사본이라 값 비교에서 뺀다.
+  const comparable = (o: Record<string, unknown>) => {
+    const { canUseTool: _gate, env: _env, ...rest } = o;
+    return rest;
+  };
+  const mockupServer = { type: 'sdk', name: 'mockup', instance: {} };
+
+  it('목업 서버는 마지막에 병합돼 같은 이름을 이기고 사전 승인된다', () => {
+    const o = buildOptions({
+      ...base,
+      claudeSessionId: null,
+      mcpsBase: { mockup: { command: 'x' }, obsidian: { command: 'o' } },
+      mcpsExtra: [{ name: 'mockup', url: 'http://extra', transport: 'http' }],
+      dbMcpServers: { 'db-7': { type: 'sdk', name: 'db-7', instance: {} } },
+      dbDialects: { 'db-7': 'mysql' },
+      mockupMcpServers: { mockup: mockupServer },
+    });
+    const servers = o.mcpServers as Record<string, unknown>;
+    expect(servers.mockup).toBe(mockupServer); // 인스턴스를 복사하지 않고 그대로, 베이스·추가 서버의 같은 이름을 이긴다
+    expect(Object.keys(servers)).toEqual(expect.arrayContaining(['obsidian', 'db-7', 'mockup']));
+    const allowed = o.allowedTools as string[];
+    expect(allowed).toContain('mcp__mockup');
+    expect(allowed.filter((t) => t === 'mcp__mockup')).toHaveLength(1);
+    expect(allowed).not.toContain('mcp__db-7'); // DB 서버는 여전히 사전 승인에서 빠진다
+  });
+
+  it('목업 서버가 없으면 지금과 같다', () => {
+    const inputs = [
+      { ...base, claudeSessionId: null },
+      {
+        ...base,
+        claudeSessionId: 'sess-abc',
+        mcpsBase: { obsidian: { command: 'o' } },
+        dbMcpServers: { 'db-7': { type: 'sdk', name: 'db-7', instance: {} } },
+        dbDialects: { 'db-7': 'mysql' as const },
+      },
+    ];
+    for (const input of inputs) {
+      expect(comparable(buildOptions({ ...input, mockupMcpServers: undefined }))).toEqual(comparable(buildOptions(input)));
+      expect(comparable(buildOptions({ ...input, mockupMcpServers: {} }))).toEqual(comparable(buildOptions(input)));
+    }
+    expect(buildOptions({ ...base, claudeSessionId: null, mockupMcpServers: undefined })).not.toHaveProperty('mcpServers');
+  });
+});

@@ -51,7 +51,7 @@ class WorkerServiceKindsTest {
                 EnumSet.of(WorkerTaskResponse.Kind.IMPLEMENTATION, WorkerTaskResponse.Kind.DESIGN));
 
         verify(taskRepo).findClaimableAmongForUpdateSkipLocked(
-                List.of(TaskStatus.APPROVED, TaskStatus.DESIGN_PENDING), true, false);
+                List.of(TaskStatus.APPROVED, TaskStatus.DESIGN_PENDING), true, false, false);
         verify(taskRepo, never()).findClaimableForUpdateSkipLocked(any(Pageable.class));
     }
 
@@ -59,7 +59,7 @@ class WorkerServiceKindsTest {
     void ref_support_is_passed_through() {
         service.claimNextTask("remote-1", false, EnumSet.of(WorkerTaskResponse.Kind.IMPLEMENTATION));
 
-        verify(taskRepo).findClaimableAmongForUpdateSkipLocked(List.of(TaskStatus.APPROVED), false, false);
+        verify(taskRepo).findClaimableAmongForUpdateSkipLocked(List.of(TaskStatus.APPROVED), false, false, false);
     }
 
     @Test
@@ -67,7 +67,7 @@ class WorkerServiceKindsTest {
         Task t = Task.create("a/b", "main", "T", "d", "user1", 3, List.of(), "claude-opus-5-5", "high");
         ReflectionTestUtils.setField(t, "id", 9L);
         t.setStatus(TaskStatus.DESIGN_PENDING);
-        when(taskRepo.findClaimableAmongForUpdateSkipLocked(anyCollection(), anyBoolean(), anyBoolean())).thenReturn(List.of(t));
+        when(taskRepo.findClaimableAmongForUpdateSkipLocked(anyCollection(), anyBoolean(), anyBoolean(), anyBoolean())).thenReturn(List.of(t));
 
         WorkerTaskResponse r = service.claimNextTask("remote-1", true, EnumSet.of(WorkerTaskResponse.Kind.DESIGN))
                 .orElseThrow();
@@ -79,7 +79,7 @@ class WorkerServiceKindsTest {
 
     @Test
     void nothing_waiting_returns_empty() {
-        when(taskRepo.findClaimableAmongForUpdateSkipLocked(anyCollection(), anyBoolean(), anyBoolean())).thenReturn(List.of());
+        when(taskRepo.findClaimableAmongForUpdateSkipLocked(anyCollection(), anyBoolean(), anyBoolean(), anyBoolean())).thenReturn(List.of());
 
         assertThat(service.claimNextTask("remote-1", true, EnumSet.of(WorkerTaskResponse.Kind.CLOSE))).isEmpty();
     }

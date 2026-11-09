@@ -28,6 +28,7 @@ import java.util.concurrent.atomic.AtomicReference;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
@@ -120,14 +121,14 @@ class TaskServiceApproveRefsTest {
             Task t = i.getArgument(0);
             refsAtSessionCreation.set(List.copyOf(t.getRefRepos()));
             return null;
-        }).when(interviewService).createForTask(any(), anyString(), anyString(), anyList());
+        }).when(interviewService).createForTask(any(), anyString(), anyString(), anyList(), anyBoolean());
 
         service.approve(5L, "admin", approveWith(List.of(
                 new RefRepoInput(11L, "main"), new RefRepoInput(12L, "master"))));
 
         InOrder o = inOrder(repoCatalog, interviewService);
         o.verify(repoCatalog).resolveReferences(9L, List.of(new RefRepoInput(12L, "master")));
-        o.verify(interviewService).createForTask(eq(task), anyString(), anyString(), anyList());
+        o.verify(interviewService).createForTask(eq(task), anyString(), anyString(), anyList(), anyBoolean());
         assertThat(refsAtSessionCreation.get()).containsExactly(OLD_APP, BATCH);   // 세션 복사 시점에 이미 반영됨
         assertThat(task.getRefRepos()).containsExactly(OLD_APP, BATCH);
         assertThat(task.getRefRepos().get(0)).isSameAs(OLD_APP);
@@ -159,7 +160,7 @@ class TaskServiceApproveRefsTest {
                 .isInstanceOfSatisfying(TaskException.class,
                         e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.BAD_REQUEST));
 
-        verify(interviewService, never()).createForTask(any(), any(), any(), any());
+        verify(interviewService, never()).createForTask(any(), any(), any(), any(), anyBoolean());
         assertThat(task.getStatus()).isEqualTo(TaskStatus.AWAITING_APPROVAL);
         assertThat(task.getRefRepos()).containsExactly(OLD_APP);
         verify(historyRepo, never()).save(any());

@@ -15,8 +15,14 @@ import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
+import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Objects;
+import java.util.Set;
+import java.util.regex.Matcher;
 import java.util.regex.Pattern;
+import java.util.stream.Collectors;
 
 /**
  * 인터뷰 목업 (스펙 2026-11-03 §5) — 에이전트가 인터뷰 중 올린 화면 목업을 검사해 세션에 쌓는다 (api 프로파일).
@@ -37,6 +43,9 @@ public class InterviewMockupService {
     public static final int MAX_CONFIRM = 10;
     /** 목업 이름 — 워커의 목업 파일 이름({@code {n}-{name}-v{version}.html})에 들어가므로 경로·공백이 못 들어온다. */
     public static final Pattern NAME = Pattern.compile("^[a-z0-9][a-z0-9-]{0,63}$");
+
+    /** 계획 본문의 목업 가리킴 — '목업 3'. 앞 번호만 찾는다('목업 3, 5'의 5는 세지 않는다). */
+    private static final Pattern PLAN_MOCKUP_REF = Pattern.compile("목업 (\\d+)");
 
     private static final int TITLE_MAX = 80;
     private static final int DESCRIPTION_MAX = 120;
@@ -140,6 +149,66 @@ public class InterviewMockupService {
         InterviewSession s = sessionRepo.findById(sessionId).orElseThrow(TaskException::notFound);
         return new InterviewMockupView(m.getId(), sessionId, s.getTaskId(), m.getN(), m.getName(), m.getVersion(),
                 m.getTitle(), m.getDescription(), m.getTurnSeq(), m.getTurnKind(), m.getCreatedAt(), m.getHtml());
+    }
+
+    /**
+     * 확정에서 정한 목업 선택 — {@code idsByN}은 구현에 넘길 목업 id(n 순), {@code excludedNumbers}는 계획이 가리켰는데
+     * 넘기지 않은 번호(오름차순), {@code historyReason}은 상태 이력에 남길 문구(둘 다 비면 null — 이력을 남기지 않는다).
+     */
+    public record ConfirmSelection(List<Long> idsByN, List<Integer> excludedNumbers, String historyReason) {
+        static final ConfirmSelection EMPTY = new ConfirmSelection(List.of(), List.of(), null);
+    }
+
+    /**
+     * 확정 때 고른 목업을 검증하고 제외 번호·이력 문구를 계산한다. 확정의 첫 상태 변경 전에 부른다 — 400이면 아무것도 바뀌지 않는다.
+     * ids가 null·빈 목록이어도 부른다(모두 해제해도 계획이 가리킨 목업은 제외로 남는다). 순서: 중복 제거 → 10개 초과 400 →
+     * 이 세션의 버리지 않은 목업이 아니면 400 → 제외 계산(계획이 가리킨 번호 ∩ 세션의 실제 번호 − 고른 번호).
+     * 세션에 목업이 없으면 계획에 '목업 N'이 있어도 제외는 비어 있다(목업 없는 인터뷰는 지금과 같다).
+     */
+    @Transactional(propagation = Propagation.MANDATORY)
+    public ConfirmSelection resolveForConfirm(Long sessionId, List<Long> ids, String planMarkdown) {
+        Set<Long> unique = new LinkedHashSet<>();
+        if (ids != null) ids.stream().filter(Objects::nonNull).forEach(unique::add);
+        if (unique.size() > MAX_CONFIRM) throw bad("구현에 넘길 목업은 " + MAX_CONFIRM + "개까지입니다");
+
+        List<InterviewMockup> found = unique.isEmpty() ? List.of()
+                : repo.findByIdInAndDiscardedFalseOrderByNAsc(unique);
+        List<InterviewMockup> mine = found.stream().filter(m -> sessionId.equals(m.getSessionId())).toList();
+        if (mine.size() != unique.size()) {
+            Set<Long> okIds = mine.stream().map(InterviewMockup::getId).collect(Collectors.toSet());
+            String notMine = unique.stream().filter(id -> !okIds.contains(id)).map(String::valueOf)
+                    .collect(Collectors.joining(", "));
+            throw bad("이 인터뷰의 목업이 아닙니다: " + notMine);
+        }
+
+        Set<Integer> existing = repo.findSummaries(sessionId).stream()
+                .map(InterviewMockupSummary::n).collect(Collectors.toSet());
+        Set<Integer> chosenNs = mine.stream().map(InterviewMockup::getN).collect(Collectors.toSet());
+        List<Integer> excluded = planMockupNumbers(planMarkdown).stream()
+                .filter(existing::contains).filter(n -> !chosenNs.contains(n)).sorted().toList();
+        if (mine.isEmpty() && excluded.isEmpty()) return ConfirmSelection.EMPTY;
+
+        String reason = "구현 목업: " + (mine.isEmpty() ? "없음" : mine.stream()
+                .map(m -> "목업 " + m.getN() + "(" + m.getTitle() + " v" + m.getVersion() + ")")
+                .collect(Collectors.joining(", ")));
+        if (!excluded.isEmpty()) {
+            reason += " / 제외: " + excluded.stream().map(n -> "목업 " + n).collect(Collectors.joining(", "));
+        }
+        return new ConfirmSelection(mine.stream().map(InterviewMockup::getId).toList(), excluded, reason);
+    }
+
+    /** 계획 본문이 가리킨 목업 번호 — '목업 N' 전부, 중복 제거, 나온 순. 본문이 없으면 빈 목록. */
+    static List<Integer> planMockupNumbers(String planMarkdown) {
+        if (planMarkdown == null) return List.of();
+        Set<Integer> out = new LinkedHashSet<>();
+        Matcher m = PLAN_MOCKUP_REF.matcher(planMarkdown);
+        while (m.find()) {
+            try {
+                out.add(Integer.parseInt(m.group(1)));
+            } catch (NumberFormatException ignored) { // int를 넘는 숫자는 번호가 아니다
+            }
+        }
+        return new ArrayList<>(out);
     }
 
     /** 줄바꿈·제어문자·연속 공백을 공백 하나로 바꾸고 앞뒤를 자른다. null은 빈 문자열. */

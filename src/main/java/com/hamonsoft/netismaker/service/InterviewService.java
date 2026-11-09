@@ -773,6 +773,16 @@ public class InterviewService {
     /** mode: 확정 때 고른 구현 방식 — null이면 직접 (스펙 2026-10-15 §5.1). */
     @Transactional
     public Long confirm(Long sessionId, String adminId, boolean designRequested, ImplementationMode mode) {
+        return confirm(sessionId, adminId, designRequested, mode, List.of());
+    }
+
+    /**
+     * mockupIds: 확정 때 고른 인터뷰 목업 id (스펙 2026-11-03 §7) — null·빈 목록이면 고른 것 없음. 이 세션의 버리지 않은
+     * 목업이 아니거나 10개를 넘으면 상태를 바꾸기 전에 400.
+     */
+    @Transactional
+    public Long confirm(Long sessionId, String adminId, boolean designRequested, ImplementationMode mode,
+                        List<Long> mockupIds) {
         InterviewSession s = requireSessionForUpdate(sessionId);
         requireNotQuestion(s, "확정");
         if (s.getStatus() != InterviewStatus.PLAN_READY) {
@@ -792,6 +802,10 @@ public class InterviewService {
         }
         InterviewPlan plan = planRepo.findById(sessionId)
                 .orElseThrow(() -> TaskException.conflict("인터뷰 플랜이 없습니다"));
+        // 고른 목업 검증은 첫 상태 변경 전에 — 400이면 아무것도 바뀌지 않는다 (서비스가 없는 구성은 목업 없음)
+        InterviewMockupService.ConfirmSelection mockups = mockupService == null
+                ? InterviewMockupService.ConfirmSelection.EMPTY
+                : mockupService.resolveForConfirm(sessionId, mockupIds, plan.getPlanMarkdown());
 
         TaskAnalysis a = TaskAnalysis.create(t.getId(), plan.getDesignMarkdown(),
                 plan.getPlanJson(), null, plan.getDurationMs());
@@ -810,6 +824,11 @@ public class InterviewService {
                 "플랜 확정 → " + to.dbValue() + " (interview_session " + sessionId
                         + ", 구현 방식: " + t.getImplementationMode().label() + ")"));
         copyPinnedRefs(s, t, to, adminId);
+        t.setImplementationMockupIds(new ArrayList<>(mockups.idsByN()));
+        t.setImplementationMockupExcluded(new ArrayList<>(mockups.excludedNumbers()));
+        if (mockups.historyReason() != null) {
+            historyRepo.save(TaskStatusHistory.log(t.getId(), to, to, "user", adminId, mockups.historyReason()));
+        }
 
         // 인터뷰 사용량 이관 (스펙 §4.2) — 세션당 confirm 1회(PLAN_READY 가드)라 이중 누적 없음.
         if ((s.getTotalCostUsd() != null && s.getTotalCostUsd().signum() > 0)

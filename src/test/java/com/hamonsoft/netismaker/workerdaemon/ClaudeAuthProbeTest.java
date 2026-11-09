@@ -182,6 +182,18 @@ class ClaudeAuthProbeTest {
                 .isEqualTo(Path.of(System.getProperty("user.home"), ".claude", ".credentials.json"));
     }
 
+    /** 사용량 수집기도 같은 규칙으로 기록 폴더를 찾는다 — 홈은 주입(시험이 실제 ~/.claude를 보지 않게). */
+    @Test
+    void claude_config_dir() {
+        Path home = dir.resolve("home");
+        assertThat(ClaudeAuthProbe.claudeConfigDir(Map.of(), home)).isEqualTo(home.resolve(".claude"));
+        Path x = dir.resolve("x");
+        assertThat(ClaudeAuthProbe.claudeConfigDir(Map.of("CLAUDE_CONFIG_DIR", x.toString()), home)).isEqualTo(x);
+        assertThat(ClaudeAuthProbe.claudeConfigDir(Map.of("claude_config_dir", x.toString()), home)).isEqualTo(x);
+        assertThat(ClaudeAuthProbe.claudeConfigDir(Map.of("CLAUDE_CONFIG_DIR", " "), home))
+                .isEqualTo(home.resolve(".claude"));
+    }
+
     @Test
     void refresh_caches_until_next_run_and_reads_the_live_file() throws Exception {
         Instant refreshExp = Instant.parse("2026-10-31T02:23:45.460Z");

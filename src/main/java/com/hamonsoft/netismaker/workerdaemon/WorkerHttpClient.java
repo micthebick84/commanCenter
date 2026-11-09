@@ -4,6 +4,8 @@ import com.fasterxml.jackson.databind.DeserializationFeature;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.hamonsoft.netismaker.dto.ActiveWorktreeTaskSummary;
 import com.hamonsoft.netismaker.dto.ArtifactInfo;
+import com.hamonsoft.netismaker.dto.ClaudeCodeUsageBatchRequest;
+import com.hamonsoft.netismaker.dto.ClaudeCodeUsageBatchResponse;
 import com.hamonsoft.netismaker.dto.DeployedTaskSummary;
 import com.hamonsoft.netismaker.dto.WorkerHeartbeatRequest;
 import com.hamonsoft.netismaker.dto.WorkerResultRequest;
@@ -113,6 +115,19 @@ public class WorkerHttpClient {
         } catch (HttpClientErrorException.NotFound e) {
             return Optional.empty();
         }
+    }
+
+    /**
+     * Claude Code 사용량 묶음 보내기(스펙 2026-11-03 §4). 4xx·5xx(구버전 API의 404 포함)는 RestClientException 그대로 던진다 —
+     * 수집기가 위치를 옮기지 않고 다음 회차에 다시 보낸다. 본문 없는 2xx도 실패로 본다.
+     */
+    public ClaudeCodeUsageBatchResponse postClaudeCodeUsage(ClaudeCodeUsageBatchRequest req) {
+        ClaudeCodeUsageBatchResponse body = http.post().uri("/worker/usage/claude-code-events")
+                .body(req)
+                .retrieve()
+                .body(ClaudeCodeUsageBatchResponse.class);
+        if (body == null) throw new IllegalStateException("응답 본문 없음");
+        return body;
     }
 
     /**

@@ -15,13 +15,13 @@ spring:
   # @Scheduled 스레드 풀. 기본 1이라 heartbeat(10s)과 pollAndProcess(5s, 블로킹 N분)가
   # 같은 thread를 공유 → task 처리 중 heartbeat 못 보내서 UI에서 DOWN 오인.
   # 4로 늘려 heartbeat/poll/stale-recovery 등이 독립 스레드에서 동작.
-  # 7 = 워커 스케줄 작업 8개(heartbeat, pollAndProcess, DeadLetterReplay, DeployReconcile, DockerGc,
-  # RepoCacheCleanup, WorktreeCleanup, ClaudeAuthProbe). pollAndProcess가 task 처리로 한 스레드를 오래 잡으므로 나머지 7개가
-  # 한꺼번에 겹쳐도 heartbeat가 밀리지 않게 7. 정리 잡은 수GB 삭제로 수십 초 걸릴 수 있다.
+  # 8 = 워커 스케줄 작업 9개(heartbeat, pollAndProcess, DeadLetterReplay, DeployReconcile, DockerGc,
+  # RepoCacheCleanup, WorktreeCleanup, ClaudeAuthProbe, ClaudeCodeUsageCollector). pollAndProcess가 task 처리로 한 스레드를
+  # 오래 잡으므로 나머지 8개가 한꺼번에 겹쳐도 heartbeat가 밀리지 않게 8. 정리 잡은 수GB 삭제로 수십 초 걸릴 수 있다.
   task:
     scheduling:
       pool:
-        size: 7
+        size: 8
 
 netis-maker:
   worker:

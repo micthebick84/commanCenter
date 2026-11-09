@@ -13,7 +13,13 @@ import { DEFAULT_IMPLEMENTATION_MODE, type ImplementationMode } from '~/composab
 import RefRepoChips from '~/components/RefRepoChips.vue'
 import MockupCard from '~/components/interview/MockupCard.vue'
 import MockupList from '~/components/interview/MockupList.vue'
-import type { MockupSummary } from '~/composables/interviewMockups'
+import {
+  defaultMockupSelection,
+  excludedPlanMockups,
+  mockupLabel,
+  MAX_CONFIRM_MOCKUPS,
+  type MockupSummary,
+} from '~/composables/interviewMockups'
 import { canRequestPlanFix, PLAN_FIX_PLACEHOLDER, PLAN_FIX_SEND } from '~/composables/interviewMode'
 // defineProps 타입이므로 상대 경로 — vitest는 .nuxt 없이 돌아 SFC 매크로 타입의 `~/` import를 못 푼다.
 import { splitConfirmRefs, type RefRepoInput, type RefRepoView } from '../composables/refRepos'
@@ -144,6 +150,31 @@ const designRequested = ref(false)
 const confirmRefs = computed(() => (props.sessionRefRepos?.length ? splitConfirmRefs(props.sessionRefRepos) : null))
 // 구현 방식 — 화면 기본은 리뷰, API는 값이 없으면 직접 (스펙 2026-10-15 §3)
 const implementationMode = ref<ImplementationMode>(DEFAULT_IMPLEMENTATION_MODE)
+
+// 확정 영역 "구현에 넘길 목업"(스펙 2026-11-03 인터뷰 목업 §6 ③) — 후보는 턴에 묶인 목업만, n 순.
+// 관리자가 체크를 바꾸기 전까지는 [plan, 후보] 변화를 따라 계획이 가리키는 목업으로 다시 채운다(스냅샷·replay로 늦게 와도).
+const mockupCandidates = computed(() =>
+  mockups.value.filter((m) => m.turnSeq != null).sort((a, b) => a.n - b.n),
+)
+const selectedMockupIds = ref<number[]>([])
+const mockupsTouched = ref(false)
+watch(
+  [() => plan.value?.planMarkdown, mockupCandidates],
+  ([planText, list]) => {
+    if (!mockupsTouched.value) selectedMockupIds.value = defaultMockupSelection(planText, list)
+  },
+  { immediate: true },
+)
+const mockupLimitReached = computed(() => selectedMockupIds.value.length >= MAX_CONFIRM_MOCKUPS)
+const excludedMockupNumbers = computed(() =>
+  excludedPlanMockups(plan.value?.planMarkdown, mockupCandidates.value, selectedMockupIds.value),
+)
+function setMockupChecked(id: number, on: boolean) {
+  mockupsTouched.value = true
+  const cur = selectedMockupIds.value.filter((x) => x !== id)
+  selectedMockupIds.value = on ? [...cur, id] : cur
+}
+const mockupHref = (m: MockupSummary) => `/interviews/${props.sessionId}/mockups/${m.id}`
 
 const isTerminal = computed(() =>
   ['REGISTERED', 'CANCELLED', 'EXPIRED', 'FAILED'].includes(status.value as string),
@@ -317,11 +348,16 @@ async function downloadAttachment(id: number) {
 async function confirm() {
   if (status.value !== 'PLAN_READY' || confirming.value) return
   confirming.value = true
+  const mockupIds = mockupCandidates.value.filter((m) => selectedMockupIds.value.includes(m.id)).map((m) => m.id)
   const withDesign = designRequested.value // 전송 시점 값 — 응답 대기 중 토글을 바꿔도 알림은 실제로 보낸 값을 따른다
   try {
     const res = await useApi<{ taskId: number }>(`/api/interviews/${props.sessionId}/confirm`, {
       method: 'POST',
-      body: { designRequested: withDesign, implementationMode: implementationMode.value },
+      body: {
+        designRequested: withDesign,
+        implementationMode: implementationMode.value,
+        ...(mockupIds.length ? { mockupIds } : {}),
+      },
     })
     $q.notify({ type: 'positive', message: `확정 완료 — ${withDesign ? '디자인' : '구현'} 큐에 진입했습니다` })
     emit('confirmed', res.taskId)
@@ -610,6 +646,42 @@ defineExpose({
           </div>
 
           <div v-if="!readonly" class="q-mt-md">
+            <div v-if="mockupCandidates.length" class="q-mb-sm" data-test="confirm-mockups">
+              <div class="text-subtitle2">구현에 넘길 목업</div>
+              <div class="text-caption text-grey-7 q-mb-xs">
+                고른 목업은 구현 세션에 파일로 전달되고, 화면 배치·라벨·요소를 그대로 따르라는 지시가 붙습니다. 계획이 가리키는 목업이 미리 골라져 있습니다.
+              </div>
+              <div v-if="designRequested" class="text-caption text-grey-7" data-test="confirm-mockup-design-note">
+                디자인 단계의 출발점으로도 쓰입니다
+              </div>
+              <div
+                v-if="excludedMockupNumbers.length"
+                class="text-caption text-orange-10"
+                data-test="confirm-mockup-warning"
+              >
+                계획이 가리키는 목업 {{ excludedMockupNumbers.join(', ') }}을 넘기지 않습니다
+              </div>
+              <div v-if="mockupLimitReached" class="text-caption text-grey-7" data-test="confirm-mockup-limit">
+                구현에 넘길 목업은 {{ MAX_CONFIRM_MOCKUPS }}개까지입니다
+              </div>
+              <div v-for="m in mockupCandidates" :key="m.id" class="row items-center no-wrap">
+                <q-checkbox
+                  :model-value="selectedMockupIds.includes(m.id)"
+                  :disable="mockupLimitReached && !selectedMockupIds.includes(m.id)"
+                  dense
+                  :label="mockupLabel(m)"
+                  :data-test="`confirm-mockup-${m.id}`"
+                  @update:model-value="(v: boolean) => setMockupChecked(m.id, v)"
+                />
+                <a
+                  class="q-ml-sm text-caption"
+                  :href="mockupHref(m)"
+                  target="_blank"
+                  rel="noopener"
+                  :data-test="`confirm-mockup-view-${m.id}`"
+                >보기</a>
+              </div>
+            </div>
             <ImplementationModePicker v-model="implementationMode" class="q-mb-sm" />
             <div class="row items-center justify-end q-gutter-sm">
               <q-toggle

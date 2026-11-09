@@ -1183,3 +1183,159 @@ describe('InterviewPanel 인터뷰 목업 (스펙 2026-11-03 인터뷰 목업 §
     w.unmount()
   })
 })
+
+describe('InterviewPanel 구현에 넘길 목업 (스펙 2026-11-03 인터뷰 목업 §6 ③)', () => {
+  // 기본 id = n. 필요하면 id를 덮어쓴다.
+  const m = (n: number, over: Record<string, unknown> = {}) => ({
+    id: n,
+    n,
+    name: `m${n}`,
+    version: 1,
+    title: `안${n}`,
+    description: null,
+    turnSeq: 1,
+    turnKind: 'design',
+    ...over,
+  })
+  const snap = (plan: string | null, mockups: unknown[], statusName = 'PLAN_READY') => ({
+    statusName,
+    turns: [],
+    plan: plan == null ? null : { designMarkdown: 'd', planMarkdown: plan, planJson: '[]' },
+    mockups,
+  })
+  const planEvent = (planMarkdown: string) => ({ designMarkdown: 'd', planMarkdown, planJson: '[]' })
+
+  async function confirmBody(w: Awaited<ReturnType<typeof mountPanel>>) {
+    useApiMock.mockResolvedValueOnce({ taskId: 1 })
+    await w.find('[data-test="confirm"]').trigger('click')
+    await flushPromises()
+    const call = useApiMock.mock.calls.find((c) => String(c[0]).endsWith('/confirm'))
+    return call?.[1].body
+  }
+
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+  function stubObserver() {
+    vi.stubGlobal(
+      'IntersectionObserver',
+      class {
+        observe() {}
+        disconnect() {}
+      },
+    )
+  }
+  const eleven = () => Array.from({ length: 11 }, (_, i) => m(i + 1, { id: 100 + i + 1 }))
+  const elevenPlan = () => eleven().map((x) => `목업 ${x.n}`).join(' ')
+
+  it('목업이 없으면 영역이 없고 바디는 지금과 같다', async () => {
+    const w = await mountPanel(9, snap('목업 3을 따른다', []))
+    expect(w.find('[data-test="confirm-mockups"]').exists()).toBe(false)
+    expect(await confirmBody(w)).toEqual({ designRequested: false, implementationMode: 'REVIEW' })
+    w.unmount()
+  })
+
+  it('계획이 가리킨 목업이 미리 체크되고 바디에 mockupIds', async () => {
+    stubObserver()
+    const w = await mountPanel(9, snap('목업 3을 따른다', [m(3, { id: 10 }), m(1, { id: 11 })]))
+    expect(w.find('[data-test="confirm-mockups"]').exists()).toBe(true)
+    expect(w.find('[data-test="confirm-mockup-10"]').attributes('aria-checked')).toBe('true')
+    expect(w.find('[data-test="confirm-mockup-11"]').attributes('aria-checked')).toBe('false')
+    expect(w.find('[data-test="confirm-mockup-view-10"]').attributes('href')).toBe('/interviews/9/mockups/10')
+    expect(w.find('[data-test="confirm-mockup-view-10"]').attributes('target')).toBe('_blank')
+    expect(w.find('[data-test="confirm-mockup-warning"]').exists()).toBe(false)
+    expect(await confirmBody(w)).toEqual({ designRequested: false, implementationMode: 'REVIEW', mockupIds: [10] })
+    w.unmount()
+  })
+
+  it('새로고침: plan이 먼저, 목업이 replay로 나중에 와도 기본 체크', async () => {
+    stubObserver()
+    const w = await mountPanel(9, { statusName: null, turns: [], plan: null })
+    const es = FakeEventSource.last()
+    es.emit('plan_ready', planEvent('목업 3을 따른다'))
+    await flushPromises()
+    expect(w.find('[data-test="confirm-mockups"]').exists()).toBe(false)
+    es.emit('mockup', m(3, { id: 10 }))
+    await flushPromises()
+    expect(w.find('[data-test="confirm-mockup-10"]').attributes('aria-checked')).toBe('true')
+    w.unmount()
+  })
+
+  it('스트림 이벤트 없이 스냅샷 mockups만으로 체크 목록과 기본 체크', async () => {
+    stubObserver()
+    const w = await mountPanel(9, snap('목업 2', [m(2, { id: 22 })]))
+    expect(w.find('[data-test="confirm-mockup-22"]').attributes('aria-checked')).toBe('true')
+    w.unmount()
+  })
+
+  it('관리자가 바꾼 뒤에는 따라가지 않는다', async () => {
+    stubObserver()
+    const w = await mountPanel(9, snap('목업 3', [m(3, { id: 10 }), m(1, { id: 11 })]))
+    await w.find('[data-test="confirm-mockup-11"]').trigger('click')
+    await flushPromises()
+    FakeEventSource.last().emit('plan_ready', planEvent('목업 1'))
+    FakeEventSource.last().emit('mockup', m(4, { id: 14 }))
+    await flushPromises()
+    expect(w.find('[data-test="confirm-mockup-10"]').attributes('aria-checked')).toBe('true')
+    expect(w.find('[data-test="confirm-mockup-11"]').attributes('aria-checked')).toBe('true')
+    expect(w.find('[data-test="confirm-mockup-14"]').attributes('aria-checked')).toBe('false')
+    w.unmount()
+  })
+
+  it('전부 해제하면 키 없음과 경고 줄', async () => {
+    stubObserver()
+    const w = await mountPanel(9, snap('목업 3을 따른다', [m(3, { id: 10 })]))
+    await w.find('[data-test="confirm-mockup-10"]').trigger('click')
+    await flushPromises()
+    expect(w.find('[data-test="confirm-mockup-warning"]').text()).toBe('계획이 가리키는 목업 3을 넘기지 않습니다')
+    expect(await confirmBody(w)).toEqual({ designRequested: false, implementationMode: 'REVIEW' })
+    w.unmount()
+  })
+
+  it('계획이 11개를 가리키면 10개만 미리 체크하고 바디도 10개', async () => {
+    stubObserver()
+    const w = await mountPanel(9, snap(elevenPlan(), eleven()))
+    expect(w.find('[data-test="confirm-mockup-warning"]').text()).toBe('계획이 가리키는 목업 11을 넘기지 않습니다')
+    expect(w.find('[data-test="confirm-mockup-limit"]').text()).toBe('구현에 넘길 목업은 10개까지입니다')
+    const body = await confirmBody(w)
+    expect(body.mockupIds).toHaveLength(10)
+    expect(body.mockupIds).not.toContain(111)
+    w.unmount()
+  })
+
+  it('10개를 고르면 11번째 체크는 막힌다', async () => {
+    stubObserver()
+    const w = await mountPanel(9, snap(elevenPlan(), eleven()))
+    const last = w.find('[data-test="confirm-mockup-111"]')
+    expect(last.attributes('aria-disabled')).toBe('true')
+    await last.trigger('click')
+    await flushPromises()
+    expect((await confirmBody(w)).mockupIds).toHaveLength(10)
+    w.unmount()
+  })
+
+  it('디자인 단계 포함이면 안내 한 줄', async () => {
+    stubObserver()
+    const w = await mountPanel(9, snap('목업 3', [m(3, { id: 10 })]))
+    expect(w.find('[data-test="confirm-mockup-design-note"]').exists()).toBe(false)
+    await w.find('.q-toggle').trigger('click')
+    await flushPromises()
+    expect(w.find('[data-test="confirm-mockup-design-note"]').text()).toBe('디자인 단계의 출발점으로도 쓰입니다')
+    w.unmount()
+  })
+
+  it('묶이지 않은 목업은 후보가 아니다', async () => {
+    stubObserver()
+    const w = await mountPanel(9, snap('목업 3', [m(3, { id: 10, turnSeq: null, turnKind: null })]))
+    expect(w.find('[data-test="confirm-mockups"]').exists()).toBe(false)
+    expect(await confirmBody(w)).toEqual({ designRequested: false, implementationMode: 'REVIEW' })
+    w.unmount()
+  })
+
+  it('첫 .q-toggle은 여전히 디자인 토글', async () => {
+    stubObserver()
+    const w = await mountPanel(9, snap('목업 3', [m(3, { id: 10 })]))
+    expect(w.find('.q-toggle').text()).toContain('디자인 단계 포함')
+    w.unmount()
+  })
+})

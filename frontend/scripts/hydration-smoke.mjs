@@ -166,8 +166,8 @@ function apiResponse(path) {
     ]
   }
   // 인터뷰 목업 — 목록(2건)과 단건(html 포함, taskId 1)
-  if (/^/api/interviews/d+/mockups$/.test(path)) return MOCKUPS
-  const mk = path.match(/^/api/interviews/d+/mockups/(d+)$/)
+  if (/^\/api\/interviews\/\d+\/mockups$/.test(path)) return MOCKUPS
+  const mk = path.match(/^\/api\/interviews\/\d+\/mockups\/(\d+)$/)
   if (mk) {
     const m = MOCKUPS.find((x) => x.id === Number(mk[1]))
     return m ? { ...m, taskId: 1, html: '<!doctype html><p>목업</p>' } : null

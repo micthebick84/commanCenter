@@ -22,8 +22,8 @@ const SERVER_NAME = /^db-\d+$/;
 // eslint-disable-next-line no-control-regex
 const IDENT = z.string().min(1).max(128).regex(/^[^\u0000-\u001f\u007f]+$/, '제어문자는 쓸 수 없습니다');
 
-type ToolResult = { content: Array<{ type: 'text'; text: string }>; isError?: boolean };
-const textResult = (text: string, isError = false): ToolResult => ({
+export type ToolResult = { content: Array<{ type: 'text'; text: string }>; isError?: boolean };
+export const textResult = (text: string, isError = false): ToolResult => ({
   content: [{ type: 'text', text }],
   ...(isError ? { isError: true } : {}),
 });

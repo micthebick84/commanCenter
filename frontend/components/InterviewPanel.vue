@@ -11,6 +11,9 @@ import PendingBubble from '~/components/chat/PendingBubble.vue'
 import ImplementationModePicker from '~/components/ImplementationModePicker.vue'
 import { DEFAULT_IMPLEMENTATION_MODE, type ImplementationMode } from '~/composables/implementationMode'
 import RefRepoChips from '~/components/RefRepoChips.vue'
+import MockupCard from '~/components/interview/MockupCard.vue'
+import MockupList from '~/components/interview/MockupList.vue'
+import type { MockupSummary } from '~/composables/interviewMockups'
 import { canRequestPlanFix, PLAN_FIX_PLACEHOLDER, PLAN_FIX_SEND } from '~/composables/interviewMode'
 // defineProps 타입이므로 상대 경로 — vitest는 .nuxt 없이 돌아 SFC 매크로 타입의 `~/` import를 못 푼다.
 import { splitConfirmRefs, type RefRepoInput, type RefRepoView } from '../composables/refRepos'
@@ -75,7 +78,20 @@ const ui = computed(() =>
 )
 
 const stream = useInterviewStream()
-const { connState, status, turns, designSections, plan, error, pending } = stream
+const { connState, status, turns, designSections, plan, error, pending, mockups } = stream
+
+// 질문 턴에 묶인 목업 — turnSeq별로 n 순. 말풍선 아래 카드로 그린다(계획 턴 목업은 목록에만).
+const cardsBySeq = computed(() => {
+  const map = new Map<number, MockupSummary[]>()
+  for (const m of mockups.value) {
+    if (m.turnKind !== 'question' || m.turnSeq == null) continue
+    const bucket = map.get(m.turnSeq)
+    if (bucket) bucket.push(m)
+    else map.set(m.turnSeq, [m])
+  }
+  for (const b of map.values()) b.sort((a, c) => a.n - c.n)
+  return map
+})
 
 // Narrow-screen tab fallback ('chat' | 'design').
 const activeTab = ref<'chat' | 'design'>('chat')
@@ -436,7 +452,11 @@ defineExpose({
       align="justify"
     >
       <q-tab name="chat" icon="forum" label="대화" />
-      <q-tab name="design" icon="design_services" label="설계·플랜" />
+      <q-tab name="design" icon="design_services" label="설계·플랜">
+        <span v-if="mockups.length > 0" class="mockup-tab-badge" data-test="mockup-tab-badge">{{
+          mockups.length
+        }}</span>
+      </q-tab>
     </q-tabs>
 
     <div class="interview-body row no-wrap">
@@ -455,7 +475,18 @@ defineExpose({
             :content="t.content"
             :attachments="t.attachments"
             @download="downloadAttachment"
-          />
+          >
+            <template v-if="cardsBySeq.get(t.seq)?.length" #footer>
+              <div class="mockup-card-grid">
+                <MockupCard
+                  v-for="m in cardsBySeq.get(t.seq)"
+                  :key="m.id"
+                  :session-id="sessionId"
+                  :mockup="m"
+                />
+              </div>
+            </template>
+          </ChatBubble>
           <PendingBubble
             v-if="waitingForAi && pending"
             data-test="pending-bubble"
@@ -529,6 +560,7 @@ defineExpose({
         :class="{ 'mobile-hidden': activeTab !== 'design' }"
       >
         <div class="col scroll q-pa-sm">
+          <MockupList v-if="!isQuestion && mockups.length" :session-id="sessionId" :mockups="mockups" />
           <div class="text-subtitle2 q-mb-sm">설계 섹션</div>
           <q-list bordered separator>
             <q-item v-for="d in designSections" :key="d.key">
@@ -635,6 +667,23 @@ defineExpose({
 </template>
 
 <style scoped>
+.mockup-card-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+  width: 100%;
+}
+.mockup-tab-badge {
+  margin-left: 6px;
+  min-width: 18px;
+  padding: 0 5px;
+  border-radius: 9px;
+  background: #1976d2;
+  color: #fff;
+  font-size: 11px;
+  line-height: 18px;
+  text-align: center;
+}
 .interview-panel {
   height: 70vh;
   min-height: 420px;

@@ -1082,3 +1082,94 @@ describe('InterviewPanel 계획 고쳐 달라기 (스펙 2026-11-03 간단 인�
     w.unmount()
   })
 })
+
+describe('InterviewPanel 인터뷰 목업 (스펙 2026-11-03 인터뷰 목업 §6)', () => {
+  const mk = (id: number, over: Record<string, unknown> = {}) => ({
+    id,
+    n: id,
+    name: `m${id}`,
+    version: 1,
+    title: `안${id}`,
+    description: null,
+    turnSeq: 1,
+    turnKind: 'question',
+    ...over,
+  })
+  const base = (mockups: unknown[]) => ({
+    statusName: 'AWAITING_INPUT',
+    turns: [{ seq: 1, role: 'assistant', kind: 'question', content: '어느 안이 좋나요?' }],
+    plan: null,
+    mockups,
+  })
+
+  // 카드의 단건 GET이 마운트 GET 수에 섞이지 않게, 콜백이 불리지 않는 관찰자로 덮는다.
+  function stubObserver() {
+    vi.stubGlobal(
+      'IntersectionObserver',
+      class {
+        observe() {}
+        disconnect() {}
+      },
+    )
+  }
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  it('묶인 질문 말풍선 안에 카드, 계획 목업은 목록에만 "계획"', async () => {
+    stubObserver()
+    const w = await mountPanel(9, base([mk(1), mk(2, { turnSeq: 7, turnKind: 'design' })]))
+    expect(w.find('.bubble-stack-assistant [data-test="mockup-card-1"]').exists()).toBe(true)
+    expect(w.find('[data-test="mockup-card-2"]').exists()).toBe(false)
+    expect(w.find('[data-test="mockup-list"]').exists()).toBe(true)
+    expect(w.find('[data-test="mockup-plan-2"]').exists()).toBe(true)
+    expect(w.find('[data-test="mockup-plan-1"]').exists()).toBe(false)
+    w.unmount()
+  })
+
+  it('목록: 이름별 묶음, 이전 버전은 접혀 있다', async () => {
+    stubObserver()
+    const w = await mountPanel(
+      9,
+      base([mk(1, { name: 'a', version: 1 }), mk(3, { n: 2, name: 'a', version: 2 })]),
+    )
+    expect(w.find('[data-test="mockup-row-3"]').text()).toContain('2 · 안3 (v2)')
+    expect(w.find('[data-test="mockup-row-1"]').exists()).toBe(false)
+    await w.find('[data-test="mockup-older-a"]').trigger('click')
+    expect(w.find('[data-test="mockup-row-1"]').exists()).toBe(true)
+    w.unmount()
+  })
+
+  it('읽기 전용(요청자)도 카드와 목록이 보인다', async () => {
+    stubObserver()
+    const w = await mountPanel(9, base([mk(1)]), { readOnly: true })
+    expect(w.find('[data-test="mockup-card-1"]').exists()).toBe(true)
+    expect(w.find('[data-test="mockup-list"]').exists()).toBe(true)
+    w.unmount()
+  })
+
+  it('질문 세션은 목록·탭 배지가 없다', async () => {
+    stubObserver()
+    const w = await mountPanel(9, base([mk(1)]), { kind: 'QUESTION' })
+    expect(w.find('[data-test="mockup-list"]').exists()).toBe(false)
+    expect(w.find('[data-test="mockup-tab-badge"]').exists()).toBe(false)
+    w.unmount()
+  })
+
+  it('탭 배지는 목업 수, 없으면 없다', async () => {
+    stubObserver()
+    const w = await mountPanel(9, base([mk(1), mk(2)]))
+    expect(w.find('[data-test="mockup-tab-badge"]').text()).toBe('2')
+    w.unmount()
+    const w2 = await mountPanel(9, base([]))
+    expect(w2.find('[data-test="mockup-tab-badge"]').exists()).toBe(false)
+    expect(w2.find('[data-test="mockup-list"]').exists()).toBe(false)
+    w2.unmount()
+  })
+
+  it('목업이 없으면 GET은 스냅샷 1회 그대로', async () => {
+    const w = await mountPanel(9, base([]))
+    expect(useApiMock).toHaveBeenCalledTimes(1)
+    w.unmount()
+  })
+})

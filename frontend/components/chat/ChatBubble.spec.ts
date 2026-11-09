@@ -165,3 +165,41 @@ describe('ChatBubble', () => {
     })
   })
 })
+
+describe('ChatBubble footer 슬롯 (인터뷰 목업 카드)', () => {
+  const QUASAR_VISIBILITY_CLASS =
+    /^(xs|sm|md|lg|xl|gt-(xs|sm|md|lg)|lt-(sm|md|lg|xl)|(xs|sm|md|lg|xl)-hide)$/
+
+  it('footer 슬롯이 없으면 래퍼가 없다', () => {
+    const w = mount(ChatBubble, { props: { role: 'assistant', content: '질문' } })
+    expect(w.find('.bubble-stack-assistant').exists()).toBe(false)
+    expect(w.find('.bubble.assistant').element.parentElement!.classList.contains('bubble-row')).toBe(true)
+  })
+
+  it('footer 슬롯은 말풍선 아래, 반응형 클래스 이름 없음', () => {
+    const w = mount(ChatBubble, {
+      props: { role: 'assistant', content: '질문' },
+      slots: { footer: '<div class="card-x">카드</div>' },
+    })
+    const stack = w.find('.bubble-stack-assistant')
+    expect(stack.exists()).toBe(true)
+    const kids = Array.from(stack.element.children)
+    expect(kids[0]!.classList.contains('bubble')).toBe(true)
+    expect(kids[1]!.classList.contains('card-x')).toBe(true)
+    // v-html 요소 안에는 들어가지 않는다
+    expect(w.find('.bubble.assistant .card-x').exists()).toBe(false)
+    const els = [w.element, ...Array.from(w.element.querySelectorAll('*'))]
+    const collisions = els
+      .flatMap((el) => el.className.split(/\s+/).filter(Boolean))
+      .filter((c) => QUASAR_VISIBILITY_CLASS.test(c))
+    expect(collisions).toEqual([])
+  })
+
+  it('user 말풍선은 footer 슬롯이 있어도 래퍼를 쓰지 않는다', () => {
+    const w = mount(ChatBubble, {
+      props: { role: 'user', content: '답' },
+      slots: { footer: '<div>카드</div>' },
+    })
+    expect(w.find('.bubble-stack-assistant').exists()).toBe(false)
+  })
+})

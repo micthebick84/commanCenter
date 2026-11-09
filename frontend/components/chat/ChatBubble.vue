@@ -4,6 +4,7 @@
 // system → 가운데 노트 칩.
 // 첨부(스펙 2026-09-13 §7): user 말풍선 아래에만 칩 줄. 클릭 → download(id). id 없는 첨부(전송 직후 낙관적 턴)는
 // 서버 확정 전이라 클릭 불가.
+import { useSlots } from 'vue'
 import { renderMarkdown } from '~/composables/useMarkdown'
 import { formatSize } from '~/composables/attachmentLimits'
 import type { TurnAttachment } from '~/composables/useInterviewStream'
@@ -15,6 +16,9 @@ const props = defineProps<{
   attachments?: TurnAttachment[]
 }>()
 const emit = defineEmits<{ (e: 'download', id: number): void }>()
+// footer 슬롯(인터뷰 목업 카드 등)이 있을 때만 assistant 말풍선과 함께 래퍼로 감싼다. 없으면 마크업은 기존 그대로다.
+const slots = useSlots()
+const hasFooter = computed(() => props.role === 'assistant' && !!slots.footer)
 
 const userAttachments = computed(() =>
   props.role === 'user' && props.attachments?.length ? props.attachments : [],
@@ -41,8 +45,12 @@ const html = computed(() =>
   <div v-else class="bubble-row" :class="role">
     <div class="avatar" :class="role">{{ avatarLabel }}</div>
     <!-- renderMarkdown은 html:false라 원시 HTML을 이스케이프한다 — v-html 안전 -->
+    <div v-if="hasFooter" class="bubble-stack-assistant">
+      <div class="bubble assistant markdown" v-html="html" />
+      <slot name="footer" />
+    </div>
     <div
-      v-if="role === 'assistant'"
+      v-else-if="role === 'assistant'"
       class="bubble assistant markdown"
       v-html="html"
     />
@@ -134,6 +142,17 @@ const html = computed(() =>
   align-items: flex-end;
 }
 .bubble-stack .bubble {
+  max-width: 100%;
+}
+.bubble-stack-assistant {
+  max-width: 80%;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+}
+.bubble-stack-assistant .bubble {
   max-width: 100%;
 }
 .bubble-attachments {

@@ -237,6 +237,11 @@ function Stop-ProcTree([int]$ProcessId) {
 #  2) pid-file wrapper that is our cmd (Test-WrapperPid) -> kill the wrapper tree; otherwise leave it
 #  3) remove the pid file and json (only when nothing we meant to kill is still alive)
 # Steps 1 and 2 are independent: a failure in one never skips the other or the reporting.
+# Gradle services: start-public runs bootRun with --no-daemon, so the JVM sits under its own single-use
+# daemon inside the wrapper's tree (cmd -> gradle client -> daemon -> java). Killing the JVM (step 1)
+# fails the build and the daemon, client and wrapper exit by themselves within about a second; killing
+# the wrapper tree (step 2) reaches the daemon and the JVM too. A run started before --no-daemon may sit
+# on a shared daemon outside the tree: only its JVM is stopped and that daemon is left alone.
 function Stop-ServiceRecord([string]$RunDir, [string]$Name) {
     $rec = $null; $wrapperId = $null; $appId = $null
     $wrapperMatched = $false; $appMatched = $false

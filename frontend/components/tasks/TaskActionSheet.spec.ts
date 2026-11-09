@@ -15,9 +15,9 @@ const pr = {
   implementation: { prUrl: 'https://github.com/x/pull/13', prNumber: 13 },
   deployment: null,
 }
-function open(task: any, isAdmin: boolean) {
+function open(task: any, isAdmin: boolean, viewerId?: string) {
   return mount(TaskActionSheet, {
-    props: { task, isAdmin, modelValue: true },
+    props: { task, isAdmin, viewerId, modelValue: true },
     attachTo: document.body,
   })
 }
@@ -91,5 +91,67 @@ describe('TaskActionSheet (스펙 2026-09-06 §4.1 ⋮ 액션 시트)', () => {
     expect(w.emitted('remove')).toBeUndefined()
     expect(body().querySelector('[data-test="task-action-sheet"]')).not.toBeNull()
     w.unmount()
+  })
+
+  // 스펙 2026-11-03 §6.9 — DB 작업은 PR생성에서 배포 없이 종료를 요청한다. 등록자(viewerId 일치)와 관리자에게만 항목이 보인다.
+  describe('DB 작업 PR생성: 확인 완료 — 종료 요청', () => {
+    const dbPr = { ...pr, taskType: 'DB_WORK', requesterId: 'alice' }
+    const item = () => body().querySelector('[data-test="sheet-request-close"]') as HTMLElement | null
+
+    it('등록자(viewerId 일치, 비관리자)에게 항목이 보이고 클릭하면 request-close를 emit한다 — 배포 전이 항목은 없다', async () => {
+      const w = open(dbPr, false, 'alice')
+      await flushPromises()
+      expect(item()).not.toBeNull()
+      expect(item()!.textContent).toContain('확인 완료 — 종료 요청')
+      expect(body().querySelector('[data-test="sheet-move"]')).toBeNull()
+      item()!.click()
+      await flushPromises()
+      expect(w.emitted('request-close')).toHaveLength(1)
+      w.unmount()
+    })
+
+    it('관리자에게는 종료 요청과 배포(전이)가 함께 보인다 — 종료 요청이 먼저', async () => {
+      const w = open(dbPr, true, 'someone-else')
+      await flushPromises()
+      expect(item()).not.toBeNull()
+      const move = body().querySelector('[data-test="sheet-move"]') as HTMLElement
+      expect(move.textContent).toContain('배포')
+      expect(item()!.compareDocumentPosition(move) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+      w.unmount()
+    })
+
+    it('등록자가 아닌 비관리자, viewerId가 없는 비관리자에게는 없다', async () => {
+      let w = open(dbPr, false, 'bob')
+      await flushPromises()
+      expect(item()).toBeNull()
+      w.unmount()
+      document.body.innerHTML = ''
+
+      w = open(dbPr, false)
+      await flushPromises()
+      expect(item()).toBeNull()
+      w.unmount()
+      document.body.innerHTML = ''
+
+      // 등록자 값이 없는 작업과 viewerId가 없는 사용자가 "둘 다 없음"으로 일치해 버리면 안 된다
+      w = open({ ...dbPr, requesterId: undefined }, false)
+      await flushPromises()
+      expect(item()).toBeNull()
+      w.unmount()
+    })
+
+    it('다른 타입·타입 없음, 다른 상태에는 없다', async () => {
+      for (const t of [{ ...pr, requesterId: 'alice' }, { ...dbPr, taskType: 'BUG_FIX' }, { ...dbPr, taskType: null }]) {
+        const w = open(t, true, 'alice')
+        await flushPromises()
+        expect(item()).toBeNull()
+        w.unmount()
+        document.body.innerHTML = ''
+      }
+      const w = open({ ...dbPr, status: 'DEPLOYED', statusLabel: '배포완료' }, true, 'alice')
+      await flushPromises()
+      expect(item()).toBeNull()
+      w.unmount()
+    })
   })
 })

@@ -329,4 +329,139 @@ class GitOpsServicePushTest {
         assertThat(w.wipError()).isNull();
         assertThat(w.pushed()).isTrue();
     }
+
+    // ---- 세션이 쓴 스크립트 파일 강제 추가 (스펙 2026-11-03 §6.6, Review Focus 3) — 실제 git ----
+
+    private static final String SCRIPT = "db/symphony/task-42.sql";
+
+    /** .gitignore가 `*.sql`·`db/`를 무시하는 레포의 bare remote(main 커밋 1개: .gitignore·a.txt). */
+    private Path ignoringRemote(String name) throws Exception {
+        Path seed = Files.createDirectories(tmp.resolve(name + "-seed"));
+        git(seed.toFile(), "init", "-b", "main");
+        Files.writeString(seed.resolve(".gitignore"), "*.sql\ndb/\n");
+        Files.writeString(seed.resolve("a.txt"), "hello");
+        git(seed.toFile(), "add", "-A");
+        git(seed.toFile(), "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-m", "init");
+        Path bare = tmp.resolve(name + ".git");
+        git(tmp.toFile(), "clone", "--bare", seed.toString(), bare.toString());
+        return bare;
+    }
+
+    /** 무시 규칙이 있는 레포에서 새 브랜치 + 세션이 쓴 스크립트 파일 하나(다른 변경 없음). */
+    private Path cloneWithIgnoredScript(Path bare, String dirName, String branch) throws Exception {
+        Path clone = tmp.resolve(dirName);
+        git(tmp.toFile(), "clone", bare.toUri().toString(), clone.toString());
+        git(clone.toFile(), "checkout", "-b", branch);
+        Files.createDirectories(clone.resolve("db/symphony"));
+        Files.writeString(clone.resolve(SCRIPT), "CREATE TABLE t_new (id int);\n");
+        return clone;
+    }
+
+    private static String namesIn(File dir, String... showArgs) throws Exception {
+        var cmd = new java.util.ArrayList<>(List.of("git"));
+        cmd.addAll(List.of(showArgs));
+        return ProcessRunner.requireSuccess(dir, cmd, 30);
+    }
+
+    @Test
+    void 무시된_파일은_강제추가_없이는_변경으로_안_보인다() throws Exception {
+        Path bare = ignoringRemote("i1");
+        Path clone = cloneWithIgnoredScript(bare, "iwork1", "netismaker/task-42");
+        RepoRef ref = new RepoRef("github", "acme/widgets", bare.toUri().toString());
+
+        assertThat(new GitOpsService(props()).hasChanges(clone.toFile())).isFalse();
+        assertThatThrownBy(() -> new GitOpsService(props())
+                .commitAndPush(clone.toFile(), ref, "netismaker/task-42", "db: 구현", head(clone)))
+                .isInstanceOf(IOException.class)
+                .hasMessageContaining("nothing to commit");
+    }
+
+    @Test
+    void 무시된_파일도_forceAdd면_커밋과_wip에_들어간다() throws Exception {
+        // 성공 경로 — commitAndPush
+        Path bare = ignoringRemote("i2");
+        Path clone = cloneWithIgnoredScript(bare, "iwork2", "netismaker/task-42");
+        String base = head(clone);
+        RepoRef ref = new RepoRef("github", "acme/widgets", bare.toUri().toString());
+        GitOpsService ops = new GitOpsService(props());
+
+        ops.forceAdd(clone.toFile(), SCRIPT);
+        assertThat(ops.hasChanges(clone.toFile())).isTrue();
+        String sha = ops.commitAndPush(clone.toFile(), ref, "netismaker/task-42", "db: 구현", base);
+
+        assertThat(namesIn(clone.toFile(), "show", "--name-only", "--format=", "HEAD")).contains(SCRIPT);
+        assertThat(namesIn(bare.toFile(), "ls-tree", "-r", "--name-only", sha)).contains(SCRIPT);
+
+        // wip 경로 — preservePartialWork
+        Path bare2 = ignoringRemote("i3");
+        Path clone2 = cloneWithIgnoredScript(bare2, "iwork3", "netismaker/task-43");
+        String base2 = head(clone2);
+        RepoRef ref2 = new RepoRef("github", "acme/widgets", bare2.toUri().toString());
+
+        ops.forceAdd(clone2.toFile(), SCRIPT);
+        GitOpsService.PartialWork w = ops.preservePartialWork(clone2.toFile(), ref2, "netismaker/task-43", base2,
+                "wip: 구현 중단(시간 초과) — task #43");
+
+        assertThat(w.pushed()).isTrue();
+        assertThat(w.commits()).isEqualTo(1);
+        assertThat(namesIn(clone2.toFile(), "show", "--name-only", "--format=", "HEAD")).contains(SCRIPT);
+        assertThat(namesIn(bare2.toFile(), "ls-tree", "-r", "--name-only", w.headSha())).contains(SCRIPT);
+    }
+
+    @Test
+    void 무시된_파일은_wip에도_강제추가_없이는_빠진다() throws Exception {
+        Path bare = ignoringRemote("i4");
+        Path clone = cloneWithIgnoredScript(bare, "iwork4", "netismaker/task-44");
+        RepoRef ref = new RepoRef("github", "acme/widgets", bare.toUri().toString());
+
+        GitOpsService.PartialWork w = new GitOpsService(props()).preservePartialWork(clone.toFile(), ref,
+                "netismaker/task-44", head(clone), "wip");
+
+        assertThat(w.commits()).isZero();   // 올릴 것이 없다 — 강제 추가가 이 구멍을 막는다
+    }
+
+    @Test
+    void forceAdd는_다른_변경과_함께_커밋되고_이미_추적_중인_파일은_그대로_둔다() throws Exception {
+        Path bare = ignoringRemote("i5");
+        Path clone = cloneWithIgnoredScript(bare, "iwork5", "netismaker/task-45");
+        Files.writeString(clone.resolve("impl.txt"), "구현 산출물");
+        GitOpsService ops = new GitOpsService(props());
+
+        ops.forceAdd(clone.toFile(), SCRIPT);
+        ops.forceAdd(clone.toFile(), SCRIPT);   // 두 번 불러도 같다
+
+        RepoRef ref = new RepoRef("github", "acme/widgets", bare.toUri().toString());
+        ops.commitAndPush(clone.toFile(), ref, "netismaker/task-45", "db: 구현", head(clone));
+        assertThat(namesIn(clone.toFile(), "show", "--name-only", "--format=", "HEAD"))
+                .contains(SCRIPT).contains("impl.txt");
+    }
+
+    @Test
+    void forceAdd는_없는_파일이면_예외() throws Exception {
+        Path bare = ignoringRemote("i6");
+        Path clone = tmp.resolve("iwork6");
+        git(tmp.toFile(), "clone", bare.toUri().toString(), clone.toString());
+
+        assertThatThrownBy(() -> new GitOpsService(props()).forceAdd(clone.toFile(), SCRIPT))
+                .isInstanceOf(IOException.class);
+    }
+
+    // ---- 베이스 이후 커밋 (스펙 2026-11-03 §6.6 성공 판정의 "이번 시도의 코드 변경") — 실제 git ----
+
+    @Test
+    void hasCommitsSince는_베이스_이후_커밋이_있을때만_참() throws Exception {
+        Path bare = bareRemote("c1");
+        Path clone = workingClone(bare, "cwork1", "netismaker/task-42");
+        String base = head(clone);
+        GitOpsService ops = new GitOpsService(props());
+
+        // 커밋 안 된 변경만 있다 — 커밋은 없다
+        assertThat(ops.hasCommitsSince(clone.toFile(), base)).isFalse();
+
+        git(clone.toFile(), "add", "-A");
+        git(clone.toFile(), "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-m", "에이전트 커밋");
+        assertThat(ops.hasCommitsSince(clone.toFile(), base)).isTrue();
+        // 새 끝을 기준으로 하면 그 뒤 커밋은 없다(수정 회차의 tip 기준)
+        assertThat(ops.hasCommitsSince(clone.toFile(), head(clone))).isFalse();
+    }
 }

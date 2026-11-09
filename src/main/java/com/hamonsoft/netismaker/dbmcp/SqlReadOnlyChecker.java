@@ -64,11 +64,14 @@ public final class SqlReadOnlyChecker {
             String upper = w.toUpperCase(Locale.ROOT);
             if (FORBIDDEN_WORDS.contains(upper)) return Check.fail("금지 키워드 " + upper);
             String lower = w.toLowerCase(Locale.ROOT);
-            if (FORBIDDEN_FUNCS.contains(lower) || FORBIDDEN_PREFIXES.stream().anyMatch(lower::startsWith)) {
-                return Check.fail("금지 함수 " + lower);
-            }
+            if (isForbiddenFunction(lower)) return Check.fail("금지 함수 " + lower);
         }
         return Check.pass();
+    }
+
+    /** 소문자로 받은 단어가 금지 함수(이름·접두)인지 — 쓰기 분석기(SqlWriteParser)도 같은 목록을 쓴다. */
+    static boolean isForbiddenFunction(String lowerWord) {
+        return FORBIDDEN_FUNCS.contains(lowerWord) || FORBIDDEN_PREFIXES.stream().anyMatch(lowerWord::startsWith);
     }
 
     /** 문자열·주석·인용 식별자 밖 마지막 ';' 위치. 없거나 스캐너가 거부하면 -1. */

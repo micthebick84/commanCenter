@@ -94,6 +94,29 @@ describe('관리 카탈로그 모바일 카드 목록', () => {
     w.unmount()
   })
 
+  it('레포: 카드는 자동 마이그레이션 칩을 켠 항목에만 달고, 카드 토글 바디에는 DB 칸이 없다', async () => {
+    await setViewportWidth(390)
+    const withDb = [
+      { ...repoRows[0], dbMigrationManaged: true, dbScriptDir: 'db/sql' },
+      { ...repoRows[1], dbMigrationManaged: false, dbScriptDir: null },
+    ]
+    const w = await mountPage(RepoCatalog, withDb)
+    const [on, off] = cards(w)
+    expect(on.find('[data-test="catalog-db-migration-chip"]').text()).toBe('자동 마이그레이션')
+    expect(off.find('[data-test="catalog-db-migration-chip"]').exists()).toBe(false)
+
+    useApiMock.mockResolvedValueOnce({}) // PUT
+    useApiMock.mockResolvedValueOnce(withDb) // reload
+    await on.find('[data-test="card-toggle"]').trigger('click')
+    await flushPromises()
+    const put = useApiMock.mock.calls.find((c: any[]) => c[1]?.method === 'PUT')!
+    expect(put[1].body).toEqual({
+      alias: 'Netis7.0', gitUrl: 'https://github.com/o/r.git', defaultBranch: 'main',
+      description: '메인 제품', enabled: false,
+    })
+    w.unmount()
+  })
+
   it('레포: 카드의 수정은 값이 채워진 전체화면 다이얼로그를 연다', async () => {
     await setViewportWidth(390)
     const w = await mountPage(RepoCatalog, repoRows)

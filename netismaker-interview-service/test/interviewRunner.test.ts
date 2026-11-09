@@ -7,6 +7,7 @@ import {
   interviewRefSection,
   refSection,
 } from '../src/runner/interviewRunner.js';
+import { taskTypeGuide } from '../src/runner/kickoffByType.js';
 import { REF_PREPARE_FALLBACK_REASON, type RefPrepared } from '../src/runner/repoPrepare.js';
 import type { InterviewClaimResponse, RefRepoClaim } from '../src/types.js';
 import {
@@ -1197,6 +1198,127 @@ describe('InterviewRunner kind=QUESTION (스펙 §6 — plan 경로 미진입, Q
         '그 아래 각 작업을 `### 작업 N: <제목>` 형식으로. 영문 `# <Feature> Implementation Plan` / `### Task N:` 도 허용됩니다. ' +
         '이 정확한 구조라야 시스템이 완료를 인식하며, 없으면 인터뷰가 끝나지 않습니다.\n\n' +
         'Use the brainstorming skill: read the project context, then ask me one clarifying question at a time.';
+
+      /** 한 claim의 첫 프롬프트(kickoff 또는 resume 입력). 작업 타입 시험이 쓴다 — 참조·DB 없음. */
+      const kickoffOf = async (claim: InterviewClaimResponse, db = noDb()): Promise<string> => {
+        const { fakeQuery, captured } = capturing(() => questionStream());
+        await runnerWith(makeClient(), fakeQuery, vi.fn(), { createDbMcp: vi.fn().mockReturnValue(db) }).run(claim);
+        return captured.prompt;
+      };
+
+      it('작업 타입: 타입 없음·NEW_FEATURE·모르는 값은 골든', async () => {
+        for (const t of [undefined, null, 'NEW_FEATURE', 'QA_WORK']) {
+          expect(await kickoffOf({ ...freshClaim, taskType: t } as any)).toBe(KICKOFF_GOLDEN);
+        }
+      });
+
+      it('작업 타입: 버그 픽스 kickoff', async () => {
+        const p = await kickoffOf({ ...freshClaim, taskType: 'BUG_FIX' });
+        expect(p.startsWith(`I want to fix a bug in the repo at ${freshClaim.githubRepo} (branch ${freshClaim.githubBranch}).\n`)).toBe(true);
+        for (const s of [
+          '어느 화면에서, 무엇을 했을 때, 어떤 오류가 뜨는지',
+          '재현 → 원인 → 수정 → 같은 오류가 다시 안 나는지 확인',
+          '`# <기능> 구현 계획`',
+          '### 작업 N:',
+          'PLANNING-ONLY',
+        ]) {
+          expect(p).toContain(s);
+        }
+      });
+
+      it('작업 타입: 기능 수정·DB 작업', async () => {
+        const change = await kickoffOf({ ...freshClaim, taskType: 'FEATURE_CHANGE' });
+        expect(change.startsWith(`I want to change an existing feature in the repo at ${freshClaim.githubRepo} (branch ${freshClaim.githubBranch}).\n`)).toBe(true);
+        expect(change).toContain('바꾸면 안 되는 것');
+        const db = await kickoffOf({ ...freshClaim, taskType: 'DB_WORK' });
+        expect(db.startsWith(`I want to change database tables or data used by the repo at ${freshClaim.githubRepo} (branch ${freshClaim.githubBranch}).\n`)).toBe(true);
+        expect(db).toContain('[바로 실행]');
+        expect(db).toContain('[승인 대기]');
+      });
+
+      it('작업 타입: 지시 문단은 Title·Request와 첨부 다음, IMPORTANT 앞에 한 번만 들어가고 나머지는 골든과 같다', async () => {
+        const imp = KICKOFF_GOLDEN.indexOf('IMPORTANT —');
+        const titleAndRequest = KICKOFF_GOLDEN.slice(KICKOFF_GOLDEN.indexOf('Title:'), imp);
+        const tail = KICKOFF_GOLDEN.slice(imp);
+        const cases: Array<[string, string]> = [
+          ['FEATURE_CHANGE', 'I want to change an existing feature in the repo at acme/widgets (branch main).\n'],
+          ['BUG_FIX', 'I want to fix a bug in the repo at acme/widgets (branch main).\n'],
+          ['DB_WORK', 'I want to change database tables or data used by the repo at acme/widgets (branch main).\n'],
+        ];
+        for (const [type, first] of cases) {
+          const p = await kickoffOf({ ...freshClaim, taskType: type } as InterviewClaimResponse);
+          expect(p.startsWith(first + titleAndRequest)).toBe(true);
+          expect(p.endsWith(tail)).toBe(true);
+          const guide = p.slice((first + titleAndRequest).length, p.length - tail.length);
+          expect(guide.startsWith('작업 타입: ')).toBe(true);
+          expect(guide.endsWith('\n\n')).toBe(true);
+          expect(p.split('작업 타입: ').length).toBe(2);
+        }
+        // 첨부가 있으면 첨부 절 다음에 지시 문단이 온다
+        const withAtt = await kickoffOf({ ...freshClaimWithAttachments, taskType: 'BUG_FIX' });
+        expect(withAtt.indexOf('첨부 자료')).toBeGreaterThan(-1);
+        expect(withAtt.indexOf('작업 타입: 버그 픽스')).toBeGreaterThan(withAtt.indexOf('계획에는 슬라이드 번호와 함께'));
+        expect(withAtt.indexOf('작업 타입: 버그 픽스')).toBeLessThan(withAtt.indexOf('IMPORTANT —'));
+      });
+
+      it('작업 타입: 참조 절·DB 절 뒤에도 kickoff 본문만 타입별로 바뀐다', async () => {
+        const db = withDb();
+        const { fakeQuery, captured } = capturing(() => questionStream());
+        await runnerWith(makeClient(), fakeQuery, preparer([iAvailable()]), { createDbMcp: vi.fn().mockReturnValue(db) })
+          .run({ ...interviewClaimWithRefs, taskType: 'BUG_FIX' });
+        const prefix = interviewRefSection([iAvailable()]) + dbSection(db);
+        expect(captured.prompt.startsWith(prefix + 'I want to fix a bug in the repo at ')).toBe(true);
+      });
+
+      it('작업 타입: resume은 타입과 무관', async () => {
+        expect(await kickoffOf({ ...resumeClaim, taskType: 'BUG_FIX' })).toBe(resumeClaim.lastAnswer);
+      });
+
+      // ── 구현 때 쓰기가 열리는 연결 안내 (스펙 2026-11-03 §5.1) ────────────────────────────────
+      const WRITABLE_LINE =
+        '구현 단계에서는 다음 DB 연결의 공용 개발 DB에 변경이 직접 적용됩니다: 개발DB (PostgreSQL). ' +
+        '남의 테이블 컬럼 삭제·변경 등은 승인 대기로 남습니다. ' +
+        'DB 변경이 필요하면 계획에 DB 변경 단계를 넣으세요. 이 인터뷰에서는 읽기 전용입니다.\n\n';
+
+      it('쓰기 가능 연결이 있으면 한 줄, 없으면 골든', async () => {
+        expect(await kickoffOf({ ...freshClaim, writableDbConnections: [] })).toBe(KICKOFF_GOLDEN);
+        expect(await kickoffOf({ ...freshClaim, writableDbConnections: ['개발DB (PostgreSQL)'] })).toContain(
+          '구현 단계에서는 다음 DB 연결의 공용 개발 DB에 변경이 직접 적용됩니다: 개발DB (PostgreSQL).',
+        );
+        // 칸이 없는 claim(구버전 API)·null·배열이 아닌 값도 골든
+        for (const v of [undefined, null, 'x']) {
+          expect(await kickoffOf({ ...freshClaim, writableDbConnections: v } as any)).toBe(KICKOFF_GOLDEN);
+        }
+      });
+
+      it('쓰기 가능 연결 한 줄은 타입 지시 문단 바로 뒤·IMPORTANT 앞에 한 번만 들어가고 나머지는 골든과 같다', async () => {
+        const imp = KICKOFF_GOLDEN.indexOf('IMPORTANT —');
+        const head = KICKOFF_GOLDEN.slice(0, imp);
+        const tail = KICKOFF_GOLDEN.slice(imp);
+        const plain = await kickoffOf({ ...freshClaim, writableDbConnections: ['개발DB (PostgreSQL)'] });
+        expect(plain).toBe(head + WRITABLE_LINE + tail);
+
+        const typed = await kickoffOf({ ...freshClaim, taskType: 'DB_WORK', writableDbConnections: ['개발DB (PostgreSQL)'] });
+        const guide = taskTypeGuide('DB_WORK');
+        const lead = 'I want to change database tables or data used by the repo at acme/widgets (branch main).\n';
+        const titleAndRequest = KICKOFF_GOLDEN.slice(KICKOFF_GOLDEN.indexOf('Title:'), imp);
+        expect(typed).toBe(lead + titleAndRequest + guide + WRITABLE_LINE + tail);
+        expect(typed.split('구현 단계에서는 다음 DB 연결').length).toBe(2);
+
+        // 첨부가 있으면 첨부 절 → 타입 지시 → 쓰기 안내 순
+        const withAtt = await kickoffOf({ ...freshClaimWithAttachments, taskType: 'BUG_FIX', writableDbConnections: ['개발DB (PostgreSQL)'] });
+        expect(withAtt.indexOf('작업 타입: 버그 픽스')).toBeLessThan(withAtt.indexOf('구현 단계에서는 다음 DB 연결'));
+        expect(withAtt.indexOf('구현 단계에서는 다음 DB 연결')).toBeLessThan(withAtt.indexOf('IMPORTANT —'));
+      });
+
+      it('쓰기 가능 연결이 여럿이면 쉼표로 잇는다', async () => {
+        const p = await kickoffOf({ ...freshClaim, writableDbConnections: ['개발DB (PostgreSQL)', '시험DB (MySQL)'] });
+        expect(p).toContain('적용됩니다: 개발DB (PostgreSQL), 시험DB (MySQL). ');
+      });
+
+      it('쓰기 가능 연결 안내는 resume 입력에 붙지 않는다', async () => {
+        expect(await kickoffOf({ ...resumeClaim, writableDbConnections: ['개발DB (PostgreSQL)'] })).toBe(resumeClaim.lastAnswer);
+      });
 
       /** 한 턴의 SDK 질의마다 프롬프트를 따로 모은다 — handoff·near-miss처럼 한 턴에 질의가 여러 번일 때. */
       function capturingEach(...streams: Array<() => AsyncIterable<unknown>>) {

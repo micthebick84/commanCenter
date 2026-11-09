@@ -28,6 +28,8 @@ interface RepoEntry {
   prebuildArtifact: string | null
   prebuildToolchain: string | null
   noteFolder: string | null
+  dbMigrationManaged: boolean
+  dbScriptDir: string | null
 }
 
 const $q = useQuasar()
@@ -96,9 +98,14 @@ const form = reactive({
   prebuildArtifact: '',
   prebuildToolchain: '',
   noteFolder: '',
+  dbMigrationManaged: false,
+  dbScriptDir: '',
 })
 // 수정 창을 열 때의 노트 폴더 — 바뀌었을 때만 보낸다(그 사이 첫 종료가 자동 기록한 값을 덮지 않게, 스펙 2026-10-28 close-note-folder §3-1)
 let originalNoteFolder = ''
+// DB 쓰기 두 칸도 같은 이유로 바꿨을 때만 보낸다(스펙 2026-11-03 task-type-db-write §6.6·§6.8 — 서버는 null이면 그대로 둔다)
+let originalDbMigrationManaged = false
+let originalDbScriptDir = ''
 const submitting = ref(false)
 
 function openCreate() {
@@ -115,6 +122,8 @@ function openCreate() {
   form.prebuildArtifact = ''
   form.prebuildToolchain = ''
   form.noteFolder = ''
+  form.dbMigrationManaged = false
+  form.dbScriptDir = ''
   showForm.value = true
 }
 
@@ -133,6 +142,10 @@ function openEdit(e: RepoEntry) {
   form.prebuildToolchain = e.prebuildToolchain ?? ''
   form.noteFolder = e.noteFolder ?? ''
   originalNoteFolder = form.noteFolder
+  form.dbMigrationManaged = e.dbMigrationManaged ?? false
+  form.dbScriptDir = e.dbScriptDir ?? ''
+  originalDbMigrationManaged = form.dbMigrationManaged
+  originalDbScriptDir = form.dbScriptDir
   showForm.value = true
 }
 
@@ -155,6 +168,14 @@ async function submit() {
     // 등록은 비면 null, 수정은 바꿨을 때만(빈 문자열 = 비움 → 다음 종료 때 다시 정함)
     if (!editingId.value) body.noteFolder = form.noteFolder.trim() || null
     else if (form.noteFolder.trim() !== originalNoteFolder.trim()) body.noteFolder = form.noteFolder.trim()
+    // DB 쓰기 칸: 등록은 기본값이 아닐 때만(예전 등록 바디 그대로), 수정은 바꿨을 때만(빈 폴더 = 기본 폴더로 되돌림)
+    if (!editingId.value) {
+      if (form.dbMigrationManaged) body.dbMigrationManaged = true
+      if (form.dbScriptDir.trim()) body.dbScriptDir = form.dbScriptDir.trim()
+    } else {
+      if (form.dbMigrationManaged !== originalDbMigrationManaged) body.dbMigrationManaged = form.dbMigrationManaged
+      if (form.dbScriptDir.trim() !== originalDbScriptDir.trim()) body.dbScriptDir = form.dbScriptDir.trim()
+    }
     if (editingId.value) {
       await useApi(`/api/admin/repo-catalog/${editingId.value}`, { method: 'PUT', body })
       $q.notify({ type: 'positive', message: '수정 완료' })
@@ -259,6 +280,16 @@ const canSubmit = computed(
             class="q-ma-none"
             data-test="catalog-prebuild-chip"
           />
+          <q-chip
+            v-if="e.dbMigrationManaged"
+            size="sm"
+            dense
+            color="blue-grey-2"
+            text-color="grey-9"
+            label="자동 마이그레이션"
+            class="q-ma-none"
+            data-test="catalog-db-migration-chip"
+          />
         </template>
         <div class="row no-wrap items-center q-gutter-x-xs">
           <q-icon name="folder" size="14px" color="grey-6" />
@@ -343,6 +374,15 @@ const canSubmit = computed(
             text-color="grey-9"
             label="미리 빌드"
             data-test="catalog-prebuild-chip"
+          />
+          <q-chip
+            v-if="props.row.dbMigrationManaged"
+            size="sm"
+            dense
+            color="blue-grey-2"
+            text-color="grey-9"
+            label="자동 마이그레이션"
+            data-test="catalog-db-migration-chip"
           />
           <div class="text-caption text-grey-7" data-test="catalog-note-folder">노트 폴더: {{ props.row.noteFolder ?? '자동' }}</div>
         </q-td>
@@ -459,6 +499,29 @@ const canSubmit = computed(
           spellcheck="false"
           data-test="form-note-folder"
         />
+        <q-toggle
+          v-model="form.dbMigrationManaged"
+          label="자동 마이그레이션 레포 (구현 단계에서 개발 DB에 직접 쓰지 않음)"
+          color="primary"
+          data-test="form-db-migration-managed"
+        />
+        <div class="text-caption text-grey-7">
+          앱이 뜰 때 Flyway·Liquibase 등이 테이블 스크립트를 자동 실행하는 레포라면 켜세요. 켜면 구현 세션은 개발 DB에 쓰지 않고 레포의 마이그레이션 파일로 DB 변경을 만듭니다.
+        </div>
+        <q-input
+          v-model="form.dbScriptDir"
+          label="DB 변경 스크립트 폴더 (선택)"
+          placeholder="db/symphony"
+          outlined
+          :dense="!mobile"
+          autocapitalize="off"
+          autocorrect="off"
+          spellcheck="false"
+          data-test="form-db-script-dir"
+        />
+        <div class="text-caption text-grey-7">
+          구현 단계에서 개발 DB에 적용한 SQL을 task-&lt;번호&gt;.sql로 남기는 레포 안 폴더입니다. 비우면 기본 폴더(db/symphony)를 씁니다. 자동 마이그레이션 레포에서는 쓰이지 않습니다.
+        </div>
         <q-toggle
           v-model="form.prebuildEnabled"
           label="배포 전 워커에서 미리 빌드"

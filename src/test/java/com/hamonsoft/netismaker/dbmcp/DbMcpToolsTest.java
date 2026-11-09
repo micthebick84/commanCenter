@@ -1,6 +1,7 @@
 package com.hamonsoft.netismaker.dbmcp;
 
 import com.hamonsoft.netismaker.dto.InterviewClaimResponse.DbConnectionRef;
+import com.hamonsoft.netismaker.entity.WriteClassification;
 import org.junit.jupiter.api.Test;
 
 import java.sql.SQLException;
@@ -83,5 +84,36 @@ class DbMcpToolsTest {
         assertThat(tools.call(ORA, "describe_table", Map.of()).isError()).isTrue();
         assertThat(tools.call(ORA, "drop_all", Map.of()).isError()).isTrue();
         assertThat(executed).isEmpty();
+    }
+
+    @Test
+    void execute_tool_only_when_writable() {
+        var tools = new DbMcpTools(fake);
+        assertThat(tools.toolDefinitions("개발 (PostgreSQL)", false)).extracting(d -> d.get("name"))
+                .containsExactly("query", "list_tables", "describe_table");
+        var writable = tools.toolDefinitions("개발 (PostgreSQL)", true);
+        assertThat(writable).extracting(d -> d.get("name"))
+                .containsExactly("query", "list_tables", "describe_table", "execute");
+        Map<String, Object> execute = writable.get(3);
+        assertThat(execute.get("description"))
+                .isEqualTo("공용 개발 DB에 쓰기 SQL 한 문장을 실행합니다. 서버가 분류해 바로 실행·승인 대기·거부합니다.");
+        assertThat(execute.get("inputSchema")).isEqualTo(Map.of("type", "object",
+                "properties", Map.of("sql", Map.of("type", "string")), "required", List.of("sql")));
+    }
+
+    @Test
+    void format_write_result_lines() {
+        assertThat(DbMcpTools.formatWriteResult(
+                new DbWriteService.ExecuteResult(WriteClassification.EXECUTED, null, 3L, 12L, null)))
+                .isEqualTo("분류: EXECUTED\n영향 행: 3\n기록: #12");
+        assertThat(DbMcpTools.formatWriteResult(
+                new DbWriteService.ExecuteResult(WriteClassification.DEFERRED, "승인 대기로 기록됨", null, 13L, null)))
+                .isEqualTo("분류: DEFERRED\n이유: 승인 대기로 기록됨\n기록: #13");
+        assertThat(DbMcpTools.formatWriteResult(
+                new DbWriteService.ExecuteResult(WriteClassification.FAILED, null, null, 14L, "permission denied")))
+                .isEqualTo("분류: FAILED\n오류: permission denied\n기록: #14");
+        assertThat(DbMcpTools.formatWriteResult(new DbWriteService.ExecuteResult(WriteClassification.REJECTED,
+                "sql은 1~100000자 문자열이어야 합니다", null, null, null)))
+                .isEqualTo("분류: REJECTED\n이유: sql은 1~100000자 문자열이어야 합니다");
     }
 }

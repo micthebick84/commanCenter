@@ -25,16 +25,30 @@ public final class DbConnectionDto {
 
     private DbConnectionDto() {}
 
+    /** allowWrite = 구현 단계 쓰기 허용 표시(스펙 2026-11-03 §6.1 조건 4). USER 연결은 늘 false다. */
     public record View(long id, String scope, long repoCatalogId, String name, String dbType, String host, int port,
-                       String databaseName, String username, boolean enabled, boolean mine) {
+                       String databaseName, String username, boolean enabled, boolean mine, boolean allowWrite) {
         public static View of(DbConnection c, String viewerId) {
             return new View(c.getId(), c.getScope().name(), c.getRepoCatalogId(), c.getName(), c.getDbType().name(),
-                    c.getHost(), c.getPort(), c.getDatabaseName(), c.getUsername(), c.isEnabled(), c.isOwnedBy(viewerId));
+                    c.getHost(), c.getPort(), c.getDatabaseName(), c.getUsername(), c.isEnabled(), c.isOwnedBy(viewerId),
+                    c.isAllowWrite());
         }
     }
 
-    /** enabled=false면 기능 꺼짐(키 미설정) — 프론트가 DB 버튼을 숨긴다. */
-    public record ListResponse(boolean enabled, List<View> items) {}
+    /**
+     * enabled=false면 기능 꺼짐(키 미설정) — 프론트가 DB 버튼을 숨긴다.
+     * writeEnabled = 그 레포에서 구현 단계 쓰기가 열릴 수 있는지(전역 스위치가 켜져 있고 자동 마이그레이션 레포가 아님) —
+     * 승인 다이얼로그가 "쓰기" 표시와 안내 문구를 고르는 데 쓴다. 연결 하나가 실제로 쓰이는지는 View.allowWrite와 함께 본다.
+     */
+    public record ListResponse(boolean enabled, List<View> items, boolean writeEnabled) {
+        /** writeEnabled를 모르는 호출자(false) 호환. */
+        public ListResponse(boolean enabled, List<View> items) {
+            this(enabled, items, false);
+        }
+    }
+
+    /** 관리자 전용 쓰기 허용 표시 변경(PUT /api/db-connections/{id}/allow-write). 일반 등록·수정 바디에는 이 값이 없다. */
+    public record AllowWriteRequest(@NotNull Boolean allowWrite) {}
 
     /** 수정(PUT)에서는 scope·repoCatalogId를 무시한다(이동 불가). password는 생성 시 필수, 수정 시 blank = 기존 유지. */
     public record UpsertRequest(

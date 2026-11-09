@@ -1,5 +1,6 @@
 package com.hamonsoft.netismaker.service;
 
+import com.hamonsoft.netismaker.dbmcp.DbWriteGate;
 import com.hamonsoft.netismaker.dto.AnswerRequest;
 import com.hamonsoft.netismaker.dto.InterviewClaimResponse;
 import com.hamonsoft.netismaker.dto.InterviewResponse;
@@ -96,6 +97,17 @@ public class InterviewService {
     @Autowired
     void setRepoCatalogService(RepoCatalogService repoCatalogService) {
         this.repoCatalogService = repoCatalogService;
+    }
+
+    /**
+     * claim의 `writableDbConnections` 판정 (스펙 2026-11-03 §5.1). 생성자를 바꾸지 않으려고 setter 주입 —
+     * 안 부른 단위 시험(옛 구성)에서는 null이고 쓰기 목록은 빈 목록이다.
+     */
+    private DbWriteGate dbWriteGate;
+
+    @Autowired
+    void setDbWriteGate(DbWriteGate dbWriteGate) {
+        this.dbWriteGate = dbWriteGate;
     }
 
     /** claim이 첨부 슬라이드 렌더링을 기다리는 최대 시간(초, 스펙 2026-10-27 §7.2). 0이면 기다리지 않는다. 생성자를 바꾸지 않으려고 setter 주입. */
@@ -215,10 +227,42 @@ public class InterviewService {
         }
         touch(s);
         List<InterviewTurn> turns = turnRepo.findBySessionIdOrderBySeqAsc(s.getId());
+        // 작업 타입과 쓰기 판정이 같은 작업 행을 쓴다 — claim마다 한 번만 읽는다
+        Task task = activeTaskOf(s);
         return Optional.of(InterviewClaimResponse.of(s, turns, attachmentRefsFor(s),
                 turnAttachmentsFor(s), attachmentRootFor(s))
                 .withRefRepos(refsFor(s))
-                .withRefsCleared(refsCleared(s, turns)));
+                .withRefsCleared(refsCleared(s, turns))
+                .withTaskType(taskTypeOf(task))
+                .withWritableDbConnections(writableDbConnectionsOf(s, task)));
+    }
+
+    /** 세션의 소유 작업(삭제되지 않은 것). 질문 세션·작업 없는 레거시 세션·삭제된 작업은 null — 질문 세션은 작업을 읽지 않는다. */
+    private Task activeTaskOf(InterviewSession s) {
+        if (s.getTaskId() == null) return null;
+        return taskRepo.findActiveById(s.getTaskId()).orElse(null);
+    }
+
+    /**
+     * 작업 인터뷰의 작업 타입 (스펙 2026-11-03 §5.1) — enum 이름, 타입 없음·작업 없음·삭제된 작업은 null.
+     * 세션에 칸을 두지 않고 claim 때 작업 행에서 읽는다(승인 때 관리자가 바꾼 값이 곧바로 반영되고, {@link #attachmentRefsFor}가
+     * 작업을 읽는 것과 같은 방식).
+     */
+    private static String taskTypeOf(Task task) {
+        return task == null || task.getTaskType() == null ? null : task.getTaskType().name();
+    }
+
+    /**
+     * 구현 단계에서 개발 DB 쓰기가 열릴 연결의 표시 이름 (스펙 2026-11-03 §5.1) — 인터뷰가 "구현 때 개발 DB에 직접 적용된다"고
+     * 계획에 DB 변경 단계를 넣게 하는 재료. 판정은 {@link DbWriteGate#writableLabels}(쓰기 조건 1·3·4·5와 REPO·enabled 재확인,
+     * 값은 claim DB 절과 같은 label)이고 단계(2)·워커(6)는 구현 때 정해지므로 보지 않는다. 입력은 세션이 인터뷰에 싣는 연결 id다.
+     * 질문 세션·작업이 없는 세션·고른 연결이 없는 세션은 판정 없이 빈 목록, 판정기가 없는 구성(setter를 안 부른 단위 시험)도 빈 목록이다.
+     */
+    private List<String> writableDbConnectionsOf(InterviewSession s, Task task) {
+        if (dbWriteGate == null || task == null || s.isQuestion()) return List.of();
+        List<Long> ids = s.getDbConnectionIds();
+        if (ids == null || ids.isEmpty()) return List.of();
+        return dbWriteGate.writableLabels(task, ids);
     }
 
     /**

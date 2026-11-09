@@ -123,7 +123,8 @@ class WorkerServiceImplementationPlanTest {
         WorkerTaskResponse r = service.claimNextTask("w1").orElseThrow();
 
         assertThat(t.getImplementationTimeoutMinutes()).isEqualTo(240);
-        assertThat(r.implementation()).isEqualTo(new WorkerTaskResponse.ImplementationSpec("SDD", 2, 240));
+        assertThat(r.implementation()).isEqualTo(new WorkerTaskResponse.ImplementationSpec("SDD", 2, 240, null, null,
+                new WorkerTaskResponse.DbWriteSpec("db/symphony/task-3.sql", false, false)));
     }
 
     @Test

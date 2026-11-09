@@ -46,8 +46,9 @@ async function openDialog() {
 function fillDraft(w: ReturnType<typeof mount>) {
   const page = w.findComponent(TasksIndex)
   const vm = page.vm as unknown as {
-    draft: { repoCatalogId: number | null; githubBranch: string; title: string; description: string }
+    draft: { taskType: string | null; repoCatalogId: number | null; githubBranch: string; title: string; description: string }
   }
+  vm.draft.taskType = 'NEW_FEATURE' // 타입을 고르기 전에는 등록 버튼이 막힌다(스펙 2026-11-03 §4.2)
   vm.draft.repoCatalogId = 1
   vm.draft.githubBranch = 'main'
   vm.draft.title = '제목'
@@ -112,6 +113,7 @@ describe('tasks form — attachments', () => {
       githubBranch: 'main',
       title: '제목',
       description: '설명',
+      taskType: 'NEW_FEATURE',
     })
     // Content-Type을 강제로 명시하지 않는다 ($fetch가 boundary를 스스로 설정)
     expect(call![1].headers?.['Content-Type']).toBeUndefined()

@@ -63,7 +63,7 @@ class TaskControllerRefReposTest {
         task.setRefRepos(new ArrayList<>(List.of(REF11)));
         task.setEnvVars(new ArrayList<>(List.of(new EnvVar("DB_PASSWORD", "pw", true))));
         when(taskService.getForView(eq(5L), anyString(), anyBoolean())).thenReturn(task);
-        when(taskService.list(anyString(), anyBoolean(), anyBoolean(), any(), any()))
+        when(taskService.list(anyString(), anyBoolean(), anyBoolean(), any(), any(), any()))
                 .thenReturn(new PageImpl<>(List.of(task)));
     }
 
@@ -118,7 +118,7 @@ class TaskControllerRefReposTest {
     void list_shows_task_refs_only() {
         task.setStatus(TaskStatus.INTERVIEWING);
 
-        TaskResponse r = controller.list(null, false, PageRequest.of(0, 20), user).getContent().get(0);
+        TaskResponse r = controller.list(null, null, false, PageRequest.of(0, 20), user).getContent().get(0);
 
         assertThat(r.refRepos()).extracting(InterviewResponse.RefRepoView::catalogId).containsExactly(11L);
         assertThat(r.refRepos().get(0).sha()).isNull();

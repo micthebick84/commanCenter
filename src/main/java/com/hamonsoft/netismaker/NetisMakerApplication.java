@@ -1,5 +1,6 @@
 package com.hamonsoft.netismaker;
 
+import com.hamonsoft.netismaker.dbmcp.DbWriteProperties;
 import com.hamonsoft.netismaker.service.CloseArtifactProperties;
 import com.hamonsoft.netismaker.workerdaemon.ArtifactProperties;
 import com.hamonsoft.netismaker.workerdaemon.CloseProperties;
@@ -13,7 +14,7 @@ import org.springframework.scheduling.annotation.EnableScheduling;
 @SpringBootApplication
 @EnableScheduling
 @EnableConfigurationProperties({com.hamonsoft.netismaker.config.RenderProperties.class, WorkerProperties.class, CloseProperties.class, CloseArtifactProperties.class,
-        ArtifactProperties.class, PrebuildProperties.class})
+        ArtifactProperties.class, PrebuildProperties.class, DbWriteProperties.class})
 public class NetisMakerApplication {
 
     public static void main(String[] args) {

@@ -73,7 +73,9 @@ public record TaskResponse(
         /** 이 작업을 등록한 질문 세션 id. 질문에서 등록하지 않았으면 null. */
         Long sourceQuestionId,
         /** 수정 요청 회차 현황 (스펙 2026-11-03 §6). 작업 상세 응답에서만 non-null — 목록·다른 엔드포인트는 null. */
-        FixView fix
+        FixView fix,
+        /** 작업 타입 NEW_FEATURE|FEATURE_CHANGE|BUG_FIX|DB_WORK (스펙 2026-11-03 §4.2). 타입 없음은 null 그대로 나간다. */
+        String taskType
 ) {
     public record AnalysisView(
             String markdownResult,
@@ -249,7 +251,8 @@ public record TaskResponse(
                 r.implementationTimeoutMinutes(),
                 r.refRepos(),
                 r.sourceQuestionId(),
-                r.fix()
+                r.fix(),
+                r.taskType()
         );
     }
 
@@ -260,7 +263,7 @@ public record TaskResponse(
                 model, effort, designRequested, analysis, design, implementation, deployment, interviewSessionId,
                 attachments, stageUsage, totalCostUsd, totalTokens, close, repoCatalogId, dbConnectionIds,
                 implementationMode, implementationAttempt, claimedAt, implementationTimeoutMinutes,
-                refViews(refs), sourceQuestionId, fix);
+                refViews(refs), sourceQuestionId, fix, taskType);
     }
 
     /** 수정 요청 회차 현황만 바꾼 사본 — 작업 상세 응답이 싣는다(목록은 null). */
@@ -270,7 +273,7 @@ public record TaskResponse(
                 model, effort, designRequested, analysis, design, implementation, deployment, interviewSessionId,
                 attachments, stageUsage, totalCostUsd, totalTokens, close, repoCatalogId, dbConnectionIds,
                 implementationMode, implementationAttempt, claimedAt, implementationTimeoutMinutes,
-                refRepos, sourceQuestionId, fixView);
+                refRepos, sourceQuestionId, fixView, taskType);
     }
 
     private static List<InterviewResponse.RefRepoView> refViews(List<RefRepo> refs) {
@@ -290,7 +293,7 @@ public record TaskResponse(
                 model, effort, designRequested, analysis, design, implementation, deployment, interviewSessionId,
                 attachments, stageUsage, totalCostUsd, totalTokens, close, repoCatalogId, dbConnectionIds,
                 implementationMode, implementationAttempt, claimedAt, implementationTimeoutMinutes,
-                refRepos, sourceQuestionId, fix);
+                refRepos, sourceQuestionId, fix, taskType);
     }
 
     private static TaskResponse build(Task t, TaskAnalysis a, TaskDesign d, Long interviewSessionId,
@@ -370,7 +373,8 @@ public record TaskResponse(
                 t.getImplementationTimeoutMinutes(),
                 refViews(t.getRefRepos()),
                 t.getSourceQuestionId(),
-                null
+                null,
+                t.getTaskType() == null ? null : t.getTaskType().name()
         );
     }
 }

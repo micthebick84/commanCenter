@@ -1,0 +1,242 @@
+# 쓰기 SQL 분류표 (스펙 2026-11-03 §6.2) — SqlWriteClassifierTableTest가 읽는다.
+# 줄 형식: 방언 ¦ 소유 ¦ 기대 ¦ SQL
+#  방언: PG · MY(MySQL·MariaDB) · OR, ALL은 세 방언으로 펼친다
+#  소유: 비인용 이름(v_로 시작하면 VIEW, 그 밖은 TABLE), -는 없음
+#  기대: EXECUTE[/행 상한] · DEFER · REJECT
+#  기본 스키마: PG public · MY app(lower_case_table_names≠0) · OR APP
+# 바로 실행 — CREATE TABLE·INDEX·SEQUENCE·VIEW(새 것)
+ALL ¦ - ¦ EXECUTE ¦ CREATE TABLE t_new (id INT)
+PG ¦ - ¦ EXECUTE ¦ CREATE TABLE IF NOT EXISTS t_new (id int)
+OR ¦ - ¦ EXECUTE ¦ CREATE TABLE t_new (id NUMBER(10) PRIMARY KEY);
+ALL ¦ - ¦ EXECUTE ¦ CREATE INDEX ix_legacy_a ON legacy (a)
+ALL ¦ - ¦ EXECUTE ¦ CREATE SEQUENCE seq_new
+ALL ¦ - ¦ EXECUTE ¦ CREATE VIEW v_new AS SELECT a FROM legacy
+# 바로 실행 — COMMENT ON (MySQL에는 없는 문법 → 거부)
+PG ¦ - ¦ EXECUTE ¦ COMMENT ON TABLE legacy IS '설명'
+OR ¦ - ¦ EXECUTE ¦ COMMENT ON COLUMN legacy.a IS '설명'
+MY ¦ - ¦ REJECT ¦ COMMENT ON TABLE legacy IS '설명'
+# 바로 실행 — 남의 테이블 ADD COLUMN(NULL 허용 또는 DEFAULT)
+PG ¦ - ¦ EXECUTE ¦ ALTER TABLE legacy ADD COLUMN c text
+PG ¦ - ¦ EXECUTE ¦ ALTER TABLE legacy ADD COLUMN c int NOT NULL DEFAULT 0
+MY ¦ - ¦ EXECUTE ¦ ALTER TABLE legacy ADD c VARCHAR(10) NULL
+MY ¦ - ¦ EXECUTE ¦ ALTER TABLE legacy ADD COLUMN c INT NOT NULL DEFAULT 0
+OR ¦ - ¦ EXECUTE ¦ ALTER TABLE legacy ADD (c VARCHAR2(10))
+OR ¦ - ¦ EXECUTE ¦ ALTER TABLE legacy ADD c NUMBER DEFAULT 0 NOT NULL
+# 바로 실행 — INSERT(남의 테이블 10000행) · WHERE 있는 UPDATE/DELETE(1000행)
+ALL ¦ - ¦ EXECUTE/10000 ¦ INSERT INTO legacy (a) VALUES ('[테스트] 장비')
+ALL ¦ - ¦ EXECUTE/10000 ¦ INSERT INTO legacy (a) SELECT a FROM other_t
+ALL ¦ - ¦ EXECUTE/10000 ¦ INSERT INTO legacy (a) VALUES ('x');
+PG ¦ - ¦ EXECUTE/10000 ¦ INSERT INTO legacy (id, a) VALUES (nextval('seq_new'), 'x')
+ALL ¦ - ¦ EXECUTE/1000 ¦ UPDATE legacy SET a = 'x' WHERE id = 3
+ALL ¦ - ¦ EXECUTE/1000 ¦ DELETE FROM legacy WHERE id = 3
+# 바로 실행 — 그 작업의 테이블: DROP·TRUNCATE·ALTER 전부·조건 없는 UPDATE/DELETE(상한 없음)
+ALL ¦ t_new ¦ EXECUTE ¦ DROP TABLE t_new
+PG ¦ t_new ¦ EXECUTE ¦ TRUNCATE t_new
+MY ¦ t_new ¦ EXECUTE ¦ TRUNCATE TABLE t_new
+OR ¦ t_new ¦ EXECUTE ¦ TRUNCATE TABLE t_new
+ALL ¦ t_new ¦ EXECUTE ¦ ALTER TABLE t_new DROP COLUMN a
+PG ¦ t_new ¦ EXECUTE ¦ ALTER TABLE t_new ALTER COLUMN a TYPE bigint
+MY ¦ t_new ¦ EXECUTE ¦ ALTER TABLE t_new CHANGE a b BIGINT
+OR ¦ t_new ¦ EXECUTE ¦ ALTER TABLE t_new MODIFY (a NUMBER(12))
+ALL ¦ t_new ¦ EXECUTE ¦ ALTER TABLE t_new ADD CONSTRAINT uq_t_new_a UNIQUE (a)
+ALL ¦ t_new ¦ EXECUTE ¦ CREATE UNIQUE INDEX ux_t_new_a ON t_new (a)
+ALL ¦ t_new ¦ EXECUTE ¦ UPDATE t_new SET a = 'x'
+ALL ¦ t_new ¦ EXECUTE ¦ DELETE FROM t_new
+ALL ¦ t_new ¦ EXECUTE ¦ ALTER TABLE t_new RENAME TO t_new2
+PG ¦ v_new ¦ EXECUTE ¦ CREATE OR REPLACE VIEW v_new AS SELECT a FROM legacy
+# 승인 대기 — 남의 테이블 DROP COLUMN · RENAME COLUMN
+ALL ¦ - ¦ DEFER ¦ ALTER TABLE legacy DROP COLUMN a
+MY ¦ - ¦ DEFER ¦ ALTER TABLE legacy DROP a
+OR ¦ - ¦ DEFER ¦ ALTER TABLE legacy DROP (a)
+ALL ¦ - ¦ DEFER ¦ ALTER TABLE legacy RENAME COLUMN a TO b
+PG ¦ - ¦ DEFER ¦ ALTER TABLE legacy RENAME a TO b
+MY ¦ - ¦ DEFER ¦ ALTER TABLE legacy CHANGE a b INT
+# 승인 대기 — 컬럼 타입·NULL 여부 변경
+PG ¦ - ¦ DEFER ¦ ALTER TABLE legacy ALTER COLUMN a TYPE bigint
+PG ¦ - ¦ DEFER ¦ ALTER TABLE legacy ALTER COLUMN a SET NOT NULL
+PG ¦ - ¦ DEFER ¦ ALTER TABLE legacy ALTER a DROP NOT NULL
+MY ¦ - ¦ DEFER ¦ ALTER TABLE legacy MODIFY a BIGINT NOT NULL
+MY ¦ - ¦ DEFER ¦ ALTER TABLE legacy MODIFY COLUMN a BIGINT
+OR ¦ - ¦ DEFER ¦ ALTER TABLE legacy MODIFY (a NUMBER(12))
+OR ¦ - ¦ DEFER ¦ ALTER TABLE legacy MODIFY a NOT NULL
+# 승인 대기 — NOT NULL이면서 DEFAULT 없는 ADD COLUMN
+PG ¦ - ¦ DEFER ¦ ALTER TABLE legacy ADD COLUMN c int NOT NULL
+MY ¦ - ¦ DEFER ¦ ALTER TABLE legacy ADD COLUMN c INT NOT NULL
+OR ¦ - ¦ DEFER ¦ ALTER TABLE legacy ADD c NUMBER NOT NULL
+# 승인 대기 — 제약 추가(ADD COLUMN 인라인 UNIQUE·REFERENCES·CHECK 포함)
+ALL ¦ - ¦ DEFER ¦ ALTER TABLE legacy ADD CONSTRAINT uq_legacy_a UNIQUE (a)
+ALL ¦ - ¦ DEFER ¦ ALTER TABLE legacy ADD CONSTRAINT fk_legacy_b FOREIGN KEY (b) REFERENCES t2 (id)
+ALL ¦ - ¦ DEFER ¦ ALTER TABLE legacy ADD CONSTRAINT ck_legacy_a CHECK (a > 0)
+PG ¦ - ¦ DEFER ¦ ALTER TABLE legacy ADD COLUMN c int UNIQUE
+PG ¦ - ¦ DEFER ¦ ALTER TABLE legacy ADD COLUMN c int REFERENCES t2 (id)
+PG ¦ - ¦ DEFER ¦ ALTER TABLE legacy ADD COLUMN c int CHECK (c > 0)
+MY ¦ - ¦ DEFER ¦ ALTER TABLE legacy ADD UNIQUE (a)
+MY ¦ - ¦ DEFER ¦ ALTER TABLE legacy ADD c INT UNIQUE
+OR ¦ - ¦ DEFER ¦ ALTER TABLE legacy ADD (c NUMBER CHECK (c > 0))
+# 승인 대기 — 남의 테이블 UNIQUE INDEX · TRIGGER(자기 테이블도) · PROCEDURE/FUNCTION · 남의 뷰 OR REPLACE
+ALL ¦ - ¦ DEFER ¦ CREATE UNIQUE INDEX ux_legacy_a ON legacy (a)
+PG ¦ - ¦ DEFER ¦ CREATE TRIGGER tr_legacy AFTER INSERT ON legacy FOR EACH ROW EXECUTE FUNCTION f_audit()
+MY ¦ - ¦ DEFER ¦ CREATE TRIGGER tr_legacy BEFORE INSERT ON legacy FOR EACH ROW SET NEW.a = 'x'
+OR ¦ t_new ¦ DEFER ¦ CREATE OR REPLACE TRIGGER tr_t BEFORE INSERT ON t_new FOR EACH ROW BEGIN NULL; END;
+PG ¦ - ¦ DEFER ¦ CREATE OR REPLACE FUNCTION f_x() RETURNS int AS $$ SELECT 1; $$ LANGUAGE sql
+MY ¦ - ¦ DEFER ¦ CREATE PROCEDURE p_x() BEGIN UPDATE legacy SET a = 1; END
+OR ¦ - ¦ DEFER ¦ CREATE OR REPLACE PROCEDURE p_x AS BEGIN NULL; END;
+ALL ¦ - ¦ DEFER ¦ CREATE OR REPLACE VIEW v_legacy AS SELECT a FROM legacy
+# 거부 — 남의 테이블 DROP·TRUNCATE·테이블 이름 변경
+ALL ¦ - ¦ REJECT ¦ DROP TABLE legacy
+ALL ¦ - ¦ REJECT ¦ DROP TABLE IF EXISTS legacy
+PG ¦ t_new ¦ REJECT ¦ DROP TABLE t_new, legacy
+OR ¦ - ¦ REJECT ¦ DROP TABLE legacy CASCADE CONSTRAINTS
+ALL ¦ - ¦ REJECT ¦ DROP VIEW v_legacy
+PG ¦ - ¦ REJECT ¦ TRUNCATE legacy
+MY ¦ - ¦ REJECT ¦ TRUNCATE TABLE legacy
+OR ¦ - ¦ REJECT ¦ TRUNCATE TABLE legacy
+ALL ¦ - ¦ REJECT ¦ ALTER TABLE legacy RENAME TO legacy2
+MY ¦ - ¦ REJECT ¦ RENAME TABLE legacy TO legacy2
+OR ¦ - ¦ REJECT ¦ RENAME legacy TO legacy2
+# 거부 — 남의 테이블 WHERE 없는 UPDATE/DELETE
+ALL ¦ - ¦ REJECT ¦ UPDATE legacy SET a = 'x'
+ALL ¦ - ¦ REJECT ¦ DELETE FROM legacy
+# 거부 — GRANT/REVOKE · 사용자·역할 · DROP DATABASE/SCHEMA
+ALL ¦ - ¦ REJECT ¦ GRANT SELECT ON legacy TO bob
+ALL ¦ - ¦ REJECT ¦ REVOKE SELECT ON legacy FROM bob
+ALL ¦ - ¦ REJECT ¦ CREATE USER bob IDENTIFIED BY x
+ALL ¦ - ¦ REJECT ¦ ALTER USER bob IDENTIFIED BY y
+ALL ¦ - ¦ REJECT ¦ DROP ROLE r_app
+PG ¦ - ¦ REJECT ¦ CREATE ROLE r_app
+PG ¦ - ¦ REJECT ¦ DROP SCHEMA app CASCADE
+MY ¦ - ¦ REJECT ¦ DROP DATABASE app
+# 거부 — ALTER SYSTEM·세션·권한 변경
+PG ¦ - ¦ REJECT ¦ ALTER SYSTEM SET work_mem = '1GB'
+PG ¦ - ¦ REJECT ¦ SET ROLE postgres
+PG ¦ - ¦ REJECT ¦ SET search_path TO other
+MY ¦ - ¦ REJECT ¦ SET GLOBAL max_connections = 1
+OR ¦ - ¦ REJECT ¦ ALTER SESSION SET CURRENT_SCHEMA = other
+OR ¦ - ¦ REJECT ¦ ALTER SYSTEM SET processes = 10
+# 거부 — 여러 문장 · 분석 불가
+ALL ¦ - ¦ REJECT ¦ INSERT INTO legacy (a) VALUES ('x'); DROP TABLE legacy
+ALL ¦ - ¦ REJECT ¦ SELECT * FROM legacy
+ALL ¦ - ¦ REJECT ¦ MERGE INTO legacy l USING t2 s ON (l.id = s.id) WHEN MATCHED THEN UPDATE SET a = s.a
+ALL ¦ - ¦ REJECT ¦ CALL p_x()
+PG ¦ t_new ¦ REJECT ¦ WITH d AS (DELETE FROM legacy RETURNING *) INSERT INTO t_new SELECT * FROM d
+PG ¦ - ¦ REJECT ¦ DO $$ BEGIN DELETE FROM legacy; END $$
+PG ¦ - ¦ REJECT ¦ INSERT INTO legacy (a) SELECT pg_terminate_backend(1)
+MY ¦ - ¦ REJECT ¦ UPDATE legacy l JOIN t2 s ON l.id = s.id SET l.a = s.a WHERE s.id = 1
+MY ¦ - ¦ REJECT ¦ /*!50000 DROP TABLE legacy */ INSERT INTO t_new VALUES (1)
+MY ¦ - ¦ REJECT ¦ INSERT INTO legacy (a) VALUES ('a\'); DROP TABLE legacy; --')
+OR ¦ - ¦ REJECT ¦ INSERT INTO legacy (a) VALUES (q'[x]')
+# Review Focus 4 — 따옴표·대소문자·스키마
+PG ¦ t_new ¦ EXECUTE ¦ DROP TABLE T_NEW
+PG ¦ t_new ¦ EXECUTE ¦ DROP TABLE public."t_new"
+PG ¦ t_new ¦ REJECT ¦ DROP TABLE "T_New"
+PG ¦ t_new ¦ REJECT ¦ DROP TABLE other_schema.t_new
+OR ¦ t_new ¦ EXECUTE ¦ DROP TABLE "T_NEW"
+OR ¦ t_new ¦ REJECT ¦ DROP TABLE "t_new"
+MY ¦ t_new ¦ EXECUTE ¦ DROP TABLE `t_new`
+# 추가 — 따옴표·대소문자·스키마·종류
+PG ¦ t_new ¦ EXECUTE ¦ DROP TABLE PUBLIC.T_NEW
+PG ¦ t_new ¦ REJECT ¦ DROP TABLE "public"."T_NEW"
+OR ¦ t_new ¦ EXECUTE ¦ DROP TABLE app.t_new
+OR ¦ t_new ¦ REJECT ¦ DROP TABLE "app".t_new
+MY ¦ t_new ¦ EXECUTE ¦ DROP TABLE APP.T_NEW
+MY ¦ t_new ¦ REJECT ¦ DROP TABLE other.t_new
+MY ¦ t_new ¦ REJECT ¦ DROP TABLE "t_new"
+# 추가 — MySQL lower_case_table_names≠0은 백틱 인용 이름도 소문자로 다룬다(표의 MY는 lowerCase 서버)
+MY ¦ t_new ¦ EXECUTE ¦ DROP TABLE `T_NEW`
+MY ¦ t_new ¦ EXECUTE ¦ DROP TABLE `APP`.t_new
+# 추가 — MySQL 객체 이름에 대소문자가 있는 ASCII 밖 문자는 거부(서버의 소문자 접기와 어긋날 수 있다), 대소문자 없는 문자는 받는다
+MY ¦ - ¦ REJECT ¦ CREATE TABLE IF NOT EXISTS `EQUİPMENT` (id INT)
+MY ¦ - ¦ REJECT ¦ CREATE TABLE `Équipe` (id INT)
+MY ¦ - ¦ EXECUTE ¦ CREATE TABLE `장비_목록` (id INT)
+PG ¦ - ¦ EXECUTE ¦ CREATE TABLE "Équipe" (id int)
+PG ¦ v_new ¦ EXECUTE ¦ DROP VIEW v_new
+PG ¦ v_new ¦ REJECT ¦ DROP TABLE v_new
+ALL ¦ t_new ¦ EXECUTE ¦ INSERT INTO t_new (a) SELECT a FROM legacy
+ALL ¦ - ¦ EXECUTE ¦ CREATE TABLE t_new AS SELECT a FROM legacy
+PG ¦ - ¦ EXECUTE ¦ CREATE TABLE "레거시_복사" (id int)
+ALL ¦ - ¦ REJECT ¦ DROP TABLE 레거시
+# 추가 — 소유 테이블도 CASCADE는 거부(다른 객체까지 지운다)
+PG ¦ t_new ¦ REJECT ¦ DROP TABLE t_new CASCADE
+PG ¦ t_new ¦ EXECUTE ¦ DROP TABLE t_new RESTRICT
+PG ¦ t_new ¦ REJECT ¦ TRUNCATE t_new CASCADE
+PG ¦ t_new ¦ REJECT ¦ ALTER TABLE t_new DROP COLUMN a CASCADE
+# 추가 — 다른 테이블에 붙는 테이블·동작
+PG ¦ - ¦ REJECT ¦ CREATE TABLE t_new PARTITION OF legacy FOR VALUES IN (1)
+PG ¦ - ¦ REJECT ¦ CREATE TABLE t_new (id int) INHERITS (legacy)
+PG ¦ t_new ¦ REJECT ¦ ALTER TABLE t_new ATTACH PARTITION legacy FOR VALUES IN (1)
+PG ¦ t_new ¦ REJECT ¦ ALTER TABLE t_new INHERIT legacy
+MY ¦ t_new ¦ REJECT ¦ ALTER TABLE t_new EXCHANGE PARTITION p0 WITH TABLE legacy
+MY ¦ - ¦ REJECT ¦ CREATE TABLE t_new (id INT) ENGINE=MERGE UNION=(legacy)
+MY ¦ - ¦ EXECUTE ¦ CREATE TABLE t_new (id INT) ENGINE=InnoDB
+PG ¦ - ¦ REJECT ¦ CREATE TEMP TABLE t_new (id int)
+MY ¦ t_new ¦ EXECUTE ¦ CREATE OR REPLACE TABLE t_new (id INT)
+MY ¦ - ¦ REJECT ¦ CREATE OR REPLACE TABLE legacy (id INT)
+# 추가 — ADD 뒤 컬럼이 아닌 것·모르는 타입
+MY ¦ - ¦ REJECT ¦ ALTER TABLE legacy ADD SYSTEM VERSIONING
+MY ¦ - ¦ REJECT ¦ ALTER TABLE legacy ADD PARTITION (PARTITION p9 VALUES LESS THAN (100))
+MY ¦ - ¦ REJECT ¦ ALTER TABLE legacy DROP PARTITION p0
+OR ¦ - ¦ REJECT ¦ ALTER TABLE legacy DROP UNUSED COLUMNS
+MY ¦ - ¦ REJECT ¦ ALTER TABLE legacy ADD INDEX ix_a (a)
+PG ¦ - ¦ REJECT ¦ ALTER TABLE legacy ADD COLUMN c mood
+PG ¦ - ¦ DEFER ¦ ALTER TABLE legacy ADD COLUMN c int DEFAULT NULL NOT NULL
+ALL ¦ - ¦ REJECT ¦ ALTER TABLE legacy ADD c INT,
+# 추가 — 다중 테이블·원격·부수 쓰기
+PG ¦ - ¦ REJECT ¦ UPDATE legacy SET a = s.a FROM t2 s WHERE legacy.id = s.id
+PG ¦ - ¦ EXECUTE/1000 ¦ UPDATE legacy SET flag = a IS DISTINCT FROM b WHERE id = 1
+ALL ¦ - ¦ EXECUTE/1000 ¦ UPDATE legacy SET a = (SELECT b FROM t2 WHERE t2.id = 1) WHERE id = 3
+ALL ¦ - ¦ REJECT ¦ UPDATE legacy SET a = (SELECT b FROM t2 WHERE t2.id = 1)
+PG ¦ - ¦ REJECT ¦ DELETE FROM legacy USING t2 WHERE legacy.id = t2.id
+MY ¦ - ¦ REJECT ¦ DELETE l FROM legacy l JOIN t2 s ON l.id = s.id WHERE s.id = 1
+OR ¦ - ¦ EXECUTE/1000 ¦ DELETE legacy WHERE id = 3
+OR ¦ - ¦ REJECT ¦ INSERT ALL INTO legacy (a) VALUES (1) INTO t2 (b) VALUES (2) SELECT * FROM dual
+OR ¦ - ¦ REJECT ¦ INSERT INTO legacy@remote_db (a) VALUES ('x')
+OR ¦ - ¦ REJECT ¦ INSERT INTO legacy (a) VALUES ('x') LOG ERRORS INTO err_legacy
+PG ¦ - ¦ EXECUTE/10000 ¦ INSERT INTO legacy (a) VALUES ('x') ON CONFLICT (a) DO UPDATE SET a = 'y'
+MY ¦ - ¦ EXECUTE/10000 ¦ INSERT INTO legacy (a) VALUES ('x') ON DUPLICATE KEY UPDATE a = 'y'
+PG ¦ - ¦ REJECT ¦ INSERT INTO t_new SELECT * FROM legacy FOR UPDATE
+PG ¦ - ¦ REJECT ¦ INSERT INTO legacy (a) SELECT "pg_terminate_backend"(1)
+# 추가 — 주석·힌트·문장 경계
+ALL ¦ - ¦ REJECT ¦ UPDATE legacy SET a = 1 /* /* */ WHERE id = 3 */
+ALL ¦ - ¦ REJECT ¦ UPDATE legacy SET a = 1 -- WHERE id = 3
+PG ¦ - ¦ REJECT ¦ /*+ Set(statement_timeout 0) */ INSERT INTO legacy (a) VALUES ('x')
+MY ¦ - ¦ REJECT ¦ UPDATE /*+ SET_VAR(foreign_key_checks=0) */ legacy SET a = 1 WHERE id = 3
+OR ¦ - ¦ EXECUTE/10000 ¦ INSERT /*+ APPEND */ INTO legacy (a) VALUES ('x')
+ALL ¦ t_new ¦ REJECT ¦ DROP TABLE t_new;;
+PG ¦ - ¦ REJECT ¦ CREATE OR REPLACE FUNCTION f_x() RETURNS int LANGUAGE sql BEGIN ATOMIC SELECT 1; END
+PG ¦ - ¦ REJECT ¦ CREATE FUNCTION f_x() RETURNS int AS $$ SELECT 1 $$ LANGUAGE sql; DROP TABLE legacy
+MY ¦ - ¦ REJECT ¦ CREATE DEFINER = root@localhost VIEW v_new AS SELECT a FROM legacy
+MY ¦ - ¦ DEFER ¦ CREATE DEFINER = 'root'@'%' PROCEDURE p_x() BEGIN UPDATE legacy SET a = 1; END
+# 추가 — 받지 않는 대상
+PG ¦ - ¦ REJECT ¦ COMMENT ON FUNCTION f_x() IS 'x'
+PG ¦ - ¦ REJECT ¦ DROP INDEX ix_legacy_a
+PG ¦ - ¦ REJECT ¦ CREATE RULE r AS ON INSERT TO legacy DO INSTEAD NOTHING
+OR ¦ - ¦ REJECT ¦ CREATE SYNONYM legacy FOR other.legacy
+MY ¦ - ¦ REJECT ¦ CREATE EVENT e ON SCHEDULE EVERY 1 HOUR DO DELETE FROM legacy
+# 거부 — 시스템 스키마 · MySQL·MariaDB의 연결 database 밖 (최종 리뷰 Important 1 — 분류 전 대상 경계 검사 WriteTargetScope)
+MY ¦ - ¦ REJECT ¦ UPDATE mysql.user SET authentication_string = 'x' WHERE User = 'root'
+MY ¦ - ¦ REJECT ¦ INSERT INTO mysql.db (Host, Db, User) VALUES ('%', 'prod', 'app')
+MY ¦ - ¦ REJECT ¦ UPDATE MYSQL.user SET Super_priv = 'Y' WHERE User = 'app'
+MY ¦ - ¦ REJECT ¦ DELETE FROM performance_schema.setup_actors WHERE HOST = '%'
+MY ¦ - ¦ REJECT ¦ UPDATE sys.sys_config SET value = '0' WHERE variable = 'x'
+MY ¦ - ¦ REJECT ¦ DELETE FROM prod.users WHERE id = 1
+MY ¦ - ¦ REJECT ¦ INSERT INTO prod.users (id) VALUES (1)
+MY ¦ - ¦ REJECT ¦ CREATE TABLE prod.t_x (id INT)
+MY ¦ - ¦ REJECT ¦ CREATE INDEX ix_x ON prod.users (id)
+MY ¦ - ¦ REJECT ¦ ALTER TABLE prod.users ADD COLUMN c INT NULL
+MY ¦ t_new ¦ REJECT ¦ RENAME TABLE t_new TO prod.t_new
+MY ¦ t_new ¦ REJECT ¦ ALTER TABLE t_new RENAME TO prod.t_new
+MY ¦ - ¦ EXECUTE/1000 ¦ DELETE FROM app.legacy WHERE id = 1
+MY ¦ - ¦ EXECUTE/1000 ¦ DELETE FROM `APP`.legacy WHERE id = 1
+MY ¦ t_new ¦ EXECUTE ¦ RENAME TABLE t_new TO app.t_old
+PG ¦ - ¦ REJECT ¦ UPDATE pg_catalog.pg_authid SET rolsuper = true WHERE rolname = 'app'
+PG ¦ - ¦ REJECT ¦ DELETE FROM pg_catalog.pg_database WHERE datname = 'other'
+PG ¦ - ¦ REJECT ¦ DELETE FROM PG_CATALOG.pg_database WHERE datname = 'other'
+PG ¦ - ¦ REJECT ¦ INSERT INTO information_schema.sql_features (feature_id) VALUES ('x')
+PG ¦ - ¦ REJECT ¦ CREATE TABLE pg_toast.t_x (id int)
+PG ¦ - ¦ REJECT ¦ CREATE INDEX ix_x ON pg_catalog.pg_class (relname)
+PG ¦ - ¦ REJECT ¦ COMMENT ON TABLE pg_catalog.pg_class IS 'x'
+PG ¦ - ¦ EXECUTE/1000 ¦ UPDATE other_schema.legacy SET a = 1 WHERE id = 1
+OR ¦ - ¦ REJECT ¦ UPDATE sys.legacy SET a = 1 WHERE id = 1
+OR ¦ - ¦ REJECT ¦ DELETE FROM SYSTEM.help WHERE topic = 'x'
+OR ¦ - ¦ REJECT ¦ INSERT INTO mdsys.legacy (a) VALUES ('x')
+OR ¦ - ¦ EXECUTE/1000 ¦ UPDATE other.legacy SET a = 1 WHERE id = 1

@@ -5,6 +5,7 @@ import com.hamonsoft.netismaker.service.DbConnectionService;
 import jakarta.validation.Valid;
 import org.springframework.context.annotation.Profile;
 import org.springframework.http.HttpStatus;
+import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.security.oauth2.server.resource.authentication.JwtAuthenticationToken;
 import org.springframework.web.bind.annotation.*;
 
@@ -16,6 +17,7 @@ import org.springframework.web.bind.annotation.*;
  *   PUT    /api/db-connections/{id}             — 수정 (password blank = 유지)
  *   DELETE /api/db-connections/{id}             — 삭제
  *   POST   /api/db-connections/test             — 접속 테스트 (id 지정 시 편집 권한 필요)
+ *   PUT    /api/db-connections/{id}/allow-write — 구현 단계 쓰기 허용 표시 (관리자 전용, REPO 연결만 — 스펙 2026-11-03 §6.1)
  */
 @RestController
 @RequestMapping("/api/db-connections")
@@ -51,6 +53,17 @@ public class DbConnectionController {
     @ResponseStatus(HttpStatus.NO_CONTENT)
     public void delete(@PathVariable Long id, JwtAuthenticationToken auth) {
         service.delete(id, AuthContext.requireUserId(auth), AuthContext.isAdmin(auth));
+    }
+
+    /**
+     * 쓰기 허용 표시는 이 경로로만 바꾼다 — 관리 화면의 일반 PUT은 전체 바디를 다시 보내므로 거기서 바꿀 수 있으면
+     * 개인(USER) 연결 소유자도 켤 수 있다.
+     */
+    @PutMapping("/{id}/allow-write")
+    @PreAuthorize("hasAuthority('ROLE_ADMIN')")
+    public DbConnectionDto.View allowWrite(@PathVariable Long id, @RequestBody @Valid DbConnectionDto.AllowWriteRequest req,
+                                           JwtAuthenticationToken auth) {
+        return DbConnectionDto.View.of(service.setAllowWrite(id, req.allowWrite()), AuthContext.requireUserId(auth));
     }
 
     @PostMapping("/test")

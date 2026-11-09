@@ -100,4 +100,45 @@ class InterviewWorkerControllerClaimDbTest {
         assertThat(body.dbConnections()).isEmpty();
         assertThat(body.refRepos()).containsExactly(REF);
     }
+
+    // ── 구현 단계에서 쓰기가 열릴 연결 label (스펙 2026-11-03 §5.1) ─────────────────────────────
+
+    @Test
+    void 접속정보를_싣는_정상_경로는_쓰기_목록을_그대로_둔다() {
+        when(interviewService.claim("w1")).thenReturn(Optional.of(
+                claimOf(false, List.of(7L)).withWritableDbConnections(List.of("개발DB (PostgreSQL)"))));
+        var ref = new InterviewClaimResponse.DbConnectionRef("db-7", "개발DB (PostgreSQL)", "POSTGRESQL", "h", 5432, "app", "u", "pw");
+        when(db.resolveForClaim(List.of(7L))).thenReturn(new DbConnectionService.ClaimDb(List.of(ref), List.of()));
+
+        var body = controller.claim("w1").getBody();
+
+        assertThat(body.dbConnections()).containsExactly(ref);
+        assertThat(body.writableDbConnections()).containsExactly("개발DB (PostgreSQL)");
+    }
+
+    @Test
+    void DB조회_실패경로는_쓰기목록도_비운다() {
+        // 접속정보를 못 싣고 DB 도구 없이 진행하는 인터뷰에게 "구현 때 개발 DB에 쓰인다"고 알리면 읽을 수도 없는 연결 이야기가 된다
+        when(interviewService.claim("w1")).thenReturn(Optional.of(
+                claimOf(false, List.of(7L)).withWritableDbConnections(List.of("개발DB (PostgreSQL)"))
+                        .withRefRepos(List.of(REF)).withTaskType("DB_WORK")));
+        when(db.resolveForClaim(any())).thenThrow(new RuntimeException("db down"));
+
+        var body = controller.claim("w1").getBody();
+
+        assertThat(body.dbConnections()).isEmpty();
+        assertThat(body.dbNotices()).containsExactly("DB 접속정보를 불러오지 못해 DB 도구 없이 진행합니다");
+        assertThat(body.writableDbConnections()).isNotNull().isEmpty();
+        // 다른 칸은 그대로
+        assertThat(body.refRepos()).containsExactly(REF);
+        assertThat(body.taskType()).isEqualTo("DB_WORK");
+    }
+
+    @Test
+    void 질문_세션의_DB조회_실패도_쓰기목록은_빈_목록() {
+        when(interviewService.claim("w1")).thenReturn(Optional.of(claimOf(true, List.of(7L))));
+        when(db.resolveForClaim(any())).thenThrow(new RuntimeException("db down"));
+
+        assertThat(controller.claim("w1").getBody().writableDbConnections()).isNotNull().isEmpty();
+    }
 }

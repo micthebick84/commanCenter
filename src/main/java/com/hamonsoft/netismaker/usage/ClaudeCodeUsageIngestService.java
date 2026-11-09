@@ -21,8 +21,9 @@ public class ClaudeCodeUsageIngestService {
     public ClaudeCodeUsageBatchResponse ingest(ClaudeCodeUsageBatchRequest req) {
         int received = req.events() == null ? 0 : req.events().size();
         var clean = ClaudeCodeUsageSanitizer.sanitize(req.events());
-        var counts = store.upsert(req.machine(), clean.events());
-        store.touchCollector(req.machine(), clean.lastEventAt(),
+        String machine = ClaudeCodeUsageSanitizer.machine(req.machine());
+        var counts = store.upsert(machine, clean.events());
+        store.touchCollector(machine, clean.lastEventAt(),
                 req.unreadableLines() == null ? 0 : req.unreadableLines());
         return new ClaudeCodeUsageBatchResponse(received, counts.inserted(), counts.updated(), clean.skipped());
     }

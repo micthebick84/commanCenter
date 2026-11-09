@@ -11,6 +11,8 @@ import java.util.TreeMap;
 /**
  * 수신 이벤트 정리(순수). 이상한 이벤트는 건너뛰어 skipped로 세고, 문자열은 칸 길이로 자르며,
  * 음수 토큰은 0으로 하고, 같은 키는 토큰 칸별 최댓값으로 한 건에 합친다(다른 칸은 먼저 온 값).
+ * PostgreSQL text는 NUL(0x00)을 못 담아 묶음 INSERT 전체가 거부되고 워커가 같은 묶음을 계속 다시 보낸다 —
+ * 그래서 문자열 칸의 NUL은 지운 뒤 위 규칙을 적용하고, 키에 NUL이 있으면 고치지 않고(중복 판정이 어긋난다) 건너뛴다.
  */
 public final class ClaudeCodeUsageSanitizer {
 
@@ -49,17 +51,25 @@ public final class ClaudeCodeUsageSanitizer {
         return new Sanitized(events, skipped, last);
     }
 
+    /** 요청 단위 machine(이벤트 표·수집기 표에 저장)도 NUL만 지운다. 빈 값·길이는 요청 검증(@NotBlank·@Size)이 맡는다. */
+    public static String machine(String raw) {
+        return stripNul(raw);
+    }
+
     private static ClaudeCodeUsageEvent clean(ClaudeCodeUsageEvent e) {
         if (e == null || e.eventKey() == null || e.eventKey().isBlank() || e.eventKey().length() > KEY_MAX
+                || e.eventKey().indexOf('\0') >= 0
                 || e.occurredAt() == null
                 || !("SYMPHONY".equals(e.category()) || "DIRECT".equals(e.category()))) {
             return null;
         }
-        String model = e.model() == null || e.model().isBlank() ? "unknown" : cut(e.model(), MODEL_MAX);
+        String rawModel = stripNul(e.model());
+        String model = rawModel == null || rawModel.isBlank() ? "unknown" : cut(rawModel, MODEL_MAX);
         return new ClaudeCodeUsageEvent(
                 e.eventKey(), e.occurredAt(), e.category(), model,
-                cut(e.speed(), SPEED_MAX), cut(e.serviceTier(), TIER_MAX), cut(e.entrypoint(), ENTRYPOINT_MAX),
-                cut(e.sessionId(), SESSION_MAX), Boolean.TRUE.equals(e.sidechain()),
+                cut(stripNul(e.speed()), SPEED_MAX), cut(stripNul(e.serviceTier()), TIER_MAX),
+                cut(stripNul(e.entrypoint()), ENTRYPOINT_MAX),
+                cut(stripNul(e.sessionId()), SESSION_MAX), Boolean.TRUE.equals(e.sidechain()),
                 nonNeg(e.inputTokens()), nonNeg(e.outputTokens()), nonNeg(e.cacheWrite5mTokens()),
                 nonNeg(e.cacheWrite1hTokens()), nonNeg(e.cacheReadTokens()));
     }
@@ -72,6 +82,10 @@ public final class ClaudeCodeUsageSanitizer {
                 Math.max(a.cacheWrite5mTokens(), b.cacheWrite5mTokens()),
                 Math.max(a.cacheWrite1hTokens(), b.cacheWrite1hTokens()),
                 Math.max(a.cacheReadTokens(), b.cacheReadTokens()));
+    }
+
+    private static String stripNul(String s) {
+        return s == null ? null : s.replace("\0", "");
     }
 
     private static String cut(String s, int max) {

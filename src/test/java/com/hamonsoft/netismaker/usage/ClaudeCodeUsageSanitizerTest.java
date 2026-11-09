@@ -70,6 +70,38 @@ class ClaudeCodeUsageSanitizerTest {
     }
 
     @Test
+    void eventKey에_NUL이_있으면_건너뛴다() {
+        var r = ClaudeCodeUsageSanitizer.sanitize(List.of(ev("k\u0000x", "m", 1), ev("ok", "m", 1)));
+
+        assertThat(r.skipped()).isEqualTo(1);
+        assertThat(r.events()).extracting(ClaudeCodeUsageEvent::eventKey).containsExactly("ok");
+    }
+
+    @Test
+    void 다른_문자열_칸은_NUL을_지운_뒤_기존_규칙대로() {
+        var raw = new ClaudeCodeUsageEvent("k", T0, "DIRECT", "op\u0000us", "fa\u0000st", "\u0000standard",
+                "cli\u0000", "\u0000".repeat(5) + "i".repeat(100), false, 1, 1, 0, 0, 0);
+        var nulModel = new ClaudeCodeUsageEvent("k2", T0, "DIRECT", "\u0000\u0000", null, null, null, null, false, 1, 1, 0, 0, 0);
+
+        var r = ClaudeCodeUsageSanitizer.sanitize(List.of(raw, nulModel));
+
+        assertThat(r.skipped()).isZero();
+        var a = r.events().get(0);
+        assertThat(a.model()).isEqualTo("opus");
+        assertThat(a.speed()).isEqualTo("fast");
+        assertThat(a.serviceTier()).isEqualTo("standard");
+        assertThat(a.entrypoint()).isEqualTo("cli");
+        assertThat(a.sessionId()).isEqualTo("i".repeat(100)); // 지운 뒤에 자른다
+        assertThat(r.events().get(1).model()).isEqualTo("unknown");
+    }
+
+    @Test
+    void 요청_machine도_NUL을_지운다() {
+        assertThat(ClaudeCodeUsageSanitizer.machine("pc\u0000-1")).isEqualTo("pc-1");
+        assertThat(ClaudeCodeUsageSanitizer.machine("pc-1")).isEqualTo("pc-1");
+    }
+
+    @Test
     void lastEventAt은_남은_이벤트의_최대_시각() {
         var late = new ClaudeCodeUsageEvent("b", T0.plusHours(3), "SYMPHONY", "m", null, null, null, null, false, 1, 1, 0, 0, 0);
         var bad = new ClaudeCodeUsageEvent("", T0.plusDays(9), "SYMPHONY", "m", null, null, null, null, false, 1, 1, 0, 0, 0);

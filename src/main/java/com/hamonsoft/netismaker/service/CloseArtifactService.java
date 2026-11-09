@@ -5,6 +5,7 @@ import com.hamonsoft.netismaker.entity.CloseStep;
 import com.hamonsoft.netismaker.entity.Task;
 import com.hamonsoft.netismaker.entity.TaskStatus;
 import com.hamonsoft.netismaker.repository.TaskRepository;
+import com.hamonsoft.netismaker.util.ArtifactNames;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.annotation.Profile;
 import org.springframework.http.HttpStatus;
@@ -50,7 +51,7 @@ public class CloseArtifactService {
                                 InputStream body) {
         if (!ArtifactStore.validName(name)) {
             throw new TaskException(HttpStatus.BAD_REQUEST,
-                    "산출물 이름은 [A-Za-z0-9._-]이고 .war 또는 .jar로 끝나야 합니다: " + name);
+                    "산출물 이름은 [A-Za-z0-9._-]이고 " + ArtifactNames.ALLOWED_LABEL + "로 끝나야 합니다: " + name);
         }
         if (sha256 == null || !SHA256.matcher(sha256).matches()) {
             throw new TaskException(HttpStatus.BAD_REQUEST, "X-Artifact-Sha256 헤더는 64자 16진수여야 합니다");

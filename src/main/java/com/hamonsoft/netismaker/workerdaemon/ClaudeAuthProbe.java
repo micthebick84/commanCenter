@@ -134,11 +134,13 @@ public class ClaudeAuthProbe {
     }
 
     static Path credentialsFile(Map<String, String> env) {
+        return claudeConfigDir(env, Path.of(System.getProperty("user.home"))).resolve(".credentials.json");
+    }
+
+    /** claude CLI의 설정 폴더 — env CLAUDE_CONFIG_DIR(대소문자 무시) 또는 {home}/.claude. 사용량 수집기도 쓴다(홈은 주입). */
+    static Path claudeConfigDir(Map<String, String> env, Path home) {
         String configDir = envValue(env, "CLAUDE_CONFIG_DIR");
-        Path dir = configDir != null && !configDir.isBlank()
-                ? Path.of(configDir)
-                : Path.of(System.getProperty("user.home"), ".claude");
-        return dir.resolve(".credentials.json");
+        return configDir != null && !configDir.isBlank() ? Path.of(configDir) : home.resolve(".claude");
     }
 
     /** `claude auth status --json` — 로그인 안 됨이면 종료 코드 1이라 출력 JSON만 본다. 실행·해석 실패면 null. */

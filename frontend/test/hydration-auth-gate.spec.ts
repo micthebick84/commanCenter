@@ -129,10 +129,12 @@ describe('관리자 전용 요소도 하이드레이션 뒤에 그린다', () =>
     await flushPromises()
     expect(w.find('[data-test="summary-strip"]').exists()).toBe(true)
     expect(w.find('[data-test="stats-toggle"]').exists()).toBe(false)
+    expect(w.find('[data-test="cost-chip"]').exists()).toBe(false)
 
     hydration.isHydrated.value = true
     await flushPromises()
     expect(w.find('[data-test="stats-toggle"]').exists()).toBe(true)
+    expect(w.find('[data-test="cost-chip"]').exists()).toBe(true)
     w.unmount()
   })
 

@@ -11,6 +11,7 @@ import { MAX_FILES, MAX_FILE_MB, MAX_TOTAL_MB, validateFiles } from '~/composabl
 import { useHydrationSafeAuth } from '~/composables/useHydrationSafeAuth'
 import { useFullscreenDialog } from '~/composables/dialogLayout'
 import DeployEnvDialog from '~/components/tasks/DeployEnvDialog.vue'
+import UsageCostChip from '~/components/tasks/UsageCostChip.vue'
 import type { EnvVar } from '~/composables/deployEnvForm'
 import RefRepoChips from '~/components/RefRepoChips.vue'
 import RefRepoAddForm from '~/components/RefRepoAddForm.vue'
@@ -583,6 +584,7 @@ const fullscreen = useFullscreenDialog()
 
 <template>
   <q-page padding>
+    <UsageCostChip v-if="isAdmin && $q.screen.lt.md" class="q-mb-sm" />
     <TaskListMobile
       v-if="$q.screen.lt.md"
       v-model:mine="mine"
@@ -603,6 +605,7 @@ const fullscreen = useFullscreenDialog()
     <div class="row items-center q-mb-md">
       <div class="text-h5">작업 목록</div>
       <q-space />
+      <UsageCostChip v-if="isAdmin" class="q-mr-md" />
       <q-toggle v-model="mine" label="내 작업만" @update:model-value="refresh" />
       <q-select
         v-model="statusFilter"

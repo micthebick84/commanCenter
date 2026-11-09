@@ -15,13 +15,13 @@ spring:
   # @Scheduled 스레드 풀. 기본 1이라 heartbeat(10s)과 pollAndProcess(5s, 블로킹 N분)가
   # 같은 thread를 공유 → task 처리 중 heartbeat 못 보내서 UI에서 DOWN 오인.
   # 4로 늘려 heartbeat/poll/stale-recovery 등이 독립 스레드에서 동작.
-  # 7 = 워커 스케줄 작업 8개(heartbeat, pollAndProcess, DeadLetterReplay, DeployReconcile, DockerGc,
-  # RepoCacheCleanup, WorktreeCleanup, ClaudeAuthProbe). pollAndProcess가 task 처리로 한 스레드를 오래 잡으므로 나머지 7개가
-  # 한꺼번에 겹쳐도 heartbeat가 밀리지 않게 7. 정리 잡은 수GB 삭제로 수십 초 걸릴 수 있다.
+  # 8 = 워커 스케줄 작업 9개(heartbeat, pollAndProcess, DeadLetterReplay, DeployReconcile, DockerGc,
+  # RepoCacheCleanup, WorktreeCleanup, ClaudeAuthProbe, ClaudeCodeUsageCollector). pollAndProcess가 task 처리로 한 스레드를
+  # 오래 잡으므로 나머지 8개가 한꺼번에 겹쳐도 heartbeat가 밀리지 않게 8. 정리 잡은 수GB 삭제로 수십 초 걸릴 수 있다.
   task:
     scheduling:
       pool:
-        size: 7
+        size: 8
 
 netis-maker:
   worker:
@@ -62,6 +62,17 @@ netis-maker:
       enabled: ${WORKTREE_CLEANUP_ENABLED:true}
       cron: ${WORKTREE_CLEANUP_CRON:0 30 2 * * *}
       retention-days: ${WORKTREE_CLEANUP_RETENTION_DAYS:7}
+    # Claude Code 사용량 수집 (ClaudeCodeUsageCollector, 스펙 2026-11-03) — ~/.claude 기록의 토큰 수만 API로 보낸다(내용·cwd·경로는 안 보냄).
+    # include-direct=false면 Symphony 작업 폴더 밖(직접 사용) 줄은 보내지 않는다. symphony-roots는 쉼표 구분(~ 펼침).
+    # count-from은 서울 자정부터 센다. machine이 비면 호스트 이름. max-mb-per-run은 한 회차에 읽는 상한이다.
+    usage-collect:
+      enabled: ${USAGE_COLLECT_ENABLED:true}
+      interval-seconds: ${USAGE_COLLECT_INTERVAL_SECONDS:300}
+      include-direct: ${USAGE_COLLECT_INCLUDE_DIRECT:false}
+      symphony-roots: ${USAGE_COLLECT_SYMPHONY_ROOTS:}
+      count-from: ${USAGE_COLLECT_COUNT_FROM:2026-10-01}
+      machine: ${USAGE_COLLECT_MACHINE:}
+      max-mb-per-run: ${USAGE_COLLECT_MAX_MB_PER_RUN:256}
     # 작업 종료(kind=CLOSE) — PR 병합 → 배포 중지 → 옵시디언 노트 → 브랜치 정리 (스펙 2026-10-13).
     # obsidian-vault-dir가 비면 노트 단계에서 종료실패가 된다(볼트가 이 워커 PC에 있어야 한다).
     # note-folder = 진행상황 노트 폴더 겸 레포 별칭이 없을 때의 노트 폴더. 노트 자체는 레포 카탈로그의 노트 폴더(비면 첫 단계

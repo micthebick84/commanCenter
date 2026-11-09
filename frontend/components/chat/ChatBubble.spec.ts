@@ -1,5 +1,6 @@
 import { mount } from '@vue/test-utils'
 import { describe, it, expect } from 'vitest'
+import { defineComponent, h } from 'vue'
 import ChatBubble from './ChatBubble.vue'
 
 describe('ChatBubble', () => {
@@ -193,6 +194,25 @@ describe('ChatBubble footer 슬롯 (인터뷰 목업 카드)', () => {
       .flatMap((el) => el.className.split(/\s+/).filter(Boolean))
       .filter((c) => QUASAR_VISIBILITY_CLASS.test(c))
     expect(collisions).toEqual([])
+  })
+
+  it('마운트 뒤에 생긴 footer 슬롯도 래퍼로 반영된다 (슬롯은 반응형이 아니다)', async () => {
+    const Host = defineComponent({
+      props: { withFooter: Boolean },
+      render() {
+        return h(
+          ChatBubble,
+          { role: 'assistant', content: '질문' },
+          this.withFooter ? { footer: () => h('div', { class: 'card-x' }, '카드') } : {},
+        )
+      },
+    })
+    const w = mount(Host, { props: { withFooter: false } })
+    expect(w.find('.card-x').exists()).toBe(false)
+    await w.setProps({ withFooter: true })
+    expect(w.find('.bubble-stack-assistant .card-x').exists()).toBe(true)
+    await w.setProps({ withFooter: false })
+    expect(w.find('.card-x').exists()).toBe(false)
   })
 
   it('user 말풍선은 footer 슬롯이 있어도 래퍼를 쓰지 않는다', () => {

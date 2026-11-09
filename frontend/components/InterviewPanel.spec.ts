@@ -1127,6 +1127,16 @@ describe('InterviewPanel 인터뷰 목업 (스펙 2026-11-03 인터뷰 목업 §
     w.unmount()
   })
 
+  it('말풍선이 먼저 그려진 뒤 mockup 이벤트로 묶이면 카드가 나타난다', async () => {
+    stubObserver()
+    const w = await mountPanel(9, base([]))
+    expect(w.find('[data-test="mockup-card-1"]').exists()).toBe(false)
+    FakeEventSource.last().emit('mockup', mk(1))
+    await flushPromises()
+    expect(w.find('.bubble-stack-assistant [data-test="mockup-card-1"]').exists()).toBe(true)
+    w.unmount()
+  })
+
   it('목록: 이름별 묶음, 이전 버전은 접혀 있다', async () => {
     stubObserver()
     const w = await mountPanel(

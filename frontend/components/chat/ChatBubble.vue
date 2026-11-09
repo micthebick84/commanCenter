@@ -17,8 +17,7 @@ const props = defineProps<{
 }>()
 const emit = defineEmits<{ (e: 'download', id: number): void }>()
 // footer 슬롯(인터뷰 목업 카드 등)이 있을 때만 assistant 말풍선과 함께 래퍼로 감싼다. 없으면 마크업은 기존 그대로다.
-const slots = useSlots()
-const hasFooter = computed(() => props.role === 'assistant' && !!slots.footer)
+// 슬롯은 반응형이 아니라 computed에 캐시하면 나중에 생긴 슬롯을 놓친다 → 템플릿에서 렌더마다 $slots.footer를 본다.
 
 const userAttachments = computed(() =>
   props.role === 'user' && props.attachments?.length ? props.attachments : [],
@@ -45,7 +44,7 @@ const html = computed(() =>
   <div v-else class="bubble-row" :class="role">
     <div class="avatar" :class="role">{{ avatarLabel }}</div>
     <!-- renderMarkdown은 html:false라 원시 HTML을 이스케이프한다 — v-html 안전 -->
-    <div v-if="hasFooter" class="bubble-stack-assistant">
+    <div v-if="role === 'assistant' && $slots.footer" class="bubble-stack-assistant">
       <div class="bubble assistant markdown" v-html="html" />
       <slot name="footer" />
     </div>

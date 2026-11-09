@@ -4,7 +4,6 @@
 // system → 가운데 노트 칩.
 // 첨부(스펙 2026-09-13 §7): user 말풍선 아래에만 칩 줄. 클릭 → download(id). id 없는 첨부(전송 직후 낙관적 턴)는
 // 서버 확정 전이라 클릭 불가.
-import { useSlots } from 'vue'
 import { renderMarkdown } from '~/composables/useMarkdown'
 import { formatSize } from '~/composables/attachmentLimits'
 import type { TurnAttachment } from '~/composables/useInterviewStream'

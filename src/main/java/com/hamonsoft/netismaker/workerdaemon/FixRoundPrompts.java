@@ -12,6 +12,7 @@ import java.util.Locale;
  * 고치게 한다 — 원래 요건·계획은 무엇이 만들어졌는지 이해하는 참고로만 준다. 리뷰 방식이면 끝에 리뷰 절
  * (fix-round-review-section.md)을 붙이고, 그 리뷰 범위는 원래 계획이 아니라 이번 수정 요청 본문이다(§6.2). SDD는 회차에서 고를 수
  * 없어(원래 플랜 전체를 다시 구현한다) 워커가 리뷰로 돌린다. 끝에는 지금 구현 프롬프트처럼 배포 env 목록 지시·DB 절·참조 절을 붙인다.
+ * 인터뷰 목업은 "원래 작업" 안 확정 디자인 다음에 참고용 H3로 둔다(설계 2026-11-03 §7).
  * 스크린샷은 넘기지 않는다 — 재검증의 근거는 요청 본문에 글로 들어온다.
  */
 final class FixRoundPrompts {
@@ -105,6 +106,8 @@ final class FixRoundPrompts {
                 .append(task.description() == null ? "" : task.description()).append("\n");
         String design = designSection(task);
         if (!design.isEmpty()) p.append(design).append("\n");
+        // 인터뷰 목업도 디자인처럼 참고용 H3 — 목업이 없으면 "" (설계 2026-11-03 §7, 회차 리뷰어에는 넣지 않는다)
+        p.append(InterviewMockupPrompts.fixRoundSection(task.interviewMockups()));
         if (task.planMarkdown() != null && !task.planMarkdown().isBlank()) {
             p.append("\n### 확정된 구현 계획 (참고용 — 다시 실행하지 마세요)\n").append(task.planMarkdown()).append("\n");
         }

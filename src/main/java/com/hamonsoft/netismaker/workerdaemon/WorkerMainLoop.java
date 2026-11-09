@@ -18,6 +18,7 @@ import org.springframework.stereotype.Component;
 
 import java.io.File;
 import java.io.IOException;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.LinkOption;
 import java.nio.file.Path;
@@ -48,8 +49,9 @@ import java.util.function.LongSupplier;
  *     3) WorktreeService.create → 새 브랜치 worktree (재시도는 -rN) + 워커 임시 파일 info/exclude
  *        → 쓰기 도구가 있거나 이전 쓰기 기록이 있으면(자동 마이그레이션 레포 제외) 이 작업의 DB 변경 기록을 사전 조회 — 실패하면
  *        claude 없이 구현실패(스펙 2026-11-03 §5.2). 수정 회차도 같다
- *     4) 방식 준비(계획·설계 파일 — 계획 파일 머리에 참조 절, 대신 진행 판정) → 방식별 구현 prompt(끝에 참조 절)
- *        + claude -p exec (worktree에서, --add-dir 없음)
+ *     4) 인터뷰 목업 파일(.netis/mockups — 설계 2026-11-03 §7) 배치 — 못 두면 claude 없이 구현실패
+ *        → 방식 준비(계획·설계 파일 — 계획 파일 머리에 참조 절·목업 절, 대신 진행 판정) → 방식별 구현 prompt(템플릿 바로 뒤 목업 절,
+ *        끝에 참조 절) + claude -p exec (worktree에서, --add-dir 없음)
  *        → claude가 어떻게 끝나든 참조 폴더 변경 검사(경고는 PR 본문·결과 보고, 실패면 사유 끝)
  *        → 실패하면 남은 변경을 WIP 커밋으로 push(부분 작업 보존 — DB 기록이 있으면 누적 SQL 스크립트 파일도 넣는다)
  *        → 성공하면 리뷰 메모 회수, .netis/·목업 삭제, 배포 env 목록(.netis-deploy-env.json) 회수·삭제
@@ -374,6 +376,20 @@ public class WorkerMainLoop {
 
         // 4. 구현 방식 준비 — 임시 파일 exclude, 계획·설계 파일, 대신 진행 판정 (스펙 2026-10-15 §6.1·§6.5)
         boolean excludesReady = worktrees.ensureWorkerExcludes(wt.dir());
+
+        // 인터뷰 목업 파일 배치(.netis/mockups — exclude 뒤, claude 전). 못 두면 claude 없이 구현실패 — 경고만 남기고 진행하면
+        // 관리자가 고른 목업 없이 구현된다(설계 2026-11-03 §10 반목표, 계획 "설계와 다름 ①"). 목업이 없으면 아무것도 하지 않는다
+        List<WorkerTaskResponse.InterviewMockupFile> ms = task.interviewMockups();
+        List<Integer> excludedMockups = task.excludedMockupNumbers();
+        boolean approvedDesign = ImplementationPrompts.hasApprovedDesign(task);
+        try {
+            placeInterviewMockups(task, wtPath);
+        } catch (IOException e) {
+            safePostImplementationFailure(task, attempt, MOCKUP_PLACE_FAILED + messageOf(e),
+                    wt.branchName(), null, null);
+            return;
+        }
+
         boolean hasPlan = task.planMarkdown() != null && !task.planMarkdown().isBlank();
         String planText = requested == ImplementationMode.SDD && hasPlan
                 ? ImplementationScratch.normalizeTaskHeadings(task.planMarkdown())
@@ -381,9 +397,12 @@ public class WorkerMainLoop {
         boolean planWritten = false;
         boolean designWritten = false;
         if (requested != ImplementationMode.DIRECT && hasPlan) {
-            // 참조 절은 파일 머리에만 — 태스크 수 판정(countTaskHeadings)에는 계획 본문만 넘긴다 (스펙 2026-10-24 §6.5)
+            // 참조 절·인터뷰 목업 절은 파일 머리에만 — 태스크 수 판정(countTaskHeadings)에는 계획 본문만 넘긴다 (스펙 2026-10-24 §6.5).
+            // 목업 머리는 SDD 서브에이전트·리뷰어가 본 프롬프트 없이 읽으므로 구현 절과 같은 강도다
             planWritten = writeScratch(wtPath, ImplementationScratch.planPath(task.id()),
-                    RefRepoPrompts.planFileHeader(ready) + planText);
+                    RefRepoPrompts.planFileHeader(ready)
+                            + InterviewMockupPrompts.planFileHeader(ms, excludedMockups, approvedDesign)
+                            + planText);
             if (requested == ImplementationMode.SDD
                     && task.analysisMarkdown() != null && !task.analysisMarkdown().isBlank()) {
                 designWritten = writeScratch(wtPath, ImplementationScratch.designPath(task.id()),
@@ -413,15 +432,17 @@ public class WorkerMainLoop {
         //    작업 타입 절은 템플릿 안({plan_section} 바로 뒤) — DB 작업의 세 갈래는 쓰기 도구 유무(execute로 한 문장씩 / 파일에 적기)와
         //    자동 마이그레이션 레포(마이그레이션 관례대로)가 정한다. 파일에 적는 경우 경로는 이전 쓰기 기록이 있으면 -manual
         //    (워커의 누적 기록 파일을 덮어쓰지 않게 — 계획 "설계와 다름 ②"). DB 쪽은 DB 절 → 자동 마이그레이션 절 → 이미 적용된 SQL 절 순서
+        //    인터뷰 목업 절은 템플릿 밖 맨 앞(템플릿 바로 뒤) — 목업도 제외 번호도 없으면 ""라 프롬프트가 예전과 같다 (설계 2026-11-03 §7)
         TaskType taskType = taskTypeOf(task);
         WorkerTaskResponse.DbWriteSpec db = dbSpecOf(task);
         boolean writeTools = DbMcpWorkerSupport.anyWritable(task.dbMcp());
         String prompt = renderImplementationPrompt(task, repo.commitSha(), wt.branchName(),
                 ImplementationPrompts.planSection(task, mode.effective(), repo.commitSha(), designWritten,
-                        !ready.isEmpty()),
+                        !ready.isEmpty(), !ms.isEmpty()),
                 ImplementationPrompts.commitRule(mode.effective()),
                 ImplementationPrompts.taskTypeSection(taskType, writeTools, db.migrationManaged(),
                         ImplementationPrompts.sessionScriptPath(db, writeTools)))
+                + InterviewMockupPrompts.implementationSection(ms, excludedMockups, approvedDesign)
                 + DbMcpWorkerSupport.promptSection(task.dbMcp(), true)
                 + DbMcpWorkerSupport.migrationManagedSection(db)
                 + DbMcpWorkerSupport.appliedSqlSection(dbLog.prior())
@@ -603,6 +624,16 @@ public class WorkerMainLoop {
         File designDir = placeMockups(task, wt.dir());
         worktrees.ensureWorkerExcludes(wt.dir());
 
+        // 인터뷰 목업 파일 — 일반 구현과 같이 exclude 뒤에 두고, 못 두면 claude 없이 회차 구현실패(사전 조회 실패와 같은 모양).
+        // 프롬프트에는 참고용 H3로만 들어간다(FixRoundPrompts)
+        try {
+            placeInterviewMockups(task, wtPath);
+        } catch (IOException e) {
+            safePostImplementationFailure(task, attempt, MOCKUP_PLACE_FAILED + messageOf(e) + reasonTail,
+                    branch, tip, null);
+            return;
+        }
+
         // 3. 회차 프롬프트 + claude exec (참조 절은 끝에, --add-dir 없음 — 지금 구현과 같다). 타입 절은 없고 DB 쪽은 DB 절(쓰기 연결이면 쓰기 절)에
         //    자동 마이그레이션 절·이미 적용된 SQL 절을 dbExtra로 붙인다
         String dbExtra = DbMcpWorkerSupport.migrationManagedSection(dbSpecOf(task))
@@ -727,6 +758,32 @@ public class WorkerMainLoop {
      */
     static WorkerResultRequest withFixMarks(WorkerResultRequest req, WorkerTaskResponse.FixRoundSpec fix) {
         return fix == null ? req : req.withFixAttempt(fix.attempt()).withFixRequestId(fix.requestId());
+    }
+
+    /** 인터뷰 목업 배치 실패 사유의 앞머리 — 구현·회차·디자인 공용. */
+    static final String MOCKUP_PLACE_FAILED = "인터뷰 목업 배치 실패: ";
+
+    /**
+     * claim의 인터뷰 목업(interviewMockups)을 worktree의 {@code .netis/mockups/{n}-{name}-v{version}.html}로 쓴다(설계 2026-11-03 §7).
+     * 목업이 없으면 폴더도 만들지 않는다(제외 번호만 있는 작업 포함). 하나라도 못 쓰면 IOException — 호출부가 claude 전에 실패로 끝낸다.
+     * 경로는 {@link ImplementationScratch#mockupPath}가 이름을 접어 만들고, 정규화한 경로가 {@code .netis/mockups} 밖이면 쓰지 않는다.
+     */
+    static void placeInterviewMockups(WorkerTaskResponse task, Path worktree) throws IOException {
+        for (WorkerTaskResponse.InterviewMockupFile m : task.interviewMockups()) {
+            Path target = mockupTarget(worktree, ImplementationScratch.mockupPath(m));
+            Files.createDirectories(target.getParent());
+            Files.writeString(target, m.html() == null ? "" : m.html(), StandardCharsets.UTF_8);
+        }
+    }
+
+    /** worktree 상대 경로를 정규화한 절대 경로 — {@code worktree/.netis/mockups} 아래가 아니면 IOException. */
+    static Path mockupTarget(Path worktree, String relPath) throws IOException {
+        Path base = worktree.resolve(ImplementationScratch.MOCKUPS_DIR).toAbsolutePath().normalize();
+        Path target = worktree.resolve(relPath).toAbsolutePath().normalize();
+        if (!target.startsWith(base) || target.equals(base)) {
+            throw new IOException("목업 경로가 worktree 밖입니다: " + relPath);
+        }
+        return target;
     }
 
     /** 승인된 디자인 목업을 worktree의 .design/에 둔다(참조용 — 커밋 전 삭제). 없거나 실패하면 null(디자인 없이 진행). */
@@ -1092,7 +1149,21 @@ public class WorkerMainLoop {
             return;
         }
 
+        // 인터뷰 목업은 출발점으로 design worktree의 .netis/mockups에 둔다 — 디자인은 커밋하지 않고 수확은 .design-out만 읽으므로
+        // exclude는 부르지 않는다(계획 "설계와 다름 ③"). 못 두면 claude 없이 디자인실패 뒤 worktree를 지운다(성공 수확 뒤와 같다)
+        try {
+            placeInterviewMockups(task, wt.toPath());
+        } catch (IOException e) {
+            safePostDesignFailure(task.id(), MOCKUP_PLACE_FAILED + messageOf(e), null);
+            worktrees.discard(GitRemotes.localKey(task.repoRef()), WorktreeKind.DESIGN, task.id());
+            return;
+        }
+
+        // 반려 재실행(claim에 이전 디자인이 있다)이면 이전 디자인과 피드백이 목업보다 우선이다(계획 Task 7 "설계와 다름 ①").
+        // 디자인 claim에는 계획 본문이 없어 '전달되지 않은' 번호는 쓰지 않는다. 목업이 없으면 ""라 프롬프트가 예전과 같다
+        boolean previousDesign = task.designMarkdown() != null && !task.designMarkdown().isBlank();
         String prompt = renderDesignPrompt(props.designPromptTemplate(), task)
+                + InterviewMockupPrompts.designSection(task.interviewMockups(), previousDesign)
                 + DbMcpWorkerSupport.promptSection(task.dbMcp());
         ClaudeExecAdapter.ExecResult exec;
         try {
@@ -1265,7 +1336,7 @@ public class WorkerMainLoop {
      * 참고용 H3(FixRoundPrompts.designSection)를 쓴다.
      */
     static String renderDesignSection(WorkerTaskResponse task) {
-        if (task.designMarkdown() == null || task.designMarkdown().isBlank()) return "";
+        if (!ImplementationPrompts.hasApprovedDesign(task)) return "";
         return """
 
                 ## 확정된 디자인 (반드시 이 디자인 기준으로 구현)
@@ -1352,9 +1423,10 @@ public class WorkerMainLoop {
 
     /**
      * PR/MR 본문. 전체가 PR_BODY_MAX_CHARS를 넘으면 사전 분석(설계 문서)을 먼저 줄이고, 그래도 넘으면 리뷰 메모를 줄인다 —
-     * 줄인 절은 끝에 `…(이하 생략)`. 머리 줄(방식 줄 포함)·참조 절·DB 변경 절과 꼬리는 그대로 둔다. 본문이 길면 이미 push한 구현이
+     * 줄인 절은 끝에 `…(이하 생략)`. 머리 줄(방식 줄 포함)·참조 절·목업 절·DB 변경 절과 꼬리는 그대로 둔다. 본문이 길면 이미 push한 구현이
      * "PR/MR 생성 실패"로 끝나기 때문이다(GitHub 65,536자 한도). 참조 절(고정 커밋·변경 경고, 스펙 2026-10-24 §6.6)은
-     * 머리 다음에 오고, 참조가 없으면 비어 본문이 예전과 같다. DB 변경 절({@link #dbChangeSection}, 스펙 2026-11-03 §6.5)은 참조 절 다음이고
+     * 머리 다음에 오고, 참조가 없으면 비어 본문이 예전과 같다. "구현 기준 목업" 절(설계 2026-11-03 §7 — 번호·제목·이름·버전, 최대 10줄)은
+     * 참조 절 바로 다음이고 넘긴 목업이 없으면 비어 본문이 예전과 같다. DB 변경 절({@link #dbChangeSection}, 스펙 2026-11-03 §6.5)은 그 다음이고
      * 스스로 승인 대기 목록을 {@link #PR_PENDING_SQL_MAX_CHARS}로 줄여 오며, 비면 본문이 예전과 같다.
      */
     static String renderPrBody(WorkerTaskResponse task, long durationMs, String headSha,
@@ -1374,14 +1446,16 @@ public class WorkerMainLoop {
                 + "🤖 Generated with netisMaker by Claude Code.\n"
                 + (gitlab ? "리뷰 후 Draft 표시를 해제하세요.\n" : "리뷰 후 Ready for review로 전환하세요.\n");
         String refSection = RefRepoPrompts.prSection(refsOf(task), refWarnings);
+        String mockupSection = InterviewMockupPrompts.prSection(task.interviewMockups());
         String analysisTitle = "## 사전 분석\n";
         String notesTitle = "## 리뷰 메모\n";
 
         String analysis = task.analysisMarkdown() == null ? "" : task.analysisMarkdown();
         String notes = reviewNotes;
         String db = dbSection == null ? "" : dbSection;
-        // 절 제목·구분 줄바꿈·머리·참조 절·DB 변경 절·꼬리를 뺀, 분석과 메모가 나눠 쓸 수 있는 글자 수
-        int room = PR_BODY_MAX_CHARS - head.length() - refSection.length() - db.length() - tail.length()
+        // 절 제목·구분 줄바꿈·머리·참조 절·목업 절·DB 변경 절·꼬리를 뺀, 분석과 메모가 나눠 쓸 수 있는 글자 수
+        int room = PR_BODY_MAX_CHARS - head.length() - refSection.length() - mockupSection.length() - db.length()
+                - tail.length()
                 - analysisTitle.length() - 2
                 - (notes == null ? 0 : notesTitle.length() + 2);
         int notesLength = notes == null ? 0 : notes.length();
@@ -1393,6 +1467,7 @@ public class WorkerMainLoop {
         }
         return head
                 + refSection
+                + mockupSection
                 + db
                 + analysisTitle + analysis + "\n\n"
                 + (notes == null ? "" : notesTitle + notes + "\n\n")

@@ -122,16 +122,24 @@ final class ImplementationPrompts {
         return planSection(task, effective, baseSha, designWritten, false);
     }
 
-    /**
-     * {plan_section}. designWritten = SDD에 설계 파일을 알릴지(실제로 썼을 때만), refsInPlanFile = 계획 파일 머리에 참조 절을
-     * 넣었는지(SDD만 참조 줄을 더한다).
-     */
+    /** {plan_section} — 계획 파일 머리에 인터뷰 목업 절이 없는 구현(mockupsInPlanFile=false). */
     static String planSection(WorkerTaskResponse task, ImplementationMode effective, String baseSha,
                               boolean designWritten, boolean refsInPlanFile) {
+        return planSection(task, effective, baseSha, designWritten, refsInPlanFile, false);
+    }
+
+    /**
+     * {plan_section}. designWritten = SDD에 설계 파일을 알릴지(실제로 썼을 때만), refsInPlanFile = 계획 파일 머리에 참조 절을
+     * 넣었는지(SDD만 참조 줄을 더한다), mockupsInPlanFile = 계획 파일 머리에 넘긴 인터뷰 목업 절을 넣었는지(SDD만 목업 줄을 더한다 —
+     * 제외 번호만 있으면 머리가 그 줄뿐이라 거짓으로 넘긴다). 리뷰 방식은 claim의 목업이 있을 때 리뷰어 요구 한 줄을 더한다
+     * (설계 2026-11-03 §7, 계획 "설계와 다름 ②" — SDD 리뷰어에는 계획 파일 머리와 SDD 줄로 전한다).
+     */
+    static String planSection(WorkerTaskResponse task, ImplementationMode effective, String baseSha,
+                              boolean designWritten, boolean refsInPlanFile, boolean mockupsInPlanFile) {
         return switch (effective) {
             case DIRECT -> WorkerMainLoop.renderPlanSection(task);
             case REVIEW -> reviewPlanSection(task, baseSha);
-            case SDD -> sddPlanSection(task, designWritten, refsInPlanFile);
+            case SDD -> sddPlanSection(task, designWritten, refsInPlanFile, mockupsInPlanFile);
         };
     }
 
@@ -140,10 +148,17 @@ final class ImplementationPrompts {
         String plan = WorkerMainLoop.renderPlanSection(task, REVIEW_LAST_BULLET);
         boolean hasPlan = !plan.isEmpty();
         String planBlock = hasPlan ? plan : NO_PLAN_NOTE;
+        // 목업 요구는 계획 파일 머리의 "인터뷰 목업" 절을 가리키므로 계획 파일이 있을 때만 붙인다. 목업이 없으면 ""
         String requirements = hasPlan
                 ? "The approved plan is in `" + ImplementationScratch.planPath(task.id()) + "`. Read it in full."
+                        + InterviewMockupPrompts.reviewerRequirement(task.interviewMockups(), hasApprovedDesign(task))
                 : "There is no plan file. The task requirements are quoted under [DESCRIPTION] above; review against them.";
         return planBlock + REVIEW_SECTION.replace("__REVIEWER__", reviewer(requirements, baseSha));
+    }
+
+    /** 승인된 디자인이 있는가 — 구현 프롬프트의 디자인 절(WorkerMainLoop.renderDesignSection)과 같은 판정. */
+    static boolean hasApprovedDesign(WorkerTaskResponse task) {
+        return task.designMarkdown() != null && !task.designMarkdown().isBlank();
     }
 
     /**
@@ -154,7 +169,8 @@ final class ImplementationPrompts {
         return REVIEWER.replace("__REQUIREMENTS__", requirements).replace("__BASE_SHA__", baseSha);
     }
 
-    private static String sddPlanSection(WorkerTaskResponse task, boolean designWritten, boolean refsInPlanFile) {
+    private static String sddPlanSection(WorkerTaskResponse task, boolean designWritten, boolean refsInPlanFile,
+                                         boolean mockupsInPlanFile) {
         String design = designWritten
                 ? " 설계 문서(스펙)는 `" + ImplementationScratch.designPath(task.id()) + "`입니다."
                 : "";
@@ -171,7 +187,8 @@ final class ImplementationPrompts {
                 - 리뷰 지적은 Critical·Important 가운데 계획 범위 안의 결함(깨짐·조용한 오작동·계획 미이행)만 고치세요. 계획에 없는 동작 규칙 변경(입력 검증 강화, 정규화 추가 등)은 하지 마세요.
                 - 끝내기 전에 원장의 Ruling·보류(parked) 항목과 고치지 않은 지적을 이유와 함께 `.netis/review-notes.md`에 한국어로 정리하세요. 이 파일은 워커가 PR/MR 본문에 붙인 뒤 지우며 커밋되지 않습니다.
                 """.formatted(ImplementationScratch.planPath(task.id()), design)
-                + (refsInPlanFile ? SDD_REF_LINE : "");
+                + (refsInPlanFile ? SDD_REF_LINE : "")
+                + (mockupsInPlanFile ? InterviewMockupPrompts.SDD_MOCKUP_LINE : "");
     }
 
     /** PR/MR 본문 방식 줄 (스펙 §6.7) — 2회째부터 회차, 낮춰서 진행했으면 요청 방식과 이유. 마크다운 목록 항목이다. */

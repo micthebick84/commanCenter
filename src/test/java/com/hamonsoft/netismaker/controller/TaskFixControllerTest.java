@@ -177,11 +177,11 @@ class TaskFixControllerTest {
         TaskController tc = new TaskController(ts, mock(DeployLogStreamService.class), mock(InterviewService.class), fs);
         task.setStatus(TaskStatus.APPROVED);
         when(ts.getForView(eq(5L), anyString(), anyBoolean())).thenReturn(task);
-        when(ts.list(anyString(), anyBoolean(), anyBoolean(), any(), any())).thenReturn(new PageImpl<>(List.of(task)));
+        when(ts.list(anyString(), anyBoolean(), anyBoolean(), any(), any(), any())).thenReturn(new PageImpl<>(List.of(task)));
         when(fs.fixViewOf(task)).thenReturn(FIX);
 
         TaskResponse detail = tc.get(5L, user);
-        TaskResponse listed = tc.list(null, false, PageRequest.of(0, 20), user).getContent().get(0);
+        TaskResponse listed = tc.list(null, null, false, PageRequest.of(0, 20), user).getContent().get(0);
 
         assertThat(detail.fix()).isEqualTo(FIX);
         assertThat(detail.envVars()).extracting(EnvVar::value).containsExactly("");   // 비관리자 가림은 그대로

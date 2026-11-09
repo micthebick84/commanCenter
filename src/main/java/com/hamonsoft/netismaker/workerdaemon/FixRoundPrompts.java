@@ -47,12 +47,20 @@ final class FixRoundPrompts {
         return render(task, fix, tipSha, remoteAhead, mode, commitRule, List.of());
     }
 
-    /**
-     * 회차 프롬프트 본문 + 배포 env 목록 지시 + DB 절 + 참조 절. mode는 실제로 돌 방식(직접·리뷰) — 리뷰만 리뷰 절을 붙이고, 리뷰어는
-     * tipSha 대비 커밋되지 않은 변경을 본다.
-     */
+    /** DB 추가 절 없는 회차 프롬프트 — 기존 호출부·테스트용(dbExtra=""). */
     static String render(WorkerTaskResponse task, FixRoundSpec fix, String tipSha, boolean remoteAhead,
                          ImplementationMode mode, String commitRule, List<WorktreeService.RefWorktree> refs) {
+        return render(task, fix, tipSha, remoteAhead, mode, commitRule, refs, "");
+    }
+
+    /**
+     * 회차 프롬프트 본문 + 배포 env 목록 지시 + DB 절 + dbExtra + 참조 절. mode는 실제로 돌 방식(직접·리뷰) — 리뷰만 리뷰 절을 붙이고, 리뷰어는
+     * tipSha 대비 커밋되지 않은 변경을 본다. DB 절은 쓰기 연결이 있으면 "개발 DB 쓰기"(스펙 2026-11-03 §6.7)이고, dbExtra에는 호출부가
+     * 만든 자동 마이그레이션 절과 이미 적용된 SQL 절만 순서대로 담는다({@link DbMcpWorkerSupport}) — 타입 절은 회차에 넣지 않는다(§5.2).
+     */
+    static String render(WorkerTaskResponse task, FixRoundSpec fix, String tipSha, boolean remoteAhead,
+                         ImplementationMode mode, String commitRule, List<WorktreeService.RefWorktree> refs,
+                         String dbExtra) {
         String label = label(fix);
         List<String> previous = fix.previousBodies() == null ? List.of() : fix.previousBodies();
         StringBuilder p = new StringBuilder();
@@ -113,7 +121,8 @@ final class FixRoundPrompts {
         }
         return p
                 + WorkerMainLoop.DEPLOY_ENV_INSTRUCTION
-                + DbMcpWorkerSupport.promptSection(task.dbMcp())
+                + DbMcpWorkerSupport.promptSection(task.dbMcp(), true)
+                + (dbExtra == null ? "" : dbExtra)
                 + RefRepoPrompts.promptSection(refs);
     }
 

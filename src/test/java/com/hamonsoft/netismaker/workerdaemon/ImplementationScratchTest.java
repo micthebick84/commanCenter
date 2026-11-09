@@ -109,6 +109,69 @@ class ImplementationScratchTest {
         assertThat(ImplementationScratch.readReviewNotes(wt)).isEmpty();
     }
 
+    // ---- DB 메모 (스펙 2026-11-03 §6.7 — 세션은 PR 본문을 못 쓰니 이 파일로 남기고 워커가 리뷰 메모 뒤에 옮긴다) ----
+
+    @Test
+    void db_notes_live_next_to_the_review_notes_and_share_the_cap() {
+        assertThat(ImplementationScratch.DB_NOTES).isEqualTo(".netis/db-notes.md");
+        assertThat(ImplementationScratch.DB_NOTES).startsWith(ImplementationScratch.ROOT + "/");
+        assertThat(ImplementationScratch.DB_NOTES).isNotEqualTo(ImplementationScratch.REVIEW_NOTES);
+    }
+
+    @Test
+    void db_notes_are_masked_trimmed_and_capped_like_review_notes() throws Exception {
+        assertThat(ImplementationScratch.readDbNotes(wt)).isEmpty();
+
+        ImplementationScratch.write(wt, ImplementationScratch.DB_NOTES, "  \n ");
+        assertThat(ImplementationScratch.readDbNotes(wt)).isEmpty();
+
+        ImplementationScratch.write(wt, ImplementationScratch.DB_NOTES,
+                "자동 마이그레이션 레포로 보임 — 카탈로그 설정 확인 필요\nclone https://oauth2:glpat-SECRET@gitlab.example/g/p.git\n");
+        assertThat(ImplementationScratch.readDbNotes(wt)).hasValueSatisfying(n -> assertThat(n)
+                .startsWith("자동 마이그레이션 레포로 보임")
+                .doesNotContain("glpat-SECRET")
+                .contains("***@gitlab.example"));
+
+        ImplementationScratch.write(wt, ImplementationScratch.DB_NOTES, "가".repeat(20_500));
+        assertThat(ImplementationScratch.readDbNotes(wt).orElseThrow())
+                .hasSize(ImplementationScratch.REVIEW_NOTES_MAX_CHARS + "\n\n…(이하 생략)".length())
+                .endsWith("…(이하 생략)");
+    }
+
+    /** 두 메모 파일은 서로 읽히지 않는다 — 리뷰어가 review-notes를 덮어써도 db-notes는 남는다. */
+    @Test
+    void review_notes_and_db_notes_are_read_independently() throws Exception {
+        ImplementationScratch.write(wt, ImplementationScratch.REVIEW_NOTES, "R");
+        assertThat(ImplementationScratch.readDbNotes(wt)).isEmpty();
+        assertThat(ImplementationScratch.readReviewNotes(wt)).contains("R");
+
+        ImplementationScratch.write(wt, ImplementationScratch.DB_NOTES, "D");
+        assertThat(ImplementationScratch.readDbNotes(wt)).contains("D");
+        assertThat(ImplementationScratch.readReviewNotes(wt)).contains("R");
+    }
+
+    @Test
+    void a_symlinked_db_notes_file_is_not_read() throws Exception {
+        Path secret = Files.writeString(wt.resolve("secret.txt"), "id_rsa");
+        Files.createDirectories(wt.resolve(".netis"));
+        try {
+            Files.createSymbolicLink(wt.resolve(ImplementationScratch.DB_NOTES), secret);
+        } catch (Exception e) {
+            assumeTrue(false, "심볼릭 링크를 만들 수 없는 환경");
+        }
+
+        assertThat(ImplementationScratch.readDbNotes(wt)).isEmpty();
+    }
+
+    @Test
+    void delete_root_also_removes_the_db_notes() throws Exception {
+        ImplementationScratch.write(wt, ImplementationScratch.DB_NOTES, "D");
+
+        ImplementationScratch.deleteRoot(wt);
+
+        assertThat(wt.resolve(ImplementationScratch.DB_NOTES)).doesNotExist();
+    }
+
     @Test
     void delete_root_removes_only_netis() throws Exception {
         ImplementationScratch.write(wt, ImplementationScratch.planPath(1), "p");

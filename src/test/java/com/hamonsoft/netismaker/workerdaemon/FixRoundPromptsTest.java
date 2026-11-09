@@ -1,6 +1,9 @@
 package com.hamonsoft.netismaker.workerdaemon;
 
+import com.hamonsoft.netismaker.dto.DbChangeView;
+import com.hamonsoft.netismaker.dto.DbMcpGrant;
 import com.hamonsoft.netismaker.dto.WorkerTaskResponse;
+import com.hamonsoft.netismaker.dto.WorkerTaskResponse.DbWriteSpec;
 import com.hamonsoft.netismaker.entity.ImplementationMode;
 import org.junit.jupiter.api.Test;
 
@@ -101,5 +104,52 @@ class FixRoundPromptsTest {
                 .doesNotContain("MIT License");   // 리소스 머리 주석은 빠진다
         // 리뷰 절은 배포 env 지시보다 앞
         assertThat(p.indexOf("## 마지막 리뷰")).isLessThan(p.indexOf("## 배포 환경변수 목록"));
+    }
+
+    // ---- 개발 DB 쓰기 (스펙 2026-11-03 §5.2 — 회차 프롬프트는 DB 절과 이미 적용된 SQL 절만 넣는다) ----
+
+    private static WorkerTaskResponse taskWithWritableDb() {
+        DbMcpGrant grant = new DbMcpGrant("tok", List.of(
+                new DbMcpGrant.Server("db-12", "/mcp/db/12", "개발 (PostgreSQL)", "POSTGRESQL", true)), List.of());
+        return task(null).withDbMcp(grant);
+    }
+
+    @Test
+    void 회차_프롬프트는_쓰기_연결이면_쓰기_절을_넣는다() {
+        String p = FixRoundPrompts.render(taskWithWritableDb(), fix(1, null), TIP, false,
+                ImplementationMode.DIRECT, ImplementationPrompts.DIRECT_COMMIT_RULE);
+
+        assertThat(p).contains("## 개발 DB 쓰기 (함께 쓰는 개발 DB)")
+                .contains("- mcp__db-12__query / list_tables / describe_table / execute : 개발 (PostgreSQL)")
+                .doesNotContain("쓰기(INSERT/UPDATE/DELETE/DDL)는 서버가 거부합니다");
+    }
+
+    /** 7인자(참조까지)는 dbExtra가 "" — DB 절만. 타입 절은 회차에 들어가지 않는다. */
+    @Test
+    void dbExtra가_없으면_DB_절_뒤에_아무것도_붙지_않는다() {
+        String seven = FixRoundPrompts.render(taskWithWritableDb(), fix(1, null), TIP, false,
+                ImplementationMode.DIRECT, ImplementationPrompts.DIRECT_COMMIT_RULE, List.of());
+        String eight = FixRoundPrompts.render(taskWithWritableDb(), fix(1, null), TIP, false,
+                ImplementationMode.DIRECT, ImplementationPrompts.DIRECT_COMMIT_RULE, List.of(), "");
+
+        assertThat(eight).isEqualTo(seven);
+        assertThat(seven).doesNotContain("## 이미 적용된 SQL").doesNotContain("## DB 변경 (자동 마이그레이션 레포)")
+                .doesNotContain("## 작업 타입");
+    }
+
+    /** 붙는 순서: 배포 env 지시 → DB 절 → dbExtra(자동 마이그레이션 절 → 이미 적용된 SQL 절) → 참조 절. */
+    @Test
+    void dbExtra는_DB_절_바로_뒤에_붙는다() {
+        String dbExtra = DbMcpWorkerSupport.migrationManagedSection(new DbWriteSpec("db/symphony/task-42.sql", true, false))
+                + DbMcpWorkerSupport.appliedSqlSection(List.of(new DbChangeView(12L, 5L, "개발 (PostgreSQL)", 1, null,
+                "CREATE TABLE t_new (id int)", "EXECUTED", null, null, null, null, null, null)));
+        String p = FixRoundPrompts.render(taskWithWritableDb(), fix(1, null), TIP, false,
+                ImplementationMode.DIRECT, ImplementationPrompts.DIRECT_COMMIT_RULE, List.of(), dbExtra);
+
+        assertThat(p).endsWith(DbMcpWorkerSupport.promptSection(taskWithWritableDb().dbMcp(), true) + dbExtra);
+        assertThat(p.indexOf("## 배포 환경변수 목록")).isLessThan(p.indexOf("## 개발 DB 쓰기"));
+        assertThat(p.indexOf("## 개발 DB 쓰기")).isLessThan(p.indexOf("## DB 변경 (자동 마이그레이션 레포)"));
+        assertThat(p.indexOf("## DB 변경 (자동 마이그레이션 레포)")).isLessThan(p.indexOf("## 이미 적용된 SQL"));
+        assertThat(p).contains("- [실행됨] #12 개발 (PostgreSQL): CREATE TABLE t_new (id int)");
     }
 }

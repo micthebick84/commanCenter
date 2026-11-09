@@ -20,6 +20,13 @@ final class ImplementationScratch {
 
     static final String ROOT = ".netis";
     static final String REVIEW_NOTES = ".netis/review-notes.md";
+    /**
+     * DB 메모 — 구현 세션이 개발 DB 쓰기 도중 PR 검토자가 알아야 할 점(예: 자동 마이그레이션 레포로 보임)을 남기는 파일. 세션은 PR 본문을
+     * 쓸 수 없고(본문은 워커가 만든다) 리뷰 메모 파일은 리뷰·SDD 지시가 "쓰세요"라고 해서 리뷰어가 덮어쓸 수 있으므로 따로 둔다.
+     * 워커가 리뷰 메모 뒤에 이어 붙여 PR 본문(수정 회차는 구현 로그)으로 옮긴다 (스펙 2026-11-03 §6.7, 계획 "설계와 다름 ①").
+     */
+    static final String DB_NOTES = ".netis/db-notes.md";
+    /** 리뷰 메모와 DB 메모 각각의 상한(자). */
     static final int REVIEW_NOTES_MAX_CHARS = 20_000;
 
     /** SDD task-brief(awk)가 찾는 제목 — `^#+[ \t]+Task[ \t]+N`. */
@@ -78,7 +85,16 @@ final class ImplementationScratch {
      * 해 PR 본문으로 빼내지 못하게). 인증 URL은 가리고 상한에서 자른다 (스펙 §6.7).
      */
     static Optional<String> readReviewNotes(Path worktree) {
-        Path notes = worktree.resolve(REVIEW_NOTES);
+        return readNotes(worktree, REVIEW_NOTES, "리뷰 메모");
+    }
+
+    /** DB 메모 회수 — {@link #readReviewNotes}와 같은 규칙(링크 불추적·인증 URL 가림·상한)이고 파일만 다르다. */
+    static Optional<String> readDbNotes(Path worktree) {
+        return readNotes(worktree, DB_NOTES, "DB 메모");
+    }
+
+    private static Optional<String> readNotes(Path worktree, String relPath, String what) {
+        Path notes = worktree.resolve(relPath);
         try {
             if (!Files.isRegularFile(notes, LinkOption.NOFOLLOW_LINKS)) return Optional.empty();
             String text = GitRemotes.mask(Files.readString(notes, StandardCharsets.UTF_8)).strip();
@@ -88,7 +104,7 @@ final class ImplementationScratch {
             }
             return Optional.of(text);
         } catch (Exception e) {
-            log.warn("리뷰 메모 읽기 실패 (PR 본문에서 생략): {}", e.getMessage());
+            log.warn("{} 읽기 실패 (PR 본문에서 생략): {}", what, e.getMessage());
             return Optional.empty();
         }
     }

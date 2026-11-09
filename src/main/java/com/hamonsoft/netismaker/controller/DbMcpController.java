@@ -4,8 +4,11 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.hamonsoft.netismaker.dbmcp.DbMcpTokenService;
 import com.hamonsoft.netismaker.dbmcp.DbMcpTools;
+import com.hamonsoft.netismaker.dbmcp.DbWriteGate;
+import com.hamonsoft.netismaker.dbmcp.DbWriteService;
 import com.hamonsoft.netismaker.dto.InterviewClaimResponse.DbConnectionRef;
 import com.hamonsoft.netismaker.entity.Task;
+import com.hamonsoft.netismaker.entity.WriteClassification;
 import com.hamonsoft.netismaker.service.DbConnectionService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -25,6 +28,8 @@ import java.util.Set;
  * 디자인·구현 단계 DB MCP (스펙 2026-10-14 §6.1). MCP Streamable HTTP의 stateless JSON 응답만 — SSE·세션 id 없음.
  * 인증은 Authorization: Bearer <작업 토큰> 하나(워커 API 키 아님). 보안 체인에서는 permitAll(SecurityConfig).
  * ⚠️ 접속정보(평문 비밀번호)와 결과값을 로그로 남기지 않는다 — 감사 로그는 메타데이터만.
+ * 구현 단계 쓰기(스펙 2026-11-03 §6.1): 토큰의 쓰기 허가와 판정(DbWriteGate)이 둘 다 참인 연결만 tools/list에 execute를 싣고,
+ * execute 호출은 DbWriteService가 같은 판정을 다시 해 실행·승인 대기·거부한다. 승인 대기는 도구 오류가 아니다.
  */
 @RestController
 @RequestMapping("/mcp/db")
@@ -39,20 +44,25 @@ public class DbMcpController {
     private final DbMcpTokenService tokens;
     private final DbConnectionService dbConnections;
     private final DbMcpTools tools;
+    private final DbWriteGate writeGate;
+    private final DbWriteService writes;
 
-    public DbMcpController(DbMcpTokenService tokens, DbConnectionService dbConnections, DbMcpTools tools) {
+    public DbMcpController(DbMcpTokenService tokens, DbConnectionService dbConnections, DbMcpTools tools,
+                           DbWriteGate writeGate, DbWriteService writes) {
         this.tokens = tokens;
         this.dbConnections = dbConnections;
         this.tools = tools;
+        this.writeGate = writeGate;
+        this.writes = writes;
     }
 
     @PostMapping("/{connectionId}")
     public ResponseEntity<Object> handle(@PathVariable long connectionId,
-                                         @RequestHeader(value = HttpHeaders.AUTHORIZATION, required = false) String auth,
+                                         @RequestHeader(value = HttpHeaders.AUTHORIZATION, required = false) String authorization,
                                          @RequestBody JsonNode body) {
-        Optional<Task> task = tokens.authenticate(bearer(auth));
-        if (task.isEmpty()) return ResponseEntity.status(HttpStatus.UNAUTHORIZED).build();
-        List<Long> ids = task.get().getDbConnectionIds();
+        Optional<DbMcpTokenService.TokenAuth> auth = tokens.authenticateWithGrant(bearer(authorization));
+        if (auth.isEmpty()) return ResponseEntity.status(HttpStatus.UNAUTHORIZED).build();
+        List<Long> ids = auth.get().task().getDbConnectionIds();
         boolean selected = ids != null && ids.stream().anyMatch(n -> n != null && ((Number) n).longValue() == connectionId);
         if (!selected) return ResponseEntity.notFound().build();
         if (body == null || !body.isObject()) {
@@ -65,8 +75,8 @@ public class DbMcpController {
         Object result = switch (method) {
             case "initialize" -> initialize(connectionId, body.path("params").path("protocolVersion").asText(""));
             case "ping" -> Map.of();
-            case "tools/list" -> Map.of("tools", tools.toolDefinitions(labelOf(connectionId)));
-            case "tools/call" -> callTool(task.get(), connectionId, body.path("params"));
+            case "tools/list" -> Map.of("tools", tools.toolDefinitions(labelOf(connectionId), writable(auth.get(), connectionId)));
+            case "tools/call" -> callTool(auth.get(), connectionId, body.path("params"));
             default -> null;
         };
         if (result == null) return ResponseEntity.ok(error(id, -32601, "Method not found: " + method));
@@ -95,22 +105,32 @@ public class DbMcpController {
         return db.refs().isEmpty() ? "DB #" + connectionId : db.refs().get(0).label();
     }
 
-    private Map<String, Object> callTool(Task task, long connectionId, JsonNode params) {
+    /**
+     * 쓰기 도구를 보일지(스펙 2026-11-03 §6.1) — 토큰 발급 때 쓰기가 허가됐고(조건 6) 지금 조건 1~5가 참일 때.
+     * execute 호출도 같은 판정을 서버에서 다시 한다(DbWriteService) — 목록에 없는 도구를 직접 불러도 거부·기록된다.
+     */
+    private boolean writable(DbMcpTokenService.TokenAuth auth, long connectionId) {
+        return auth.writeGranted() && writeGate.check(auth.task(), true, connectionId).allowed();
+    }
+
+    private Map<String, Object> callTool(DbMcpTokenService.TokenAuth auth, long connectionId, JsonNode params) {
+        Task task = auth.task();
         String name = params.path("name").asText("");
         @SuppressWarnings("unchecked")
         Map<String, Object> args = params.path("arguments").isObject()
                 ? JSON.convertValue(params.path("arguments"), Map.class) : Map.of();
         long start = System.currentTimeMillis();
-        DbConnectionService.ClaimDb db = dbConnections.resolveForClaim(List.of(connectionId));
-        DbMcpTools.ToolResult r;
-        if (db.refs().isEmpty()) {
-            r = new DbMcpTools.ToolResult(db.notices().isEmpty()
-                    ? "DB 연결 #" + connectionId + "를 사용할 수 없습니다" : String.join(" / ", db.notices()), true);
-        } else {
-            DbConnectionRef ref = db.refs().get(0);
-            r = tools.call(ref, name, args);
-        }
         Object sql = args.get("sql");
+        DbMcpTools.ToolResult r;
+        if ("execute".equals(name)) {
+            DbWriteService.ExecuteResult x = writes.execute(task, auth.writeGranted(), connectionId,
+                    sql instanceof String text ? text : null);
+            boolean failed = x.classification() == WriteClassification.REJECTED
+                    || x.classification() == WriteClassification.FAILED;
+            r = new DbMcpTools.ToolResult(DbMcpTools.formatWriteResult(x), failed);
+        } else {
+            r = readTool(connectionId, name, args);
+        }
         log.info("db-mcp task={} conn={} tool={} sql={} error={} chars={} ms={}", task.getId(), connectionId,
                 logSafe(name, 100), sql instanceof String s ? logSafe(s, 200) : "-",
                 r.isError(), r.text().length(), System.currentTimeMillis() - start);
@@ -118,6 +138,17 @@ public class DbMcpController {
         out.put("content", List.of(Map.of("type", "text", "text", r.text())));
         out.put("isError", r.isError());
         return out;
+    }
+
+    /** 읽기 도구(query·list_tables·describe_table) — 읽기 경로는 지금 그대로(READ ONLY + ROLLBACK). */
+    private DbMcpTools.ToolResult readTool(long connectionId, String name, Map<String, Object> args) {
+        DbConnectionService.ClaimDb db = dbConnections.resolveForClaim(List.of(connectionId));
+        if (db.refs().isEmpty()) {
+            return new DbMcpTools.ToolResult(db.notices().isEmpty()
+                    ? "DB 연결 #" + connectionId + "를 사용할 수 없습니다" : String.join(" / ", db.notices()), true);
+        }
+        DbConnectionRef ref = db.refs().get(0);
+        return tools.call(ref, name, args);
     }
 
     /** 감사 로그용 — 앞 max자만, CR/LF 등 제어문자(C0·C1)와 유니코드 줄 구분자는 공백으로(로그 줄 위조 방지). */

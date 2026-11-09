@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.DeserializationFeature;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.hamonsoft.netismaker.dto.ActiveWorktreeTaskSummary;
 import com.hamonsoft.netismaker.dto.ArtifactInfo;
+import com.hamonsoft.netismaker.dto.DbChangeView;
 import com.hamonsoft.netismaker.dto.DeployedTaskSummary;
 import com.hamonsoft.netismaker.dto.WorkerHeartbeatRequest;
 import com.hamonsoft.netismaker.dto.WorkerResultRequest;
@@ -118,9 +119,10 @@ public class WorkerHttpClient {
     /**
      * next-task의 supports — 이 워커가 아는 기능(쉼표 구분). API는 refRepos가 없는 요청(구버전 워커)에게 참조 repo가 있는
      * 구현을 넘기지 않고(스펙 2026-10-24 §4.7), fixRounds가 없는 요청에게 수정 회차 구현을 넘기지 않는다(스펙 2026-11-03 §7 —
-     * 구버전은 회차 정보를 버리고 base에서 -rN 브랜치를 새로 딴다).
+     * 구버전은 회차 정보를 버리고 base에서 -rN 브랜치를 새로 딴다). dbWrite가 없는 요청에게는 개발 DB 쓰기 도구(execute)를 붙이지 않는다
+     * (task-type-db-write §6.1 조건 6 — 구버전은 쓰기 기록으로 SQL 스크립트 파일을 만들지 못해 실행한 SQL이 PR에서 빠진다).
      */
-    static final String SUPPORTS = "refRepos,fixRounds";
+    static final String SUPPORTS = "refRepos,fixRounds,dbWrite";
 
     public Optional<WorkerTaskResponse> nextTask() {
         try {
@@ -186,6 +188,26 @@ public class WorkerHttpClient {
     static List<ActiveWorktreeTaskSummary> requireActiveBody(List<ActiveWorktreeTaskSummary> body) {
         if (body == null) {
             throw new IllegalStateException("진행 중 worktree 작업 목록 응답 본문이 없다 — 조회 실패로 간주");
+        }
+        return body;
+    }
+
+    /**
+     * 이 작업의 DB 변경 기록(시간순) — 구현 전 "이미 적용된 SQL" 절 재료와 스크립트 파일 기준 id (스펙 2026-11-03 §5.2·§6.6).
+     * 실패 시 예외 전파 — 호출부는 claude를 돌리지 않고 구현실패로 끝낸다(같은 SQL이 공용 DB에 두 번 실행되는 것을 막으려고).
+     * 응답 본문이 없는(null) 경우도 조회 실패로 본다: 본문 없는 2xx를 '기록 없음'으로 읽으면 이미 적용한 SQL을 다시 실행하게 된다.
+     */
+    public List<DbChangeView> dbChanges(long taskId) {
+        List<DbChangeView> body = http.get().uri("/worker/tasks/{id}/db-changes", taskId)
+                .retrieve()
+                .body(new ParameterizedTypeReference<>() {});
+        return requireDbChangesBody(body);
+    }
+
+    /** 응답 본문 검증 seam(HTTP 없이 단위 테스트). null이면 조회 실패. */
+    static List<DbChangeView> requireDbChangesBody(List<DbChangeView> body) {
+        if (body == null) {
+            throw new IllegalStateException("DB 변경 기록 응답 본문이 없다 — 조회 실패로 간주");
         }
         return body;
     }

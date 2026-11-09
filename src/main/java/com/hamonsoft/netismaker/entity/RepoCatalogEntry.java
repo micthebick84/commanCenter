@@ -89,6 +89,14 @@ public class RepoCatalogEntry {
     @Column(name = "note_folder", length = 500)
     private String noteFolder;
 
+    /** 구현 단계 DB 쓰기의 SQL 스크립트 폴더(레포 안 상대 경로, 스펙 2026-11-03 §6.6). null이면 기본 `db/symphony`. */
+    @Column(name = "db_script_dir", length = 255)
+    private String dbScriptDir;
+
+    /** 앱이 뜰 때 테이블 스크립트를 자동 실행하는 레포(Flyway 등)인지 (스펙 2026-11-03 §6.8). 켜면 구현 단계에 쓰기 도구를 주지 않는다. */
+    @Column(name = "db_migration_managed", nullable = false)
+    private boolean dbMigrationManaged;
+
     @Column(name = "created_by", length = 20)
     private String createdBy;
 

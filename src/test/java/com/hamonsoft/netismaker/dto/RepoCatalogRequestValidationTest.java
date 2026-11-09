@@ -29,4 +29,33 @@ class RepoCatalogRequestValidationTest {
         assertThat(validator.validate(req)).isEmpty();
     }
 
+    private static RepoCatalogDto.UpsertRequest upsert(String dbScriptDir) {
+        return new RepoCatalogDto.UpsertRequest("별칭", "owner/repo", null, null, true, null, null,
+                null, null, null, null, null, true, dbScriptDir);
+    }
+
+    @Test
+    void upsert_db_script_dir_up_to_255_chars() {
+        assertThat(validator.validate(upsert("a".repeat(255)))).isEmpty();
+        assertThat(validator.validate(upsert("a".repeat(256))))
+                .extracting(v -> v.getPropertyPath().toString())
+                .containsExactly("dbScriptDir");
+    }
+
+    @Test
+    void upsert_compat_constructors_leave_db_write_fields_null() {
+        // 활성 토글(5칸)·노트 폴더 도입 전(11칸)·도입 후(12칸) 호출부는 두 칸을 null(=유지)로 보낸다.
+        RepoCatalogDto.UpsertRequest five = new RepoCatalogDto.UpsertRequest("별칭", "owner/repo", null, null, true);
+        RepoCatalogDto.UpsertRequest eleven = new RepoCatalogDto.UpsertRequest("별칭", "owner/repo", null, null, true,
+                null, null, null, null, null, null);
+        RepoCatalogDto.UpsertRequest twelve = new RepoCatalogDto.UpsertRequest("별칭", "owner/repo", null, null, true,
+                null, null, null, null, null, null, "HamonSoft/x");
+        for (RepoCatalogDto.UpsertRequest r : new RepoCatalogDto.UpsertRequest[]{five, eleven, twelve}) {
+            assertThat(r.dbMigrationManaged()).isNull();
+            assertThat(r.dbScriptDir()).isNull();
+            assertThat(validator.validate(r)).isEmpty();
+        }
+        assertThat(twelve.noteFolder()).isEqualTo("HamonSoft/x");
+    }
+
 }

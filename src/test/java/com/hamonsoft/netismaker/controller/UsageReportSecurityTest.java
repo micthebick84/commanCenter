@@ -9,6 +9,7 @@ import com.hamonsoft.netismaker.dto.SubscriptionFeeView;
 import com.hamonsoft.netismaker.service.ClaudeUsageService;
 import com.hamonsoft.netismaker.service.UserProvisioner;
 import com.hamonsoft.netismaker.usage.UsageSubscriptionFeeService;
+import com.hamonsoft.netismaker.usage.UsageSummaryService;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -23,11 +24,13 @@ import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.request.RequestPostProcessor;
 
 import java.math.BigDecimal;
+import java.nio.charset.StandardCharsets;
 import java.time.LocalDate;
 import java.time.OffsetDateTime;
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.hamcrest.Matchers.containsString;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.never;
@@ -37,6 +40,7 @@ import static org.mockito.Mockito.when;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.jwt;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
@@ -53,6 +57,7 @@ class UsageReportSecurityTest {
     @MockBean private UserProvisioner userProvisioner;
     @MockBean private UsageSubscriptionFeeService fees;
     @MockBean private ClaudeUsageService claudeUsage;
+    @MockBean private UsageSummaryService summaries;
 
     private static RequestPostProcessor as(String username, String role) {
         return jwt().jwt(b -> b.claim("username", username).claim("authorities", List.of(role)))
@@ -118,5 +123,27 @@ class UsageReportSecurityTest {
     void 기존_usage_claude는_사용자도_200() throws Exception {
         when(claudeUsage.snapshot()).thenReturn(new ClaudeUsageResponse(List.of()));
         mvc.perform(get("/api/usage/claude").with(as("u", "ROLE_USER"))).andExpect(status().isOk());
+    }
+
+    @Test
+    void 사용자는_summary와_csv_403() throws Exception {
+        mvc.perform(get("/api/usage/summary").param("period", "month").with(as("u", "ROLE_USER")))
+                .andExpect(status().isForbidden());
+        mvc.perform(get("/api/usage/summary.csv").param("period", "month").with(as("u", "ROLE_USER")))
+                .andExpect(status().isForbidden());
+        verifyNoInteractions(summaries);
+
+        mvc.perform(get("/api/usage/summary").param("period", "week").param("date", "2026-11-03")
+                        .with(as("boss", "ROLE_ADMIN")))
+                .andExpect(status().isOk());
+        verify(summaries).summary("week", "2026-11-03");
+
+        when(summaries.csv(any(), any())).thenReturn(new UsageSummaryService.CsvFile(
+                "claude-usage-month-2026-11-01.csv", ((char) 0xFEFF + "날짜\n").getBytes(StandardCharsets.UTF_8)));
+        mvc.perform(get("/api/usage/summary.csv").param("period", "month").with(as("boss", "ROLE_ADMIN")))
+                .andExpect(status().isOk())
+                .andExpect(header().string("Content-Type", "text/csv;charset=UTF-8"))
+                .andExpect(header().string("Content-Disposition", containsString("claude-usage-month-2026-11-01.csv")));
+        verify(summaries).csv("month", null);
     }
 }

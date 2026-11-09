@@ -2,6 +2,7 @@
 // Mirrors the EventSource pattern in pages/tasks/[id].vue (auth via ?access_token=),
 // adds reconnect + typed handlers for question/design/plan_ready/status/note/done.
 import type { AttachmentView } from '~/composables/questions'
+import { dropUnbound, upsertMockup, type MockupSummary } from '~/composables/interviewMockups'
 
 export type InterviewStatus =
   | 'QUEUED'
@@ -59,6 +60,8 @@ export interface InterviewSnapshot {
     attachments?: AttachmentView[]
   }>
   plan?: { designMarkdown?: string; planMarkdown?: string; planJson?: unknown } | null
+  /** 인터뷰 목업 요약(html 없음). 칸이 없거나 null이면 무시한다(구 API·질문 세션). */
+  mockups?: MockupSummary[] | null
 }
 
 export interface InterviewPlan {
@@ -92,6 +95,7 @@ export function useInterviewStream() {
   const designSections = ref<DesignSection[]>([])
   const plan = ref<InterviewPlan | null>(null)
   const pending = ref<PendingActivity | null>(null)
+  const mockups = ref<MockupSummary[]>([])
   const error = ref<string | null>(null)
 
   let es: EventSource | null = null
@@ -137,6 +141,7 @@ export function useInterviewStream() {
     es.addEventListener('activity', (e) => onActivity(e as MessageEvent))
     es.addEventListener('plan_ready', (e) => onPlanReady(e as MessageEvent))
     es.addEventListener('note', (e) => onNote(e as MessageEvent))
+    es.addEventListener('mockup', (e) => onMockup(e as MessageEvent))
     es.addEventListener('done', () => close())
     es.onerror = () => onError()
   }
@@ -147,6 +152,8 @@ export function useInterviewStream() {
   function onStatus(e: MessageEvent) {
     const name = (e.data ?? '').trim() as InterviewStatus
     if (!KNOWN_STATUSES.includes(name)) return
+    // 끊긴 턴(재기동·실패)의 목업은 턴에 묶이지 않은 채 남는다 — 상태가 바뀌면 지운다.
+    mockups.value = dropUnbound(mockups.value)
     status.value = name
     if (TERMINAL.includes(name)) close()
   }
@@ -175,6 +182,14 @@ export function useInterviewStream() {
     const data = parse(e)
     if (!data || typeof data.seq !== 'number') return
     pushTurn({ seq: data.seq, role: 'system', kind: 'note', content: data.content ?? '' })
+  }
+
+  // `mockup` 페이로드 = InterviewMockupSummary(html 없음). 같은 목업이 올라올 때(turnSeq null)와
+  // 묶일 때 두 번 오므로 id로 덮어쓴다.
+  function onMockup(e: MessageEvent) {
+    const data = parse(e)
+    if (!data || typeof data.id !== 'number') return
+    mockups.value = upsertMockup(mockups.value, data as MockupSummary)
   }
 
   function onDesign(e: MessageEvent) {
@@ -285,6 +300,9 @@ export function useInterviewStream() {
     if (snapshot.plan) {
       plan.value = toPlan(snapshot.plan)
     }
+    if (Array.isArray(snapshot.mockups)) {
+      for (const m of snapshot.mockups) mockups.value = upsertMockup(mockups.value, m)
+    }
   }
 
   // Dedup by seq so SSE replay-on-reconnect does not duplicate turns.
@@ -340,6 +358,7 @@ export function useInterviewStream() {
     designSections,
     plan,
     pending,
+    mockups,
     error,
     open,
     close,

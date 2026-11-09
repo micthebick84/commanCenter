@@ -410,3 +410,66 @@ describe('useInterviewStream — note 이벤트 · 턴 첨부 (스펙 2026-09-13
     expect(s.turns.value[2]).not.toHaveProperty('attachments')
   })
 })
+
+describe('useInterviewStream — mockup 이벤트 (스펙 2026-11-03 인터뷰 목업)', () => {
+  const m = (over: Record<string, unknown> = {}) => ({
+    id: 1,
+    n: 1,
+    name: 'a',
+    version: 1,
+    title: 'A안',
+    description: null,
+    turnSeq: null,
+    turnKind: null,
+    ...over,
+  })
+
+  it('스냅샷 mockups로 시드하고 replay와 id로 합쳐진다', () => {
+    authStub.accessToken = 'jwt'
+    const s = useInterviewStream()
+    s.hydrate({ mockups: [m({ turnSeq: 4, turnKind: 'question' })] } as any)
+    expect(s.mockups.value).toHaveLength(1)
+    s.open(1)
+    FakeEventSource.last().emit('mockup', m({ turnSeq: 4, turnKind: 'question' }))
+    expect(s.mockups.value).toHaveLength(1)
+    const t = useInterviewStream()
+    t.hydrate({ statusName: 'QUEUED' })
+    t.hydrate({ mockups: null })
+    expect(t.mockups.value).toEqual([])
+    s.close()
+  })
+
+  it('mockup 이벤트: 같은 id면 turnSeq를 갱신한다', () => {
+    authStub.accessToken = 'jwt'
+    const s = useInterviewStream()
+    s.open(1)
+    const es = FakeEventSource.last()
+    es.emit('mockup', m())
+    es.emit('mockup', m({ turnSeq: 4, turnKind: 'question' }))
+    expect(s.mockups.value).toHaveLength(1)
+    expect(s.mockups.value[0].turnSeq).toBe(4)
+    s.close()
+  })
+
+  it('status 이벤트가 오면 묶이지 않은 목업을 지운다', () => {
+    authStub.accessToken = 'jwt'
+    const s = useInterviewStream()
+    s.open(1)
+    const es = FakeEventSource.last()
+    es.emit('mockup', m())
+    es.emit('status', 'QUEUED')
+    expect(s.mockups.value).toEqual([])
+    s.close()
+  })
+
+  it('묶인 목업은 status 뒤에도 남는다', () => {
+    authStub.accessToken = 'jwt'
+    const s = useInterviewStream()
+    s.open(1)
+    const es = FakeEventSource.last()
+    es.emit('mockup', m({ turnSeq: 4, turnKind: 'question' }))
+    es.emit('status', 'QUEUED')
+    expect(s.mockups.value).toHaveLength(1)
+    s.close()
+  })
+})

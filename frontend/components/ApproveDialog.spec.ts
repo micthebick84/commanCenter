@@ -1,6 +1,6 @@
 import { mount, flushPromises } from '@vue/test-utils'
 import { describe, it, expect, afterEach, beforeEach, vi } from 'vitest'
-import { QSelect } from 'quasar'
+import { QSelect, QToggle } from 'quasar'
 import ApproveDialog from './ApproveDialog.vue'
 import DbConnectionPicker from './DbConnectionPicker.vue'
 import RefRepoChips from './RefRepoChips.vue'
@@ -1036,6 +1036,249 @@ describe('ApproveDialog DB 쓰기 표시 (스펙 2026-11-03 §6.5)', () => {
     await (w.vm as any).approve()
     await flushPromises()
     expect(approveCall()?.[1].body).toEqual({ model: 'claude-opus-5-5', effort: 'medium', mcpCatalogIds: [], dbConnectionIds: [3, 4] })
+    w.unmount()
+  })
+})
+
+// superpowers 인터뷰 토글 (스펙 2026-11-03 간단 인터뷰 §6) — 모델·추론 아래, MCP 위. 끔이면 간단 인터뷰.
+// 기본값: ① 지난 세션 값(boolean일 때만) ② 지금 고른 타입의 기본값(DB 작업만 끔). 타입을 바꾸면 따라가고 직접 바꾼 뒤에는 따라가지 않는다.
+// 바디에는 끔일 때만 superpowersEnabled:false를 싣는다(켬 바디는 지금과 바이트까지 같다).
+describe('ApproveDialog superpowers 인터뷰 (스펙 2026-11-03 간단 인터뷰 §6)', () => {
+  // '참조 repo' describe의 지역 상수와 같은 값 — 켬 바디가 지금과 같은지 보는 기준
+  const BODY_WITHOUT_REFS = { model: 'claude-opus-5-5', effort: 'medium', mcpCatalogIds: [] }
+  const SIMPLE_CAPTION = '간단 인터뷰 — 질문을 최대 한 번 모아서 묻고 바로 계획'
+
+  type Wrapper = ReturnType<typeof mountDialog>
+  const toggle = (w: Wrapper) =>
+    w.findAllComponents(QToggle).find((c) => (c.vm.$attrs as Record<string, unknown>)['data-test'] === 'approve-superpowers')!
+  const typeSelect = (w: Wrapper) =>
+    w.findAllComponents(QSelect).find((c) => (c.vm.$attrs as Record<string, unknown>)['data-test'] === 'approve-task-type')!
+  const caption = () => document.body.querySelector('[data-test="approve-superpowers-caption"]')
+  const on = (w: Wrapper) => toggle(w).props('modelValue')
+  async function pickType(w: Wrapper, type: string) {
+    typeSelect(w).vm.$emit('update:modelValue', type)
+    await flushPromises()
+  }
+  async function flip(w: Wrapper, value: boolean) {
+    toggle(w).vm.$emit('update:modelValue', value)
+    await flushPromises()
+  }
+  const lastSession = (over: Record<string, unknown> = {}) => ({
+    ...session(5, 'CANCELLED', '취소됨', 'claude-opus-5-5', 'high'),
+    ...over,
+  })
+
+  it('지난 세션이 없으면 타입 기본값 — DB 작업은 끔과 보조 문구, 다른 타입·타입 없음은 켬', async () => {
+    routeApi({ interviews: [] })
+    const w = mountDialog({ taskType: 'DB_WORK' })
+    await flushPromises()
+    expect(toggle(w)).toBeDefined()
+    expect(document.body.querySelector('[data-test="approve-superpowers"]')!.textContent).toContain('superpowers 인터뷰')
+    expect(on(w)).toBe(false)
+    expect(caption()!.textContent!.trim()).toBe(SIMPLE_CAPTION)
+    w.unmount()
+    document.body.innerHTML = ''
+
+    for (const overrides of [{ taskType: 'BUG_FIX' }, { taskType: null }, {}]) {
+      routeApi({ interviews: [] })
+      const w2 = mountDialog(overrides)
+      await flushPromises()
+      expect(on(w2)).toBe(true)
+      expect(caption()).toBeNull()
+      w2.unmount()
+      document.body.innerHTML = ''
+    }
+  })
+
+  it('지난 세션 값이 먼저 — 모델이 목록에 없어도', async () => {
+    routeApi({
+      interviews: [{ ...session(5, 'CANCELLED', '취소됨', 'fable-5', 'high'), superpowersEnabled: false }],
+    })
+    const w = mountDialog({ taskType: 'BUG_FIX' })
+    await flushPromises()
+    expect(on(w)).toBe(false)
+    expect(caption()!.textContent).toContain(SIMPLE_CAPTION)
+    // 모델은 목록에 없어 프리필하지 않는다 — 안내 한 줄은 보이되 "설정을 불러왔습니다" 캡션은 없다
+    expect(document.body.querySelector('[data-test="previous-hint"]')).not.toBeNull()
+    expect(document.body.textContent).not.toContain('마지막 인터뷰 설정을 불러왔습니다')
+    w.unmount()
+    document.body.innerHTML = ''
+
+    // 지난 세션이 켬이면 DB 작업 기본값(끔)보다 앞선다
+    routeApi({ interviews: [lastSession({ superpowersEnabled: true })] })
+    const w2 = mountDialog({ taskType: 'DB_WORK' })
+    await flushPromises()
+    expect(on(w2)).toBe(true)
+    expect(caption()).toBeNull()
+    w2.unmount()
+  })
+
+  it('지난 세션에 칸이 없으면(구 API) 타입 기본값', async () => {
+    for (const row of [lastSession(), lastSession({ superpowersEnabled: null })]) {
+      routeApi({ interviews: [row] })
+      const w = mountDialog({ taskType: 'DB_WORK' })
+      await flushPromises()
+      expect(on(w)).toBe(false)
+      w.unmount()
+      document.body.innerHTML = ''
+
+      routeApi({ interviews: [row] })
+      const w2 = mountDialog({ taskType: 'BUG_FIX' })
+      await flushPromises()
+      expect(on(w2)).toBe(true)
+      w2.unmount()
+      document.body.innerHTML = ''
+    }
+  })
+
+  it('지난 인터뷰 조회가 실패해도 타입 기본값으로 열린다', async () => {
+    routeApi({ interviews: new Error('403') })
+    const w = mountDialog({ taskType: 'DB_WORK' })
+    await flushPromises()
+    expect(on(w)).toBe(false)
+    w.unmount()
+  })
+
+  it('타입을 바꾸면 따라가고, 토글을 직접 바꾼 뒤에는 따라가지 않는다', async () => {
+    routeApi({ interviews: [] })
+    const w = mountDialog({ taskType: 'FEATURE_CHANGE' })
+    await flushPromises()
+    expect(on(w)).toBe(true)
+    await pickType(w, 'DB_WORK')
+    expect(on(w)).toBe(false)
+    expect(caption()).not.toBeNull()
+    await pickType(w, 'BUG_FIX')
+    expect(on(w)).toBe(true)
+    expect(caption()).toBeNull()
+
+    // 직접 끈 뒤에는 타입이 어디로 가도 끔을 지킨다
+    await flip(w, false)
+    expect(on(w)).toBe(false)
+    await pickType(w, 'BUG_FIX')
+    expect(on(w)).toBe(false)
+    await pickType(w, 'NEW_FEATURE')
+    expect(on(w)).toBe(false)
+    w.unmount()
+    document.body.innerHTML = ''
+
+    // 직접 켠 뒤에도 마찬가지(DB 작업으로 바꿔도 켬 유지)
+    routeApi({ interviews: [] })
+    const w2 = mountDialog({ taskType: 'DB_WORK' })
+    await flushPromises()
+    await flip(w2, true)
+    await pickType(w2, 'BUG_FIX')
+    await pickType(w2, 'DB_WORK')
+    expect(on(w2)).toBe(true)
+    w2.unmount()
+  })
+
+  it('지난 세션 값으로 채운 뒤에도 타입을 바꾸면 따라간다(직접 바꾸기 전까지)', async () => {
+    routeApi({ interviews: [lastSession({ superpowersEnabled: false })] })
+    const w = mountDialog({ taskType: 'BUG_FIX' })
+    await flushPromises()
+    expect(on(w)).toBe(false)
+    await pickType(w, 'NEW_FEATURE')
+    expect(on(w)).toBe(true)
+    w.unmount()
+  })
+
+  it('지난 인터뷰 응답이 늦게 와도 그 사이 직접 바꾼 토글을 덮어쓰지 않는다', async () => {
+    routeApi({})
+    let resolveInterviews!: (v: unknown) => void
+    const base = useApiMock.getMockImplementation()!
+    useApiMock.mockImplementation((url: string, ...rest: unknown[]) => {
+      if (url === '/api/tasks/7/interviews')
+        return new Promise((res) => {
+          resolveInterviews = res
+        })
+      return (base as any)(url, ...rest)
+    })
+    const w = mountDialog({ taskType: 'BUG_FIX' })
+    await flushPromises()
+    await flip(w, false)
+    await flip(w, true) // 값은 기본값과 같아도 "직접 바꿈"이다
+    resolveInterviews([lastSession({ superpowersEnabled: false })])
+    await flushPromises()
+    expect(on(w)).toBe(true)
+    w.unmount()
+  })
+
+  it('다시 열면 직접 바꿈이 풀린다', async () => {
+    routeApi({ interviews: [] })
+    const w = mountDialog({ taskType: 'BUG_FIX' })
+    await flushPromises()
+    await flip(w, false)
+    expect(on(w)).toBe(false)
+
+    await w.setProps({ modelValue: false })
+    await flushPromises()
+    await w.setProps({ modelValue: true })
+    await flushPromises()
+
+    // 기본값으로 돌아오고, 직접 바꿈도 풀려 타입을 따라간다
+    expect(on(w)).toBe(true)
+    await pickType(w, 'DB_WORK')
+    expect(on(w)).toBe(false)
+    w.unmount()
+  })
+
+  it('켬이면 바디에 키가 없고, 끔이면 superpowersEnabled:false', async () => {
+    routeApi()
+    const w = mountDialog()
+    await flushPromises()
+    await (w.vm as any).approve()
+    await flushPromises()
+    expect(approveCall()?.[1]).toEqual({ method: 'POST', body: BODY_WITHOUT_REFS })
+    expect(approveCall()?.[1].body).not.toHaveProperty('superpowersEnabled')
+    w.unmount()
+    document.body.innerHTML = ''
+
+    useApiMock.mockClear()
+    routeApi({ interviews: [] })
+    const w2 = mountDialog()
+    await flushPromises()
+    await flip(w2, false)
+    await (w2.vm as any).approve()
+    await flushPromises()
+    expect(approveCall()?.[1]).toEqual({ method: 'POST', body: { ...BODY_WITHOUT_REFS, superpowersEnabled: false } })
+    w2.unmount()
+    document.body.innerHTML = ''
+
+    // 끄고 다시 켜면 키가 없다
+    useApiMock.mockClear()
+    routeApi({ interviews: [] })
+    const w3 = mountDialog()
+    await flushPromises()
+    await flip(w3, false)
+    await flip(w3, true)
+    await (w3.vm as any).approve()
+    await flushPromises()
+    expect(approveCall()?.[1]).toEqual({ method: 'POST', body: BODY_WITHOUT_REFS })
+    w3.unmount()
+  })
+
+  it('DB 작업은 기본이 끔이라 타입을 바꾸지 않아도 바디에 false가 실리고 taskType 키는 없다', async () => {
+    routeApi({ interviews: [] })
+    const w = mountDialog({ taskType: 'DB_WORK' })
+    await flushPromises()
+    await (w.vm as any).approve()
+    await flushPromises()
+    expect(approveCall()?.[1]).toEqual({ method: 'POST', body: { ...BODY_WITHOUT_REFS, superpowersEnabled: false } })
+    w.unmount()
+  })
+
+  it('토글은 모델·추론 아래, MCP 위 — DB·참조·사용량 순서는 그대로다', async () => {
+    routeApi({ db: { enabled: true, items: [] } })
+    const w = mountDialog({ repoCatalogId: 9 })
+    await flushPromises()
+    const q = (sel: string) => document.body.querySelector(sel)!
+    const FOLLOWING = Node.DOCUMENT_POSITION_FOLLOWING
+    const field = q('[data-test="approve-superpowers"]')
+    expect(q('[data-test="effort-desc"]').compareDocumentPosition(field) & FOLLOWING).toBeTruthy()
+    expect(field.compareDocumentPosition(q('[data-test="mcp-flat"]')) & FOLLOWING).toBeTruthy()
+    expect(q('[data-test="mcp-flat"]').compareDocumentPosition(q('[data-test="approve-db"]')) & FOLLOWING).toBeTruthy()
+    expect(q('[data-test="approve-db"]').nextElementSibling).toBe(q('[data-test="approve-refs"]'))
+    expect(q('[data-test="approve-refs"]').nextElementSibling!.classList.contains('usage-slot')).toBe(true)
     w.unmount()
   })
 })

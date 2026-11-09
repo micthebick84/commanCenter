@@ -53,7 +53,7 @@ class TaskServiceApproveDbTest {
         assertThat(task.getDbConnectionIds()).containsExactly(3L, 4L);
         InOrder o = inOrder(db, interviewService);
         o.verify(db).validateSelection(9L, "user1", List.of(3L, 4L));
-        o.verify(interviewService).createForTask(eq(task), anyString(), anyString(), anyList());
+        o.verify(interviewService).createForTask(eq(task), anyString(), anyString(), anyList(), anyBoolean());
     }
 
     @Test
@@ -63,7 +63,7 @@ class TaskServiceApproveDbTest {
 
         assertThatThrownBy(() -> service.approve(5L, "admin", new ApproveRequest(List.of(), null, null, List.of(7L))))
                 .isInstanceOf(TaskException.class);
-        verify(interviewService, never()).createForTask(any(), any(), any(), any());
+        verify(interviewService, never()).createForTask(any(), any(), any(), any(), anyBoolean());
         assertThat(task.getStatus()).isEqualTo(TaskStatus.AWAITING_APPROVAL);
     }
 

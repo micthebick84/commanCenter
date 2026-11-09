@@ -180,6 +180,12 @@ export interface InterviewClaimResponse {
    * 구버전 API는 칸이 없다 → 배열이 아니면 안내하지 않는다.
    */
   writableDbConnections?: string[];
+  /**
+   * superpowers 켬/끔 (스펙 2026-11-03 간단 인터뷰 §4) — API가 claim 때 세션 행에서 읽어 싣는다. **`false`일 때만 끔**(간단 인터뷰)이고,
+   * 칸이 없거나(구버전 API) null이거나 true면 켬이라 지금과 같다 — `refsCleared === true` 선례와 같은 엄격 비교(`superpowersOn`).
+   * 질문 세션은 이 값과 무관하다(원래 superpowers가 없다).
+   */
+  superpowersEnabled?: boolean | null;
 }
 
 /** 작업 타입의 와이어 값 — Java `TaskType` enum 이름. */
@@ -253,6 +259,12 @@ export interface WorkerPlanRequest {
    * 참조 없는 인터뷰·구버전 API의 바디는 지금과 같다. 없으면 마지막 답변에서 더한 참조가 계획 턴에 처음 받아져도 커밋이 고정되지 않는다.
    */
   refStates?: RefState[];
+  /**
+   * 이 계획을 낸 Claude 세션 id (스펙 2026-11-03 간단 인터뷰 §3·§4.1) — **superpowers 끔 세션이고 id가 비어 있지 않을 때만** 싣는다.
+   * 켬 바디에는 키 자체가 없다(지금과 같다). 세션 id는 질문 보고(`/question`)에서만 저장되므로, 첫 턴에 바로 계획을 낸 간단 인터뷰는
+   * 이 값이 없으면 "계획 고쳐 달라기"가 같은 대화를 잇지 못하고 새 kickoff로 처음부터 다시 쓴다(고칠 점이 버려진다). 구 API는 모르는 칸을 무시한다.
+   */
+  claudeSessionId?: string;
 }
 
 /**

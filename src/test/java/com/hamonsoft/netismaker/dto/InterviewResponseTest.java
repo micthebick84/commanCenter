@@ -179,9 +179,21 @@ class InterviewResponseTest {
     void direct_construction_normalizes_null_ref_repos_to_an_empty_list() {
         // 컴팩트 생성자가 "항상 non-null"을 지킨다 — of()를 거치지 않는 호출처도 null을 못 내보낸다
         InterviewResponse r = new InterviewResponse(1L, "o/r", "main", "t", "d", "큐", "QUEUED", null, null, null,
-                "m", "e", List.of(), null, null, null, "QUESTION", null, null, null, null, null, null, null, null, null);
+                "m", "e", List.of(), null, null, null, "QUESTION", null, null, null, null, null, null, null, null, null, null);
         assertThat(r.refRepos()).isNotNull().isEmpty();
         assertThat(r.mcpCatalogIds()).isEmpty();
+    }
+
+    @Test
+    void 세션응답은_superpowersEnabled를_세션값으로_싣는다_질문_세션도_기본_켬() {
+        InterviewSession interview = InterviewSession.create("o/r", "main", "t", "d", "u1", List.of(), "claude-opus-5", "high");
+        interview.setSuperpowersEnabled(false);
+        InterviewSession question = InterviewSession.createQuestion("o/r", "main", "t", "q?", "user1",
+                List.of(), "claude-opus-5", "high");
+
+        assertThat(InterviewResponse.of(interview, List.of(), null).superpowersEnabled()).isFalse();
+        // 인터뷰 서비스는 QUESTION에서 이 값을 보지 않는다 — 칸은 기본값 그대로 켬으로 나간다
+        assertThat(InterviewResponse.of(question, List.of(), null).superpowersEnabled()).isTrue();
     }
 
     @Test

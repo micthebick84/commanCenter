@@ -141,4 +141,49 @@ class InterviewWorkerControllerClaimDbTest {
 
         assertThat(controller.claim("w1").getBody().writableDbConnections()).isNotNull().isEmpty();
     }
+
+    // ── superpowers 끔은 DB 보강을 거쳐도 그대로다 (설계 2026-11-03-interview-superpowers-toggle §4, RF5) ──────────
+
+    /** 승인 때 간단 인터뷰(끔)를 고른 INTERVIEW 세션의 claim. */
+    private static InterviewClaimResponse simpleClaimOf(List<Long> dbIds) {
+        InterviewSession s = InterviewSession.create("a/b", "main", "t", "q", "user1", new ArrayList<>(), "claude-sonnet-5", "medium");
+        ReflectionTestUtils.setField(s, "id", 7L);
+        s.setDbConnectionIds(new ArrayList<>(dbIds));
+        s.setSuperpowersEnabled(false);
+        return InterviewClaimResponse.of(s, List.of(), List.of());
+    }
+
+    @Test
+    void DB보강_실패경로도_끔_유지() {
+        // withDb(List.of(), …) 사본이 끔 값을 빠뜨리면 DB가 흔들리는 순간 간단 인터뷰가 superpowers로 돈다
+        when(interviewService.claim("w1")).thenReturn(Optional.of(simpleClaimOf(List.of(7L))));
+        when(db.resolveForClaim(any())).thenThrow(new RuntimeException("db down"));
+
+        var body = controller.claim("w1").getBody();
+
+        assertThat(body.dbConnections()).isEmpty();
+        assertThat(body.dbNotices()).containsExactly("DB 접속정보를 불러오지 못해 DB 도구 없이 진행합니다");
+        assertThat(body.superpowersEnabled()).isFalse();
+    }
+
+    @Test
+    void DB보강_정상경로와_DB없는_경로도_끔_유지() {
+        var ref = new InterviewClaimResponse.DbConnectionRef("db-7", "운영 (MySQL)", "MYSQL", "h", 3306, "app", "u", "pw");
+        when(interviewService.claim("w1")).thenReturn(Optional.of(simpleClaimOf(List.of(7L))));
+        when(db.resolveForClaim(List.of(7L))).thenReturn(new DbConnectionService.ClaimDb(List.of(ref), List.of()));
+        var enriched = controller.claim("w1").getBody();
+        assertThat(enriched.dbConnections()).containsExactly(ref);
+        assertThat(enriched.superpowersEnabled()).isFalse();
+
+        when(interviewService.claim("w2")).thenReturn(Optional.of(simpleClaimOf(List.of())));
+        assertThat(controller.claim("w2").getBody().superpowersEnabled()).isFalse();
+    }
+
+    @Test
+    void 켬_세션은_DB보강_실패경로에서도_켬() {
+        when(interviewService.claim("w1")).thenReturn(Optional.of(claimOf(false, List.of(7L))));
+        when(db.resolveForClaim(any())).thenThrow(new RuntimeException("db down"));
+
+        assertThat(controller.claim("w1").getBody().superpowersEnabled()).isTrue();
+    }
 }

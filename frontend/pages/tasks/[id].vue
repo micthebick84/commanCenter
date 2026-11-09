@@ -23,6 +23,7 @@ import { elapsedLabel, implementationModeLabel, implementationModeText } from '~
 import { canAbortFix, canFollowUp, canRequestFix, fixLimitReached, followUpPath, type FixView } from '~/composables/taskFix'
 import { useNowTick } from '~/composables/useNowTick'
 import { taskTypeLabel } from '~/composables/taskType'
+import { SIMPLE_INTERVIEW_LABEL } from '~/composables/interviewMode'
 import { downloadAttachment as downloadBlob } from '~/composables/attachmentDownload'
 import {
   closeSteps,
@@ -159,6 +160,8 @@ interface TaskResponse {
   fix?: FixView | null
   /** 작업 타입 (스펙 2026-11-03 §4) — null·없음은 타입 없음(기존 작업). 칩은 타입이 있을 때만 그린다. */
   taskType?: string | null
+  /** 이 작업 인터뷰의 superpowers 켬/끔 (설계 2026-11-03 interview-superpowers-toggle §4) — false(간단 인터뷰)일 때만 칩을 그린다. null·없음은 켬이다. */
+  interviewSuperpowersEnabled?: boolean | null
 }
 
 const route = useRoute()
@@ -754,6 +757,7 @@ function onAction(kind: NextActionKind) {
           <q-chip dense size="sm" outline icon="tune" :label="task.effort" />
           <q-chip v-if="task.taskType" dense size="sm" outline :label="taskTypeLabel(task.taskType)" data-test="task-type-chip" />
           <q-chip v-if="modeChip" dense size="sm" outline icon="account_tree" :label="modeChip" data-test="impl-mode-chip" />
+          <q-chip v-if="task.interviewSuperpowersEnabled === false" dense size="sm" outline :label="SIMPLE_INTERVIEW_LABEL" data-test="simple-interview-chip" />
           <q-chip v-if="task.totalCostUsd != null" dense size="sm" outline
                   icon="paid" color="primary"
                   :label="`${fmtTokens(task.totalTokens ?? 0)} 토큰 · ${fmtCost(task.totalCostUsd)}`" />

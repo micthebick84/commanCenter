@@ -10,8 +10,9 @@ import type { InterviewClaimResponse } from '../types.js';
  * 문구(첫 문장 그대로, 지시 문단 없음)라 타입이 생기기 전과 프롬프트가 바이트까지 같다.
  *
  * 이 파일은 "무슨 일인지"(타입 절)만 정한다. 진행 방식 문구 — PLANNING-ONLY 문단의 `(via brainstorming → writing-plans)`와
- * 마지막 `Use the brainstorming skill…` 줄 — 은 interviewRunner.promptFor에 그대로 있고 여기서 건드리지 않는다
- * (후속 간단 인터뷰 설계가 그 문구만 바꾼다).
+ * 마지막 `Use the brainstorming skill…` 줄 — 은 `interviewMode.ts`(간단 인터뷰 = superpowers 끔의 진행 방식 절)가 정한다.
+ * 다만 `taskTypeGuide`의 "…부터 질문하세요." 문장은 질문 순서(진행 방식)이기도 해서 `superpowers` 인자가 false면 그 문장만
+ * "먼저 자료·코드·DB로 확인하고, 그래도 알 수 없는 것만 한 번의 질문 묶음에 넣으세요."로 바뀐다 — 계획 내용 요구는 그대로다.
  */
 
 type KickoffClaim = Pick<InterviewClaimResponse, 'taskType' | 'githubRepo' | 'githubBranch'>;
@@ -25,30 +26,64 @@ export function kickoffLead(claim: KickoffClaim): string {
   return `I want to add a feature to the repo ${where}`;
 }
 
-const FEATURE_CHANGE_GUIDE =
-  '작업 타입: 기능 수정. 먼저 코드를 읽어 지금 어떻게 동작하는지 확인하고, 무엇을 어떻게 바꿀지와 바꾸면 안 되는 것(유지할 동작)부터 질문하세요.';
+/**
+ * 타입 지시 문단의 조각. 켬 문단 = `head + askFirst + rest`, 끔 문단 = `head + askOnce + rest`다 — 첫 "…부터 질문하세요." 문장
+ * (`askFirst`)만 끔에서 `askOnce`로 바뀌고 나머지(`head`의 작업 타입·질문 대상, `rest`의 계획 내용 요구)는 같다.
+ */
+interface TypeGuide {
+  /** "작업 타입: …"부터 질문 대상까지. */
+  head: string;
+  /** 켬: 사람에게 먼저 묻는 문장(끝 마침표까지). */
+  askFirst: string;
+  /** 끔: 먼저 자료·코드·DB로 확인하고 그래도 알 수 없는 것만 한 번의 질문 묶음에 넣는 문장. */
+  askOnce: string;
+  /** 첫 문장 뒤의 계획 내용 요구 — 앞 공백을 포함하고, 없으면 ''. */
+  rest: string;
+}
 
-const BUG_FIX_GUIDE =
-  '작업 타입: 버그 픽스. 어느 화면에서, 무엇을 했을 때, 어떤 오류가 뜨는지부터 질문하세요. ' +
-  '첨부(캡처·로그)가 있으면 먼저 보고, 코드 읽기와 DB 조회 도구로 원인을 좁혀 보세요. ' +
-  '계획의 작업은 재현 → 원인 → 수정 → 같은 오류가 다시 안 나는지 확인(가능하면 회귀 테스트) 순서로 쓰세요.';
+const FEATURE_CHANGE_GUIDE: TypeGuide = {
+  head: '작업 타입: 기능 수정. 먼저 코드를 읽어 지금 어떻게 동작하는지 확인하고, 무엇을 어떻게 바꿀지와 바꾸면 안 되는 것(유지할 동작)',
+  askFirst: '부터 질문하세요.',
+  askOnce: '도 자료·코드·DB로 먼저 확인하세요. 그래도 알 수 없는 것만 한 번의 질문 묶음에 넣으세요.',
+  rest: '',
+};
 
-const DB_WORK_GUIDE =
-  '작업 타입: DB 작업. 어떤 테이블·데이터를 어떻게 바꿀지부터 질문하세요. ' +
-  '계획에는 실행할 SQL을 순서대로 적고, 문장마다 [바로 실행] 또는 [승인 대기]를 표시하세요. ' +
-  '[바로 실행]: 새 테이블·인덱스·시퀀스·뷰, NULL 허용이거나 DEFAULT 있는 컬럼 추가, INSERT, WHERE 있는 UPDATE/DELETE. ' +
-  '[승인 대기]: 남의 테이블 컬럼 삭제·이름·타입·NULL 여부 변경, NOT NULL이면서 DEFAULT 없는 컬럼 추가, 제약·유니크 인덱스·트리거·프로시저. ' +
-  '기존 테이블 DROP·TRUNCATE와 조건 없는 UPDATE/DELETE는 거부됩니다.';
+const BUG_FIX_GUIDE: TypeGuide = {
+  head: '작업 타입: 버그 픽스. 어느 화면에서, 무엇을 했을 때, 어떤 오류가 뜨는지',
+  askFirst: '부터 질문하세요.',
+  askOnce: '는 먼저 자료·코드·DB로 확인하고, 그래도 알 수 없는 것만 한 번의 질문 묶음에 넣으세요.',
+  rest:
+    ' 첨부(캡처·로그)가 있으면 먼저 보고, 코드 읽기와 DB 조회 도구로 원인을 좁혀 보세요. ' +
+    '계획의 작업은 재현 → 원인 → 수정 → 같은 오류가 다시 안 나는지 확인(가능하면 회귀 테스트) 순서로 쓰세요.',
+};
+
+const DB_WORK_GUIDE: TypeGuide = {
+  head: '작업 타입: DB 작업. 어떤 테이블·데이터를 어떻게 바꿀지',
+  askFirst: '부터 질문하세요.',
+  askOnce: '는 먼저 자료·코드·DB로 확인하고, 그래도 알 수 없는 것만 한 번의 질문 묶음에 넣으세요.',
+  rest:
+    ' 계획에는 실행할 SQL을 순서대로 적고, 문장마다 [바로 실행] 또는 [승인 대기]를 표시하세요. ' +
+    '[바로 실행]: 새 테이블·인덱스·시퀀스·뷰, NULL 허용이거나 DEFAULT 있는 컬럼 추가, INSERT, WHERE 있는 UPDATE/DELETE. ' +
+    '[승인 대기]: 남의 테이블 컬럼 삭제·이름·타입·NULL 여부 변경, NOT NULL이면서 DEFAULT 없는 컬럼 추가, 제약·유니크 인덱스·트리거·프로시저. ' +
+    '기존 테이블 DROP·TRUNCATE와 조건 없는 UPDATE/DELETE는 거부됩니다.',
+};
 
 /**
  * 타입별 인터뷰 지시 문단 — 끝에 빈 줄(`\n\n`)을 포함한다. 타입 없음·NEW_FEATURE·모르는 값이면 ''.
  * 인자가 `unknown`인 것은 와이어 값이 다른 버전 API의 새 타입이거나 숫자·객체일 수도 있어서다.
+ *
+ * `superpowers`(기본 true)가 false면 간단 인터뷰(스펙 2026-11-03 §5-2)다 — 첫 "…부터 질문하세요." 문장만 "먼저 자료·코드·DB로
+ * 확인하고, 그래도 알 수 없는 것만 한 번의 질문 묶음에 넣으세요."로 바뀌고 나머지(계획 내용 요구)는 같다. 둘째 인자를 생략하면 켬이라
+ * 이 인자가 생기기 전과 바이트까지 같다.
  */
-export function taskTypeGuide(taskType: unknown): string {
-  if (taskType === 'FEATURE_CHANGE') return FEATURE_CHANGE_GUIDE + '\n\n';
-  if (taskType === 'BUG_FIX') return BUG_FIX_GUIDE + '\n\n';
-  if (taskType === 'DB_WORK') return DB_WORK_GUIDE + '\n\n';
-  return '';
+export function taskTypeGuide(taskType: unknown, superpowers = true): string {
+  const guide =
+    taskType === 'FEATURE_CHANGE' ? FEATURE_CHANGE_GUIDE
+    : taskType === 'BUG_FIX' ? BUG_FIX_GUIDE
+    : taskType === 'DB_WORK' ? DB_WORK_GUIDE
+    : null;
+  if (guide === null) return '';
+  return guide.head + (superpowers ? guide.askFirst : guide.askOnce) + guide.rest + '\n\n';
 }
 
 /**

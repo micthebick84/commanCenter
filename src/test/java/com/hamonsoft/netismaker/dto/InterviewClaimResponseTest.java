@@ -410,4 +410,75 @@ class InterviewClaimResponseTest {
         assertThat(json.get("writableDbConnections").isArray()).isTrue();
         assertThat(json.get("writableDbConnections").size()).isZero();
     }
+
+    // ── superpowers 켬/끔 (설계 2026-11-03-interview-superpowers-toggle §4) ─────────────────────────
+
+    private InterviewSession simpleSession() {
+        InterviewSession s = session();
+        s.setSuperpowersEnabled(false);
+        return s;
+    }
+
+    /** 정규 생성자로 superpowersEnabled만 null로 만든 사본 — of()를 거치지 않는 호출처가 null을 못 내보내는지 본다. */
+    private static InterviewClaimResponse withNullSuperpowers(InterviewClaimResponse r) {
+        return new InterviewClaimResponse(r.sessionId(), r.githubRepo(), r.githubBranch(), r.title(), r.description(),
+                r.claudeSessionId(), r.currentPhase(), r.workDir(), r.lastAnswer(), r.replyToSeq(), r.mcpsExtra(),
+                r.turns(), r.model(), r.effort(), r.totalCostUsd(), r.attachments(), r.kind(), r.attachmentRoot(),
+                r.gitUrl(), r.repoHost(), r.dbConnectionIds(), r.dbConnections(), r.dbNotices(), r.refRepos(),
+                r.refsCleared(), r.taskType(), r.writableDbConnections(), null);
+    }
+
+    @Test
+    void of는_세션의_superpowersEnabled를_싣고_켬이_기본이다() throws Exception {
+        ObjectMapper mapper = new ObjectMapper().findAndRegisterModules();
+        InterviewClaimResponse on = InterviewClaimResponse.of(session(), List.of(), List.of());
+        InterviewClaimResponse off = InterviewClaimResponse.of(simpleSession(), List.of(), List.of());
+
+        assertThat(on.superpowersEnabled()).isTrue();
+        assertThat(off.superpowersEnabled()).isFalse();
+        assertThat(mapper.writeValueAsString(on)).contains("\"superpowersEnabled\":true");
+        assertThat(mapper.writeValueAsString(off)).contains("\"superpowersEnabled\":false");
+    }
+
+    @Test
+    void claim_사본_다섯곳이_superpowersEnabled_유지_JSON() throws Exception {
+        var dbRef = new InterviewClaimResponse.DbConnectionRef("db-7", "운영 (MySQL)", "MYSQL", "h", 3306, "app", "u", "Pw-9");
+        InterviewClaimResponse off = InterviewClaimResponse.of(simpleSession(), List.of(), List.of());
+
+        InterviewClaimResponse viaDb = off.withDb(List.of(dbRef), List.of("참고"));
+        InterviewClaimResponse viaRefs = off.withRefRepos(List.of(claimRef(11L, SHA)));
+        InterviewClaimResponse viaCleared = off.withRefsCleared(true);
+        InterviewClaimResponse viaType = off.withTaskType("DB_WORK");
+        InterviewClaimResponse viaWritable = off.withWritableDbConnections(List.of("개발DB (PostgreSQL)"));
+
+        ObjectMapper mapper = new ObjectMapper().findAndRegisterModules();
+        for (InterviewClaimResponse r : List.of(viaDb, viaRefs, viaCleared, viaType, viaWritable)) {
+            assertThat(r.superpowersEnabled()).isFalse();
+            assertThat(mapper.writeValueAsString(r)).contains("\"superpowersEnabled\":false");
+        }
+        // 다섯 사본을 다 거쳐도 끔이 남고, 값을 바꾸는 사본이 아니므로 켬 세션은 켬이 남는다
+        InterviewClaimResponse chained = off.withRefRepos(List.of(claimRef(11L, SHA))).withRefsCleared(true)
+                .withTaskType("DB_WORK").withDb(List.of(dbRef), List.of("참고"))
+                .withWritableDbConnections(List.of("개발DB (PostgreSQL)"));
+        assertThat(chained.superpowersEnabled()).isFalse();
+        InterviewClaimResponse onChained = InterviewClaimResponse.of(session(), List.of(), List.of())
+                .withRefRepos(List.of(claimRef(11L, SHA))).withRefsCleared(true)
+                .withTaskType("DB_WORK").withDb(List.of(dbRef), List.of("참고"))
+                .withWritableDbConnections(List.of("개발DB (PostgreSQL)"));
+        assertThat(onChained.superpowersEnabled()).isTrue();
+        // 사본은 superpowersEnabled 말고 다른 칸을 건드리지 않는다
+        assertThat(off.withWritableDbConnections(List.of())).isEqualTo(off);
+        assertThat(off.withTaskType(null)).isEqualTo(off);
+    }
+
+    @Test
+    void 정규_생성자의_null은_켬이다() throws Exception {
+        InterviewClaimResponse r = withNullSuperpowers(InterviewClaimResponse.of(simpleSession(), List.of(), List.of()));
+
+        assertThat(r.superpowersEnabled()).isTrue();
+        assertThat(new ObjectMapper().findAndRegisterModules().writeValueAsString(r))
+                .contains("\"superpowersEnabled\":true");
+        // null로 만든 것에서 사본을 떠도 켬이 남는다
+        assertThat(r.withRefsCleared(true).superpowersEnabled()).isTrue();
+    }
 }

@@ -1,5 +1,11 @@
 import { describe, expect, it, vi } from 'vitest';
-import { detectHandoff, buildWritingPlansSplice, detectPlanIntent, buildPlanReformatSplice } from '../src/runner/skillDispatch.js';
+import {
+  detectHandoff,
+  buildWritingPlansSplice,
+  detectPlanIntent,
+  buildPlanReformatSplice,
+  PLAN_FORMAT_RULE,
+} from '../src/runner/skillDispatch.js';
 
 describe('detectHandoff', () => {
   it('detects when the agent announces the writing-plans transition', () => {
@@ -81,10 +87,35 @@ describe('detectPlanIntent', () => {
   });
 });
 
+/**
+ * buildPlanReformatSplice()의 출력 — PLAN_FORMAT_RULE을 뽑아내기 전(skillDispatch.ts 42-45행 그대로) 코드의 출력을 옮겨 고정했다.
+ * 켬 세션의 force-finish·near-miss 재요청이 이 바이트를 지켜야 한다(스펙 2026-11-03 §5-3·반목표 §9).
+ */
+const PLAN_REFORMAT_GOLDEN =
+  '지금까지의 논의를 바탕으로 최종 구현 계획을 한 번에 확정해 제시하세요. ' +
+  '반드시 다음 정규 형식을 지키세요(설명은 한국어): 최상위 헤딩 `# <기능> 구현 계획`, ' +
+  '그 아래 각 작업을 `### 작업 N: <제목>` 형식으로 나열. ' +
+  '영문 `# <Feature> Implementation Plan` / `### Task N:` 도 허용됩니다. ' +
+  '이 구조라야 시스템이 완료를 인식합니다. 구현/빌드/커밋은 하지 마세요(plan 문서만).';
+
 describe('buildPlanReformatSplice', () => {
   it('demands the canonical Korean plan structure', () => {
     const out = buildPlanReformatSplice();
     expect(out).toContain('구현 계획');
     expect(out).toContain('### 작업 N:');
+  });
+
+  it('buildPlanReformatSplice 바이트 고정 (켬 force-finish·near-miss 가드)', () => {
+    expect(buildPlanReformatSplice()).toBe(PLAN_REFORMAT_GOLDEN);
+  });
+
+  it('PLAN_FORMAT_RULE은 재요청 문구 안에 그대로', () => {
+    expect(buildPlanReformatSplice()).toContain(PLAN_FORMAT_RULE);
+    // 값은 정규 형식 안내부터 "…완료를 인식합니다."까지 — 앞뒤 문장과 끝 공백은 재요청 쪽이 붙인다
+    expect(PLAN_FORMAT_RULE.startsWith('반드시 다음 정규 형식을 지키세요(설명은 한국어): ')).toBe(true);
+    expect(PLAN_FORMAT_RULE.endsWith('이 구조라야 시스템이 완료를 인식합니다.')).toBe(true);
+    expect(PLAN_REFORMAT_GOLDEN).toBe(
+      '지금까지의 논의를 바탕으로 최종 구현 계획을 한 번에 확정해 제시하세요. ' + PLAN_FORMAT_RULE + ' 구현/빌드/커밋은 하지 마세요(plan 문서만).',
+    );
   });
 });

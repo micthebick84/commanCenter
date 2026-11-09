@@ -6,6 +6,7 @@ import { renderMarkdown } from '~/composables/useMarkdown'
 import type { StageStep } from '~/composables/taskStages'
 import { mrNoun, mrRef } from '~/composables/mergeRequestLabel'
 import { implementationModeText } from '~/composables/implementationMode'
+import { SIMPLE_INTERVIEW_LABEL } from '~/composables/interviewMode'
 import RefRepoChips from '~/components/RefRepoChips.vue'
 // DetailTask는 defineProps 타입에 쓰이므로 상대 경로 — vitest는 .nuxt 없이 돌아 SFC 매크로 타입의 `~/` import를 못 푼다.
 import { taskRefContext, type RefRepoView } from '../../composables/refRepos'
@@ -43,6 +44,8 @@ export interface DetailTask {
   sourceQuestionId?: number | null
   /** 작업 타입(스펙 2026-11-03 §4) — 요청 상세 섹션 머리의 칩. null·없음은 타입 없음이라 칩이 없다. */
   taskType?: string | null
+  /** 이 작업 인터뷰의 superpowers 켬/끔(설계 2026-11-03 interview-superpowers-toggle §4) — false(간단 인터뷰)일 때만 정보 영역에 줄을 그린다. null·없음은 켬이다. */
+  interviewSuperpowersEnabled?: boolean | null
 }
 
 const props = defineProps<{
@@ -247,6 +250,7 @@ const deployCaption = computed(() => {
           <div v-if="open.info" class="q-expansion-item__content" :id="contentId('info')">
             <q-card-section class="kv">
               <div><span class="k">모델</span>{{ task.model }} · {{ task.effort }}</div>
+              <div v-if="task.interviewSuperpowersEnabled === false" data-test="info-simple-interview"><span class="k">인터뷰</span>{{ SIMPLE_INTERVIEW_LABEL }}</div>
               <div v-if="modeText" data-test="info-impl-mode"><span class="k">구현</span>{{ modeText }}</div>
               <div v-if="task.totalCostUsd != null"><span class="k">사용량</span>{{ fmtTokens(task.totalTokens ?? 0) }} 토큰 · ${{ Number(task.totalCostUsd).toFixed(2) }}</div>
               <div v-if="task.mcpsExtra.length"><span class="k">MCP</span>{{ task.mcpsExtra.map((m) => m.name).join(', ') }}</div>

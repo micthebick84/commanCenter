@@ -35,14 +35,23 @@ export function detectPlanIntent(assistantText: string): boolean {
   return detectHandoff(assistantText) || (!asksUser(assistantText) && PLAN_HEADING.test(assistantText));
 }
 
+/**
+ * 정규 계획 형식 안내 한 덩어리 — "반드시 다음 정규 형식을 지키세요 …"부터 "… 완료를 인식합니다."까지(끝 공백 없음).
+ * `buildPlanReformatSplice`(near-miss 보정 / force-finish)와 간단 인터뷰(superpowers 끔)의 resume 접두
+ * (`interviewMode.SIMPLE_RESUME_PREFIX`)가 같은 문구를 쓴다 — 계획 형식이 한 곳에서만 정해지도록.
+ */
+export const PLAN_FORMAT_RULE =
+  '반드시 다음 정규 형식을 지키세요(설명은 한국어): 최상위 헤딩 `# <기능> 구현 계획`, ' +
+  '그 아래 각 작업을 `### 작업 N: <제목>` 형식으로 나열. ' +
+  '영문 `# <Feature> Implementation Plan` / `### Task N:` 도 허용됩니다. ' +
+  '이 구조라야 시스템이 완료를 인식합니다.';
+
 /** 지정 정규 형식으로 plan을 한 번에 확정 제시하라는 프롬프트(near-miss 보정 / force-finish 공용). */
 export function buildPlanReformatSplice(): string {
   return (
     '지금까지의 논의를 바탕으로 최종 구현 계획을 한 번에 확정해 제시하세요. ' +
-    '반드시 다음 정규 형식을 지키세요(설명은 한국어): 최상위 헤딩 `# <기능> 구현 계획`, ' +
-    '그 아래 각 작업을 `### 작업 N: <제목>` 형식으로 나열. ' +
-    '영문 `# <Feature> Implementation Plan` / `### Task N:` 도 허용됩니다. ' +
-    '이 구조라야 시스템이 완료를 인식합니다. 구현/빌드/커밋은 하지 마세요(plan 문서만).'
+    PLAN_FORMAT_RULE +
+    ' 구현/빌드/커밋은 하지 마세요(plan 문서만).'
   );
 }
 

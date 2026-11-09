@@ -121,6 +121,17 @@ const WORKERS = [
   { workerId: 'smoke-interview-1', hostname: 'smoke', version: 'interview-service/0.1.0', lastSeenAt: NOW, alive: true, claudeSessionOk: false, claudeAuthMethod: 'CREDENTIALS', claudeAuthExpiresAt: '2026-10-31T02:23:45.460Z', vpnStatus: null, mcps: [], lostReportCount: 0 },
 ]
 
+const USAGE_TOKENS = { input: 1000, output: 200, cacheWrite5m: 0, cacheWrite1h: 0, cacheRead: 5000 }
+const USAGE_SUMMARY = {
+  period: 'month', date: '2026-11-04', start: '2026-11-01T00:00:00+09:00', end: '2026-12-01T00:00:00+09:00', countFrom: '2026-10-01',
+  inProgress: true, tokens: USAGE_TOKENS, cost: 1234,
+  byCategory: [{ category: 'SYMPHONY', tokens: USAGE_TOKENS, cost: 900 }, { category: 'DIRECT', tokens: USAGE_TOKENS, cost: 334 }],
+  byModel: [{ model: 'claude-smoke-1', tokens: USAGE_TOKENS, cost: 1234 }],
+  feeConfigured: true, feeMissing: false, feeShare: 200, fullPeriodFeeShare: 1000, ratio: 6.2, previous: null,
+  series: [{ at: '2026-11-01T00:00:00+09:00', cost: 10 }, { at: '2026-11-02T00:00:00+09:00', cost: 20 }],
+  coverage: { collectors: [{ machine: 'smoke-pc', lastReportedAt: NOW, lastEventAt: null, unreadableLines: 0 }], earliestEventAt: '2026-10-03T09:12:00+09:00', unpricedModels: [] },
+}
+
 /** pathname → 응답 본문. 목록에 없는 /api/ 요청은 null(200)로 답하고 보고서에 남긴다. */
 function apiResponse(path) {
   if (path === '/api/me') return { user_id: 1, username: 'admin', email: 'admin@example.com', authorities: ['ROLE_USER', 'ROLE_ADMIN'] }
@@ -138,6 +149,7 @@ function apiResponse(path) {
   if (path === '/api/questions') return [QUESTION]
   if (/^\/api\/questions\/\d+$/.test(path)) return QUESTION
   if (path === '/api/usage/claude') return { limits: [] }
+  if (path === '/api/usage/summary') return USAGE_SUMMARY
   if (path === '/api/queue/stats') return { avgDurationMs: null }
   if (path === '/api/repo-catalog' || path === '/api/admin/repo-catalog') return REPOS
   if (path === '/api/repos/branches') return { repo: 'acme/widgets', defaultBranch: 'main', branches: [{ name: 'main', sha: 'abc123' }], fetchedAt: NOW }

@@ -44,14 +44,12 @@ const html = computed(() =>
     <div class="avatar" :class="role">{{ avatarLabel }}</div>
     <!-- renderMarkdown은 html:false라 원시 HTML을 이스케이프한다 — v-html 안전 -->
     <div v-if="role === 'assistant' && $slots.footer" class="bubble-stack-assistant">
+      <!-- eslint-disable-next-line vue/no-v-html -->
       <div class="bubble assistant markdown" v-html="html" />
       <slot name="footer" />
     </div>
-    <div
-      v-else-if="role === 'assistant'"
-      class="bubble assistant markdown"
-      v-html="html"
-    />
+    <!-- eslint-disable-next-line vue/no-v-html -->
+    <div v-else-if="role === 'assistant'" class="bubble assistant markdown" v-html="html" />
     <div v-else class="bubble-stack">
       <div class="bubble" :class="role">{{ content }}</div>
       <!-- 첨부 칩 줄 — 말풍선 아래 오른쪽 정렬. 클래스명은 Quasar 반응형 표시 헬퍼(xs/sm/md/lg/xl)와 겹치지 않게. -->

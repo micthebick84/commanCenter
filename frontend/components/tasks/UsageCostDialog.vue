@@ -25,7 +25,7 @@ import {
   type UsageTokens,
 } from '~/composables/usageReport'
 
-const props = defineProps<{ initialPeriod: UsagePeriodValue }>()
+const props = defineProps<{ initialPeriod: 'day' | 'week' | 'month' }>()
 const emit = defineEmits<{ (e: 'fee-saved'): void }>()
 const show = defineModel<boolean>()
 

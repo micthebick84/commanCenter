@@ -131,6 +131,8 @@ function go(target: number | null) {
 <style scoped>
 /* 페이지는 스크롤하지 않고 목업이 iframe 안에서 스크롤된다 — 윗줄 + 목업 = 창 높이 */
 .mockup-view {
+  display: flex;
+  flex-direction: column;
   height: 100vh;
   overflow: hidden;
 }
@@ -140,11 +142,10 @@ function go(target: number | null) {
   align-items: center;
   gap: 4px 12px;
   box-sizing: border-box;
-  height: 72px;
+  flex: none;
   padding: 4px 8px 4px 16px;
   border-bottom: 1px solid rgba(0, 0, 0, 0.12);
   background: #fff;
-  overflow: hidden;
 }
 .mockup-bar__back {
   flex: none;
@@ -169,7 +170,8 @@ function go(target: number | null) {
 .mockup-frame {
   display: block;
   width: 100%;
-  height: calc(100vh - 72px);
+  flex: 1 1 auto;
+  min-height: 0;
   border: 0;
   background: #fff;
 }

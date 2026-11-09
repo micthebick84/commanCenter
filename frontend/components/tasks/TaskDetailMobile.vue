@@ -54,6 +54,10 @@ const props = defineProps<{
   steps: StageStep[]
   /** 진행 이력 아코디언 헤더 캡션용 건수 — null/undefined면 캡션을 아예 안 보여준다(아직 조회 전). */
   historyCount?: number | null
+  /** 부모가 이미 연 빌드 로그(배포중·배포중지중). 연결은 부모([id].vue) 소유라 이 컴포넌트는 그대로 그리기만 한다 (스펙 2026-11-03 §5). */
+  liveLog?: string
+  /** 앱 로그 칸을 보일지 — 부모의 `appLogViewable`. 칸 안의 카드는 부모가 슬롯 `applog`로 넘기고, 칸을 펼칠 때만 마운트된다. */
+  appLogViewable?: boolean
   /** 고른 DB 연결 중 구현 단계 쓰기가 열릴 수 있는 것이 있는가(스펙 2026-11-03 §6.1) — 정보 영역 "읽기 전용" 문구를 바꾼다. 없으면 읽기 전용 그대로. */
   dbWritable?: boolean
 }>()
@@ -67,7 +71,15 @@ const open = reactive<Record<string, boolean>>({
   history: false, request: false,
   analysis: currentKey.value === 'analysis', design: currentKey.value === 'design',
   impl: currentKey.value === 'impl', deploy: currentKey.value === 'deploy', interviews: false, info: false,
+  // 앱 로그 칸은 접힌 채로 둔다 — 펼칠 때만 카드가 마운트돼 연결한다. 빌드 로그 칸도 접힌 채(연결은 부모가 이미 열었다).
+  applog: false, buildlog: false,
 })
+// 빌드 로그 칸은 부모가 로그를 모으는 두 상태에서만 — 데스크톱 "실시간 로그"와 같다([id].vue의 status watch).
+const BUILD_LOG_STATUSES = ['DEPLOYING', 'UNDEPLOYING']
+const buildLogVisible = computed(() => BUILD_LOG_STATUSES.includes(props.task.status))
+// 칸이 숨겨지면 접힌 상태로 되돌린다 — 다시 보여도 저절로 펼쳐져 연결하지 않게(앱 로그: 허용 상태 밖 → 안, 빌드 로그: 배포 끝 → 재배포).
+watch(() => props.appLogViewable, (v) => { if (!v) open.applog = false })
+watch(buildLogVisible, (v) => { if (!v) open.buildlog = false })
 // 헤더 aria-controls ↔ 콘텐츠 id 연결 — 인스턴스 두 개가 동시에 마운트돼도 충돌하지 않도록 task.id를 접두어로 둔다.
 function contentId(key: string) {
   return `task-${props.task.id}-${key}-content`
@@ -222,6 +234,38 @@ const deployCaption = computed(() => {
             <q-card-section v-else-if="task.status === 'DEPLOY_FAILED'" class="text-negative">{{ task.failureReason }}</q-card-section>
             <q-card-section v-else-if="IN_FLIGHT_DEPLOY_STATUSES.includes(task.status)" class="text-grey-7">배포 작업이 진행 중입니다</q-card-section>
             <q-card-section v-else class="text-grey-7">PR생성 상태에서 관리자가 배포할 수 있습니다.</q-card-section>
+          </div>
+        </q-slide-transition>
+      </div>
+
+      <!-- 앱 로그 — 허용 상태에서만. 카드는 슬롯이고, 이 v-if가 펼칠 때만 마운트(= 연결)하는 게이트다 -->
+      <div v-if="appLogViewable" class="acc-section" data-test="section-applog">
+        <q-item clickable class="acc-header" role="button" :aria-expanded="open.applog" :aria-controls="contentId('applog')" @click="open.applog = !open.applog">
+          <q-item-section>
+            <q-item-label>앱 로그</q-item-label>
+            <q-item-label caption>배포된 앱의 실시간 로그</q-item-label>
+          </q-item-section>
+          <q-item-section side><q-icon :name="open.applog ? 'expand_less' : 'expand_more'" /></q-item-section>
+        </q-item>
+        <q-slide-transition>
+          <div v-if="open.applog" :id="contentId('applog')" class="q-expansion-item__content">
+            <q-card-section><slot name="applog" /></q-card-section>
+          </div>
+        </q-slide-transition>
+      </div>
+
+      <!-- 빌드 로그 — 배포중·배포중지중에만. 본문은 부모가 연 liveLog -->
+      <div v-if="buildLogVisible" class="acc-section" data-test="section-buildlog">
+        <q-item clickable class="acc-header" role="button" :aria-expanded="open.buildlog" :aria-controls="contentId('buildlog')" @click="open.buildlog = !open.buildlog">
+          <q-item-section>
+            <q-item-label>빌드 로그</q-item-label>
+            <q-item-label caption>{{ task.status === 'UNDEPLOYING' ? '배포 중지 진행 중' : '배포 진행 중' }}</q-item-label>
+          </q-item-section>
+          <q-item-section side><q-icon :name="open.buildlog ? 'expand_less' : 'expand_more'" /></q-item-section>
+        </q-item>
+        <q-slide-transition>
+          <div v-if="open.buildlog" :id="contentId('buildlog')" class="q-expansion-item__content">
+            <q-card-section><pre class="deploy-log">{{ liveLog || '로그 대기 중…' }}</pre></q-card-section>
           </div>
         </q-slide-transition>
       </div>

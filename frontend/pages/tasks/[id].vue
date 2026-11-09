@@ -15,6 +15,8 @@ import DeployEnvDialog from '~/components/tasks/DeployEnvDialog.vue'
 import ImplementationRetryDialog from '~/components/tasks/ImplementationRetryDialog.vue'
 import FixRequestDialog from '~/components/tasks/FixRequestDialog.vue'
 import FixRequestHistory from '~/components/tasks/FixRequestHistory.vue'
+import AppLogCard from '~/components/tasks/AppLogCard.vue'
+import { appLogViewable } from '~/composables/appLog'
 import TaskInterviewMockups from '~/components/tasks/TaskInterviewMockups.vue'
 import TaskDbChanges from '~/components/tasks/TaskDbChanges.vue'
 import { stageSteps, nextAction, ageOf, isDbWorkPrCreated, DB_WORK_CLOSE_REQUEST_CONFIRM, type NextActionKind } from '~/composables/taskStages'
@@ -485,6 +487,16 @@ watch(
 
 onUnmounted(() => closeLog())
 
+// 배포된 앱 로그 (스펙 2026-11-03 §5) — 허용 상태이고 배포 기록이 있을 때만 카드(칸)를 보인다. 연결은 카드가 마운트될 때(= 펼칠 때)만 열린다.
+// 폴링이 task 객체를 통째로 바꾸지만 이 computed는 불리언이라 값이 바뀔 때만 아래 watch가 돈다.
+const appLogVisible = computed(() => appLogViewable(task.value))
+// 데스크톱 "앱 로그" 칸의 펼침. 모바일 칸의 펼침은 TaskDetailMobile이 들고 있다.
+const appLogOpen = ref(false)
+// 재배포·중지가 시작돼 허용 밖이 되면 접는다 — 카드가 언마운트되며 연결이 닫히고, 빌드 로그가 그 자리를 이어받는다. 다시 보여도 접힌 채다.
+watch(appLogVisible, (v) => {
+  if (!v) appLogOpen.value = false
+})
+
 function statusClass(status: string) {
   return (
     {
@@ -904,12 +916,17 @@ function onAction(kind: NextActionKind) {
           :is-admin="auth.isAdmin"
           :steps="steps"
           :history-count="historyCount"
+          :live-log="liveLog"
+          :app-log-viewable="appLogVisible"
           :db-writable="dbWritable"
           @retry="retry"
           @download="downloadAttachment"
         >
           <template #history>
             <TaskHistoryTimeline :task-id="task.id" @loaded="historyCount = $event" />
+          </template>
+          <template v-if="appLogVisible" #applog>
+            <AppLogCard :key="task.id" :task-id="task.id" :viewable="appLogVisible" />
           </template>
           <template #interviews>
             <InterviewHistoryCard :task-id="task.id" :task-status="task.status" />
@@ -1453,6 +1470,14 @@ function onAction(kind: NextActionKind) {
           </div>
         </q-card-section>
 
+        <!-- 앱 로그 (스펙 2026-11-03 §5) — q-expansion-item은 접힌 상태에도 슬롯을 마운트하므로 v-if로 펼칠 때만 카드(= 연결)를 만든다 -->
+        <q-separator v-if="appLogVisible" />
+        <q-card-section v-if="appLogVisible">
+          <q-expansion-item v-model="appLogOpen" dense icon="terminal" label="앱 로그" data-test="app-log-desktop">
+            <AppLogCard v-if="appLogOpen" :key="task.id" :task-id="task.id" :viewable="appLogVisible" />
+          </q-expansion-item>
+        </q-card-section>
+
         <q-separator v-if="task.status === 'DEPLOYING' || task.status === 'UNDEPLOYING'" />
         <q-card-section v-if="task.status === 'DEPLOYING' || task.status === 'UNDEPLOYING'">
           <div class="text-caption text-grey-7 q-mb-xs">실시간 로그</div>
@@ -1620,16 +1645,6 @@ function onAction(kind: NextActionKind) {
 .interview-sheet__refs {
   flex: none;
   padding: 8px 16px;
-}
-.deploy-log {
-  max-height: 240px;
-  overflow: auto;
-  background: #1e1e1e;
-  color: #d4d4d4;
-  padding: 8px;
-  border-radius: 4px;
-  font-size: 0.75rem;
-  white-space: pre-wrap;
 }
 .impl-elapsed {
   color: #757575;

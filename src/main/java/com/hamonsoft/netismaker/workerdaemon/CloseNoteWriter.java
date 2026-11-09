@@ -1,6 +1,6 @@
 package com.hamonsoft.netismaker.workerdaemon;
 
-import com.hamonsoft.netismaker.git.GitRemotes;
+import com.hamonsoft.netismaker.util.SecretMasks;
 
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
@@ -8,7 +8,6 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
 import java.time.LocalDate;
-import java.util.regex.Pattern;
 
 /**
  * 종료 노트를 볼트에 쓴다 (스펙 2026-10-13 §4 ③). 파일 이름·진행상황 추기는 여기서 결정론으로 — claude는 본문만 만든다.
@@ -32,10 +31,6 @@ public class CloseNoteWriter {
     public record Written(String relativePath, Path file) {}
 
     private static final int SLUG_MAX = 60;
-
-    /** URL 밖에 맨몸으로 나온 토큰(GitHub classic/fine-grained PAT, GitLab PAT, Anthropic 키). */
-    private static final Pattern BARE_TOKENS = Pattern.compile(
-            "ghp_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|glpat-[A-Za-z0-9_-]{16,}|sk-ant-[A-Za-z0-9_-]{16,}");
 
     /** 노트와 진행상황을 같은 폴더에 — 노트 폴더 분리 전 호출부 호환. */
     public Written write(Path vault, String folder, NoteMeta meta, String body, LocalDate date) throws IOException {
@@ -104,9 +99,9 @@ public class CloseNoteWriter {
         return maskSecrets(b);
     }
 
-    /** URL 안 자격증명(GitRemotes.mask) + 맨 토큰 패턴을 가린다. */
+    /** URL 안 자격증명(GitRemotes.mask) + 맨 토큰 패턴을 가린다 — 규칙은 {@link SecretMasks}가 갖는다. */
     static String maskSecrets(String text) {
-        return BARE_TOKENS.matcher(GitRemotes.mask(text)).replaceAll("***");
+        return SecretMasks.maskUrlAndTokens(text);
     }
 
     private static void appendProgress(Path progress, String noteName, NoteMeta m, LocalDate date) throws IOException {

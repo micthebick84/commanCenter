@@ -203,4 +203,30 @@ class TaskApiIntegrationTest {
                 .andExpect(status().isOk())
                 .andExpect(request().asyncStarted());
     }
+
+    // ── 앱 로그 스트림 (스펙 2026-11-03 §4) ───────────────────────────────────
+
+    @Test
+    void 앱로그_스트림은_등록자와_관리자만() throws Exception {
+        // TestcontainersConfig가 app.app-log.enabled=false로 막으므로 docker 없이 구독이 end(disabled)로 끝난다 —
+        // 여기서는 접근 제어(남 403·본문 없음, 소유자·관리자 200 + 비동기 시작)만 본다.
+        String location = mvc.perform(post("/api/tasks").with(userJwt("user1"))
+                        .contentType(APPLICATION_JSON)
+                        .content(body(1L, "앱 로그 스트림", "내용")))
+                .andReturn().getResponse().getHeader("Location");
+        assertThat(location).isNotNull();
+
+        mvc.perform(get(location + "/app-logs/stream").with(userJwt("user2"))
+                        .header("Accept", "text/event-stream"))
+                .andExpect(status().isForbidden())
+                .andExpect(content().string(""));
+
+        mvc.perform(get(location + "/app-logs/stream").with(userJwt("user1")))
+                .andExpect(status().isOk())
+                .andExpect(request().asyncStarted());
+
+        mvc.perform(get(location + "/app-logs/stream").with(adminJwt("admin1")))
+                .andExpect(status().isOk())
+                .andExpect(request().asyncStarted());
+    }
 }

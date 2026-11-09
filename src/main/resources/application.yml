@@ -114,7 +114,7 @@ app:
         output: 10
         cache-write-5m: 2.50
         cache-write-1h: 4
-        cache-read: 0.10
+        cache-read: 0.20
       claude-sonnet-5:
         input: 2
         output: 10

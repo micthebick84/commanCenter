@@ -137,4 +137,11 @@ class UsagePricingTest {
         assertThat(p.prices()).containsKeys("claude-opus-5-5", "claude-opus-5", "claude-sonnet-5-5",
                 "claude-sonnet-5", "claude-haiku-4-5");
     }
+
+    @Test
+    void 본_yml_sonnet_5_5_캐시_읽기_단가는_sonnet_5와_같은_0_20() throws Exception {
+        UsageProperties p = bind(new ClassPathResource("application.yml"));
+        assertThat(p.prices().get("claude-sonnet-5-5").cacheRead()).isEqualByComparingTo("0.20");
+        assertThat(p.prices().get("claude-sonnet-5").cacheRead()).isEqualByComparingTo("0.20");
+    }
 }

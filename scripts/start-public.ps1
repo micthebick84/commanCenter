@@ -220,13 +220,21 @@ if ($env:PG_DIR -and -not (Test-PortListening 5432)) {
     }
 }
 
+# Every gradlew bootRun below (auth, api, worker) runs with --no-daemon, so Gradle never hands the
+# build to an idle daemon that was started somewhere else. A daemon started from a Claude Code tool
+# shell lives in the Claude app's Windows Job object and dies with the app: on 2026-11-07 the API ran
+# on such a daemon and went down with a Claude app update (about 55 h). With --no-daemon Gradle forks
+# a single-use daemon (the build's JVM args differ from the client's) as a child of the client, so the
+# whole chain cmd wrapper -> gradle client -> daemon -> app JVM stays in this script's process tree;
+# that daemon is never offered to other builds and exits with the build.
+
 # ---- 1) netis-auth (:9000) --------------------------------------------------
 if (Test-PortListening 9000) {
     Write-Host "[skip] auth: port 9000 already listening"
 } else {
     if (-not (Test-Path (Join-Path $AuthDir 'gradlew.bat'))) { throw "netis-auth not found at $AuthDir (pass -AuthDir)" }
     Write-Host "[..]   auth starting (:9000)"
-    $authPid = Start-Service-Proc 'auth' $AuthDir "`"$(Join-Path $AuthDir 'gradlew.bat')`" bootRun -q" @{
+    $authPid = Start-Service-Proc 'auth' $AuthDir "`"$(Join-Path $AuthDir 'gradlew.bat')`" bootRun -q --no-daemon" @{
         JAVA_HOME                       = $JavaHome
         AUTH_ISSUER_URI                 = $AuthOrigin
         SERVER_FORWARD_HEADERS_STRATEGY = 'framework'
@@ -244,7 +252,7 @@ if (Test-PortListening 8090) {
     Write-Host "[skip] api: port 8090 already listening"
 } else {
     Write-Host "[..]   api starting (:8090)"
-    $apiPid = Start-Service-Proc 'api' $Root "`"$(Join-Path $Root 'gradlew.bat')`" bootRun -q" @{
+    $apiPid = Start-Service-Proc 'api' $Root "`"$(Join-Path $Root 'gradlew.bat')`" bootRun -q --no-daemon" @{
         JAVA_HOME                                             = $JavaHome
         SPRING_SECURITY_OAUTH2_RESOURCESERVER_JWT_JWK_SET_URI = 'http://localhost:9000/oauth2/jwks'
         SPRING_SECURITY_OAUTH2_RESOURCESERVER_JWT_ISSUER_URI  = $AuthOrigin
@@ -325,7 +333,7 @@ if ($WithWorkers) {
         }
         if ($sp) { $workerEnv['SUPERPOWERS_PLUGIN_PATH'] = $sp }
         else { Write-Host "[warn] superpowers plugin not found - SDD implementation requests fall back to REVIEW (set SUPERPOWERS_PLUGIN_PATH)" }
-        $workerPid = Start-Service-Proc 'worker' $Root "`"$(Join-Path $Root 'gradlew.bat')`" bootRun -q --args=--spring.profiles.active=worker" $workerEnv
+        $workerPid = Start-Service-Proc 'worker' $Root "`"$(Join-Path $Root 'gradlew.bat')`" bootRun -q --no-daemon --args=--spring.profiles.active=worker" $workerEnv
         if (Wait-Log 'worker' $SpringOk $SpringFail 240) { Write-Host "[ok]   worker ready"; Register-Service 'worker' $workerPid $Root }
         else { Write-Host "[FAIL] worker - see .run\worker.log"; $failed += 'worker' }
     }

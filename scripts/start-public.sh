@@ -35,6 +35,7 @@ mkdir -p "$RUN_DIR"
 AUTH_ORIGIN="${AUTH_ORIGIN:-https://auth.micthebick.dev}"
 APP_ORIGIN="${APP_ORIGIN:-https://app.micthebick.dev}"
 GRADLE="./gradlew"
+# bootRun은 모두 --no-daemon — 다른 곳이 띄운 유휴 Gradle 데몬을 재사용하지 않는다(scripts/start-all.sh 주석 참고).
 
 is_alive() { [ -f "$1" ] && kill -0 "$(cat "$1" 2>/dev/null)" 2>/dev/null; }
 
@@ -80,7 +81,7 @@ else
       AUTH_ISSUER_URI="$AUTH_ORIGIN" \
       SERVER_FORWARD_HEADERS_STRATEGY=framework \
       CORS_ALLOWED_ORIGINS="$APP_ORIGIN,http://localhost:9000,http://localhost:3001,http://localhost:3000,http://localhost:8080" \
-      "$GRADLE" bootRun -q > "$RUN_DIR/auth.log" 2>&1 &
+      "$GRADLE" bootRun -q --no-daemon > "$RUN_DIR/auth.log" 2>&1 &
     echo $! > "$RUN_DIR/auth.pid"
   )
   if wait_for_log "$RUN_DIR/auth.log" 'Started .*Application|APPLICATION FAILED|BUILD FAILED' "auth" 90; then
@@ -101,7 +102,7 @@ else
       SPRING_SECURITY_OAUTH2_RESOURCESERVER_JWT_JWK_SET_URI="http://localhost:9000/oauth2/jwks" \
       SPRING_SECURITY_OAUTH2_RESOURCESERVER_JWT_ISSUER_URI="$AUTH_ORIGIN" \
       CORS_ALLOWED_ORIGINS="$APP_ORIGIN,http://localhost:3001,http://localhost:3000" \
-      "$GRADLE" bootRun -q > "$RUN_DIR/api.log" 2>&1 &
+      "$GRADLE" bootRun -q --no-daemon > "$RUN_DIR/api.log" 2>&1 &
     echo $! > "$RUN_DIR/api.pid"
   )
 fi

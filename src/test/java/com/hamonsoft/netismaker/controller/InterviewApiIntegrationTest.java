@@ -3,10 +3,12 @@ package com.hamonsoft.netismaker.controller;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.hamonsoft.netismaker.TestcontainersConfig;
 import com.hamonsoft.netismaker.dto.TaskCreateRequest;
+import com.hamonsoft.netismaker.entity.InterviewMockup;
 import com.hamonsoft.netismaker.entity.InterviewSession;
 import com.hamonsoft.netismaker.entity.InterviewStatus;
 import com.hamonsoft.netismaker.entity.Task;
 import com.hamonsoft.netismaker.entity.TaskStatus;
+import com.hamonsoft.netismaker.repository.InterviewMockupRepository;
 import com.hamonsoft.netismaker.repository.InterviewSessionRepository;
 import com.hamonsoft.netismaker.repository.InterviewTurnRepository;
 import com.hamonsoft.netismaker.repository.TaskRepository;
@@ -44,6 +46,7 @@ class InterviewApiIntegrationTest {
     @Autowired private ObjectMapper json;
     @Autowired private InterviewSessionRepository sessionRepo;
     @Autowired private InterviewTurnRepository turnRepo;
+    @Autowired private InterviewMockupRepository mockupRepo;
     @Autowired private TaskRepository taskRepo;
     @Autowired private TaskService taskService;
     @Value("${app.worker.api-key}") private String apiKey;
@@ -85,6 +88,33 @@ class InterviewApiIntegrationTest {
         mvc.perform(get("/api/interviews/" + sid).with(adminJwt("admin1")))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.status").value("인터뷰대기"));
+    }
+
+    /**
+     * 목업 목록·단건(스펙 2026-11-03 §5)은 세션 조회와 같은 권한이다 — 남의 세션은 403(목업 id가 진짜여도 본문을 못 본다),
+     * 소유자는 단건을 application/json으로 받는다(text/html 금지 — HTML을 앱 출처로 실행하지 않는다).
+     */
+    @Test
+    void GET_mockups_other_user_returns_403_and_owner_gets_json() throws Exception {
+        long sid = startSession("user1", "제목");
+        long mid = mockupRepo.save(InterviewMockup.create(sid, 1, "list-a", 1, "목록 A안", null,
+                "<!doctype html><html><body>목록</body></html>")).getId();
+
+        mvc.perform(get("/api/interviews/" + sid + "/mockups").with(userJwt("user2"))).andExpect(status().isForbidden());
+        mvc.perform(get("/api/interviews/" + sid + "/mockups/" + mid).with(userJwt("user2")))
+                .andExpect(status().isForbidden());
+
+        mvc.perform(get("/api/interviews/" + sid + "/mockups").with(userJwt("user1")))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$[0].id").value(mid))
+                .andExpect(jsonPath("$[0].html").doesNotExist());
+        mvc.perform(get("/api/interviews/" + sid + "/mockups/" + mid).with(userJwt("user1")))
+                .andExpect(status().isOk())
+                .andExpect(header().string(HttpHeaders.CONTENT_TYPE, containsString("application/json")))
+                .andExpect(jsonPath("$.html").value(containsString("<body>목록</body>")))
+                .andExpect(jsonPath("$.taskId").isNumber());
+        mvc.perform(get("/api/interviews/" + sid + "/mockups/" + mid).with(adminJwt("admin1")))
+                .andExpect(status().isOk());
     }
 
     @Test

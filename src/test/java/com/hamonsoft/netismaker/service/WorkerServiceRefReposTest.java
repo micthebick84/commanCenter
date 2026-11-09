@@ -72,17 +72,17 @@ class WorkerServiceRefReposTest {
     void a_worker_without_ref_support_claims_through_the_filtered_queue() {
         service.claimNextTask("w1", false);
 
-        verify(taskRepo).findClaimableAmongForUpdateSkipLocked(TaskRepository.CLAIMABLE_STATUSES, false, false);
+        verify(taskRepo).findClaimableAmongForUpdateSkipLocked(TaskRepository.CLAIMABLE_STATUSES, false, false, false);
         verify(taskRepo, never()).findClaimableForUpdateSkipLocked(any());
     }
 
     @Test
     void a_fully_capable_worker_and_the_one_arg_call_use_the_full_queue() {
-        service.claimNextTask("w1", new WorkerCapabilities(true, true), null);
+        service.claimNextTask("w1", WorkerCapabilities.ALL, null);
         service.claimNextTask("w1");
 
         verify(taskRepo, times(2)).findClaimableForUpdateSkipLocked(any(Pageable.class));
-        verify(taskRepo, never()).findClaimableAmongForUpdateSkipLocked(anyCollection(), anyBoolean(), anyBoolean());
+        verify(taskRepo, never()).findClaimableAmongForUpdateSkipLocked(anyCollection(), anyBoolean(), anyBoolean(), anyBoolean());
     }
 
     @Test
@@ -90,14 +90,14 @@ class WorkerServiceRefReposTest {
         // (id, boolean) 오버로드는 fixRounds를 모르는 워커 — 참조는 받되 수정 회차 구현은 거른다
         service.claimNextTask("w1", true);
 
-        verify(taskRepo).findClaimableAmongForUpdateSkipLocked(TaskRepository.CLAIMABLE_STATUSES, true, false);
+        verify(taskRepo).findClaimableAmongForUpdateSkipLocked(TaskRepository.CLAIMABLE_STATUSES, true, false, false);
         verify(taskRepo, never()).findClaimableForUpdateSkipLocked(any());
     }
 
     @Test
     void the_filtered_queue_claims_what_it_returns() {
         Task t = task(TaskStatus.PENDING);
-        when(taskRepo.findClaimableAmongForUpdateSkipLocked(TaskRepository.CLAIMABLE_STATUSES, false, false))
+        when(taskRepo.findClaimableAmongForUpdateSkipLocked(TaskRepository.CLAIMABLE_STATUSES, false, false, false))
                 .thenReturn(List.of(t));
 
         assertThat(service.claimNextTask("w2", false)).isPresent();

@@ -37,4 +37,11 @@ class InterviewSecuritySurfaceTest {
     void api_interviews_stream_without_token_is_401() throws Exception {
         mvc.perform(get("/api/interviews/1/stream")).andExpect(status().isUnauthorized());
     }
+
+    /** 목업 목록·단건(스펙 2026-11-03 §5)도 /api/** 의 JWT 보호 아래다 — 토큰 없는 요청은 401. */
+    @Test
+    void api_interview_mockups_without_token_is_401() throws Exception {
+        mvc.perform(get("/api/interviews/1/mockups")).andExpect(status().isUnauthorized());
+        mvc.perform(get("/api/interviews/1/mockups/1")).andExpect(status().isUnauthorized());
+    }
 }

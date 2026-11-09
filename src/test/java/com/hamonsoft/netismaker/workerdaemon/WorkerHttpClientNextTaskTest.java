@@ -40,14 +40,16 @@ class WorkerHttpClientNextTaskTest {
         return props;
     }
 
+    /** mockups — 인터뷰 목업을 파일로 두고 프롬프트에 절을 넣는 워커(설계 2026-11-03 §7). 없으면 API가 목업 있는 구현·디자인을 넘기지 않는다. */
     @Test
-    void next_task_tells_the_api_it_supports_ref_repos_fix_rounds_and_db_write() throws Exception {
+    void next_task_tells_the_api_it_supports_ref_repos_fix_rounds_db_write_and_mockups() throws Exception {
         AtomicReference<String> seen = new AtomicReference<>();
         WorkerProperties props = propsFor(seen);
 
         assertThat(new WorkerHttpClient(props).nextTask()).isEmpty();
-        assertThat(seen.get()).isEqualTo("GET /worker/next-task?workerId=w1&supports=refRepos,fixRounds,dbWrite");
-        assertThat(WorkerHttpClient.SUPPORTS).isEqualTo("refRepos,fixRounds,dbWrite");
+        assertThat(seen.get())
+                .isEqualTo("GET /worker/next-task?workerId=w1&supports=refRepos,fixRounds,dbWrite,mockups");
+        assertThat(WorkerHttpClient.SUPPORTS).isEqualTo("refRepos,fixRounds,dbWrite,mockups");
     }
 
     /** WORKER_KINDS를 준 워커(다른 PC)는 받을 종류를 알린다 — 비면 예전 요청 그대로(위 테스트). */
@@ -58,7 +60,8 @@ class WorkerHttpClientNextTaskTest {
 
         assertThat(new WorkerHttpClient(props, " design, implementation ").nextTask()).isEmpty();
         assertThat(seen.get())
-                .isEqualTo("GET /worker/next-task?workerId=w1&supports=refRepos,fixRounds,dbWrite&kinds=IMPLEMENTATION,DESIGN");
+                .isEqualTo("GET /worker/next-task?workerId=w1&supports=refRepos,fixRounds,dbWrite,mockups"
+                        + "&kinds=IMPLEMENTATION,DESIGN");
     }
 
     @Test

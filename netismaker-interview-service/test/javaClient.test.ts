@@ -274,3 +274,55 @@ describe('JavaApiClient 턴 결과 보고 재시도 (question·plan·fail)', () 
     await expect(new JavaApiClient(cfg, notFound, fast()).fail(42, 'boom')).rejects.toMatchObject({ status: 404 });
   });
 });
+
+describe('JavaApiClient.postMockup', () => {
+  const body = { name: 'a-plan', title: 'A안', html: '<!doctype html>' };
+  const json = (status: number, b: unknown) => new Response(JSON.stringify(b), { status });
+
+  it('postMockup URL·헤더·바디', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(json(201, { id: 1, n: 1, version: 1 }));
+    await new JavaApiClient(cfg, fetchMock).postMockup(42, body);
+    expect(fetchMock).toHaveBeenCalledWith(
+      'http://api:8090/worker/interviews/42/mockups?workerId=iw-1',
+      expect.objectContaining({
+        method: 'POST',
+        headers: expect.objectContaining({ 'X-Worker-API-Key': 'KEY' }),
+        body: JSON.stringify(body),
+      }),
+    );
+  });
+
+  it('2xx면 ok와 id·n·version', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(json(201, { id: 7, n: 3, version: 2 }));
+    expect(await new JavaApiClient(cfg, fetchMock).postMockup(42, body)).toEqual({
+      ok: true,
+      mockup: { id: 7, n: 3, version: 2 },
+    });
+  });
+
+  it('400이면 서버 message를 그대로', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(json(400, { error: 'Bad Request', message: '목업이 200KB를 넘습니다: 201KB' }));
+    expect(await new JavaApiClient(cfg, fetchMock).postMockup(42, body)).toEqual({
+      ok: false,
+      status: 400,
+      message: '목업이 200KB를 넘습니다: 201KB',
+    });
+  });
+
+  it('JSON이 아닌 오류 바디는 HTTP 상태로', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response('<html>', { status: 502 }));
+    expect(await new JavaApiClient(cfg, fetchMock).postMockup(42, body)).toEqual({ ok: false, status: 502, message: 'HTTP 502' });
+  });
+
+  it('message 없는 Spring 기본 오류 바디도 HTTP 상태로', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(json(500, { status: 500, error: 'Internal Server Error' }));
+    expect(await new JavaApiClient(cfg, fetchMock).postMockup(42, body)).toEqual({ ok: false, status: 500, message: 'HTTP 500' });
+  });
+
+  it('네트워크 오류도 던지지 않고 한 번만 시도', async () => {
+    const fetchMock = vi.fn().mockRejectedValue(new TypeError('fetch failed'));
+    const r = await new JavaApiClient(cfg, fetchMock).postMockup(42, body);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(r).toEqual({ ok: false, status: null, message: '네트워크 오류' });
+  });
+});

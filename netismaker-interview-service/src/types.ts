@@ -215,6 +215,21 @@ export interface WorkerActivityRequest {
   events: ActivityEvent[];
 }
 
+/** Body for POST /worker/interviews/{id}/mockups — 인터뷰 목업 게시 (스펙 2026-11-03 인터뷰 목업 §4). */
+export interface WorkerMockupRequest {
+  name: string;
+  title: string;
+  description?: string | null;
+  html: string;
+}
+
+/** POST /worker/interviews/{id}/mockups 2xx 응답. n = 세션 안 목업 번호. */
+export interface WorkerMockupResponse {
+  id: number;
+  n: number;
+  version: number;
+}
+
 /** Body for POST /worker/interviews/{id}/question */
 export interface WorkerQuestionRequest {
   content: string;

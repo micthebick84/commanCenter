@@ -7,7 +7,7 @@ import {
   interviewRefSection,
   refSection,
 } from '../src/runner/interviewRunner.js';
-import { SIMPLE_RESUME_PREFIX } from '../src/runner/interviewMode.js';
+import { MOCKUP_GUIDE, MOCKUP_RESTART_NOTE, SIMPLE_RESUME_PREFIX, processLine } from '../src/runner/interviewMode.js';
 import { taskTypeGuide } from '../src/runner/kickoffByType.js';
 import { REF_PREPARE_FALLBACK_REASON, type RefPrepared } from '../src/runner/repoPrepare.js';
 import type { InterviewClaimResponse, RefRepoClaim } from '../src/types.js';
@@ -31,6 +31,8 @@ function makeClient() {
     fail: vi.fn().mockResolvedValue(undefined),
     postActivity: vi.fn().mockResolvedValue(undefined),
     postRateLimit: vi.fn().mockResolvedValue(undefined),
+    // 켬 인터뷰 턴은 목업 도구를 붙인다(스펙 2026-11-03 인터뷰 목업 §4) — 가짜 SDK 스트림은 도구를 부르지 않으므로 기본값은 쓰이지 않는다.
+    postMockup: vi.fn(),
   };
 }
 // ensureRepo / harvestPlanFiles are injected so unit tests never touch git.
@@ -513,6 +515,23 @@ describe('InterviewRunner kind=QUESTION (스펙 §6 — plan 경로 미진입, Q
       cacheReadTokens: 8000,
     }));
     expect(client.postPlan).not.toHaveBeenCalled();
+  });
+
+  it('QUESTION은 목업 서버를 만들지 않는다', async () => {
+    // superpowers 값과 무관 — 새 질문·추가 질문 모두
+    for (const claim of [questionClaim, { ...questionClaim, claudeSessionId: 'sess-q', lastAnswer: '추가 질문' }, { ...questionClaim, superpowersEnabled: true }]) {
+      const client = makeClient();
+      const { fakeQuery, captured } = capturing(() => questionStream());
+      const createMockupMcp = vi.fn();
+      const runner = new InterviewRunner(client as never, fakeQuery as never, { ...deps, createMockupMcp } as never);
+      await runner.run(claim);
+
+      expect(client.fail).not.toHaveBeenCalled();
+      expect(createMockupMcp).not.toHaveBeenCalled();
+      expect(captured.options.allowedTools).toEqual([]);
+      expect(captured.options.mcpServers ?? {}).not.toHaveProperty('mockup');
+      expect(captured.prompt).not.toContain('show_mockup');
+    }
   });
 
   it('resume: 후속 질문(lastAnswer)을 그대로 주입하고 options.resume을 쓴다', async () => {
@@ -1209,10 +1228,10 @@ describe('InterviewRunner kind=QUESTION (스펙 §6 — plan 경로 미진입, Q
       const noDb = () => dbOf([]);
       const withDb = () => dbOf([{ serverName: 'db-7', label: '운영 DB (MySQL)' }]);
       /**
-       * freshClaim의 kickoff 프롬프트 — promptFor를 고치기 전(a5a36d1) 코드의 출력을 그대로 옮겨 고정했다.
-       * 참조 없는 작업 인터뷰의 kickoff는 이 바이트를 지켜야 한다(스펙 §1.2).
+       * freshClaim의 kickoff 프롬프트에서 목업 지시를 뺀 부분 — promptFor를 고치기 전(a5a36d1) 코드의 출력을 그대로 옮겨 고정했다.
+       * 끔 kickoff 기대값은 여기서 만든다(목업 지시는 켬 kickoff에만 붙는다 — 스펙 2026-11-03 인터뷰 목업 §4).
        */
-      const KICKOFF_GOLDEN =
+      const KICKOFF_BASE =
         'I want to add a feature to the repo at acme/widgets (branch main).\n' +
         'Title: Add CSV export\nRequest: Users want to export the dashboard table as CSV.\n\n' +
         'IMPORTANT — this is a PLANNING-ONLY interview. Your only deliverable is a written implementation PLAN ' +
@@ -1223,6 +1242,12 @@ describe('InterviewRunner kind=QUESTION (스펙 §6 — plan 경로 미진입, Q
         '그 아래 각 작업을 `### 작업 N: <제목>` 형식으로. 영문 `# <Feature> Implementation Plan` / `### Task N:` 도 허용됩니다. ' +
         '이 정확한 구조라야 시스템이 완료를 인식하며, 없으면 인터뷰가 끝나지 않습니다.\n\n' +
         'Use the brainstorming skill: read the project context, then ask me one clarifying question at a time.';
+      /**
+       * freshClaim의 켬 kickoff 프롬프트 — 목업 지시가 끝에 붙는다(설계 §10이 이 PR에서 갱신하기로 한 골든).
+       * 참조 없는 작업 인터뷰의 켬 kickoff는 이 바이트를 지켜야 한다(스펙 2026-10-24 §1.2). 목업 지시 문구 자체의 바이트는
+       * interviewMode.test.ts의 리터럴이 지킨다.
+       */
+      const KICKOFF_GOLDEN = KICKOFF_BASE + MOCKUP_GUIDE;
 
       /** 한 claim의 첫 프롬프트(kickoff 또는 resume 입력). 작업 타입 시험이 쓴다 — 참조·DB 없음. */
       const kickoffOf = async (claim: InterviewClaimResponse, db = noDb()): Promise<string> => {
@@ -1268,11 +1293,11 @@ describe('InterviewRunner kind=QUESTION (스펙 §6 — plan 경로 미진입, Q
         attachments: [SLIDE_ATT],
       };
       /**
-       * FULL_CLAIM + withDb() + iAvailable()의 kickoff 프롬프트 — superpowers 끔 기능을 고치기 전(c920df0 위 60d11d4) 코드의 출력을
-       * 그대로 옮겨 고정했다. 참조 절 → DB 절 → kickoff(첨부 절 → 타입 지시 → 쓰기 안내 → PLANNING-ONLY → 정규 형식 → brainstorming 줄).
-       * 켬(칸 없음·null·true) 세션의 kickoff는 이 바이트를 지켜야 한다(스펙 2026-11-03 §5·반목표 §9).
+       * FULL_CLAIM + withDb() + iAvailable()의 kickoff 프롬프트에서 목업 지시를 뺀 부분 — superpowers 끔 기능을 고치기 전(c920df0 위 60d11d4)
+       * 코드의 출력을 그대로 옮겨 고정했다. 참조 절 → DB 절 → kickoff(첨부 절 → 타입 지시 → 쓰기 안내 → PLANNING-ONLY → 정규 형식 → brainstorming 줄).
+       * 끔 kickoff 기대값은 여기서 만든다.
        */
-      const KICKOFF_FULL_GOLDEN =
+      const KICKOFF_FULL_BASE =
         '참조 repo (읽기 전용 — 비교·참고용, 수정 금지):\n' +
         '- 옛앱 · release/6.5@aaaaaaa : /r/_refs/42/12\n' +
         '규칙:\n' +
@@ -1312,6 +1337,8 @@ describe('InterviewRunner kind=QUESTION (스펙 §6 — plan 경로 미진입, Q
         '그 아래 각 작업을 `### 작업 N: <제목>` 형식으로. 영문 `# <Feature> Implementation Plan` / `### Task N:` 도 허용됩니다. ' +
         '이 정확한 구조라야 시스템이 완료를 인식하며, 없으면 인터뷰가 끝나지 않습니다.\n\n' +
         'Use the brainstorming skill: read the project context, then ask me one clarifying question at a time.';
+      /** FULL_CLAIM + withDb() + iAvailable()의 켬 kickoff — 끝에 목업 지시(스펙 2026-11-03 인터뷰 목업 §4·§10). 켬(칸 없음·null·true) 세션은 이 바이트를 지킨다. */
+      const KICKOFF_FULL_GOLDEN = KICKOFF_FULL_BASE + MOCKUP_GUIDE;
 
       it('켬 가드: 첨부(슬라이드)·DB 작업·쓰기 연결·DB 절·참조가 다 붙은 kickoff는 골든', async () => {
         for (const v of [undefined, null, true]) {
@@ -1469,9 +1496,9 @@ describe('InterviewRunner kind=QUESTION (스펙 §6 — plan 경로 미진입, Q
         ]) {
           expect(p).toContain(s);
         }
-        // 골든에서 진행 방식 두 곳((via …) 괄호와 마지막 brainstorming 줄)만 바뀐 것과 바이트까지 같다
+        // 목업 지시 없는 골든에서 진행 방식 두 곳((via …) 괄호와 마지막 brainstorming 줄)만 바뀐 것과 바이트까지 같다
         expect(p).toBe(
-          KICKOFF_GOLDEN.replace(' (via brainstorming → writing-plans)', '').replace(
+          KICKOFF_BASE.replace(' (via brainstorming → writing-plans)', '').replace(
             'Use the brainstorming skill: read the project context, then ask me one clarifying question at a time.',
             SIMPLE_PROCESS_LITERAL,
           ),
@@ -1493,9 +1520,9 @@ describe('InterviewRunner kind=QUESTION (스펙 §6 — plan 경로 미진입, Q
         expect(p).not.toContain('부터 질문하세요');
         expect(p).not.toContain('brainstorming');
         expect(p.startsWith(interviewRefSection([iAvailable()]) + dbSection(withDb()))).toBe(true);
-        // 켬 풀 골든에서 진행 방식 문구 네 곳(첨부 안내의 brainstorming·타입 지시의 질문 순서·(via …) 괄호·마지막 줄)만 다르다
+        // 목업 지시 없는 켬 풀 골든에서 진행 방식 문구 네 곳(첨부 안내의 brainstorming·타입 지시의 질문 순서·(via …) 괄호·마지막 줄)만 다르다
         expect(p).toBe(
-          KICKOFF_FULL_GOLDEN.replace('brainstorming 시작 전에 이 파일들', '계획을 쓰기 전에 이 파일들')
+          KICKOFF_FULL_BASE.replace('brainstorming 시작 전에 이 파일들', '계획을 쓰기 전에 이 파일들')
             .replace(
               '어떤 테이블·데이터를 어떻게 바꿀지부터 질문하세요.',
               '어떤 테이블·데이터를 어떻게 바꿀지는 먼저 자료·코드·DB로 확인하고, 그래도 알 수 없는 것만 한 번의 질문 묶음에 넣으세요.',
@@ -1524,6 +1551,80 @@ describe('InterviewRunner kind=QUESTION (스펙 §6 — plan 경로 미진입, Q
         for (const v of [undefined, null, true]) {
           expect(await kickoffOf({ ...resumeClaim, superpowersEnabled: v } as any)).toBe(resumeClaim.lastAnswer);
         }
+      });
+
+      // ── 인터뷰 목업 — 켬 kickoff 지시·재기동 안내·목업 서버 (스펙 2026-11-03 인터뷰 목업 §4·§5) ─────────────
+      /** 테스트용 목업 MCP — 실제 SDK 서버 대신 같은 모양의 객체(인스턴스 동일성으로 relay마다 같은 서버인지 본다). */
+      const fakeMockup = () => ({ servers: { mockup: { type: 'sdk', name: 'mockup', instance: {} } }, tools: [] });
+      /** InterviewService.releaseForRestart가 남기는 system 노트 — 재기동으로 같은 답을 다시 돌리는 claim의 마지막 턴이다. */
+      const RESTART_TURN = {
+        seq: 3,
+        role: 'system',
+        kind: 'note',
+        content: '인터뷰 서비스가 다시 시작돼 이 단계를 다시 진행합니다.',
+        replyToSeq: null,
+      };
+      const restartedResume: InterviewClaimResponse = { ...resumeClaim, turns: [...resumeClaim.turns, RESTART_TURN] };
+
+      it('켬 kickoff 끝에 목업 지시', async () => {
+        for (const v of [undefined, null, true]) {
+          const p = await kickoffOf({ ...freshClaim, superpowersEnabled: v } as any);
+          expect(p.endsWith(processLine(true) + MOCKUP_GUIDE)).toBe(true);
+          expect(p.split('화면 목업:').length).toBe(2);
+        }
+        // 참조·DB 절·첨부·타입 지시가 다 붙어도 끝은 같다
+        const full = await promptWith(FULL_CLAIM, { db: withDb(), prepared: [iAvailable()] });
+        expect(full.endsWith(processLine(true) + MOCKUP_GUIDE)).toBe(true);
+      });
+
+      it('켬 resume·끔 kickoff·끔 resume에는 없다', async () => {
+        // 켬 resume = 답변 그대로(마지막 턴이 답변이면 재기동 안내도 없다)
+        expect(await kickoffOf(resumeClaim)).toBe(resumeClaim.lastAnswer);
+        // 끔 kickoff
+        const offKickoff = await kickoffOf({ ...freshClaim, superpowersEnabled: false });
+        expect(offKickoff).not.toContain('show_mockup');
+        expect(offKickoff).not.toContain('화면 목업');
+        // 끔 resume(재요청 질의까지)
+        const { fakeQuery, prompts } = capturingEach(() => questionStream(), () => questionStream());
+        await runnerWith(makeClient(), fakeQuery, vi.fn()).run({ ...resumeClaim, superpowersEnabled: false });
+        expect(prompts.join('')).not.toContain('show_mockup');
+      });
+
+      it('켬 resume이 재기동 노트 뒤면 답변 앞에 버림 안내', async () => {
+        for (const v of [undefined, null, true]) {
+          expect(await kickoffOf({ ...restartedResume, superpowersEnabled: v } as any)).toBe(MOCKUP_RESTART_NOTE + resumeClaim.lastAnswer);
+        }
+        // 참조 절(매 턴 접두) 뒤, 답변 바로 앞
+        const withRefs = await promptWith({ ...interviewResume, turns: restartedResume.turns }, { prepared: [iAvailable()] });
+        expect(withRefs).toBe(interviewRefSection([iAvailable()]) + MOCKUP_RESTART_NOTE + interviewResume.lastAnswer);
+        // 끔 resume은 재기동 노트 뒤여도 지금과 같다(목업 서버가 없으므로 버린 목업도 없다)
+        const { fakeQuery, prompts } = capturingEach(() => questionStream(), () => questionStream());
+        await runnerWith(makeClient(), fakeQuery, vi.fn()).run({ ...restartedResume, superpowersEnabled: false });
+        expect(prompts[0]).toBe(SIMPLE_RESUME_PREFIX + resumeClaim.lastAnswer);
+        expect(prompts.join('')).not.toContain('목업');
+      });
+
+      it('도구의 post는 이 세션 id로 postMockup', async () => {
+        const client = makeClient();
+        const stored = { ok: true, mockup: { id: 9, n: 3, version: 1 } };
+        client.postMockup.mockResolvedValue(stored);
+        const createMockupMcp = vi.fn().mockReturnValue(fakeMockup());
+        const { fakeQuery } = capturing(() => questionStream());
+        await runnerWith(client, fakeQuery, vi.fn(), { createDbMcp: vi.fn().mockReturnValue(noDb()), createMockupMcp }).run(freshClaim);
+
+        expect(createMockupMcp).toHaveBeenCalledTimes(1);
+        expect(client.postMockup).not.toHaveBeenCalled(); // 도구가 불리기 전에는 올리지 않는다
+        const post = createMockupMcp.mock.calls[0]![0] as (body: unknown) => Promise<unknown>;
+        const body = { name: 'list-a', title: 'A안', html: '<!doctype html><p>a</p>' };
+        await expect(post(body)).resolves.toBe(stored);
+        expect(client.postMockup).toHaveBeenCalledWith(42, body);
+      });
+
+      it('켬: 주입이 없으면 기본 팩토리의 SDK 목업 서버가 붙는다', async () => {
+        const { fakeQuery, captured } = capturing(() => questionStream());
+        await runnerWith(makeClient(), fakeQuery, vi.fn(), { createDbMcp: vi.fn().mockReturnValue(noDb()) }).run(freshClaim);
+        expect((captured.options.mcpServers as Record<string, unknown>).mockup).toMatchObject({ type: 'sdk', name: 'mockup' });
+        expect(captured.options.allowedTools as string[]).toContain('mcp__mockup');
       });
 
       // ── 간단 인터뷰(superpowers 끔) — 턴 흐름: 옵션·재요청·계획 보고 (스펙 2026-11-03 §5) ──────────────
@@ -1579,6 +1680,45 @@ describe('InterviewRunner kind=QUESTION (스펙 §6 — plan 경로 미진입, Q
             expect(o.disallowedTools).toEqual(['AskUserQuestion']);
           }
           expect(client.postPlan).toHaveBeenCalledTimes(1);
+        });
+
+        it('켬: 본 질의·handoff·near-miss 세 relay가 같은 목업 서버', async () => {
+          // kickoff(fresh)와 답변 턴(resume) 모두 — 서버는 턴마다 한 번 만들고 그 턴의 모든 relay가 같은 인스턴스를 쓴다
+          for (const claim of [freshClaim, resumeClaim]) {
+            const { fakeQuery, options } = capturingEach(said(HANDOFF_TEXT), said(DRAFT_TEXT), said(PLAN_TEXT));
+            const mockup = fakeMockup();
+            const createMockupMcp = vi.fn().mockReturnValue(mockup);
+            const spliceRead = vi.fn().mockReturnValue('# Writing Plans\n\nbreak into tasks');
+            const client = await runOne(claim, fakeQuery, { spliceRead, createMockupMcp });
+
+            expect(createMockupMcp).toHaveBeenCalledTimes(1);
+            expect(options).toHaveLength(3);
+            for (const o of options) {
+              expect((o.mcpServers as Record<string, unknown>).mockup).toBe(mockup.servers.mockup);
+              expect(o.allowedTools as string[]).toContain('mcp__mockup');
+            }
+            expect(client.postPlan).toHaveBeenCalledTimes(1);
+          }
+        });
+
+        it('끔은 목업 서버를 만들지 않는다', async () => {
+          // resume(질문으로 끝남 → 재요청)과 kickoff(초안 → near-miss 재요청) — 두 relay 모두 목업 서버·사전 승인이 없다
+          const cases: Array<[InterviewClaimResponse, string]> = [
+            [{ ...resumeClaim, ...OFF }, QUESTION_TEXT],
+            [{ ...freshClaim, ...OFF }, DRAFT_TEXT],
+          ];
+          for (const [claim, first] of cases) {
+            const { fakeQuery, options } = capturingEach(said(first), said(PLAN_TEXT));
+            const createMockupMcp = vi.fn().mockReturnValue(fakeMockup());
+            await runOne(claim, fakeQuery, { createMockupMcp });
+
+            expect(createMockupMcp).not.toHaveBeenCalled();
+            expect(options).toHaveLength(2);
+            for (const o of options) {
+              expect(o.mcpServers ?? {}).not.toHaveProperty('mockup');
+              expect(o.allowedTools as string[]).not.toContain('mcp__mockup');
+            }
+          }
         });
 
         it('끔: kickoff·재요청 relay 모두 plugins [] 이고 Skill이 막혀 있다', async () => {

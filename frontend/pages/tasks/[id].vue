@@ -15,6 +15,7 @@ import DeployEnvDialog from '~/components/tasks/DeployEnvDialog.vue'
 import ImplementationRetryDialog from '~/components/tasks/ImplementationRetryDialog.vue'
 import FixRequestDialog from '~/components/tasks/FixRequestDialog.vue'
 import FixRequestHistory from '~/components/tasks/FixRequestHistory.vue'
+import TaskInterviewMockups from '~/components/tasks/TaskInterviewMockups.vue'
 import TaskDbChanges from '~/components/tasks/TaskDbChanges.vue'
 import { stageSteps, nextAction, ageOf, isDbWorkPrCreated, DB_WORK_CLOSE_REQUEST_CONFIRM, type NextActionKind } from '~/composables/taskStages'
 import { renderMarkdown } from '~/composables/useMarkdown'
@@ -134,6 +135,8 @@ interface TaskResponse {
   mcpsExtra: TaskMcpSpec[]
   envVars: EnvVar[]
   interviewSessionId: number | null
+  /** 확정 때 구현에 넘긴 인터뷰 목업 id (스펙 2026-11-03 인터뷰 목업) — 없으면 키 없음. */
+  implementationMockupIds?: number[]
   createdAt: string
   updatedAt: string
   model: string
@@ -924,6 +927,12 @@ function onAction(kind: NextActionKind) {
           </template>
         </TaskDetailMobile>
         <FixRequestHistory v-if="task.fix" class="q-mt-md" :task-id="String(task.id)" :refresh-key="fixHistoryKey" />
+        <TaskInterviewMockups
+          v-if="task.implementationMockupIds?.length && task.interviewSessionId"
+          class="q-mt-md"
+          :session-id="task.interviewSessionId"
+          :ids="task.implementationMockupIds"
+        />
         <!-- DB 변경 (스펙 2026-11-03 §6.5) — 수정 요청 기록 옆. 기록이 없으면 카드 자체가 없다 -->
         <TaskDbChanges class="q-mt-md" :task-id="String(task.id)" :is-admin="auth.isAdmin" :refresh-key="dbChangesKey" @changed="refresh" />
         <!-- 좁은 화면: 인라인 패널은 하단 액션 바와 겹쳐 입력이 답답하다 → 카드에는 열기 버튼만, 대화는 전체화면 시트(스펙 §4.2) -->
@@ -1223,6 +1232,13 @@ function onAction(kind: NextActionKind) {
 
       <!-- 지난 인터뷰 이력 — 인터뷰 phase 여부와 무관하게 항상 마운트 (카드 스스로 숨김 판단) -->
       <InterviewHistoryCard :task-id="task.id" :task-status="task.status" />
+
+      <!-- 구현에 넘긴 인터뷰 목업 — 링크만(스펙 2026-11-03 인터뷰 목업 §6) -->
+      <TaskInterviewMockups
+        v-if="task.implementationMockupIds?.length && task.interviewSessionId"
+        :session-id="task.interviewSessionId"
+        :ids="task.implementationMockupIds"
+      />
 
       <!-- 구현 결과 카드 (PR 생성 또는 구현 실패 시 노출) -->
       <q-card

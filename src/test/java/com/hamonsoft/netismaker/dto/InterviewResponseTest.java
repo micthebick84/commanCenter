@@ -179,9 +179,10 @@ class InterviewResponseTest {
     void direct_construction_normalizes_null_ref_repos_to_an_empty_list() {
         // 컴팩트 생성자가 "항상 non-null"을 지킨다 — of()를 거치지 않는 호출처도 null을 못 내보낸다
         InterviewResponse r = new InterviewResponse(1L, "o/r", "main", "t", "d", "큐", "QUEUED", null, null, null,
-                "m", "e", List.of(), null, null, null, "QUESTION", null, null, null, null, null, null, null, null, null, null);
+                "m", "e", List.of(), null, null, null, "QUESTION", null, null, null, null, null, null, null, null, null, null, null);
         assertThat(r.refRepos()).isNotNull().isEmpty();
         assertThat(r.mcpCatalogIds()).isEmpty();
+        assertThat(r.mockups()).isNotNull().isEmpty();   // 끝 컴포넌트(mockups)도 같은 규칙
     }
 
     @Test
@@ -204,6 +205,60 @@ class InterviewResponseTest {
 
         assertThat(filled.refRepos()).isEqualTo(r.refRepos()).hasSize(2);
         assertThat(filled.dbConnections()).hasSize(1);
+    }
+
+    // ── 인터뷰 목업 요약 (스펙 2026-11-03 §5) ──────────────────────────────────
+
+    private static InterviewMockupSummary mockup(long id, int n, String name, int version, Integer turnSeq) {
+        return new InterviewMockupSummary(id, n, name, version, "목록 " + name, null, turnSeq,
+                turnSeq == null ? null : "question", java.time.OffsetDateTime.parse("2026-11-04T09:30:00+09:00"));
+    }
+
+    @Test
+    void of는_mockups를_비워_두고_withMockups가_채운다() {
+        InterviewSession s = InterviewSession.create("o/r", "main", "t", "d", "u1", List.of(), "claude-opus-5", "high");
+        InterviewResponse r = InterviewResponse.of(s, List.of(), null);
+        assertThat(r.mockups()).isNotNull().isEmpty();
+
+        InterviewResponse filled = r.withMockups(List.of(mockup(1L, 1, "a", 1, 3), mockup(2L, 2, "a", 2, null)));
+
+        assertThat(filled.mockups()).extracting(InterviewMockupSummary::id).containsExactly(1L, 2L);
+        assertThat(filled.id()).isEqualTo(r.id());
+        assertThat(filled.title()).isEqualTo(r.title());
+        assertThat(filled.superpowersEnabled()).isEqualTo(r.superpowersEnabled());
+        assertThat(r.mockups()).as("원본은 그대로").isEmpty();
+        assertThat(filled.withMockups(null).mockups()).as("null은 빈 목록").isNotNull().isEmpty();
+    }
+
+    @Test
+    void 사본이_mockups_유지_JSON에_html없음() throws Exception {
+        InterviewSession s = InterviewSession.createQuestion("o/r", "main", "t", "q?", "user1",
+                List.of(), "claude-opus-5", "high");
+        s.setRefRepos(new ArrayList<>(List.of(PINNED)));
+        InterviewResponse r = InterviewResponse.of(s, List.of(), null)
+                .withMockups(List.of(mockup(1L, 1, "a", 1, 3)));
+
+        // withDbConnections가 mockups를 그대로 실어 나른다(순서 무관 — 어느 쪽이 먼저든 같다)
+        InterviewResponse viaChips = r.withDbConnections(List.of(new DbConnectionDto.Chip(7, "운영", "MYSQL")));
+        assertThat(viaChips.mockups()).isEqualTo(r.mockups()).hasSize(1);
+        assertThat(viaChips.dbConnections()).hasSize(1);
+        assertThat(viaChips.refRepos()).isEqualTo(r.refRepos());
+        InterviewResponse chipsFirst = InterviewResponse.of(s, List.of(), null)
+                .withDbConnections(List.of(new DbConnectionDto.Chip(7, "운영", "MYSQL")))
+                .withMockups(List.of(mockup(1L, 1, "a", 1, 3)));
+        assertThat(chipsFirst.mockups()).isEqualTo(r.mockups());
+        assertThat(chipsFirst.dbConnections()).hasSize(1);
+
+        JsonNode root = new ObjectMapper().registerModule(new JavaTimeModule()).valueToTree(viaChips);
+        JsonNode list = root.get("mockups");
+        assertThat(list.isArray()).isTrue();
+        assertThat(list).hasSize(1);
+        List<String> names = new ArrayList<>();
+        list.get(0).fieldNames().forEachRemaining(names::add);
+        // 목록 한 줄에는 html이 없다(응답 크기·로그) — 본문은 단건 조회로만 나간다
+        assertThat(names).containsExactlyInAnyOrder(
+                "id", "n", "name", "version", "title", "description", "turnSeq", "turnKind", "createdAt");
+        assertThat(root.toString()).doesNotContain("\"html\"");
     }
 
     @Test

@@ -15,6 +15,8 @@ const props = defineProps<{
   attachments?: TurnAttachment[]
 }>()
 const emit = defineEmits<{ (e: 'download', id: number): void }>()
+// footer 슬롯(인터뷰 목업 카드 등)이 있을 때만 assistant 말풍선과 함께 래퍼로 감싼다. 없으면 마크업은 기존 그대로다.
+// 슬롯은 반응형이 아니라 computed에 캐시하면 나중에 생긴 슬롯을 놓친다 → 템플릿에서 렌더마다 $slots.footer를 본다.
 
 const userAttachments = computed(() =>
   props.role === 'user' && props.attachments?.length ? props.attachments : [],
@@ -41,11 +43,13 @@ const html = computed(() =>
   <div v-else class="bubble-row" :class="role">
     <div class="avatar" :class="role">{{ avatarLabel }}</div>
     <!-- renderMarkdown은 html:false라 원시 HTML을 이스케이프한다 — v-html 안전 -->
-    <div
-      v-if="role === 'assistant'"
-      class="bubble assistant markdown"
-      v-html="html"
-    />
+    <div v-if="role === 'assistant' && $slots.footer" class="bubble-stack-assistant">
+      <!-- eslint-disable-next-line vue/no-v-html -->
+      <div class="bubble assistant markdown" v-html="html" />
+      <slot name="footer" />
+    </div>
+    <!-- eslint-disable-next-line vue/no-v-html -->
+    <div v-else-if="role === 'assistant'" class="bubble assistant markdown" v-html="html" />
     <div v-else class="bubble-stack">
       <div class="bubble" :class="role">{{ content }}</div>
       <!-- 첨부 칩 줄 — 말풍선 아래 오른쪽 정렬. 클래스명은 Quasar 반응형 표시 헬퍼(xs/sm/md/lg/xl)와 겹치지 않게. -->
@@ -134,6 +138,17 @@ const html = computed(() =>
   align-items: flex-end;
 }
 .bubble-stack .bubble {
+  max-width: 100%;
+}
+.bubble-stack-assistant {
+  max-width: 80%;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+}
+.bubble-stack-assistant .bubble {
   max-width: 100%;
 }
 .bubble-attachments {

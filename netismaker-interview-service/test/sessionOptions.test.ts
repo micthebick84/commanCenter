@@ -442,3 +442,49 @@ describe('buildOptions — superpowers 끔 (스펙 2026-11-03 간단 인터뷰 �
     }
   });
 });
+
+describe('buildOptions — 목업 MCP (스펙 2026-11-03 인터뷰 목업 §4)', () => {
+  // canUseTool은 호출마다 새 함수이고 env는 process.env 사본이라 값 비교에서 뺀다.
+  const comparable = (o: Record<string, unknown>) => {
+    const { canUseTool: _gate, env: _env, ...rest } = o;
+    return rest;
+  };
+  const mockupServer = { type: 'sdk', name: 'mockup', instance: {} };
+
+  it('목업 서버는 마지막에 병합돼 같은 이름을 이기고 사전 승인된다', () => {
+    const o = buildOptions({
+      ...base,
+      claudeSessionId: null,
+      mcpsBase: { mockup: { command: 'x' }, obsidian: { command: 'o' } },
+      mcpsExtra: [{ name: 'mockup', url: 'http://extra', transport: 'http' }],
+      dbMcpServers: { 'db-7': { type: 'sdk', name: 'db-7', instance: {} } },
+      dbDialects: { 'db-7': 'mysql' },
+      mockupMcpServers: { mockup: mockupServer },
+    });
+    const servers = o.mcpServers as Record<string, unknown>;
+    expect(servers.mockup).toBe(mockupServer); // 인스턴스를 복사하지 않고 그대로, 베이스·추가 서버의 같은 이름을 이긴다
+    expect(Object.keys(servers)).toEqual(expect.arrayContaining(['obsidian', 'db-7', 'mockup']));
+    const allowed = o.allowedTools as string[];
+    expect(allowed).toContain('mcp__mockup');
+    expect(allowed.filter((t) => t === 'mcp__mockup')).toHaveLength(1);
+    expect(allowed).not.toContain('mcp__db-7'); // DB 서버는 여전히 사전 승인에서 빠진다
+  });
+
+  it('목업 서버가 없으면 지금과 같다', () => {
+    const inputs = [
+      { ...base, claudeSessionId: null },
+      {
+        ...base,
+        claudeSessionId: 'sess-abc',
+        mcpsBase: { obsidian: { command: 'o' } },
+        dbMcpServers: { 'db-7': { type: 'sdk', name: 'db-7', instance: {} } },
+        dbDialects: { 'db-7': 'mysql' as const },
+      },
+    ];
+    for (const input of inputs) {
+      expect(comparable(buildOptions({ ...input, mockupMcpServers: undefined }))).toEqual(comparable(buildOptions(input)));
+      expect(comparable(buildOptions({ ...input, mockupMcpServers: {} }))).toEqual(comparable(buildOptions(input)));
+    }
+    expect(buildOptions({ ...base, claudeSessionId: null, mockupMcpServers: undefined })).not.toHaveProperty('mcpServers');
+  });
+});

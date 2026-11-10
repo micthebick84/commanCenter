@@ -225,23 +225,9 @@ public class DeployPrebuilder {
      * 허용 목록이어야 한다 — 아니면 카탈로그 명령이 잘못된 것이라 배포실패로 바로 알린다.
      */
     static Optional<String> stageDelivery(Path worktree, Consumer<String> sink) throws PrebuildException {
-        Path dir = worktree.resolve(DELIVERY_SOURCE_DIR);
-        if (!Files.isDirectory(dir, LinkOption.NOFOLLOW_LINKS)) return Optional.empty();
-        List<Path> files = new ArrayList<>();
-        try (DirectoryStream<Path> entries = Files.newDirectoryStream(dir)) {
-            for (Path entry : entries) {
-                if (Files.isRegularFile(entry, LinkOption.NOFOLLOW_LINKS)) files.add(entry);
-            }
-        } catch (IOException e) {
-            throw deliveryError("읽기 실패: " + e.getMessage());
-        }
-        if (files.isEmpty()) throw deliveryError("파일 없음");
-        if (files.size() > 1) {
-            List<String> names = files.stream().map(p -> p.getFileName().toString()).sorted().toList();
-            throw deliveryError("여러 개: " + String.join(", ", names.subList(0, Math.min(MAX_LISTED, names.size())))
-                    + (names.size() > MAX_LISTED ? ", …" : ""));
-        }
-        Path source = files.get(0);
+        if (!Files.isDirectory(worktree.resolve(DELIVERY_SOURCE_DIR), LinkOption.NOFOLLOW_LINKS)) return Optional.empty();
+        // 폴더는 있는데 파일이 없으면 오류(singleDeliveryFile은 둘 다 empty라 위에서 따로 가른다)
+        Path source = singleDeliveryFile(worktree).orElseThrow(() -> deliveryError("파일 없음"));
         String name = source.getFileName().toString();
         if (ArtifactNames.extension(name).isEmpty()) {
             throw deliveryError("확장자 밖: " + name + " — " + ArtifactNames.ALLOWED_LABEL);

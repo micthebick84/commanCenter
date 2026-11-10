@@ -68,15 +68,21 @@ claim에는 `closePatch` 스펙(명령, 툴체인, 비교 대상 경로, 파일 
 ## 6. 워커: 패치 만들기
 
 ### 6.1 전·후 커밋
-- "후" = `merge_commit_sha`. "전" = 그 커밋의 첫 번째 부모(`<sha>^1`).
-- `CLOSE_MERGE_METHOD`가 `merge`·`squash`일 때만 성립한다. `rebase`면 병합 **전에** "부분 패치는 rebase 병합을 지원하지 않습니다"로 종료실패(지금 `requireVault()`처럼 되돌릴 수 없는 병합 앞에서 확인). GitLab은 rebase를 merge로 취급하므로 해당 없음.
-- 병합 커밋을 워커 레포 캐시에 fetch 한 뒤, 전·후 각각 detached worktree를 만든다(`{worktree-root}/{repoKey}/patch-{id}-before|after`). 끝나면 성공·실패 모두 지운다.
+- "후" = 병합 결과 커밋(`merge_commit_sha`). "전" = **병합 직전 기준 브랜치 끝**.
+- 워커는 병합 **직전에** 원격 기준 브랜치 끝 sha를 읽어 두고, MERGED 진행 보고에 `baseSha`로 함께 보낸다 → API가 `task.patch_base_sha`에 기록(재시도 claim의 `closePatch.baseSha`로 다시 받는다).
+- 패치 단계는 시작할 때 **검증**한다. 하나라도 어긋나면 빌드 없이 단계 실패(사유 `패치 기준 커밋을 확인할 수 없습니다: …`) — 틀린 범위의 패치가 정상처럼 나가지 않게 한다.
+  1. `merge_commit_sha`가 있다(코드상 null일 수 있다 — GitLab fast-forward 프로젝트, 사람이 미리 병합한 경우 등).
+  2. `baseSha`가 기록돼 있으면 `후^1 == baseSha`(merge·squash 병합에서 성립. 그 사이 기준 브랜치에 다른 push가 끼었으면 어긋난다).
+  3. `baseSha`가 없으면(사람이 미리 병합해 워커가 병합 직전을 못 본 경우) "후"가 **부모 둘인 병합 커밋일 때만** `후^1`을 "전"으로 쓴다. 부모가 하나면 실패.
+- `CLOSE_MERGE_METHOD=rebase`(GitHub)는 지원하지 않는다 — 병합 **전에** "부분 패치는 rebase 병합을 지원하지 않습니다"로 종료실패(지금 `requireVault()`처럼 되돌릴 수 없는 병합 앞에서 확인). 미리 빌드 툴체인이 워커에 설정돼 있는지도 같은 자리에서 확인한다. GitLab은 rebase를 merge로 취급하므로 해당 없음.
+- 레포 캐시는 `--depth=1`이라 "전"·"후" 두 커밋을 따로 fetch 한다(참조 repo의 고정 커밋 받기와 같은 방식). 전·후 각각 detached worktree를 만들고 끝나면 성공·실패 모두 지운다. 폴더 이름은 worktree 정리 잡 규칙(`WorktreeKind`)에 맞춘다.
 
 ### 6.2 빌드
 - 카탈로그 `prebuild_command`·`prebuild_toolchain`으로 `DeployPrebuilder`와 **같은 방식**(툴체인 env, 셸, 스택 비밀 제거, 스트리밍 로그)으로 실행한다. 실행 부분을 공용으로 빼서 쓴다.
 - 비교 대상 파일(§6.3)을 worktree에서 찾는다. 빌드 실패·대상 없음이면 단계 실패.
 - 빌드 한 번의 상한은 미리 빌드와 같은 값(기본 20분). 전·후는 차례로 돈다(동시 실행 안 함 — 로컬 Maven 저장소 경합 회피).
-- 로그는 종료 진행 로그로 남긴다(지금 종료 단계 로그와 같은 통로. 없으면 워커 로그 + 실패 사유).
+- 종료에는 화면으로 가는 로그 통로가 없다. 빌드 출력은 워커 로그에 남기고, 실패하면 출력 끝부분(비밀 가린 뒤)을 실패 사유에 싣는다. 빌드 중 화면에는 종료 단계 목록의 "부분 패치"가 진행 중으로만 보인다.
+- "전" 커밋이 지금 카탈로그 명령으로 빌드되지 않으면(명령이 생기기 전 커밋 등) 단계 실패다. 출구는 "패치 없이 마무리".
 
 ### 6.3 비교 대상
 우선순위:
@@ -86,6 +92,7 @@ claim에는 `closePatch` 스펙(명령, 툴체인, 비교 대상 경로, 파일 
 풀기 규칙:
 - `.war`·`.jar` 하나 → 그 안의 항목이 곧 배포 경로. zip 안 `patch/` 바로 아래에 둔다.
 - `.zip`·`.tar.gz`·`.tgz` 묶음 → 안의 `.war`마다 `patch/<war 이름(확장자 뺌)>/` 아래에 그 war의 항목을 둔다. 묶음 안의 war가 아닌 파일은 `patch/<묶음 안 경로>`로 파일 단위 비교한다.
+- **전·후의 모양이 같아야 한다**: 대상 종류(단일 war/jar인지 묶음인지)와 묶음 안 war 이름 집합이 다르면 비교하지 않고 단계 실패(`패치 전·후 빌드 결과의 구성이 다릅니다`). 전체 추가 + 전체 삭제로 된 수백 MB 패치가 정상처럼 나가는 것을 막는다. 해시 목록(§6.5)에도 이 모양을 함께 적는다.
 - war 안의 **중첩 jar(`WEB-INF/lib/*.jar` 등)는 풀지 않는다.** 같은지 여부만 jar 안 항목 기준으로 판정하고(§6.4), 다르면 jar를 통째로 패치에 넣는다.
 
 ### 6.4 "같다"의 기준(잡음 제거)
@@ -95,7 +102,7 @@ claim에는 `closePatch` 스펙(명령, 툴체인, 비교 대상 경로, 파일 
 - 검증 기준: **같은 커밋을 두 번 빌드해 비교하면 차이 0**이어야 한다. 구현 중 실제 레포(카탈로그 5·12·13 중 하나 이상)로 확인하고, 잡음이 남으면 무시 패턴을 더한다.
 
 ### 6.5 "후" 해시 목록 보관(빌드 한 번 줄이기)
-- 패치 단계가 끝나면 "후"의 (배포 경로 → 해시) 목록을 워커 PC에 보관한다: `{worker 데이터 폴더}/patch-manifests/{repoKey}/{커밋 40자}-{키}.json`. 키 = 명령·툴체인·비교 대상 경로·무시 패턴의 해시.
+- 패치 단계가 끝나면 "후"의 (배포 경로 → 해시) 목록을 워커 PC에 보관한다: `{reposDir의 형제}/close/patch-manifests/{repoKey}/{커밋 40자}-{키}.json`. 키 = 명령·툴체인·비교 대상 경로·무시 패턴의 해시.
 - 다음 패치에서 "전" 커밋의 목록이 있으면 "전" 빌드를 건너뛴다("전"은 해시만 필요하다 — 파일은 "후"에서만 꺼낸다).
 - 레포마다 최근 20개만 남긴다. 목록이 깨졌거나 못 읽으면 그냥 빌드한다.
 
@@ -130,17 +137,17 @@ claim에는 `closePatch` 스펙(명령, 툴체인, 비교 대상 경로, 파일 
 - 내려받기: `POST /api/tasks/{id}/patch/download-link`(등록자·관리자) → 기존 1회용 토큰(60초) 주소. 토큰 저장소는 산출물과 같이 쓰되 어느 파일인지 구분한다.
 - 건너뛰기: `POST /api/tasks/{id}/close/skip-patch`(관리자, 상태 종료실패, `PATCH_BUILT` 미완료일 때) → 모드 `SKIPPED` 후 종료 재큐. 병합 전이면 기존 "종료 취소"도 그대로 쓸 수 있다.
 - 응답: 작업 목록·상세 응답의 `close`에 `patchMode`와 `patch { name, sizeBytes, fileCount, empty, uploadedAt }`.
-- stale 판정: 패치 모드가 REQUIRED인 종료는 판정 시간을 `close-stale-threshold-minutes` + 빌드 상한 × 2로 본다(빌드 중 재큐 방지).
+- stale 판정: 패치 모드가 REQUIRED이고 `PATCH_BUILT` 전인 종료는 `app.task.close-patch-stale-threshold-minutes`(기본 110 = 종료 60 + 빌드 20×2 + 여유 10)로 본다. 빌드 상한은 워커 설정이라 두 yml에 서로를 가리키는 주석을 둔다(배포 판정 70분과 같은 방식).
 
 ## 9. DB (V43)
 
-`com.task`: `close_patch_mode`(VARCHAR 20), `patch_name`(VARCHAR 255), `patch_size`(BIGINT), `patch_sha256`(VARCHAR 64), `patch_file_count`(INT), `patch_empty`(BOOLEAN), `patch_uploaded_at`(TIMESTAMP).
+`com.task`: `close_patch_mode`(VARCHAR 20), `patch_base_sha`(VARCHAR 40), `patch_name`(VARCHAR 255), `patch_size`(BIGINT), `patch_sha256`(VARCHAR 64), `patch_file_count`(INT), `patch_empty`(BOOLEAN), `patch_uploaded_at`(TIMESTAMP).
 `com.repo_catalog`: `patch_enabled`(BOOLEAN NOT NULL DEFAULT false).
 
 ## 10. 화면
 
 - 작업 목록(`pages/tasks/index.vue`): 작업종료 줄에
-  - 패치 파일이 있으면 `부분 패치` 버튼(누르면 바로 내려받기, 기존 산출물 내려받기처럼 2초 재클릭 방지).
+  - 패치 파일이 있으면 `부분 패치` 버튼(누르면 바로 내려받기, 2초 재클릭 방지 — 목록에는 지금 내려받기 코드가 없으므로 상세 화면의 산출물 내려받기 로직을 공용으로 빼서 쓴다. 데스크톱 카드·모바일 카드 둘 다).
   - `patch_empty`면 `변경 없음` 표시(버튼 아님).
   - 모드 null·SKIPPED면 아무것도 없음.
 - 작업 상세(`pages/tasks/[id].vue`): 종료 단계 목록에 "부분 패치" 단계, 같은 버튼, 종료실패 + 패치 단계 미완료일 때 관리자에게 `패치 없이 마무리`.
@@ -163,7 +170,8 @@ claim에는 `closePatch` 스펙(명령, 툴체인, 비교 대상 경로, 파일 
 
 1. 전역 스위치 `CLOSE_PATCH_ENABLED`를 둔다(단계적 반영).
 2. `DB_WORK` 작업은 패치 대상에서 뺀다.
-3. `rebase` 병합이면 병합 전에 종료실패로 막는다.
+3. `rebase` 병합이면 병합 전에 종료실패로 막는다. "전" 커밋은 병합 직전 기준 브랜치 끝을 기록해 검증하고, 확인할 수 없으면 패치를 만들지 않고 실패시킨다(§6.1).
+11. 전·후 빌드 결과의 구성이 다르거나 "전"이 빌드되지 않으면 단계 실패 — "패치 없이 마무리"로만 끝낸다(§6.2·§6.3).
 4. zip 안에서 배포 파일은 `patch/` 아래, 명세·삭제 목록은 맨 위에 둔다.
 5. 파일 이름의 날짜 = 패치 만든 날, 제목 정리 규칙(§7).
 6. 무시 패턴 기본값(`MANIFEST.MF`, `META-INF/maven/**`).

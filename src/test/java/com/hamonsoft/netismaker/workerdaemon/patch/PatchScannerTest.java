@@ -112,6 +112,63 @@ class PatchScannerTest {
     }
 
     @Test
+    void nestedJarThatIsNotAZipIsHashedByRawBytes() throws Exception {
+        PatchTree t1 = scanner().scan(zip(dir.resolve("1.war"), entries("WEB-INF/lib/x.jar", "not a zip 1"), T1));
+        PatchTree t2 = scanner().scan(zip(dir.resolve("2.war"), entries("WEB-INF/lib/x.jar", "not a zip 2"), T1));
+        PatchTree t3 = scanner().scan(zip(dir.resolve("3.war"), entries("WEB-INF/lib/x.jar", "not a zip 1"), T2));
+
+        assertThat(t1.hashes().get("WEB-INF/lib/x.jar")).isNotEqualTo(t2.hashes().get("WEB-INF/lib/x.jar"));
+        assertThat(t1.hashes().get("WEB-INF/lib/x.jar")).isEqualTo(t3.hashes().get("WEB-INF/lib/x.jar"));
+    }
+
+    @Test
+    void nestedJarWithLeadingScriptIsHashedByRawBytes() throws Exception {
+        byte[] zipPart = zipBytes(entries("a/A.class", "AAA"), T1);
+        byte[] other = zipBytes(entries("a/A.class", "AAB"), T1);
+        byte[] exec1 = concat(b("#!/bin/sh\nexec java -jar $0\n"), zipPart);
+        byte[] exec2 = concat(b("#!/bin/sh\nexec java -jar $0\n"), other);
+        PatchTree t1 = scanner().scan(zip(dir.resolve("1.war"), entries("BOOT-INF/lib/x.jar", exec1), T1));
+        PatchTree t2 = scanner().scan(zip(dir.resolve("2.war"), entries("BOOT-INF/lib/x.jar", exec2), T1));
+
+        assertThat(t1.hashes().get("BOOT-INF/lib/x.jar")).isNotEqualTo(t2.hashes().get("BOOT-INF/lib/x.jar"));
+    }
+
+    @Test
+    void jarWithOnlyIgnoredEntriesHashesLikeEmptyListNotRaw() throws Exception {
+        byte[] jar1 = zipBytes(entries("META-INF/MANIFEST.MF", "m1"), T1);
+        byte[] jar2 = zipBytes(entries("META-INF/MANIFEST.MF", "m2"), T1);
+        PatchTree t1 = scanner().scan(zip(dir.resolve("1.war"), entries("WEB-INF/lib/x.jar", jar1), T1));
+        PatchTree t2 = scanner().scan(zip(dir.resolve("2.war"), entries("WEB-INF/lib/x.jar", jar2), T1));
+
+        assertThat(t1).isEqualTo(t2);
+    }
+
+    @Test
+    void emptyValidJarFallsBackToRawBytes() throws Exception {
+        byte[] empty = zipBytes(entries(), T1);
+        PatchTree t1 = scanner().scan(zip(dir.resolve("1.war"), entries("WEB-INF/lib/x.jar", empty), T1));
+        PatchTree t2 = scanner().scan(zip(dir.resolve("2.war"), entries("WEB-INF/lib/x.jar", empty), T2));
+
+        assertThat(t1).isEqualTo(t2);
+        assertThat(t1.hashes().get("WEB-INF/lib/x.jar")).hasSize(64);
+    }
+
+    private static byte[] concat(byte[] a, byte[] b2) {
+        byte[] r = new byte[a.length + b2.length];
+        System.arraycopy(a, 0, r, 0, a.length);
+        System.arraycopy(b2, 0, r, a.length, b2.length);
+        return r;
+    }
+
+    @Test
+    void singleJarTargetThatIsNotAZipFails() throws Exception {
+        // 대상 jar 자체는 ZipFile로 열리므로 zip이 아니면 IOException (스캔 실패로 올라간다).
+        Path bad = Files.write(dir.resolve("bad.jar"), b("not a zip"));
+
+        assertThatThrownBy(() -> scanner().scan(bad)).isInstanceOf(IOException.class);
+    }
+
+    @Test
     void nestedJarIsNotExpandedIntoTree() throws Exception {
         byte[] jar = zipBytes(entries("a/A.class", "AAA"), T1);
         PatchTree t = scanner().scan(zip(dir.resolve("1.war"), entries("WEB-INF/lib/x.jar", jar), T1));

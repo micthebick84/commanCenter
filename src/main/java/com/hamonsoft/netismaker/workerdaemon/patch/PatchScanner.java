@@ -6,6 +6,7 @@ import java.io.InputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
+import java.security.DigestInputStream;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.ArrayList;
@@ -154,13 +155,27 @@ public final class PatchScanner {
 
     private String jarHash(InputStream in) throws IOException {
         TreeMap<String, String> inner = new TreeMap<>();
-        ZipInputStream zin = new ZipInputStream(new NonClosingInputStream(in));
+        // 한 번만 읽을 수 있는 스트림이라 원본 바이트 해시를 같은 패스에서 함께 계산한다.
+        MessageDigest raw = digest();
+        DigestInputStream rawIn = new DigestInputStream(new NonClosingInputStream(in), raw);
+        ZipInputStream zin = new ZipInputStream(rawIn);
         ZipEntry e;
+        int seen = 0;
         while ((e = zin.getNextEntry()) != null) {
+            seen++;
             if (e.isDirectory() || isIgnored(e.getName())) {
                 continue;
             }
             inner.put(e.getName(), sha256(new NonClosingInputStream(zin)));
+        }
+        if (seen == 0) {
+            // zip으로 읽히지 않는 .jar(앞에 스크립트가 붙은 실행 jar, zip이 아닌 파일, 빈 zip): 항목 해시가 없으면
+            // 모든 버전이 같은 해시가 되어 변경이 사라지므로 원본 바이트 SHA-256으로 비교한다.
+            byte[] buf = new byte[BUFFER];
+            while (rawIn.read(buf) != -1) {
+                // 남은 바이트를 모두 해시에 반영한다.
+            }
+            return HexFormat.of().formatHex(raw.digest());
         }
         MessageDigest md = digest();
         for (Map.Entry<String, String> en : inner.entrySet()) {

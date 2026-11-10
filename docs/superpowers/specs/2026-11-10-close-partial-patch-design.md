@@ -1,7 +1,7 @@
 # 종료 부분 패치(변경 파일만, 배포 폴더 구조) 설계
 
 - 날짜: 2026-11-10
-- 상태: 사용자 검토 대기. 사용자가 정한 것은 §3, 작성자 판단은 §13에 모았다.
+- 상태: 구현됨(브랜치 `feature/close-partial-patch`, 계획 `docs/superpowers/plans/2026-11-10-close-partial-patch.md`). 사용자가 정한 것은 §3, 작성자 판단은 §13에 모았다. 구현에서 달라진 것은 §15.
 - 범위: netisMaker API·워커 데몬·프론트, DB(V43). 인터뷰 서비스 변경 없음.
 - 근거: 종료 산출물 `2026-10-14-close-artifact-delivery-design.md`, 납품 파일 `2026-11-04-close-artifact-bundle-design.md`, 미리 빌드 `2026-10-28-deploy-prebuild-design.md`.
 
@@ -183,3 +183,10 @@ claim에는 `closePatch` 스펙(명령, 툴체인, 비교 대상 경로, 파일 
 ## 14. 빌더에게 맡기는 것
 
 클래스·메서드 나누기, 공용화 범위(`DeployPrebuilder` 실행부·`ArtifactStore`·토큰), 압축 풀기 구현(임시 폴더 vs 스트림), 로그 문구, 화면 배치 세부.
+
+## 15. 구현에서 달라진 것
+
+1. zip 파일 이름(`yyyyMMdd_제목.zip`)은 API가 업로드를 받을 때 정하고(`task.patch_name`), 디스크에는 `attachments/task-{id}/patch/patch.zip`으로 둔다.
+2. `.tar.gz`·`.tgz` 납품 묶음은 지원하지 않는다 — 패치 단계 종료실패(`tar.gz 묶음은 부분 패치를 지원하지 않습니다`), 관리자 `패치 없이 마무리`로 넘어간다.
+3. 실제 레포의 "같은 커밋 두 번 빌드 → 차이 0" 확인은 구현 단계에서 하지 않고 켜기 전 운영 단계로 옮겼다(`PatchRealArtifactCheck`, 환경변수 `PATCH_CHECK_A`·`PATCH_CHECK_B`로 운영자가 실행). 차이가 남으면 그 경로를 `CLOSE_PATCH_IGNORE`에 더한다.
+4. zip으로 읽히지 않는 `.jar`는 항목 비교 대신 원본 바이트의 해시로 비교한다.

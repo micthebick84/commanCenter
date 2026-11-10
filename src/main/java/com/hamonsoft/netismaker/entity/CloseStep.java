@@ -8,11 +8,15 @@ import java.util.stream.Collectors;
  * (스펙 2026-10-13 §4, 2026-10-14 §3). 산출물 단계는 close_artifact_mode가 REQUIRED인 작업에만 필요하다.
  */
 public enum CloseStep {
-    MERGED, UNDEPLOYED, ARTIFACT_UPLOADED, NOTE_WRITTEN, BRANCH_DELETED;
+    MERGED, PATCH_BUILT, UNDEPLOYED, ARTIFACT_UPLOADED, NOTE_WRITTEN, BRANCH_DELETED;
 
     /** task.close_artifact_mode 값. null = 해당 없음(기능 꺼짐·레포 꺼짐·이 기능 전 승인). */
     public static final String ARTIFACT_REQUIRED = "REQUIRED";
     public static final String ARTIFACT_SKIPPED = "SKIPPED";
+
+    /** task.close_patch_mode 값. null = 해당 없음(기능 꺼짐·레포 꺼짐·이 기능 전 승인). 부분 패치 스펙 2026-11-10. */
+    public static final String PATCH_REQUIRED = "REQUIRED";
+    public static final String PATCH_SKIPPED = "SKIPPED";
 
     /** null·빈 값은 빈 집합, 모르는 이름은 무시(구버전·수동 편집 방어). */
     public static EnumSet<CloseStep> parse(String csv) {
@@ -34,14 +38,15 @@ public enum CloseStep {
         return set.stream().map(Enum::name).collect(Collectors.joining(","));
     }
 
-    /** 이 작업이 작업종료가 되려면 끝나야 하는 단계. 산출물 단계는 모드가 REQUIRED일 때만. */
-    public static EnumSet<CloseStep> required(String artifactMode) {
+    /** 이 작업이 작업종료가 되려면 끝나야 하는 단계. 산출물·패치 단계는 각 모드가 REQUIRED일 때만. */
+    public static EnumSet<CloseStep> required(String artifactMode, String patchMode) {
         EnumSet<CloseStep> s = EnumSet.allOf(CloseStep.class);
         if (!ARTIFACT_REQUIRED.equals(artifactMode)) s.remove(ARTIFACT_UPLOADED);
+        if (!PATCH_REQUIRED.equals(patchMode)) s.remove(PATCH_BUILT);
         return s;
     }
 
-    public static boolean allDone(String csv, String artifactMode) {
-        return parse(csv).containsAll(required(artifactMode));
+    public static boolean allDone(String csv, String artifactMode, String patchMode) {
+        return parse(csv).containsAll(required(artifactMode, patchMode));
     }
 }

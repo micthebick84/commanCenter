@@ -69,6 +69,7 @@ public class RepoCatalogService {
         if (req.enabled() != null) e.setEnabled(req.enabled());
         applyArtifact(e, req);
         applyPrebuild(e, req);
+        applyPatch(e, req);
         applyNoteFolder(e, req, true);
         applyDbWrite(e, req);
         return repo.save(e);
@@ -98,6 +99,7 @@ public class RepoCatalogService {
         if (req.enabled() != null) e.setEnabled(req.enabled());
         applyArtifact(e, req);
         applyPrebuild(e, req);
+        applyPatch(e, req);
         applyNoteFolder(e, req, false);
         applyDbWrite(e, req);
         e.setUpdatedAt(OffsetDateTime.now());
@@ -264,6 +266,17 @@ public class RepoCatalogService {
         e.setPrebuildCommand(blankToNull(req.prebuildCommand()));
         e.setPrebuildArtifact(blankToNull(req.prebuildArtifact()));
         e.setPrebuildToolchain(blankToNull(req.prebuildToolchain()));
+    }
+
+    /**
+     * 종료 부분 패치 (스펙 2026-11-10). null이면 현재 값을 유지한다. 적용 뒤(applyPrebuild 뒤) 켜져 있는데 미리 빌드 명령이 비어 있으면 400.
+     * 미리 빌드를 꺼도 명령 값은 저장되므로(applyPrebuild) 명령만 있으면 켤 수 있다.
+     */
+    static void applyPatch(RepoCatalogEntry e, RepoCatalogDto.UpsertRequest req) {
+        if (req.patchEnabled() != null) e.setPatchEnabled(req.patchEnabled());
+        if (e.isPatchEnabled() && blankToNull(e.getPrebuildCommand()) == null) {
+            throw badRequest("부분 패치는 미리 빌드 명령이 있어야 켤 수 있습니다");
+        }
     }
 
     /**

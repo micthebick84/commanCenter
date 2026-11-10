@@ -1114,7 +1114,7 @@ public class WorkerService {
         String reason;
         switch (req.status()) {
             case CLOSED -> {
-                if (!CloseStep.allDone(t.getCloseProgress(), t.getCloseArtifactMode())) {
+                if (!CloseStep.allDone(t.getCloseProgress(), t.getCloseArtifactMode(), t.getClosePatchMode())) {
                     throw new TaskException(HttpStatus.BAD_REQUEST,
                             "종료 단계가 모두 끝나지 않았습니다 (끝난 단계: "
                                     + (t.getCloseProgress() == null ? "없음" : t.getCloseProgress()) + ")");

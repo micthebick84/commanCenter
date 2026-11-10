@@ -80,6 +80,7 @@ describe('admin/repo-catalog', () => {
         artifactEnabled: false,
         artifactPath: null,
         prebuildEnabled: false,
+        patchEnabled: false,
         prebuildCommand: null,
         prebuildArtifact: null,
         prebuildToolchain: null,
@@ -215,6 +216,57 @@ describe('admin/repo-catalog', () => {
     expect((document.querySelector('[data-test="form-prebuild-command"]') as HTMLInputElement).value).toBe('mvn -B -o package')
     expect((document.querySelector('[data-test="form-prebuild-artifact"]') as HTMLInputElement).value).toBe('hm-dash/target/*.war')
     expect((document.querySelector('[data-test="form-prebuild-toolchain"]') as HTMLInputElement).value).toBe('jdk8-maven')
+    w.unmount()
+  })
+
+  const patchEl = () => document.querySelector('[data-test="form-patch-enabled"]') as HTMLElement
+
+  it('미리 빌드 명령이 비면 부분 패치 체크가 비활성이고 안내가 보인다', async () => {
+    const w = await mountPage([])
+    await w.find('[data-test="open-create"]').trigger('click')
+    await flushPromises()
+    expect(patchEl().getAttribute('aria-disabled')).toBe('true')
+    expect(document.body.textContent).toContain('미리 빌드 명령이 있어야 켤 수 있습니다')
+    ;(document.querySelector('[data-test="form-prebuild-enabled"]') as HTMLElement).click()
+    await flushPromises()
+    setInput('[data-test="form-prebuild-command"]', 'mvn -B -o package')
+    await flushPromises()
+    expect(patchEl().getAttribute('aria-disabled')).not.toBe('true')
+    expect(document.body.textContent).not.toContain('미리 빌드 명령이 있어야 켤 수 있습니다')
+    w.unmount()
+  })
+
+  it('저장 바디에 patchEnabled를 싣는다', async () => {
+    const w = await mountPage([])
+    await w.find('[data-test="open-create"]').trigger('click')
+    await flushPromises()
+    await fillRequired()
+    ;(document.querySelector('[data-test="form-prebuild-enabled"]') as HTMLElement).click()
+    await flushPromises()
+    setInput('[data-test="form-prebuild-command"]', 'mvn -B -o package')
+    await flushPromises()
+    patchEl().click()
+    await flushPromises()
+    useApiMock.mockResolvedValueOnce({})
+    useApiMock.mockResolvedValueOnce([])
+    ;(document.querySelector('[data-test="form-submit"]') as HTMLElement).click()
+    await flushPromises()
+    expect(useApiMock).toHaveBeenCalledWith('/api/admin/repo-catalog', expect.objectContaining({
+      method: 'POST',
+      body: expect.objectContaining({ patchEnabled: true }),
+    }))
+    w.unmount()
+  })
+
+  it('켜진 항목에만 목록에 부분 패치 칩이 보이고, 수정 창은 체크 상태를 채운다', async () => {
+    const w = await mountPage([{ ...prebuildRow, patchEnabled: true }, { ...prebuildRow, id: 12, alias: '패치 꺼짐', patchEnabled: false }])
+    const chips = w.findAll('[data-test="catalog-patch-chip"]')
+    expect(chips).toHaveLength(1)
+    expect(chips[0].text()).toBe('부분 패치')
+    const editBtn = w.findAll('button').find((b) => b.find('.q-icon').text() === 'edit')
+    await editBtn!.trigger('click')
+    await flushPromises()
+    expect(patchEl().getAttribute('aria-checked')).toBe('true')
     w.unmount()
   })
 

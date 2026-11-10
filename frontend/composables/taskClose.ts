@@ -12,6 +12,14 @@ export interface CloseMailView {
   at: string | null
 }
 
+export interface ClosePatchView {
+  name: string | null
+  sizeBytes: number | null
+  fileCount: number | null
+  empty: boolean
+  uploadedAt: string | null
+}
+
 export interface CloseView {
   progress: string[]
   mergeCommitSha: string | null
@@ -19,24 +27,31 @@ export interface CloseView {
   artifactMode?: 'REQUIRED' | 'SKIPPED' | null
   artifact?: CloseArtifactView | null
   mail?: CloseMailView | null
+  patchMode?: 'REQUIRED' | 'SKIPPED' | null
+  patch?: ClosePatchView | null
 }
 
 export type CloseStepState = 'done' | 'current' | 'failed' | 'future' | 'skipped'
 
 export const CLOSE_STEPS = [
   { key: 'MERGED', label: 'PR 병합' },
+  { key: 'PATCH_BUILT', label: '부분 패치' },
   { key: 'UNDEPLOYED', label: '배포 중지' },
   { key: 'ARTIFACT_UPLOADED', label: '산출물 업로드' },
   { key: 'NOTE_WRITTEN', label: '옵시디언 노트' },
   { key: 'BRANCH_DELETED', label: '브랜치 삭제' },
 ]
 
-/** 산출물 단계는 모드가 있을 때만 보이고, SKIPPED면 '건너뜀'이다. */
+/** 산출물·부분 패치 단계는 모드가 있을 때만 보이고, SKIPPED면 '건너뜀'이다. */
 export function closeSteps(close: CloseView | null, status: string) {
   const mode = close?.artifactMode ?? null
-  const steps = CLOSE_STEPS.filter((s) => s.key !== 'ARTIFACT_UPLOADED' || mode !== null)
+  const patchMode = close?.patchMode ?? null
+  const steps = CLOSE_STEPS.filter(
+    (s) => (s.key !== 'ARTIFACT_UPLOADED' || mode !== null) && (s.key !== 'PATCH_BUILT' || patchMode !== null),
+  )
   const done = new Set(close?.progress ?? [])
-  const skipped = (key: string) => key === 'ARTIFACT_UPLOADED' && mode === 'SKIPPED'
+  const skipped = (key: string) =>
+    (key === 'ARTIFACT_UPLOADED' && mode === 'SKIPPED') || (key === 'PATCH_BUILT' && patchMode === 'SKIPPED')
   const nextIdx = steps.findIndex((s) => !done.has(s.key) && !skipped(s.key))
   return steps.map((s, i) => {
     let state: CloseStepState = 'future'
@@ -53,6 +68,23 @@ export function canSkipArtifact(close: CloseView | null, status: string): boolea
   if (!close || status !== 'CLOSE_FAILED' || close.artifactMode !== 'REQUIRED') return false
   const done = new Set(close.progress)
   return done.has('MERGED') && done.has('UNDEPLOYED') && !done.has('ARTIFACT_UPLOADED')
+}
+
+/** 패치 단계에서 멈춘 종료실패인가 — 관리자 '패치 없이 마무리'(close/skip-patch)가 가능한 조건. */
+export function canSkipPatch(close: CloseView | null, status: string): boolean {
+  if (!close || status !== 'CLOSE_FAILED' || close.patchMode !== 'REQUIRED') return false
+  return !close.progress.includes('PATCH_BUILT')
+}
+
+export type PatchButtonState = 'download' | 'empty' | 'none'
+
+/** 부분 패치 표시: 파일 있음 → 내려받기, 변경 없음 → 글자, 그 밖 → 없음. */
+export function patchButtonState(
+  close: { patch?: { name: string | null; empty: boolean } | null } | null | undefined,
+): PatchButtonState {
+  if (close?.patch?.empty) return 'empty'
+  if (close?.patch?.name) return 'download'
+  return 'none'
 }
 
 export const MAIL_STATUS_LABEL: Record<string, string> = {
@@ -76,6 +108,16 @@ export async function startArtifactDownload(
   go: (url: string) => void = (u) => window.location.assign(u),
 ) {
   const res = await api(`/api/tasks/${taskId}/artifact/download-link`, { method: 'POST' })
+  go(res.url)
+}
+
+/** 부분 패치 내려받기 — startArtifactDownload와 같은 모양, 주소만 patch/download-link. */
+export async function startPatchDownload(
+  taskId: number | string,
+  api: (url: string, opts: { method: 'POST' }) => Promise<{ url: string }>,
+  go: (url: string) => void = (u) => window.location.assign(u),
+) {
+  const res = await api(`/api/tasks/${taskId}/patch/download-link`, { method: 'POST' })
   go(res.url)
 }
 

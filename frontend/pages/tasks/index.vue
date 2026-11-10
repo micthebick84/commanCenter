@@ -20,6 +20,8 @@ import { taskPrefillFromQuestion, type QuestionDetail } from '~/composables/ques
 import { taskPrefillFromTask, type FollowUpSource } from '~/composables/taskFix'
 import { TASK_TYPES, TASK_TYPE_FILTERS, taskTypeLabel } from '~/composables/taskType'
 import { fetchDeferredWarning } from '~/composables/taskDbChanges'
+import { patchButtonState, startPatchDownload, type CloseView } from '~/composables/taskClose'
+import { useOneTimeDownload, downloadErrorMessage } from '~/composables/useOneTimeDownload'
 
 definePageMeta({ layout: 'default' })
 
@@ -53,6 +55,8 @@ interface TaskResponse {
   envVars?: EnvVar[] | null
   /** 작업 타입(스펙 2026-11-03 §4) — null·없음은 타입 없음(기존 작업). 칩은 타입이 있을 때만 그린다. */
   taskType?: string | null
+  /** 종료 부분 패치(스펙 2026-11-10) — 작업종료 카드의 버튼·글자용 */
+  close?: CloseView | null
 }
 
 interface PageResponse<T> {
@@ -194,6 +198,23 @@ async function applyMove(id: number, move: MoveDef) {
     $q.notify({ type: 'negative', message: e?.data?.message ?? `${move.label} 실패` })
   } finally {
     moving.value = false
+  }
+}
+
+// 종료 부분 패치(스펙 2026-11-10) — 작업종료 카드·모바일 카드. 등록자·관리자에게만, 카드 이동 없이 내려받는다.
+// 주소 토큰은 1회용이라 연타·쿨다운 잠금은 useOneTimeDownload가 맡는다(페이지 공용 한 칸).
+function canDownloadPatch(t: { requesterId?: string | null }) {
+  return isAdmin.value || (viewerId.value !== undefined && t.requesterId === viewerId.value)
+}
+function patchState(t: TaskResponse) {
+  return t.status === 'CLOSED' && canDownloadPatch(t) ? patchButtonState(t.close) : 'none'
+}
+const patchDownload = useOneTimeDownload((id) => startPatchDownload(id, (u, o) => useApi<{ url: string }>(u, o)))
+async function downloadPatch(t: { id: number }) {
+  try {
+    await patchDownload.run(t.id)
+  } catch (e: unknown) {
+    $q.notify({ type: 'negative', message: downloadErrorMessage(e) })
   }
 }
 
@@ -598,6 +619,7 @@ const fullscreen = useFullscreenDialog()
       @cancel="cancel"
       @remove="remove"
       @request-close="requestClose"
+      @patch="downloadPatch"
     />
     <template v-else>
     <QueueStatsBar />
@@ -800,6 +822,20 @@ const fullscreen = useFullscreenDialog()
                       {{ mrRef(c.task.implementation.prUrl, c.task.implementation.prNumber!) }}
                       <q-icon name="open_in_new" size="13px" />
                     </a>
+                    <q-btn
+                      v-if="patchState(c.task) === 'download'"
+                      dense
+                      flat
+                      no-caps
+                      size="sm"
+                      color="primary"
+                      icon="download"
+                      label="부분 패치"
+                      :disable="patchDownload.busy.value"
+                      data-test="card-patch-download"
+                      @click.stop="downloadPatch(c.task)"
+                    />
+                    <span v-else-if="patchState(c.task) === 'empty'" class="text-grey-6" data-test="card-patch-empty">변경 없음</span>
                   </div>
                 </div>
               </div>

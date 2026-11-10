@@ -17,7 +17,11 @@ const emit = defineEmits<{
   (e: 'cancel', task: CardTask): void
   (e: 'remove', task: CardTask): void
   (e: 'request-close', task: CardTask): void
+  (e: 'patch', task: CardTask): void
 }>()
+// 부분 패치 내려받기는 등록자·관리자에게만(스펙 2026-11-10)
+const canDownloadPatch = (task: CardTask) =>
+  props.isAdmin || (props.viewerId !== undefined && task.requesterId === props.viewerId)
 
 const filter = ref<AttentionGroup | 'all'>('all')
 const closedOpen = ref(false)
@@ -246,8 +250,10 @@ function openSheet(task: CardTask) {
           :key="task.id"
           :task="task"
           :is-admin="isAdmin"
+          :can-download-patch="canDownloadPatch(task)"
           @open="emit('open', task)"
           @menu="openSheet(task)"
+          @patch="emit('patch', task)"
         />
       </div>
     </section>

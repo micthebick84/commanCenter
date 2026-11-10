@@ -469,6 +469,119 @@ describe('pages/tasks/[id] — 작업 종료 (스펙 2026-10-13 §6)', () => {
     }
   })
 
+  describe('부분 패치 (스펙 2026-11-10)', () => {
+    const patch = { name: 'patch-task-42.zip', sizeBytes: 3_145_728, fileCount: 7, empty: false, uploadedAt: null }
+    const closed = { ...baseTask, status: 'CLOSED', statusLabel: '작업종료', requesterId: 'alice', deployment }
+    const patchPosts = () => useApiMock.mock.calls.filter((c) => c[0] === '/api/tasks/42/patch/download-link')
+
+    it('패치 파일이 있으면 부분 패치 버튼을 보이고 누르면 내려받는다 — 다른 사용자에게는 정보만', async () => {
+      setMe('alice')
+      const assign = vi.spyOn(window.location, 'assign').mockImplementation(() => {})
+      let w = await mountWith({ ...closed, close: { ...emptyClose, patchMode: 'REQUIRED', patch } })
+      const row = w.find('[data-test="close-patch"]')
+      expect(row.text()).toContain('patch-task-42.zip')
+      expect(row.text()).toContain('3.0 MB')
+      expect(row.text()).toContain('파일 7개')
+      useApiMock.mockClear()
+      useApiMock.mockResolvedValueOnce({ url: '/api/patch-downloads/tok' })
+      await w.find('[data-test="close-patch-download"]').trigger('click')
+      await flushPromises()
+      expect(useApiMock).toHaveBeenCalledWith('/api/tasks/42/patch/download-link', { method: 'POST' })
+      expect(assign).toHaveBeenCalledWith('/api/patch-downloads/tok')
+      w.unmount()
+      document.body.innerHTML = ''
+
+      setMe('bob')
+      w = await mountWith({ ...closed, close: { ...emptyClose, patchMode: 'REQUIRED', patch } })
+      expect(w.find('[data-test="close-patch"]').exists()).toBe(true)
+      expect(w.find('[data-test="close-patch-download"]').exists()).toBe(false)
+      w.unmount()
+      assign.mockRestore()
+    })
+
+    it('변경 없음이면 버튼 대신 글자를 보인다', async () => {
+      setMe('alice')
+      const w = await mountWith({
+        ...closed,
+        close: { ...emptyClose, patchMode: 'REQUIRED', patch: { name: null, sizeBytes: null, fileCount: 0, empty: true, uploadedAt: null } },
+      })
+      expect(w.find('[data-test="close-patch"]').text()).toContain('변경 없음')
+      expect(w.find('[data-test="close-patch-download"]').exists()).toBe(false)
+      w.unmount()
+    })
+
+    it('패치가 없는 작업에는 패치 줄이 없다', async () => {
+      const w = await mountWith({ ...closed, close: { ...emptyClose } })
+      expect(w.find('[data-test="close-patch"]').exists()).toBe(false)
+      w.unmount()
+    })
+
+    it('관리자에게 패치 없이 마무리를 보이고 확인 뒤 skip-patch를 부른다', async () => {
+      authStub.isAdmin = true
+      let w = await mountWith({
+        ...baseTask, status: 'CLOSE_FAILED', statusLabel: '종료실패', failureReason: '패치: 빌드 실패', deployment,
+        close: { progress: ['MERGED'], mergeCommitSha: 'abcdef1234', notePath: null, patchMode: 'REQUIRED' },
+      })
+      expect(w.find('[data-test="close-step-PATCH_BUILT"]').exists()).toBe(true)
+      useApiMock.mockClear()
+      await w.find('[data-test="close-skip-patch"]').trigger('click')
+      await flushPromises()
+      ;(document.body.querySelector('[data-test="confirm-dialog-ok"]') as HTMLElement).click()
+      await flushPromises()
+      expect(useApiMock).toHaveBeenCalledWith('/api/tasks/42/close/skip-patch', { method: 'POST', body: undefined })
+      w.unmount()
+      document.body.innerHTML = ''
+
+      authStub.isAdmin = false
+      w = await mountWith({
+        ...baseTask, status: 'CLOSE_FAILED', statusLabel: '종료실패', failureReason: '패치: 빌드 실패', deployment,
+        close: { progress: ['MERGED'], mergeCommitSha: 'abcdef1234', notePath: null, patchMode: 'REQUIRED' },
+      })
+      expect(w.find('[data-test="close-skip-patch"]').exists()).toBe(false)
+      w.unmount()
+    })
+
+    it('모바일: 패치 없이 마무리는 하단 더 보기 메뉴에서 한다', async () => {
+      authStub.isAdmin = true
+      await setViewportWidth(390)
+      try {
+        const w = await mountWith({
+          ...baseTask, status: 'CLOSE_FAILED', statusLabel: '종료실패', failureReason: '패치: 빌드 실패', deployment,
+          close: { progress: ['MERGED'], mergeCommitSha: 'abcdef1234', notePath: null, patchMode: 'REQUIRED' },
+        })
+        expect(w.find('[data-test="close-skip-patch"]').exists()).toBe(false)
+        await w.find('[data-test="bar-more"]').trigger('click')
+        await flushPromises()
+        useApiMock.mockClear()
+        ;(document.body.querySelector('[data-test="bar-more-close-skip-patch"]') as HTMLElement).click()
+        await flushPromises()
+        ;(document.body.querySelector('[data-test="confirm-dialog-ok"]') as HTMLElement).click()
+        await flushPromises()
+        expect(useApiMock).toHaveBeenCalledWith('/api/tasks/42/close/skip-patch', { method: 'POST', body: undefined })
+        w.unmount()
+      } finally {
+        await setViewportWidth(1024)
+      }
+    })
+
+    it('연속으로 두 번 눌러도 링크 요청은 한 번이다', async () => {
+      authStub.isAdmin = true
+      const assign = vi.spyOn(window.location, 'assign').mockImplementation(() => {})
+      const w = await mountWith({ ...closed, close: { ...emptyClose, patchMode: 'REQUIRED', patch } })
+      useApiMock.mockClear()
+      useApiMock.mockResolvedValueOnce({ url: '/api/patch-downloads/tok' })
+      const btn = w.find('[data-test="close-patch-download"]')
+      await btn.trigger('click')
+      await btn.trigger('click')
+      await flushPromises()
+      await btn.trigger('click')
+      await flushPromises()
+      expect(patchPosts()).toHaveLength(1)
+      assign.mockRestore()
+      w.unmount()
+    })
+  })
+
   describe('관리자의 배포중단됨 작업 종료 요청 (주 행동은 재배포 그대로)', () => {
     const lost = { ...baseTask, status: 'DEPLOY_LOST', statusLabel: '배포중단됨', requesterId: 'admin', deployment }
 

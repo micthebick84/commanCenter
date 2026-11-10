@@ -250,3 +250,31 @@ describe('TaskCardCompact — DB 작업의 배포 세그먼트 (스펙 2026-11-0
     w.unmount()
   })
 })
+
+describe('TaskCardCompact — 부분 패치 (스펙 2026-11-10)', () => {
+  const closed = {
+    ...base,
+    status: 'CLOSED',
+    statusLabel: '작업종료',
+    close: { patch: { name: 'p.zip', empty: false } },
+  }
+  it('patch 버튼은 open을 내지 않고 patch를 낸다', async () => {
+    const w = mount(TaskCardCompact, { props: { task: closed, isAdmin: false, canDownloadPatch: true } })
+    await w.find('[data-test="card-patch-download"]').trigger('click')
+    expect(w.emitted('patch')).toHaveLength(1)
+    expect(w.emitted('open')).toBeUndefined()
+    w.unmount()
+  })
+  it('변경 없음은 글자만, 권한이 없거나 CLOSED가 아니면 아무것도 없다', () => {
+    const empty = { ...closed, close: { patch: { name: null, empty: true } } }
+    let w = mount(TaskCardCompact, { props: { task: empty, isAdmin: false, canDownloadPatch: true } })
+    expect(w.find('[data-test="card-patch-empty"]').text()).toBe('변경 없음')
+    w.unmount()
+    w = mount(TaskCardCompact, { props: { task: closed, isAdmin: false } })
+    expect(w.find('[data-test="card-patch-download"]').exists()).toBe(false)
+    w.unmount()
+    w = mount(TaskCardCompact, { props: { task: { ...closed, status: 'DEPLOYED' }, isAdmin: false, canDownloadPatch: true } })
+    expect(w.find('[data-test="card-patch-download"]').exists()).toBe(false)
+    w.unmount()
+  })
+})

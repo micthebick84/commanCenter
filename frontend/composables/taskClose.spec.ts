@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest'
-import { closeSteps, obsidianLink, canSkipArtifact, formatMb, startArtifactDownload, MAIL_STATUS_LABEL } from './taskClose'
+import { closeSteps, obsidianLink, canSkipArtifact, canSkipPatch, patchButtonState, startPatchDownload, formatMb, startArtifactDownload, MAIL_STATUS_LABEL } from './taskClose'
 
 describe('closeSteps', () => {
   it('끝난 단계는 done, 종료중이면 다음 단계가 current', () => {
@@ -55,6 +55,46 @@ describe('canSkipArtifact', () => {
     expect(canSkipArtifact({ ...base, progress: ['MERGED', 'UNDEPLOYED'], artifactMode: null }, 'CLOSE_FAILED')).toBe(false)
     expect(canSkipArtifact({ ...base, progress: ['MERGED', 'UNDEPLOYED'], artifactMode: 'REQUIRED' }, 'CLOSING')).toBe(false)
     expect(canSkipArtifact(null, 'CLOSE_FAILED')).toBe(false)
+  })
+})
+
+describe('부분 패치 (스펙 2026-11-10)', () => {
+  const base = { mergeCommitSha: null, notePath: null }
+  it('패치 모드가 없으면 부분 패치 단계를 숨긴다', () => {
+    expect(closeSteps({ ...base, progress: [], patchMode: null }, 'CLOSE_REVIEW').map((s) => s.key)).not.toContain('PATCH_BUILT')
+  })
+  it('패치 단계는 병합 다음이다', () => {
+    expect(closeSteps({ ...base, progress: [], patchMode: 'REQUIRED', artifactMode: 'REQUIRED' }, 'CLOSE_REVIEW').map((s) => s.key))
+      .toEqual(['MERGED', 'PATCH_BUILT', 'UNDEPLOYED', 'ARTIFACT_UPLOADED', 'NOTE_WRITTEN', 'BRANCH_DELETED'])
+    expect(closeSteps({ ...base, progress: ['MERGED'], patchMode: 'REQUIRED' }, 'CLOSE_FAILED')[1]!.label).toBe('부분 패치')
+  })
+  it('SKIPPED면 건너뜀으로 보인다', () => {
+    const s = closeSteps({ ...base, progress: ['MERGED'], patchMode: 'SKIPPED' }, 'CLOSING')
+    expect(s[1]!.state).toBe('skipped')
+    expect(s[2]!.state).toBe('current')
+  })
+  it('canSkipPatch는 종료실패 + REQUIRED + 미완료일 때만', () => {
+    expect(canSkipPatch({ ...base, progress: ['MERGED'], patchMode: 'REQUIRED' }, 'CLOSE_FAILED')).toBe(true)
+    expect(canSkipPatch({ ...base, progress: ['MERGED', 'PATCH_BUILT'], patchMode: 'REQUIRED' }, 'CLOSE_FAILED')).toBe(false)
+    expect(canSkipPatch({ ...base, progress: ['MERGED'], patchMode: 'SKIPPED' }, 'CLOSE_FAILED')).toBe(false)
+    expect(canSkipPatch({ ...base, progress: ['MERGED'], patchMode: null }, 'CLOSE_FAILED')).toBe(false)
+    expect(canSkipPatch({ ...base, progress: ['MERGED'], patchMode: 'REQUIRED' }, 'CLOSING')).toBe(false)
+    expect(canSkipPatch(null, 'CLOSE_FAILED')).toBe(false)
+  })
+  it('patchButtonState: 파일 있음 download / empty / none', () => {
+    const p = { name: 'a.zip', sizeBytes: 1, fileCount: 2, empty: false, uploadedAt: null }
+    expect(patchButtonState({ ...base, progress: [], patch: p })).toBe('download')
+    expect(patchButtonState({ ...base, progress: [], patch: { ...p, name: null, empty: true } })).toBe('empty')
+    expect(patchButtonState({ ...base, progress: [], patch: null })).toBe('none')
+    expect(patchButtonState(null)).toBe('none')
+    expect(patchButtonState(undefined)).toBe('none')
+  })
+  it('startPatchDownload는 patch/download-link를 부른다', async () => {
+    const api = vi.fn().mockResolvedValue({ url: '/api/p/tok' })
+    const go = vi.fn()
+    await startPatchDownload(42, api, go)
+    expect(api).toHaveBeenCalledWith('/api/tasks/42/patch/download-link', { method: 'POST' })
+    expect(go).toHaveBeenCalledWith('/api/p/tok')
   })
 })
 

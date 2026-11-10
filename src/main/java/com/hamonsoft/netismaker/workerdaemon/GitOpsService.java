@@ -207,6 +207,68 @@ public class GitOpsService {
     }
 
     /**
+     * 커밋의 부모들 — {@code git rev-list --parents -n 1 <sha>}의 둘째 칸부터(루트 커밋이면 빈 목록, 병합 커밋이면 둘).
+     * sha는 전체 sha(40·64자 16진수)여야 한다 — git 인자가 옵션으로 읽히지 않게. git 실패는 IOException.
+     */
+    public List<String> parents(File dir, String sha) throws IOException, InterruptedException {
+        requireFullSha(sha);
+        String out = ProcessRunner.requireSuccess(dir,
+                List.of("git", "rev-list", "--parents", "-n", "1", sha), GIT_TIMEOUT_SECONDS);
+        String line = out.lines().map(String::strip).filter(l -> l.startsWith(sha.toLowerCase(java.util.Locale.ROOT)))
+                .findFirst().orElseThrow(() -> new IOException("커밋의 부모를 읽지 못했습니다: " + GitRemotes.mask(out.strip())));
+        String[] tokens = line.split("\\s+");
+        List<String> parents = new java.util.ArrayList<>();
+        for (int i = 1; i < tokens.length; i++) {
+            if (GitRepoCache.isFullSha(tokens[i])) parents.add(tokens[i]);
+        }
+        return List.copyOf(parents);
+    }
+
+    /** {@code git diff --name-status <before> <after>}의 줄을 그대로(빈 줄 제외). 두 sha는 전체 sha. git 실패는 IOException. */
+    public List<String> diffNameStatus(File dir, String before, String after)
+            throws IOException, InterruptedException {
+        requireFullSha(before);
+        requireFullSha(after);
+        String out = ProcessRunner.requireSuccess(dir,
+                List.of("git", "diff", "--name-status", before, after), GIT_TIMEOUT_SECONDS);
+        return out.lines().filter(l -> !l.isBlank()).toList();
+    }
+
+    /**
+     * 원격 브랜치 끝 — {@code git ls-remote <인증 URL> refs/heads/<branch>}. 캐시와 같은 규칙(자격증명 도우미·askpass·프롬프트 없음,
+     * 토큰은 전송에만)으로 부르고, 읽지 못하면(원격 접근 실패·브랜치 없음·시간 초과) 어떤 사유든 null이다.
+     * 예외와 출력은 로그에 {@link GitRemotes#mask}를 거쳐서만 나간다.
+     */
+    public String remoteBranchTip(RepoRef ref, String branch) {
+        if (branch == null || branch.isBlank()) return null;
+        try {
+            String refName = "refs/heads/" + branch;
+            ProcessRunner.Result r = GitRepoCache.runRefGit(new File(System.getProperty("java.io.tmpdir")),
+                    GitRepoCache.refGit("ls-remote", remotes.authenticatedUrl(ref), refName), GIT_TIMEOUT_SECONDS);
+            if (r.exitCode() != 0) {
+                log.warn("원격 브랜치 끝을 읽지 못함: {} (exit={}) {}", branch, r.exitCode(),
+                        GitRemotes.maskAndCut(r.stdout(), 300));
+                return null;
+            }
+            for (String line : r.stdout().lines().map(String::strip).toList()) {
+                String[] cols = line.split("\\s+");
+                if (cols.length == 2 && refName.equals(cols[1]) && GitRepoCache.isFullSha(cols[0])) return cols[0];
+            }
+            return null;
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            return null;
+        } catch (Exception e) {
+            log.warn("원격 브랜치 끝을 읽지 못함: {} ({})", branch, GitRemotes.maskAndCut(e.getMessage(), 300));
+            return null;
+        }
+    }
+
+    private static void requireFullSha(String sha) throws IOException {
+        if (!GitRepoCache.isFullSha(sha)) throw new IOException("커밋 정보가 올바르지 않습니다");
+    }
+
+    /**
      * baseSha 이후 HEAD에 커밋이 있는가(에이전트 커밋 — SDD 태스크 커밋 등). 구현 성공 판정의 "이번 시도의 코드 변경"을 워커가 스크립트 파일을
      * 쓰기 전에 구할 때 쓴다(스펙 2026-11-03 §6.6). 수정 회차는 baseSha가 회차 브랜치 끝(tip)이다. git 실패는 IOException.
      */

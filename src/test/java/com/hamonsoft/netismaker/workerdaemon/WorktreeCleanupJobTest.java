@@ -120,6 +120,30 @@ class WorktreeCleanupJobTest {
     }
 
     @Test
+    void patch_worktrees_follow_the_same_seven_day_and_active_rules() throws Exception {
+        Path oldBefore = worktrees.createAtCommit(cacheDir, key, WorktreeKind.PATCH_BEFORE, 5, headSha).toPath();
+        Path oldAfter = worktrees.createAtCommit(cacheDir, key, WorktreeKind.PATCH_AFTER, 5, headSha).toPath();
+        Path freshBefore = worktrees.createAtCommit(cacheDir, key, WorktreeKind.PATCH_BEFORE, 6, headSha).toPath();
+        Path activeAfter = worktrees.createAtCommit(cacheDir, key, WorktreeKind.PATCH_AFTER, 7, headSha).toPath();
+        age(oldBefore, 8);
+        age(oldAfter, 8);
+        age(freshBefore, 2);
+        age(activeAfter, 30);
+        when(http.activeWorktreeTasks()).thenReturn(List.of(new ActiveWorktreeTaskSummary(7L, TaskStatus.CLOSING)));
+
+        WorktreeCleanupJob.Result r = job.runOnce();
+
+        assertThat(r.outcomes())
+                .containsEntry(oldBefore, Outcome.REMOVED)
+                .containsEntry(oldAfter, Outcome.REMOVED)
+                .containsEntry(freshBefore, Outcome.TOO_NEW)
+                .containsEntry(activeAfter, Outcome.ACTIVE);
+        assertThat(oldBefore).doesNotExist();
+        assertThat(freshBefore).exists();
+        assertThat(activeAfter).exists();
+    }
+
+    @Test
     void active_lookup_failure_skips_the_whole_round() throws Exception {
         Path oldTask = worktrees.create(cacheDir, key, "main", 1, "old").dir().toPath();
         age(oldTask, 30);

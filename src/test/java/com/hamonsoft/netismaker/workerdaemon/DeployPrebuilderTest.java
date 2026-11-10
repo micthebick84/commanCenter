@@ -314,6 +314,71 @@ class DeployPrebuilderTest {
         assertThat(DeployPrebuilder.DOCKERIGNORE).isEqualTo("*\n!.netis-prebuild/\n!.netis-prebuild/**\n");
     }
 
+    // ── buildOnly (패치용 — 스테이징 없음) ──
+
+    private static String makeWarAndZipCommand(int zips) {
+        StringBuilder sb = new StringBuilder(makeWarCommand());
+        if (zips > 0) sb.append(WINDOWS ? "& mkdir .netis-artifact" : " && mkdir -p .netis-artifact");
+        for (int i = 1; i <= zips; i++) {
+            sb.append(WINDOWS ? "& echo zip> .netis-artifact\\d" + i + ".zip" : " && echo zip > .netis-artifact/d" + i + ".zip");
+        }
+        return sb.toString();
+    }
+
+    @Test
+    void buildOnlyReturnsDeliveryFileWhenPresent() throws Exception {
+        Path file = prebuilder(Duration.ofMinutes(1), Map.of())
+                .buildOnly(new PrebuildSpec(makeWarAndZipCommand(1), "t/*.war", null), root, l -> {});
+
+        assertThat(file.getFileName().toString()).isEqualTo("d1.zip");
+        assertThat(file.getParent().getFileName().toString()).isEqualTo(".netis-artifact");
+    }
+
+    @Test
+    void buildOnlyFallsBackToArtifactPattern() throws Exception {
+        Path file = prebuilder(Duration.ofMinutes(1), Map.of())
+                .buildOnly(new PrebuildSpec(makeWarCommand(), "t/*.war", null), root, l -> {});
+
+        assertThat(file.getFileName().toString()).isEqualTo("a.war");
+    }
+
+    @Test
+    void buildOnlyDoesNotCreateStageDir() throws Exception {
+        prebuilder(Duration.ofMinutes(1), Map.of())
+                .buildOnly(new PrebuildSpec(makeWarAndZipCommand(1), "t/*.war", null), root, l -> {});
+        prebuilder(Duration.ofMinutes(1), Map.of())
+                .buildOnly(new PrebuildSpec(makeWarCommand(), "t/*.war", null), root, l -> {});
+
+        assertThat(root.resolve(".netis-prebuild")).doesNotExist();
+    }
+
+    @Test
+    void buildOnlyFailsWithTwoDeliveryFiles() {
+        PrebuildException e = catchThrowableOfType(PrebuildException.class, () -> prebuilder(Duration.ofMinutes(1), Map.of())
+                .buildOnly(new PrebuildSpec(makeWarAndZipCommand(2), "t/*.war", null), root, l -> {}));
+
+        assertThat(e).isNotNull();
+        assertThat(e.getMessage()).contains("d1.zip").contains("d2.zip");
+    }
+
+    @Test
+    void buildOnlyFailsLikeRunWhenCommandFails() {
+        PrebuildException e = catchThrowableOfType(PrebuildException.class, () -> prebuilder(Duration.ofMinutes(1), Map.of())
+                .buildOnly(new PrebuildSpec(WINDOWS ? "exit 3" : "exit 3", "t/*.war", null), root, l -> {}));
+
+        assertThat(e.getMessage()).isEqualTo("미리 빌드 실패 (exit=3)");
+    }
+
+    @Test
+    void toolchainConfiguredTreatsBlankAsNoToolchain() {
+        DeployPrebuilder pb = prebuilder(Duration.ofMinutes(1), Map.of("jdk8", new Toolchain(System.getProperty("java.home"), null)));
+
+        assertThat(pb.toolchainConfigured(null)).isTrue();
+        assertThat(pb.toolchainConfigured("  ")).isTrue();
+        assertThat(pb.toolchainConfigured("jdk8")).isTrue();
+        assertThat(pb.toolchainConfigured("nope")).isFalse();
+    }
+
     // ── run (실제 프로세스) ──
 
     @Test

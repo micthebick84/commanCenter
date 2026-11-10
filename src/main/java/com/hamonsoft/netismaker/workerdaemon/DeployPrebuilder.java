@@ -101,6 +101,83 @@ public class DeployPrebuilder {
      */
     public Staged run(WorkerTaskResponse.PrebuildSpec spec, Path worktree, Consumer<String> sink)
             throws PrebuildException {
+        StringBuilder buf = execute(spec, worktree, sink);
+
+        Path artifact;
+        try {
+            artifact = resolveArtifact(worktree, spec.artifact());
+        } catch (PrebuildException e) {
+            throw new PrebuildException(e.getMessage(), tail(buf));
+        }
+        String fileName = artifact.getFileName().toString();
+        String sourceRelative = worktree.relativize(artifact).toString().replace('\\', '/');
+        long size;
+        try {
+            Path stage = Files.createDirectories(worktree.resolve(STAGE_DIR));
+            Path target = stage.resolve(fileName);
+            Files.copy(artifact, target, StandardCopyOption.REPLACE_EXISTING);
+            size = Files.size(target);
+        } catch (IOException e) {
+            throw new PrebuildException("미리 빌드 산출물 복사 실패: " + e.getMessage(), tail(buf));
+        }
+        sink.accept("[미리 빌드 산출물] " + sourceRelative + " ("
+                + String.format(Locale.ROOT, "%.1f", size / (1024.0 * 1024.0)) + "MB) → " + STAGE_DIR + "/" + fileName);
+        String delivery;
+        try {
+            delivery = stageDelivery(worktree, sink).orElse(null);
+        } catch (PrebuildException e) {
+            throw new PrebuildException(e.getMessage(), tail(buf));
+        }
+        return new Staged(fileName, size, sourceRelative, delivery);
+    }
+
+    /**
+     * 패치용 빌드(스테이징 없음) — 명령을 {@link #run}과 같은 방식으로 돌린 뒤 비교 대상 파일 경로를 돌려준다.
+     * {@link #DELIVERY_SOURCE_DIR} 바로 아래 파일이 하나면 그것(둘 이상이면 실패), 없거나 폴더가 없으면 카탈로그 산출물 패턴
+     * ({@link #resolveArtifact}). {@link #STAGE_DIR}로 복사하지 않는다 — 읽기 전용 "전"·"후" worktree에서 쓴다.
+     */
+    public Path buildOnly(WorkerTaskResponse.PrebuildSpec spec, Path worktree, Consumer<String> sink)
+            throws PrebuildException {
+        StringBuilder buf = execute(spec, worktree, sink);
+        try {
+            Optional<Path> delivery = singleDeliveryFile(worktree);
+            return delivery.isPresent() ? delivery.get() : resolveArtifact(worktree, spec.artifact());
+        } catch (PrebuildException e) {
+            throw new PrebuildException(e.getMessage(), tail(buf));
+        }
+    }
+
+    /** 이 이름의 툴체인을 쓸 수 있는가 — 이름이 비면(툴체인을 요청하지 않음, run과 같다) true, 아니면 이 워커에 설정돼 있어야 한다. */
+    public boolean toolchainConfigured(String name) {
+        return name == null || name.isBlank() || props.configured(name.trim()).isPresent();
+    }
+
+    /** 납품 폴더 바로 아래 일반 파일(링크 따라가지 않음, 하위 폴더 무시)이 정확히 하나면 그것, 없으면 empty, 둘 이상이면 실패. */
+    private static Optional<Path> singleDeliveryFile(Path worktree) throws PrebuildException {
+        Path dir = worktree.resolve(DELIVERY_SOURCE_DIR);
+        if (!Files.isDirectory(dir, LinkOption.NOFOLLOW_LINKS)) return Optional.empty();
+        List<Path> files = new ArrayList<>();
+        try (DirectoryStream<Path> entries = Files.newDirectoryStream(dir)) {
+            for (Path entry : entries) {
+                if (Files.isRegularFile(entry, LinkOption.NOFOLLOW_LINKS)) files.add(entry);
+            }
+        } catch (IOException e) {
+            throw deliveryError("읽기 실패: " + e.getMessage());
+        }
+        if (files.size() > 1) {
+            List<String> names = files.stream().map(p -> p.getFileName().toString()).sorted().toList();
+            throw deliveryError("여러 개: " + String.join(", ", names.subList(0, Math.min(MAX_LISTED, names.size())))
+                    + (names.size() > MAX_LISTED ? ", …" : ""));
+        }
+        return files.isEmpty() ? Optional.empty() : Optional.of(files.get(0));
+    }
+
+    /**
+     * 명령을 deploy/patch worktree에서 돌린다(run·buildOnly 공통). 출력은 sink로 그대로 흘리고, 실패 사유는 run이 늘 쓰던 것.
+     * @return 출력 꼬리 버퍼 — 뒤 단계 실패의 logTail로 쓴다
+     */
+    private StringBuilder execute(WorkerTaskResponse.PrebuildSpec spec, Path worktree, Consumer<String> sink)
+            throws PrebuildException {
         String toolName = spec.toolchain() == null || spec.toolchain().isBlank() ? null : spec.toolchain().trim();
         Map<String, String> extraEnv = Map.of();
         if (toolName != null) {
@@ -139,32 +216,7 @@ public class DeployPrebuilder {
             throw new PrebuildException("미리 빌드 실패 (exit=" + result.exitCode() + ")", tail(buf));
         }
 
-        Path artifact;
-        try {
-            artifact = resolveArtifact(worktree, spec.artifact());
-        } catch (PrebuildException e) {
-            throw new PrebuildException(e.getMessage(), tail(buf));
-        }
-        String fileName = artifact.getFileName().toString();
-        String sourceRelative = worktree.relativize(artifact).toString().replace('\\', '/');
-        long size;
-        try {
-            Path stage = Files.createDirectories(worktree.resolve(STAGE_DIR));
-            Path target = stage.resolve(fileName);
-            Files.copy(artifact, target, StandardCopyOption.REPLACE_EXISTING);
-            size = Files.size(target);
-        } catch (IOException e) {
-            throw new PrebuildException("미리 빌드 산출물 복사 실패: " + e.getMessage(), tail(buf));
-        }
-        sink.accept("[미리 빌드 산출물] " + sourceRelative + " ("
-                + String.format(Locale.ROOT, "%.1f", size / (1024.0 * 1024.0)) + "MB) → " + STAGE_DIR + "/" + fileName);
-        String delivery;
-        try {
-            delivery = stageDelivery(worktree, sink).orElse(null);
-        } catch (PrebuildException e) {
-            throw new PrebuildException(e.getMessage(), tail(buf));
-        }
-        return new Staged(fileName, size, sourceRelative, delivery);
+        return buf;
     }
 
     /**

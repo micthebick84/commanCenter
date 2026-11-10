@@ -47,7 +47,7 @@ class TaskCloseServiceTest {
         historyRepo = mock(TaskStatusHistoryRepository.class);
         when(historyRepo.save(any())).thenAnswer(i -> i.getArgument(0));
         catalogRepo = mock(RepoCatalogRepository.class);
-        service = new TaskCloseService(taskRepo, historyRepo, catalogRepo, new CloseArtifactProperties(false, null));
+        service = new TaskCloseService(taskRepo, historyRepo, catalogRepo, new CloseArtifactProperties(false, null), new ClosePatchProperties(false, null));
     }
 
     @Test
@@ -187,7 +187,7 @@ class TaskCloseServiceTest {
     }
 
     private TaskCloseService enabledService() {
-        return new TaskCloseService(taskRepo, historyRepo, catalogRepo, new CloseArtifactProperties(true, null));
+        return new TaskCloseService(taskRepo, historyRepo, catalogRepo, new CloseArtifactProperties(true, null), new ClosePatchProperties(false, null));
     }
 
     private RepoCatalogEntry catalog(boolean artifactEnabled) {
@@ -273,5 +273,101 @@ class TaskCloseServiceTest {
         u.setRequesterEmail("keep@hamonsoft.co.kr");
         service.requestClose(42L, "admin", true, "admin@hamonsoft.co.kr");
         assertThat(u.getRequesterEmail()).isEqualTo("keep@hamonsoft.co.kr");
+    }
+
+    // ── 부분 패치 (스펙 2026-11-10) ──
+
+    private TaskCloseService patchService(boolean switchOn) {
+        return new TaskCloseService(taskRepo, historyRepo, catalogRepo, new CloseArtifactProperties(false, null),
+                new ClosePatchProperties(switchOn, null));
+    }
+
+    private RepoCatalogEntry patchCatalog(boolean patchEnabled, String prebuildCommand) {
+        RepoCatalogEntry e = catalog(false);
+        e.setPatchEnabled(patchEnabled);
+        e.setPrebuildCommand(prebuildCommand);
+        return e;
+    }
+
+    private Task reviewTaskWithCatalog(RepoCatalogEntry e) {
+        Task t = task(TaskStatus.CLOSE_REVIEW);
+        t.setRepoCatalogId(5L);
+        when(catalogRepo.findById(5L)).thenReturn(Optional.of(e));
+        return t;
+    }
+
+    @Test
+    void approveSetsPatchModeWhenSwitchCatalogAndCommandPresent() {
+        reviewTaskWithCatalog(patchCatalog(true, "mvn -q package"));
+        Task r = patchService(true).approve(42L, "admin");
+        assertThat(r.getClosePatchMode()).isEqualTo("REQUIRED");
+        ArgumentCaptor<TaskStatusHistory> cap = ArgumentCaptor.forClass(TaskStatusHistory.class);
+        verify(historyRepo).save(cap.capture());
+        assertThat(cap.getValue().getReason()).isEqualTo("관리자 종료 승인 → 종료 큐 진입 (부분 패치)");
+    }
+
+    @Test
+    void approveLeavesPatchModeNullForDbWork() {
+        Task t = reviewTaskWithCatalog(patchCatalog(true, "mvn -q package"));
+        t.setTaskType(com.hamonsoft.netismaker.entity.TaskType.DB_WORK);
+        assertThat(patchService(true).approve(42L, "admin").getClosePatchMode()).isNull();
+    }
+
+    @Test
+    void approveLeavesPatchModeNullWhenSwitchOff() {
+        reviewTaskWithCatalog(patchCatalog(true, "mvn -q package"));
+        assertThat(patchService(false).approve(42L, "admin").getClosePatchMode()).isNull();
+    }
+
+    @Test
+    void approveLeavesPatchModeNullWhenCatalogOff() {
+        reviewTaskWithCatalog(patchCatalog(false, "mvn -q package"));
+        assertThat(patchService(true).approve(42L, "admin").getClosePatchMode()).isNull();
+    }
+
+    @Test
+    void approveLeavesPatchModeNullWhenCommandBlank() {
+        reviewTaskWithCatalog(patchCatalog(true, "   "));
+        assertThat(patchService(true).approve(42L, "admin").getClosePatchMode()).isNull();
+    }
+
+    @Test
+    void skipPatchMovesToClosePendingWithSkippedMode() {
+        Task t = task(TaskStatus.CLOSE_FAILED);
+        t.setClosePatchMode("REQUIRED");
+        t.setCloseProgress("MERGED");
+        t.setFailureReason("패치: 빌드 실패");
+
+        Task r = service.skipPatch(42L, "admin", "수동 납품");
+
+        assertThat(r.getStatus()).isEqualTo(TaskStatus.CLOSE_PENDING);
+        assertThat(r.getClosePatchMode()).isEqualTo("SKIPPED");
+        assertThat(r.getFailureReason()).isNull();
+        assertThat(r.getCloseProgress()).isEqualTo("MERGED");
+        ArgumentCaptor<TaskStatusHistory> cap = ArgumentCaptor.forClass(TaskStatusHistory.class);
+        verify(historyRepo).save(cap.capture());
+        assertThat(cap.getValue().getReason()).isEqualTo("패치 없이 마무리: 수동 납품");
+    }
+
+    @Test
+    void skipPatchRejectedWhenPatchAlreadyBuilt() {
+        Task t = task(TaskStatus.CLOSE_FAILED);
+        t.setClosePatchMode("REQUIRED");
+        t.setCloseProgress("MERGED,PATCH_BUILT");
+        assertThatThrownBy(() -> service.skipPatch(42L, "admin", null))
+                .isInstanceOf(TaskException.class)
+                .satisfies(e -> assertThat(((TaskException) e).getStatus()).isEqualTo(HttpStatus.CONFLICT));
+        assertThat(t.getClosePatchMode()).isEqualTo("REQUIRED");
+        verify(historyRepo, never()).save(any());
+    }
+
+    @Test
+    void skipPatchRejectedWhenNotFailedOrNotRequired() {
+        Task t = task(TaskStatus.CLOSING);
+        t.setClosePatchMode("REQUIRED");
+        assertThatThrownBy(() -> service.skipPatch(42L, "admin", null)).isInstanceOf(TaskException.class);
+        t.setStatus(TaskStatus.CLOSE_FAILED);
+        t.setClosePatchMode(null);
+        assertThatThrownBy(() -> service.skipPatch(42L, "admin", null)).isInstanceOf(TaskException.class);
     }
 }

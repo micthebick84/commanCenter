@@ -24,4 +24,14 @@ class StaleTaskThresholdConfigTest {
             assertThat(task.get("deploy-stale-threshold-minutes")).isEqualTo(70);
         }
     }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void application_yml의_부분_패치_종료_판정은_110분() throws IOException {
+        try (InputStream in = StaleTaskThresholdConfigTest.class.getResourceAsStream("/application.yml")) {
+            Map<String, Object> root = new Yaml().load(in);
+            Map<String, Object> task = (Map<String, Object>) ((Map<String, Object>) root.get("app")).get("task");
+            assertThat(task.get("close-patch-stale-threshold-minutes")).isEqualTo(110);
+        }
+    }
 }

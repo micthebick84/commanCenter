@@ -51,13 +51,16 @@ public class TaskCloseService {
     private final TaskStatusHistoryRepository historyRepo;
     private final RepoCatalogRepository catalogRepo;
     private final CloseArtifactProperties artifactProps;
+    private final ClosePatchProperties patchProps;
 
     public TaskCloseService(TaskRepository taskRepo, TaskStatusHistoryRepository historyRepo,
-                            RepoCatalogRepository catalogRepo, CloseArtifactProperties artifactProps) {
+                            RepoCatalogRepository catalogRepo, CloseArtifactProperties artifactProps,
+                            ClosePatchProperties patchProps) {
         this.taskRepo = taskRepo;
         this.historyRepo = historyRepo;
         this.catalogRepo = catalogRepo;
         this.artifactProps = artifactProps;
+        this.patchProps = patchProps;
     }
 
     @Transactional
@@ -111,8 +114,10 @@ public class TaskCloseService {
         t.setFailureReason(null);
         // 산출물 모드는 승인 때 한 번 정한다 — 재시도·stale 재큐는 바꾸지 않는다 (스펙 2026-10-14 §3)
         t.setCloseArtifactMode(artifactRequired(t) ? CloseStep.ARTIFACT_REQUIRED : null);
+        t.setClosePatchMode(patchRequired(t) ? CloseStep.PATCH_REQUIRED : null);
         return move(t, TaskStatus.CLOSE_PENDING, "user", adminId, "관리자 종료 승인 → 종료 큐 진입"
-                + (t.getCloseArtifactMode() == null ? "" : " (산출물 보관)"));
+                + (t.getCloseArtifactMode() == null ? "" : " (산출물 보관)")
+                + (t.getClosePatchMode() == null ? "" : " (부분 패치)"));
     }
 
     /**
@@ -125,6 +130,15 @@ public class TaskCloseService {
         return artifactProps.enabled()
                 && RepoCatalogRepository.findForTask(catalogRepo, t.getRepoCatalogId(), t.getGitUrl())
                         .map(RepoCatalogEntry::isArtifactEnabled).orElse(false);
+    }
+
+    /**
+     * 부분 패치 대상 판정 (스펙 2026-11-10): 전역 스위치 + 카탈로그 patchEnabled + 미리 빌드 명령 + DB 작업 아님.
+     */
+    boolean patchRequired(Task t) {
+        if (!patchProps.enabled() || t.getTaskType() == TaskType.DB_WORK) return false;
+        return RepoCatalogRepository.findForTask(catalogRepo, t.getRepoCatalogId(), t.getGitUrl())
+                .map(e -> e.isPatchEnabled() && !isBlank(e.getPrebuildCommand())).orElse(false);
     }
 
     @Transactional
@@ -185,6 +199,26 @@ public class TaskCloseService {
         t.setFailureReason(null);
         return move(t, TaskStatus.CLOSE_PENDING, "user", adminId,
                 "산출물 없이 마무리" + (isBlank(reason) ? "" : ": " + reason.trim()));
+    }
+
+    /**
+     * 패치 단계에서 멈춘 종료실패를 패치 없이 이어 간다 (스펙 2026-11-10). skipArtifact와 같은 출구.
+     */
+    @Transactional
+    public Task skipPatch(Long taskId, String adminId, String reason) {
+        Task t = taskRepo.findActiveByIdForUpdate(taskId).orElseThrow(TaskException::notFound);
+        if (t.getStatus() != TaskStatus.CLOSE_FAILED) {
+            throw TaskException.conflict("종료실패 상태에서만 패치 없이 마무리할 수 있습니다 (현재: "
+                    + t.getStatus().dbValue() + ")");
+        }
+        if (!CloseStep.PATCH_REQUIRED.equals(t.getClosePatchMode())
+                || CloseStep.parse(t.getCloseProgress()).contains(CloseStep.PATCH_BUILT)) {
+            throw TaskException.conflict("패치 단계에서 멈춘 종료만 패치 없이 마무리할 수 있습니다");
+        }
+        t.setClosePatchMode(CloseStep.PATCH_SKIPPED);
+        t.setFailureReason(null);
+        return move(t, TaskStatus.CLOSE_PENDING, "user", adminId,
+                "패치 없이 마무리" + (isBlank(reason) ? "" : ": " + reason.trim()));
     }
 
     /**

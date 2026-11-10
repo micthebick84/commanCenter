@@ -356,13 +356,18 @@ class PatchScannerTest {
     }
 
     @Test
-    void duplicateEntryInsideNestedJarFails() throws Exception {
+    void duplicateEntriesInsideNestedJarAreAllHashed() throws Exception {
+        // 서드파티 jar에는 같은 이름의 항목이 둘 든 것이 실제로 있다(xmlbeans-2.6.0.jar). 실패시키지 않고 모든 사본을 해시에 넣는다.
         byte[] jar = renameInZip(zipBytes(entries("p/A.class", "1", "p/B.class", "2"), T1), "p/B.class", "p/A.class");
-        Path war = zip(dir.resolve("a.war"), entries("WEB-INF/lib/x.jar", jar), T1);
+        byte[] sameLater = renameInZip(zipBytes(entries("p/A.class", "1", "p/B.class", "2"), T2), "p/B.class", "p/A.class");
+        byte[] hiddenCopyChanged = renameInZip(zipBytes(entries("p/A.class", "1", "p/B.class", "3"), T1), "p/B.class", "p/A.class");
 
-        assertThatThrownBy(() -> scanner().scan(war))
-                .isInstanceOf(PatchException.class)
-                .hasMessage("패치 경로가 겹칩니다: WEB-INF/lib/x.jar!/p/A.class");
+        String h1 = scanner().scan(zip(dir.resolve("a.war"), entries("WEB-INF/lib/x.jar", jar), T1)).hashes().get("WEB-INF/lib/x.jar");
+        String h2 = scanner().scan(zip(dir.resolve("b.war"), entries("WEB-INF/lib/x.jar", sameLater), T1)).hashes().get("WEB-INF/lib/x.jar");
+        String h3 = scanner().scan(zip(dir.resolve("c.war"), entries("WEB-INF/lib/x.jar", hiddenCopyChanged), T1)).hashes().get("WEB-INF/lib/x.jar");
+
+        assertThat(h1).isNotNull().isEqualTo(h2);
+        assertThat(h3).isNotEqualTo(h1);
     }
 
     @Test

@@ -29,14 +29,15 @@ public class RepoCatalogDto {
             String prebuildToolchain,
             String noteFolder,
             boolean dbMigrationManaged,
-            String dbScriptDir
+            String dbScriptDir,
+            boolean patchEnabled
     ) {
         public static View of(RepoCatalogEntry e) {
             return new View(e.getId(), e.getAlias(), e.getGitUrl(), e.getHost(), e.getOwnerRepo(),
                     e.getDefaultBranch(), e.getDescription(), e.isEnabled(),
                     e.getCreatedBy(), e.getCreatedAt(), e.getUpdatedAt(), e.isArtifactEnabled(), e.getArtifactPath(),
                     e.isPrebuildEnabled(), e.getPrebuildCommand(), e.getPrebuildArtifact(), e.getPrebuildToolchain(),
-                    e.getNoteFolder(), e.isDbMigrationManaged(), e.getDbScriptDir());
+                    e.getNoteFolder(), e.isDbMigrationManaged(), e.getDbScriptDir(), e.isPatchEnabled());
         }
 
         /** host/ownerRepo를 저장값 대신 현재 설정으로 재해석한 값으로 내보낸다(스펙 §3.3). */
@@ -45,7 +46,7 @@ public class RepoCatalogDto {
                     e.getDefaultBranch(), e.getDescription(), e.isEnabled(),
                     e.getCreatedBy(), e.getCreatedAt(), e.getUpdatedAt(), e.isArtifactEnabled(), e.getArtifactPath(),
                     e.isPrebuildEnabled(), e.getPrebuildCommand(), e.getPrebuildArtifact(), e.getPrebuildToolchain(),
-                    e.getNoteFolder(), e.isDbMigrationManaged(), e.getDbScriptDir());
+                    e.getNoteFolder(), e.isDbMigrationManaged(), e.getDbScriptDir(), e.isPatchEnabled());
         }
     }
 
@@ -93,15 +94,28 @@ public class RepoCatalogDto {
 
             /** 구현 단계 DB 쓰기 SQL 스크립트 폴더 (같은 스펙 §6.6). 수정 때 null이면 그대로, 빈 문자열이면 비움(기본 폴더). */
             @Size(max = 255)
-            String dbScriptDir
+            String dbScriptDir,
+
+            /** 종료 부분 패치 (스펙 2026-11-10). null이면 그대로 둔다. 켜려면 미리 빌드 명령이 있어야 한다. */
+            Boolean patchEnabled
     ) {
+        /** 부분 패치 칸 도입 전 14개 인자 — 기존 호출부·테스트 호환(부분 패치 유지). */
+        public UpsertRequest(String alias, String gitUrl, String defaultBranch, String description, Boolean enabled,
+                             Boolean artifactEnabled, String artifactPath, Boolean prebuildEnabled,
+                             String prebuildCommand, String prebuildArtifact, String prebuildToolchain,
+                             String noteFolder, Boolean dbMigrationManaged, String dbScriptDir) {
+            this(alias, gitUrl, defaultBranch, description, enabled, artifactEnabled, artifactPath,
+                    prebuildEnabled, prebuildCommand, prebuildArtifact, prebuildToolchain, noteFolder,
+                    dbMigrationManaged, dbScriptDir, null);
+        }
+
         /** DB 쓰기 칸 도입 전 12개 인자 — 기존 호출부·테스트 호환(자동 마이그레이션 표시·스크립트 폴더 유지). */
         public UpsertRequest(String alias, String gitUrl, String defaultBranch, String description, Boolean enabled,
                              Boolean artifactEnabled, String artifactPath, Boolean prebuildEnabled,
                              String prebuildCommand, String prebuildArtifact, String prebuildToolchain,
                              String noteFolder) {
             this(alias, gitUrl, defaultBranch, description, enabled, artifactEnabled, artifactPath,
-                    prebuildEnabled, prebuildCommand, prebuildArtifact, prebuildToolchain, noteFolder, null, null);
+                    prebuildEnabled, prebuildCommand, prebuildArtifact, prebuildToolchain, noteFolder, null, null, null);
         }
 
         /** 노트 폴더 도입 전 11개 인자 — 기존 호출부·테스트 호환(노트 폴더 유지). */

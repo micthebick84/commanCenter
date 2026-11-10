@@ -1,5 +1,6 @@
 package com.hamonsoft.netismaker.service;
 
+import com.hamonsoft.netismaker.entity.CloseStep;
 import com.hamonsoft.netismaker.entity.ImplementationMode;
 import com.hamonsoft.netismaker.entity.Task;
 import com.hamonsoft.netismaker.entity.TaskFixRequest;
@@ -70,6 +71,9 @@ public class StaleTaskRecoveryJob {
     @Value("${app.task.close-stale-threshold-minutes:60}")
     private int closeStaleThresholdMinutes;
 
+    @Value("${app.task.close-patch-stale-threshold-minutes:110}")
+    private int closePatchStaleThresholdMinutes;
+
     private final ImplementationModePolicy implementationModePolicy;
     /** 수정 회차의 구현 방식(요청 기록) — 회차 구현중의 행업 판정에 쓴다. */
     private final TaskFixRequestRepository fixRequestRepo;
@@ -127,7 +131,7 @@ public class StaleTaskRecoveryJob {
                 // 방식별 판정 — SDD는 몇 시간 돈다 (스펙 2026-10-15 §5.4). 수정 회차는 회차의 방식으로 (claim의 상한과 같은 기준)
                 case IMPLEMENTING -> implementationModePolicy.staleThresholdMinutes(implementationModeOf(t));
                 case DESIGNING -> designStaleThresholdMinutes;
-                case CLOSING -> closeStaleThresholdMinutes;
+                case CLOSING -> closeCeilingMinutes(t);
                 case DEPLOYING, UNDEPLOYING -> deployStaleThresholdMinutes;
                 default -> analysisStaleThresholdMinutes; // IN_PROGRESS
             };
@@ -138,6 +142,15 @@ public class StaleTaskRecoveryJob {
             String why = workerDead ? "워커 " + workerId + " 응답 없음(heartbeat)" : "처리 시간 초과(" + ceilingMin + "분)";
             taskRecovery.recover(t, RecoveryCause.stale(why));
         }
+    }
+
+    /**
+     * 부분 패치가 필요한 종료는 전·후 미리 빌드가 더 들어 판정이 길다 (스펙 2026-11-10). 천장은 claim 전체를
+     * claimed_at부터 재므로 PATCH_BUILT 보고 뒤에도 줄이지 않는다 — 줄이면 아직 도는 종료를 회수할 수 있다.
+     */
+    private int closeCeilingMinutes(Task t) {
+        return CloseStep.PATCH_REQUIRED.equals(t.getClosePatchMode())
+                ? closePatchStaleThresholdMinutes : closeStaleThresholdMinutes;
     }
 
     /**

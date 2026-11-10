@@ -59,11 +59,11 @@ class TaskCloseServiceDbWorkTest {
         historyRepo = mock(TaskStatusHistoryRepository.class);
         when(historyRepo.save(any())).thenAnswer(i -> i.getArgument(0));
         catalogRepo = mock(RepoCatalogRepository.class);
-        service = new TaskCloseService(taskRepo, historyRepo, catalogRepo, new CloseArtifactProperties(false, null));
+        service = new TaskCloseService(taskRepo, historyRepo, catalogRepo, new CloseArtifactProperties(false, null), new ClosePatchProperties(false, null));
     }
 
     private TaskCloseService artifactEnabledService() {
-        return new TaskCloseService(taskRepo, historyRepo, catalogRepo, new CloseArtifactProperties(true, null));
+        return new TaskCloseService(taskRepo, historyRepo, catalogRepo, new CloseArtifactProperties(true, null), new ClosePatchProperties(false, null));
     }
 
     /** 카탈로그 항목(id 5)의 산출물 칸을 켜 두고 작업에 연결한다. */

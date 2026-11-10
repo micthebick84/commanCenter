@@ -152,6 +152,7 @@ app:
     deploy-stale-threshold-minutes: 70         # 워커 dockerfile 10m + 미리 빌드 20m + build 30m + 여유 — application-worker.yml deploy 상한과 같이 볼 것
     design-stale-threshold-minutes: 30         # 디자인 생성(목업 생성) 처리 시간 초과
     close-stale-threshold-minutes: 60          # 종료(병합·배포 중지·산출물 꺼내기·업로드·노트 claude 10분·정리) 처리 시간 초과 → 종료대기로 재큐잉
+    close-patch-stale-threshold-minutes: 110   # 부분 패치 모드가 REQUIRED인 종료 — PATCH_BUILT 뒤에도 이 값(전·후 미리 빌드 각 DEPLOY_PREBUILD_TIMEOUT 20m + 패치 계산·업로드 + 기존 종료 단계) — application-worker.yml DEPLOY_PREBUILD_TIMEOUT 상한과 같이 볼 것
     worker-dead-threshold-seconds: 60          # 분석 단계 heartbeat 사망 판정
     implementation-worker-dead-threshold-seconds: 300   # 구현: 긴 작업 중 블립 허용
     deploy-worker-dead-threshold-seconds: 180           # 배포/중지
@@ -216,6 +217,9 @@ app:
     artifact:                             # 종료 산출물 보관 (스펙 2026-10-14). 켜도 카탈로그에서 켠 레포만 대상
       enabled: ${CLOSE_ARTIFACT_ENABLED:false}
       max-size-mb: ${CLOSE_ARTIFACT_MAX_SIZE_MB:1024}
+    patch:                                # 종료 부분 패치 (스펙 2026-11-10). 켜도 카탈로그에서 켠 레포(미리 빌드 명령 필요)만 대상
+      enabled: ${CLOSE_PATCH_ENABLED:false}
+      max-size-mb: ${CLOSE_PATCH_MAX_SIZE_MB:1024}
     mail:
       from: ${MAIL_FROM:}    # 비면 MAIL_USERNAME
   db-write:                               # 구현 단계 개발 DB 쓰기 (스펙 2026-11-03 §6.1). 스위치는 기본 꺼짐 — 배포한 뒤 DB_WRITE_ENABLED=true로 켠다

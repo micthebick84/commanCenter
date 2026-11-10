@@ -12,6 +12,7 @@ import { mrRef } from '~/composables/mergeRequestLabel'
 import { elapsedLabel } from '~/composables/implementationMode'
 import { useNowTick } from '~/composables/useNowTick'
 import { taskTypeLabel } from '~/composables/taskType'
+import { patchButtonState } from '~/composables/taskClose'
 
 export interface CardTask {
   id: number
@@ -31,10 +32,16 @@ export interface CardTask {
   implementationTimeoutMinutes?: number | null
   /** 작업 타입(스펙 2026-11-03 §4) — null·없음은 타입 없음. 칩은 타입이 있을 때만 그린다. */
   taskType?: string | null
+  /** 종료 부분 패치(스펙 2026-11-10) — 작업종료 카드의 '부분 패치' 버튼·'변경 없음' 글자용 */
+  close?: { patch?: { name: string | null; empty: boolean } | null } | null
 }
 
-const props = defineProps<{ task: CardTask; isAdmin: boolean }>()
-const emit = defineEmits<{ (e: 'open'): void; (e: 'menu'): void }>()
+// canDownloadPatch = 등록자·관리자 여부 — 부모가 계산해 내려 준다(카드는 인증 정보를 모른다)
+const props = defineProps<{ task: CardTask; isAdmin: boolean; canDownloadPatch?: boolean }>()
+const emit = defineEmits<{ (e: 'open'): void; (e: 'menu'): void; (e: 'patch'): void }>()
+const patchState = computed(() =>
+  props.canDownloadPatch && props.task.status === 'CLOSED' ? patchButtonState(props.task.close) : 'none',
+)
 
 const chip = computed(() => CHIP[props.task.status] ?? ['#f5f5f5', '#616161'])
 const steps = computed(() => stageSteps(props.task))
@@ -170,6 +177,24 @@ function segStyle(state: string, color: string) {
         >
           {{ deployHost }}<q-icon name="open_in_new" size="13px" />
         </a>
+      </template>
+      <template v-if="patchState === 'download'">
+        <span class="dot">·</span>
+        <q-btn
+          dense
+          flat
+          no-caps
+          size="sm"
+          color="primary"
+          icon="download"
+          label="부분 패치"
+          data-test="card-patch-download"
+          @click.stop="emit('patch')"
+        />
+      </template>
+      <template v-else-if="patchState === 'empty'">
+        <span class="dot">·</span>
+        <span class="text-grey-6" data-test="card-patch-empty">변경 없음</span>
       </template>
     </div>
 

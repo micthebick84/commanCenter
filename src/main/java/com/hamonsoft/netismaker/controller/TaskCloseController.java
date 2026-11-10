@@ -87,6 +87,15 @@ public class TaskCloseController {
                 body == null ? null : body.reason()), true);
     }
 
+    @PostMapping("/{id}/close/skip-patch")
+    @PreAuthorize("hasAuthority('ROLE_ADMIN')")
+    public TaskResponse skipPatch(@PathVariable Long id,
+                                  @RequestBody(required = false) @Valid SkipArtifactRequest body,
+                                  JwtAuthenticationToken auth) {
+        return view(closeService.skipPatch(id, AuthContext.requireUserId(auth),
+                body == null ? null : body.reason()), true);
+    }
+
     @PostMapping("/{id}/close/mail/resend")
     @PreAuthorize("hasAuthority('ROLE_ADMIN')")
     public Map<String, String> resendMail(@PathVariable Long id) {

@@ -40,6 +40,8 @@ const AUTH_PATHS = [
   '/tasks/1',
   // DB 작업 PR생성(스펙 2026-11-03 §6.9) — 관리자 상세가 주 행동 '확인 완료 — 종료 요청'과 보조 배포 버튼(deploy-secondary)을 그린다
   '/tasks/11',
+  // 작업종료 + 부분 패치(스펙 2026-11-10) — 상세(1280/390)의 종료 카드 패치 줄·내려받기 버튼, 보드·모바일 카드의 부분 패치 버튼
+  '/tasks/12',
   '/questions',
   '/questions/3',
   '/requests',
@@ -102,6 +104,14 @@ const TASKS = [
   // 수정승인대기 — 보드 배포 단계 그룹과 칩 색(스펙 2026-11-03 §6)
   task(10, 'FIX_REVIEW', '수정승인대기', { fix: { activeRound: null, activeMode: null, approvedRounds: 0, maxRounds: 3 } }),
   task(3, 'CANCELLED', '취소됨'),
+  // 작업종료 + 부분 패치 — 종료 카드의 패치 줄(파일 이름·크기·파일 수·내려받기)과 목록 카드의 부분 패치 버튼(등록자 admin = 로그인 사용자)
+  task(12, 'CLOSED', '작업종료', {
+    close: {
+      progress: ['MERGED', 'PATCH_BUILT', 'UNDEPLOYED', 'NOTE_WRITTEN', 'BRANCH_DELETED'], mergeCommitSha: 'abcdef1234567', notePath: null,
+      artifactMode: null, artifact: null, mail: null, patchMode: 'REQUIRED',
+      patch: { name: 'patch-task-12.zip', sizeBytes: 3145728, fileCount: 7, empty: false, uploadedAt: NOW },
+    },
+  }),
   // 구현중 작업 — 경과 문구는 마운트 뒤에만 그려지므로(useNowTick) 하이드레이션 불일치가 없어야 한다
   task(9, 'IMPLEMENTING', '구현중', { implementationMode: 'REVIEW', claimedAt: NOW, implementationTimeoutMinutes: 80 }),
 ]

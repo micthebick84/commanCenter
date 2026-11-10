@@ -12,7 +12,7 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 
-/** 산출물 내려받기 (스펙 2026-10-14 §6) — 권한 확인 뒤 1회용 주소, 그 주소로 파일. */
+/** 산출물·부분 패치 내려받기 (스펙 2026-10-14 §6, 2026-11-10) — 권한 확인 뒤 1회용 주소, 그 주소로 파일. */
 @Slf4j
 @Service
 @Profile("api")
@@ -22,13 +22,18 @@ public class ArtifactDownloadService {
 
     public record Download(Path file, String name, long size) {}
 
+    private static final String URL_PREFIX = "/api/artifact-downloads/";
+
     private final TaskRepository taskRepo;
     private final ArtifactStore store;
+    private final PatchStore patchStore;
     private final ArtifactDownloadTokens tokens;
 
-    public ArtifactDownloadService(TaskRepository taskRepo, ArtifactStore store, ArtifactDownloadTokens tokens) {
+    public ArtifactDownloadService(TaskRepository taskRepo, ArtifactStore store, PatchStore patchStore,
+                                   ArtifactDownloadTokens tokens) {
         this.taskRepo = taskRepo;
         this.store = store;
+        this.patchStore = patchStore;
         this.tokens = tokens;
     }
 
@@ -41,19 +46,43 @@ public class ArtifactDownloadService {
         if (!store.exists(taskId, t.getArtifactName())) {
             throw new TaskException(HttpStatus.GONE, "보관 파일이 정리되었습니다");
         }
-        return new Link("/api/artifact-downloads/" + tokens.issue(taskId), ArtifactDownloadTokens.TTL.toSeconds());
+        return new Link(URL_PREFIX + tokens.issue(taskId, ArtifactDownloadTokens.Kind.ARTIFACT),
+                ArtifactDownloadTokens.TTL.toSeconds());
+    }
+
+    /** 부분 패치 — 판정 순서는 {@link #link}와 같다: 작업 없음 404 → 403 → 패치 기록 없음 404 → 파일 없음 410. */
+    @Transactional(readOnly = true)
+    public Link patchLink(Long taskId, String actorId, boolean isAdmin) {
+        Task t = taskRepo.findActiveById(taskId).orElseThrow(TaskException::notFound);
+        if (!t.isOwnedBy(actorId) && !isAdmin) throw TaskException.forbidden();
+        if (t.getPatchName() == null) throw new TaskException(HttpStatus.NOT_FOUND, "보관한 패치가 없습니다");
+        if (!patchStore.exists(taskId)) {
+            throw new TaskException(HttpStatus.GONE, "보관 파일이 정리되었습니다");
+        }
+        return new Link(URL_PREFIX + tokens.issue(taskId, ArtifactDownloadTokens.Kind.PATCH),
+                ArtifactDownloadTokens.TTL.toSeconds());
     }
 
     @Transactional(readOnly = true)
     public Download redeem(String token) {
-        long taskId = tokens.redeem(token).orElseThrow(TaskException::notFound);
+        ArtifactDownloadTokens.Ticket ticket = tokens.redeem(token).orElseThrow(TaskException::notFound);
+        long taskId = ticket.taskId();
         Task t = taskRepo.findActiveById(taskId).orElseThrow(TaskException::notFound);
-        if (t.getArtifactName() == null || !store.exists(taskId, t.getArtifactName())) throw TaskException.notFound();
-        Path f = store.file(taskId, t.getArtifactName());
+        String name;
+        Path f;
+        if (ticket.kind() == ArtifactDownloadTokens.Kind.PATCH) {
+            if (t.getPatchName() == null || !patchStore.exists(taskId)) throw TaskException.notFound();
+            name = t.getPatchName();
+            f = patchStore.file(taskId);
+        } else {
+            if (t.getArtifactName() == null || !store.exists(taskId, t.getArtifactName())) throw TaskException.notFound();
+            name = t.getArtifactName();
+            f = store.file(taskId, name);
+        }
         try {
-            return new Download(f, t.getArtifactName(), Files.size(f));
+            return new Download(f, name, Files.size(f));
         } catch (IOException e) {
-            log.warn("산출물 크기 조회 실패 — 404로 응답: taskId={}", taskId, e);
+            log.warn("내려받기 파일 크기 조회 실패 — 404로 응답: taskId={}, kind={}", taskId, ticket.kind(), e);
             throw TaskException.notFound();
         }
     }

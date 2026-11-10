@@ -8,6 +8,8 @@ import com.hamonsoft.netismaker.dto.WorkerTaskResponse;
 import com.hamonsoft.netismaker.entity.CloseStep;
 import com.hamonsoft.netismaker.git.GitRemotes;
 import com.hamonsoft.netismaker.git.RepoRef;
+import com.hamonsoft.netismaker.workerdaemon.patch.PatchBuilder;
+import com.hamonsoft.netismaker.workerdaemon.patch.PatchException;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.annotation.Profile;
@@ -25,7 +27,7 @@ import java.util.Locale;
 
 /**
  * 작업 종료(kind=CLOSE) 오케스트레이션 (스펙 2026-10-13 §4, 2026-10-14 §4).
- *   ① 병합 → ② 배포 중지(띄운 적 없으면 중지 없이 기록만) → [③ 산출물 업로드 — claim에 closeArtifact가 있을 때만] → ④ 옵시디언 노트
+ *   ① 병합 → [①-1 부분 패치 — claim에 closePatch가 있을 때만] → ② 배포 중지(띄운 적 없으면 중지 없이 기록만) → [③ 산출물 업로드 — claim에 closeArtifact가 있을 때만] → ④ 옵시디언 노트
  *   → ⑤ 원격 브랜치 삭제 — 그 전에 이 브랜치를 target으로 쓰는 열린 PR/MR을 기준 브랜치로 옮긴다
  *   (+ 로컬 worktree 정리, 실패는 경고만)
  * 단계마다 close-progress를 보고하고, claim의 closeProgress에 있는 단계는 건너뛴다. 어느 단계든 실패하면
@@ -47,15 +49,20 @@ public class TaskCloser {
     private final CloseNoteWriter noteWriter;
     private final CloseNoteFolderResolver folderResolver;
     private final ArtifactPublisher artifacts;
+    private final PatchBuilder patchBuilder;
+    private final DeployPrebuilder prebuilder;
+    private final GitOpsService gitOps;
     private final Clock clock;
 
     @Autowired
     public TaskCloser(WorkerProperties props, CloseProperties closeProps, WorkerHttpClient http,
                       DeployService deployService, WorktreeService worktrees, ClaudeExecAdapter claude,
-                      ResultReporter reporter, ArtifactPublisher artifacts) {
+                      ResultReporter reporter, ArtifactPublisher artifacts,
+                      PatchBuilder patchBuilder, DeployPrebuilder prebuilder, GitOpsService gitOps) {
         this(props, closeProps, http, deployService, worktrees, claude, reporter,
                 List.of(new GitHubPrCloser(props.githubPat()), new GitLabMrCloser(props.gitlabToken())),
-                new CloseNoteWriter(), artifacts, Clock.system(ZoneId.of("Asia/Seoul")));
+                new CloseNoteWriter(), artifacts, patchBuilder, prebuilder, gitOps,
+                Clock.system(ZoneId.of("Asia/Seoul")));
     }
 
     /** 산출물 업로더 없는 테스트용 — closeArtifact가 있는 claim은 산출물 단계에서 종료실패한다. */
@@ -65,10 +72,20 @@ public class TaskCloser {
         this(props, closeProps, http, deployService, worktrees, claude, reporter, closers, noteWriter, null, clock);
     }
 
+    /** 부분 패치 협력자(patchBuilder·prebuilder·gitOps)가 없는 테스트용 — closePatch가 없는 claim은 그대로 돈다. */
     TaskCloser(WorkerProperties props, CloseProperties closeProps, WorkerHttpClient http,
                DeployService deployService, WorktreeService worktrees, ClaudeExecAdapter claude,
                ResultReporter reporter, List<MergeRequestCloser> closers, CloseNoteWriter noteWriter,
                ArtifactPublisher artifacts, Clock clock) {
+        this(props, closeProps, http, deployService, worktrees, claude, reporter, closers, noteWriter, artifacts,
+                null, null, null, clock);
+    }
+
+    TaskCloser(WorkerProperties props, CloseProperties closeProps, WorkerHttpClient http,
+               DeployService deployService, WorktreeService worktrees, ClaudeExecAdapter claude,
+               ResultReporter reporter, List<MergeRequestCloser> closers, CloseNoteWriter noteWriter,
+               ArtifactPublisher artifacts, PatchBuilder patchBuilder, DeployPrebuilder prebuilder,
+               GitOpsService gitOps, Clock clock) {
         this.props = props;
         this.closeProps = closeProps;
         this.http = http;
@@ -80,6 +97,9 @@ public class TaskCloser {
         this.noteWriter = noteWriter;
         this.folderResolver = new CloseNoteFolderResolver(claude, closeProps);
         this.artifacts = artifacts;
+        this.patchBuilder = patchBuilder;
+        this.prebuilder = prebuilder;
+        this.gitOps = gitOps;
         this.clock = clock;
     }
 
@@ -115,12 +135,26 @@ public class TaskCloser {
         try {
             // 노트(③)가 남았으면 볼트를 먼저 확인한다 — 병합(되돌릴 수 없음) 뒤에 설정 누락으로 멈추지 않게
             if (!done.contains(CloseStep.NOTE_WRITTEN)) requireVault();
+            // 부분 패치 대상 — claim에 지시가 있고 아직 만들지 않았다. 아니면 아래 패치 코드는 하나도 돌지 않는다.
+            boolean patchPending = task.closePatch() != null && !done.contains(CloseStep.PATCH_BUILT);
+            if (patchPending && !done.contains(CloseStep.MERGED)) requirePatchReady(task, ref);
             if (!done.contains(CloseStep.MERGED)) {
                 if (task.prNumber() == null) throw new StepFailed("PR 번호가 없어 병합할 수 없습니다");
+                // 병합 직전 기준 브랜치 끝 — 패치 "전" 커밋 확인용. 읽지 못하면 null(패치 단계가 두 부모 규칙으로 판단)
+                String baseSha = patchPending ? gitOps.remoteBranchTip(ref, task.githubBranch()) : null;
                 String merged = step("병합", () -> closerFor(ref).merge(ref, task.prNumber(), task.headSha(),
                         closeProps.mergeMethod()));
                 if (merged != null) mergeSha = merged;
-                progress(task, CloseStep.MERGED, mergeSha, null);
+                // 병합은 됐는데 MERGED 보고 전에 끊긴 재시도면 읽은 끝이 이미 병합 커밋이다 — 기준으로 쓰지 않는다
+                if (baseSha != null && baseSha.equals(mergeSha)) baseSha = null;
+                progress(task, new CloseProgressRequest(props.id(), CloseStep.MERGED, mergeSha, null, null,
+                        baseSha, null, null));
+            }
+            if (patchPending) {
+                String after = mergeSha;
+                PatchBuilder.Outcome o = step("부분 패치", () -> patchBuilder.build(task, after));
+                progress(task, new CloseProgressRequest(props.id(), CloseStep.PATCH_BUILT, null, null, null,
+                        null, o.empty(), o.fileCount()));
             }
             if (!done.contains(CloseStep.UNDEPLOYED)) {
                 if (neverDeployed(task.closeContext())) {
@@ -305,10 +339,35 @@ public class TaskCloser {
 
     private void progress(WorkerTaskResponse task, CloseStep s, String mergeSha, String notePath, String noteFolder)
             throws StepFailed {
-        step("진행 보고(" + s + ")", () -> {
-            http.postCloseProgress(task.id(), new CloseProgressRequest(props.id(), s, mergeSha, notePath, noteFolder));
+        progress(task, new CloseProgressRequest(props.id(), s, mergeSha, notePath, noteFolder));
+    }
+
+    private void progress(WorkerTaskResponse task, CloseProgressRequest req) throws StepFailed {
+        step("진행 보고(" + req.step() + ")", () -> {
+            http.postCloseProgress(task.id(), req);
             return null;
         });
+    }
+
+    /**
+     * 부분 패치를 만들 수 있는지 병합(되돌릴 수 없음) 전에 확인한다. GitHub rebase 병합은 병합 커밋이 없어 "전" 커밋을
+     * 정할 수 없다(GitLab은 rebase 설정이어도 병합 커밋을 만든다). 빌드 도구가 이 워커에 없으면 병합 뒤에야 실패하므로 막는다.
+     */
+    private void requirePatchReady(WorkerTaskResponse task, RepoRef ref) throws StepFailed {
+        if (patchBuilder == null || prebuilder == null || gitOps == null) {
+            throw new StepFailed("부분 패치: 워커에 패치 빌더가 없습니다");
+        }
+        if ("rebase".equalsIgnoreCase(closeProps.mergeMethod()) && !ref.isGitlab()) {
+            throw new StepFailed("부분 패치는 rebase 병합을 지원하지 않습니다");
+        }
+        String command = task.closePatch().command();
+        if (command == null || command.isBlank()) {
+            throw new StepFailed("부분 패치 빌드 명령이 비어 있습니다");
+        }
+        String toolchain = task.closePatch().toolchain();
+        if (!prebuilder.toolchainConfigured(toolchain)) {
+            throw new StepFailed("부분 패치 빌드 도구가 워커에 설정되지 않았습니다: " + toolchain);
+        }
     }
 
     /**
@@ -341,8 +400,8 @@ public class TaskCloser {
             return s.run();
         } catch (StepFailed e) {
             throw e;
-        } catch (MergeRequestCloser.CloseRefusedException e) {
-            throw new StepFailed(e.getMessage());
+        } catch (MergeRequestCloser.CloseRefusedException | PatchException e) {
+            throw new StepFailed(e.getMessage());   // 사람이 읽는 사유 그대로(패치의 고정 문구 포함)
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             throw new StepFailed(label + " 중단됨");

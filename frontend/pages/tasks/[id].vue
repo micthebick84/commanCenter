@@ -32,11 +32,15 @@ import {
   closeSteps,
   obsidianLink,
   canSkipArtifact,
+  canSkipPatch,
+  patchButtonState,
   formatMb,
   startArtifactDownload,
+  startPatchDownload,
   MAIL_STATUS_LABEL,
   type CloseView,
 } from '~/composables/taskClose'
+import { useOneTimeDownload, downloadErrorMessage } from '~/composables/useOneTimeDownload'
 import RefRepoChips from '~/components/RefRepoChips.vue'
 import TaskRefChangeMenu from '~/components/tasks/TaskRefChangeMenu.vue'
 import type { InterviewStatus } from '~/composables/useInterviewStream'
@@ -659,33 +663,35 @@ const canSkipArtifactClose = computed(
   () => auth.isAdmin && !!task.value && canSkipArtifact(task.value.close, task.value.status),
 )
 
-// 내려받기 주소 토큰은 1회용 — 연타가 download-link를 두 번 POST해 254MB 내려받기를 두 번 시작하지 않게 막는다.
-// 응답이 오기 전은 물론, 성공해 주소를 연 직후에도 잠깐(쿨다운) 잠근다: startArtifactDownload는 응답 직후 동기로
-// 이동하므로 빠른 API에서는 진행 중 플래그만으로 두 번째 클릭이 새어 나온다. 오류면 바로 풀어 다시 시도할 수 있게 한다.
-const DOWNLOAD_COOLDOWN_MS = 2000
-const downloadingArtifact = ref(false)
-let downloadCooldown: ReturnType<typeof setTimeout> | null = null
-onUnmounted(() => {
-  if (downloadCooldown) clearTimeout(downloadCooldown)
-})
+// 내려받기 주소 토큰은 1회용 — 연타·성공 직후 쿨다운 잠금은 useOneTimeDownload가 맡는다(산출물·부분 패치 공용 규칙).
+const artifactDownload = useOneTimeDownload((id) => startArtifactDownload(id, (u, o) => useApi<{ url: string }>(u, o)))
+const downloadingArtifact = artifactDownload.busy
 async function downloadArtifact() {
-  if (downloadingArtifact.value) return
-  downloadingArtifact.value = true
   try {
-    await startArtifactDownload(taskId.value, (u, o) => useApi<{ url: string }>(u, o))
-    downloadCooldown = setTimeout(() => {
-      downloadCooldown = null
-      downloadingArtifact.value = false
-    }, DOWNLOAD_COOLDOWN_MS)
+    await artifactDownload.run(taskId.value)
   } catch (e: any) {
-    downloadingArtifact.value = false
-    // 410 = 보관 기간이 지나 서버가 산출물 파일을 정리했다(본문 메시지가 없어도 같은 안내)
-    const status = e?.statusCode ?? e?.response?.status ?? e?.status
-    $q.notify({
-      type: 'negative',
-      message: status === 410 ? '보관 파일이 정리되었습니다' : (e?.data?.message ?? '내려받기 실패'),
-    })
+    // 410 = 보관 기간이 지나 서버가 파일을 정리했다(본문 메시지가 없어도 같은 안내)
+    $q.notify({ type: 'negative', message: downloadErrorMessage(e) })
   }
+}
+
+// 종료 부분 패치(스펙 2026-11-10) — 내려받기는 등록자 본인·관리자, 패치 없이 마무리는 관리자
+const patchState = computed(() => patchButtonState(task.value?.close))
+const canDownloadPatch = computed(() => patchState.value === 'download' && (auth.isAdmin || isOwner.value))
+const canSkipPatchClose = computed(
+  () => auth.isAdmin && !!task.value && canSkipPatch(task.value.close, task.value.status),
+)
+const patchDownload = useOneTimeDownload((id) => startPatchDownload(id, (u, o) => useApi<{ url: string }>(u, o)))
+async function downloadPatch() {
+  try {
+    await patchDownload.run(taskId.value)
+  } catch (e: unknown) {
+    $q.notify({ type: 'negative', message: downloadErrorMessage(e) })
+  }
+}
+async function skipPatch() {
+  if (!(await confirmDialog($q, '부분 패치 없이 배포 중지·노트·브랜치 정리를 이어 갑니다.', { title: '패치 없이 마무리' }))) return
+  await closeAction('close/skip-patch', '패치 없이 마무리 — 종료 큐 등록')
 }
 
 // 서버는 재시도 결과 상태를 200으로 돌려준다(스펙 2026-10-14 §7) — SENT만 성공이고 나머지는 경고로 결과를 알린다.
@@ -850,6 +856,15 @@ function onAction(kind: NextActionKind) {
             data-test="close-skip-artifact"
             @click="skipArtifact"
           />
+          <q-btn
+            v-if="!$q.screen.lt.md && canSkipPatchClose"
+            outline
+            color="warning"
+            icon="skip_next"
+            label="패치 없이 마무리"
+            data-test="close-skip-patch"
+            @click="skipPatch"
+          />
         </q-card-section>
         <q-separator />
         <q-card-section>
@@ -869,6 +884,28 @@ function onAction(kind: NextActionKind) {
             옵시디언 노트
             <a v-if="noteHref" :href="noteHref">{{ task.close.notePath }}</a>
             <span v-else>{{ task.close.notePath }}</span>
+          </div>
+          <div v-if="patchState !== 'none'" class="q-mt-sm row items-center" style="gap: 8px" data-test="close-patch">
+            <q-icon name="difference" color="grey-7" />
+            <template v-if="patchState === 'download'">
+              <span class="text-caption">
+                부분 패치 <code>{{ task.close.patch!.name }}</code>
+                <template v-if="task.close.patch!.sizeBytes != null"> · {{ formatMb(task.close.patch!.sizeBytes) }}</template>
+                <template v-if="task.close.patch!.fileCount != null"> · 파일 {{ task.close.patch!.fileCount }}개</template>
+              </span>
+              <q-btn
+                v-if="canDownloadPatch"
+                dense
+                flat
+                color="primary"
+                icon="download"
+                label="부분 패치"
+                :loading="patchDownload.busy.value"
+                data-test="close-patch-download"
+                @click="downloadPatch"
+              />
+            </template>
+            <span v-else class="text-caption text-grey-7">부분 패치 — 변경 없음</span>
           </div>
           <div v-if="task.close.artifact" class="q-mt-sm row items-center" style="gap: 8px" data-test="close-artifact">
             <q-icon name="inventory_2" color="grey-7" />
@@ -1051,6 +1088,10 @@ function onAction(kind: NextActionKind) {
                   <q-item v-if="canSkipArtifactClose" v-close-popup clickable class="text-warning" data-test="bar-more-close-skip-artifact" @click="skipArtifact">
                     <q-item-section avatar><q-icon name="skip_next" color="warning" /></q-item-section>
                     <q-item-section>산출물 없이 마무리</q-item-section>
+                  </q-item>
+                  <q-item v-if="canSkipPatchClose" v-close-popup clickable class="text-warning" data-test="bar-more-close-skip-patch" @click="skipPatch">
+                    <q-item-section avatar><q-icon name="skip_next" color="warning" /></q-item-section>
+                    <q-item-section>패치 없이 마무리</q-item-section>
                   </q-item>
                   <q-item v-if="isInterviewPhase && task.interviewSessionId" v-close-popup clickable data-test="bar-more-interview" @click="onAction('open-interview')">
                     <q-item-section avatar><q-icon name="forum" /></q-item-section>

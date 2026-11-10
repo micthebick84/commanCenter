@@ -281,6 +281,33 @@ public class WorktreeService {
         return worktreeDir.toFile();
     }
 
+    /**
+     * 특정 커밋을 detached 체크아웃하는 worktree(부분 패치의 "전"·"후" 빌드용 — kind는 PATCH_BEFORE/PATCH_AFTER).
+     * createForDeploy와 같은 락·{@code --force --detach}이고 대상이 {@code origin/<브랜치>}가 아니라 sha다.
+     * 멱등: 같은 이름의 기존 worktree는 강제 제거 후 다시 만든다. sha는 캐시에 이미 있어야 한다
+     * ({@link GitRepoCache#fetchPatchCommits}).
+     */
+    public File createAtCommit(File repoCacheDir, String repoKey, WorktreeKind kind, long taskId, String sha)
+            throws IOException, InterruptedException {
+        if (!GitRepoCache.isFullSha(sha)) throw new IOException("커밋 정보가 올바르지 않습니다");
+        return repos.withRepoLock(repoKey, () -> doCreateAtCommit(repoCacheDir, repoKey, kind, taskId, sha));
+    }
+
+    private File doCreateAtCommit(File repoCacheDir, String repoKey, WorktreeKind kind, long taskId, String sha)
+            throws IOException, InterruptedException {
+        Path worktreeDir = worktreeDir(repoKey, kind, taskId);
+        Files.createDirectories(worktreeDir.getParent());
+        if (Files.exists(worktreeDir, LinkOption.NOFOLLOW_LINKS)) {
+            log.warn("기존 {} worktree 발견, 강제 제거: {}", kind.dirName(taskId), worktreeDir);
+            removeWorktree(TARGET_GIT, repoCacheDir, worktreeDir, false);
+        }
+        ProcessRunner.requireSuccess(repoCacheDir,
+                List.of("git", "worktree", "add", "--force", "--detach", worktreeDir.toString(), sha),
+                GIT_TIMEOUT_SECONDS);
+        log.info("{} worktree 생성: sha={} dir={}", kind.dirName(taskId), sha.substring(0, 7), worktreeDir);
+        return worktreeDir.toFile();
+    }
+
     public Path worktreeDir(String repoKey, WorktreeKind kind, long taskId) {
         return Paths.get(props.worktreeRoot(), repoKey, kind.dirName(taskId));
     }

@@ -10,7 +10,11 @@ import java.util.regex.Pattern;
 public enum WorktreeKind {
     TASK("task-"),
     DEPLOY("deploy-"),
-    DESIGN("design-");
+    DESIGN("design-"),
+    /** 부분 패치의 "전" 커밋 체크아웃(읽기 전용 빌드). 접두사는 위 세 종류와 겹치지 않는다. */
+    PATCH_BEFORE("patch-before-"),
+    /** 부분 패치의 "후"(병합 커밋) 체크아웃. */
+    PATCH_AFTER("patch-after-");
 
     /** 양의 10진 정수, 앞자리 0 없음, long 범위 안(18자리까지). */
     private static final Pattern ID = Pattern.compile("[1-9][0-9]{0,17}");

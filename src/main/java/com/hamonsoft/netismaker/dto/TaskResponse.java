@@ -155,7 +155,11 @@ public record TaskResponse(
      * artifact·mail은 없으면 null (스펙 2026-10-14 §8). 수신 주소는 싣지 않는다.
      */
     public record CloseView(List<String> progress, String mergeCommitSha, String notePath,
-                            String artifactMode, ArtifactView artifact, MailView mail) {}
+                            String artifactMode, ArtifactView artifact, MailView mail,
+                            String patchMode, PatchView patch) {}
+
+    /** 부분 패치 — 올린 파일이 있거나 변경 없음일 때만 존재. 변경 없음이면 name·sizeBytes는 null, fileCount는 0. */
+    public record PatchView(String name, Long sizeBytes, Integer fileCount, boolean empty, OffsetDateTime uploadedAt) {}
 
     public record ArtifactView(String name, long sizeBytes, String sha256, OffsetDateTime uploadedAt) {}
 
@@ -182,7 +186,14 @@ public record TaskResponse(
                 t.getArtifactName() == null ? null : new ArtifactView(t.getArtifactName(),
                         t.getArtifactSize() == null ? 0 : t.getArtifactSize(), t.getArtifactSha256(),
                         t.getArtifactUploadedAt()),
-                t.getCloseMailStatus() == null ? null : new MailView(t.getCloseMailStatus(), t.getCloseMailAt()));
+                t.getCloseMailStatus() == null ? null : new MailView(t.getCloseMailStatus(), t.getCloseMailAt()),
+                t.getClosePatchMode(), patchViewOf(t));
+    }
+
+    private static PatchView patchViewOf(Task t) {
+        boolean empty = Boolean.TRUE.equals(t.getPatchEmpty());
+        if (t.getPatchName() == null && !empty) return null;
+        return new PatchView(t.getPatchName(), t.getPatchSize(), t.getPatchFileCount(), empty, t.getPatchUploadedAt());
     }
 
     public static TaskResponse of(Task t, TaskAnalysis a) {

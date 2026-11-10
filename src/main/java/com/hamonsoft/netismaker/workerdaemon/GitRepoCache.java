@@ -188,6 +188,54 @@ public class GitRepoCache {
                 + "의 최근 " + REF_FALLBACK_DEPTHS.get(REF_FALLBACK_DEPTHS.size() - 1) + "개 커밋 안에 없음");
     }
 
+    /** 부분 패치 — 병합 커밋과 그 부모를 받는 얕은 fetch 깊이, 그리고 거부될 때 기준 브랜치를 받는 깊이. */
+    private static final int PATCH_SHA_DEPTH = 2;
+    private static final int PATCH_BRANCH_DEPTH = 50;
+
+    /**
+     * 부분 패치용으로 병합 커밋({@code afterSha})과 그 부모를 캐시에 들여놓는다(스펙 2026-11-10). 레포 락을 스스로 잡는다
+     * (참조 받기와 달리 호출자가 락을 쥐지 않는다). 캐시가 없으면 기존 참조 받기와 같은 단일 브랜치 shallow clone으로 만든다.
+     *
+     *  1. {@code fetch --depth=2 <인증 URL> <afterSha>} — 서버가 sha 받기를 거부하면
+     *  2. {@code fetch --depth=50 <인증 URL> +refs/heads/<기준>:refs/netis-refs/<기준>}(참조 전용 이름공간)
+     *  3. 그래도 afterSha가 없으면 {@code IOException("병합 커밋을 받지 못했습니다")}
+     *
+     * {@code refs/remotes/origin/*}·캐시 HEAD는 건드리지 않는다(같은 repo를 쓰는 다른 작업의 기준이 흔들리지 않게).
+     * git 호출은 전부 {@link #runRefGit}(자격증명 도우미·askpass·프롬프트 없음), 자세한 실패 출력은 가려서 로그에만 남긴다.
+     *
+     * @return 캐시 디렉터리
+     */
+    public File fetchPatchCommits(RepoRef ref, String baseBranch, String afterSha)
+            throws IOException, InterruptedException {
+        if (!isFullSha(afterSha)) throw new IOException("병합 커밋 정보가 올바르지 않습니다");
+        if (baseBranch == null || baseBranch.isBlank()) throw new IOException("기준 브랜치 정보가 없습니다");
+        String commit = afterSha.toLowerCase(Locale.ROOT);
+        return withRepoLock(GitRemotes.localKey(ref), () -> {
+            Path target = Paths.get(props.reposDir(), GitRemotes.localKey(ref));
+            Files.createDirectories(target.getParent());
+            String authUrl = remotes.authenticatedUrl(ref);
+            if (!Files.exists(target.resolve(".git"))) {
+                requireRefGit(target.getParent().toFile(),
+                        refCloneArgs(authUrl, baseBranch, target.getFileName().toString()), GIT_TIMEOUT_SECONDS);
+            }
+            requireRefGit(target.toFile(), refScrubArgs(ref), LOCAL_GIT_TIMEOUT_SECONDS);
+
+            File dir = target.toFile();
+            // 이미 있어도 받는다 — shallow 경계라 부모가 없을 수 있고, 이미 가진 객체는 거의 비용이 없다.
+            ProcessRunner.Result last = runRefGit(dir,
+                    refGit("fetch", "--no-tags", "--depth=" + PATCH_SHA_DEPTH, authUrl, commit), GIT_TIMEOUT_SECONDS);
+            if (last.exitCode() != 0 || !hasCommit(dir, commit)) {
+                last = runRefGit(dir, refFetchBranchArgs(authUrl, baseBranch, PATCH_BRANCH_DEPTH), GIT_TIMEOUT_SECONDS);
+            }
+            if (!hasCommit(dir, commit)) {
+                log.warn("패치 병합 커밋 받기 실패: {} (exit={}) {}", commit.substring(0, 7), last.exitCode(),
+                        GitRemotes.maskAndCut(last.stdout(), 500));
+                throw new IOException("병합 커밋을 받지 못했습니다");
+            }
+            return dir;
+        });
+    }
+
     private static boolean hasCommit(File dir, String commit) throws IOException, InterruptedException {
         return runRefGit(dir, refGit("cat-file", "-e", commit + "^{commit}"), LOCAL_GIT_TIMEOUT_SECONDS)
                 .exitCode() == 0;

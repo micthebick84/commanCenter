@@ -24,6 +24,8 @@ interface RepoEntry {
   artifactEnabled: boolean
   artifactPath: string | null
   prebuildEnabled: boolean
+  /** 종료 부분 패치 만들기(스펙 2026-11-10) — 미리 빌드 명령이 있어야 켤 수 있다 */
+  patchEnabled?: boolean
   prebuildCommand: string | null
   prebuildArtifact: string | null
   prebuildToolchain: string | null
@@ -94,12 +96,18 @@ const form = reactive({
   artifactEnabled: false,
   artifactPath: '',
   prebuildEnabled: false,
+  patchEnabled: false,
   prebuildCommand: '',
   prebuildArtifact: '',
   prebuildToolchain: '',
   noteFolder: '',
   dbMigrationManaged: false,
   dbScriptDir: '',
+})
+// 부분 패치는 미리 빌드 명령이 있어야 켤 수 있다(서버도 400) — 명령을 지우면 체크도 내린다
+const patchBlocked = computed(() => !form.prebuildCommand.trim())
+watch(patchBlocked, (blocked) => {
+  if (blocked) form.patchEnabled = false
 })
 // 수정 창을 열 때의 노트 폴더 — 바뀌었을 때만 보낸다(그 사이 첫 종료가 자동 기록한 값을 덮지 않게, 스펙 2026-10-28 close-note-folder §3-1)
 let originalNoteFolder = ''
@@ -118,6 +126,7 @@ function openCreate() {
   form.artifactEnabled = false
   form.artifactPath = ''
   form.prebuildEnabled = false
+  form.patchEnabled = false
   form.prebuildCommand = ''
   form.prebuildArtifact = ''
   form.prebuildToolchain = ''
@@ -137,6 +146,7 @@ function openEdit(e: RepoEntry) {
   form.artifactEnabled = e.artifactEnabled ?? false
   form.artifactPath = e.artifactPath ?? ''
   form.prebuildEnabled = e.prebuildEnabled ?? false
+  form.patchEnabled = e.patchEnabled ?? false
   form.prebuildCommand = e.prebuildCommand ?? ''
   form.prebuildArtifact = e.prebuildArtifact ?? ''
   form.prebuildToolchain = e.prebuildToolchain ?? ''
@@ -161,6 +171,7 @@ async function submit() {
       artifactEnabled: form.artifactEnabled,
       artifactPath: form.artifactPath || null,
       prebuildEnabled: form.prebuildEnabled,
+      patchEnabled: form.patchEnabled,
       prebuildCommand: form.prebuildCommand.trim() || null,
       prebuildArtifact: form.prebuildArtifact.trim() || null,
       prebuildToolchain: form.prebuildToolchain.trim() || null,
@@ -281,6 +292,16 @@ const canSubmit = computed(
             data-test="catalog-prebuild-chip"
           />
           <q-chip
+            v-if="e.patchEnabled"
+            size="sm"
+            dense
+            color="blue-grey-2"
+            text-color="grey-9"
+            label="부분 패치"
+            class="q-ma-none"
+            data-test="catalog-patch-chip"
+          />
+          <q-chip
             v-if="e.dbMigrationManaged"
             size="sm"
             dense
@@ -374,6 +395,15 @@ const canSubmit = computed(
             text-color="grey-9"
             label="미리 빌드"
             data-test="catalog-prebuild-chip"
+          />
+          <q-chip
+            v-if="props.row.patchEnabled"
+            size="sm"
+            dense
+            color="blue-grey-2"
+            text-color="grey-9"
+            label="부분 패치"
+            data-test="catalog-patch-chip"
           />
           <q-chip
             v-if="props.row.dbMigrationManaged"
@@ -531,7 +561,7 @@ const canSubmit = computed(
         <div class="text-caption text-grey-7">
           사내 라이브러리처럼 원격 Docker 안에서 받을 수 없는 의존성이 있을 때. 명령은 워커 PC에서 운영자 계정으로 실행됩니다. 명령에 비밀번호·토큰을 넣지 마세요 — 배포 로그에 그대로 보입니다.
         </div>
-        <template v-if="form.prebuildEnabled">
+        <template v-if="form.prebuildEnabled || form.patchEnabled">
           <q-input
             v-model="form.prebuildCommand"
             label="빌드 명령"
@@ -567,6 +597,17 @@ const canSubmit = computed(
             data-test="form-prebuild-toolchain"
           />
         </template>
+        <q-toggle
+          v-model="form.patchEnabled"
+          label="부분 패치 만들기"
+          color="primary"
+          :disable="patchBlocked"
+          data-test="form-patch-enabled"
+        />
+        <div class="text-caption text-grey-7">
+          종료 때 병합 전·후 빌드 결과를 비교해 바뀐 파일만 담은 패치 파일(zip)을 만들어 보관합니다.
+          <span v-if="patchBlocked" data-test="form-patch-hint">미리 빌드 명령이 있어야 켤 수 있습니다</span>
+        </div>
       </template>
     </AdminFormDialog>
 

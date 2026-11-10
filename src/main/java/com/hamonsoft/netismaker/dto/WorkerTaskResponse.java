@@ -87,7 +87,9 @@ public record WorkerTaskResponse(
          * 계획이 가리켰지만 구현에 넘기지 않은 목업 번호(interview_mockup.n) — 구현 프롬프트가 "전달되지 않은 목업은 찾지 말고
          * 계획 글만 따르라"를 넣는 근거. 없으면(null 포함) 빈 목록.
          */
-        List<Integer> excludedMockupNumbers
+        List<Integer> excludedMockupNumbers,
+        /** CLOSE 전용: 부분 패치 지시. null이면(모드가 REQUIRED가 아니거나 이미 만들었으면) 워커가 패치 단계를 건너뛴다 (스펙 2026-11-10). */
+        ClosePatchSpec closePatch
 ) {
     public WorkerTaskResponse {
         if (refRepos == null) refRepos = List.of();
@@ -109,6 +111,24 @@ public record WorkerTaskResponse(
 
     /** 미리 빌드 지시. toolchain은 워커 설정의 도구 이름(null이면 워커 환경 그대로). */
     public record PrebuildSpec(String command, String artifact, String toolchain) {}
+
+    /** 부분 패치(closePatch) 도입 전 34개 인자 정규 생성자 — 기존 팩토리·테스트 호환(closePatch=null). */
+    public WorkerTaskResponse(Long id, String githubRepo, String githubBranch, String title, String description,
+                              Kind kind, List<TaskMcpSpec> mcpsExtra, String analysisMarkdown, String subtasksJson,
+                              String headBranch, String headSha, List<EnvVar> envVars, String model, String effort,
+                              String designMarkdown, String mockupFilesJson, String feedbackHistoryJson,
+                              String designUrl, String designSystemProjectId, String designOutputProjectId,
+                              String gitUrl, String repoHost, String planMarkdown,
+                              Integer prNumber, String prUrl, String closeProgress, CloseContext closeContext,
+                              CloseArtifactSpec closeArtifact, DbMcpGrant dbMcp, ImplementationSpec implementation,
+                              List<TaskRefRepo> refRepos, PrebuildSpec prebuild,
+                              List<InterviewMockupFile> interviewMockups, List<Integer> excludedMockupNumbers) {
+        this(id, githubRepo, githubBranch, title, description, kind, mcpsExtra, analysisMarkdown, subtasksJson,
+                headBranch, headSha, envVars, model, effort, designMarkdown, mockupFilesJson, feedbackHistoryJson,
+                designUrl, designSystemProjectId, designOutputProjectId, gitUrl, repoHost, planMarkdown,
+                prNumber, prUrl, closeProgress, closeContext, closeArtifact, dbMcp, implementation, refRepos, prebuild,
+                interviewMockups, excludedMockupNumbers, null);
+    }
 
     /** 인터뷰 목업(interviewMockups·excludedMockupNumbers) 도입 전 32개 인자 정규 생성자 — 기존 팩토리·테스트 호환. */
     public WorkerTaskResponse(Long id, String githubRepo, String githubBranch, String title, String description,
@@ -278,7 +298,7 @@ public record WorkerTaskResponse(
                 analysisMarkdown, subtasksJson, headBranch, headSha, envVars, model, effort, designMarkdown,
                 mockupFilesJson, feedbackHistoryJson, designUrl, designSystemProjectId, designOutputProjectId,
                 gitUrl, repoHost, planMarkdown, prNumber, prUrl, closeProgress, closeContext, closeArtifact, grant,
-                implementation, refRepos, prebuild, interviewMockups, excludedMockupNumbers);
+                implementation, refRepos, prebuild, interviewMockups, excludedMockupNumbers, closePatch);
     }
 
     /** 인터뷰 목업 파일과 '전달되지 않은' 번호 두 칸만 바꾼 사본 — 둘은 함께 움직인다. */
@@ -287,7 +307,7 @@ public record WorkerTaskResponse(
                 analysisMarkdown, subtasksJson, headBranch, headSha, envVars, model, effort, designMarkdown,
                 mockupFilesJson, feedbackHistoryJson, designUrl, designSystemProjectId, designOutputProjectId,
                 gitUrl, repoHost, planMarkdown, prNumber, prUrl, closeProgress, closeContext, closeArtifact, dbMcp,
-                implementation, refRepos, prebuild, files, excludedNumbers);
+                implementation, refRepos, prebuild, files, excludedNumbers, closePatch);
     }
 
     /** 워커가 clone/폴더/MR에 쓰는 저장소 참조. 새 필드가 없는 페이로드는 GitHub로 복원된다. */
@@ -412,10 +432,16 @@ public record WorkerTaskResponse(
     }
 
     public static WorkerTaskResponse forClose(Task t, CloseContext ctx, CloseArtifactSpec artifact) {
+        return forClose(t, ctx, artifact, null);
+    }
+
+    public static WorkerTaskResponse forClose(Task t, CloseContext ctx, CloseArtifactSpec artifact,
+                                              ClosePatchSpec patch) {
         return new WorkerTaskResponse(t.getId(), t.getGithubRepo(), t.getGithubBranch(),
                 t.getTitle(), t.getDescription(), Kind.CLOSE, List.of(), null, null,
                 t.getHeadBranch(), t.getHeadSha(), List.of(), null, null,
                 null, null, null, null, null, null, t.getGitUrl(), hostOf(t), null,
-                t.getPrNumber(), t.getPrUrl(), t.getCloseProgress(), ctx, artifact);
+                t.getPrNumber(), t.getPrUrl(), t.getCloseProgress(), ctx, artifact, null, null, List.of(), null,
+                List.of(), List.of(), patch);
     }
 }

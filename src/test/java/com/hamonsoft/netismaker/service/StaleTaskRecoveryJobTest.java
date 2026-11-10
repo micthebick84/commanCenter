@@ -49,6 +49,7 @@ class StaleTaskRecoveryJobTest {
         ReflectionTestUtils.setField(job, "designStaleThresholdMinutes", 30);
         ReflectionTestUtils.setField(job, "designWorkerDeadThresholdSeconds", 300);
         ReflectionTestUtils.setField(job, "closeStaleThresholdMinutes", 30);
+        ReflectionTestUtils.setField(job, "closePatchStaleThresholdMinutes", 110);
         // 기동 유예가 기존 테스트의 의미를 바꾸지 않게 API가 오래전에 뜬 것으로 둔다
         ReflectionTestUtils.setField(job, "startedAt", OffsetDateTime.now().minusHours(1));
         when(historyRepo.save(any())).thenAnswer(i -> i.getArgument(0));
@@ -337,5 +338,53 @@ class StaleTaskRecoveryJobTest {
         job.recoverStale();
 
         assertThat(t.getStatus()).isEqualTo(TaskStatus.PENDING);
+    }
+
+    @Test
+    void closingWithPatchPendingUses110Minutes() {
+        // 패치 단계가 남음: 31분 전 claim은 기본 천장(30분)을 넘었어도 회수하지 않는다
+        Task t = task(17L, TaskStatus.CLOSING, "w1", 31, 0);
+        t.setClosePatchMode("REQUIRED");
+        t.setCloseProgress("MERGED");
+        when(taskRepo.findInFlightClaimedForUpdateSkipLocked()).thenReturn(List.of(t));
+        when(heartbeatRepo.findAllById(any())).thenReturn(List.of(hb("w1", 5)));
+        job.recoverStale();
+        assertThat(t.getStatus()).isEqualTo(TaskStatus.CLOSING);
+
+        Task late = task(18L, TaskStatus.CLOSING, "w1", 111, 0);
+        late.setClosePatchMode("REQUIRED");
+        when(taskRepo.findInFlightClaimedForUpdateSkipLocked()).thenReturn(List.of(late));
+        job.recoverStale();
+        assertThat(late.getStatus()).isEqualTo(TaskStatus.CLOSE_PENDING);
+    }
+
+    @Test
+    void closingAfterPatchBuiltStillUses110Minutes() {
+        // 천장은 claim 전체를 claimed_at부터 재므로 PATCH_BUILT 보고 뒤에도 110분 그대로
+        Task t = task(19L, TaskStatus.CLOSING, "w1", 31, 0);
+        t.setClosePatchMode("REQUIRED");
+        t.setCloseProgress("MERGED,PATCH_BUILT");
+        when(taskRepo.findInFlightClaimedForUpdateSkipLocked()).thenReturn(List.of(t));
+        when(heartbeatRepo.findAllById(any())).thenReturn(List.of(hb("w1", 5)));
+        job.recoverStale();
+        assertThat(t.getStatus()).isEqualTo(TaskStatus.CLOSING);
+
+        Task late = task(20L, TaskStatus.CLOSING, "w1", 111, 0);
+        late.setClosePatchMode("REQUIRED");
+        late.setCloseProgress("MERGED,PATCH_BUILT");
+        when(taskRepo.findInFlightClaimedForUpdateSkipLocked()).thenReturn(List.of(late));
+        job.recoverStale();
+        assertThat(late.getStatus()).isEqualTo(TaskStatus.CLOSE_PENDING);
+    }
+
+    @Test
+    void closingWithPatchSkippedUsesBaseThreshold() {
+        Task t = task(21L, TaskStatus.CLOSING, "w1", 31, 0);
+        t.setClosePatchMode("SKIPPED");
+        t.setCloseProgress("MERGED");
+        when(taskRepo.findInFlightClaimedForUpdateSkipLocked()).thenReturn(List.of(t));
+        when(heartbeatRepo.findAllById(any())).thenReturn(List.of(hb("w1", 5)));
+        job.recoverStale();
+        assertThat(t.getStatus()).isEqualTo(TaskStatus.CLOSE_PENDING);
     }
 }

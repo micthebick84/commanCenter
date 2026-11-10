@@ -358,4 +358,108 @@ class WorkerServiceCloseTest {
 
         verifyNoInteractions(events);
     }
+
+    // ---- 부분 패치 (스펙 2026-11-10) ----
+
+    private void catalogWithPrebuild() {
+        RepoCatalogEntry e = RepoCatalogEntry.create("W", "https://github.com/owner/repo.git", "github",
+                "owner/repo", null, null, "admin");
+        e.setPrebuildCommand("mvn -q package");
+        e.setPrebuildToolchain("jdk8-maven");
+        e.setPrebuildArtifact("target/*.war");
+        when(catalogRepo.findById(3L)).thenReturn(Optional.of(e));
+    }
+
+    @Test
+    void claim은_패치_모드가_REQUIRED이고_아직_안_만들었을_때만_패치_지시를_싣는다() {
+        Task t = task(TaskStatus.CLOSE_PENDING);
+        t.setRepoCatalogId(3L);
+        t.setClosePatchMode("REQUIRED");
+        t.setPatchBaseSha("a".repeat(40));
+        t.setCloseProgress("MERGED");
+        catalogWithPrebuild();
+        when(taskRepo.findClaimableForUpdateSkipLocked(any())).thenReturn(List.of(t));
+
+        WorkerTaskResponse r = service.claimNextTask("w1").orElseThrow();
+        assertThat(r.closePatch()).isEqualTo(new com.hamonsoft.netismaker.dto.ClosePatchSpec(
+                "mvn -q package", "jdk8-maven", "target/*.war", "a".repeat(40)));
+
+        // 이미 만들었으면 없음
+        Task done = task(TaskStatus.CLOSE_PENDING);
+        done.setRepoCatalogId(3L);
+        done.setClosePatchMode("REQUIRED");
+        done.setCloseProgress("MERGED,PATCH_BUILT");
+        when(taskRepo.findClaimableForUpdateSkipLocked(any())).thenReturn(List.of(done));
+        assertThat(service.claimNextTask("w1").orElseThrow().closePatch()).isNull();
+
+        // SKIPPED·null이면 없음
+        Task skipped = task(TaskStatus.CLOSE_PENDING);
+        skipped.setClosePatchMode("SKIPPED");
+        when(taskRepo.findClaimableForUpdateSkipLocked(any())).thenReturn(List.of(skipped));
+        assertThat(service.claimNextTask("w1").orElseThrow().closePatch()).isNull();
+        Task none = task(TaskStatus.CLOSE_PENDING);
+        when(taskRepo.findClaimableForUpdateSkipLocked(any())).thenReturn(List.of(none));
+        assertThat(service.claimNextTask("w1").orElseThrow().closePatch()).isNull();
+    }
+
+    @Test
+    void 병합_보고의_baseSha를_기록하고_40자를_넘으면_400() {
+        Task t = task(TaskStatus.CLOSING);
+        t.setWorkerId("w1");
+        when(taskRepo.findActiveByIdForUpdate(7L)).thenReturn(Optional.of(t));
+
+        service.recordCloseProgress(7L, new CloseProgressRequest("w1", CloseStep.MERGED, "cafe1234", null, null,
+                "b".repeat(40), null, null));
+        assertThat(t.getPatchBaseSha()).isEqualTo("b".repeat(40));
+
+        assertThatThrownBy(() -> service.recordCloseProgress(7L, new CloseProgressRequest("w1", CloseStep.MERGED,
+                "cafe1234", null, null, "b".repeat(41), null, null)))
+                .isInstanceOfSatisfying(TaskException.class,
+                        e -> assertThat(e.getStatus()).isEqualTo(org.springframework.http.HttpStatus.BAD_REQUEST));
+    }
+
+    @Test
+    void 패치_보고는_업로드_없이는_400() {
+        Task t = task(TaskStatus.CLOSING);
+        t.setWorkerId("w1");
+        t.setClosePatchMode("REQUIRED");
+        when(taskRepo.findActiveByIdForUpdate(7L)).thenReturn(Optional.of(t));
+
+        assertThatThrownBy(() -> service.recordCloseProgress(7L,
+                new CloseProgressRequest("w1", CloseStep.PATCH_BUILT, null, null, null, null, false, 3)))
+                .isInstanceOfSatisfying(TaskException.class,
+                        e -> assertThat(e.getStatus()).isEqualTo(org.springframework.http.HttpStatus.BAD_REQUEST));
+
+        t.setPatchName("20261110_T.zip");
+        service.recordCloseProgress(7L, new CloseProgressRequest("w1", CloseStep.PATCH_BUILT, null, null));
+        assertThat(t.getPatchEmpty()).isFalse();
+        assertThat(t.getCloseProgress()).isEqualTo("PATCH_BUILT");
+    }
+
+    @Test
+    void 변경_없음_패치_보고는_empty_표시와_개수_0() {
+        Task t = task(TaskStatus.CLOSING);
+        t.setWorkerId("w1");
+        t.setClosePatchMode("REQUIRED");
+        when(taskRepo.findActiveByIdForUpdate(7L)).thenReturn(Optional.of(t));
+
+        service.recordCloseProgress(7L, new CloseProgressRequest("w1", CloseStep.PATCH_BUILT, null, null, null,
+                null, true, 0));
+
+        assertThat(t.getPatchEmpty()).isTrue();
+        assertThat(t.getPatchFileCount()).isEqualTo(0);
+        assertThat(t.getCloseProgress()).isEqualTo("PATCH_BUILT");
+    }
+
+    @Test
+    void 패치_모드가_없으면_패치_보고는_409() {
+        Task t = task(TaskStatus.CLOSING);
+        t.setWorkerId("w1");
+        when(taskRepo.findActiveByIdForUpdate(7L)).thenReturn(Optional.of(t));
+
+        assertThatThrownBy(() -> service.recordCloseProgress(7L,
+                new CloseProgressRequest("w1", CloseStep.PATCH_BUILT, null, null, null, null, true, 0)))
+                .isInstanceOfSatisfying(TaskException.class,
+                        e -> assertThat(e.getStatus()).isEqualTo(org.springframework.http.HttpStatus.CONFLICT));
+    }
 }

@@ -233,6 +233,41 @@ public class Task {
     @Setter
     private String closeArtifactMode;
 
+    /** 종료 부분 패치 모드 null | REQUIRED | SKIPPED — 종료 승인 때 정한다 (CloseStep.PATCH_*). */
+    @Column(name = "close_patch_mode", length = 20)
+    @Setter
+    private String closePatchMode;
+
+    /** 부분 패치 기준 커밋(배포된 커밋). */
+    @Column(name = "patch_base_sha", length = 40)
+    @Setter
+    private String patchBaseSha;
+
+    @Column(name = "patch_name", length = 255)
+    @Setter
+    private String patchName;
+
+    @Column(name = "patch_size")
+    @Setter
+    private Long patchSize;
+
+    @Column(name = "patch_sha256", length = 64)
+    @Setter
+    private String patchSha256;
+
+    @Column(name = "patch_file_count")
+    @Setter
+    private Integer patchFileCount;
+
+    /** 변경 파일이 없어 패치가 비었는지. */
+    @Column(name = "patch_empty")
+    @Setter
+    private Boolean patchEmpty;
+
+    @Column(name = "patch_uploaded_at")
+    @Setter
+    private OffsetDateTime patchUploadedAt;
+
     /** 보관한 산출물 파일 이름. 파일은 ArtifactStore가 attachments/task-{id}/artifact/ 아래에 둔다. */
     @Column(name = "artifact_name", length = 255)
     @Setter

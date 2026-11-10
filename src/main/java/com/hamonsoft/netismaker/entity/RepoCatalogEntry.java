@@ -97,6 +97,10 @@ public class RepoCatalogEntry {
     @Column(name = "db_migration_managed", nullable = false)
     private boolean dbMigrationManaged;
 
+    /** 종료 부분 패치 켜기 (스펙 2026-11-10). 켜려면 prebuildCommand가 있어야 한다. */
+    @Column(name = "patch_enabled", nullable = false)
+    private boolean patchEnabled;
+
     @Column(name = "created_by", length = 20)
     private String createdBy;
 

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest'
-import { closeSteps, obsidianLink, canSkipArtifact, canSkipPatch, patchButtonState, startPatchDownload, formatMb, startArtifactDownload, MAIL_STATUS_LABEL } from './taskClose'
+import { closeSteps, obsidianLink, canSkipArtifact, canSkipPatch, patchButtonState, startPatchDownload, formatMb, startArtifactDownload, MAIL_STATUS_LABEL, type CloseView } from './taskClose'
 
 describe('closeSteps', () => {
   it('끝난 단계는 done, 종료중이면 다음 단계가 current', () => {
@@ -83,9 +83,10 @@ describe('부분 패치 (스펙 2026-11-10)', () => {
   })
   it('patchButtonState: 파일 있음 download / empty / none', () => {
     const p = { name: 'a.zip', sizeBytes: 1, fileCount: 2, empty: false, uploadedAt: null }
-    expect(patchButtonState({ ...base, progress: [], patch: p })).toBe('download')
-    expect(patchButtonState({ ...base, progress: [], patch: { ...p, name: null, empty: true } })).toBe('empty')
-    expect(patchButtonState({ ...base, progress: [], patch: null })).toBe('none')
+    const withPatch = (patch: CloseView['patch']): CloseView => ({ ...base, progress: [], patch })
+    expect(patchButtonState(withPatch(p))).toBe('download')
+    expect(patchButtonState(withPatch({ ...p, name: null, empty: true }))).toBe('empty')
+    expect(patchButtonState(withPatch(null))).toBe('none')
     expect(patchButtonState(null)).toBe('none')
     expect(patchButtonState(undefined)).toBe('none')
   })

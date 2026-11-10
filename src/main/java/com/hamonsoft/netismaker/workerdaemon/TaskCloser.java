@@ -145,6 +145,8 @@ public class TaskCloser {
                 String merged = step("병합", () -> closerFor(ref).merge(ref, task.prNumber(), task.headSha(),
                         closeProps.mergeMethod()));
                 if (merged != null) mergeSha = merged;
+                // 병합은 됐는데 MERGED 보고 전에 끊긴 재시도면 읽은 끝이 이미 병합 커밋이다 — 기준으로 쓰지 않는다
+                if (baseSha != null && baseSha.equals(mergeSha)) baseSha = null;
                 progress(task, new CloseProgressRequest(props.id(), CloseStep.MERGED, mergeSha, null, null,
                         baseSha, null, null));
             }
@@ -357,6 +359,10 @@ public class TaskCloser {
         }
         if ("rebase".equalsIgnoreCase(closeProps.mergeMethod()) && !ref.isGitlab()) {
             throw new StepFailed("부분 패치는 rebase 병합을 지원하지 않습니다");
+        }
+        String command = task.closePatch().command();
+        if (command == null || command.isBlank()) {
+            throw new StepFailed("부분 패치 빌드 명령이 비어 있습니다");
         }
         String toolchain = task.closePatch().toolchain();
         if (!prebuilder.toolchainConfigured(toolchain)) {

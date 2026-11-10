@@ -359,11 +359,29 @@ class StaleTaskRecoveryJobTest {
     }
 
     @Test
-    void closingAfterPatchBuiltUses60Minutes() {
-        // PATCH_BUILT 이후엔 기존 판정(테스트에서는 30분)
+    void closingAfterPatchBuiltStillUses110Minutes() {
+        // 천장은 claim 전체를 claimed_at부터 재므로 PATCH_BUILT 보고 뒤에도 110분 그대로
         Task t = task(19L, TaskStatus.CLOSING, "w1", 31, 0);
         t.setClosePatchMode("REQUIRED");
         t.setCloseProgress("MERGED,PATCH_BUILT");
+        when(taskRepo.findInFlightClaimedForUpdateSkipLocked()).thenReturn(List.of(t));
+        when(heartbeatRepo.findAllById(any())).thenReturn(List.of(hb("w1", 5)));
+        job.recoverStale();
+        assertThat(t.getStatus()).isEqualTo(TaskStatus.CLOSING);
+
+        Task late = task(20L, TaskStatus.CLOSING, "w1", 111, 0);
+        late.setClosePatchMode("REQUIRED");
+        late.setCloseProgress("MERGED,PATCH_BUILT");
+        when(taskRepo.findInFlightClaimedForUpdateSkipLocked()).thenReturn(List.of(late));
+        job.recoverStale();
+        assertThat(late.getStatus()).isEqualTo(TaskStatus.CLOSE_PENDING);
+    }
+
+    @Test
+    void closingWithPatchSkippedUsesBaseThreshold() {
+        Task t = task(21L, TaskStatus.CLOSING, "w1", 31, 0);
+        t.setClosePatchMode("SKIPPED");
+        t.setCloseProgress("MERGED");
         when(taskRepo.findInFlightClaimedForUpdateSkipLocked()).thenReturn(List.of(t));
         when(heartbeatRepo.findAllById(any())).thenReturn(List.of(hb("w1", 5)));
         job.recoverStale();

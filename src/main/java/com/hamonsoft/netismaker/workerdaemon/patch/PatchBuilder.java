@@ -35,6 +35,8 @@ import java.util.ArrayList;
 import java.util.HexFormat;
 import java.util.List;
 import java.util.Optional;
+import java.util.zip.ZipEntry;
+import java.util.zip.ZipFile;
 
 /**
  * 종료 부분 패치 만들기 (스펙 2026-11-10). 병합 커밋("후")과 그 기준 쪽 부모("전")를 각각 읽기 전용 worktree에서
@@ -195,6 +197,7 @@ public class PatchBuilder {
                     sourceChanges(cacheDir, before, mergeSha));
             Path zip = work.resolve("patch.zip");
             PatchZipWriter.write(zip, patchDir, doc);
+            verifyFileCount(zip, delta.fileCount());   // 빠진 파일이 있는 패치가 정상처럼 나가지 않게
             PatchInfo info = upload(id, delta.fileCount(), zip, sha256(zip));
             log.info("부분 패치 보관: task={} {} {}B 파일 {}개", id, info.name(), info.sizeBytes(), info.fileCount());
             return new Outcome(false, delta.fileCount());
@@ -224,6 +227,21 @@ public class PatchBuilder {
             if (tail.length() > REASON_TAIL_CHARS) tail = "…" + tail.substring(tail.length() - REASON_TAIL_CHARS);
             throw new PatchException("패치 빌드 실패(" + side + "): " + GitRemotes.mask(e.getMessage())
                     + (tail.isEmpty() ? "" : "\n" + tail));
+        }
+    }
+
+    /** 만든 zip의 {@code patch/} 파일 항목 수가 비교 결과(추가 + 변경)와 같은지 본다. 다르면 올리지 않는다. */
+    static void verifyFileCount(Path zip, int expected) throws IOException, PatchException {
+        int actual = 0;
+        try (ZipFile zf = new ZipFile(zip.toFile())) {
+            var entries = zf.entries();
+            while (entries.hasMoreElements()) {
+                ZipEntry e = entries.nextElement();
+                if (!e.isDirectory() && e.getName().startsWith("patch/")) actual++;
+            }
+        }
+        if (actual != expected) {
+            throw new PatchException("패치 파일 수가 맞지 않습니다: 기대 " + expected + ", 실제 " + actual);
         }
     }
 

@@ -177,7 +177,7 @@ public record TaskResponse(
 
     private static CloseView closeViewOf(Task t) {
         boolean recorded = t.getCloseProgress() != null || t.getMergeCommitSha() != null || t.getCloseNotePath() != null
-                || t.getArtifactName() != null || t.getClosePatchMode() != null;
+                || t.getArtifactName() != null;
         if (!recorded && !CLOSE_PHASE.contains(t.getStatus())) return null;
         return new CloseView(
                 CloseStep.parse(t.getCloseProgress()).stream().map(Enum::name).toList(),

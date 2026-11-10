@@ -175,6 +175,7 @@ public class TaskCloseService {
         }
         t.setFailureReason(null);
         t.setCloseProgress(null);
+        t.setClosePatchMode(null); // 다음 승인 때 다시 정한다
         return move(t, statusBeforeReview(t), "user", adminId, "종료 취소(병합 전)");
     }
 

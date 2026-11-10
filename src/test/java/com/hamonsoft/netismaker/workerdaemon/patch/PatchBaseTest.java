@@ -35,6 +35,15 @@ class PatchBaseTest {
     }
 
     @Test
+    void recordedBaseEqualToMergeShaIsTreatedAsNoRecord() throws Exception {
+        // 병합은 됐는데 MERGED 보고 전에 끊긴 재시도 — 기준 끝을 읽으면 이미 병합 커밋이다
+        assertThat(PatchBase.resolve(MERGE, MERGE, List.of(P1, P2))).isEqualTo(P1);
+        assertThatThrownBy(() -> PatchBase.resolve(MERGE, MERGE, List.of(P1)))
+                .isInstanceOf(PatchException.class)
+                .hasMessage("패치 기준 커밋을 확인할 수 없습니다: 병합 직전 기준 브랜치를 기록하지 못했고 병합 커밋이 아닙니다");
+    }
+
+    @Test
     void noRecordedBaseAndSingleParentFails() {
         assertThatThrownBy(() -> PatchBase.resolve(MERGE, null, List.of(P1)))
                 .isInstanceOf(PatchException.class)

@@ -685,7 +685,7 @@ const patchDownload = useOneTimeDownload((id) => startPatchDownload(id, (u, o) =
 async function downloadPatch() {
   try {
     await patchDownload.run(taskId.value)
-  } catch (e: any) {
+  } catch (e: unknown) {
     $q.notify({ type: 'negative', message: downloadErrorMessage(e) })
   }
 }

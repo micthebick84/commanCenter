@@ -22,7 +22,8 @@ public final class PatchBase {
             throw new PatchException(PREFIX + "병합 커밋의 부모를 읽지 못했습니다");
         }
         String first = parentsOfAfter.get(0);
-        if (recordedBase != null && !recordedBase.isBlank()) {
+        // 기록이 병합 커밋 자신이면(병합 뒤 MERGED 보고 전에 끊긴 재시도가 이미 병합된 끝을 읽음) 기록이 없는 것과 같다
+        if (recordedBase != null && !recordedBase.isBlank() && !recordedBase.equals(mergeSha)) {
             if (!recordedBase.equals(first)) {
                 throw new PatchException(PREFIX + "병합 직전 기준 브랜치 끝(" + abbrev(recordedBase)
                         + ")과 병합 커밋의 부모(" + abbrev(first) + ")가 다릅니다");

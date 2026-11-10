@@ -60,12 +60,9 @@ class TaskResponseCloseViewTest {
     }
 
     @Test
-    void 패치_모드만_있어도_종료_상태가_아닌_작업에_close를_준다() {
+    void 종료_상태가_아닌_작업은_패치_모드만_있으면_close가_없다() {
         Task t = task(TaskStatus.DEPLOYED);
-        t.setClosePatchMode("SKIPPED");
-        TaskResponse.CloseView v = TaskResponse.of(t, null).close();
-        assertThat(v).isNotNull();
-        assertThat(v.patchMode()).isEqualTo("SKIPPED");
-        assertThat(v.patch()).isNull();
+        t.setClosePatchMode("REQUIRED");
+        assertThat(TaskResponse.of(t, null).close()).isNull();
     }
 }

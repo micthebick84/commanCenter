@@ -137,7 +137,7 @@ claim에는 `closePatch` 스펙(명령, 툴체인, 비교 대상 경로, 파일 
 - 내려받기: `POST /api/tasks/{id}/patch/download-link`(등록자·관리자) → 기존 1회용 토큰(60초) 주소. 토큰 저장소는 산출물과 같이 쓰되 어느 파일인지 구분한다.
 - 건너뛰기: `POST /api/tasks/{id}/close/skip-patch`(관리자, 상태 종료실패, `PATCH_BUILT` 미완료일 때) → 모드 `SKIPPED` 후 종료 재큐. 병합 전이면 기존 "종료 취소"도 그대로 쓸 수 있다.
 - 응답: 작업 목록·상세 응답의 `close`에 `patchMode`와 `patch { name, sizeBytes, fileCount, empty, uploadedAt }`.
-- stale 판정: 패치 모드가 REQUIRED이고 `PATCH_BUILT` 전인 종료는 `app.task.close-patch-stale-threshold-minutes`(기본 110 = 종료 60 + 빌드 20×2 + 여유 10)로 본다. 빌드 상한은 워커 설정이라 두 yml에 서로를 가리키는 주석을 둔다(배포 판정 70분과 같은 방식).
+- stale 판정: 패치 모드가 REQUIRED인 종료는 진행과 무관하게(`PATCH_BUILT` 보고 뒤에도 — 천장은 claim 전체를 claimed_at부터 재므로 줄이면 아직 도는 종료를 회수할 수 있다) `app.task.close-patch-stale-threshold-minutes`(기본 110 = 종료 60 + 빌드 20×2 + 여유 10)로 본다. 빌드 상한은 워커 설정이라 두 yml에 서로를 가리키는 주석을 둔다(배포 판정 70분과 같은 방식).
 
 ## 9. DB (V43)
 

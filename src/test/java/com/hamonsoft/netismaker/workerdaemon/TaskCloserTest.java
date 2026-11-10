@@ -655,6 +655,38 @@ class TaskCloserTest {
     }
 
     @Test
+    void baseTipAlreadyEqualToMergeShaIsSentAsNull() throws Exception {
+        // 병합은 됐는데 MERGED 보고 전에 끊긴 재시도 — 기준 끝이 이미 병합 커밋이면 기준으로 기록하지 않는다
+        TaskCloser c = patchCloser("merge");
+        when(gitOps.remoteBranchTip(any(), eq("main"))).thenReturn(MERGE_SHA);
+
+        c.process(patchTask(null));
+
+        assertThat(reported().get(0)).isEqualTo(new CloseProgressRequest("w1", CloseStep.MERGED, MERGE_SHA, null, null,
+                null, null, null));
+    }
+
+    @Test
+    void blankPatchCommandFailsBeforeMerge() throws Exception {
+        TaskCloser c = patchCloser("merge");
+        WorkerTaskResponse t = patchTask(null);
+        WorkerTaskResponse blank = new WorkerTaskResponse(7L, "acme/w", "main", "로그인 수정", "d",
+                WorkerTaskResponse.Kind.CLOSE, List.of(), null, null, "netismaker/task-7", SHA, List.of(), null, null,
+                null, null, null, null, null, null, null, "github", null, 3, "https://github.com/acme/w/pull/3", null,
+                t.closeContext(), null, null, null, List.of(), null, List.of(), List.of(),
+                new ClosePatchSpec("  ", "jdk8-maven", "target/*.war", null));
+
+        c.process(blank);
+
+        verify(mr, never()).merge(any(), anyInt(), any(), any());
+        verify(patchBuilder, never()).build(any(), any());
+        assertThat(reportedSteps()).isEmpty();
+        WorkerResultRequest r = terminal();
+        assertThat(r.status()).isEqualTo(TaskStatus.CLOSE_FAILED);
+        assertThat(r.failureReason()).isEqualTo("부분 패치 빌드 명령이 비어 있습니다");
+    }
+
+    @Test
     void rebaseMethodFailsBeforeMergeWhenPatchRequired() throws Exception {
         patchCloser("rebase").process(patchTask(null));
 

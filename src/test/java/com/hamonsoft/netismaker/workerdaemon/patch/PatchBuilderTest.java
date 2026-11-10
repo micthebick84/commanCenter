@@ -277,4 +277,30 @@ class PatchBuilderTest {
         assertThat(git.discarded).containsExactlyInAnyOrder("PATCH_BEFORE", "PATCH_AFTER");
         assertThat(closeRoot.resolve("task-7")).doesNotExist();
     }
+
+    // ---- zip 파일 수 확인 (최종 검토 F4) ----
+
+    private Path patchZip(String... entryNames) throws IOException {
+        Map<String, byte[]> m = new LinkedHashMap<>();
+        m.put("PATCH-INFO.txt", b("i"));
+        m.put("DELETED.txt", b("d"));
+        for (String n : entryNames) m.put(n, n.endsWith("/") ? new byte[0] : b("x"));
+        return PatchTestZips.zip(tmp.resolve("check-" + entryNames.length + ".zip"), m, T);
+    }
+
+    @Test
+    void fileCountCheckPassesWhenPatchEntriesMatch() throws Exception {
+        Path zip = patchZip("patch/WEB-INF/", "patch/WEB-INF/a.class", "patch/index.jsp");
+
+        PatchBuilder.verifyFileCount(zip, 2);   // 폴더 항목과 PATCH-INFO·DELETED는 세지 않는다
+    }
+
+    @Test
+    void fileCountMismatchFails() throws Exception {
+        Path zip = patchZip("patch/index.jsp");
+
+        assertThatThrownBy(() -> PatchBuilder.verifyFileCount(zip, 2))
+                .isInstanceOf(PatchException.class)
+                .hasMessage("패치 파일 수가 맞지 않습니다: 기대 2, 실제 1");
+    }
 }

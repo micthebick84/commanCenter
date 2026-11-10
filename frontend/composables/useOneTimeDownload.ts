@@ -32,7 +32,13 @@ export function useOneTimeDownload(start: (id: number | string) => Promise<void>
 }
 
 /** 내려받기 오류 알림 문구 — 410 = 보관 기간이 지나 서버가 파일을 정리했다(본문 메시지가 없어도 같은 안내). */
-export function downloadErrorMessage(e: any): string {
-  const status = e?.statusCode ?? e?.response?.status ?? e?.status
-  return status === 410 ? '보관 파일이 정리되었습니다' : (e?.data?.message ?? '내려받기 실패')
+export function downloadErrorMessage(e: unknown): string {
+  const err = (typeof e === 'object' && e !== null ? e : {}) as {
+    statusCode?: number
+    status?: number
+    response?: { status?: number }
+    data?: { message?: string }
+  }
+  const status = err.statusCode ?? err.response?.status ?? err.status
+  return status === 410 ? '보관 파일이 정리되었습니다' : (err.data?.message ?? '내려받기 실패')
 }

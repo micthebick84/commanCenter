@@ -318,6 +318,63 @@ class PatchScannerTest {
         assertThat(s.isIgnored("a.txt")).isFalse();
     }
 
+    // ---- 경로 충돌 (최종 검토 F4) ----
+
+    /** ZipOutputStream은 같은 이름을 거부하므로 같은 길이의 다른 이름으로 쓴 뒤 바이트에서 이름을 바꿔 중복 항목을 만든다. */
+    private static byte[] renameInZip(byte[] zip, String from, String to) {
+        byte[] f = b(from);
+        byte[] t = b(to);
+        assertThat(t).hasSameSizeAs(f);
+        byte[] out = zip.clone();
+        int replaced = 0;
+        for (int i = 0; i + f.length <= out.length; i++) {
+            if (java.util.Arrays.equals(out, i, i + f.length, f, 0, f.length)) {
+                System.arraycopy(t, 0, out, i, t.length);
+                replaced++;
+            }
+        }
+        assertThat(replaced).isGreaterThanOrEqualTo(2);   // 로컬 헤더 + 중앙 디렉터리
+        return out;
+    }
+
+    @Test
+    void bundlePlainFileCollidingWithWarEntryFails() throws Exception {
+        byte[] war = zipBytes(entries("a", "from-war"), T1);
+        Path zip = zip(dir.resolve("b.zip"), entries("x/a", "plain", "x.war", war), T1);
+
+        assertThatThrownBy(() -> scanner().scan(zip))
+                .isInstanceOf(PatchException.class).hasMessage("패치 경로가 겹칩니다: x/a");
+    }
+
+    @Test
+    void duplicateEntryInsideWarOfBundleFails() throws Exception {
+        byte[] war = renameInZip(zipBytes(entries("p/A.class", "1", "p/B.class", "2"), T1), "p/B.class", "p/A.class");
+        Path zip = zip(dir.resolve("b.zip"), entries("x.war", war), T1);
+
+        assertThatThrownBy(() -> scanner().scan(zip))
+                .isInstanceOf(PatchException.class).hasMessage("패치 경로가 겹칩니다: x/p/A.class");
+    }
+
+    @Test
+    void duplicateEntryInsideNestedJarFails() throws Exception {
+        byte[] jar = renameInZip(zipBytes(entries("p/A.class", "1", "p/B.class", "2"), T1), "p/B.class", "p/A.class");
+        Path war = zip(dir.resolve("a.war"), entries("WEB-INF/lib/x.jar", jar), T1);
+
+        assertThatThrownBy(() -> scanner().scan(war))
+                .isInstanceOf(PatchException.class)
+                .hasMessage("패치 경로가 겹칩니다: WEB-INF/lib/x.jar!/p/A.class");
+    }
+
+    @Test
+    void pathsDifferingOnlyByCaseFail() throws Exception {
+        Path war = zip(dir.resolve("a.war"), entries("WEB-INF/classes/A.class", "1", "WEB-INF/classes/a.class", "2"),
+                T1);
+
+        assertThatThrownBy(() -> scanner().scan(war))
+                .isInstanceOf(PatchException.class)
+                .hasMessage("대소문자만 다른 경로가 있습니다: WEB-INF/classes/A.class / WEB-INF/classes/a.class");
+    }
+
     private static List<String> files(Path root) throws IOException {
         try (Stream<Path> s = Files.walk(root)) {
             return s.filter(Files::isRegularFile)

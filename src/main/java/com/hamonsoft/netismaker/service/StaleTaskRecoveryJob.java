@@ -144,11 +144,13 @@ public class StaleTaskRecoveryJob {
         }
     }
 
-    /** 부분 패치 단계가 남은 종료는 전·후 미리 빌드가 더 들어 판정이 길다 (스펙 2026-11-10). */
+    /**
+     * 부분 패치가 필요한 종료는 전·후 미리 빌드가 더 들어 판정이 길다 (스펙 2026-11-10). 천장은 claim 전체를
+     * claimed_at부터 재므로 PATCH_BUILT 보고 뒤에도 줄이지 않는다 — 줄이면 아직 도는 종료를 회수할 수 있다.
+     */
     private int closeCeilingMinutes(Task t) {
-        boolean patchPending = CloseStep.PATCH_REQUIRED.equals(t.getClosePatchMode())
-                && !CloseStep.parse(t.getCloseProgress()).contains(CloseStep.PATCH_BUILT);
-        return patchPending ? closePatchStaleThresholdMinutes : closeStaleThresholdMinutes;
+        return CloseStep.PATCH_REQUIRED.equals(t.getClosePatchMode())
+                ? closePatchStaleThresholdMinutes : closeStaleThresholdMinutes;
     }
 
     /**

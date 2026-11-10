@@ -60,8 +60,14 @@ public final class PatchScanner {
         Kind kind = kindOf(artifact);
         TreeMap<String, String> hashes = new TreeMap<>();
         Set<String> warNames = new TreeSet<>();
-        walk(artifact, kind, prefix -> true, warNames, (path, name, in) ->
-                hashes.put(path, isJar(name) ? jarHash(in) : sha256(in)));
+        walk(artifact, kind, prefix -> true, warNames, (path, name, in) -> {
+            String h = isJar(name) ? jarHash(path, in) : sha256(in);
+            if (hashes.putIfAbsent(path, h) != null) {
+                // 덮어쓰면 한쪽 파일이 비교에서 빠져 변경이 사라진 패치가 정상처럼 나간다
+                throw new PatchException("패치 경로가 겹칩니다: " + path);
+            }
+        });
+        checkCaseCollisions(hashes.keySet());
         String shape = switch (kind) {
             case WAR -> "single:war";
             case JAR -> "single:jar";
@@ -153,7 +159,18 @@ public final class PatchScanner {
 
     // ---- 해시 ----
 
-    private String jarHash(InputStream in) throws IOException {
+    /** 패치는 Windows 워커에서 풀린다 — 대소문자만 다른 두 경로는 디스크에서 한 파일이 된다. */
+    private static void checkCaseCollisions(Collection<String> paths) throws PatchException {
+        Map<String, String> seen = new TreeMap<>();
+        for (String p : paths) {
+            String prev = seen.putIfAbsent(p.toLowerCase(Locale.ROOT), p);
+            if (prev != null) {
+                throw new PatchException("대소문자만 다른 경로가 있습니다: " + prev + " / " + p);
+            }
+        }
+    }
+
+    private String jarHash(String jarPath, InputStream in) throws IOException, PatchException {
         TreeMap<String, String> inner = new TreeMap<>();
         // 한 번만 읽을 수 있는 스트림이라 원본 바이트 해시를 같은 패스에서 함께 계산한다.
         MessageDigest raw = digest();
@@ -166,7 +183,9 @@ public final class PatchScanner {
             if (e.isDirectory() || isIgnored(e.getName())) {
                 continue;
             }
-            inner.put(e.getName(), sha256(new NonClosingInputStream(zin)));
+            if (inner.putIfAbsent(e.getName(), sha256(new NonClosingInputStream(zin))) != null) {
+                throw new PatchException("패치 경로가 겹칩니다: " + jarPath + "!/" + e.getName());
+            }
         }
         if (seen == 0) {
             // zip으로 읽히지 않는 .jar(앞에 스크립트가 붙은 실행 jar, zip이 아닌 파일, 빈 zip): 항목 해시가 없으면

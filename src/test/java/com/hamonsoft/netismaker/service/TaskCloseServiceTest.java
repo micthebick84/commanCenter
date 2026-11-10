@@ -146,6 +146,7 @@ class TaskCloseServiceTest {
         Task t = task(TaskStatus.CLOSE_FAILED);
         t.setFailureReason("head 불일치");
         t.setCloseProgress("");
+        t.setClosePatchMode("REQUIRED");
         t.setWorkerId("w");
         when(historyRepo.findByTaskIdOrderByAtDescIdDesc(eq(42L), any())).thenReturn(List.of(
                 TaskStatusHistory.log(42L, TaskStatus.CLOSING, TaskStatus.CLOSE_FAILED, "system", "w", "head 불일치"),
@@ -158,6 +159,7 @@ class TaskCloseServiceTest {
         assertThat(r.getStatus()).isEqualTo(TaskStatus.DEPLOYED);
         assertThat(r.getFailureReason()).isNull();
         assertThat(r.getCloseProgress()).isNull();
+        assertThat(r.getClosePatchMode()).isNull();
         assertThat(r.getWorkerId()).isNull();
         org.mockito.ArgumentCaptor<TaskStatusHistory> h = org.mockito.ArgumentCaptor.forClass(TaskStatusHistory.class);
         verify(historyRepo).save(h.capture());

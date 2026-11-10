@@ -87,6 +87,9 @@ netis-maker:
         search-dirs: ${CLOSE_ARTIFACT_SEARCH_DIRS:/usr/local/tomcat/webapps,/app}
         copy-timeout: ${CLOSE_ARTIFACT_COPY_TIMEOUT:10m}
         upload-timeout: ${CLOSE_ARTIFACT_UPLOAD_TIMEOUT:10m}
+      patch:                         # 종료 부분 패치 — 전·후 미리 빌드 결과 비교 (스펙 2026-11-10)
+        ignore: ${CLOSE_PATCH_IGNORE:META-INF/MANIFEST.MF,META-INF/maven/**}   # 비교에서 뺄 산출물 항목(glob, 쉼표 구분)
+        upload-timeout: ${CLOSE_PATCH_UPLOAD_TIMEOUT:10m}
     dead-letter-dir: ${DEAD_LETTER_DIR:${user.home}/netis-maker/dead-letter}
     claude-cli-path: ${CLAUDE_CLI:/opt/homebrew/bin/claude}
     github-pat: ${GITHUB_PAT:}
@@ -211,6 +214,7 @@ netis-maker:
       # 배포 전 워커 미리 빌드(레포 카탈로그에서 켠 레포만, PrebuildProperties). 명령 env에서 스택 비밀은 뺀다.
       # 툴체인 java-home이 비면 "설정 안 됨" — 그 도구를 쓰는 레포의 배포만 실패한다(기동은 막지 않음).
       # 툴체인을 더 두려면 항목을 더한다(env 이름 규칙은 jdk8-maven처럼).
+      # 부분 패치(종료)도 이 timeout으로 전·후를 한 번씩 빌드한다 — API `app.task.close-patch-stale-threshold-minutes`(110)와 같이 볼 것.
       prebuild:
         timeout: ${DEPLOY_PREBUILD_TIMEOUT:20m}
         toolchains:

@@ -6,12 +6,14 @@ import ch.qos.logback.core.read.ListAppender;
 import com.hamonsoft.netismaker.dto.ArtifactInfo;
 import com.hamonsoft.netismaker.dto.CloseArtifactSpec;
 import com.hamonsoft.netismaker.dto.CloseContext;
+import com.hamonsoft.netismaker.dto.ClosePatchSpec;
 import com.hamonsoft.netismaker.dto.CloseProgressRequest;
 import com.hamonsoft.netismaker.dto.WorkerResultRequest;
 import com.hamonsoft.netismaker.dto.WorkerTaskResponse;
 import com.hamonsoft.netismaker.entity.CloseStep;
 import com.hamonsoft.netismaker.entity.TaskStatus;
 import com.hamonsoft.netismaker.git.RepoRef;
+import com.hamonsoft.netismaker.workerdaemon.patch.PatchBuilder;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -558,5 +560,188 @@ class TaskCloserTest {
         WorkerResultRequest r = terminal();
         assertThat(r.status()).isEqualTo(TaskStatus.CLOSE_FAILED);
         assertThat(r.failureReason()).isEqualTo("산출물: 워커에 산출물 업로더가 없습니다");
+    }
+
+    // ---- 부분 패치 (스펙 2026-11-10) ----
+
+    private static final String MERGE_SHA = "2222222222222222222222222222222222222222";
+    private static final String BASE_SHA = "1111111111111111111111111111111111111111";
+
+    private PatchBuilder patchBuilder;
+    private DeployPrebuilder prebuilder;
+    private GitOpsService gitOps;
+
+    private WorkerTaskResponse patchTask(String progress, CloseContext ctx) {
+        return new WorkerTaskResponse(7L, "acme/w", "main", "로그인 수정", "d", WorkerTaskResponse.Kind.CLOSE,
+                List.of(), null, null, "netismaker/task-7", SHA, List.of(), null, null, null, null, null, null,
+                null, null, null, "github", null, 3, "https://github.com/acme/w/pull/3", progress, ctx, null,
+                null, null, List.of(), null, List.of(), List.of(),
+                new ClosePatchSpec("mvn -q package", "jdk8-maven", "target/*.war", null));
+    }
+
+    private WorkerTaskResponse patchTask(String progress) {
+        return patchTask(progress, new CloseContext(null, null, null, null, "http://h:1", null, List.of(), List.of()));
+    }
+
+    private TaskCloser patchCloser(String mergeMethod) throws Exception {
+        patchBuilder = mock(PatchBuilder.class);
+        prebuilder = mock(DeployPrebuilder.class);
+        gitOps = mock(GitOpsService.class);
+        when(prebuilder.toolchainConfigured("jdk8-maven")).thenReturn(true);
+        when(gitOps.remoteBranchTip(any(), eq("main"))).thenReturn(BASE_SHA);
+        when(mr.merge(any(), eq(3), eq(SHA), anyString())).thenReturn(MERGE_SHA);
+        when(patchBuilder.build(any(), eq(MERGE_SHA))).thenReturn(new PatchBuilder.Outcome(false, 4));
+        WorkerProperties props = mock(WorkerProperties.class);
+        when(props.id()).thenReturn("w1");
+        when(props.reposDir()).thenReturn(tmp.resolve("repos").toString());
+        CloseProperties cp = new CloseProperties(tmp.resolve("vault").toString(), "HamonSoft/netisMaker", mergeMethod,
+                "sonnet", Duration.ofMinutes(1), null);
+        return new TaskCloser(props, cp, http, deploy, worktrees, claude, reporter, List.of(mr), new CloseNoteWriter(),
+                null, patchBuilder, prebuilder, gitOps,
+                Clock.fixed(Instant.parse("2026-10-13T03:00:00Z"), ZoneId.of("Asia/Seoul")));
+    }
+
+    @Test
+    void patchStepRunsRightAfterMergeAndBeforeUndeploy() throws Exception {
+        patchCloser("merge").process(patchTask(null));
+
+        assertThat(reportedSteps()).containsExactly(CloseStep.MERGED, CloseStep.PATCH_BUILT, CloseStep.UNDEPLOYED,
+                CloseStep.NOTE_WRITTEN, CloseStep.BRANCH_DELETED);
+        CloseProgressRequest patch = reported().get(1);
+        assertThat(patch).isEqualTo(new CloseProgressRequest("w1", CloseStep.PATCH_BUILT, null, null, null,
+                null, false, 4));
+        var order = inOrder(mr, patchBuilder, deploy);
+        order.verify(mr).merge(any(), eq(3), eq(SHA), eq("merge"));
+        order.verify(patchBuilder).build(any(), eq(MERGE_SHA));
+        order.verify(deploy).undeploy(7L);
+        assertThat(terminal().status()).isEqualTo(TaskStatus.CLOSED);
+    }
+
+    @Test
+    void emptyPatchIsReportedAsEmpty() throws Exception {
+        TaskCloser c = patchCloser("merge");
+        when(patchBuilder.build(any(), eq(MERGE_SHA))).thenReturn(new PatchBuilder.Outcome(true, 0));
+
+        c.process(patchTask(null));
+
+        CloseProgressRequest patch = reported().get(1);
+        assertThat(patch.patchEmpty()).isTrue();
+        assertThat(patch.patchFileCount()).isZero();
+    }
+
+    @Test
+    void mergedProgressCarriesBaseSha() throws Exception {
+        TaskCloser c = patchCloser("merge");
+
+        c.process(patchTask(null));
+
+        assertThat(reported().get(0)).isEqualTo(new CloseProgressRequest("w1", CloseStep.MERGED, MERGE_SHA, null, null,
+                BASE_SHA, null, null));
+        var order = inOrder(gitOps, mr);
+        order.verify(gitOps).remoteBranchTip(any(), eq("main"));
+        order.verify(mr).merge(any(), anyInt(), any(), any());
+    }
+
+    @Test
+    void unreadableBaseTipStillMergesWithNullBaseSha() throws Exception {
+        TaskCloser c = patchCloser("merge");
+        when(gitOps.remoteBranchTip(any(), any())).thenReturn(null);
+
+        c.process(patchTask(null));
+
+        assertThat(reported().get(0).baseSha()).isNull();
+        assertThat(reported().get(0).mergeCommitSha()).isEqualTo(MERGE_SHA);
+        verify(patchBuilder).build(any(), eq(MERGE_SHA));
+    }
+
+    @Test
+    void rebaseMethodFailsBeforeMergeWhenPatchRequired() throws Exception {
+        patchCloser("rebase").process(patchTask(null));
+
+        verify(mr, never()).merge(any(), anyInt(), any(), any());
+        verify(patchBuilder, never()).build(any(), any());
+        assertThat(reportedSteps()).isEmpty();
+        WorkerResultRequest r = terminal();
+        assertThat(r.status()).isEqualTo(TaskStatus.CLOSE_FAILED);
+        assertThat(r.failureReason()).isEqualTo("부분 패치는 rebase 병합을 지원하지 않습니다");
+    }
+
+    @Test
+    void rebaseMethodIsAllowedOnGitlab() throws Exception {
+        TaskCloser c = patchCloser("rebase");
+        WorkerTaskResponse gl = new WorkerTaskResponse(7L, "g/w", "main", "로그인 수정", "d",
+                WorkerTaskResponse.Kind.CLOSE, List.of(), null, null, "netismaker/task-7", SHA, List.of(), null, null,
+                null, null, null, null, null, null, "https://gitlab.example/g/w.git", "gitlab", null, 3,
+                "https://gitlab.example/g/w/-/merge_requests/3", null,
+                new CloseContext(null, null, null, null, "http://h:1", null, List.of(), List.of()), null,
+                null, null, List.of(), null, List.of(), List.of(),
+                new ClosePatchSpec("mvn -q package", "jdk8-maven", "target/*.war", null));
+        assertThat(gl.repoRef().isGitlab()).isTrue();
+
+        c.process(gl);
+
+        verify(mr).merge(any(), eq(3), eq(SHA), eq("rebase"));
+        assertThat(reportedSteps()).startsWith(CloseStep.MERGED, CloseStep.PATCH_BUILT);
+    }
+
+    @Test
+    void missingToolchainFailsBeforeMerge() throws Exception {
+        TaskCloser c = patchCloser("merge");
+        when(prebuilder.toolchainConfigured("jdk8-maven")).thenReturn(false);
+
+        c.process(patchTask(null));
+
+        verify(mr, never()).merge(any(), anyInt(), any(), any());
+        WorkerResultRequest r = terminal();
+        assertThat(r.status()).isEqualTo(TaskStatus.CLOSE_FAILED);
+        assertThat(r.failureReason()).isEqualTo("부분 패치 빌드 도구가 워커에 설정되지 않았습니다: jdk8-maven");
+    }
+
+    @Test
+    void patchFailureReportsCloseFailedAndKeepsMerged() throws Exception {
+        TaskCloser c = patchCloser("merge");
+        when(patchBuilder.build(any(), any())).thenThrow(
+                new com.hamonsoft.netismaker.workerdaemon.patch.PatchException("패치 전·후 빌드 결과의 구성이 다릅니다"));
+
+        c.process(patchTask(null));
+
+        assertThat(reportedSteps()).containsExactly(CloseStep.MERGED);
+        verify(deploy, never()).undeploy(anyLong());
+        verify(mr, never()).deleteBranch(any(), any());
+        WorkerResultRequest r = terminal();
+        assertThat(r.status()).isEqualTo(TaskStatus.CLOSE_FAILED);
+        assertThat(r.failureReason()).isEqualTo("패치 전·후 빌드 결과의 구성이 다릅니다");
+    }
+
+    @Test
+    void retryAfterMergeTakesMergeShaFromClaimAndSkipsPreMergeChecks() throws Exception {
+        TaskCloser c = patchCloser("rebase");   // 병합이 끝났으면 병합 방식 검사도 하지 않는다
+        when(prebuilder.toolchainConfigured(any())).thenReturn(false);
+
+        c.process(patchTask("MERGED", new CloseContext(null, null, null, MERGE_SHA, "http://h:1", null,
+                List.of(), List.of())));
+
+        verify(mr, never()).merge(any(), anyInt(), any(), any());
+        verify(gitOps, never()).remoteBranchTip(any(), any());
+        verify(patchBuilder).build(any(), eq(MERGE_SHA));
+        assertThat(reportedSteps()).containsExactly(CloseStep.PATCH_BUILT, CloseStep.UNDEPLOYED,
+                CloseStep.NOTE_WRITTEN, CloseStep.BRANCH_DELETED);
+    }
+
+    @Test
+    void noPatchSpecLeavesFlowUnchanged() throws Exception {
+        TaskCloser c = patchCloser("rebase");
+        when(mr.merge(any(), eq(3), eq(SHA), eq("rebase"))).thenReturn("m3rg3");
+
+        c.process(task(null));
+
+        assertThat(reported()).containsExactly(
+                new CloseProgressRequest("w1", CloseStep.MERGED, "m3rg3", null, null),
+                new CloseProgressRequest("w1", CloseStep.UNDEPLOYED, null, null, null),
+                new CloseProgressRequest("w1", CloseStep.NOTE_WRITTEN, null,
+                        "HamonSoft/netisMaker/로그인-수정-작업7-2026-10-13.md", null),
+                new CloseProgressRequest("w1", CloseStep.BRANCH_DELETED, null, null, null));
+        verifyNoInteractions(patchBuilder, prebuilder, gitOps);
+        assertThat(terminal().status()).isEqualTo(TaskStatus.CLOSED);
     }
 }

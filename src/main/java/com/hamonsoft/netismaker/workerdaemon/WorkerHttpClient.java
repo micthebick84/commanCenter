@@ -8,6 +8,7 @@ import com.hamonsoft.netismaker.dto.ClaudeCodeUsageBatchRequest;
 import com.hamonsoft.netismaker.dto.ClaudeCodeUsageBatchResponse;
 import com.hamonsoft.netismaker.dto.DbChangeView;
 import com.hamonsoft.netismaker.dto.DeployedTaskSummary;
+import com.hamonsoft.netismaker.dto.PatchInfo;
 import com.hamonsoft.netismaker.dto.WorkerHeartbeatRequest;
 import com.hamonsoft.netismaker.dto.WorkerResultRequest;
 import com.hamonsoft.netismaker.dto.WorkerRuntimeStatusRequest;
@@ -286,5 +287,46 @@ public class WorkerHttpClient {
             throw new IOException("서버 응답 " + res.statusCode() + ": " + (body.length() > 300 ? body.substring(0, 300) : body));
         }
         return mapper.readValue(res.body(), ArtifactInfo.class);
+    }
+
+    /** 이미 보관된 부분 패치. 404면 empty — 재시도에서 다시 빌드하지 않으려고 먼저 묻는다 (스펙 2026-11-10). */
+    public Optional<PatchInfo> currentPatch(Long taskId) {
+        try {
+            return Optional.ofNullable(http.get().uri("/worker/tasks/{id}/patch", taskId)
+                    .retrieve().body(PatchInfo.class));
+        } catch (HttpClientErrorException.NotFound e) {
+            return Optional.empty();
+        }
+    }
+
+    /**
+     * 부분 패치 zip 업로드 — PUT 원시 본문(octet-stream) + X-Artifact-Sha256, 쿼리 workerId·fileCount.
+     * 2xx가 아니면 상태·본문(가린 뒤 300자)으로 IOException — {@link #uploadArtifact}와 같은 규칙.
+     */
+    public PatchInfo uploadPatch(Long taskId, int fileCount, Path file, String sha256,
+                                 Duration timeout) throws IOException, InterruptedException {
+        Map<String, Object> vars = new HashMap<>();
+        vars.put("id", taskId);
+        vars.put("workerId", props.id());
+        vars.put("fileCount", fileCount);
+        URI uri = UriComponentsBuilder.fromUriString(props.apiBaseUrl())
+                .path("/worker/tasks/{id}/patch")
+                .queryParam("workerId", "{workerId}")
+                .queryParam("fileCount", "{fileCount}")
+                .encode().buildAndExpand(vars).toUri();
+        HttpRequest req = HttpRequest.newBuilder(uri)
+                .version(HttpClient.Version.HTTP_1_1)
+                .timeout(timeout)
+                .header("X-Worker-API-Key", props.apiKey())
+                .header("X-Artifact-Sha256", sha256)
+                .header("Content-Type", "application/octet-stream")
+                .PUT(HttpRequest.BodyPublishers.ofFile(file))
+                .build();
+        HttpResponse<String> res = uploader.send(req, HttpResponse.BodyHandlers.ofString());
+        if (res.statusCode() / 100 != 2) {
+            String body = res.body() == null ? "" : com.hamonsoft.netismaker.git.GitRemotes.mask(res.body());
+            throw new IOException("서버 응답 " + res.statusCode() + ": " + (body.length() > 300 ? body.substring(0, 300) : body));
+        }
+        return mapper.readValue(res.body(), PatchInfo.class);
     }
 }

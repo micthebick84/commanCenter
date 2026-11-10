@@ -4,6 +4,7 @@ import com.hamonsoft.netismaker.dbmcp.DbWriteGate;
 import com.hamonsoft.netismaker.dto.ActiveWorktreeTaskSummary;
 import com.hamonsoft.netismaker.dto.CloseArtifactSpec;
 import com.hamonsoft.netismaker.dto.CloseContext;
+import com.hamonsoft.netismaker.dto.ClosePatchSpec;
 import com.hamonsoft.netismaker.dto.CloseProgressRequest;
 import com.hamonsoft.netismaker.dto.DeployedTaskSummary;
 import com.hamonsoft.netismaker.dto.WorkerHeartbeatRequest;
@@ -338,7 +339,7 @@ public class WorkerService {
             return WorkerTaskResponse.forUndeploy(t);
         }
         if (from == TaskStatus.CLOSE_PENDING) {
-            return WorkerTaskResponse.forClose(t, closeContext(t), closeArtifactSpec(t));
+            return WorkerTaskResponse.forClose(t, closeContext(t), closeArtifactSpec(t), closePatchSpec(t));
         }
         return WorkerTaskResponse.forAnalysis(t);
     }
@@ -441,6 +442,17 @@ public class WorkerService {
         boolean priorWrites = dbWriteLogRepo != null
                 && dbWriteLogRepo.existsByTaskIdAndClassificationIn(t.getId(), PRIOR_WRITE_CLASSIFICATIONS);
         return new WorkerTaskResponse.DbWriteSpec(DbScriptDir.resolve(dir, t.getId()), migrationManaged, priorWrites);
+    }
+
+    /** 패치 모드가 REQUIRED이고 PATCH_BUILT 전일 때만 지시를 싣는다 — 워커는 null이면 패치 단계를 건너뛴다 (스펙 2026-11-10). */
+    private ClosePatchSpec closePatchSpec(Task t) {
+        if (!CloseStep.PATCH_REQUIRED.equals(t.getClosePatchMode())) return null;
+        if (CloseStep.parse(t.getCloseProgress()).contains(CloseStep.PATCH_BUILT)) return null;
+        RepoCatalogEntry cat = RepoCatalogRepository.findForTask(repoCatalogRepo, t.getRepoCatalogId(), t.getGitUrl())
+                .orElse(null);
+        if (cat == null) return new ClosePatchSpec(null, null, null, t.getPatchBaseSha());
+        return new ClosePatchSpec(cat.getPrebuildCommand(), cat.getPrebuildToolchain(), cat.getPrebuildArtifact(),
+                t.getPatchBaseSha());
     }
 
     /** 산출물 모드가 REQUIRED이고 아직 안 올렸을 때만 지시를 싣는다 — 워커는 null이면 단계를 건너뛴다. */
@@ -1035,6 +1047,12 @@ public class WorkerService {
                     }
                     t.setMergeCommitSha(req.mergeCommitSha());
                 }
+                if (req.baseSha() != null && !req.baseSha().isBlank()) {
+                    if (req.baseSha().length() > MAX_COMMIT_SHA_LENGTH) {
+                        throw new TaskException(HttpStatus.BAD_REQUEST, "baseSha가 너무 깁니다");
+                    }
+                    t.setPatchBaseSha(req.baseSha());
+                }
             }
             case UNDEPLOYED -> {
                 // 컨테이너를 내렸으니 배포 런타임 정보를 비운다 (undeploy→PR_CREATED 복귀와 같은 규칙; 배포 로그는 보존)
@@ -1043,6 +1061,21 @@ public class WorkerService {
                 t.setDeployHostPort(null);
                 t.setDeployImage(null);
                 t.setDeployedAt(null);
+            }
+            case PATCH_BUILT -> {
+                // 부분 패치 (스펙 2026-11-10): 변경 없음이면 파일 없이 표시만, 아니면 zip이 먼저 올라가 있어야 한다
+                if (!CloseStep.PATCH_REQUIRED.equals(t.getClosePatchMode())) {
+                    throw new TaskException(HttpStatus.CONFLICT, "부분 패치 대상이 아닙니다");
+                }
+                if (Boolean.TRUE.equals(req.patchEmpty())) {
+                    t.setPatchEmpty(true);
+                    t.setPatchFileCount(0);
+                } else {
+                    if (t.getPatchName() == null) {
+                        throw new TaskException(HttpStatus.BAD_REQUEST, "패치가 아직 저장되지 않았습니다");
+                    }
+                    t.setPatchEmpty(false);
+                }
             }
             case ARTIFACT_UPLOADED -> {
                 // 파일이 먼저 저장돼 있어야 한다 — PUT /worker/tasks/{id}/artifact (스펙 2026-10-14 §5)

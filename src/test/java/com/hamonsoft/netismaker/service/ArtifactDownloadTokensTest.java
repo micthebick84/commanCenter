@@ -21,16 +21,16 @@ class ArtifactDownloadTokensTest {
     @Test
     void 토큰은_한_번만_쓴다() {
         ArtifactDownloadTokens tokens = new ArtifactDownloadTokens(clock);
-        String t = tokens.issue(7L);
+        String t = tokens.issue(7L, ArtifactDownloadTokens.Kind.ARTIFACT);
         assertThat(t).matches("[A-Za-z0-9_-]{43}");
-        assertThat(tokens.redeem(t)).hasValue(7L);
+        assertThat(tokens.redeem(t)).contains(new ArtifactDownloadTokens.Ticket(7L, ArtifactDownloadTokens.Kind.ARTIFACT));
         assertThat(tokens.redeem(t)).isEmpty();
     }
 
     @Test
     void 토큰은_60초가_지나면_쓸_수_없다() {
         ArtifactDownloadTokens tokens = new ArtifactDownloadTokens(clock);
-        String t = tokens.issue(7L);
+        String t = tokens.issue(7L, ArtifactDownloadTokens.Kind.ARTIFACT);
         now.set(now.get().plusSeconds(60));
         assertThat(tokens.redeem(t)).isEmpty();
         assertThat(tokens.redeem(null)).isEmpty();
@@ -40,18 +40,26 @@ class ArtifactDownloadTokensTest {
     @Test
     void 만료_직전_59초까지는_쓸_수_있다() {
         ArtifactDownloadTokens tokens = new ArtifactDownloadTokens(clock);
-        String t = tokens.issue(7L);
+        String t = tokens.issue(7L, ArtifactDownloadTokens.Kind.ARTIFACT);
         now.set(now.get().plusSeconds(59));
-        assertThat(tokens.redeem(t)).hasValue(7L);
+        assertThat(tokens.redeem(t)).contains(new ArtifactDownloadTokens.Ticket(7L, ArtifactDownloadTokens.Kind.ARTIFACT));
     }
 
     @Test
     void 발급마다_다른_토큰이고_서로_영향이_없다() {
         ArtifactDownloadTokens tokens = new ArtifactDownloadTokens(clock);
-        String a = tokens.issue(7L);
-        String b = tokens.issue(8L);
+        String a = tokens.issue(7L, ArtifactDownloadTokens.Kind.ARTIFACT);
+        String b = tokens.issue(8L, ArtifactDownloadTokens.Kind.ARTIFACT);
         assertThat(a).isNotEqualTo(b);
-        assertThat(tokens.redeem(b)).hasValue(8L);
-        assertThat(tokens.redeem(a)).hasValue(7L);
+        assertThat(tokens.redeem(b)).contains(new ArtifactDownloadTokens.Ticket(8L, ArtifactDownloadTokens.Kind.ARTIFACT));
+        assertThat(tokens.redeem(a)).contains(new ArtifactDownloadTokens.Ticket(7L, ArtifactDownloadTokens.Kind.ARTIFACT));
+    }
+
+    @Test
+    void 토큰은_종류를_싣고_한_번만_쓴다() {
+        ArtifactDownloadTokens tokens = new ArtifactDownloadTokens(clock);
+        String t = tokens.issue(1L, ArtifactDownloadTokens.Kind.PATCH);
+        assertThat(tokens.redeem(t)).contains(new ArtifactDownloadTokens.Ticket(1L, ArtifactDownloadTokens.Kind.PATCH));
+        assertThat(tokens.redeem(t)).isEmpty();
     }
 }

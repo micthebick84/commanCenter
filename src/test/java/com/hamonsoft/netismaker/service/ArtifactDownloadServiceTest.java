@@ -24,6 +24,7 @@ class ArtifactDownloadServiceTest {
     @TempDir Path root;
     private Task t;
     private ArtifactDownloadService service;
+    private PatchStore patchStore;
 
     @BeforeEach
     void setUp() throws Exception {
@@ -32,7 +33,8 @@ class ArtifactDownloadServiceTest {
         ReflectionTestUtils.setField(t, "id", 7L);
         t.setStatus(TaskStatus.CLOSED);
         when(taskRepo.findActiveById(7L)).thenReturn(Optional.of(t));
-        service = new ArtifactDownloadService(taskRepo, new ArtifactStore(root.toString()), new ArtifactDownloadTokens());
+        patchStore = new PatchStore(root.toString());
+        service = new ArtifactDownloadService(taskRepo, new ArtifactStore(root.toString()), patchStore, new ArtifactDownloadTokens());
     }
 
     private void storeFile() throws Exception {
@@ -105,5 +107,57 @@ class ArtifactDownloadServiceTest {
     void 모르는_토큰은_404() {
         assertThatThrownBy(() -> service.redeem("nope")).satisfies(e -> assertStatus(e, HttpStatus.NOT_FOUND));
         assertThatThrownBy(() -> service.redeem(null)).satisfies(e -> assertStatus(e, HttpStatus.NOT_FOUND));
+    }
+
+    private void storePatch() throws Exception {
+        Files.createDirectories(patchStore.file(7L).getParent());
+        Files.writeString(patchStore.file(7L), "ZIP");
+        t.setPatchName("20261110_로그인_오류_수정.zip");
+    }
+
+    private static String tokenOf(ArtifactDownloadService.Link link) {
+        return link.url().substring("/api/artifact-downloads/".length());
+    }
+
+    @Test
+    void 패치_주소는_패치_파일과_한글_이름으로_꺼낸다() throws Exception {
+        storePatch();
+        ArtifactDownloadService.Link link = service.patchLink(7L, "user1", false);
+        assertThat(link.url()).startsWith("/api/artifact-downloads/");
+        assertThat(link.expiresInSec()).isEqualTo(60);
+
+        ArtifactDownloadService.Download d = service.redeem(tokenOf(link));
+        assertThat(d.name()).isEqualTo("20261110_로그인_오류_수정.zip");
+        assertThat(d.file()).isEqualTo(patchStore.file(7L));
+        assertThat(d.size()).isEqualTo(3);
+    }
+
+    @Test
+    void 산출물_토큰은_패치_파일을_돌려주지_않는다() throws Exception {
+        storeFile();
+        storePatch();
+        ArtifactDownloadService.Download d = service.redeem(tokenOf(service.link(7L, "user1", false)));
+        assertThat(d.name()).isEqualTo("repo-task-7-abcdef1.war");
+        assertThat(Files.readString(d.file())).isEqualTo("WAR");
+    }
+
+    @Test
+    void 패치_주소_판정_순서는_작업_403_기록_404_파일_410() throws Exception {
+        assertThatThrownBy(() -> service.patchLink(8L, "admin", true)).satisfies(e -> assertStatus(e, HttpStatus.NOT_FOUND));
+        assertThatThrownBy(() -> service.patchLink(7L, "user2", false)).satisfies(e -> assertStatus(e, HttpStatus.FORBIDDEN));
+        assertThatThrownBy(() -> service.patchLink(7L, "user1", false)).satisfies(e -> assertStatus(e, HttpStatus.NOT_FOUND));
+        t.setPatchName("20261110_로그인_오류_수정.zip");
+        assertThatThrownBy(() -> service.patchLink(7L, "user1", false)).satisfies(e -> assertStatus(e, HttpStatus.GONE));
+        assertThatThrownBy(() -> service.patchLink(7L, "user2", false)).satisfies(e -> assertStatus(e, HttpStatus.FORBIDDEN));
+        storePatch();
+        assertThat(service.patchLink(7L, "admin", true).url()).startsWith("/api/artifact-downloads/");
+    }
+
+    @Test
+    void 주소를_받은_뒤_패치_파일이_정리되면_꺼낼_때_404() throws Exception {
+        storePatch();
+        String token = tokenOf(service.patchLink(7L, "user1", false));
+        Files.delete(patchStore.file(7L));
+        assertThatThrownBy(() -> service.redeem(token)).satisfies(e -> assertStatus(e, HttpStatus.NOT_FOUND));
     }
 }

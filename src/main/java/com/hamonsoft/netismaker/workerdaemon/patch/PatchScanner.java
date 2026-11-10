@@ -61,7 +61,7 @@ public final class PatchScanner {
         TreeMap<String, String> hashes = new TreeMap<>();
         Set<String> warNames = new TreeSet<>();
         walk(artifact, kind, prefix -> true, warNames, (path, name, in) -> {
-            String h = isJar(name) ? jarHash(path, in) : sha256(in);
+            String h = isJar(name) ? jarHash(in) : sha256(in);
             if (hashes.putIfAbsent(path, h) != null) {
                 // 덮어쓰면 한쪽 파일이 비교에서 빠져 변경이 사라진 패치가 정상처럼 나간다
                 throw new PatchException("패치 경로가 겹칩니다: " + path);
@@ -170,8 +170,10 @@ public final class PatchScanner {
         }
     }
 
-    private String jarHash(String jarPath, InputStream in) throws IOException, PatchException {
-        TreeMap<String, String> inner = new TreeMap<>();
+    private String jarHash(InputStream in) throws IOException {
+        // 같은 이름의 항목이 둘 이상 든 서드파티 jar가 실제로 있다(xmlbeans-2.6.0.jar). jar는 통째로 한 경로이므로
+        // 실패시키지 않고 모든 사본을 "이름\0내용 해시" 줄로 넣어 정렬한다 — 어느 사본이 바뀌어도 해시가 달라진다.
+        List<String> inner = new ArrayList<>();
         // 한 번만 읽을 수 있는 스트림이라 원본 바이트 해시를 같은 패스에서 함께 계산한다.
         MessageDigest raw = digest();
         DigestInputStream rawIn = new DigestInputStream(new NonClosingInputStream(in), raw);
@@ -183,9 +185,7 @@ public final class PatchScanner {
             if (e.isDirectory() || isIgnored(e.getName())) {
                 continue;
             }
-            if (inner.putIfAbsent(e.getName(), sha256(new NonClosingInputStream(zin))) != null) {
-                throw new PatchException("패치 경로가 겹칩니다: " + jarPath + "!/" + e.getName());
-            }
+            inner.add(e.getName() + "\0" + sha256(new NonClosingInputStream(zin)) + "\n");
         }
         if (seen == 0) {
             // zip으로 읽히지 않는 .jar(앞에 스크립트가 붙은 실행 jar, zip이 아닌 파일, 빈 zip): 항목 해시가 없으면
@@ -197,8 +197,9 @@ public final class PatchScanner {
             return HexFormat.of().formatHex(raw.digest());
         }
         MessageDigest md = digest();
-        for (Map.Entry<String, String> en : inner.entrySet()) {
-            md.update((en.getKey() + "\0" + en.getValue() + "\n").getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        inner.sort(null);
+        for (String line : inner) {
+            md.update(line.getBytes(java.nio.charset.StandardCharsets.UTF_8));
         }
         return HexFormat.of().formatHex(md.digest());
     }

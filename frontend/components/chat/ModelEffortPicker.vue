@@ -36,7 +36,8 @@ defineExpose({ pickModel })
 </script>
 
 <template>
-  <div class="row items-center no-wrap model-effort-picker">
+  <!-- 좁은 폭에서는 모델 버튼과 추론 묶음이 두 줄로 나뉠 수 있다(row = flex-wrap: wrap) — 전송 버튼을 밀어내지 않게 -->
+  <div class="row items-center model-effort-picker">
     <q-btn-dropdown
       flat
       dense
@@ -104,7 +105,8 @@ defineExpose({ pickModel })
         :disable="props.disabled"
         data-test="effort-toggle"
       />
-      <span v-if="haikuHint" class="text-caption text-grey-7 q-ml-sm">{{ haikuHint }}</span>
+      <!-- 좁은 폭에서는 같은 안내가 모델 메뉴의 Haiku 항목 캡션에 이미 있으므로 툴바에는 그리지 않는다 -->
+      <span v-if="haikuHint && !compact" class="text-caption text-grey-7 q-ml-sm">{{ haikuHint }}</span>
     </div>
   </div>
 </template>

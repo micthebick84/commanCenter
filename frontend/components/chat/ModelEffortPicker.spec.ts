@@ -1,5 +1,6 @@
 import { mount } from '@vue/test-utils'
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, afterEach } from 'vitest'
+import { setViewportWidth } from '~/test/mocks/screen'
 import { defineComponent, h, ref } from 'vue'
 import ModelEffortPicker from './ModelEffortPicker.vue'
 
@@ -53,6 +54,21 @@ describe('ModelEffortPicker (스펙 2026-09-05 §2·§5.4)', () => {
     ;(w.findComponent(ModelEffortPicker).vm as any).pickModel('claude-haiku-4-5')
     await w.vm.$nextTick()
     expect(model.value).toBe('claude-sonnet-5')
+    w.unmount()
+  })
+})
+
+describe('ModelEffortPicker — 좁은 폭 (2026-11-11 인터페이스 검토)', () => {
+  afterEach(async () => {
+    await setViewportWidth(1024)
+  })
+
+  it('lt.md에서는 Haiku 힌트를 툴바에 그리지 않는다(모델 메뉴 캡션에 같은 안내가 있다)', async () => {
+    await setViewportWidth(390)
+    const { w } = host('claude-haiku-4-5', 'low')
+    await w.vm.$nextTick()
+    expect(w.find('[data-test="effort-dropdown"]').exists()).toBe(true)
+    expect(w.text()).not.toContain('Haiku는 low/medium/high만 지원')
     w.unmount()
   })
 })

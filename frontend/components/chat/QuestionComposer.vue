@@ -184,11 +184,15 @@ function onEnter(ev: KeyboardEvent) {
       data-test="composer-file-input"
       @update:model-value="onPick"
     />
+    <!-- 전송은 늘 오른쪽 끝에 남고, 모델·추론·도구 묶음만 줄바꿈한다 — 한 줄(no-wrap)이던 때 320~390px에서
+         전송 버튼이 카드 밖으로 밀려 나갔다(2026-11-11 실측: 묶음 폭 약 362px). -->
     <div class="row items-center no-wrap composer-bar">
-      <ModelEffortPicker v-model:model="model" v-model:effort="effort" :disabled="inputLocked" />
-      <slot name="tools" />
-      <q-space />
+      <div class="row items-center composer-tools" data-test="composer-tools">
+        <ModelEffortPicker v-model:model="model" v-model:effort="effort" :disabled="inputLocked" />
+        <slot name="tools" />
+      </div>
       <q-btn
+        class="composer-send"
         round
         dense
         unelevated
@@ -222,6 +226,15 @@ function onEnter(ev: KeyboardEvent) {
 .composer-bar {
   gap: 4px;
   padding-top: 4px;
+}
+.composer-tools {
+  flex: 1 1 0;
+  min-width: 0;
+  gap: 2px 4px;
+}
+.composer-send {
+  flex: none;
+  align-self: flex-end;
 }
 .composer-files {
   gap: 2px;

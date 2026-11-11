@@ -127,3 +127,36 @@ describe('TaskListMobile — 타입 필터 (스펙 2026-11-03 §4.3)', () => {
     w.unmount()
   })
 })
+
+describe('TaskListMobile — 좁은 폭 필터·빈 목록 (2026-11-11 인터페이스 검토)', () => {
+  afterEach(() => {
+    document.body.innerHTML = ''
+  })
+
+  it('내 작업만·상세 필터·타입 칩은 그룹 칩 스크롤 줄이 아니라 별도 줄에 있다', () => {
+    const w = mount(TaskListMobile, { props: { tasks: [task('DEPLOYED', '배포완료')], isAdmin: true } })
+    const filters = w.find('[data-test="filter-chip-row"]')
+    expect(filters.find('[data-test="mine-chip"]').exists()).toBe(true)
+    expect(filters.find('[data-test="status-filter-chip"]').exists()).toBe(true)
+    expect(filters.find('[data-test="mobile-type-filter"]').exists()).toBe(true)
+    expect(filters.find('[data-test="filter-all"]').exists()).toBe(false)
+    w.unmount()
+  })
+
+  it('내 작업만이 켜진 채 목록이 비면 그 사실과 모든 작업 보기를 알려 준다', async () => {
+    const w = mount(TaskListMobile, { props: { tasks: [], isAdmin: true, mine: true } })
+    expect(w.find('[data-test="empty-mine"]').exists()).toBe(true)
+    expect(w.find('[data-test="empty-all"]').exists()).toBe(false)
+    expect(w.find('[data-test="empty-mine"]').text()).toContain('내가 등록한 작업이 없습니다')
+    await w.find('[data-test="empty-show-all"]').trigger('click')
+    expect(w.emitted('update:mine')![0]).toEqual([false])
+    w.unmount()
+  })
+
+  it('내 작업만이 꺼진 채 목록이 비면 첫 작업 등록을 안내한다', () => {
+    const w = mount(TaskListMobile, { props: { tasks: [], isAdmin: true, mine: false } })
+    expect(w.find('[data-test="empty-all"]').exists()).toBe(true)
+    expect(w.find('[data-test="empty-mine"]').exists()).toBe(false)
+    w.unmount()
+  })
+})

@@ -140,6 +140,10 @@ function openSheet(task: CardTask) {
       >
         {{ g.label }}<q-badge v-if="counts[g.key]" rounded :color="filter === g.key ? 'white' : 'grey-3'" :text-color="filter === g.key ? 'primary' : 'grey-8'" class="q-ml-xs">{{ counts[g.key] }}</q-badge>
       </q-chip>
+    </div>
+    <!-- 범위·상세·타입 필터는 그룹 칩과 다른 줄에 늘 보이게 둔다 — 한 줄 가로 스크롤 끝에 있을 때 320~390px에서
+         켜진 "내 작업만"이 화면 밖에 숨어, 빈 목록이 "등록된 작업이 없습니다"로만 보였다(2026-11-11 실측). -->
+    <div class="chip-row chip-row--filters" data-test="filter-chip-row">
       <q-chip
         clickable
         :icon="mine ? 'check' : undefined"
@@ -219,7 +223,19 @@ function openSheet(task: CardTask) {
       </q-card>
     </q-dialog>
 
-    <div v-if="tasks.length === 0" class="empty" data-test="empty-all">
+    <div v-if="tasks.length === 0 && mine" class="empty" data-test="empty-mine">
+      <q-icon name="inbox" size="28px" color="grey-5" />
+      <div>내가 등록한 작업이 없습니다. 다른 사람의 작업은 "모든 작업 보기"로 확인하세요.</div>
+      <q-btn
+        flat
+        no-caps
+        color="primary"
+        label="모든 작업 보기"
+        data-test="empty-show-all"
+        @click="mine = false"
+      />
+    </div>
+    <div v-else-if="tasks.length === 0" class="empty" data-test="empty-all">
       <q-icon name="inbox" size="28px" color="grey-5" />
       <div>등록된 작업이 없습니다 — 우하단 + 로 첫 작업을 등록하세요</div>
     </div>
@@ -290,6 +306,7 @@ function openSheet(task: CardTask) {
 .dot { color: #bdbdbd; margin: 0 4px; }
 .chip-row { display: flex; gap: 4px; overflow-x: auto; white-space: nowrap; margin: 0 -8px; padding: 0 8px 4px; }
 .chip-row::-webkit-scrollbar { display: none; }
+.chip-row--filters { flex-wrap: wrap; overflow-x: visible; white-space: normal; margin: 0; padding: 0; }
 .chip-row :deep(.q-chip) { min-height: 44px; border-radius: 22px; padding: 0 14px; font-size: 13px; }
 .stats-toggle { min-height: 44px; }
 .group { display: flex; flex-direction: column; gap: 8px; }

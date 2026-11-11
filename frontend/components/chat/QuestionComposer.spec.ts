@@ -296,3 +296,15 @@ describe('QuestionComposer 첨부 (스펙 2026-09-13 §7 — 클립은 prepend �
     w.unmount()
   })
 })
+
+describe('QuestionComposer — 좁은 폭 툴바 (2026-11-11 인터페이스 검토)', () => {
+  it('전송 버튼은 줄바꿈하는 도구 묶음 밖, 툴바의 마지막 자식이다', () => {
+    const w = mountComposer()
+    const tools = w.find('[data-test="composer-tools"]')
+    expect(tools.find('[data-test="model-picker"]').exists()).toBe(true)
+    expect(tools.find('[data-test="composer-send"]').exists()).toBe(false)
+    const bar = w.find('.composer-bar').element
+    expect((bar.lastElementChild as HTMLElement).getAttribute('data-test')).toBe('composer-send')
+    w.unmount()
+  })
+})

@@ -46,3 +46,9 @@ frontend/.output/
 .superpowers/
 spikes/
 .gstack/
+
+# graphify knowledge graph output (rebuilt locally with /graphify)
+graphify-out/
+
+# Claude Code project-local tooling (skills, hooks) - kept per machine, not shared
+.claude/

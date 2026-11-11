@@ -38,6 +38,12 @@ function lastSeenAgo(iso: string | null): string {
   if (hr < 24) return `${hr}시간 전`
   return `${Math.floor(hr / 24)}일 전`
 }
+
+// 유실 보고·재전송 포기 숫자 — 0보다 크면 빨강 굵게, 0은 흐리게. 흐린 쪽도 흰 배경에서 4.5:1(WCAG 1.4.3)을
+// 넘어야 해서 grey-7(#757575)이다(grey-6 #9e9e9e는 2.68:1). report-count = 자릿수 폭 고정(행마다 숫자가 흔들리지 않게).
+function countClass(n: number | null | undefined): string {
+  return (n ?? 0) > 0 ? 'report-count text-red-9 text-weight-bold' : 'report-count text-grey-7'
+}
 </script>
 
 <template>
@@ -99,11 +105,11 @@ function lastSeenAgo(iso: string | null): string {
           <dt>네트워크</dt>
           <dd>{{ w.vpnStatus ?? '—' }}</dd>
           <dt>유실 보고</dt>
-          <dd :class="w.lostReportCount > 0 ? 'text-red-9 text-weight-bold' : 'text-grey-6'" data-test="card-lost">
+          <dd :class="countClass(w.lostReportCount)" data-test="card-lost">
             {{ w.lostReportCount ?? 0 }}
           </dd>
           <dt>재전송 포기</dt>
-          <dd :class="(w.deadReportCount ?? 0) > 0 ? 'text-red-9 text-weight-bold' : 'text-grey-6'" data-test="card-dead">
+          <dd :class="countClass(w.deadReportCount)" data-test="card-dead">
             {{ w.deadReportCount ?? 0 }}
           </dd>
         </dl>
@@ -137,9 +143,9 @@ function lastSeenAgo(iso: string | null): string {
         { name: 'lastSeenAt', label: '마지막 응답', field: 'lastSeenAt', align: 'left' },
         { name: 'claudeSession', label: 'Claude OAuth', field: (r) => claudeAuthView(r).label, align: 'center' },
         { name: 'vpnStatus', label: '네트워크', field: 'vpnStatus', align: 'center' },
-        { name: 'mcps', label: 'MCP 도구', field: 'mcps', align: 'left' },
         { name: 'lostReportCount', label: '유실 보고', field: 'lostReportCount', align: 'center' },
         { name: 'deadReportCount', label: '재전송 포기', field: (r) => r.deadReportCount ?? 0, align: 'center' },
+        { name: 'mcps', label: 'MCP 도구', field: 'mcps', align: 'left' },
       ]"
     >
       <template #body-cell-status="props">
@@ -187,15 +193,15 @@ function lastSeenAgo(iso: string | null): string {
         </q-td>
       </template>
       <template #body-cell-lostReportCount="props">
-        <q-td :props="props">
-          <span :class="props.row.lostReportCount > 0 ? 'text-red-9 text-weight-bold' : 'text-grey-6'">
+        <q-td :props="props" data-test="cell-lost">
+          <span :class="countClass(props.row.lostReportCount)">
             {{ props.row.lostReportCount ?? 0 }}
           </span>
         </q-td>
       </template>
       <template #body-cell-deadReportCount="props">
         <q-td :props="props" data-test="cell-dead">
-          <span :class="(props.row.deadReportCount ?? 0) > 0 ? 'text-red-9 text-weight-bold' : 'text-grey-6'">
+          <span :class="countClass(props.row.deadReportCount)">
             {{ props.row.deadReportCount ?? 0 }}
           </span>
         </q-td>
@@ -217,3 +223,9 @@ function lastSeenAgo(iso: string | null): string {
     </AdminInfoBanner>
   </q-page>
 </template>
+
+<style scoped>
+.report-count {
+  font-variant-numeric: tabular-nums;
+}
+</style>

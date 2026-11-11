@@ -31,7 +31,7 @@ const rows = [
   },
   {
     workerId: 'mac-worker-2', hostname: null, version: null, lastSeenAt: null,
-    alive: false, claudeSessionOk: null, vpnStatus: null, mcps: [], lostReportCount: 3,
+    alive: false, claudeSessionOk: null, vpnStatus: null, mcps: [], lostReportCount: 3, deadReportCount: 2,
   },
 ]
 
@@ -56,6 +56,11 @@ describe('관리 워커 헬스 모바일 카드', () => {
     expect(dead.find('[data-test="card-alive"]').text()).toContain('응답 없음')
     expect(dead.find('[data-test="card-lost"]').text()).toBe('3')
     expect(dead.find('[data-test="card-lost"]').classes()).toContain('text-red-9')
+    expect(dead.find('[data-test="card-dead"]').text()).toBe('2')
+    expect(dead.find('[data-test="card-dead"]').classes()).toContain('text-red-9')
+    // 구버전 API·워커는 이 칸을 보내지 않는다 → 0, 회색
+    expect(ok.find('[data-test="card-dead"]').text()).toBe('0')
+    expect(ok.find('[data-test="card-dead"]').classes()).toContain('text-grey-6')
     expect(dead.find('[data-test="card-mcps"]').exists()).toBe(false)
     // 읽기 전용: 토글·비활성 표식·액션 바 없음
     expect(w.find('[data-test="card-toggle"]').exists()).toBe(false)

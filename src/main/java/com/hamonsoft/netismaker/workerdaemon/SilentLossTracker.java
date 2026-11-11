@@ -31,6 +31,9 @@ import java.util.concurrent.atomic.AtomicInteger;
  *  - currentCount()는 "미전송 pending 엔트리 수" (프로세스 누적이 아님): 시작 시 파일 스캔으로
  *    초기화, resolve/reject-이동 시 감소. 재전송 성공 시 admin 배지(워커 화면 '유실 보고')가
  *    내려가고, 워커 재시작에도 파일 기준이라 유지된다.
+ *  - deadCount()는 "재전송을 포기해 dead 파일(2세대 합)에 보관만 된 엔트리 수": pending에서 빠지는 순간
+ *    '유실 보고' 배지가 내려가 유실이 화면에서 사라지던 것을 막는다(heartbeat → 워커 화면 '재전송 포기').
+ *    파일 기준이라 운영자가 확인 뒤 dead 파일을 지우거나 옮기면 0으로 돌아간다(재기동 불필요).
  *  - onLost는 절대 throw 안 함(기존 불변식): 파일 I/O 실패는 로그만 (카운트는 증가 — 배지로 이상 신호).
  */
 @Component
@@ -46,6 +49,10 @@ public class SilentLossTracker implements ResultReporter.LostReportListener {
     private final Path deadLetterFile;
     private final Path deadFile;
     private final long maxDeadBytes;
+    private final Path rolledDeadFile;
+    /** deadCount() 캐시 — dead 파일 두 세대의 (크기, 수정 시각)이 그대로면 다시 세지 않는다. */
+    private String deadSignature;
+    private int deadCount;
 
     /** 재전송 대기 엔트리. raw는 파일 내 원본 라인 그대로 — resolve/reject의 매칭 키. */
     public record PendingEntry(Long taskId, WorkerResultRequest result, int attempts, String raw) { }
@@ -64,6 +71,7 @@ public class SilentLossTracker implements ResultReporter.LostReportListener {
         this.deadLetterFile = Path.of(deadLetterDir, workerId + ".jsonl");
         this.deadFile = Path.of(deadLetterDir, workerId + ".dead.jsonl");
         this.maxDeadBytes = maxDeadBytes;
+        this.rolledDeadFile = deadFile.resolveSibling(deadFile.getFileName() + ".1");
         // 시작 시 파일 스캔으로 pending 수 초기화 (재시작해도 배지 유지)
         this.pendingCount.set(loadPendingSafe().size());
     }
@@ -151,6 +159,29 @@ public class SilentLossTracker implements ResultReporter.LostReportListener {
         return pendingCount.get();
     }
 
+    /**
+     * 재전송을 포기해 dead 파일(현재 + 로테이션된 .1)에 보관만 된 엔트리 수. heartbeat가 실어 admin 워커 화면
+     * '재전송 포기'로 노출한다. heartbeat마다 불리므로 파일이 바뀌었을 때만 다시 센다. 절대 throw 안 함
+     * (읽기 실패면 마지막으로 센 값).
+     */
+    public synchronized int deadCount() {
+        try {
+            String signature = signatureOf(deadFile) + "|" + signatureOf(rolledDeadFile);
+            if (!signature.equals(deadSignature)) {
+                deadCount = readLines(deadFile).size() + readLines(rolledDeadFile).size();
+                deadSignature = signature;
+            }
+        } catch (Exception e) {
+            log.warn("dead 파일 엔트리 수 세기 실패 (마지막 값 {} 유지): {}", deadCount, e.getMessage());
+        }
+        return deadCount;
+    }
+
+    private static String signatureOf(Path file) throws IOException {
+        if (!Files.exists(file)) return "-";
+        return Files.size(file) + "@" + Files.getLastModifiedTime(file).toMillis();
+    }
+
     // ─────────────────────────── 내부 파일 연산 ───────────────────────────
 
     /** 파일 전체 파싱. 파싱 불가 라인은 dead 파일로 이동(본 파일 재기록). 실패 시 빈 리스트, throw 안 함. */
@@ -215,7 +246,7 @@ public class SilentLossTracker implements ResultReporter.LostReportListener {
      */
     private void rotateDeadIfNeeded() throws IOException {
         if (!Files.exists(deadFile) || Files.size(deadFile) < maxDeadBytes) return;
-        Path rolled = deadFile.resolveSibling(deadFile.getFileName() + ".1");
+        Path rolled = rolledDeadFile;
         Files.move(deadFile, rolled, StandardCopyOption.REPLACE_EXISTING);
         log.warn("dead 파일 로테이션: {} ({}B 초과) → {} (이전 세대 대체)",
                 deadFile.getFileName(), maxDeadBytes, rolled.getFileName());

@@ -176,6 +176,41 @@ class SilentLossTrackerTest {
     }
 
     @Test
+    void dead_count_follows_the_dead_file(@TempDir Path dir) throws Exception {
+        // 재전송을 포기한 보고는 pending 수('유실 보고')에서 빠진다 — 따로 세어 화면에 남긴다
+        SilentLossTracker t = tracker(dir);
+        assertThat(t.deadCount()).isZero();
+
+        t.onLost(9L, REQ, true, "4xx 409");
+        assertThat(t.deadCount()).isZero(); // 아직 재전송 대기
+        t.reject(t.snapshotPending().get(0), 1);
+
+        assertThat(t.currentCount()).isZero();
+        assertThat(t.deadCount()).isEqualTo(1);
+
+        // 재기동해도 파일 기준이라 유지된다
+        assertThat(tracker(dir).deadCount()).isEqualTo(1);
+
+        // 운영자가 확인하고 파일을 지우면 0으로 돌아간다 (재기동 불필요)
+        Files.delete(dir.resolve("mac-worker-1.dead.jsonl"));
+        assertThat(t.deadCount()).isZero();
+    }
+
+    @Test
+    void dead_count_includes_the_rotated_generation(@TempDir Path dir) throws Exception {
+        SilentLossTracker t = new SilentLossTracker(dir.toString(), "mac-worker-1", 1L);
+        Path main = dir.resolve("mac-worker-1.jsonl");
+
+        Files.writeString(main, "not-json-1\n");
+        t.snapshotPending();
+        assertThat(t.deadCount()).isEqualTo(1);
+
+        Files.writeString(main, "not-json-2\n"); // 상한(1B) 초과 → 앞 줄은 .1로 밀린다
+        t.snapshotPending();
+        assertThat(t.deadCount()).isEqualTo(2);
+    }
+
+    @Test
     void unparseable_line_is_moved_to_dead_file_and_rest_survive(@TempDir Path dir) throws Exception {
         Files.writeString(dir.resolve("mac-worker-1.jsonl"),
                 "{{{ 깨진 JSON" + System.lineSeparator() + legacyLine(7L) + System.lineSeparator());

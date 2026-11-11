@@ -135,7 +135,8 @@ public class WorkerMainLoop {
         try {
             http.heartbeat(new WorkerHeartbeatRequest(
                     props.id(), hostname(), props.version(), auth.ok(), null, mcps.getServerNames(),
-                    silentLossTracker.currentCount(), auth.methodName(), auth.expiresAtUtc()));
+                    silentLossTracker.currentCount(), auth.methodName(), auth.expiresAtUtc(),
+                    silentLossTracker.deadCount()));
         } catch (RestClientException e) {
             log.warn("heartbeat 실패: {}", e.getMessage());
         }

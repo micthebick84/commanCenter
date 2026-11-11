@@ -147,8 +147,8 @@ const REQUEST_DETAIL = {
   ],
 }
 const WORKERS = [
-  { workerId: 'smoke-worker-1', hostname: 'smoke', version: '1.0', lastSeenAt: NOW, alive: true, claudeSessionOk: true, claudeAuthMethod: 'ENV_TOKEN', claudeAuthExpiresAt: null, vpnStatus: null, mcps: ['docs'], lostReportCount: 0 },
-  { workerId: 'smoke-interview-1', hostname: 'smoke', version: 'interview-service/0.1.0', lastSeenAt: NOW, alive: true, claudeSessionOk: false, claudeAuthMethod: 'CREDENTIALS', claudeAuthExpiresAt: '2026-10-31T02:23:45.460Z', vpnStatus: null, mcps: [], lostReportCount: 0 },
+  { workerId: 'smoke-worker-1', hostname: 'smoke', version: '1.0', lastSeenAt: NOW, alive: true, claudeSessionOk: true, claudeAuthMethod: 'ENV_TOKEN', claudeAuthExpiresAt: null, vpnStatus: null, mcps: ['docs'], lostReportCount: 0, deadReportCount: 0 },
+  { workerId: 'smoke-interview-1', hostname: 'smoke', version: 'interview-service/0.1.0', lastSeenAt: NOW, alive: true, claudeSessionOk: false, claudeAuthMethod: 'CREDENTIALS', claudeAuthExpiresAt: '2026-10-31T02:23:45.460Z', vpnStatus: null, mcps: [], lostReportCount: 0, deadReportCount: 0 },
 ]
 
 const USAGE_TOKENS = { input: 1000, output: 200, cacheWrite5m: 0, cacheWrite1h: 0, cacheRead: 5000 }

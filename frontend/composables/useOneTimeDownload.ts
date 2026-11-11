@@ -1,4 +1,5 @@
 import { ref, onUnmounted, getCurrentInstance } from 'vue'
+import { failMsg } from './failMessage'
 
 /**
  * 1회용 내려받기 주소 토큰은 연타하면 안 된다 — 진행 중은 물론, 성공해 주소를 연 직후에도 잠깐(쿨다운) 잠근다:
@@ -40,5 +41,5 @@ export function downloadErrorMessage(e: unknown): string {
     data?: { message?: string }
   }
   const status = err.statusCode ?? err.response?.status ?? err.status
-  return status === 410 ? '보관 파일이 정리되었습니다' : (err.data?.message ?? '내려받기 실패')
+  return status === 410 ? '보관 파일이 정리되었습니다' : (err.data?.message ?? failMsg('내려받기'))
 }

@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { failMsg } from '~/composables/failMessage'
 import type { Ref } from 'vue'
 import { useQuasar } from 'quasar'
 import InterviewPanel from '~/components/InterviewPanel.vue'
@@ -154,7 +155,7 @@ async function downloadSessionAttachment(a: AttachmentView) {
   try {
     await downloadAttachment(`/api/questions/${sessionId.value}/attachments/${a.id}`, a.fileName)
   } catch (e: any) {
-    $q.notify({ type: 'negative', message: e?.message ?? '다운로드 실패' })
+    $q.notify({ type: 'negative', message: e?.message ?? failMsg('다운로드') })
   }
 }
 

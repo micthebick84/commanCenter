@@ -53,7 +53,7 @@ function handleLogout() {
   $q.dialog({
     title: '로그아웃',
     message: '정말로 로그아웃 하시겠습니까?',
-    ok: { label: '로그아웃', color: 'negative', unelevated: true },
+    ok: { label: '로그아웃', color: 'primary', unelevated: true },
     cancel: { label: '취소', flat: true },
     persistent: true,
   }).onOk(() => {
@@ -79,7 +79,7 @@ function handleLogout() {
           <q-route-tab to="/tasks" label="작업" />
           <q-route-tab to="/questions" label="질문" />
           <q-route-tab to="/requests" label="요청">
-            <q-badge v-if="isAdmin && requestsAttention > 0" color="red" floating data-test="requests-badge">{{ requestsAttention }}</q-badge>
+            <q-badge v-if="isAdmin && requestsAttention > 0" color="red-9" floating data-test="requests-badge">{{ requestsAttention }}</q-badge>
           </q-route-tab>
           <q-route-tab v-if="isAdmin" to="/admin/workers" label="워커 헬스" />
           <q-route-tab v-if="isAdmin" to="/admin/mcp-catalog" label="MCP 카탈로그" />
@@ -98,17 +98,17 @@ function handleLogout() {
             dense
           />
         </div>
-        <q-btn v-if="isAuthenticated" flat dense icon="logout" @click="handleLogout" />
+        <q-btn v-if="isAuthenticated" flat dense icon="logout" aria-label="로그아웃" @click="handleLogout" />
       </q-toolbar>
     </q-header>
     <q-footer v-if="isAuthenticated && $q.screen.lt.md" bordered class="bg-white bottom-nav" data-test="bottom-nav">
       <q-tabs dense no-caps align="justify" active-color="primary" indicator-color="transparent" class="text-grey-7">
         <q-route-tab to="/tasks" icon="assignment" label="작업">
-          <q-badge v-if="tasksAttention > 0" color="orange-9" floating data-test="tasks-badge">{{ tasksAttention }}</q-badge>
+          <q-badge v-if="tasksAttention > 0" color="warning" text-color="dark" floating data-test="tasks-badge">{{ tasksAttention }}</q-badge>
         </q-route-tab>
         <q-route-tab to="/questions" icon="forum" label="질문" />
         <q-route-tab to="/requests" icon="campaign" label="요청">
-          <q-badge v-if="isAdmin && requestsAttention > 0" color="red" floating data-test="requests-badge">{{ requestsAttention }}</q-badge>
+          <q-badge v-if="isAdmin && requestsAttention > 0" color="red-9" floating data-test="requests-badge">{{ requestsAttention }}</q-badge>
         </q-route-tab>
         <q-route-tab v-if="isAdmin" to="/admin/workers" icon="settings" label="관리" :class="{ 'q-tab--active text-primary': isAdminRoute }" />
       </q-tabs>

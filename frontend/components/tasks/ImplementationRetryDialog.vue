@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { failMsg } from '~/composables/failMessage'
 // 구현 재시도 (스펙 2026-10-15 §5.5·§7) — 방식을 다시 골라 구현실패 작업을 구현대기로 돌린다(관리자).
 // 작업에 참조 repo가 있으면 참조마다 "이 참조 빼고 재시도"를 고를 수 있다(작업 스펙 2026-10-24 §7.5b) — 기본은 해제,
 // 실패 사유가 그 참조의 준비 실패(`참조 repo 준비 실패: {별칭}({브랜치}) — …`)면 미리 고른다. 고른 것이 있을 때만 바디에 싣는다.
@@ -69,7 +70,7 @@ async function submit() {
     emit('update:modelValue', false)
     emit('submitted')
   } catch (e: any) {
-    $q.notify({ type: 'negative', message: e?.data?.message ?? '구현 재시도 실패' })
+    $q.notify({ type: 'negative', message: e?.data?.message ?? failMsg('구현 재시도') })
   } finally {
     submitting.value = false
   }

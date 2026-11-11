@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { failMsg } from '~/composables/failMessage'
 import { useQuasar } from 'quasar'
 import { confirmDialog } from '~/composables/confirmDialog'
 import AdminSectionTabs from '~/components/tasks/AdminSectionTabs.vue'
@@ -52,7 +53,7 @@ async function load() {
   try {
     entries.value = await useApi<RepoEntry[]>('/api/admin/repo-catalog')
   } catch (e: any) {
-    $q.notify({ type: 'negative', message: e?.data?.message ?? '카탈로그 조회 실패' })
+    $q.notify({ type: 'negative', message: e?.data?.message ?? failMsg('카탈로그 조회') })
   } finally {
     loading.value = false
   }
@@ -78,7 +79,7 @@ async function check(e: RepoEntry) {
       $q.notify({ type: 'negative', message: `${e.alias}: 연결 실패`, caption: res.error ?? undefined })
     }
   } catch (err: any) {
-    $q.notify({ type: 'negative', message: err?.data?.message ?? '체크 호출 실패' })
+    $q.notify({ type: 'negative', message: err?.data?.message ?? failMsg('체크 호출') })
   } finally {
     checkingIds.value.delete(e.id)
   }
@@ -197,7 +198,7 @@ async function submit() {
     showForm.value = false
     await load()
   } catch (e: any) {
-    $q.notify({ type: 'negative', message: e?.data?.message ?? '저장 실패' })
+    $q.notify({ type: 'negative', message: e?.data?.message ?? failMsg('저장') })
   } finally {
     submitting.value = false
   }
@@ -217,7 +218,7 @@ async function toggleEnabled(e: RepoEntry) {
     })
     await load()
   } catch (err: any) {
-    $q.notify({ type: 'negative', message: err?.data?.message ?? '활성화 토글 실패' })
+    $q.notify({ type: 'negative', message: err?.data?.message ?? failMsg('활성화 토글') })
   }
 }
 
@@ -228,7 +229,7 @@ async function remove(e: RepoEntry) {
     $q.notify({ type: 'positive', message: '삭제 완료' })
     await load()
   } catch (err: any) {
-    $q.notify({ type: 'negative', message: err?.data?.message ?? '삭제 실패' })
+    $q.notify({ type: 'negative', message: err?.data?.message ?? failMsg('삭제') })
   }
 }
 
@@ -320,7 +321,7 @@ const canSubmit = computed(
           <q-icon name="call_split" size="14px" color="grey-6" />
           <span>{{ e.defaultBranch ?? '기본 브랜치 자동 감지' }}</span>
         </div>
-        <code class="text-grey-6 card-url">{{ e.gitUrl }}</code>
+        <code class="text-grey-7 card-url">{{ e.gitUrl }}</code>
         <div class="text-caption text-grey-7" data-test="catalog-note-folder">노트 폴더: {{ e.noteFolder ?? '자동' }}</div>
         <div v-if="e.description" class="card-desc">{{ e.description }}</div>
         <template #actions>
@@ -433,16 +434,17 @@ const canSubmit = computed(
             icon="cable"
             color="primary"
             :loading="checkingIds.has(props.row.id)"
+            :aria-label="`${props.row.alias} 연결 확인`"
             data-test="check"
             @click="check(props.row)"
           >
             <q-tooltip>연결 확인</q-tooltip>
           </q-btn>
-          <q-btn flat dense icon="storage" color="primary" data-test="db" @click="openDbAdmin(props.row)">
+          <q-btn flat dense icon="storage" color="primary" :aria-label="`${props.row.alias} DB 접속`" data-test="db" @click="openDbAdmin(props.row)">
             <q-tooltip>DB 접속(공용)</q-tooltip>
           </q-btn>
-          <q-btn flat dense icon="edit" color="primary" @click="openEdit(props.row)" />
-          <q-btn flat dense icon="delete" color="negative" @click="remove(props.row)" />
+          <q-btn flat dense icon="edit" color="primary" :aria-label="`${props.row.alias} 수정`" @click="openEdit(props.row)" />
+          <q-btn flat dense icon="delete" color="negative" :aria-label="`${props.row.alias} 삭제`" @click="remove(props.row)" />
         </q-td>
       </template>
     </q-table>

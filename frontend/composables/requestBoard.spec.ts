@@ -17,8 +17,8 @@ describe('requestBoard', () => {
 
   it('종류 라벨과 상태 색', () => {
     expect(KIND_OPTIONS.map((o) => o.label)).toEqual(['기능 추가', 'MCP 추가', 'REPO 추가'])
-    expect(STATUS_COLOR.RECEIVED).toBe('grey')
-    expect(STATUS_COLOR.REVIEWING).toBe('blue')
+    expect(STATUS_COLOR.RECEIVED).toBe('grey-8')
+    expect(STATUS_COLOR.REVIEWING).toBe('blue-9')
     expect(STATUS_COLOR.DONE).toBe('positive')
     expect(STATUS_COLOR.REJECTED).toBe('negative')
   })

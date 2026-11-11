@@ -274,7 +274,7 @@ function download() {
 }
 .app-log-info {
   margin-bottom: 6px;
-  color: #ef6c00;
+  color: #bf360c;
   font-size: 0.8125rem;
   overflow-wrap: anywhere;
 }

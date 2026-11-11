@@ -27,7 +27,7 @@ onMounted(load)
 watch(() => [props.taskId, props.refreshKey], load)
 
 const STATUS_COLOR: Record<string, string> = {
-  PENDING: 'orange-8',
+  PENDING: 'warning',
   APPROVED: 'positive',
   REJECTED: 'negative',
   WITHDRAWN: 'grey-7',
@@ -56,7 +56,7 @@ function modeText(r: FixRequestView): string | null {
       <q-card-section>
         <div class="row items-center" style="gap: 6px">
           <span v-if="r.round != null" class="text-subtitle2 text-weight-bold">{{ r.round }}회차</span>
-          <q-chip dense size="sm" square :color="STATUS_COLOR[r.status] ?? 'grey-7'" text-color="white" :label="fixRequestStatusLabel(r.status)" />
+          <q-chip dense size="sm" square :color="STATUS_COLOR[r.status] ?? 'grey-7'" :text-color="STATUS_COLOR[r.status] === 'warning' ? 'dark' : 'white'" :label="fixRequestStatusLabel(r.status)" />
           <q-chip v-if="modeText(r)" dense size="sm" outline icon="account_tree" :label="modeText(r) ?? undefined" />
           <q-chip
             v-if="fixOutcomeLabel(r.outcome)"

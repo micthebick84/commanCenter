@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, afterEach } from 'vitest'
 import { useOneTimeDownload, downloadErrorMessage } from './useOneTimeDownload'
+import { failMsg } from './failMessage'
 
 afterEach(() => vi.useRealTimers())
 
@@ -29,6 +30,6 @@ describe('downloadErrorMessage', () => {
   it('410은 정리 안내, 그 밖은 서버 메시지 또는 기본', () => {
     expect(downloadErrorMessage({ statusCode: 410 })).toBe('보관 파일이 정리되었습니다')
     expect(downloadErrorMessage({ data: { message: 'm' } })).toBe('m')
-    expect(downloadErrorMessage(new Error('n'))).toBe('내려받기 실패')
+    expect(downloadErrorMessage(new Error('n'))).toBe(failMsg('내려받기'))
   })
 })

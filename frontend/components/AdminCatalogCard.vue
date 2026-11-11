@@ -78,7 +78,7 @@ const emit = defineEmits<{ (e: 'toggle'): void }>()
   padding: 2px 6px;
   border-radius: 4px;
   background: #eeeeee;
-  color: #757575;
+  color: #616161;
 }
 .card-toggle {
   margin: -2px -8px 0 0;

@@ -323,7 +323,7 @@ describe('pages/tasks/[id] — 작업 종료 (스펙 2026-10-13 §6)', () => {
 
     useApiMock.mockRejectedValueOnce(new Error('network'))
     await click()
-    expect(notifySpy).toHaveBeenLastCalledWith({ type: 'negative', message: '내려받기 실패' })
+    expect(notifySpy).toHaveBeenLastCalledWith({ type: 'negative', message: '내려받기에 실패했습니다. 새로고침한 뒤 다시 시도하고, 계속되면 관리자에게 알려 주세요.' })
     w.unmount()
   })
 

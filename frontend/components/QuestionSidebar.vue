@@ -93,11 +93,14 @@ defineExpose({ refresh })
       </div>
       <template v-for="g in groups" :key="g.key">
         <div class="group-label text-caption text-grey-7">{{ g.label }}</div>
-        <div
+        <!-- 키보드(Tab·Enter·Space)로도 열 수 있게 button으로 둔다 — div였을 때 마우스로만 열렸다(2026-11-11 검토) -->
+        <button
           v-for="q in g.items"
           :key="q.id"
+          type="button"
           class="session-item"
           :class="{ active: q.id === props.activeId }"
+          :aria-current="q.id === props.activeId ? 'page' : undefined"
           data-test="question-row"
           @click="emit('select', q.id)"
         >
@@ -106,7 +109,7 @@ defineExpose({ refresh })
             <span :class="{ 'text-primary text-weight-medium': isBusy(q) }">{{ statusCaption(q) }}</span>
             · {{ q.repoAlias ?? q.githubRepo }} · {{ q.githubBranch }}<span v-if="all"> · {{ q.requesterId }}</span>
           </div>
-        </div>
+        </button>
       </template>
     </div>
     <ClaudeUsagePanel variant="panel" />
@@ -136,8 +139,15 @@ defineExpose({ refresh })
   font-weight: 500;
 }
 .session-item {
+  display: block;
+  width: 100%;
   padding: 8px 10px;
+  border: 0;
   border-radius: 6px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
   cursor: pointer;
 }
 .session-item:hover {

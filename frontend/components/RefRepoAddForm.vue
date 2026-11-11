@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { failMsg } from '~/composables/failMessage'
 // 참조 repo 추가 폼 (스펙 2026-10-22 §7.1) — RefRepoChips의 "＋ 참조 추가"가 여는 작은 창(q-menu·q-dialog) 안에 그대로 넣는다.
 // 레포 선택(카탈로그에서 대상·이미 고른 레포·지원하지 않는 호스트(other)를 뺀 것만) → 브랜치 선택
 // (GET /api/repos/branches — 새 질문 화면 pages/questions/index.vue loadBranches와 같은 호출) → "추가"가
@@ -99,7 +100,7 @@ async function onRepoSelected(id: number | null) {
     const st = e?.statusCode ?? e?.response?.status ?? e?.status
     status.value = 'error'
     statusMsg.value =
-      e?.data?.message ?? (st === 404 ? '레포를 찾을 수 없거나 접근 권한이 없습니다' : '브랜치 동기화 실패')
+      e?.data?.message ?? (st === 404 ? '레포를 찾을 수 없거나 접근 권한이 없습니다' : failMsg('브랜치 동기화'))
   }
 }
 
@@ -131,7 +132,7 @@ function submit() {
     >
       <template #no-option>
         <q-item>
-          <q-item-section class="text-grey">고를 수 있는 레포가 없습니다</q-item-section>
+          <q-item-section class="text-grey-7">고를 수 있는 레포가 없습니다</q-item-section>
         </q-item>
       </template>
     </q-select>
@@ -154,7 +155,7 @@ function submit() {
     >
       <template #no-option>
         <q-item>
-          <q-item-section class="text-grey">결과 없음</q-item-section>
+          <q-item-section class="text-grey-7">결과 없음</q-item-section>
         </q-item>
       </template>
     </q-select>

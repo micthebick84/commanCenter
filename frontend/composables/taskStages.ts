@@ -96,14 +96,14 @@ export const CHIP: Record<string, [string, string]> = {
   AWAITING_APPROVAL: ['#e3f2fd', '#1565c0'],
   // 인터뷰 구간: 초록 = 관리자 승인 대기, 앰버 = 사람 입력 대기
   INTERVIEWING: ['#e1f5fe', '#01579b'],
-  INTERVIEW_INPUT: ['#fff8e1', '#ef6c00'],
+  INTERVIEW_INPUT: ['#fff8e1', '#bf360c'],
   INTERVIEW_REVIEW: ['#e8f5e9', '#2e7d32'],
   PENDING: ['#e3f2fd', '#1565c0'],
-  IN_PROGRESS: ['#fff8e1', '#ef6c00'],
+  IN_PROGRESS: ['#fff8e1', '#bf360c'],
   COMPLETED: ['#e8f5e9', '#2e7d32'],
   FAILED: ['#ffebee', '#c62828'],
   DESIGN_PENDING: ['#ede7f6', '#5e35b1'],
-  DESIGNING: ['#fff8e1', '#ef6c00'],
+  DESIGNING: ['#fff8e1', '#bf360c'],
   DESIGN_REVIEW: ['#e8f5e9', '#2e7d32'],
   DESIGN_FAILED: ['#fce4ec', '#ad1457'],
   APPROVED: ['#ede7f6', '#4527a0'],
@@ -111,17 +111,17 @@ export const CHIP: Record<string, [string, string]> = {
   PR_CREATED: ['#e0f2f1', '#00695c'],
   IMPLEMENTATION_FAILED: ['#fce4ec', '#ad1457'],
   DEPLOY_PENDING: ['#ede7f6', '#5e35b1'],
-  DEPLOYING: ['#fff3e0', '#e65100'],
+  DEPLOYING: ['#fff3e0', '#bf360c'],
   DEPLOYED: ['#e0f2f1', '#00695c'],
   // 수정 요청 승인 대기(스펙 2026-11-03 §6) — 관리자 승인 대기는 초록(인터뷰·종료 구간과 같은 규칙)
   FIX_REVIEW: ['#e8f5e9', '#2e7d32'],
   DEPLOY_FAILED: ['#fce4ec', '#ad1457'],
   DEPLOY_LOST: ['#fbe9e7', '#bf360c'],
   UNDEPLOY_PENDING: ['#fbe9e7', '#bf360c'],
-  UNDEPLOYING: ['#fff3e0', '#e65100'],
+  UNDEPLOYING: ['#fff3e0', '#bf360c'],
   CLOSE_REVIEW: ['#e8f5e9', '#2e7d32'],
   CLOSE_PENDING: ['#eceff1', '#37474f'],
-  CLOSING: ['#fff3e0', '#e65100'],
+  CLOSING: ['#fff3e0', '#bf360c'],
   CLOSED: ['#e8f5e9', '#1b5e20'],
   CLOSE_FAILED: ['#fce4ec', '#ad1457'],
   CANCELLED: ['#f5f5f5', '#616161'],
@@ -184,7 +184,7 @@ export function agePct(iso: string, now = Date.now()): number {
 export function ageColor(iso: string, now = Date.now()): string {
   const h = ageHours(iso, now)
   if (h > 24 * 30) return '#c62828'
-  if (h > 24 * 7) return '#ef6c00'
+  if (h > 24 * 7) return '#ef6c00' // 막대 채움 색(글자 아님) — 7일·30일 구분을 위해 주황 유지
   return '#43a047'
 }
 
@@ -271,7 +271,7 @@ export function buildStages<T extends StageCardTask>(
         steps: pipelineStages.map((x, i) => ({
           label: x.name,
           bg: i < stageIdx ? '#a5d6a7' : i === stageIdx ? x.color : '#eeeeee',
-          fg: i === stageIdx ? x.color : '#bdbdbd',
+          fg: i === stageIdx ? x.color : '#757575',
           weight: i === stageIdx ? '700' : '400',
         })),
         move: opts.isAdmin ? moveFor(t) : null,
@@ -333,7 +333,7 @@ export function stageAccepts(stageKey: string, move: MoveDef | null): boolean {
 export type AttentionGroup = 'attention' | 'active' | 'done' | 'closed'
 
 export const ATTENTION_GROUPS: { key: AttentionGroup; label: string; color: string }[] = [
-  { key: 'attention', label: '확인 필요', color: '#ef6c00' },
+  { key: 'attention', label: '확인 필요', color: '#bf360c' },
   { key: 'active', label: '진행 중', color: '#1565c0' },
   { key: 'done', label: '완료', color: '#00695c' },
   { key: 'closed', label: '취소됨', color: '#757575' },
@@ -403,6 +403,14 @@ export function sortForMobile<T extends { status: string; updatedAt: string }>(
 // ── 스테퍼 (스펙 §4.2) ──────────────────────────────────────────────────
 
 export type StepState = 'done' | 'current' | 'future' | 'skipped' | 'failed'
+/** 화면 읽기 프로그램용 단계 상태 글자 — 단계 색만으로 상태를 알리지 않게(2026-11-11 검토). 앞 공백은 라벨과 붙지 않게 한다. */
+export const STEP_STATE_LABEL: Record<StepState, string> = {
+  done: ' 완료',
+  current: ' 진행 중',
+  future: ' 대기',
+  skipped: ' 건너뜀',
+  failed: ' 실패',
+}
 export interface StageStep {
   key: string
   label: string

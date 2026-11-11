@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { failMsg } from '~/composables/failMessage'
 import { useQuasar } from 'quasar'
 import { confirmDialog } from '~/composables/confirmDialog'
 import TaskListMobile from '~/components/tasks/TaskListMobile.vue'
@@ -224,12 +225,12 @@ async function requestClose(t: CardTask) {
   if (closeRequestBusy) return // 확인창이 떠 있거나 요청이 끝나기 전의 중복 클릭은 무시한다
   closeRequestBusy = true
   try {
-    if (!(await confirmDialog($q, DB_WORK_CLOSE_REQUEST_CONFIRM, { title: '종료 요청' }))) return
+    if (!(await confirmDialog($q, DB_WORK_CLOSE_REQUEST_CONFIRM, { title: '종료 요청', ok: '종료 요청' }))) return
     await useApi(`/api/tasks/${t.id}/close-request`, { method: 'POST' })
     $q.notify({ type: 'positive', message: `작업 #${t.id} — 종료 요청 등록` })
     refresh()
   } catch (e: unknown) {
-    $q.notify({ type: 'negative', message: (e as { data?: { message?: string } })?.data?.message ?? '종료 요청 실패' })
+    $q.notify({ type: 'negative', message: (e as { data?: { message?: string } })?.data?.message ?? failMsg('종료 요청') })
   } finally {
     closeRequestBusy = false
   }
@@ -246,12 +247,12 @@ function initialOf(t: TaskResponse) {
 // CardTask(모바일 시트/카드 공용 타입)로 받는다 — TaskResponse는 구조적으로 CardTask를 만족하므로
 // 데스크톱 보드(TaskResponse)·모바일 리스트(CardTask emit) 양쪽에서 그대로 호출할 수 있다.
 async function cancel(t: CardTask) {
-  if (!(await confirmDialog($q, `작업 #${t.id} '${t.title}'을 취소하시겠습니까?`, { title: '작업 취소' }))) return
+  if (!(await confirmDialog($q, `작업 #${t.id} '${t.title}'을 취소하시겠습니까?`, { title: '작업 취소', ok: '작업 취소', cancel: '돌아가기' }))) return
   try {
     await useApi(`/api/tasks/${t.id}/cancel`, { method: 'POST' })
     refresh()
   } catch (e: any) {
-    $q.notify({ type: 'negative', message: e?.data?.message ?? '취소 실패' })
+    $q.notify({ type: 'negative', message: e?.data?.message ?? failMsg('취소') })
   }
 }
 
@@ -268,7 +269,7 @@ async function remove(t: CardTask) {
     await useApi(`/api/tasks/${t.id}`, { method: 'DELETE' })
     refresh()
   } catch (e: any) {
-    $q.notify({ type: 'negative', message: e?.data?.message ?? '삭제 실패' })
+    $q.notify({ type: 'negative', message: e?.data?.message ?? failMsg('삭제') })
   }
 }
 
@@ -433,7 +434,7 @@ async function loadBranches(repo: number) {
       repoStatusMsg.value = e?.data?.message ?? '레포를 찾을 수 없거나 접근 권한이 없습니다'
     } else {
       repoStatus.value = 'error'
-      repoStatusMsg.value = e?.data?.message ?? '브랜치 동기화 실패'
+      repoStatusMsg.value = e?.data?.message ?? failMsg('브랜치 동기화')
     }
   }
 }
@@ -589,7 +590,7 @@ async function submit() {
     showCreate.value = false
     refresh()
   } catch (e: any) {
-    const msg = e?.data?.message ?? '등록 실패'
+    const msg = e?.data?.message ?? failMsg('등록')
     $q.notify({ type: 'negative', message: msg })
   } finally {
     submitting.value = false
@@ -748,22 +749,32 @@ const fullscreen = useFullscreenDialog()
                       data-test="board-elapsed"
                     >{{ elapsedOf(c.task)!.text }}</span>
                     <q-space />
-                    <q-icon
+                    <!-- 아이콘(q-icon)이 아니라 버튼 — 키보드로 닿고 화면 읽기 프로그램이 이름을 읽는다(2026-11-11 검토).
+                         배포 이력이 활성인 작업의 삭제는 눌렀을 때 이유를 알려 주므로 막지 않고 회색으로만 둔다. -->
+                    <q-btn
                       v-if="cancelable(c.task)"
-                      name="block"
-                      size="18px"
-                      color="warning"
-                      class="cursor-pointer"
-                      @click="cancel(c.task)"
+                      flat
+                      round
+                      dense
+                      size="sm"
+                      icon="block"
+                      color="grey-8"
+                      :aria-label="`작업 #${c.task.id} 취소`"
+                      data-test="board-cancel"
+                      @click.stop="cancel(c.task)"
                     >
                       <q-tooltip>취소</q-tooltip>
-                    </q-icon>
-                    <q-icon
-                      name="delete"
-                      size="18px"
-                      class="cursor-pointer"
-                      :color="DEPLOY_ACTIVE_STATUSES.includes(c.task.status) ? 'grey-4' : 'negative'"
-                      @click="remove(c.task)"
+                    </q-btn>
+                    <q-btn
+                      flat
+                      round
+                      dense
+                      size="sm"
+                      icon="delete"
+                      :color="DEPLOY_ACTIVE_STATUSES.includes(c.task.status) ? 'grey-7' : 'negative'"
+                      :aria-label="`작업 #${c.task.id} 삭제`"
+                      data-test="board-delete"
+                      @click.stop="remove(c.task)"
                     >
                       <q-tooltip>
                         {{
@@ -772,7 +783,7 @@ const fullscreen = useFullscreenDialog()
                             : '삭제'
                         }}
                       </q-tooltip>
-                    </q-icon>
+                    </q-btn>
                   </div>
 
                   <NuxtLink :to="`/tasks/${c.task.id}`" class="card-title">
@@ -782,7 +793,7 @@ const fullscreen = useFullscreenDialog()
                   <div class="card-repo">
                     <q-icon name="folder" size="13px" color="grey-6" />
                     <span class="ellipsis">{{ repoLabel(c.task) }}</span>
-                    <span class="text-grey-5">·</span>
+                    <span class="text-grey-7">·</span>
                     <q-icon name="call_split" size="13px" color="grey-6" />
                     <span class="ellipsis">{{ c.task.githubBranch }}</span>
                   </div>
@@ -810,7 +821,7 @@ const fullscreen = useFullscreenDialog()
                   <div class="card-foot">
                     <span class="card-avatar">{{ initialOf(c.task) }}</span>
                     <span>{{ c.task.requesterId }}</span>
-                    <span class="text-grey-5">·</span>
+                    <span class="text-grey-7">·</span>
                     <span>재시도 {{ c.task.retryCount }}/{{ c.task.maxRetry }}</span>
                     <a
                       v-if="c.task.implementation?.prUrl"
@@ -835,7 +846,7 @@ const fullscreen = useFullscreenDialog()
                       data-test="card-patch-download"
                       @click.stop="downloadPatch(c.task)"
                     />
-                    <span v-else-if="patchState(c.task) === 'empty'" class="text-grey-6" data-test="card-patch-empty">변경 없음</span>
+                    <span v-else-if="patchState(c.task) === 'empty'" class="text-grey-7" data-test="card-patch-empty">변경 없음</span>
                   </div>
                 </div>
               </div>
@@ -945,7 +956,7 @@ const fullscreen = useFullscreenDialog()
             >
               <template #no-option>
                 <q-item>
-                  <q-item-section class="text-grey">등록된 레포가 없습니다</q-item-section>
+                  <q-item-section class="text-grey-7">등록된 레포가 없습니다</q-item-section>
                 </q-item>
               </template>
             </q-select>
@@ -973,7 +984,7 @@ const fullscreen = useFullscreenDialog()
             >
               <template #no-option>
                 <q-item>
-                  <q-item-section class="text-grey">결과 없음</q-item-section>
+                  <q-item-section class="text-grey-7">결과 없음</q-item-section>
                 </q-item>
               </template>
             </q-select>
@@ -1069,7 +1080,7 @@ const fullscreen = useFullscreenDialog()
 .stage-name { font-size: 17px; font-weight: 700; color: #212121; }
 .stage-count { font-size: 26px; font-weight: 600; line-height: 1; }
 .pipeline-seg { flex: 1; height: 5px; border-radius: 3px; }
-.stage-summary { font-size: 11.5px; color: #757575; line-height: 1.5; }
+.stage-summary { font-size: 11.5px; color: #616161; line-height: 1.5; }
 .stage-oldest {
   margin-top: auto;
   display: flex;
@@ -1085,7 +1096,7 @@ const fullscreen = useFullscreenDialog()
   align-self: flex-start;
   font-size: 11.5px;
   font-weight: 600;
-  color: #ef6c00;
+  color: #bf360c;
   background: #fff8e1;
   border: 1px solid #ffe082;
   border-radius: 3px;
@@ -1129,11 +1140,11 @@ const fullscreen = useFullscreenDialog()
 .task-card.draggable { cursor: grab; }
 .task-card.draggable:active { cursor: grabbing; }
 
-.card-id { font-size: 12px; font-weight: 700; color: #9e9e9e; }
+.card-id { font-size: 12px; font-weight: 700; color: #757575; }
 .card-status { font-size: 11px; font-weight: 500; padding: 2px 7px; border-radius: 4px; }
 .card-cost { font-size: 11px; font-weight: 600; color: #2e7d32; padding: 2px 6px; border-radius: 4px; background: rgba(46, 125, 50, 0.08); }
 .card-type { font-size: 11px; font-weight: 600; color: #455a64; padding: 2px 6px; border-radius: 4px; background: rgba(69, 90, 100, 0.1); white-space: nowrap; }
-.board-elapsed--warn { color: #ef6c00; font-weight: 600; }
+.board-elapsed--warn { color: #bf360c; font-weight: 600; }
 .card-title {
   font-size: 14.5px;
   font-weight: 600;
@@ -1214,10 +1225,10 @@ const fullscreen = useFullscreenDialog()
   align-items: center;
   justify-content: center;
   gap: 6px;
-  color: #9e9e9e;
+  color: #757575;
   font-size: 13px;
 }
-.stage-empty-hint { font-size: 11.5px; color: #bdbdbd; }
+.stage-empty-hint { font-size: 11.5px; color: #757575; }
 
 .drop-overlay {
   position: absolute;

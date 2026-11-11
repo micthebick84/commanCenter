@@ -30,8 +30,20 @@ describe('confirmDialog — window.confirm 대체', () => {
 
   it('취소를 누르면 false', async () => {
     const { w, q } = mountWithQ()
-    const p = confirmDialog(q, '취소하시겠습니까?')
+    const p = confirmDialog(q, '취소하시겠습니까?', { ok: '작업 취소', cancel: '돌아가기' })
     await flushPromises()
+    cancelBtn()!.click()
+    await expect(p).resolves.toBe(false)
+    w.unmount()
+  })
+
+  it('취소 동작을 확인할 때는 버튼이 "작업 취소"/"돌아가기"로 갈려 "취소"가 두 뜻이 되지 않는다 (2026-11-11 검토)', async () => {
+    const { w, q } = mountWithQ()
+    const p = confirmDialog(q, '이 작업을 취소하시겠습니까?', { ok: '작업 취소', cancel: '돌아가기' })
+    await flushPromises()
+    expect(okBtn()!.textContent).toContain('작업 취소')
+    expect(cancelBtn()!.textContent).toContain('돌아가기')
+    expect(document.body.textContent).toContain('작업 취소') // 제목이 없으면 확인 버튼 이름을 제목으로
     cancelBtn()!.click()
     await expect(p).resolves.toBe(false)
     w.unmount()
@@ -42,7 +54,7 @@ describe('confirmDialog — window.confirm 대체', () => {
   it('window.confirm을 호출하지 않는다', async () => {
     const spy = vi.spyOn(window, 'confirm').mockReturnValue(false)
     const { w, q } = mountWithQ()
-    const p = confirmDialog(q, '삭제하시겠습니까?')
+    const p = confirmDialog(q, '삭제하시겠습니까?', { ok: '삭제' })
     await flushPromises()
     okBtn()!.click()
     await expect(p).resolves.toBe(true)

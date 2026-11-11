@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { failMsg } from '~/composables/failMessage'
 // 승인 — 인터뷰 시작 다이얼로그 (2026-09-06 UI/UX 개선).
 // 위→아래: 작업 요약(어떤 작업인지) → 지난 인터뷰 안내(재승인 맥락) → 인터뷰 설정(모델 라디오 + 추론 단계 세그먼트,
 // MCP 칩, DB 연결, 참조 repo, 구독 사용량 strip) → 승인 후 다음 단계 안내 → 액션. 폰(lt.sm)은 전체화면: 상단 고정 바(닫기) /
@@ -279,7 +280,7 @@ async function approve() {
     show.value = false
     emit('approved')
   } catch (e: any) {
-    $q.notify({ type: 'negative', message: e?.data?.message ?? '승인 실패' })
+    $q.notify({ type: 'negative', message: e?.data?.message ?? failMsg('승인') })
   } finally {
     approving.value = false
   }
@@ -438,7 +439,7 @@ const fullscreen = useFullscreenDialog()
           <q-icon
             name="info_outline"
             size="18px"
-            class="q-mr-sm text-grey-6 next-step-icon"
+            class="q-mr-sm text-grey-7 next-step-icon"
           />
           <!-- 상태 칩에 실제로 보이는 백엔드 라벨(입력대기)로 쓴다 -->
           <div>

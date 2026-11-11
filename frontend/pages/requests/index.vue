@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { failMsg } from '~/composables/failMessage'
 import { useQuasar } from 'quasar'
 import RepoAddDropdown from '~/components/requests/RepoAddDropdown.vue'
 import RequestFormDialog from '~/components/requests/RequestFormDialog.vue'
@@ -48,7 +49,7 @@ async function load() {
   try {
     rows.value = await useApi<RequestListItem[]>(buildUrl())
   } catch (e: any) {
-    $q.notify({ type: 'negative', message: e?.data?.message ?? '요청 목록 조회 실패' })
+    $q.notify({ type: 'negative', message: e?.data?.message ?? failMsg('요청 목록 조회') })
   } finally {
     loading.value = false
   }
@@ -123,9 +124,10 @@ const showCreate = ref(false)
             <q-chip dense size="sm" color="blue-grey-1" text-color="grey-9" :label="r.kindLabel" class="q-ma-none" />
             <q-chip dense size="sm" :color="STATUS_COLOR[r.status]" text-color="white" :label="r.statusLabel" class="q-ma-none" />
             <q-space />
-            <span v-if="r.unread" class="unread-dot" data-test="unread-dot" aria-label="새 활동" />
+            <span v-if="r.unread" class="unread-dot" role="img" data-test="unread-dot" aria-label="새 활동" />
           </div>
-          <div class="text-subtitle2 text-weight-medium">{{ r.title }}</div>
+          <!-- 제목을 링크로 — 카드 클릭은 마우스용으로 두고, 키보드는 이 링크로 연다(2026-11-11 검토). .stop으로 카드 클릭과 겹쳐 두 번 이동하지 않게 -->
+          <NuxtLink :to="`/requests/${r.id}`" class="text-subtitle2 text-weight-medium request-title-link" :data-test="`req-link-${r.id}`" @click.stop>{{ r.title }}</NuxtLink>
           <div class="text-caption text-grey-7">
             <span v-if="isAdmin">{{ r.requesterId }} · </span>{{ fmt(r.updatedAt) }}
           </div>
@@ -161,9 +163,14 @@ const showCreate = ref(false)
         </q-td>
       </template>
       <template #body-cell-title="props">
-        <q-td :props="props" class="cursor-pointer">
-          <span class="text-weight-medium" :data-test="`req-row-${props.row.id}`">{{ props.row.title }}</span>
-          <span v-if="props.row.unread" class="unread-dot q-ml-sm" data-test="unread-dot" aria-label="새 활동" />
+        <q-td :props="props" class="cursor-pointer" :data-test="`req-row-${props.row.id}`">
+          <NuxtLink
+            :to="`/requests/${props.row.id}`"
+            class="text-weight-medium request-title-link"
+            :data-test="`req-link-${props.row.id}`"
+            @click.stop
+          >{{ props.row.title }}</NuxtLink>
+          <span v-if="props.row.unread" class="unread-dot q-ml-sm" role="img" data-test="unread-dot" aria-label="새 활동" />
         </q-td>
       </template>
       <template #body-cell-status="props">
@@ -188,6 +195,13 @@ const showCreate = ref(false)
 </template>
 
 <style scoped>
+.request-title-link {
+  color: inherit;
+  text-decoration: none;
+}
+.request-title-link:hover {
+  text-decoration: underline;
+}
 .unread-dot {
   display: inline-block;
   width: 8px;

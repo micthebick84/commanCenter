@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { failMsg } from '~/composables/failMessage'
 import type { Ref } from 'vue'
 import { useQuasar } from 'quasar'
 import { DEFAULT_MODEL, DEFAULT_EFFORT } from '~/composables/modelEffort'
@@ -130,7 +131,7 @@ async function loadBranches(repo: number) {
     draft.githubBranch = ''
     repoStatus.value = status === 404 ? 'notfound' : 'error'
     repoStatusMsg.value =
-      e?.data?.message ?? (status === 404 ? '레포를 찾을 수 없거나 접근 권한이 없습니다' : '브랜치 동기화 실패')
+      e?.data?.message ?? (status === 404 ? '레포를 찾을 수 없거나 접근 권한이 없습니다' : failMsg('브랜치 동기화'))
   }
 }
 
@@ -227,7 +228,7 @@ async function submit() {
   } catch (e: any) {
     const st = e?.statusCode ?? e?.response?.status ?? e?.status
     // 429(활성 세션 상한)는 실패가 아니라 안내 — 경고 톤.
-    $q.notify({ type: st === 429 ? 'warning' : 'negative', message: e?.data?.message ?? '질문 등록 실패' })
+    $q.notify({ type: st === 429 ? 'warning' : 'negative', message: e?.data?.message ?? failMsg('질문 등록') })
   } finally {
     submitting.value = false
   }
@@ -279,7 +280,7 @@ defineExpose({ draft, submit, onRepoSelected, db })
               >
                 <template #no-option>
                   <q-item>
-                    <q-item-section class="text-grey">등록된 레포가 없습니다</q-item-section>
+                    <q-item-section class="text-grey-7">등록된 레포가 없습니다</q-item-section>
                   </q-item>
                 </template>
               </q-select>
@@ -306,7 +307,7 @@ defineExpose({ draft, submit, onRepoSelected, db })
               >
                 <template #no-option>
                   <q-item>
-                    <q-item-section class="text-grey">결과 없음</q-item-section>
+                    <q-item-section class="text-grey-7">결과 없음</q-item-section>
                   </q-item>
                 </template>
               </q-select>

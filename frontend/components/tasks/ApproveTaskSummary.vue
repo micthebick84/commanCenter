@@ -97,7 +97,7 @@ const clamped = computed(() => isLong.value && !expanded.value)
 .task-id {
   font-size: 12px;
   font-weight: 700;
-  color: #9e9e9e;
+  color: #616161;
 }
 .task-title {
   font-size: 15px;

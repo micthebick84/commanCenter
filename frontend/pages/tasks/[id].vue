@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { failMsg } from '~/composables/failMessage'
 import { useQuasar } from 'quasar'
 import { confirmDialog } from '~/composables/confirmDialog'
 import ApproveDialog from '~/components/ApproveDialog.vue'
@@ -245,7 +246,7 @@ async function approve() {
     })
     refresh()
   } catch (e: any) {
-    $q.notify({ type: 'negative', message: e?.data?.message ?? '승인 실패' })
+    $q.notify({ type: 'negative', message: e?.data?.message ?? failMsg('승인') })
   }
 }
 
@@ -265,13 +266,13 @@ const historyCount = ref<number | null>(null)
 // 승인대기 취소: 요청자 본인 또는 admin — getForView가 이미 조회 시점에 두 경우만
 // 통과시키므로(그 외 403) 별도 소유권 가드 없이 재시도 버튼과 동일한 패턴을 따른다.
 async function cancelTask() {
-  if (!(await confirmDialog($q, '이 작업을 취소하시겠습니까?', { title: '작업 취소' }))) return
+  if (!(await confirmDialog($q, '이 작업을 취소하시겠습니까?', { title: '작업 취소', ok: '작업 취소', cancel: '돌아가기' }))) return
   try {
     await useApi(`/api/tasks/${taskId.value}/cancel`, { method: 'POST' })
     $q.notify({ type: 'positive', message: '작업이 취소되었습니다' })
     refresh()
   } catch (e: any) {
-    $q.notify({ type: 'negative', message: e?.data?.message ?? '취소 실패' })
+    $q.notify({ type: 'negative', message: e?.data?.message ?? failMsg('취소') })
   }
 }
 
@@ -361,7 +362,8 @@ function undeploy() {
   $q.dialog({
     title: '배포 중지',
     message: '실행 중인 컨테이너를 중지하고 제거합니다. 계속할까요?',
-    cancel: true,
+    ok: { label: '배포 중지', flat: true },
+    cancel: { label: '취소', flat: true },
     persistent: true,
   }).onOk(async () => {
     try {
@@ -371,7 +373,7 @@ function undeploy() {
     } catch (e: any) {
       $q.notify({
         type: 'negative',
-        message: e?.data?.message ?? '배포 중지 실패',
+        message: e?.data?.message ?? failMsg('배포 중지'),
       })
     }
   })
@@ -383,13 +385,28 @@ async function retry() {
     $q.notify({ type: 'positive', message: '재시도 큐 등록' })
     refresh()
   } catch (e: any) {
-    $q.notify({ type: 'negative', message: e?.data?.message ?? '재시도 실패' })
+    $q.notify({ type: 'negative', message: e?.data?.message ?? failMsg('재시도') })
   }
 }
 
 // 작업 종료 (스펙 2026-10-13) — 응답에 사용량이 없으므로 액션 뒤에는 항상 refresh()로 다시 읽는다.
 // 성공 알림은 문자열(항상 positive)이거나, 서버 응답으로 정하는 함수다 — 메일 다시 보내기는 재시도가 또 실패해도 200이다.
 type CloseNotice = { type: 'positive' | 'warning'; message: string }
+const CLOSE_ACTION_NAMES: Record<string, string> = {
+  'close-request': '종료 요청',
+  'close-request/withdraw': '종료 요청 철회',
+  'close/approve': '종료 승인',
+  'close/retry': '종료 재시도',
+  'close/cancel': '종료 취소',
+  'close/reject': '종료 반려',
+  'close/skip-patch': '패치 없이 마무리',
+  'close/skip-artifact': '산출물 없이 마무리',
+  'close/mail/resend': '메일 다시 보내기',
+  'fix-requests/approve': '수정 요청 승인',
+  'fix-requests/reject': '수정 요청 반려',
+  'fix-requests/withdraw': '수정 요청 철회',
+  'fix-requests/abort': '수정 중단',
+}
 let closeInFlight = false
 async function closeAction(
   path: string,
@@ -403,7 +420,8 @@ async function closeAction(
     $q.notify(typeof ok === 'function' ? ok(res) : { type: 'positive', message: ok })
     refresh()
   } catch (e: any) {
-    $q.notify({ type: 'negative', message: e?.data?.message ?? '요청 실패' })
+    // 어느 동작이 실패했는지 말한다 — 예전엔 종료·수정 동작 여럿이 '요청 실패' 하나를 같이 썼다(2026-11-11 검토)
+    $q.notify({ type: 'negative', message: e?.data?.message ?? failMsg(CLOSE_ACTION_NAMES[path] ?? '요청') })
   } finally {
     closeInFlight = false
   }
@@ -414,19 +432,19 @@ async function requestClose() {
   const message = task.value && isDbWorkPrCreated(task.value)
     ? DB_WORK_CLOSE_REQUEST_CONFIRM
     : '배포 결과를 확인했나요? 관리자가 승인하면 PR을 main에 병합하고, 배포를 중지하고, 브랜치를 삭제합니다. 병합은 되돌릴 수 없습니다.'
-  if (!(await confirmDialog($q, message, { title: '종료 요청' }))) return
+  if (!(await confirmDialog($q, message, { title: '종료 요청', ok: '종료 요청' }))) return
   await closeAction('close-request', '종료 요청 등록')
 }
 
 async function approveClose() {
   // 승인 대기 SQL이 남아 있으면 확인창에 건수 한 줄을 덧붙인다(스펙 2026-11-03 §6.5) — 조회가 실패하면 경고 없이 그대로 승인할 수 있다
   const warning = await fetchDeferredWarning(taskId.value)
-  if (!(await confirmDialog($q, `PR을 main에 병합하고, 배포를 중지하고, 옵시디언 노트를 쓴 뒤 브랜치를 삭제합니다. 되돌릴 수 없습니다.${warning}`, { title: '종료 승인' }))) return
+  if (!(await confirmDialog($q, `PR을 main에 병합하고, 배포를 중지하고, 옵시디언 노트를 쓴 뒤 브랜치를 삭제합니다. 되돌릴 수 없습니다.${warning}`, { title: '종료 승인', ok: '병합하고 종료' }))) return
   await closeAction('close/approve', '종료 큐 등록')
 }
 
 async function retryClose() {
-  if (!(await confirmDialog($q, '남은 종료 단계(병합 포함 가능)를 다시 실행합니다. 병합은 되돌릴 수 없습니다.', { title: '종료 재시도' }))) return
+  if (!(await confirmDialog($q, '남은 종료 단계(병합 포함 가능)를 다시 실행합니다. 병합은 되돌릴 수 없습니다.', { title: '종료 재시도', ok: '종료 재시도' }))) return
   await closeAction('close/retry', '종료 재시도 큐 등록')
 }
 
@@ -442,7 +460,7 @@ const canCancelClose = computed(
 )
 
 async function cancelClose() {
-  if (!(await confirmDialog($q, '병합 전 단계에서 실패한 종료를 취소하고 배포 상태로 되돌립니다.', { title: '종료 취소' }))) return
+  if (!(await confirmDialog($q, '병합 전 단계에서 실패한 종료를 취소하고 배포 상태로 되돌립니다.', { title: '종료 취소', ok: '종료 취소', cancel: '돌아가기' }))) return
   await closeAction('close/cancel', '종료 취소')
 }
 
@@ -451,7 +469,8 @@ function rejectClose() {
     title: '종료 반려',
     message: '반려 사유를 입력하세요 (등록자에게 보입니다)',
     prompt: { model: '', type: 'text', isValid: (v: string) => v.trim().length > 0 },
-    cancel: true,
+    ok: { label: '반려', flat: true },
+    cancel: { label: '취소', flat: true },
     persistent: true,
   }).onOk((reason: string) => closeAction('close/reject', '종료 반려', { reason: reason.trim() }))
 }
@@ -547,7 +566,7 @@ async function downloadAttachment(att: Pick<AttachmentMeta, 'id' | 'fileName'>) 
   try {
     await downloadBlob(`/api/tasks/${taskId.value}/attachments/${att.id}`, att.fileName)
   } catch (e: unknown) {
-    $q.notify({ type: 'negative', message: e instanceof Error ? e.message : '다운로드 실패' })
+    $q.notify({ type: 'negative', message: e instanceof Error ? e.message : failMsg('다운로드') })
   }
 }
 
@@ -690,7 +709,7 @@ async function downloadPatch() {
   }
 }
 async function skipPatch() {
-  if (!(await confirmDialog($q, '부분 패치 없이 배포 중지·노트·브랜치 정리를 이어 갑니다.', { title: '패치 없이 마무리' }))) return
+  if (!(await confirmDialog($q, '부분 패치 없이 배포 중지·노트·브랜치 정리를 이어 갑니다.', { title: '패치 없이 마무리', ok: '패치 없이 마무리' }))) return
   await closeAction('close/skip-patch', '패치 없이 마무리 — 종료 큐 등록')
 }
 
@@ -704,7 +723,7 @@ async function resendMail() {
 }
 
 async function skipArtifact() {
-  if (!(await confirmDialog($q, '산출물 없이 노트·브랜치 정리를 이어 갑니다. 메일은 보내지 않습니다.', { title: '산출물 없이 마무리' }))) return
+  if (!(await confirmDialog($q, '산출물 없이 노트·브랜치 정리를 이어 갑니다. 메일은 보내지 않습니다.', { title: '산출물 없이 마무리', ok: '산출물 없이 마무리' }))) return
   await closeAction('close/skip-artifact', '산출물 없이 마무리 — 종료 큐 등록')
 }
 const stepCaption = computed(() => {
@@ -841,7 +860,7 @@ function onAction(kind: NextActionKind) {
           <q-btn
             v-if="!$q.screen.lt.md && canCancelClose"
             outline
-            color="warning"
+            color="grey-8"
             icon="undo"
             label="종료 취소"
             data-test="close-cancel"
@@ -850,7 +869,7 @@ function onAction(kind: NextActionKind) {
           <q-btn
             v-if="!$q.screen.lt.md && canSkipArtifactClose"
             outline
-            color="warning"
+            color="grey-8"
             icon="skip_next"
             label="산출물 없이 마무리"
             data-test="close-skip-artifact"
@@ -859,7 +878,7 @@ function onAction(kind: NextActionKind) {
           <q-btn
             v-if="!$q.screen.lt.md && canSkipPatchClose"
             outline
-            color="warning"
+            color="grey-8"
             icon="skip_next"
             label="패치 없이 마무리"
             data-test="close-skip-patch"
@@ -924,7 +943,7 @@ function onAction(kind: NextActionKind) {
           </div>
           <div v-if="task.close.mail || canResendMail" class="q-mt-xs row items-center" style="gap: 8px" data-test="close-mail">
             <template v-if="task.close.mail">
-              <q-chip dense square :color="task.close.mail.status === 'SENT' ? 'positive' : 'warning'" text-color="white">
+              <q-chip dense square :color="task.close.mail.status === 'SENT' ? 'positive' : 'warning'" :text-color="task.close.mail.status === 'SENT' ? 'white' : 'dark'">
                 {{ MAIL_STATUS_LABEL[task.close.mail.status] ?? task.close.mail.status }}
               </q-chip>
               <span v-if="task.close.mail.at" class="text-caption text-grey-7">{{ new Date(task.close.mail.at).toLocaleString() }}</span>
@@ -1065,8 +1084,8 @@ function onAction(kind: NextActionKind) {
                     <q-item-section avatar><q-icon name="block" color="negative" /></q-item-section>
                     <q-item-section>수정 반려</q-item-section>
                   </q-item>
-                  <q-item v-if="canAbort" v-close-popup clickable class="text-warning" data-test="bar-more-fix-abort" @click="abortFix">
-                    <q-item-section avatar><q-icon name="stop_circle" color="warning" /></q-item-section>
+                  <q-item v-if="canAbort" v-close-popup clickable class="text-grey-8" data-test="bar-more-fix-abort" @click="abortFix">
+                    <q-item-section avatar><q-icon name="stop_circle" color="grey-8" /></q-item-section>
                     <q-item-section>수정 중단</q-item-section>
                   </q-item>
                   <q-item v-if="canAdminDeploySecondary" v-close-popup clickable data-test="bar-more-deploy" @click="openDeployDialog('deploy')">
@@ -1081,16 +1100,16 @@ function onAction(kind: NextActionKind) {
                     <q-item-section avatar><q-icon name="block" color="negative" /></q-item-section>
                     <q-item-section>종료 반려</q-item-section>
                   </q-item>
-                  <q-item v-if="canCancelClose" v-close-popup clickable class="text-warning" data-test="bar-more-close-cancel" @click="cancelClose">
-                    <q-item-section avatar><q-icon name="undo" color="warning" /></q-item-section>
+                  <q-item v-if="canCancelClose" v-close-popup clickable class="text-grey-8" data-test="bar-more-close-cancel" @click="cancelClose">
+                    <q-item-section avatar><q-icon name="undo" color="grey-8" /></q-item-section>
                     <q-item-section>종료 취소</q-item-section>
                   </q-item>
-                  <q-item v-if="canSkipArtifactClose" v-close-popup clickable class="text-warning" data-test="bar-more-close-skip-artifact" @click="skipArtifact">
-                    <q-item-section avatar><q-icon name="skip_next" color="warning" /></q-item-section>
+                  <q-item v-if="canSkipArtifactClose" v-close-popup clickable class="text-grey-8" data-test="bar-more-close-skip-artifact" @click="skipArtifact">
+                    <q-item-section avatar><q-icon name="skip_next" color="grey-8" /></q-item-section>
                     <q-item-section>산출물 없이 마무리</q-item-section>
                   </q-item>
-                  <q-item v-if="canSkipPatchClose" v-close-popup clickable class="text-warning" data-test="bar-more-close-skip-patch" @click="skipPatch">
-                    <q-item-section avatar><q-icon name="skip_next" color="warning" /></q-item-section>
+                  <q-item v-if="canSkipPatchClose" v-close-popup clickable class="text-grey-8" data-test="bar-more-close-skip-patch" @click="skipPatch">
+                    <q-item-section avatar><q-icon name="skip_next" color="grey-8" /></q-item-section>
                     <q-item-section>패치 없이 마무리</q-item-section>
                   </q-item>
                   <q-item v-if="isInterviewPhase && task.interviewSessionId" v-close-popup clickable data-test="bar-more-interview" @click="onAction('open-interview')">
@@ -1101,8 +1120,8 @@ function onAction(kind: NextActionKind) {
                     <q-item-section avatar><q-icon name="refresh" /></q-item-section>
                     <q-item-section>재시도</q-item-section>
                   </q-item>
-                  <q-item v-if="task.status === 'AWAITING_APPROVAL' || task.status === 'PENDING'" v-close-popup clickable class="text-warning" data-test="bar-more-cancel" @click="cancelTask">
-                    <q-item-section avatar><q-icon name="block" color="warning" /></q-item-section>
+                  <q-item v-if="task.status === 'AWAITING_APPROVAL' || task.status === 'PENDING'" v-close-popup clickable class="text-grey-8" data-test="bar-more-cancel" @click="cancelTask">
+                    <q-item-section avatar><q-icon name="block" color="grey-8" /></q-item-section>
                     <q-item-section>취소</q-item-section>
                   </q-item>
                 </q-list>
@@ -1215,7 +1234,7 @@ function onAction(kind: NextActionKind) {
           <q-btn
             v-if="task.status === 'FAILED' || task.status === 'DESIGN_FAILED'"
             unelevated
-            color="warning"
+            color="primary"
             icon="refresh"
             :label="
               task.status === 'DESIGN_FAILED'
@@ -1238,7 +1257,7 @@ function onAction(kind: NextActionKind) {
             data-test="cancel-task"
             flat
             dense
-            color="warning"
+            color="grey-8"
             icon="block"
             label="취소"
             class="q-mr-sm"
@@ -1414,8 +1433,8 @@ function onAction(kind: NextActionKind) {
               task.status === 'UNDEPLOY_PENDING' ||
               task.status === 'UNDEPLOYING'
             "
-            color="orange"
-            text-color="white"
+            color="warning"
+            text-color="dark"
             >{{ task.statusLabel }}</q-chip
           >
           <template
@@ -1464,7 +1483,7 @@ function onAction(kind: NextActionKind) {
           <q-btn
             v-if="canAbort"
             outline
-            color="warning"
+            color="grey-8"
             icon="stop_circle"
             label="수정 중단"
             data-test="fix-abort"
@@ -1475,10 +1494,10 @@ function onAction(kind: NextActionKind) {
         <q-banner
           v-if="task.status === 'DEPLOY_LOST'"
           dense
-          class="bg-orange-1 text-orange-9"
+          class="bg-orange-1 text-deep-orange-10"
         >
           <template #avatar>
-            <q-icon name="warning" color="orange" />
+            <q-icon name="warning" color="deep-orange-10" />
           </template>
           배포 컨테이너가 실행 중이 아닙니다 (도커 데몬 재시작 등). 접속 URL이
           응답하지 않으면 재배포하세요. 컨테이너가 다시 살아나면 자동으로
@@ -1506,7 +1525,7 @@ function onAction(kind: NextActionKind) {
           <div class="text-caption text-grey-7 q-mb-xs">환경변수</div>
           <div v-for="(e, i) in task.envVars" :key="i" class="text-body2">
             <code>{{ e.key }}</code> =
-            <span v-if="e.secret" class="text-grey">••••••</span>
+            <span v-if="e.secret" class="text-grey-7">••••••</span>
             <code v-else>{{ e.value }}</code>
           </div>
         </q-card-section>
@@ -1691,7 +1710,7 @@ function onAction(kind: NextActionKind) {
   color: #757575;
 }
 .impl-elapsed--warn {
-  color: #ef6c00;
+  color: #bf360c;
   font-weight: 600;
 }
 /* 참조 repo 줄: 칩 줄은 내용 폭만큼만 차지하고("✎ 참조 변경"이 칩 바로 옆에 붙는다), 좁으면 남는 폭까지 줄어 칩이 줄바꿈한다 */

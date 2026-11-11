@@ -63,6 +63,7 @@ const show = computed({
         <q-btn
           unelevated
           :color="submitColor ?? 'primary'"
+          :text-color="submitColor === 'warning' ? 'dark' : undefined"
           :label="submitLabel"
           :loading="submitting"
           :disable="!canSubmit"

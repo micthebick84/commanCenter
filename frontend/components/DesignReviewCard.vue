@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { failMsg } from '~/composables/failMessage'
 import { useQuasar } from 'quasar'
 import { confirmDialog } from '~/composables/confirmDialog'
 import { useFullscreenDialog } from '~/composables/dialogLayout'
@@ -65,7 +66,7 @@ async function approveDesign() {
     $q.notify({ type: 'positive', message: '디자인 승인 — 구현 큐에 진입했습니다' })
     emit('refresh')
   } catch (e: any) {
-    $q.notify({ type: 'negative', message: e?.data?.message ?? '디자인 승인 실패' })
+    $q.notify({ type: 'negative', message: e?.data?.message ?? failMsg('디자인 승인') })
   } finally {
     submitting.value = false
   }
@@ -84,7 +85,7 @@ async function submitReject() {
     rejectFeedback.value = ''
     emit('refresh')
   } catch (e: any) {
-    $q.notify({ type: 'negative', message: e?.data?.message ?? '반려 실패' })
+    $q.notify({ type: 'negative', message: e?.data?.message ?? failMsg('반려') })
   } finally {
     submitting.value = false
   }
@@ -108,7 +109,7 @@ const fullscreen = useFullscreenDialog()
       <q-chip
         v-else-if="design.rejectCount > 0"
         color="warning"
-        text-color="white"
+        text-color="dark"
         icon="replay"
         :label="`반려 ${design.rejectCount}/3`"
         dense
@@ -138,7 +139,7 @@ const fullscreen = useFullscreenDialog()
         />
         <q-btn
           outline
-          color="warning"
+          color="negative"
           icon="replay"
           label="반려"
           :disable="rejectLimitReached"
@@ -210,7 +211,7 @@ const fullscreen = useFullscreenDialog()
           <q-btn v-close-popup flat label="취소" />
           <q-btn
             unelevated
-            color="warning"
+            color="negative"
             label="반려"
             :disable="!rejectFeedback.trim()"
             :loading="submitting"

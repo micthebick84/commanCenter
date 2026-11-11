@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { failMsg } from '~/composables/failMessage'
 // Claude 사용량 · API 환산 비용 상세 (스펙 2026-11-03 §7). 열릴 때마다 date 없이 한 번 부르고, 이전·다음은 기간 시작일로
 // date를 옮겨 다시 부른다. 차트는 CSS 막대(새 의존성 없음). 구독료 설정은 열 때만 마운트한다.
 import { useQuasar } from 'quasar'
@@ -93,7 +94,7 @@ async function downloadCsv() {
   try {
     await downloadAttachment(csvUrl(curPeriod.value, d), `claude-usage-${curPeriod.value}-${d}.csv`)
   } catch (e: unknown) {
-    $q.notify({ type: 'negative', message: (e instanceof Error ? e.message : '') || '다운로드 실패' })
+    $q.notify({ type: 'negative', message: (e instanceof Error ? e.message : '') || failMsg('다운로드') })
   }
 }
 
@@ -250,7 +251,7 @@ function tok(t: UsageTokens | null | undefined, k: keyof UsageTokens): string {
           </div>
         </q-card-section>
 
-        <q-card-section v-if="summary?.coverage?.unpricedModels?.length" class="text-warning" data-test="cost-unpriced">
+        <q-card-section v-if="summary?.coverage?.unpricedModels?.length" class="text-deep-orange-10" data-test="cost-unpriced">
           가격 미등록 모델(비용에서 빠짐):
           <span v-for="u in summary.coverage.unpricedModels" :key="u.model" class="q-mr-sm">
             {{ u.model }} ({{ formatTokens(totalTokens(u.tokens)) }})

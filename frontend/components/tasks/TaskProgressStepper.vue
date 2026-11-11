@@ -1,6 +1,6 @@
 <script setup lang="ts">
 // 5단계(분석·디자인·구현·배포·종료) 진행 스테퍼 (스펙 2026-09-06 §4.2, 캔버스 Detail/DesktopDetail). 상태 계산은 taskStages.stageSteps — 여기선 표시만.
-import type { StageStep } from '~/composables/taskStages'
+import { STEP_STATE_LABEL, type StageStep } from '~/composables/taskStages'
 
 const props = withDefaults(
   defineProps<{ steps: StageStep[]; caption?: string; compact?: boolean }>(),
@@ -23,7 +23,7 @@ function circleStyle(s: StageStep) {
     return { background: '#c62828', borderColor: '#c62828' }
   if (s.state === 'skipped')
     return { background: '#fff', borderColor: '#e0e0e0', borderStyle: 'dashed' }
-  return { background: '#fff', borderColor: '#bdbdbd' }
+  return { background: '#fff', borderColor: '#757575' }
 }
 function segStyle(s: StageStep) {
   if (s.state === 'done') return { background: '#a5d6a7' }
@@ -40,7 +40,7 @@ function labelColor(s: StageStep) {
   if (s.state === 'current') return s.color
   if (s.state === 'failed') return '#c62828'
   if (s.state === 'done') return '#2e7d32'
-  return '#9e9e9e'
+  return '#757575'
 }
 </script>
 
@@ -109,7 +109,7 @@ function labelColor(s: StageStep) {
               color: labelColor(s),
               fontWeight: s === current ? 700 : 400,
             }"
-            >{{ s.label }}</span
+            >{{ s.label }}<span class="sr-only">{{ STEP_STATE_LABEL[s.state] }}</span></span
           >
         </div>
       </div>

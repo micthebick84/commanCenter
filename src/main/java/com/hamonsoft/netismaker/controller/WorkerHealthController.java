@@ -74,6 +74,7 @@ public class WorkerHealthController {
         view.put("vpnStatus", h.getVpnStatus());
         view.put("mcps", h.getMcps() == null ? java.util.List.of() : h.getMcps());
         view.put("lostReportCount", h.getLostReportCount() != null ? h.getLostReportCount() : 0);
+        view.put("deadReportCount", h.getDeadReportCount() != null ? h.getDeadReportCount() : 0);
         return view;
     }
 }

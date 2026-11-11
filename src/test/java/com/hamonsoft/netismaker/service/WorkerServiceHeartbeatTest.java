@@ -44,7 +44,29 @@ class WorkerServiceHeartbeatTest {
 
     private WorkerHeartbeatRequest req(Integer lostReportCount) {
         return new WorkerHeartbeatRequest("mac-worker-1", "host", "0.1.0", true, "ok",
-                List.of("local-db"), lostReportCount, null, null);
+                List.of("local-db"), lostReportCount, null, null, null);
+    }
+
+    @Test
+    void heartbeat_persists_dead_report_count() {
+        service.heartbeat(new WorkerHeartbeatRequest("mac-worker-1", "host", "0.1.0", true, "ok",
+                List.of(), 0, null, null, 2));
+        ArgumentCaptor<WorkerHeartbeat> cap = ArgumentCaptor.forClass(WorkerHeartbeat.class);
+        verify(heartbeatRepo).save(cap.capture());
+        assertThat(cap.getValue().getDeadReportCount()).isEqualTo(2);
+    }
+
+    @Test
+    void heartbeat_from_old_worker_without_dead_report_count_maps_to_zero() {
+        // 구버전 워커·인터뷰 서비스는 이 칸을 보내지 않는다 — 예전 값이 남아 있으면 안 된다
+        WorkerHeartbeat existing = new WorkerHeartbeat();
+        existing.setWorkerId("mac-worker-1");
+        existing.setDeadReportCount(4);
+        when(heartbeatRepo.findById("mac-worker-1")).thenReturn(Optional.of(existing));
+
+        service.heartbeat(req(0));
+
+        assertThat(existing.getDeadReportCount()).isEqualTo(0);
     }
 
     @Test
@@ -67,7 +89,7 @@ class WorkerServiceHeartbeatTest {
     void heartbeat_persists_claude_auth_status() {
         OffsetDateTime exp = OffsetDateTime.parse("2026-10-31T02:23:45.460Z");
         service.heartbeat(new WorkerHeartbeatRequest("win-worker-1", "host", "0.1.0", false, null,
-                List.of(), 0, "CREDENTIALS", exp));
+                List.of(), 0, "CREDENTIALS", exp, null));
         ArgumentCaptor<WorkerHeartbeat> cap = ArgumentCaptor.forClass(WorkerHeartbeat.class);
         verify(heartbeatRepo).save(cap.capture());
         assertThat(cap.getValue().getClaudeSessionOk()).isFalse();
@@ -86,7 +108,7 @@ class WorkerServiceHeartbeatTest {
         when(heartbeatRepo.findById("mac-worker-1")).thenReturn(Optional.of(existing));
 
         service.heartbeat(new WorkerHeartbeatRequest("mac-worker-1", "host", "0.1.0", null, null,
-                List.of(), 0, null, null));
+                List.of(), 0, null, null, null));
 
         assertThat(existing.getClaudeSessionOk()).isNull();
         assertThat(existing.getClaudeAuthMethod()).isNull();

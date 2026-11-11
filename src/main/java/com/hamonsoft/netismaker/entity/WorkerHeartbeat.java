@@ -52,4 +52,8 @@ public class WorkerHeartbeat {
 
     @Column(name = "lost_report_count", nullable = false)
     private Integer lostReportCount = 0;
+
+    /** 재전송을 포기해 워커 PC의 .dead.jsonl에 보관만 된 결과 보고 수 — 사람이 확인해야 한다. */
+    @Column(name = "dead_report_count", nullable = false)
+    private Integer deadReportCount = 0;
 }

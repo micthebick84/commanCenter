@@ -18,6 +18,7 @@ interface WorkerHealth {
   vpnStatus: string | null
   mcps: string[]
   lostReportCount: number
+  deadReportCount?: number
 }
 
 const { data, loading } = useTaskPolling<WorkerHealth[]>(() => useApi('/api/workers/health'))
@@ -101,6 +102,10 @@ function lastSeenAgo(iso: string | null): string {
           <dd :class="w.lostReportCount > 0 ? 'text-red-9 text-weight-bold' : 'text-grey-6'" data-test="card-lost">
             {{ w.lostReportCount ?? 0 }}
           </dd>
+          <dt>재전송 포기</dt>
+          <dd :class="(w.deadReportCount ?? 0) > 0 ? 'text-red-9 text-weight-bold' : 'text-grey-6'" data-test="card-dead">
+            {{ w.deadReportCount ?? 0 }}
+          </dd>
         </dl>
         <div v-if="w.mcps && w.mcps.length" class="row q-gutter-xs" data-test="card-mcps">
           <q-chip
@@ -134,6 +139,7 @@ function lastSeenAgo(iso: string | null): string {
         { name: 'vpnStatus', label: '네트워크', field: 'vpnStatus', align: 'center' },
         { name: 'mcps', label: 'MCP 도구', field: 'mcps', align: 'left' },
         { name: 'lostReportCount', label: '유실 보고', field: 'lostReportCount', align: 'center' },
+        { name: 'deadReportCount', label: '재전송 포기', field: (r) => r.deadReportCount ?? 0, align: 'center' },
       ]"
     >
       <template #body-cell-status="props">
@@ -187,6 +193,13 @@ function lastSeenAgo(iso: string | null): string {
           </span>
         </q-td>
       </template>
+      <template #body-cell-deadReportCount="props">
+        <q-td :props="props" data-test="cell-dead">
+          <span :class="(props.row.deadReportCount ?? 0) > 0 ? 'text-red-9 text-weight-bold' : 'text-grey-6'">
+            {{ props.row.deadReportCount ?? 0 }}
+          </span>
+        </q-td>
+      </template>
     </q-table>
 
     <AdminInfoBanner summary="alive 기준 · 유실 보고 안내" class="q-mt-md">
@@ -195,9 +208,12 @@ function lastSeenAgo(iso: string | null): string {
       <br /><strong>Claude OAuth</strong>: 워커·인터뷰 서비스가 5분마다 그 PC의 claude 로그인을 확인해 보고합니다.
       <strong>setup-token</strong>(env CLAUDE_CODE_OAUTH_TOKEN, 1년)이면 OK, <strong>CLI 로그인</strong>(claude auth
       login)은 refresh token 만료 시각(로그인 후 약 30일)까지 — 3일 안이면 주황, 지나거나 로그아웃이면 빨강입니다.
-      <br /><strong>유실 보고</strong>: 결과 보고가 끝내 백엔드에 닿지 못한 횟수입니다. 워커
-      재시작 시 0으로 리셋되며, 유실된 결과 원본은 워커의
-      <code>~/netis-maker/dead-letter/</code>에 보존됩니다.
+      <br /><strong>유실 보고</strong>: 백엔드에 닿지 못해 재전송을 기다리는 결과 보고 수입니다. 워커가 1분마다 다시
+      보내고, 받아들여지면 줄어듭니다.
+      <br /><strong>재전송 포기</strong>: 다시 보내도 백엔드가 계속 거절해(작업이 이미 다른 상태로 넘어감 등) 워커가 더
+      보내지 않는 결과 보고 수입니다. 화면의 작업 상태와 실제(PR·배포)가 다를 수 있으니 그 워커 PC의
+      <code>~/netis-maker/dead-letter/&lt;워커 ID&gt;.dead.jsonl</code>에서 작업 번호를 확인하세요. 확인한 뒤 그 파일을
+      지우거나 옮기면 0으로 돌아갑니다.
     </AdminInfoBanner>
   </q-page>
 </template>

@@ -4,6 +4,7 @@
 // ($fetch는 헤더를 안 돌려준다). 실패하면 사용자에게 보여줄 메시지를 담은 Error를 던진다 — 알림은 호출처가 띄운다.
 // 받은 Blob의 저장(앵커 click·지연 해제)은 saveBlob.ts — 앱 로그 내려받기와 공유한다.
 import { saveBlob } from './saveBlob'
+import { failMsg } from './failMessage'
 
 export async function downloadAttachment(
   url: string,
@@ -36,5 +37,5 @@ async function errorMessage(e: unknown): Promise<string> {
   } catch {
     // 본문이 JSON이 아니면 fallback 유지
   }
-  return '다운로드 실패'
+  return failMsg('다운로드')
 }

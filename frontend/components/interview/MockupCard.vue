@@ -113,7 +113,7 @@ onUnmounted(() => {
 }
 .mockup-card-desc {
   font-size: 11px;
-  color: #8a97a8;
+  color: #5b6b7d;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;

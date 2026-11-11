@@ -58,7 +58,7 @@ const moveIcon = computed(() =>
       <div class="handle" />
       <div class="sheet-head">
         <div class="row items-baseline no-wrap" style="gap: 6px">
-          <span class="text-caption text-weight-bold text-grey-6"
+          <span class="text-caption text-weight-bold text-grey-7"
             >#{{ task.id }}</span
           >
           <span class="text-subtitle1 text-weight-medium ellipsis">{{
@@ -152,12 +152,12 @@ const moveIcon = computed(() =>
           v-if="cancelable(task)"
           v-close-popup
           clickable
-          class="sheet-item text-warning"
+          class="sheet-item text-grey-8"
           data-test="sheet-cancel"
           @click="emit('cancel')"
         >
           <q-item-section avatar
-            ><q-icon name="block" color="warning"
+            ><q-icon name="block" color="grey-8"
           /></q-item-section>
           <q-item-section>취소</q-item-section>
         </q-item>

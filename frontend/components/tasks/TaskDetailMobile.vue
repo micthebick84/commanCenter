@@ -306,7 +306,7 @@ const deployCaption = computed(() => {
                 <q-chip v-for="a in task.attachments" :key="a.id" clickable dense icon="attach_file" :label="`${a.fileName} (${fmtSize(a.sizeBytes)})`" @click="emit('download', a)" />
               </div>
               <div v-if="task.failureReason" class="text-negative"><span class="k">실패 사유</span>{{ task.failureReason }}</div>
-              <q-btn v-if="task.status === 'FAILED' || task.status === 'DESIGN_FAILED'" unelevated color="warning" icon="refresh" :label="task.status === 'DESIGN_FAILED' ? '재시도' : `재시도 (${task.retryCount}/${task.maxRetry})`" :disable="task.status !== 'DESIGN_FAILED' && task.retryCount >= task.maxRetry" @click="emit('retry')" />
+              <q-btn v-if="task.status === 'FAILED' || task.status === 'DESIGN_FAILED'" unelevated color="primary" icon="refresh" :label="task.status === 'DESIGN_FAILED' ? '재시도' : `재시도 (${task.retryCount}/${task.maxRetry})`" :disable="task.status !== 'DESIGN_FAILED' && task.retryCount >= task.maxRetry" @click="emit('retry')" />
             </q-card-section>
           </div>
         </q-slide-transition>

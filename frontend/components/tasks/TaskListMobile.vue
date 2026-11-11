@@ -254,12 +254,19 @@ function openSheet(task: CardTask) {
 
     <section v-for="g in visibleGroups" :key="g.key" class="group" :data-test="`group-${g.key}`">
       <div v-if="g.key !== 'closed'" class="group-head" :style="{ color: g.color }">{{ g.label }}<span class="rule" /></div>
-      <div v-else class="closed-head" data-test="closed-toggle" @click="closedOpen = !closedOpen">
+      <button
+        v-else
+        type="button"
+        class="closed-head"
+        :aria-expanded="closedOpen ? 'true' : 'false'"
+        data-test="closed-toggle"
+        @click="closedOpen = !closedOpen"
+      >
         <span>취소됨 {{ g.items.length }}건</span>
         <q-space />
         <span>{{ closedOpen ? '접기' : '펼치기' }}</span>
         <q-icon :name="closedOpen ? 'expand_less' : 'expand_more'" size="20px" />
-      </div>
+      </button>
       <div v-if="g.key !== 'closed' || closedOpen" class="cards">
         <TaskCardCompact
           v-for="task in g.items"
@@ -302,7 +309,7 @@ function openSheet(task: CardTask) {
 .mobile-list { display: flex; flex-direction: column; gap: 8px; padding-bottom: 88px; }
 .summary-strip { display: flex; align-items: center; gap: 4px; min-height: 40px; font-size: 13px; color: #616161; }
 .summary-strip b { font-weight: 700; }
-.c-attention { color: #ef6c00; } .c-active { color: #1565c0; } .c-done { color: #00695c; }
+.c-attention { color: #bf360c; } .c-active { color: #1565c0; } .c-done { color: #00695c; }
 .dot { color: #bdbdbd; margin: 0 4px; }
 .chip-row { display: flex; gap: 4px; overflow-x: auto; white-space: nowrap; margin: 0 -8px; padding: 0 8px 4px; }
 .chip-row::-webkit-scrollbar { display: none; }
@@ -312,7 +319,7 @@ function openSheet(task: CardTask) {
 .group { display: flex; flex-direction: column; gap: 8px; }
 .group-head { display: flex; align-items: center; gap: 8px; padding: 10px 4px 0; font-size: 12px; font-weight: 700; letter-spacing: 0.02em; }
 .rule { flex: 1; height: 1px; background: rgba(0, 0, 0, 0.12); }
-.closed-head { display: flex; align-items: center; gap: 8px; min-height: 44px; padding: 8px 4px; font-size: 13px; color: #757575; cursor: pointer; }
+.closed-head { display: flex; align-items: center; gap: 8px; width: 100%; min-height: 44px; padding: 8px 4px; border: 0; background: transparent; font: inherit; font-size: 13px; color: #757575; text-align: left; cursor: pointer; }
 .cards { display: flex; flex-direction: column; gap: 8px; }
 .empty { display: flex; flex-direction: column; align-items: center; gap: 8px; padding: 48px 16px; color: #757575; font-size: 13px; text-align: center; }
 .status-sheet { width: 100%; border-radius: 16px 16px 0 0; padding: 12px 0 calc(12px + env(safe-area-inset-bottom)); }

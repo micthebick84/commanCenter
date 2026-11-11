@@ -19,7 +19,7 @@ body {
 }
 .status-in-progress {
   background: #fff8e1;
-  color: #ef6c00;
+  color: #bf360c;
 }
 .status-completed {
   background: #e8f5e9;
@@ -56,7 +56,7 @@ body {
 }
 .status-deploying {
   background: #fff3e0;
-  color: #e65100;
+  color: #bf360c;
 }
 .status-deployed {
   background: #e0f2f1;
@@ -95,7 +95,7 @@ body {
 .catalog-empty {
   padding: 32px 0;
   text-align: center;
-  color: #9e9e9e;
+  color: #757575;
   font-size: 13px;
 }
 
@@ -131,6 +131,31 @@ body {
   border-radius: 4px;
   font-size: 0.75rem;
   white-space: pre-wrap;
+}
+/* 동작 줄이기(OS 설정)를 켠 사람에게는 대화상자·시트·접기 같은 Quasar 전이(slide-up·scale·q-slide-transition)도 바로 끝낸다.
+   Quasar 자체 규칙은 .animated만 덮어서 이 전이들이 그대로 움직였다(2026-11-11 검토). q-slide-transition은 시간을 인라인
+   style로 걸기 때문에 !important로 덮는다. 0이 아니라 0.01ms라서 transitionend가 그대로 와 닫힘·펼침 처리는 그대로 끝난다. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+/* 화면에는 안 보이고 화면 읽기 프로그램만 읽는 글자 (단계 상태 등 — 2026-11-11 검토) */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
 }
 /* 안전망: 페이지 레벨 가로 스크롤 금지 */
 .q-page {

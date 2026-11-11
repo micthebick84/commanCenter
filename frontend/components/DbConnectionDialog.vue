@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { failMsg } from '~/composables/failMessage'
 // DB 접속정보 추가/수정 (스펙 2026-10-02 §7). AdminFormDialog 셸 재사용(모바일 전체화면).
 // 수정 모드에서 비밀번호는 다시 채우지 않는다 — 비워 두고 저장하면 서버가 기존 값을 유지한다.
 // 화면(2026-10-06): 데스크톱·모바일이 같은 DOM 한 벌 — 종류 카드는 grid auto-fit으로 4열↔2열만 바뀐다.
@@ -112,7 +113,7 @@ async function runTest() {
   try {
     testResult.value = await testDbConnection(props.editing ? { id: props.editing.id, ...fields() } : fields())
   } catch (e: any) {
-    testResult.value = { ok: false, message: e?.data?.message ?? '접속 테스트 요청 실패' }
+    testResult.value = { ok: false, message: e?.data?.message ?? failMsg('접속 테스트 요청') }
   } finally {
     testedKey.value = key
     testedAt.value = new Date()
@@ -137,7 +138,7 @@ async function save() {
       $q.notify({ type: 'warning', message: '접속 대상이 바뀌어 쓰기 허용을 껐습니다', timeout: 8000 })
     }
   } catch (e: any) {
-    $q.notify({ type: 'negative', message: e?.data?.message ?? 'DB 접속정보 저장 실패' })
+    $q.notify({ type: 'negative', message: e?.data?.message ?? failMsg('DB 접속정보 저장') })
   } finally {
     submitting.value = false
   }

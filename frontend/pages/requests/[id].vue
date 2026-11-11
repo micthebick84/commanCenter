@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { failMsg } from '~/composables/failMessage'
 // 요청 상세 — 본문(마크다운) · 답글 스레드 · 수정/취소(editable) · 관리자 상태 변경.
 import { useQuasar } from 'quasar'
 import RepoAddDropdown from '~/components/requests/RepoAddDropdown.vue'
@@ -85,13 +86,13 @@ function onSaved(item: RequestListItem | RequestDetail) {
 const cancelling = ref(false)
 async function cancelRequest() {
   if (!req.value || cancelling.value) return
-  if (!(await confirmDialog($q, '이 요청을 취소할까요? 되돌릴 수 없습니다.', { ok: '요청 취소' }))) return
+  if (!(await confirmDialog($q, '이 요청을 취소할까요? 되돌릴 수 없습니다.', { title: '요청 취소', ok: '요청 취소', cancel: '돌아가기' }))) return
   cancelling.value = true
   try {
     await useApi(`/api/requests/${req.value.id}`, { method: 'DELETE' })
     await navigateTo('/requests')
   } catch (e: any) {
-    $q.notify({ type: 'negative', message: e?.data?.message ?? '요청 취소 실패' })
+    $q.notify({ type: 'negative', message: e?.data?.message ?? failMsg('요청 취소') })
   } finally {
     cancelling.value = false
   }
@@ -111,7 +112,7 @@ async function changeStatus(status: RequestStatus, reason?: string) {
     req.value = await useApi<RequestDetail>(`/api/admin/requests/${req.value.id}/status`, { method: 'POST', body })
     return true
   } catch (e: any) {
-    $q.notify({ type: 'negative', message: e?.data?.message ?? '상태 변경 실패' })
+    $q.notify({ type: 'negative', message: e?.data?.message ?? failMsg('상태 변경') })
     return false
   } finally {
     changing.value = false

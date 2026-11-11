@@ -85,7 +85,7 @@ const fullscreen = useFullscreenDialog()
           :label="statusLabel"
         />
         <q-space />
-        <q-btn v-close-popup data-test="history-close" flat round dense icon="close" />
+        <q-btn v-close-popup data-test="history-close" aria-label="닫기" flat round dense icon="close" />
       </q-card-section>
       <q-separator />
 
@@ -105,7 +105,7 @@ const fullscreen = useFullscreenDialog()
           :role="bubbleRole(t.role)"
           :content="t.content"
         />
-        <div v-if="detail.turns.length === 0" class="text-grey-6 q-pa-md text-center">
+        <div v-if="detail.turns.length === 0" class="text-grey-7 q-pa-md text-center">
           기록된 대화가 없습니다.
         </div>
 

@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { failMsg } from '~/composables/failMessage'
 // 레포 공용(REPO) DB 접속정보 관리 (스펙 2026-10-02 §7) — 관리 > 레포 카탈로그에서 연다.
 // 목록 API는 관리자에게 비활성 REPO도 돌려준다. USER 행은 여기서 다루지 않는다(본인만 관리).
 import { useQuasar } from 'quasar'
@@ -45,7 +46,7 @@ async function toggleEnabled(r: DbConnectionView) {
     }, r.id)
     await load()
   } catch (e: any) {
-    $q.notify({ type: 'negative', message: e?.data?.message ?? '변경 실패' })
+    $q.notify({ type: 'negative', message: e?.data?.message ?? failMsg('변경') })
   }
 }
 
@@ -55,18 +56,23 @@ async function toggleAllowWrite(r: DbConnectionView) {
     await setDbConnectionAllowWrite(r.id, !r.allowWrite)
     await load()
   } catch (e) {
-    $q.notify({ type: 'negative', message: (e as { data?: { message?: string } })?.data?.message ?? '쓰기 허용 변경 실패' })
+    $q.notify({ type: 'negative', message: (e as { data?: { message?: string } })?.data?.message ?? failMsg('쓰기 허용 변경') })
   }
 }
 
 function remove(r: DbConnectionView) {
-  $q.dialog({ title: '삭제', message: `'${r.name}' 접속정보를 삭제할까요? 이 연결을 고른 질문 세션은 다음 질문부터 DB 도구 없이 답합니다.`, cancel: true })
+  $q.dialog({
+    title: `'${r.name}' 접속정보 삭제`,
+    message: `'${r.name}' 접속정보를 삭제할까요? 이 연결을 고른 질문 세션은 다음 질문부터 DB 도구 없이 답합니다.`,
+    ok: { label: '접속정보 삭제', flat: true, color: 'negative' },
+    cancel: { label: '취소', flat: true },
+  })
     .onOk(async () => {
       try {
         await deleteDbConnection(r.id)
         await load()
       } catch (e: any) {
-        $q.notify({ type: 'negative', message: e?.data?.message ?? '삭제 실패' })
+        $q.notify({ type: 'negative', message: e?.data?.message ?? failMsg('삭제') })
       }
     })
 }
@@ -92,20 +98,20 @@ const fullscreen = useFullscreenDialog()
             '쓰기 허용'을 켠 연결은 구현 단계에서 개발 DB에 쓰기 SQL을 실행합니다 — 계정에 쓰기 권한이 있어야 합니다.
             접속 대상(호스트·포트·DB·사용자)을 바꿔 저장하면 쓰기 허용은 꺼집니다.
           </q-card-section>
-          <q-card-section v-if="writeEnabled === false" class="q-py-sm text-caption text-orange-9" data-test="db-admin-write-off">
+          <q-card-section v-if="writeEnabled === false" class="q-py-sm text-caption text-deep-orange-10" data-test="db-admin-write-off">
             지금은 이 레포에서 구현 단계 쓰기가 열리지 않습니다 — 개발 DB 쓰기 스위치가 꺼져 있거나 자동 마이그레이션 레포입니다.
             표시는 미리 켜 둘 수 있습니다.
           </q-card-section>
           <q-list separator>
-            <q-item v-if="rows.length === 0"><q-item-section class="text-grey-6">등록된 공용 접속정보가 없습니다</q-item-section></q-item>
-            <q-item v-for="r in rows" :key="r.id" :class="{ 'text-grey-6': !r.enabled }">
+            <q-item v-if="rows.length === 0"><q-item-section class="text-grey-7">등록된 공용 접속정보가 없습니다</q-item-section></q-item>
+            <q-item v-for="r in rows" :key="r.id" :class="{ 'text-grey-7': !r.enabled }">
               <q-item-section>
                 <q-item-label>{{ r.name }} <q-badge outline color="grey-7" :label="dbTypeLabel(r.dbType)" /></q-item-label>
                 <q-item-label caption>{{ r.host }}:{{ r.port }}/{{ r.databaseName }} · {{ r.username }}</q-item-label>
                 <q-toggle
                   :model-value="r.allowWrite"
                   dense
-                  color="warning"
+                  color="deep-orange-10"
                   label="구현 단계 쓰기 허용"
                   class="q-mt-xs"
                   :data-test="`db-allow-write-${r.id}`"

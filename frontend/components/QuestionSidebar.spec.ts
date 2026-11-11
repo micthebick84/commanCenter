@@ -108,4 +108,15 @@ describe('QuestionSidebar (스펙 2026-09-05 §3)', () => {
     expect(w.text()).toContain('아직 질문이 없습니다')
     w.unmount()
   })
+
+  it('질문 행은 button이라 키보드로 열 수 있고, 지금 연 질문에만 aria-current="page" (2026-11-11 검토)', async () => {
+    const w = mount(QuestionSidebar, { props: { activeId: 3 } })
+    await flushPromises()
+    const rows = w.findAll('[data-test="question-row"]')
+    expect(rows[0]!.element.tagName).toBe('BUTTON')
+    expect(rows[0]!.attributes('type')).toBe('button')
+    expect(rows[0]!.attributes('aria-current')).toBe('page')
+    expect(rows[1]!.attributes('aria-current')).toBeUndefined()
+    w.unmount()
+  })
 })

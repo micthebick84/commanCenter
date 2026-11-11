@@ -134,7 +134,7 @@ const recent = computed(() => props.pending.activities.slice(-4, -1))
 }
 .recent-line {
   font-size: 10.5px;
-  color: #9aa7b6;
+  color: #5b6b7d;
   word-break: break-all;
 }
 .thinking-box {
@@ -145,7 +145,7 @@ const recent = computed(() => props.pending.activities.slice(-4, -1))
   background: none;
   padding: 0;
   font-size: 11px;
-  color: #8a97a8;
+  color: #5b6b7d;
   cursor: pointer;
 }
 .thinking-text {
@@ -154,7 +154,7 @@ const recent = computed(() => props.pending.activities.slice(-4, -1))
   overflow-y: auto;
   font-size: 11px;
   line-height: 1.45;
-  color: #8a97a8;
+  color: #5b6b7d;
   white-space: pre-wrap;
   word-break: break-word;
   font-family: 'Pretendard', sans-serif;

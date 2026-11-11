@@ -68,7 +68,7 @@ describe('downloadAttachment — useApi blob → objectURL → <a download> (스
       statusCode: 500,
       data: new Blob(['<html>'], { type: 'text/html' }),
     })
-    await expect(downloadAttachment('/u', 'x')).rejects.toThrow('다운로드 실패')
+    await expect(downloadAttachment('/u', 'x')).rejects.toThrow('다운로드에 실패했습니다')
     useApiMock.mockRejectedValue({
       statusCode: 500,
       data: { message: '서버 오류' },

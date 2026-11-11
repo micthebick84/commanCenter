@@ -124,7 +124,7 @@ const fullscreen = useFullscreenDialog()
         </q-card-section>
         <q-card-section class="q-pt-none text-caption text-grey-7">
           <div v-if="caption" class="text-primary q-mb-xs" data-test="deploy-env-caption">{{ caption }}</div>
-          <div v-if="notice" class="text-orange-9 q-mb-xs" data-test="deploy-env-no-env-notice">{{ notice }}</div>
+          <div v-if="notice" class="text-deep-orange-10 q-mb-xs" data-test="deploy-env-no-env-notice">{{ notice }}</div>
           <div>
             컨테이너에 <code>-e KEY=VALUE</code>로 주입됩니다. 값이 빈 변수는 보내지 않습니다.
             비밀 값은 마스킹 표시되지만 평문 저장됩니다.
@@ -137,7 +137,7 @@ const fullscreen = useFullscreenDialog()
           <div v-for="row in rows" :key="row.id" data-test="env-row">
             <div v-if="row.fixedKey" class="row items-center q-gutter-x-sm">
               <code class="env-key" data-test="env-key-label">{{ row.key }}</code>
-              <q-badge v-if="row.required" color="orange-8" label="필수" />
+              <q-badge v-if="row.required" color="warning" text-color="dark" label="필수" />
               <q-badge v-if="row.valueFromPrevious" outline color="grey-7" label="직전 배포 값" />
             </div>
             <div
@@ -167,9 +167,14 @@ const fullscreen = useFullscreenDialog()
                 data-test="env-value-input"
               >
                 <template v-if="row.secret" #append>
-                  <q-icon
-                    :name="row.reveal ? 'visibility_off' : 'visibility'"
-                    class="cursor-pointer"
+                  <q-btn
+                    flat
+                    round
+                    dense
+                    :icon="row.reveal ? 'visibility_off' : 'visibility'"
+                    :aria-label="row.reveal ? '값 숨기기' : '값 보기'"
+                    :aria-pressed="row.reveal ? 'true' : 'false'"
+                    data-test="env-reveal"
                     @click="row.reveal = !row.reveal"
                   />
                 </template>
@@ -185,7 +190,7 @@ const fullscreen = useFullscreenDialog()
       </div>
       <q-card-section
         v-if="missing.length"
-        class="q-py-xs text-caption text-warning"
+        class="q-py-xs text-caption text-deep-orange-10"
         data-test="env-missing-required"
       >
         필수 변수 {{ missing.length }}개가 비어 있습니다: {{ missing.join(', ') }}
@@ -195,6 +200,7 @@ const fullscreen = useFullscreenDialog()
         <q-btn
           unelevated
           :color="missing.length ? 'warning' : 'primary'"
+          :text-color="missing.length ? 'dark' : undefined"
           :label="submitLabel"
           :loading="submitting"
           :disable="loading"

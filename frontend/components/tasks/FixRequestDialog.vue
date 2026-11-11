@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { failMsg } from '~/composables/failMessage'
 // 수정 요청 내기 (스펙 2026-11-03 §6.1·§6.2) — 배포된 작업의 문제를 적는다. 등록자의 요청은 관리자가 승인해야 시작하고,
 // 관리자가 내면 승인 없이 바로 구현 큐에 들어가므로 그때만 구현 방식(리뷰·직접)을 고른다. SDD는 수정 회차에서 쓰지 않는다.
 import { useQuasar } from 'quasar'
@@ -60,7 +61,7 @@ async function submit() {
     emit('update:modelValue', false)
     emit('submitted')
   } catch (e) {
-    $q.notify({ type: 'negative', message: (e as { data?: { message?: string } })?.data?.message ?? '수정 요청 실패' })
+    $q.notify({ type: 'negative', message: (e as { data?: { message?: string } })?.data?.message ?? failMsg('수정 요청') })
   } finally {
     submitting.value = false
   }

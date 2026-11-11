@@ -72,8 +72,8 @@ export const STATUS_OPTIONS: { value: RequestStatus; label: string }[] = [
 export const OPEN_STATUSES: RequestStatus[] = ['RECEIVED', 'REVIEWING']
 
 export const STATUS_COLOR: Record<RequestStatus, string> = {
-  RECEIVED: 'grey',
-  REVIEWING: 'blue',
+  RECEIVED: 'grey-8',
+  REVIEWING: 'blue-9',
   DONE: 'positive',
   REJECTED: 'negative',
 }

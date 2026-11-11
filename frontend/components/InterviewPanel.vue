@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { failMsg } from '~/composables/failMessage'
 import { useQuasar } from 'quasar'
 import { useInterviewStream } from '~/composables/useInterviewStream'
 import type { InterviewStatus, InterviewSnapshot } from '~/composables/useInterviewStream'
@@ -327,7 +328,7 @@ async function sendAnswer(extra?: AskExtra): Promise<boolean> {
       // 질문 세션 문답 상한 등 — 서버 메시지 그대로, 입력은 유지
       $q.notify({ type: 'warning', message: e?.data?.message ?? '요청이 거부되었습니다' })
     } else {
-      $q.notify({ type: 'negative', message: e?.data?.message ?? '답변 전송 실패' })
+      $q.notify({ type: 'negative', message: e?.data?.message ?? failMsg('답변 전송') })
     }
     return false
   } finally {
@@ -341,7 +342,7 @@ async function downloadAttachment(id: number) {
   try {
     await downloadBlob(`${apiBase.value}/${props.sessionId}/attachments/${id}`, meta?.fileName ?? `attachment-${id}`)
   } catch (e: any) {
-    $q.notify({ type: 'negative', message: e?.message ?? '다운로드 실패' })
+    $q.notify({ type: 'negative', message: e?.message ?? failMsg('다운로드') })
   }
 }
 
@@ -362,7 +363,7 @@ async function confirm() {
     $q.notify({ type: 'positive', message: `확정 완료 — ${withDesign ? '디자인' : '구현'} 큐에 진입했습니다` })
     emit('confirmed', res.taskId)
   } catch (e: any) {
-    $q.notify({ type: 'negative', message: e?.data?.message ?? '확정 실패' })
+    $q.notify({ type: 'negative', message: e?.data?.message ?? failMsg('확정') })
   } finally {
     confirming.value = false
   }
@@ -430,7 +431,7 @@ defineExpose({
         <q-chip v-if="props.model" dense size="sm" outline icon="smart_toy" :label="props.model" />
         <q-chip v-if="props.effort" dense size="sm" outline icon="tune" :label="props.effort" />
       </template>
-      <q-banner v-if="status === 'EXPIRED'" dense class="bg-orange-1 text-orange-10 col"
+      <q-banner v-if="status === 'EXPIRED'" dense class="bg-orange-1 text-deep-orange-10 col"
         >{{ ui.expired }}</q-banner
       >
       <q-banner v-else-if="status === 'CANCELLED'" dense class="bg-grey-2 text-grey-9 col"
@@ -531,25 +532,26 @@ defineExpose({
           <TypingIndicator v-else-if="waitingForAi" data-test="typing-indicator" />
           <div
             v-if="turns.length === 0 && waitingForAi"
-            class="text-grey-6 q-mt-xs text-center"
+            class="text-grey-7 q-mt-xs text-center"
             style="font-size: 12px"
           >
             {{ ui.preparing }}
           </div>
           <div
             v-if="turns.length === 0 && !waitingForAi"
-            class="text-grey-6 q-pa-md text-center"
+            class="text-grey-7 q-pa-md text-center"
           >
             {{ ui.starting }}
           </div>
-          <div
+          <button
             v-if="unread > 0"
+            type="button"
             data-test="new-msg-pill"
             class="new-msg-pill"
             @click="scrollToBottom()"
           >
             ↓ 새 메시지 {{ unread }}
-          </div>
+          </button>
         </div>
         <div v-if="!readonly" class="answer-bar q-pa-sm">
           <slot
@@ -612,7 +614,7 @@ defineExpose({
               </q-item-section>
             </q-item>
             <q-item v-if="designSections.length === 0">
-              <q-item-section class="text-grey-6">아직 설계 섹션이 없습니다.</q-item-section>
+              <q-item-section class="text-grey-7">아직 설계 섹션이 없습니다.</q-item-section>
             </q-item>
           </q-list>
 
@@ -634,13 +636,13 @@ defineExpose({
             <div
               v-for="r in confirmRefs.stale"
               :key="`stale-${r.catalogId}`"
-              class="text-caption text-orange-10 q-mt-xs"
+              class="text-caption text-deep-orange-10 q-mt-xs"
               data-test="confirm-ref-stale"
             >⚠ {{ r.alias }}: 마지막 턴에는 받지 못했습니다 — 고정 커밋으로 구현합니다</div>
             <div
               v-for="r in confirmRefs.dropped"
               :key="`dropped-${r.catalogId}`"
-              class="text-caption text-orange-10 q-mt-xs"
+              class="text-caption text-deep-orange-10 q-mt-xs"
               data-test="confirm-ref-dropped"
             >⚠ {{ r.alias }}({{ r.branch }}) — 인터뷰에서 받지 못해 구현에 넘기지 않습니다</div>
           </div>
@@ -656,7 +658,7 @@ defineExpose({
               </div>
               <div
                 v-if="excludedMockupNumbers.length"
-                class="text-caption text-orange-10"
+                class="text-caption text-deep-orange-10"
                 data-test="confirm-mockup-warning"
               >
                 계획이 가리키는 목업 {{ excludedMockupNumbers.join(', ') }}을 넘기지 않습니다
@@ -793,6 +795,9 @@ defineExpose({
   width: fit-content;
   margin: 4px auto 0;
   z-index: 5;
+  display: block;
+  border: 0;
+  font-family: inherit;
   background: var(--q-primary);
   color: #fff;
   font-size: 12px;

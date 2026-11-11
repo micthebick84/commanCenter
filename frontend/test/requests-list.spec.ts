@@ -105,6 +105,14 @@ describe('requests/index', () => {
     w.unmount()
   })
 
+  it('제목은 상세로 가는 링크라 키보드로도 연다 (2026-11-11 검토)', async () => {
+    const w = await mountPage([item({ id: 7, title: '레포 추가해 주세요' })])
+    const link = w.find('[data-test="req-link-7"]')
+    expect(link.element.tagName).toBe('A')
+    expect(link.attributes('href')).toBe('/requests/7')
+    w.unmount()
+  })
+
   it('repo-add: 드롭다운으로 레포를 등록하면 목록을 다시 읽는다', async () => {
     authStub.isAdmin = true
     const w = await mountPage([item({ id: 7, kind: 'REPO', kindLabel: 'REPO 추가', title: '레포 추가해 주세요' })])

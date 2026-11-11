@@ -58,7 +58,7 @@ function countClass(n: number | null | undefined): string {
 
     <q-banner
       v-if="authAlerts.length"
-      :class="authAlertBad ? 'bg-red-1 text-red-10' : 'bg-orange-1 text-orange-10'"
+      :class="authAlertBad ? 'bg-red-1 text-red-10' : 'bg-orange-1 text-deep-orange-10'"
       class="q-mb-md"
       data-test="claude-auth-alert"
     >
@@ -189,7 +189,7 @@ function countClass(n: number | null | undefined): string {
               class="q-mr-xs q-mb-xs"
             />
           </template>
-          <span v-else class="text-grey-6">—</span>
+          <span v-else class="text-grey-7">—</span>
         </q-td>
       </template>
       <template #body-cell-lostReportCount="props">

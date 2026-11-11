@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { failMsg } from '~/composables/failMessage'
 // 요청 답글 스레드. COMMENT는 말풍선(마크다운), SYSTEM은 회색 한 줄. 입력창은 POST /api/requests/{id}/comments.
 import { useQuasar } from 'quasar'
 import type { RequestComment } from '~/composables/requestBoard'
@@ -32,7 +33,7 @@ async function send() {
     draft.value = ''
     emit('posted', posted)
   } catch (e: any) {
-    $q.notify({ type: 'negative', message: e?.data?.message ?? '답글 등록 실패' })
+    $q.notify({ type: 'negative', message: e?.data?.message ?? failMsg('답글 등록') })
   } finally {
     sending.value = false
   }

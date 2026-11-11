@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { failMsg } from '~/composables/failMessage'
 // 요청 작성/수정 다이얼로그. initial이 없으면 새 요청(POST), 있으면 수정(PUT, 종류 잠금).
 // 레포 힌트는 종류가 REPO일 때만 받고 보낸다.
 import { useQuasar } from 'quasar'
@@ -66,7 +67,7 @@ async function submit() {
     show.value = false
     emit('saved', saved)
   } catch (e: any) {
-    $q.notify({ type: 'negative', message: e?.data?.message ?? '저장 실패' })
+    $q.notify({ type: 'negative', message: e?.data?.message ?? failMsg('저장') })
   } finally {
     submitting.value = false
   }

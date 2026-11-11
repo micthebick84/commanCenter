@@ -30,7 +30,7 @@ describe('TaskProgressStepper (스펙 2026-09-06 §4.2)', () => {
     })
     const stepEls = w.findAll('.step')
     expect(stepEls).toHaveLength(5)
-    expect(stepEls.map((s) => s.find('[data-test="step-label"]').text())).toEqual(
+    expect(stepEls.map((s) => s.find('[data-test="step-label"]').element.firstChild!.textContent)).toEqual(
       ['분석', '디자인', '구현', '배포', '종료'],
     )
     // 연결선은 원 사이에만(4개) — 마지막 종료 칸엔 없다.
@@ -61,6 +61,15 @@ describe('TaskProgressStepper (스펙 2026-09-06 §4.2)', () => {
     expect(w.find('[data-test="step-deploy"]').classes()).toContain(
       'step--failed',
     )
+    w.unmount()
+  })
+
+  it('단계 라벨마다 화면 읽기 프로그램용 상태 글자가 붙는다 — 색만으로 상태를 알리지 않게 (2026-11-11 검토)', () => {
+    const w = mount(TaskProgressStepper, {
+      props: { steps: stageSteps({ status: 'PR_CREATED', designRequested: true }) },
+    })
+    const hidden = w.findAll('[data-test="step-label"] .sr-only').map((s) => s.text())
+    expect(hidden).toEqual(['완료', '완료', '진행 중', '대기', '대기'])
     w.unmount()
   })
 })

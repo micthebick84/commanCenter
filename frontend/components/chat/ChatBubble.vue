@@ -160,7 +160,7 @@ const html = computed(() =>
 }
 .system-note {
   font-size: 11px;
-  color: #8a97a8;
+  color: #5b6b7d;
   background: #f0f2f5;
   padding: 3px 11px;
   border-radius: 11px;

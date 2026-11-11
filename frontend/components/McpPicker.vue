@@ -34,7 +34,7 @@ defineExpose({ toggle })   // 테스트에서 칩 클릭 대신 직접 호출 (�
 
 <template>
   <div v-if="props.flat" class="mcp-flat" data-test="mcp-flat">
-    <div class="field-label">MCP 도구 <span class="text-grey-6 text-weight-regular">(선택)</span></div>
+    <div class="field-label">MCP 도구 <span class="text-grey-7 text-weight-regular">(선택)</span></div>
     <!-- 불러오는 동안 빈 안내를 먼저 보였다가 칩으로 바뀌면 열릴 때마다 깜빡인다 — 로딩 중엔 스켈레톤 -->
     <q-skeleton v-if="loading" type="text" width="180px" data-test="mcp-loading" />
     <div

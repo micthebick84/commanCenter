@@ -24,6 +24,11 @@ export default defineNuxtConfig({
 
   quasar: {
     plugins: ['Dialog', 'Notify', 'Loading'],
+    // 성공 색: Quasar 기본 #21BA45는 흰 글자와 2.57:1이라 칩·버튼·알림 글자가 읽히지 않는다 → green-9(5.13:1).
+    // warning(#F2C037)은 알림창이 검은 글자로 쓰므로 그대로 두고, 흰 글자·흰 바탕 글자로 쓰던 곳을 각 위치에서 고친다(2026-11-11 검토).
+    config: {
+      brand: { positive: '#2E7D32' },
+    },
     extras: {
       fontIcons: ['material-icons'],
     },

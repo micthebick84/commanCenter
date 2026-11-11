@@ -7,6 +7,7 @@ import {
   stageSteps,
   attentionGroup,
   nextAction,
+  STEP_STATE_LABEL,
 } from '~/composables/taskStages'
 import { mrRef } from '~/composables/mergeRequestLabel'
 import { elapsedLabel } from '~/composables/implementationMode'
@@ -126,11 +127,11 @@ function segStyle(state: string, color: string) {
                 s.state === 'current' || s.state === 'failed'
                   ? s.color
                   : s.state === 'done'
-                    ? '#9e9e9e'
-                    : '#bdbdbd',
+                    ? '#2e7d32'
+                    : '#757575',
               fontWeight: s === current ? 700 : 400,
             }"
-            >{{ s.label }}</span
+            ><span v-if="s.state === 'done'" aria-hidden="true">✓</span>{{ s.label }}<span class="sr-only">{{ STEP_STATE_LABEL[s.state] }}</span></span
           >
         </div>
       </div>
@@ -194,7 +195,7 @@ function segStyle(state: string, color: string) {
       </template>
       <template v-else-if="patchState === 'empty'">
         <span class="dot">·</span>
-        <span class="text-grey-6" data-test="card-patch-empty">변경 없음</span>
+        <span class="text-grey-7" data-test="card-patch-empty">변경 없음</span>
       </template>
     </div>
 
@@ -229,7 +230,7 @@ function segStyle(state: string, color: string) {
 .card-id {
   font-size: 12px;
   font-weight: 700;
-  color: #9e9e9e;
+  color: #757575;
 }
 .card-title {
   font-size: 15px;
@@ -317,7 +318,7 @@ function segStyle(state: string, color: string) {
   padding: 6px 10px;
   border-radius: 6px;
   background: #fff8e1;
-  color: #ef6c00;
+  color: #bf360c;
   font-size: 12.5px;
   font-weight: 600;
 }
@@ -336,7 +337,7 @@ function segStyle(state: string, color: string) {
   color: #757575;
 }
 .card-elapsed--warn {
-  color: #ef6c00;
+  color: #bf360c;
   font-weight: 600;
 }
 </style>

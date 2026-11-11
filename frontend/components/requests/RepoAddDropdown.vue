@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { failMsg } from '~/composables/failMessage'
 // REPO 추가 요청 처리 — 사내 GitLab 후보를 골라 한 번에 카탈로그에 등록한다(확인 창 없음).
 // 열면 요청 힌트로 추측한 후보를 읽고, 검색창(300ms 디바운스·2자 이상)으로 GitLab 전체를 찾을 수 있다.
 import { useQuasar } from 'quasar'
@@ -94,7 +95,7 @@ async function runSearch(q: string) {
     results.value = list
   } catch (e: any) {
     if (seq !== searchSeq) return
-    $q.notify({ type: 'negative', message: e?.data?.message ?? 'GitLab 검색 실패' })
+    $q.notify({ type: 'negative', message: e?.data?.message ?? failMsg('GitLab 검색') })
   } finally {
     if (seq === searchSeq) searching.value = false
   }
@@ -112,7 +113,7 @@ async function pick(c: RepoCandidate) {
     dropdown.value?.hide()
     emit('added', detail)
   } catch (e: any) {
-    $q.notify({ type: 'negative', message: e?.data?.message ?? '레포 등록 실패' })
+    $q.notify({ type: 'negative', message: e?.data?.message ?? failMsg('레포 등록') })
   } finally {
     adding.value = false
   }

@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { failMsg } from '~/composables/failMessage'
 // 작업 상세 "DB 변경" 카드 (스펙 2026-11-03 §6.5) — GET /api/tasks/{id}/db-changes. 구현 단계에서 개발 DB에 쓴 SQL 기록을
 // 연결별·시간순으로 보여 주고, 승인 대기(DEFERRED) 항목은 관리자에게만 실행·실행 안 함 버튼을 보인다. 기록이 하나도 없으면 카드 자체를 그리지 않는다.
 // 목록은 로컬 ref에 보관 — 5초 폴링이 task를 갈아끼워도 상태가 유지되고, 다시 읽을 때만 refreshKey를 올린다(FixRequestHistory와 같은 방식).
@@ -41,7 +42,7 @@ const pending = computed(() => deferredCount(items.value))
 
 const LABEL_COLOR: Record<string, string> = {
   EXECUTED: 'positive',
-  DEFERRED: 'orange-8',
+  DEFERRED: 'warning',
   DISMISSED: 'grey-7',
   REJECTED: 'negative',
   FAILED: 'negative',
@@ -76,7 +77,7 @@ async function process(row: DbChangeView, action: 'execute' | 'dismiss') {
     emit('changed')
   } catch (e) {
     const serverMessage = (e as { data?: { message?: string } } | null)?.data?.message
-    $q.notify({ type: 'negative', message: serverMessage ?? (action === 'execute' ? '실행 실패' : '처리 실패') })
+    $q.notify({ type: 'negative', message: serverMessage ?? (action === 'execute' ? failMsg('실행') : failMsg('처리')) })
     // 이미 다른 관리자가 처리했거나 실행이 실패해 되돌려졌을 수 있다 — 지금 상태로 다시 그린다
     await load()
   } finally {
@@ -91,7 +92,7 @@ async function process(row: DbChangeView, action: 'execute' | 'dismiss') {
       <q-icon name="storage" color="primary" size="sm" />
       <div class="text-h6">DB 변경</div>
       <q-chip dense size="sm" outline :label="`${items.length}건`" />
-      <q-chip v-if="pending" dense size="sm" square color="orange-8" text-color="white" :label="`승인 대기 ${pending}건`" data-test="db-changes-pending" />
+      <q-chip v-if="pending" dense size="sm" square color="warning" text-color="dark" :label="`승인 대기 ${pending}건`" data-test="db-changes-pending" />
     </q-card-section>
     <q-separator />
     <div v-for="g in groups" :key="g.key" data-test="db-change-group">
@@ -108,7 +109,7 @@ async function process(row: DbChangeView, action: 'execute' | 'dismiss') {
               size="sm"
               square
               :color="LABEL_COLOR[r.classification] ?? 'grey-7'"
-              text-color="white"
+              :text-color="LABEL_COLOR[r.classification] === 'warning' ? 'dark' : 'white'"
               :label="dbChangeLabel(r.classification)"
               :data-test="`db-change-label-${r.id}`"
             />

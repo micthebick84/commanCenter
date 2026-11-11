@@ -68,7 +68,7 @@ defineExpose({ toggle })
   <div class="db-picker">
     <div class="picker-label">공용</div>
     <div data-test="db-section-repo">
-      <div v-if="repoItems.length === 0" class="text-caption text-grey-6 q-px-sm">등록된 공용 접속정보가 없습니다</div>
+      <div v-if="repoItems.length === 0" class="text-caption text-grey-7 q-px-sm">등록된 공용 접속정보가 없습니다</div>
       <q-item v-for="i in repoItems" :key="i.id" dense tag="label" :disable="!i.enabled && !model.includes(i.id)">
         <q-item-section side>
           <q-checkbox :model-value="model.includes(i.id)" :disable="!i.enabled && !model.includes(i.id)" dense @update:model-value="toggle(i.id)" />
@@ -76,7 +76,7 @@ defineExpose({ toggle })
         <q-item-section>
           <q-item-label>
             {{ i.name }} <q-badge outline color="grey-7" :label="dbTypeLabel(i.dbType)" />
-            <q-badge v-if="showWrite && i.allowWrite && i.enabled" color="orange-8" label="쓰기" class="q-ml-xs" data-test="db-write-badge" />
+            <q-badge v-if="showWrite && i.allowWrite && i.enabled" color="warning" text-color="dark" label="쓰기" class="q-ml-xs" data-test="db-write-badge" />
           </q-item-label>
           <q-item-label caption>{{ i.host }}:{{ i.port }}/{{ i.databaseName }}</q-item-label>
         </q-item-section>
@@ -84,7 +84,7 @@ defineExpose({ toggle })
     </div>
     <div v-if="showUserSection" class="picker-label q-mt-sm">내 접속정보</div>
     <div v-if="showUserSection" data-test="db-section-user">
-      <div v-if="userItems.length === 0" class="text-caption text-grey-6 q-px-sm">아직 없습니다</div>
+      <div v-if="userItems.length === 0" class="text-caption text-grey-7 q-px-sm">아직 없습니다</div>
       <q-item v-for="i in userItems" :key="i.id" dense tag="label">
         <q-item-section side>
           <q-checkbox :model-value="model.includes(i.id)" dense @update:model-value="toggle(i.id)" />

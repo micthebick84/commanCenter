@@ -55,14 +55,14 @@ function colorOf(status: string | null) {
 
 <template>
   <div class="timeline q-px-md q-pb-sm">
-    <div v-if="loading" class="text-caption text-grey-6 q-py-sm">불러오는 중…</div>
+    <div v-if="loading" class="text-caption text-grey-7 q-py-sm">불러오는 중…</div>
     <div v-else-if="error" class="text-caption text-negative q-py-sm">이력을 불러오지 못했습니다</div>
-    <div v-else-if="rows.length === 0" class="text-caption text-grey-6 q-py-sm">이력이 없습니다</div>
+    <div v-else-if="rows.length === 0" class="text-caption text-grey-7 q-py-sm">이력이 없습니다</div>
     <template v-else>
       <div v-for="(r, i) in rows.slice(0, shown)" :key="r.at + i" class="entry" data-test="history-entry">
         <div class="rail"><span class="dot" :style="{ background: i === 0 ? colorOf(r.toStatus) : '#bdbdbd' }" /><span v-if="i < Math.min(shown, rows.length) - 1" class="line" /></div>
         <div class="body">
-          <div class="text-caption text-grey-6">{{ formatKoDateTime(r.at) }}</div>
+          <div class="text-caption text-grey-7">{{ formatKoDateTime(r.at) }}</div>
           <div class="text-body2 text-weight-medium">
             <template v-if="r.fromLabel">{{ r.fromLabel }} → </template><span :style="{ color: colorOf(r.toStatus) }">{{ r.toLabel }}</span>
           </div>

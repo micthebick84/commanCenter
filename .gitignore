@@ -52,3 +52,6 @@ graphify-out/
 
 # Claude Code project-local tooling (skills, hooks) - kept per machine, not shared
 .claude/
+
+# Playwright MCP page snapshots (browser checks from Claude sessions)
+.playwright-mcp/

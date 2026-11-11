@@ -58,9 +58,16 @@ describe('관리 워커 헬스 모바일 카드', () => {
     expect(dead.find('[data-test="card-lost"]').classes()).toContain('text-red-9')
     expect(dead.find('[data-test="card-dead"]').text()).toBe('2')
     expect(dead.find('[data-test="card-dead"]').classes()).toContain('text-red-9')
-    // 구버전 API·워커는 이 칸을 보내지 않는다 → 0, 회색
+    // 구버전 API·워커는 이 칸을 보내지 않는다 → 0, 흐린 회색. grey-6(#9e9e9e)은 흰 배경 2.68:1이라 grey-7(4.61:1)
     expect(ok.find('[data-test="card-dead"]').text()).toBe('0')
-    expect(ok.find('[data-test="card-dead"]').classes()).toContain('text-grey-6')
+    expect(ok.find('[data-test="card-dead"]').classes()).toContain('text-grey-7')
+    expect(ok.find('[data-test="card-lost"]').classes()).toContain('text-grey-7')
+    for (const sel of ['card-lost', 'card-dead']) {
+      for (const card of [ok, dead]) {
+        expect(card.find(`[data-test="${sel}"]`).classes()).not.toContain('text-grey-6')
+        expect(card.find(`[data-test="${sel}"]`).classes()).toContain('report-count')
+      }
+    }
     expect(dead.find('[data-test="card-mcps"]').exists()).toBe(false)
     // 읽기 전용: 토글·비활성 표식·액션 바 없음
     expect(w.find('[data-test="card-toggle"]').exists()).toBe(false)
@@ -89,6 +96,32 @@ describe('관리 워커 헬스 모바일 카드', () => {
     const w = await mountPage(rows)
     expect(w.find('.q-table').exists()).toBe(true)
     expect(w.find('[data-test="catalog-cards"]').exists()).toBe(false)
+    w.unmount()
+  })
+
+  it('데스크톱 표는 유실 보고·재전송 포기를 폭 넓은 MCP 도구 열 앞에 둔다(좁은 데스크톱에서 스크롤 끝 너머로 밀리지 않게)', async () => {
+    const w = await mountPage(rows)
+    const heads = w.findAll('.q-table thead th').map((th) => th.text().trim())
+    const lost = heads.indexOf('유실 보고')
+    const dead = heads.indexOf('재전송 포기')
+    const mcps = heads.indexOf('MCP 도구')
+    expect(lost).toBeGreaterThan(-1)
+    expect(dead).toBe(lost + 1)
+    expect(mcps).toBe(dead + 1)
+    w.unmount()
+  })
+
+  it('데스크톱 표의 숫자 칸: 0은 grey-7, 0보다 크면 빨강 굵게, 둘 다 자릿수 폭 고정', async () => {
+    const w = await mountPage(rows)
+    const lostCells = w.findAll('[data-test="cell-lost"] span')
+    const deadCells = w.findAll('[data-test="cell-dead"] span')
+    expect(lostCells.map((s) => s.text())).toEqual(['0', '3'])
+    expect(deadCells.map((s) => s.text())).toEqual(['0', '2'])
+    for (const cells of [lostCells, deadCells]) {
+      expect(cells[0]!.classes()).toEqual(expect.arrayContaining(['report-count', 'text-grey-7']))
+      expect(cells[1]!.classes()).toEqual(expect.arrayContaining(['report-count', 'text-red-9', 'text-weight-bold']))
+      for (const c of cells) expect(c.classes()).not.toContain('text-grey-6')
+    }
     w.unmount()
   })
 })

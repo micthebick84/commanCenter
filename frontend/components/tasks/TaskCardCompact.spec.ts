@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
 import { mount } from '@vue/test-utils'
 import { describe, it, expect } from 'vitest'
 import { nextTick } from 'vue'
@@ -276,5 +278,29 @@ describe('TaskCardCompact — 부분 패치 (스펙 2026-11-10)', () => {
     w = mount(TaskCardCompact, { props: { task: { ...closed, status: 'DEPLOYED' }, isAdmin: false, canDownloadPatch: true } })
     expect(w.find('[data-test="card-patch-download"]').exists()).toBe(false)
     w.unmount()
+  })
+})
+
+describe('TaskCardCompact 단계 라벨 줄 맞춤', () => {
+  it('라벨 수가 막대 칸 수와 같다', () => {
+    const w = mount(TaskCardCompact, { props: { task: base, isAdmin: false } })
+    expect(w.findAll('.seg-labels > span')).toHaveLength(w.findAll('[data-test="card-step"]').length)
+    w.unmount()
+  })
+
+  // vitest는 레이아웃을 계산하지 않는다 — 칸 수를 숫자로 박으면(예전 repeat(4, …)) 5번째 '종료'가 다음 줄로 내려갔다
+  it('라벨 격자는 칸 수를 고정하지 않고 단계 수만큼 한 줄로 늘어난다', () => {
+    const sfc = readFileSync(resolve(__dirname, 'TaskCardCompact.vue'), 'utf8')
+    const rule = sfc.match(/\.seg-labels \{([^}]*)\}/)?.[1] ?? ''
+    expect(rule).toContain('grid-auto-flow: column')
+    expect(rule).toContain('grid-auto-columns: minmax(0, 1fr)')
+    expect(rule).not.toMatch(/grid-template-columns/)
+  })
+
+  // 좁은 폰에서 칩 옆 자리가 모자라면 단계 막대가 다음 줄로 내려가야 한다(no-wrap이면 5칸이 33px로 줄어 ✓가 줄바꿈된다)
+  it('단계 줄은 줄바꿈을 허용하고 단계 묶음에 최소 폭을 준다', () => {
+    const sfc = readFileSync(resolve(__dirname, 'TaskCardCompact.vue'), 'utf8')
+    expect(sfc).toMatch(/class="row items-center step-row"/)
+    expect(sfc).toMatch(/\.step-row > \.seg-col \{\s*flex: 1 1 205px;/)
   })
 })

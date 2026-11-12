@@ -99,7 +99,7 @@ function segStyle(state: string, color: string) {
       />
     </div>
 
-    <div class="row items-center no-wrap step-row">
+    <div class="row items-center step-row">
       <span
         class="card-status"
         :style="{ background: chip[0], color: chip[1] }"
@@ -247,8 +247,12 @@ function segStyle(state: string, color: string) {
   min-height: 44px;
   margin: -10px -12px -10px 0;
 }
+/* 상태·타입 칩 옆에 단계 라벨 5칸(✓디자인 ≈ 36px)이 들어갈 자리가 없으면 단계 막대를 다음 줄로 내린다 */
 .step-row {
-  gap: 10px;
+  gap: 6px 10px;
+}
+.step-row > .seg-col {
+  flex: 1 1 205px;
 }
 .card-status {
   font-size: 11.5px;
@@ -279,9 +283,11 @@ function segStyle(state: string, color: string) {
   height: 5px;
   border-radius: 3px;
 }
+/* 라벨 칸 수 = 단계 수(위 막대와 같은 줄 맞춤). 칸 수를 숫자로 박으면 단계가 늘 때 끝 라벨이 다음 줄로 내려간다 */
 .seg-labels {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-auto-flow: column;
+  grid-auto-columns: minmax(0, 1fr);
   gap: 4px;
   font-size: 10.5px;
   line-height: 1.2;

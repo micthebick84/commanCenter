@@ -54,6 +54,24 @@ describe('harvestPlan bilingual', () => {
     expect(harvestPlan(t).planJson).toEqual([{ task: 1, title: '가' }, { task: 2, title: 'na' }]);
   });
 
+  // 2026-11-11 작업 37(세션 51): 제목 끝의 이슈 번호 꼬리 때문에 계획을 못 알아보고 매 턴 질문으로 보고했다
+  it('accepts a trailing bracketed tag after the plan keyword', () => {
+    const tasks = '\n\n### 작업 1: 가';
+    for (const title of [
+      '# OID지표설정 Index 숫자 크기 순 정렬 구현 계획 (LINALIFE2026-10)',
+      '# 서버관리 구현 계획 [HIVE-12]',
+      '## 서버관리 구현 계획（v2）',
+      '# CSV Export Implementation Plan (ABC-1)',
+    ]) {
+      expect(harvestPlan(`# 설계\n\nx\n\n${title}${tasks}`).planMarkdown.startsWith(title)).toBe(true);
+    }
+  });
+
+  it('does not treat a heading that merely continues after the keyword as the plan header', () => {
+    expect(tryHarvest('## 구현 계획 검토\n\n### 작업 1: 가').ok).toBe(false);
+    expect(tryHarvest('# 구현 계획 (초안) 이후 메모\n\n### 작업 1: 가').ok).toBe(false);
+  });
+
   it('still harvests the English structure (regression)', () => {
     const t = '# Design\n\nx\n\n# CSV Export Implementation Plan\n\n### Task 1: do';
     expect(harvestPlan(t).planJson).toEqual([{ task: 1, title: 'do' }]);

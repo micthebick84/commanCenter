@@ -11,8 +11,10 @@ export interface Harvest {
   planJson: Array<{ task: number; title: string }>;
 }
 
-// writing-plans header convention: "# <Feature> Implementation Plan" 또는 한국어 "# <기능> 구현 계획" (H1/H2)
-const PLAN_HEADER = /^#{1,2}\s+.*(Implementation Plan|구현\s*계획)\s*$/m;
+// writing-plans header convention: "# <Feature> Implementation Plan" 또는 한국어 "# <기능> 구현 계획" (H1/H2).
+// 끝에 괄호 꼬리 하나(이슈 번호 등 — "(LINALIFE2026-10)", "[HIVE-12]", "（v2）")는 허용한다 — 2026-11-11 작업 37이
+// 이 꼬리 때문에 계획을 못 알아봐 매 턴 질문으로 보고됐다. 키워드 뒤에 다른 말이 이어지는 제목("구현 계획 검토")은 여전히 아니다.
+const PLAN_HEADER = /^#{1,2}\s+.*(Implementation Plan|구현\s*계획)(?:\s*(?:\([^()\n]*\)|\[[^[\]\n]*\]|（[^（）\n]*）))?\s*$/m;
 const TASK_LINE = /^###\s+(?:Task|작업|태스크)\s+(\d+)\s*[:：]\s*(.+?)\s*$/gm;
 
 /** Splits the final transcript into design (before the plan header) and the plan, and indexes tasks. */

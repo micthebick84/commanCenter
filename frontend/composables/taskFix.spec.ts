@@ -15,13 +15,15 @@ import {
   fixRoundTitle,
   SYNC_BASE_CONFIRM,
   BASE_SYNC_ABORT_CONFIRM,
+  type FixView,
 } from './taskFix'
 
-const fix = (over: Partial<{ activeRound: number | null; activeMode: string | null; approvedRounds: number; maxRounds: number }> = {}) => ({
+const fix = (over: Partial<FixView> = {}): FixView => ({
   activeRound: null,
   activeMode: null,
   approvedRounds: 0,
   maxRounds: 3,
+  activeKind: null,
   ...over,
 })
 const task = (over: Record<string, unknown> = {}) => ({

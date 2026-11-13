@@ -151,7 +151,7 @@ class InterviewConfirmMockupFlowIntegrationTest {
                 .andExpect(jsonPath("$.status").value("INTERVIEW_REVIEW"));
     }
 
-    private static final String SUPPORTS_ALL = "refRepos,fixRounds,dbWrite,mockups";
+    private static final String SUPPORTS_ALL = "refRepos,fixRounds,dbWrite,mockups,baseSync";
 
     @Test
     void 확정한_목업이_next_task_응답에_html까지_실린다() throws Exception {

@@ -41,7 +41,7 @@ class WorkerMainLoopHeartbeatTest {
                 mock(PromptResultParser.class), mcps, mock(WorktreeService.class),
                 mock(GitOpsService.class), mock(DeployService.class), mock(ResultReporter.class),
                 mock(SilentLossTracker.class), mock(DesignResultHarvester.class), mock(TaskCloser.class),
-                new SuperpowersPlugin(""), probe);
+                new SuperpowersPlugin(""), probe, mock(BaseSyncMerger.class));
     }
 
     private static WorkerHeartbeatRequest sentHeartbeat(WorkerHttpClient http) {

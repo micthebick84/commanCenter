@@ -80,7 +80,7 @@ class WorkerMainLoopDesignMockupsTest {
         return new WorkerMainLoop(props, http, repos, claude, mock(PromptResultParser.class),
                 mock(WorkerMcpSupport.class), worktrees, mock(GitOpsService.class), mock(DeployService.class),
                 reporter, mock(SilentLossTracker.class), harvester, mock(TaskCloser.class),
-                new SuperpowersPlugin(""), mock(ClaudeAuthProbe.class));
+                new SuperpowersPlugin(""), mock(ClaudeAuthProbe.class), mock(BaseSyncMerger.class));
     }
 
     /** 디자인 claim — previous가 있으면 반려 재실행(이전 디자인·피드백 동봉). */

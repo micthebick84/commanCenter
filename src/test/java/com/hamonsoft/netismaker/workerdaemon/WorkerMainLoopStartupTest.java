@@ -38,7 +38,7 @@ class WorkerMainLoopStartupTest {
                 mock(PromptResultParser.class), mock(WorkerMcpSupport.class), mock(WorktreeService.class),
                 mock(GitOpsService.class), mock(DeployService.class), mock(ResultReporter.class),
                 tracker, mock(DesignResultHarvester.class), mock(TaskCloser.class),
-                new SuperpowersPlugin(""), mock(ClaudeAuthProbe.class));
+                new SuperpowersPlugin(""), mock(ClaudeAuthProbe.class), mock(BaseSyncMerger.class));
     }
 
     private static SilentLossTracker.PendingEntry pending(long taskId) {

@@ -63,7 +63,7 @@ import java.util.regex.Pattern;
 @Slf4j
 public class GitRepoCache {
 
-    private static final long GIT_TIMEOUT_SECONDS = 600;
+    static final long GIT_TIMEOUT_SECONDS = 600;
     /** 네트워크를 쓰지 않는 참조 git(origin 씻기·커밋 확인)의 상한. */
     private static final long LOCAL_GIT_TIMEOUT_SECONDS = 120;
     /** 락 파일 접미사: {localKey}.lock */
@@ -233,6 +233,52 @@ public class GitRepoCache {
                 throw new IOException("병합 커밋을 받지 못했습니다");
             }
             return dir;
+        });
+    }
+
+    /** 기준 브랜치 반영용 받기 결과 — 캐시 디렉터리와 기준 브랜치를 담은 참조 이름({@code refs/netis-refs/<기준>}). */
+    public record BaseSyncRepo(File dir, String baseRef) {}
+
+    /** 이력 {@link #REF_FALLBACK_DEPTHS} 끝 깊이까지 받아도 작업 브랜치와 기준 브랜치의 공통 조상이 없다. */
+    public static class NoCommonAncestorException extends IOException {
+        public NoCommonAncestorException() {
+            super("공통 조상을 찾지 못함(이력 " + REF_FALLBACK_DEPTHS.get(REF_FALLBACK_DEPTHS.size() - 1) + "커밋 초과)");
+        }
+    }
+
+    /**
+     * 기준 브랜치 반영용 받기(스펙 2026-11-13). 레포 락을 스스로 잡는다. 작업 브랜치는 {@code refs/remotes/origin/<head>},
+     * 기준 브랜치는 참조 전용 이름공간 {@code refs/netis-refs/<base>}로 한 번의 fetch에 함께 받고, 깊이를 50 → 500으로 늘려 가며
+     * 두 끝의 공통 조상({@code git merge-base})이 생길 때까지 받는다. 캐시 HEAD·다른 브랜치의 origin/*는 건드리지 않는다.
+     * 캐시가 없으면 작업 브랜치로 shallow clone한다. 받기 실패는 가린 메시지의 IOException, 끝까지 공통 조상이 없으면
+     * {@link NoCommonAncestorException}.
+     */
+    public BaseSyncRepo fetchForBaseSync(RepoRef ref, String headBranch, String baseBranch)
+            throws IOException, InterruptedException {
+        if (headBranch == null || headBranch.isBlank()) throw new IOException("작업 브랜치 정보가 없습니다");
+        if (baseBranch == null || baseBranch.isBlank()) throw new IOException("기준 브랜치 정보가 없습니다");
+        return withRepoLock(GitRemotes.localKey(ref), () -> {
+            Path target = Paths.get(props.reposDir(), GitRemotes.localKey(ref));
+            Files.createDirectories(target.getParent());
+            String authUrl = remotes.authenticatedUrl(ref);
+            if (!Files.exists(target.resolve(".git"))) {
+                requireRefGit(target.getParent().toFile(),
+                        refCloneArgs(authUrl, headBranch, target.getFileName().toString()), GIT_TIMEOUT_SECONDS);
+            }
+            requireRefGit(target.toFile(), refScrubArgs(ref), LOCAL_GIT_TIMEOUT_SECONDS);
+
+            File dir = target.toFile();
+            String baseRef = REF_NAMESPACE + baseBranch;
+            for (int depth : REF_FALLBACK_DEPTHS) {
+                requireRefGit(dir, refGit("fetch", "--no-tags", "--depth=" + depth, authUrl,
+                        "+refs/heads/" + headBranch + ":refs/remotes/origin/" + headBranch,
+                        "+refs/heads/" + baseBranch + ":" + baseRef), GIT_TIMEOUT_SECONDS);
+                if (runRefGit(dir, refGit("merge-base", "refs/remotes/origin/" + headBranch, baseRef),
+                        LOCAL_GIT_TIMEOUT_SECONDS).exitCode() == 0) {
+                    return new BaseSyncRepo(dir, baseRef);
+                }
+            }
+            throw new NoCommonAncestorException();
         });
     }
 

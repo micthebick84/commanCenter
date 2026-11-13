@@ -464,4 +464,42 @@ class GitOpsServicePushTest {
         // 새 끝을 기준으로 하면 그 뒤 커밋은 없다(수정 회차의 tip 기준)
         assertThat(ops.hasCommitsSince(clone.toFile(), head(clone))).isFalse();
     }
+
+    @Test
+    void pushHead는_원격_브랜치_끝을_HEAD로_올리고_그_sha를_돌려준다() throws Exception {
+        Path bare = bareRemote("r6");
+        Path clone = workingClone(bare, "work6", "netismaker/task-6");
+        git(clone.toFile(), "add", "-A");
+        git(clone.toFile(), "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-m", "병합 흉내");
+        RepoRef ref = new RepoRef("github", "acme/widgets", bare.toUri().toString());
+
+        String sha = new GitOpsService(props()).pushHead(clone.toFile(), ref, "netismaker/task-6");
+
+        assertThat(sha).hasSize(40).isEqualTo(head(clone));
+        assertThat(remoteSha(bare, "netismaker/task-6")).isEqualTo(sha);
+    }
+
+    @Test
+    void pushHead는_원격이_앞서_있으면_force_없이_IOException() throws Exception {
+        Path bare = bareRemote("r7");
+        Path clone = workingClone(bare, "work7", "netismaker/task-7");
+        git(clone.toFile(), "add", "-A");
+        git(clone.toFile(), "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-m", "내 커밋");
+        git(clone.toFile(), "push", "origin", "netismaker/task-7");
+        Path other = tmp.resolve("other7");
+        git(tmp.toFile(), "clone", "--branch", "netismaker/task-7", bare.toUri().toString(), other.toString());
+        Files.writeString(other.resolve("human.txt"), "사람");
+        git(other.toFile(), "add", "-A");
+        git(other.toFile(), "-c", "user.name=h", "-c", "user.email=h@h", "commit", "-m", "사람 커밋");
+        git(other.toFile(), "push", "origin", "netismaker/task-7");
+        String humanTip = remoteSha(bare, "netismaker/task-7");
+        Files.writeString(clone.resolve("more.txt"), "더");
+        git(clone.toFile(), "add", "-A");
+        git(clone.toFile(), "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-m", "뒤처진 커밋");
+        RepoRef ref = new RepoRef("github", "acme/widgets", bare.toUri().toString());
+
+        assertThatThrownBy(() -> new GitOpsService(props()).pushHead(clone.toFile(), ref, "netismaker/task-7"))
+                .isInstanceOf(IOException.class);
+        assertThat(remoteSha(bare, "netismaker/task-7")).isEqualTo(humanTip);
+    }
 }

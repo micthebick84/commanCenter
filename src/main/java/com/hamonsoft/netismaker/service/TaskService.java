@@ -792,7 +792,9 @@ public class TaskService {
                     + ")이 없어 구현을 재시도할 수 없습니다 — 수정 중단으로 회차를 닫으세요");
         }
         ImplementationMode before = FixRounds.modeOf(r);
-        ImplementationMode after = requested == null ? before : TaskFixService.parseFixMode(rawMode);
+        // 기준 브랜치 반영 회차는 늘 DIRECT — 화면이 보낸 방식(SDD 포함)은 보지 않는다(parseFixMode는 SDD에 400)
+        ImplementationMode after = FixRounds.isBaseSync(r) ? ImplementationMode.DIRECT
+                : requested == null ? before : TaskFixService.parseFixMode(rawMode);
 
         t.prepareFixRoundRequeue();
         t.setRestartRequeueCount(0);

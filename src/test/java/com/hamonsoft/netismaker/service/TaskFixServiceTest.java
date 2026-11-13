@@ -600,6 +600,51 @@ class TaskFixServiceTest {
     }
 
     @Test
+    void 반영회차_중단은_직전상태로_돌아간다() {
+        // 기준 브랜치 반영 회차 — 배포가 떠 있어도(컨테이너·주소 있음) 배포 중지가 아니라 요청 전 상태로 되돌린다. head_sha는 그대로.
+        Task t = task(IMPLEMENTATION_FAILED);
+        t.setFailureReason("충돌");
+        t.setHeadSha("aaa1111");
+        t.setDeployContainerId("c0ffee");
+        t.setDeployUrl("https://task-42-win.micthebick.dev");
+        TaskFixRequest r = TaskFixRequest.baseSync(42L, 1, "main", DEPLOYED, ADMIN);
+        ReflectionTestUtils.setField(r, "id", 77L);
+        t.setActiveFixRequestId(77L);
+        when(fixRepo.findById(77L)).thenReturn(Optional.of(r));
+
+        Task out = svc.abort(42L, ADMIN);
+
+        assertThat(out.getStatus()).isEqualTo(DEPLOYED);   // UNDEPLOY_PENDING·PR_CREATED 아님
+        assertThat(out.getHeadSha()).isEqualTo("aaa1111");
+        assertThat(out.getActiveFixRequestId()).isNull();
+        assertThat(out.getFailureReason()).isNull();
+        assertThat(out.getDeployContainerId()).isEqualTo("c0ffee");
+        assertThat(r.getOutcome()).isEqualTo(com.hamonsoft.netismaker.entity.FixOutcome.ABORTED);
+        assertThat(r.getClosedAt()).isNotNull();
+        verify(fixRepo).save(r);
+        TaskStatusHistory h = savedHistory();
+        assertThat(h.getFromStatus()).isEqualTo("구현실패");
+        assertThat(h.getToStatus()).isEqualTo("배포완료");
+        assertThat(h.getActorId()).isEqualTo(ADMIN);
+        assertThat(h.getReason()).isEqualTo("기준 브랜치 반영 1회차 중단 → 배포완료");
+    }
+
+    @Test
+    void 반영회차_중단은_배포중단됨_PR생성_직전상태도_그대로() {
+        for (TaskStatus from : new TaskStatus[]{DEPLOY_LOST, PR_CREATED}) {
+            setUp();
+            Task t = task(IMPLEMENTATION_FAILED);
+            TaskFixRequest r = TaskFixRequest.baseSync(42L, 2, "main", from, ADMIN);
+            ReflectionTestUtils.setField(r, "id", 77L);
+            t.setActiveFixRequestId(77L);
+            when(fixRepo.findById(77L)).thenReturn(Optional.of(r));
+
+            assertThat(svc.abort(42L, ADMIN).getStatus()).as(from.name()).isEqualTo(from);
+            assertThat(savedHistory().getReason()).isEqualTo("기준 브랜치 반영 2회차 중단 → " + from.dbValue());
+        }
+    }
+
+    @Test
     void 이전_배포가_떠_있으면_수정중단은_배포중지대기로() {
         // 회차가 닫히면 GC 보호가 풀리고 PR생성은 중지·보호 대상이 아니다 — 컨테이너·공개 주소가 추적 없이 남지 않게 배포 중지 길로 보낸다
         Task t = task(IMPLEMENTATION_FAILED);

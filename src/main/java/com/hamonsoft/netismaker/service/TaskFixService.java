@@ -167,6 +167,11 @@ public class TaskFixService {
         Long requestId = t.getActiveFixRequestId();
         TaskFixRequest r = FixRounds.closeActive(fixRepo, t, FixOutcome.ABORTED);
         t.setFailureReason(null);
+        if (FixRounds.isBaseSync(r)) {
+            // 기준 브랜치 반영 회차 — 새 배포를 만들려던 일이 아니라 요청 전 상태로 되돌린다(배포 중지·PR생성 분기 없음, head_sha 그대로)
+            TaskStatus back = FixRounds.baseSyncReturnStatus(r, t);
+            return move(t, back, adminId, FixRounds.label(r) + " 중단 → " + back.dbValue());
+        }
         boolean liveDeploy = hasDeployRuntime(t);
         String next = liveDeploy ? "배포 중지" : "PR생성";
         String reason = r != null

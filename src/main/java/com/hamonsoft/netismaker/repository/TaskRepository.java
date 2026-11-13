@@ -190,6 +190,8 @@ public interface TaskRepository extends JpaRepository<Task, Long> {
      *   <li>includeMockupWork=false(mockups를 모르는 워커): 인터뷰 목업을 고른(implementation_mockup_ids) 또는 제외 번호가 있는
      *       (implementation_mockup_excluded) 구현대기·디자인대기를 건너뛴다 — 구버전 jar는 목업 필드를 버리고 목업 없이 일한다
      *       (스펙 2026-11-03 §7). 디자인대기에도 걸리므로 :designPending이 따로 있다.</li>
+     *   <li>includeBaseSync=false(baseSync를 모르는 워커): 기준 브랜치 반영 회차(task_fix_request.kind=BASE_SYNC)가 열린 구현대기를 건너뛴다 —
+     *       구버전 jar는 kind를 버리고 빈 수정 요청으로 Claude를 돌린다(스펙 2026-11-13). FIX 회차는 includeFixRounds만 본다.</li>
      * </ul>
      * JPQL로 jsonb를 비교하지 못하므로 네이티브 쿼리다(findRecentlyDeployedWithEnv와 같은 CAST 비교).
      * 상태 값은 DB 저장 값(한글)이라 {@link #findClaimableAmongForUpdateSkipLocked}가 채운다.
@@ -205,6 +207,10 @@ public interface TaskRepository extends JpaRepository<Task, Long> {
                OR NOT (t.status IN (:approved, :designPending)
                        AND (t.implementation_mockup_ids <> CAST('[]' AS jsonb)
                             OR t.implementation_mockup_excluded <> CAST('[]' AS jsonb))))
+          AND (CAST(:includeBaseSync AS boolean)
+               OR NOT (t.status = :approved AND EXISTS (
+                   SELECT 1 FROM com.task_fix_request r
+                   WHERE r.id = t.active_fix_request_id AND r.kind = 'BASE_SYNC')))
         ORDER BY t.created_at ASC
         LIMIT 1
         FOR UPDATE SKIP LOCKED
@@ -214,7 +220,8 @@ public interface TaskRepository extends JpaRepository<Task, Long> {
                                   @Param("designPending") String designPending,
                                   @Param("includeRefImplementations") boolean includeRefImplementations,
                                   @Param("includeFixRounds") boolean includeFixRounds,
-                                  @Param("includeMockupWork") boolean includeMockupWork);
+                                  @Param("includeMockupWork") boolean includeMockupWork,
+                                  @Param("includeBaseSync") boolean includeBaseSync);
 
     /**
      * 위 네이티브 claim 1건 — 후보 상태는 {@link #CLAIMABLE_STATUSES} 중에서만 고른다(종류를 고르지 않은 워커는 그 전체를 넘긴다).
@@ -222,11 +229,11 @@ public interface TaskRepository extends JpaRepository<Task, Long> {
      */
     default List<Task> findClaimableAmongForUpdateSkipLocked(Collection<TaskStatus> statuses,
                                                              boolean supportsRefRepos, boolean supportsFixRounds,
-                                                             boolean supportsMockups) {
+                                                             boolean supportsMockups, boolean supportsBaseSync) {
         List<String> claimable = statuses.stream().filter(CLAIMABLE_STATUSES::contains).map(TaskStatus::dbValue).toList();
         if (claimable.isEmpty()) return List.of();
         return findClaimableAmong(claimable, TaskStatus.APPROVED.dbValue(), TaskStatus.DESIGN_PENDING.dbValue(),
-                supportsRefRepos, supportsFixRounds, supportsMockups);
+                supportsRefRepos, supportsFixRounds, supportsMockups, supportsBaseSync);
     }
 
     /** 호환 alias. 기존 호출처 단계적 마이그레이션 위함. */

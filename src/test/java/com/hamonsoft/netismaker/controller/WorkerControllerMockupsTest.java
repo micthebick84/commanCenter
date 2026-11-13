@@ -27,7 +27,6 @@ class WorkerControllerMockupsTest {
         controller.nextTask("w1", "refRepos,fixRounds,dbWrite,mockups", null);
 
         verify(workerService).claimNextTask("w1", new WorkerCapabilities(true, true, true, true), null);
-        verify(workerService).claimNextTask("w1", WorkerCapabilities.ALL, null);
     }
 
     @Test

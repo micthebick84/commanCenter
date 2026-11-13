@@ -12,24 +12,32 @@ package com.hamonsoft.netismaker.service;
  * @param mockups   인터뷰 목업 파일(interviewMockups)과 '전달되지 않은 목업'(excludedMockupNumbers)을 아는 워커 (스펙 2026-11-03 §7).
  *                  모르면 목업을 고른(또는 제외 번호가 있는) 구현대기·디자인대기를 받지 못한다 — 구버전 jar는 모르는 필드를 버리고
  *                  목업 없이 구현해 버리기 때문이다
+ * @param baseSync  기준 브랜치 반영 회차(kind=BASE_SYNC)가 열린 구현대기를 받을 수 있다 (스펙 2026-11-13) — 구버전 워커는
+ *                  회차의 kind를 버리고 빈 수정 요청으로 Claude를 돌려 버린다
  */
-public record WorkerCapabilities(boolean refRepos, boolean fixRounds, boolean dbWrite, boolean mockups) {
+public record WorkerCapabilities(boolean refRepos, boolean fixRounds, boolean dbWrite, boolean mockups,
+                                 boolean baseSync) {
 
     /** 모든 기능을 아는 워커 — 거르는 조건이 없는 전체 큐. */
-    public static final WorkerCapabilities ALL = new WorkerCapabilities(true, true, true, true);
+    public static final WorkerCapabilities ALL = new WorkerCapabilities(true, true, true, true, true);
 
-    /** mockups를 모르는 워커 — mockups가 생기기 전 호출 호환. */
-    public WorkerCapabilities(boolean refRepos, boolean fixRounds, boolean dbWrite) {
-        this(refRepos, fixRounds, dbWrite, false);
+    /** baseSync를 모르는 워커 — baseSync가 생기기 전 호출 호환. */
+    public WorkerCapabilities(boolean refRepos, boolean fixRounds, boolean dbWrite, boolean mockups) {
+        this(refRepos, fixRounds, dbWrite, mockups, false);
     }
 
-    /** dbWrite·mockups를 모르는 워커 — dbWrite가 생기기 전 호출 호환. */
+    /** mockups·baseSync를 모르는 워커 — mockups가 생기기 전 호출 호환. */
+    public WorkerCapabilities(boolean refRepos, boolean fixRounds, boolean dbWrite) {
+        this(refRepos, fixRounds, dbWrite, false, false);
+    }
+
+    /** dbWrite·mockups·baseSync를 모르는 워커 — dbWrite가 생기기 전 호출 호환. */
     public WorkerCapabilities(boolean refRepos, boolean fixRounds) {
-        this(refRepos, fixRounds, false, false);
+        this(refRepos, fixRounds, false, false, false);
     }
 
     /** 거르는 조건이 하나라도 걸리는지. false면 전체 큐(JPQL)를 그대로 쓴다. dbWrite는 보지 않는다. */
     boolean needsFilteredQueue() {
-        return !(refRepos && fixRounds && mockups);
+        return !(refRepos && fixRounds && mockups && baseSync);
     }
 }

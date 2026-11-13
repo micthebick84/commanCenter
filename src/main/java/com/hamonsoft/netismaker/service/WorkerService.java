@@ -247,12 +247,12 @@ public class WorkerService {
         if (kinds == null) {
             candidates = caps.needsFilteredQueue()
                     ? taskRepo.findClaimableAmongForUpdateSkipLocked(TaskRepository.CLAIMABLE_STATUSES,
-                            caps.refRepos(), caps.fixRounds(), caps.mockups())
+                            caps.refRepos(), caps.fixRounds(), caps.mockups(), caps.baseSync())
                     : taskRepo.findClaimableForUpdateSkipLocked(PageRequest.of(0, 1));
         } else {
             List<TaskStatus> statuses = kinds.stream().map(WorkerService::claimableStatusFor).toList();
             candidates = taskRepo.findClaimableAmongForUpdateSkipLocked(statuses, caps.refRepos(), caps.fixRounds(),
-                    caps.mockups());
+                    caps.mockups(), caps.baseSync());
         }
         // claim이 null이면(수정 회차 기록이 깨진 작업을 구현실패로 치웠다) 이번 poll은 빈 응답 — 큐 머리가 치워졌으니 다음 poll이 뒤를 잡는다
         return candidates.isEmpty() ? Optional.empty() : Optional.ofNullable(claim(candidates.get(0), workerId));

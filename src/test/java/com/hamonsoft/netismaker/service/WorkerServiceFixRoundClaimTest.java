@@ -253,14 +253,14 @@ class WorkerServiceFixRoundClaimTest {
         svc.claimNextTask("w1");
 
         verify(taskRepo, times(2)).findClaimableForUpdateSkipLocked(any(Pageable.class));
-        verify(taskRepo, never()).findClaimableAmongForUpdateSkipLocked(anyCollection(), anyBoolean(), anyBoolean(), anyBoolean());
+        verify(taskRepo, never()).findClaimableAmongForUpdateSkipLocked(anyCollection(), anyBoolean(), anyBoolean(), anyBoolean(), anyBoolean());
     }
 
     @Test
     void fixRounds를_모르는_워커는_회차를_거르는_큐를_쓴다() {
         svc.claimNextTask("w1", new WorkerCapabilities(true, false), null);
 
-        verify(taskRepo).findClaimableAmongForUpdateSkipLocked(TaskRepository.CLAIMABLE_STATUSES, true, false, false);
+        verify(taskRepo).findClaimableAmongForUpdateSkipLocked(TaskRepository.CLAIMABLE_STATUSES, true, false, false, false);
         verify(taskRepo, never()).findClaimableForUpdateSkipLocked(any(Pageable.class));
     }
 
@@ -269,8 +269,8 @@ class WorkerServiceFixRoundClaimTest {
         svc.claimNextTask("w1", new WorkerCapabilities(false, true), null);
         svc.claimNextTask("w1", new WorkerCapabilities(false, false), null);
 
-        verify(taskRepo).findClaimableAmongForUpdateSkipLocked(TaskRepository.CLAIMABLE_STATUSES, false, true, false);
-        verify(taskRepo).findClaimableAmongForUpdateSkipLocked(TaskRepository.CLAIMABLE_STATUSES, false, false, false);
+        verify(taskRepo).findClaimableAmongForUpdateSkipLocked(TaskRepository.CLAIMABLE_STATUSES, false, true, false, false);
+        verify(taskRepo).findClaimableAmongForUpdateSkipLocked(TaskRepository.CLAIMABLE_STATUSES, false, false, false, false);
         verify(taskRepo, never()).findClaimableForUpdateSkipLocked(any(Pageable.class));
     }
 
@@ -282,8 +282,8 @@ class WorkerServiceFixRoundClaimTest {
         svc.claimNextTask("remote-1", new WorkerCapabilities(true, true), kinds);
 
         List<TaskStatus> statuses = List.of(TaskStatus.APPROVED, TaskStatus.DESIGN_PENDING);
-        verify(taskRepo).findClaimableAmongForUpdateSkipLocked(statuses, true, false, false);
-        verify(taskRepo).findClaimableAmongForUpdateSkipLocked(statuses, true, true, false);
+        verify(taskRepo).findClaimableAmongForUpdateSkipLocked(statuses, true, false, false, false);
+        verify(taskRepo).findClaimableAmongForUpdateSkipLocked(statuses, true, true, false, false);
         verify(taskRepo, never()).findClaimableForUpdateSkipLocked(any(Pageable.class));
     }
 
@@ -293,8 +293,8 @@ class WorkerServiceFixRoundClaimTest {
         svc.claimNextTask("w1", false);
         svc.claimNextTask("remote-1", true, EnumSet.of(WorkerTaskResponse.Kind.CLOSE));
 
-        verify(taskRepo).findClaimableAmongForUpdateSkipLocked(TaskRepository.CLAIMABLE_STATUSES, true, false, false);
-        verify(taskRepo).findClaimableAmongForUpdateSkipLocked(TaskRepository.CLAIMABLE_STATUSES, false, false, false);
-        verify(taskRepo).findClaimableAmongForUpdateSkipLocked(List.of(TaskStatus.CLOSE_PENDING), true, false, false);
+        verify(taskRepo).findClaimableAmongForUpdateSkipLocked(TaskRepository.CLAIMABLE_STATUSES, true, false, false, false);
+        verify(taskRepo).findClaimableAmongForUpdateSkipLocked(TaskRepository.CLAIMABLE_STATUSES, false, false, false, false);
+        verify(taskRepo).findClaimableAmongForUpdateSkipLocked(List.of(TaskStatus.CLOSE_PENDING), true, false, false, false);
     }
 }

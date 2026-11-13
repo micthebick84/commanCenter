@@ -389,6 +389,26 @@ AND (CAST(:includeBaseSync AS boolean)
 
 `GitOpsServicePushTest`: `pushHead`가 원격 브랜치 끝을 HEAD로 올리고 그 sha를 돌려주며, 원격이 앞서 있으면 기존 push와 같은 예외.
 
+새 `workerdaemon/BaseSyncGitFlowTest`(실제 git, 목 없음 — 스펙 §11의 끝에서 끝 시험):
+
+```java
+@Test void 깊이1_캐시에서_받아_병합하고_이어서_push한다() {
+    // 원격(bare): main 3커밋 → task 분기, main과 task가 PLAN.md 1행을 각자 바꿈(+ 서로 다른 파일 하나씩)
+    // 캐시: --depth=1 clone
+    BaseSyncRepo r = cache.fetchForBaseSync(ref, "task", "main");
+    CreatedWorktree wt = worktrees.createOnBranch(r.dir(), repoKey, "task", 42L);
+    String oldTip = gitOps.headSha(wt.dir());
+    Started s = merger.start(wt.dir(), r.baseRef());
+    assertThat(s.conflicted()).containsExactly("PLAN.md");
+    Files.writeString(wt.dir().toPath().resolve("PLAN.md"), "main 내용\n\ntask 내용\n");   // 해결 흉내
+    assertThat(merger.unresolved(wt.dir(), s.conflicted())).isEmpty();
+    assertThat(merger.strayChanges(wt.dir(), s)).isEmpty();
+    merger.commitMerge(wt.dir(), s.conflicted(), "merge: 기준 브랜치 main 반영 — t");
+    String pushed = gitOps.pushHead(wt.dir(), ref, "task");
+    // 원격 task 끝 == pushed, 부모 2개(첫 부모 == oldTip, 둘째 == 원격 main 끝), main의 파일과 task의 파일이 둘 다 있음
+}
+```
+
 - [ ] **Step 2: 실패 확인** — `./gradlew test --tests 'com.hamonsoft.netismaker.workerdaemon.BaseSyncMergerTest'` → 컴파일 오류.
 
 - [ ] **Step 3: 구현** — 위 인터페이스·알고리즘대로. git 실행은 `ProcessRunner.run`/`requireSuccess`(시간 상한은 `GitRepoCache.GIT_TIMEOUT_SECONDS`와 같은 값), NUL 분리 출력은 `\0`로 나눈다.
@@ -489,7 +509,7 @@ AND (CAST(:includeBaseSync AS boolean)
 
 - [ ] **Step 2: 실패 확인** — `./gradlew test --tests 'com.hamonsoft.netismaker.workerdaemon.WorkerMainLoopBaseSyncTest' --tests 'com.hamonsoft.netismaker.workerdaemon.BaseSyncPromptsTest'` → 컴파일 오류.
 
-- [ ] **Step 3: 구현** — 분기: `if (fix != null)` 블록 안에서 `BaseSyncPrompts.isBaseSync(fix) ? syncBaseRound(task, fix, attempt, claudeLimit) : implementFixRound(…)`(`finally`의 참조 worktree 정리는 공통). `WorkerMainLoop` 클래스 javadoc의 회차 설명 아래에 반영 회차 한 단락. 생성자 인자가 늘어 깨지는 기존 시험 생성부(`WorkerMainLoopFixRoundTest` 등 `new WorkerMainLoop(`)를 고친다.
+- [ ] **Step 3: 구현** — 분기는 **참조 repo 준비(:276-316)보다 앞**에 둔다: `processImplementation`에서 `attempt`·구현 상한(`limit`)을 구한 직후 `BaseSyncPrompts.isBaseSync(fixOf(task))`면 `syncBaseRound(task, fix, attempt, limit)` 후 return — 반영 회차는 참조가 필요 없고, 참조 준비 실패(`참조 repo 준비 실패: …`)로 끝나거나 그 시간만큼 Claude 상한이 깎이면 안 된다. 시험 `참조repo가_있는_작업의_반영회차는_참조를_준비하지_않는다`(claim에 `refRepos` 1개 → `verify(repos, never()).prepareRefCommitUnderLock(…)`, `verify(worktrees, never()).createRefWorktree(…)`)를 `WorkerMainLoopBaseSyncTest`에 더한다. `FIX` 회차의 자리(:318-327)는 그대로. `WorkerMainLoop` 클래스 javadoc의 회차 설명 아래에 반영 회차 한 단락. 생성자 인자가 늘어 깨지는 기존 시험 생성부(`WorkerMainLoopFixRoundTest` 등 `new WorkerMainLoop(`)를 고친다.
 
 - [ ] **Step 4: 통과 확인** — Step 2 명령 + `--tests 'com.hamonsoft.netismaker.workerdaemon.WorkerMainLoopFixRoundTest' --tests 'com.hamonsoft.netismaker.workerdaemon.WorkerHttpClientNextTaskTest' --tests 'com.hamonsoft.netismaker.workerdaemon.FixRoundPromptsTest'` → PASS.
 
@@ -506,13 +526,26 @@ AND (CAST(:includeBaseSync AS boolean)
 **Interfaces:**
 - Produces(패키지 안 상수): `GitLabMrCloser.MERGEABILITY_POLL_ATTEMPTS = 10`, `MERGEABILITY_POLL_MILLIS = 2000`, `static final Set<String> COMPUTING = Set.of("checking", "unchecked", "preparing")`, `MergeRequestCloser.CONFLICT_REFUSED = "충돌: 기준 브랜치와 충돌합니다 — 작업 상세의 '기준 브랜치 반영'으로 해결하세요"`, `MergeRequestCloser.HEAD_MISMATCH_HINT = " — '종료 취소' 뒤 재배포(또는 '기준 브랜치 반영')로 새 커밋을 확인하고 다시 종료하세요"`, 거부 문구 `"병합 가능 여부 확인 중 — 잠시 뒤 재시도하세요"`.
 
-- [ ] **Step 1: `COMPUTING` 값 확인** — 사내 GitLab 버전을 `GET {GITLAB_BASE_URL}/api/v4/version`으로 읽고(토큰은 `PRIVATE-TOKEN` 헤더로만, 출력에 남기지 않는다) 그 버전의 Merge requests API 문서 "Merge status" 표에서 "아직 계산 중"을 뜻하는 `detailed_merge_status` 값을 확인해 `COMPUTING`을 확정한다. `checking`은 작업 42 실패 로그(2026-11-13 14:51:14 `병합 거부(checking) (HTTP 422)`)로 확인된 값이다. 문서와 다르면 문서를 따르고 커밋 메시지에 버전을 적는다.
+**Draft가 보통 경우다.** Symphony가 만드는 MR은 모두 Draft이고, Draft MR의 `detailed_merge_status`는 `draft_status`로 덮인다(작업 42의 MR !10: `detailed_merge_status=draft_status`, `merge_status=cannot_be_merged`, `has_conflicts=true`). 그래서 "계산 중" 판정은 Draft에서도 보이는 신호로 해야 한다.
+
+- [ ] **Step 1: GitLab 문서로 세 가지 확인** — 사내 GitLab 버전을 `GET {GITLAB_BASE_URL}/api/v4/version`으로 읽고(토큰은 `PRIVATE-TOKEN` 헤더로만, 출력에 남기지 않는다) 그 버전의 Merge requests API 문서에서:
+  1. `detailed_merge_status`의 "아직 계산 중" 값 → `COMPUTING` 확정(`checking`은 작업 42 실패 로그 2026-11-13 14:51:14 `병합 거부(checking) (HTTP 422)`로 확인됨).
+  2. 예전 칸 `merge_status`(`unchecked`·`checking`·`cannot_be_merged_recheck` 등)가 Draft MR에서도 계산 상태를 보여 주는지 → 그렇다면 **`merge_status`를 Draft 해제 전 대기 신호로 쓴다**(`LEGACY_COMPUTING` 상수). 아니라면 Draft 해제 뒤 대기(아래 Step 4의 둘째 길)가 주 경로가 된다.
+  3. 단건 MR GET이 재계산을 시작시키는지, 계산이 안 끝난 동안 `has_conflicts`를 믿을 수 있는지 → 못 믿는다면 계산이 끝난 뒤에만 `has_conflicts`를 본다(지금 계획의 순서).
+  
+  확인 결과와 GitLab 버전을 `GitLabMrCloser` 클래스 주석과 커밋 메시지에 적는다. 문서와 이 계획이 다르면 문서를 따른다.
 
 - [ ] **Step 2: 실패하는 시험 작성** (`GitLabMrCloserTest` — 기존 `route`·`mr(...)`·`sleeps` 헬퍼 사용)
 
 ```java
+@Test void Draft_MR이_계산중이면_기다렸다가_해제하고_병합한다() {          // 보통 경우 — 주 시험
+    // GET MR 큐: (draft, detailed=draft_status, merge_status=checking) ×2 → (draft, merge_status=can_be_merged)
+    // → PUT title(해제) → PUT merge 200 merged. sleeps == [2000, 2000]
+    // Step 1에서 merge_status를 못 쓴다고 확인되면: 해제 PUT 뒤의 GET 큐로 같은 내용을 단언한다
+}
+@Test void Draft_MR이_끝내_계산중이면_병합요청_없이_거부하고_제목은_Draft_그대로() { }
 @Test void 계산중이면_기다렸다가_병합한다() {
-    // GET MR 큐: checking, checking, mergeable → PUT merge 200 merged
+    // (Draft 아님) GET MR 큐: checking, checking, mergeable → PUT merge 200 merged
     assertThat(closer.merge(ref(), 10, SHA, "merge")).isEqualTo(MERGE_SHA);
     assertThat(sleeps).containsExactly(2000L, 2000L);
 }
@@ -542,7 +575,7 @@ AND (CAST(:includeBaseSync AS boolean)
 
 - [ ] **Step 3: 실패 확인** — `./gradlew test --tests 'com.hamonsoft.netismaker.workerdaemon.GitLabMrCloserTest'` → 새 시험 FAIL.
 
-- [ ] **Step 4: 구현** — `merge`에서 sha 검사 뒤 `mr = awaitMergeability(base, mr)`(`COMPUTING`인 동안 `sleeper.sleep(2000)` 후 재조회, 10회 뒤에도 계산 중이면 거부). draft였다면 해제 PUT 응답 본문으로 같은 대기를 한 번 더 하고, 그 뒤 계산 중이거나 `has_conflicts`면 **제목을 원복한 뒤** 거부(기존 `restoreTitle`의 실패 안내 덧붙임 규칙 그대로). target 브랜치 없음 판정은 지금 자리 그대로. GitHub: 충돌 문구를 `CONFLICT_REFUSED`로, head 불일치 두 곳(GitLab :85·GitHub :80)에 `HEAD_MISMATCH_HINT`. `TODOS.md`에 한 줄: `GitHubPrCloser — mergeStateStatus UNKNOWN(계산 중) 대기 없음, GitLab은 2026-11-13에 추가`.
+- [ ] **Step 4: 구현** — `merge`에서 sha 검사 뒤 `mr = awaitMergeability(base, mr)`(계산 중 = `detailed_merge_status ∈ COMPUTING` 또는 — Step 1에서 쓸 수 있다고 확인됐으면 — `merge_status ∈ LEGACY_COMPUTING`; 계산 중인 동안 `sleeper.sleep(2000)` 후 재조회, 10회 뒤에도 계산 중이면 거부). 둘째 길: draft였다면 해제 PUT 응답 본문으로 같은 대기를 한 번 더 하고, 그 뒤 계산 중이거나 `has_conflicts`면 **제목을 원복한 뒤** 거부(기존 `restoreTitle`의 실패 안내 덧붙임 규칙 그대로). target 브랜치 없음 판정은 지금 자리 그대로. GitHub: 충돌 문구를 `CONFLICT_REFUSED`로, head 불일치 두 곳(GitLab :85·GitHub :80)에 `HEAD_MISMATCH_HINT`. `TODOS.md`에 한 줄: `GitHubPrCloser — mergeStateStatus UNKNOWN(계산 중) 대기 없음, GitLab은 2026-11-13에 추가`.
 
 - [ ] **Step 5: 통과 확인** — Step 3 명령 + `--tests 'com.hamonsoft.netismaker.workerdaemon.GitHubPrCloserTest'` → PASS(옛 문구를 단언하던 기존 시험은 새 문구로 고친다).
 
@@ -591,6 +624,7 @@ it('비관리자에게는 버튼이 없다', …)
 
 - [ ] **Step 3: 구현**
   - `[id].vue`: `canSyncBaseNow = computed(() => !!task.value && canSyncBase(task.value, auth.isAdmin))`, `syncBase()`(= `confirmDialog($q, …)` 뒤 `closeAction('close/sync-base', '기준 브랜치 반영을 시작했습니다')`), `CLOSE_ACTION_NAMES`에 `'close/sync-base': '기준 브랜치 반영'`. 데스크톱 버튼은 종료 취소 버튼(:860) 옆 `data-test="close-sync-base"` 라벨 `기준 브랜치 반영`, 모바일 `bar-more` 메뉴 항목 `data-test="bar-more-close-sync-base"`(종료 취소 항목 위). `fixBannerText`·`abortFix`·중단 버튼 라벨·메뉴 라벨은 `isBaseSyncRound(task)`로 가른다. `ImplementationRetryDialog`에 `:fix-kind="task.fix?.activeKind ?? null"`.
+  - `composables/taskStages.ts`: `nextAction`의 인자 타입에 `fix?: { activeRound: number | null; activeKind?: string | null } | null`을 더하고, 열린 `BASE_SYNC` 회차(`activeRound != null && activeKind === 'BASE_SYNC'`)의 `APPROVED`·`IMPLEMENTING`이면 `{ text: '기준 브랜치 반영 중 — 끝나면 자동으로 다시 배포됩니다' }`(버튼 없음)를 돌려준다. `CLOSE_FAILED` 관리자 문구 끝에 ` 충돌이면 '기준 브랜치 반영'을 쓰세요`를 붙인다. `taskStages.spec.ts`에 두 경우의 시험. 상태 칩 색·문구(`구현대기`·`구현중`)는 바꾸지 않는다.
   - `FixRequestHistory.vue`: 행 제목을 `fixRoundTitle(r)`로, 결과 칩을 `fixOutcomeLabel(r.outcome, r.kind)`로, `OUTCOME_COLOR`에 `NO_CHANGE: '#616161'`, `SYNCED: '#2e7d32'`, `BASE_SYNC` 행은 방식 칩 숨김.
   - `ImplementationRetryDialog.vue`: prop `fixKind?: FixKind | null`, `BASE_SYNC`면 방식 선택 숨김·바디에서 `implementationMode` 생략.
   - `hydration-smoke.mjs`: fix 목에 `activeKind: null`, fix-requests 목 행에 `kind: 'FIX'`.

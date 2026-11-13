@@ -13,6 +13,12 @@ import java.util.List;
  */
 public interface MergeRequestCloser {
 
+    /** 충돌 거부 문구 — 충돌을 직접 풀면 브랜치 끝이 바뀌어 재시도가 head 불일치가 되므로 '기준 브랜치 반영'으로 안내한다. */
+    String CONFLICT_REFUSED = "충돌: 기준 브랜치와 충돌합니다 — 작업 상세의 '기준 브랜치 반영'으로 해결하세요";
+
+    /** head 불일치 거부 문구 뒤에 붙는 다음 행동 안내. */
+    String HEAD_MISMATCH_HINT = " — '종료 취소' 뒤 재배포(또는 '기준 브랜치 반영')로 새 커밋을 확인하고 다시 종료하세요";
+
     boolean supports(RepoRef ref);
 
     /** @return 병합 커밋 SHA(호스트가 알려주지 않으면 null). 이미 병합된 PR이면 그 커밋. */

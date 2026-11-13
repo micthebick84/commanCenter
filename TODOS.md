@@ -99,6 +99,8 @@
 
 **우선순위**: 낮음.
 
+- `GitHubPrCloser` — `mergeStateStatus` UNKNOWN(계산 중) 대기 없음, GitLab은 2026-11-13에 추가
+
 ## 완료
 
 ### [x] UI 잔손질 묶음 (2026-10-24, `fix/ui-polish`)

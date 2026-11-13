@@ -557,6 +557,128 @@ class WorkerServiceFixRoundResultTest {
         verifyNoInteractions(fixRepo);
     }
 
+    // ── 기준 브랜치 반영 회차 ─────────────────────────────
+
+    /** 기준 브랜치 반영 회차 #7 (1회차, 직전 상태 from)을 열어 둔 작업 — head_sha는 aaa1111. */
+    private Task baseSyncTask(TaskStatus from) {
+        Task t = t(IMPLEMENTING);
+        t.setHeadSha("aaa1111");
+        t.setActiveFixRequestId(7L);
+        t.setDeployUrl("https://task-42-win.micthebick.dev");
+        t.setDeployedAt(java.time.OffsetDateTime.now());
+        syncRound = TaskFixRequest.baseSync(42L, 1, "main", from, "admin");
+        ReflectionTestUtils.setField(syncRound, "id", 7L);
+        when(fixRepo.findById(7L)).thenReturn(Optional.of(syncRound));
+        return t;
+    }
+
+    private TaskFixRequest syncRound;
+
+    private static WorkerResultRequest syncReport(WorkerResultRequest r) {
+        return r.withImplementationAttempt(1).withFixAttempt(1).withFixRequestId(7L);
+    }
+
+    @Test
+    void 반영_성공_새_커밋이면_head갱신_자동재배포() {
+        Task t = baseSyncTask(DEPLOYED);
+
+        svc.recordResult(42L, syncReport(success(BRANCH, "bbb2222")));
+
+        assertThat(t.getStatus()).isEqualTo(DEPLOY_PENDING);
+        assertThat(t.getHeadSha()).isEqualTo("bbb2222");
+        assertThat(t.getActiveFixRequestId()).isEqualTo(7L);   // 닫는 것은 배포 보고
+        assertThat(syncRound.getOutcome()).isNull();
+        List<TaskStatusHistory> rows = histories();
+        assertThat(rows.get(rows.size() - 1).getReason()).isEqualTo("기준 브랜치 반영 1회차 구현 완료 → 자동 재배포");
+    }
+
+    @Test
+    void 반영할_것이_없으면_직전상태로_회차는_NO_CHANGE() {
+        Task t = baseSyncTask(DEPLOYED);
+
+        svc.recordResult(42L, syncReport(success(BRANCH, "AAA1111")));
+
+        assertThat(t.getStatus()).isEqualTo(DEPLOYED);
+        assertThat(t.getHeadSha()).isEqualTo("aaa1111");
+        assertThat(t.getActiveFixRequestId()).isNull();
+        assertThat(syncRound.getOutcome()).isEqualTo(FixOutcome.NO_CHANGE);
+        assertThat(syncRound.getClosedAt()).isNotNull();
+        assertThat(t.getWorkerId()).isNull();
+        assertThat(t.getClaimedAt()).isNull();
+        assertThat(t.getFailureReason()).isNull();
+        assertThat(t.getImplementationLog()).isEqualTo("fix log");
+        verify(fixRepo).save(syncRound);
+        verify(stageUsageRepo).accumulate(eq(42L), eq(TaskStageUsage.STAGE_IMPLEMENTATION), any(),
+                anyLong(), anyLong(), anyLong(), anyLong());
+        List<TaskStatusHistory> rows = histories();
+        assertThat(rows).hasSize(1);
+        assertThat(rows.get(0).getFromStatus()).isEqualTo("구현중");
+        assertThat(rows.get(0).getToStatus()).isEqualTo("배포완료");
+        assertThat(rows.get(0).getReason()).isEqualTo("기준 브랜치가 이미 반영돼 있음 → 배포완료 (기준 브랜치 반영 1회차 닫힘)");
+    }
+
+    @Test
+    void 배포한_적_없는_DB작업은_재배포_없이_PR생성_회차는_SYNCED() {
+        Task t = baseSyncTask(PR_CREATED);
+        t.setTaskType(com.hamonsoft.netismaker.entity.TaskType.DB_WORK);
+        t.setDeployUrl(null);
+        t.setDeployedAt(null);
+
+        svc.recordResult(42L, syncReport(success(BRANCH, "bbb2222")));
+
+        assertThat(t.getStatus()).isEqualTo(PR_CREATED);
+        assertThat(t.getHeadSha()).isEqualTo("bbb2222");
+        assertThat(t.getActiveFixRequestId()).isNull();
+        assertThat(syncRound.getOutcome()).isEqualTo(FixOutcome.SYNCED);
+        assertThat(t.getWorkerId()).isNull();
+        assertThat(t.getClaimedAt()).isNull();
+        List<TaskStatusHistory> rows = histories();
+        assertThat(rows).hasSize(1);
+        assertThat(rows.get(0).getToStatus()).isEqualTo("PR생성");
+        assertThat(rows.get(0).getReason()).isEqualTo("기준 브랜치 반영 1회차 완료: bbb2222 → PR생성 (기준 브랜치 반영 1회차 닫힘)");
+    }
+
+    @Test
+    void 반영_실패는_head_sha를_바꾸지_않는다() {
+        Task t = baseSyncTask(DEPLOYED);
+
+        svc.recordResult(42L, syncReport(new WorkerResultRequest("w1", TaskStatus.IMPLEMENTATION_FAILED,
+                null, null, null, null, "기준 브랜치 반영 1회차: 충돌 해결 실패 — a.java",
+                null, null, BRANCH, "ccc3333", "fail log",
+                null, null, null, null, null,
+                null, null, null, null, USAGE)));
+
+        assertThat(t.getStatus()).isEqualTo(IMPLEMENTATION_FAILED);
+        assertThat(t.getHeadSha()).isEqualTo("aaa1111");
+        assertThat(t.getActiveFixRequestId()).isEqualTo(7L);
+        assertThat(t.getFailureReason()).startsWith("기준 브랜치 반영 1회차: 충돌 해결 실패");
+    }
+
+    @Test
+    void 닫힌_반영회차의_늦은_보고는_무시() {
+        Task t = baseSyncTask(DEPLOYED);
+        t.setStatus(DEPLOYED);
+        t.setActiveFixRequestId(null);
+        syncRound.setOutcome(FixOutcome.NO_CHANGE);
+
+        svc.recordResult(42L, syncReport(success(BRANCH, "bbb2222")));
+
+        assertThat(t.getStatus()).isEqualTo(DEPLOYED);
+        assertThat(t.getHeadSha()).isEqualTo("aaa1111");
+        assertThat(histories().get(0).getReason()).startsWith("닫힌 수정 회차(요청 #7)의 늦은 보고 무시");
+    }
+
+    @Test
+    void FIX회차_실패는_지금처럼_head_sha를_브랜치_끝으로() {
+        Task t = t(IMPLEMENTING);
+        request(2, 1);
+
+        svc.recordResult(42L, failure("wip7777").withImplementationAttempt(1).withFixAttempt(1).withFixRequestId(502L));
+
+        assertThat(t.getStatus()).isEqualTo(IMPLEMENTATION_FAILED);
+        assertThat(t.getHeadSha()).isEqualTo("wip7777");
+    }
+
     // ── 자동 재배포 결과 = 회차 닫기 ─────────────────────
 
     private static WorkerResultRequest deployed() {

@@ -2,7 +2,7 @@
 // 수정 요청 기록 카드 (스펙 2026-11-03 §6·§8) — GET /api/tasks/{id}/fix-requests(최신순). 요청이 하나도 없으면 카드 자체를 그리지 않는다.
 // 목록은 로컬 ref에 보관 — 5초 폴링이 task를 갈아끼워도 펼침 상태가 유지되고, 다시 읽을 때만 refreshKey를 올린다.
 import { CHIP } from '~/composables/taskStages'
-import { fixOutcomeLabel, fixRequestStatusLabel, type FixRequestView } from '~/composables/taskFix'
+import { fixOutcomeLabel, fixRequestStatusLabel, fixRoundTitle, type FixRequestView } from '~/composables/taskFix'
 import { implementationModeLabel } from '~/composables/implementationMode'
 import { formatKoDateTime } from '~/components/tasks/TaskHistoryTimeline.vue'
 
@@ -36,9 +36,13 @@ const OUTCOME_COLOR: Record<string, string> = {
   DEPLOYED: CHIP.DEPLOYED?.[1] ?? '#00695c',
   DEPLOY_FAILED: CHIP.DEPLOY_FAILED?.[1] ?? '#ad1457',
   ABORTED: '#616161',
+  NO_CHANGE: '#616161',
+  SYNCED: '#2e7d32',
 }
 
 function modeText(r: FixRequestView): string | null {
+  // 기준 브랜치 반영은 방식(DIRECT 고정)을 고르는 일이 아니라 칩을 숨긴다
+  if (r.kind === 'BASE_SYNC') return null
   return r.implementationMode ? implementationModeLabel(r.implementationMode) : null
 }
 </script>
@@ -55,16 +59,16 @@ function modeText(r: FixRequestView): string | null {
       <q-separator v-if="i > 0" />
       <q-card-section>
         <div class="row items-center" style="gap: 6px">
-          <span v-if="r.round != null" class="text-subtitle2 text-weight-bold">{{ r.round }}회차</span>
+          <span v-if="r.round != null" class="text-subtitle2 text-weight-bold">{{ fixRoundTitle(r) }}</span>
           <q-chip dense size="sm" square :color="STATUS_COLOR[r.status] ?? 'grey-7'" :text-color="STATUS_COLOR[r.status] === 'warning' ? 'dark' : 'white'" :label="fixRequestStatusLabel(r.status)" />
           <q-chip v-if="modeText(r)" dense size="sm" outline icon="account_tree" :label="modeText(r) ?? undefined" />
           <q-chip
-            v-if="fixOutcomeLabel(r.outcome)"
+            v-if="fixOutcomeLabel(r.outcome, r.kind)"
             dense
             size="sm"
             outline
             :style="{ color: OUTCOME_COLOR[r.outcome ?? ''] ?? '#616161' }"
-            :label="fixOutcomeLabel(r.outcome) ?? undefined"
+            :label="fixOutcomeLabel(r.outcome, r.kind) ?? undefined"
           />
           <span v-if="r.attempt >= 2" class="text-caption text-grey-7">{{ r.attempt }}회째 시도</span>
           <q-space />

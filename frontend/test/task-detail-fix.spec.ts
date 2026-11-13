@@ -6,6 +6,7 @@ import TaskDetail from '../pages/tasks/[id].vue'
 import { authStub, useApiMock } from './mocks/nuxt'
 import { baseTask } from './fixtures/task'
 import { setViewportWidth } from './mocks/screen'
+import { BASE_SYNC_ABORT_CONFIRM } from '../composables/taskFix'
 
 // 배포 뒤 수정 요청 화면 (스펙 2026-11-03 §6·§7) — 요청·승인·반려·철회·중단·이력. 하네스는 task-detail-close.spec.ts와 같다.
 ;(globalThis as any).useRoute = () => ({ params: { id: '42' } })
@@ -411,6 +412,97 @@ describe('pages/tasks/[id] — 수정 요청 (스펙 2026-11-03 §6)', () => {
       setMe('alice')
       w = await mountWith(roundFailed)
       expect(w.find('[data-test="fix-abort"]').exists()).toBe(false)
+      w.unmount()
+    })
+  })
+
+  describe('기준 브랜치 반영 회차 (BASE_SYNC)', () => {
+    const syncRound = { activeRound: 1, activeMode: 'DIRECT', activeKind: 'BASE_SYNC', approvedRounds: 0, maxRounds: 3 }
+    const syncRunning = {
+      ...baseTask, status: 'IMPLEMENTING', statusLabel: '구현중', requesterId: 'alice', deployment, fix: syncRound,
+    }
+    const syncFailed = {
+      ...baseTask, status: 'IMPLEMENTATION_FAILED', statusLabel: '구현실패', requesterId: 'alice', deployment,
+      failureReason: '병합 충돌 해결 실패', fix: syncRound,
+    }
+
+    it('열린 회차의 배너는 "기준 브랜치 반영 1회차 진행 중 — 끝나면 자동으로 다시 배포됩니다"다', async () => {
+      authStub.isAdmin = true
+      setMe('admin')
+      const w = await mountWith(syncRunning)
+      expect(w.find('[data-test="fix-round-banner"]').text()).toContain('기준 브랜치 반영 1회차 진행 중 — 끝나면 자동으로 다시 배포됩니다')
+      expect(w.find('[data-test="fix-round-banner"]').text()).not.toContain('수정 1회차')
+      w.unmount()
+    })
+
+    it('구현실패에서 중단 버튼 라벨은 "반영 중단"이고 확인 문구는 BASE_SYNC_ABORT_CONFIRM이다', async () => {
+      authStub.isAdmin = true
+      setMe('admin')
+      const w = await mountWith(syncFailed)
+      const btn = w.find('[data-test="fix-abort"]')
+      expect(btn.text()).toContain('반영 중단')
+      expect(btn.text()).not.toContain('수정 중단')
+      await btn.trigger('click')
+      await flushPromises()
+      expect(body().textContent).toContain(BASE_SYNC_ABORT_CONFIRM)
+      expect(body().textContent).not.toContain('수정 회차를 닫고')
+      useApiMock.mockClear()
+      stubApi(syncFailed)
+      await click('[data-test="confirm-dialog-ok"]')
+      expect(useApiMock).toHaveBeenCalledWith('/api/tasks/42/fix-requests/abort', { method: 'POST', body: undefined })
+      w.unmount()
+    })
+
+    it('FIX 회차의 중단 버튼은 그대로 "수정 중단"이다', async () => {
+      authStub.isAdmin = true
+      setMe('admin')
+      const w = await mountWith(roundFailed)
+      expect(w.find('[data-test="fix-abort"]').text()).toContain('수정 중단')
+      w.unmount()
+    })
+
+    it('이력 카드: BASE_SYNC 행은 "기준 브랜치 반영 1회차"·"변경 없음"이고 방식 칩이 없다 (FIX 행은 그대로)', async () => {
+      setMe('alice')
+      const history = [
+        {
+          id: 21, kind: 'BASE_SYNC', round: 1, status: 'APPROVED', implementationMode: 'DIRECT', body: '기준 브랜치 main 반영',
+          requestedBy: 'admin', requestedAt: '2026-11-13T01:00:00Z', decidedBy: 'admin', decidedAt: '2026-11-13T01:00:00Z',
+          decisionReason: null, attempt: 1, outcome: 'NO_CHANGE', closedAt: '2026-11-13T01:10:00Z',
+        },
+        {
+          id: 20, kind: 'FIX', round: 1, status: 'APPROVED', implementationMode: 'DIRECT', body: '고칠 내용',
+          requestedBy: 'alice', requestedAt: '2026-11-12T01:00:00Z', decidedBy: 'admin', decidedAt: '2026-11-12T01:10:00Z',
+          decisionReason: null, attempt: 1, outcome: 'DEPLOYED', closedAt: '2026-11-12T02:00:00Z',
+        },
+      ]
+      const w = await mountWith(deployed, history)
+      const items = w.find('[data-test="fix-history"]').findAll('[data-test="fix-history-item"]')
+      expect(items).toHaveLength(2)
+      expect(items[0]!.text()).toContain('기준 브랜치 반영 1회차')
+      expect(items[0]!.text()).toContain('변경 없음')
+      expect(items[0]!.text()).toContain('기준 브랜치 main 반영')
+      expect(items[0]!.text()).not.toContain('직접')
+      expect(items[1]!.text()).not.toContain('기준 브랜치 반영')
+      expect(items[1]!.text()).toContain('직접')
+      expect(items[1]!.text()).toContain('재배포 완료')
+      w.unmount()
+    })
+
+    it('구현 재시도 창: 제목·안내가 BASE_SYNC 문구이고 방식 선택이 없으며 바디에 implementationMode가 없다', async () => {
+      authStub.isAdmin = true
+      setMe('admin')
+      const w = await mountWith(syncFailed)
+      await w.find('[data-test="next-action-primary"]').trigger('click')
+      await flushPromises()
+      const dialog = body().querySelector('[data-test="impl-retry-dialog"]')!
+      expect(dialog.textContent).toContain('기준 브랜치 반영 1회차 재시도')
+      expect(dialog.textContent).toContain('기준 브랜치 반영을 다시 시도합니다 (같은 브랜치)')
+      expect(dialog.querySelector('[data-test="impl-mode-REVIEW"]')).toBeNull()
+      expect(dialog.querySelector('[data-test="impl-mode-DIRECT"]')).toBeNull()
+      useApiMock.mockClear()
+      stubApi(syncFailed)
+      await click('[data-test="impl-retry-submit"]')
+      expect(useApiMock).toHaveBeenCalledWith('/api/tasks/42/implementation/retry', { method: 'POST', body: {} })
       w.unmount()
     })
   })

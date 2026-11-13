@@ -1,13 +1,18 @@
 // 배포 뒤 수정 요청 (스펙 2026-11-03 §6·§7) — 화면 판정·타입·문구·새 작업 미리 채우기. 순수 함수만 둔다(화면 상태 없음).
 import type { ImplementationMode } from './implementationMode'
 
+/** 회차 종류 — FIX 수정 요청 / BASE_SYNC 기준 브랜치 반영(종료실패에서 관리자가 연다). */
+export type FixKind = 'FIX' | 'BASE_SYNC'
+
 /** `GET /api/tasks/{id}`의 `fix` — 목록·구 API 응답에는 없다(null/undefined). */
 export interface FixView {
   /** 열린 수정 회차 번호. 열린 회차가 없으면 null. */
   activeRound: number | null
   /** 열린 회차의 구현 방식(DIRECT|REVIEW). 회차가 없으면 null. */
   activeMode: string | null
-  /** 승인된 수정 요청 수 — 반려·철회는 세지 않는다. */
+  /** 열린 회차의 종류. 회차가 없으면 null (구 API 응답에는 없다). */
+  activeKind: FixKind | null
+  /** 승인된 수정 요청 수 — 반려·철회·기준 브랜치 반영은 세지 않는다. */
   approvedRounds: number
   /** 작업당 승인 한도(`app.task.fix-request-max-rounds`). */
   maxRounds: number
@@ -16,6 +21,8 @@ export interface FixView {
 /** `GET /api/tasks/{id}/fix-requests` 한 건 (서버 `FixRequestView`). */
 export interface FixRequestView {
   id: number
+  /** FIX 수정 요청 | BASE_SYNC 기준 브랜치 반영 */
+  kind: FixKind
   /** 승인 때 확정된다 — 승인 전·반려·철회는 null. */
   round: number | null
   status: 'PENDING' | 'APPROVED' | 'REJECTED' | 'WITHDRAWN' | string
@@ -29,7 +36,7 @@ export interface FixRequestView {
   decisionReason: string | null
   attempt: number
   /** 회차가 끝난 결과 — 열려 있는 동안 null. */
-  outcome: 'DEPLOYED' | 'DEPLOY_FAILED' | 'ABORTED' | string | null
+  outcome: 'DEPLOYED' | 'DEPLOY_FAILED' | 'ABORTED' | 'NO_CHANGE' | 'SYNCED' | string | null
   closedAt: string | null
 }
 
@@ -149,7 +156,44 @@ const OUTCOME_LABEL: Record<string, string> = {
   ABORTED: '수정 중단',
 }
 
-/** 회차가 끝난 결과 라벨 — 열려 있으면(null) null. */
-export function fixOutcomeLabel(outcome: string | null | undefined): string | null {
-  return outcome ? (OUTCOME_LABEL[outcome] ?? outcome) : null
+const BASE_SYNC_OUTCOME_LABEL: Record<string, string> = {
+  DEPLOYED: '재배포됨',
+  DEPLOY_FAILED: '배포 실패',
+  NO_CHANGE: '변경 없음',
+  SYNCED: '반영됨',
+  ABORTED: '중단',
 }
+
+/** 회차가 끝난 결과 라벨 — 열려 있으면(null) null. 기준 브랜치 반영(BASE_SYNC)은 자기 문구를 쓴다. */
+export function fixOutcomeLabel(outcome: string | null | undefined, kind?: FixKind | null): string | null {
+  if (!outcome) return null
+  const table = kind === 'BASE_SYNC' ? BASE_SYNC_OUTCOME_LABEL : OUTCOME_LABEL
+  return table[outcome] ?? outcome
+}
+
+/** 기준 브랜치 반영을 열 수 있는가 — 관리자가, 병합 전(MERGED 없음) 종료실패에서, 열린 회차가 없을 때. 마지막 판단은 서버(409). */
+export function canSyncBase(
+  task: { status: string; close?: { progress?: string[] | null } | null; fix?: FixView | null },
+  isAdmin: boolean,
+): boolean {
+  if (!isAdmin || task.status !== 'CLOSE_FAILED') return false
+  if (task.close?.progress?.includes('MERGED')) return false
+  return task.fix?.activeRound == null
+}
+
+/** 지금 열린 회차가 기준 브랜치 반영인가. */
+export function isBaseSyncRound(task: { fix?: FixView | null }): boolean {
+  return task.fix?.activeRound != null && task.fix.activeKind === 'BASE_SYNC'
+}
+
+/** 이력 행 제목 — 기준 브랜치 반영은 `기준 브랜치 반영 N회차`, 그 밖은 `N회차`. */
+export function fixRoundTitle(r: { kind?: FixKind | null; round: number | null }): string {
+  return r.kind === 'BASE_SYNC' ? `기준 브랜치 반영 ${r.round}회차` : `${r.round}회차`
+}
+
+/** 기준 브랜치 반영 확인 문구 — `base`는 작업의 기준 브랜치. */
+export function SYNC_BASE_CONFIRM(base: string): string {
+  return `종료를 취소하고 작업 브랜치에 기준 브랜치(${base})를 반영합니다. 충돌이 있으면 Claude가 해결하고, 끝나면 자동으로 다시 배포됩니다. 배포 결과를 확인한 뒤 종료를 다시 요청해야 합니다.`
+}
+
+export const BASE_SYNC_ABORT_CONFIRM = '기준 브랜치 반영을 중단하고 종료 요청 전 상태로 되돌립니다. 작업 브랜치는 바뀌지 않습니다.'

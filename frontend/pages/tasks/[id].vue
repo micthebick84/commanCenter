@@ -24,7 +24,18 @@ import { stageSteps, nextAction, ageOf, isDbWorkPrCreated, DB_WORK_CLOSE_REQUEST
 import { renderMarkdown } from '~/composables/useMarkdown'
 import { mrNoun, mrRef } from '~/composables/mergeRequestLabel'
 import { elapsedLabel, implementationModeLabel, implementationModeText } from '~/composables/implementationMode'
-import { canAbortFix, canFollowUp, canRequestFix, fixLimitReached, followUpPath, type FixView } from '~/composables/taskFix'
+import {
+  BASE_SYNC_ABORT_CONFIRM,
+  SYNC_BASE_CONFIRM,
+  canAbortFix,
+  canFollowUp,
+  canRequestFix,
+  canSyncBase,
+  fixLimitReached,
+  followUpPath,
+  isBaseSyncRound,
+  type FixView,
+} from '~/composables/taskFix'
 import { useNowTick } from '~/composables/useNowTick'
 import { taskTypeLabel } from '~/composables/taskType'
 import { SIMPLE_INTERVIEW_LABEL } from '~/composables/interviewMode'
@@ -398,6 +409,7 @@ const CLOSE_ACTION_NAMES: Record<string, string> = {
   'close/approve': '종료 승인',
   'close/retry': '종료 재시도',
   'close/cancel': '종료 취소',
+  'close/sync-base': '기준 브랜치 반영',
   'close/reject': '종료 반려',
   'close/skip-patch': '패치 없이 마무리',
   'close/skip-artifact': '산출물 없이 마무리',
@@ -462,6 +474,15 @@ const canCancelClose = computed(
 async function cancelClose() {
   if (!(await confirmDialog($q, '병합 전 단계에서 실패한 종료를 취소하고 배포 상태로 되돌립니다.', { title: '종료 취소', ok: '종료 취소', cancel: '돌아가기' }))) return
   await closeAction('close/cancel', '종료 취소')
+}
+
+// 기준 브랜치 반영 — 병합 전 종료실패에서 관리자가 연다(충돌 등). 종료를 취소하고 작업 브랜치에 기준 브랜치를 합친 뒤 자동 재배포한다.
+const canSyncBaseNow = computed(() => !!task.value && canSyncBase(task.value, auth.isAdmin))
+
+async function syncBase() {
+  if (!task.value) return
+  if (!(await confirmDialog($q, SYNC_BASE_CONFIRM(task.value.githubBranch), { title: '기준 브랜치 반영', ok: '기준 브랜치 반영', cancel: '돌아가기' }))) return
+  await closeAction('close/sync-base', '기준 브랜치 반영을 시작했습니다')
 }
 
 function rejectClose() {
@@ -594,6 +615,7 @@ const fixLimitNote = computed(() => {
 const fixBannerText = computed(() => {
   const f = task.value?.fix
   if (f?.activeRound == null) return null
+  if (isBaseSyncRound(task.value as { fix?: FixView | null })) return `기준 브랜치 반영 ${f.activeRound}회차 진행 중 — 끝나면 자동으로 다시 배포됩니다`
   const mode = f.activeMode ? ` (${implementationModeLabel(f.activeMode)})` : ''
   return `수정 ${f.activeRound}회차 진행 중${mode} — 같은 브랜치에서 이어 고친 뒤 자동으로 다시 배포해요.`
 })
@@ -604,7 +626,7 @@ const dbChangesKey = ref(0)
 watch(
   () => {
     const t = task.value
-    return t ? `${t.status}|${t.updatedAt}|${t.fix?.activeRound ?? ''}|${t.fix?.approvedRounds ?? ''}` : ''
+    return t ? `${t.status}|${t.updatedAt}|${t.fix?.activeRound ?? ''}|${t.fix?.activeKind ?? ''}|${t.fix?.approvedRounds ?? ''}` : ''
   },
   (_now, before) => {
     if (before) {
@@ -648,7 +670,16 @@ async function withdrawFix() {
   await closeAction('fix-requests/withdraw', '수정 요청 철회')
 }
 
+// 기준 브랜치 반영 회차면 중단 버튼·메뉴 라벨이 `반영 중단`이고 종료 요청 전 상태로 돌아간다(서버가 반영 직전 상태로 되돌림)
+const baseSyncOpen = computed(() => !!task.value && isBaseSyncRound(task.value))
+const abortLabel = computed(() => (baseSyncOpen.value ? '반영 중단' : '수정 중단'))
+
 async function abortFix() {
+  if (baseSyncOpen.value) {
+    if (!(await confirmDialog($q, BASE_SYNC_ABORT_CONFIRM, { title: '반영 중단', ok: '반영 중단' }))) return
+    await closeAction('fix-requests/abort', '기준 브랜치 반영 중단 — 종료 요청 전 상태로 되돌렸습니다')
+    return
+  }
   if (!(await confirmDialog(
     $q,
     '수정 회차를 닫고 PR생성 상태로 되돌립니다. 이전 배포가 아직 떠 있으면 먼저 그 배포를 중지합니다. 이 브랜치에는 배포되지 않은 커밋이 남아 있을 수 있어요 — 이어서 배포하려면 PR생성에서 다시 배포하세요. 이 회차는 실패한 회차로 세어집니다.',
@@ -856,6 +887,15 @@ function onAction(kind: NextActionKind) {
             label="반려"
             data-test="close-reject"
             @click="rejectClose"
+          />
+          <q-btn
+            v-if="!$q.screen.lt.md && canSyncBaseNow"
+            outline
+            color="primary"
+            icon="merge"
+            label="기준 브랜치 반영"
+            data-test="close-sync-base"
+            @click="syncBase"
           />
           <q-btn
             v-if="!$q.screen.lt.md && canCancelClose"
@@ -1086,7 +1126,7 @@ function onAction(kind: NextActionKind) {
                   </q-item>
                   <q-item v-if="canAbort" v-close-popup clickable class="text-grey-8" data-test="bar-more-fix-abort" @click="abortFix">
                     <q-item-section avatar><q-icon name="stop_circle" color="grey-8" /></q-item-section>
-                    <q-item-section>수정 중단</q-item-section>
+                    <q-item-section>{{ abortLabel }}</q-item-section>
                   </q-item>
                   <q-item v-if="canAdminDeploySecondary" v-close-popup clickable data-test="bar-more-deploy" @click="openDeployDialog('deploy')">
                     <q-item-section avatar><q-icon name="rocket_launch" /></q-item-section>
@@ -1099,6 +1139,10 @@ function onAction(kind: NextActionKind) {
                   <q-item v-if="auth.isAdmin && task.status === 'CLOSE_REVIEW'" v-close-popup clickable class="text-negative" data-test="bar-more-close-reject" @click="rejectClose">
                     <q-item-section avatar><q-icon name="block" color="negative" /></q-item-section>
                     <q-item-section>종료 반려</q-item-section>
+                  </q-item>
+                  <q-item v-if="canSyncBaseNow" v-close-popup clickable data-test="bar-more-close-sync-base" @click="syncBase">
+                    <q-item-section avatar><q-icon name="merge" /></q-item-section>
+                    <q-item-section>기준 브랜치 반영</q-item-section>
                   </q-item>
                   <q-item v-if="canCancelClose" v-close-popup clickable class="text-grey-8" data-test="bar-more-close-cancel" @click="cancelClose">
                     <q-item-section avatar><q-icon name="undo" color="grey-8" /></q-item-section>
@@ -1485,7 +1529,7 @@ function onAction(kind: NextActionKind) {
             outline
             color="grey-8"
             icon="stop_circle"
-            label="수정 중단"
+            :label="abortLabel"
             data-test="fix-abort"
             @click="abortFix"
           />
@@ -1664,6 +1708,7 @@ function onAction(kind: NextActionKind) {
         :ref-repos="task.refRepos ?? []"
         :failure-reason="task.failureReason"
         :fix-round="task.fix?.activeRound ?? null"
+        :fix-kind="task.fix?.activeKind ?? null"
         @submitted="refresh"
       />
 

@@ -479,11 +479,16 @@ export function nextAction(
     implementation?: { prUrl: string | null } | null
     deployment?: { deployUrl: string | null } | null
     taskType?: string | null
+    fix?: { activeRound: number | null; activeKind?: string | null } | null
   },
   isAdmin: boolean,
   isOwner = false,
 ): NextAction | null {
   const s = task.status
+  // 기준 브랜치 반영 회차 — 구현대기·구현중이어도 사용자에게는 "반영 중"이다 (상태 칩 문구는 그대로)
+  if ((s === 'APPROVED' || s === 'IMPLEMENTING') && task.fix?.activeRound != null && task.fix.activeKind === 'BASE_SYNC') {
+    return { text: '기준 브랜치 반영 중 — 끝나면 자동으로 다시 배포됩니다' }
+  }
   switch (s) {
     case 'CANCELLED':
       return null
@@ -538,7 +543,7 @@ export function nextAction(
       return { text: '수정 요청 승인을 기다리는 중입니다' }
     case 'CLOSE_FAILED':
       return isAdmin
-        ? { text: '종료 실패 — 사유를 확인하고 재시도하세요(끝난 단계는 건너뜁니다)', primary: { label: '종료 재시도', icon: 'refresh', kind: 'retry-close' } }
+        ? { text: '종료 실패 — 사유를 확인하고 재시도하세요(끝난 단계는 건너뜁니다). 충돌이면 \'기준 브랜치 반영\'을 쓰세요', primary: { label: '종료 재시도', icon: 'refresh', kind: 'retry-close' } }
         : { text: '종료 실패 — 관리자 확인이 필요합니다' }
     case 'CLOSED':
       return { text: '작업 종료 — PR이 병합되고 정리가 끝났습니다' }

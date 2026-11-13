@@ -6,6 +6,7 @@ import TaskDetail from '../pages/tasks/[id].vue'
 import { authStub, useApiMock, useRuntimeConfigMock } from './mocks/nuxt'
 import { baseTask } from './fixtures/task'
 import { setViewportWidth } from './mocks/screen'
+import { SYNC_BASE_CONFIRM } from '../composables/taskFix'
 
 ;(globalThis as any).useRoute = () => ({ params: { id: '42' } })
 const PageWrapper = defineComponent({
@@ -114,6 +115,61 @@ describe('pages/tasks/[id] — 작업 종료 (스펙 2026-10-13 §6)', () => {
       close: { progress: ['MERGED'], mergeCommitSha: 'abcdef1234', notePath: null },
     })
     expect(w.find('[data-test="close-cancel"]').exists()).toBe(false)
+    w.unmount()
+  })
+
+  it('병합 전 종료실패에서 관리자에게 기준 브랜치 반영 버튼이 보이고, 확인하면 close/sync-base를 부른다', async () => {
+    authStub.isAdmin = true
+    const w = await mountWith({
+      ...baseTask, status: 'CLOSE_FAILED', statusLabel: '종료실패', failureReason: '병합 충돌', deployment, close: emptyClose, githubBranch: 'main',
+      fix: { activeRound: null, activeMode: null, activeKind: null, approvedRounds: 0, maxRounds: 3 },
+    })
+    const btn = w.find('[data-test="close-sync-base"]')
+    expect(btn.exists()).toBe(true)
+    expect(btn.text()).toContain('기준 브랜치 반영')
+    useApiMock.mockClear()
+    await btn.trigger('click')
+    await flushPromises()
+    expect(document.body.textContent).toContain(SYNC_BASE_CONFIRM('main'))
+    ;(document.body.querySelector('[data-test="confirm-dialog-ok"]') as HTMLElement).click()
+    await flushPromises()
+    expect(useApiMock).toHaveBeenCalledWith('/api/tasks/42/close/sync-base', { method: 'POST', body: undefined })
+    w.unmount()
+  })
+
+  it('병합된 뒤에는 기준 브랜치 반영 버튼이 없다', async () => {
+    authStub.isAdmin = true
+    const w = await mountWith({
+      ...baseTask, status: 'CLOSE_FAILED', statusLabel: '종료실패', failureReason: '노트 실패', deployment,
+      close: { progress: ['MERGED'], mergeCommitSha: 'abcdef1234', notePath: null },
+      fix: { activeRound: null, activeMode: null, activeKind: null, approvedRounds: 0, maxRounds: 3 },
+    })
+    expect(w.find('[data-test="close-sync-base"]').exists()).toBe(false)
+    w.unmount()
+  })
+
+  it('비관리자에게는 기준 브랜치 반영 버튼이 없다', async () => {
+    authStub.isAdmin = false
+    const w = await mountWith({
+      ...baseTask, status: 'CLOSE_FAILED', statusLabel: '종료실패', failureReason: '병합 충돌', deployment, close: emptyClose,
+      fix: { activeRound: null, activeMode: null, activeKind: null, approvedRounds: 0, maxRounds: 3 },
+    })
+    expect(w.find('[data-test="close-sync-base"]').exists()).toBe(false)
+    w.unmount()
+  })
+
+  it('모바일 더 보기 메뉴에 기준 브랜치 반영 항목이 있다', async () => {
+    authStub.isAdmin = true
+    await setViewportWidth(390)
+    const w = await mountWith({
+      ...baseTask, status: 'CLOSE_FAILED', statusLabel: '종료실패', failureReason: '병합 충돌', deployment, close: emptyClose,
+      fix: { activeRound: null, activeMode: null, activeKind: null, approvedRounds: 0, maxRounds: 3 },
+    })
+    expect(w.find('[data-test="close-sync-base"]').exists()).toBe(false)
+    await w.find('[data-test="bar-more"]').trigger('click')
+    await flushPromises()
+    expect(document.body.querySelector('[data-test="bar-more-close-sync-base"]')).not.toBeNull()
+    await setViewportWidth(1024)
     w.unmount()
   })
 

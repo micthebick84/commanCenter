@@ -37,9 +37,12 @@ public class BaseSyncMerger {
     /**
      * @param conflicted       병합 안 된 경로(NUL 분리 출력 그대로의 경로)
      * @param binaryConflicted conflicted 중 바이너리로 보이는 것(텍스트 표식으로 해결할 수 없다)
+     * @param markerless       conflicted 중 바이너리가 아니면서 작업 트리 파일이 없거나 {@code <<<<<<< } 줄이 없는 것(한쪽 삭제·이름 변경 충돌 등).
+     *                         표식 검사로는 풀렸는지 알 수 없으므로 호출부(작업 7)는 Claude를 돌리지 않고 이 회차를 실패시킨다
      * @param indexSnapshot    충돌 경로를 뺀 스테이징 상태 — {@link #strayChanges}가 비교하는 기준
      */
     public record Started(Outcome outcome, List<String> conflicted, List<String> binaryConflicted,
+                          List<String> markerless,
                           String indexSnapshot) {}
 
     private static final int BINARY_SNIFF_BYTES = 8000;
@@ -54,7 +57,7 @@ public class BaseSyncMerger {
     public Started start(File worktreeDir, String baseRef) throws IOException, InterruptedException {
         int anc = ProcessRunner.run(worktreeDir,
                 List.of("git", "merge-base", "--is-ancestor", baseRef, "HEAD"), TIMEOUT).exitCode();
-        if (anc == 0) return new Started(Outcome.UP_TO_DATE, List.of(), List.of(), "");
+        if (anc == 0) return new Started(Outcome.UP_TO_DATE, List.of(), List.of(), List.of(), "");
         if (anc != 1) throw new IOException("git merge-base 실패 (" + anc + ")");
 
         ProcessRunner.Result merge = ProcessRunner.run(worktreeDir, withIdentity("merge", "--no-ff", "--no-commit", baseRef),
@@ -64,13 +67,17 @@ public class BaseSyncMerger {
             if (merge.exitCode() != 0) {
                 throw new IOException("git merge 실패: " + GitRemotes.maskAndCut(tail(merge.stdout(), 500), 500));
             }
-            return new Started(Outcome.CLEAN, List.of(), List.of(), snapshot(worktreeDir, Set.of()));
+            return new Started(Outcome.CLEAN, List.of(), List.of(), List.of(), snapshot(worktreeDir, Set.of()));
         }
         List<String> binary = new ArrayList<>();
         for (String path : conflicted) {
             if (isBinary(worktreeDir, path)) binary.add(path);
         }
-        return new Started(Outcome.CONFLICTED, List.copyOf(conflicted), List.copyOf(binary),
+        List<String> markerless = new ArrayList<>();
+        for (String path : conflicted) {
+            if (!binary.contains(path) && !hasOpeningMarker(worktreeDir.toPath().resolve(path))) markerless.add(path);
+        }
+        return new Started(Outcome.CONFLICTED, List.copyOf(conflicted), List.copyOf(binary), List.copyOf(markerless),
                 snapshot(worktreeDir, new HashSet<>(conflicted)));
     }
 
@@ -144,6 +151,15 @@ public class BaseSyncMerger {
         try (InputStream in = Files.newInputStream(file)) {
             byte[] head = in.readNBytes(BINARY_SNIFF_BYTES);
             for (byte b : head) if (b == 0) return true;
+        }
+        return false;
+    }
+
+    private static boolean hasOpeningMarker(Path file) throws IOException {
+        if (!Files.isRegularFile(file)) return false;
+        String text = new String(Files.readAllBytes(file), StandardCharsets.ISO_8859_1);
+        for (String line : text.split("\n", -1)) {
+            if (line.startsWith("<<<<<<< ")) return true;
         }
         return false;
     }

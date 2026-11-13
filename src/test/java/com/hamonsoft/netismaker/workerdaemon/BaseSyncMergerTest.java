@@ -61,7 +61,31 @@ class BaseSyncMergerTest {
         assertThat(s.outcome()).isEqualTo(Outcome.CONFLICTED);
         assertThat(s.conflicted()).containsExactly("PLAN.md");
         assertThat(s.binaryConflicted()).isEmpty();
+        assertThat(s.markerless()).isEmpty();
         assertThat(f.merger.unresolved(f.dir(), s.conflicted())).containsExactly("PLAN.md");
+    }
+
+    @Test
+    void 한쪽이_지운_파일을_다른쪽이_고치면_markerless에_잡힌다() throws Exception {
+        // main이 지우고 task가 고침
+        BaseSyncFixture f = fx(Map.of("gone.txt", BaseSyncFixture.DELETE), Map.of("gone.txt", "task가 고침\n"));
+        Started s = f.merger.start(f.dir(), f.repo.baseRef());
+
+        assertThat(s.outcome()).isEqualTo(Outcome.CONFLICTED);
+        assertThat(s.conflicted()).contains("gone.txt");
+        assertThat(s.markerless()).containsExactly("gone.txt");
+        assertThat(s.binaryConflicted()).isEmpty();
+    }
+
+    @Test
+    void 반대로_task가_지우고_main이_고쳐도_markerless에_잡힌다() throws Exception {
+        BaseSyncFixture f = fx(Map.of("gone.txt", "main이 고침\n"), Map.of("gone.txt", BaseSyncFixture.DELETE));
+        Started s = f.merger.start(f.dir(), f.repo.baseRef());
+
+        assertThat(s.outcome()).isEqualTo(Outcome.CONFLICTED);
+        assertThat(s.conflicted()).contains("gone.txt");
+        assertThat(s.markerless()).containsExactly("gone.txt");
+        assertThat(s.binaryConflicted()).isEmpty();
     }
 
     @Test
@@ -132,6 +156,7 @@ class BaseSyncMergerTest {
         assertThat(s.outcome()).isEqualTo(Outcome.CONFLICTED);
         assertThat(s.conflicted()).containsExactly("img.bin");
         assertThat(s.binaryConflicted()).containsExactly("img.bin");
+        assertThat(s.markerless()).doesNotContain("img.bin");
     }
 
     @Test

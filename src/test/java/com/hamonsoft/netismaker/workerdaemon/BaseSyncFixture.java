@@ -22,7 +22,11 @@ final class BaseSyncFixture {
             "README.md", "readme\n",
             "other.txt", "other\n",
             "docs/작업 기록.md", "기록\n",
-            "img.bin", "A\0B\0C");
+            "img.bin", "A\0B\0C",
+            "gone.txt", "원본\n");
+
+    /** 편집 값이 이것이면 그 파일을 지운다. */
+    static final String DELETE = "\u0000DELETE";
 
     final Path bare;
     final RepoRef ref;
@@ -96,6 +100,7 @@ final class BaseSyncFixture {
         for (var e : files.entrySet()) {
             Path f = dir.resolve(e.getKey());
             if (f.getParent() != null) Files.createDirectories(f.getParent());
+            if (DELETE.equals(e.getValue())) { Files.deleteIfExists(f); continue; }
             Files.writeString(f, e.getValue());
         }
         git(dir.toFile(), "add", "-A");

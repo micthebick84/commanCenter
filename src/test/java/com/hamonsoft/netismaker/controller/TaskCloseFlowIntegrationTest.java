@@ -7,6 +7,7 @@ import com.hamonsoft.netismaker.entity.TaskType;
 import com.hamonsoft.netismaker.repository.InterviewSessionRepository;
 import com.hamonsoft.netismaker.repository.TaskAnalysisRepository;
 import com.hamonsoft.netismaker.repository.TaskDesignRepository;
+import com.hamonsoft.netismaker.repository.TaskFixRequestRepository;
 import com.hamonsoft.netismaker.repository.TaskRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -39,11 +40,13 @@ class TaskCloseFlowIntegrationTest {
     @Autowired private TaskRepository taskRepo;
     @Autowired private TaskAnalysisRepository analysisRepo;
     @Autowired private TaskDesignRepository designRepo;
+    @Autowired private TaskFixRequestRepository fixRepo;
     @Autowired private InterviewSessionRepository sessionRepo;
     @org.springframework.beans.factory.annotation.Value("${app.worker.api-key}") private String apiKey;
 
     @BeforeEach
     void cleanTasks() {
+        fixRepo.deleteAll();
         designRepo.deleteAll();
         analysisRepo.deleteAll();
         sessionRepo.deleteAll();
@@ -98,6 +101,28 @@ class TaskCloseFlowIntegrationTest {
         mvc.perform(post("/api/tasks/" + id + "/close/cancel").with(userJwt("user1")))
                 .andExpect(status().isForbidden());
         mvc.perform(post("/api/tasks/" + id + "/close/cancel").with(adminJwt("admin")))
+                .andExpect(status().isConflict());
+    }
+
+    @Test
+    void 종료실패_병합전이면_기준_브랜치_반영_회차를_열어_구현대기로() throws Exception {
+        Task t = Task.create("owner/repo", "main", "충돌", "d", "user1", 3, List.of(), "claude-opus-5-5", "high");
+        t.setStatus(TaskStatus.CLOSE_FAILED);
+        t.setFailureReason("충돌: …");
+        t.setPrNumber(5);
+        t.setPrUrl("https://github.com/owner/repo/pull/5");
+        t.setHeadBranch("netismaker/task-z");
+        t.setHeadSha("0123456789abcdef0123456789abcdef01234567");
+        Long id = taskRepo.save(t).getId();
+
+        mvc.perform(post("/api/tasks/" + id + "/close/sync-base").with(userJwt("user1")))
+                .andExpect(status().isForbidden());
+        mvc.perform(post("/api/tasks/" + id + "/close/sync-base").with(adminJwt("admin")))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("APPROVED"));
+        org.assertj.core.api.Assertions.assertThat(fixRepo.findByTaskIdOrderByIdDesc(id)).hasSize(1);
+        // 회차가 열려 있으면 다시 열 수 없다
+        mvc.perform(post("/api/tasks/" + id + "/close/sync-base").with(adminJwt("admin")))
                 .andExpect(status().isConflict());
     }
 

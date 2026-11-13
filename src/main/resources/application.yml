@@ -160,6 +160,7 @@ app:
     stale-check-interval-ms: 60000
     user-concurrent-limit: 5
     fix-request-max-rounds: 3                 # 작업당 승인된 수정 요청(배포 뒤 같은 브랜치 이어 구현) 상한 — 반려·철회는 안 센다, 넘으면 새 작업 등록 안내 (스펙 2026-11-03 §6.3)
+    base-sync-max-rounds: 3                   # 작업당 "기준 브랜치 반영" 회차 상한 — 병합 전 종료실패에서 여는 BASE_SYNC 회차 수(수정 요청 상한과 따로 센다)
   interview:
     sse-ping-interval-ms: 30000
     idle-ttl-minutes: 1440          # AWAITING_INPUT 무응답 → EXPIRED (24h)

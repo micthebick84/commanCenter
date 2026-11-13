@@ -23,6 +23,7 @@ import java.util.Map;
  *   POST /{id}/close/reject            ROLE_ADMIN (바디 reason)
  *   POST /{id}/close/retry             ROLE_ADMIN
  *   POST /{id}/close/cancel            ROLE_ADMIN (병합 전 종료실패만)
+ *   POST /{id}/close/sync-base         ROLE_ADMIN (병합 전 종료실패만 — 기준 브랜치 반영 회차를 열어 구현대기로)
  *   POST /{id}/close/skip-artifact     ROLE_ADMIN (산출물 단계에서 멈춘 종료실패만, 바디 reason 선택)
  *   POST /{id}/close/mail/resend      ROLE_ADMIN (작업종료 + 산출물 보관 작업)
  */
@@ -76,6 +77,12 @@ public class TaskCloseController {
     @PreAuthorize("hasAuthority('ROLE_ADMIN')")
     public TaskResponse cancel(@PathVariable Long id, JwtAuthenticationToken auth) {
         return view(closeService.cancel(id, AuthContext.requireUserId(auth)), true);
+    }
+
+    @PostMapping("/{id}/close/sync-base")
+    @PreAuthorize("hasAuthority('ROLE_ADMIN')")
+    public TaskResponse syncBase(@PathVariable Long id, JwtAuthenticationToken auth) {
+        return view(closeService.syncBase(id, AuthContext.requireUserId(auth)), true);
     }
 
     @PostMapping("/{id}/close/skip-artifact")

@@ -1,14 +1,18 @@
 package com.hamonsoft.netismaker.service;
 
 import com.hamonsoft.netismaker.entity.CloseStep;
+import com.hamonsoft.netismaker.entity.FixRequestKind;
 import com.hamonsoft.netismaker.entity.RepoCatalogEntry;
 import com.hamonsoft.netismaker.entity.Task;
 import com.hamonsoft.netismaker.entity.TaskStatus;
+import com.hamonsoft.netismaker.entity.TaskFixRequest;
 import com.hamonsoft.netismaker.entity.TaskStatusHistory;
 import com.hamonsoft.netismaker.entity.TaskType;
 import com.hamonsoft.netismaker.repository.RepoCatalogRepository;
+import com.hamonsoft.netismaker.repository.TaskFixRequestRepository;
 import com.hamonsoft.netismaker.repository.TaskRepository;
 import com.hamonsoft.netismaker.repository.TaskStatusHistoryRepository;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Profile;
 import org.springframework.data.domain.Limit;
 import org.springframework.http.HttpStatus;
@@ -29,6 +33,7 @@ import java.util.Set;
  *   reject       ─► 종료승인대기 → 직전 상태 + 사유      (관리자)
  *   retry        ─► 종료실패 → 종료대기 (close_progress 유지 → 남은 단계부터)  (관리자)
  *   cancel       ─► 종료실패(MERGED 전) → 직전 상태, close_progress·사유 비움  (관리자)
+ *   syncBase     ─► 종료실패(MERGED 전) → 구현대기, 기준 브랜치 반영 회차를 연다  (관리자)
  *   skipArtifact ─► 종료실패(산출물 단계에서 멈춤) → 종료대기, 모드 SKIPPED  (관리자, 스펙 2026-10-14 §3)
  *
  * 락 정책은 TaskService와 같다 — findActiveByIdForUpdate 후 재판정.
@@ -52,15 +57,20 @@ public class TaskCloseService {
     private final RepoCatalogRepository catalogRepo;
     private final CloseArtifactProperties artifactProps;
     private final ClosePatchProperties patchProps;
+    private final TaskFixRequestRepository fixRepo;
+    private final int baseSyncMaxRounds;
 
     public TaskCloseService(TaskRepository taskRepo, TaskStatusHistoryRepository historyRepo,
                             RepoCatalogRepository catalogRepo, CloseArtifactProperties artifactProps,
-                            ClosePatchProperties patchProps) {
+                            ClosePatchProperties patchProps, TaskFixRequestRepository fixRepo,
+                            @Value("${app.task.base-sync-max-rounds:3}") int baseSyncMaxRounds) {
         this.taskRepo = taskRepo;
         this.historyRepo = historyRepo;
         this.catalogRepo = catalogRepo;
         this.artifactProps = artifactProps;
         this.patchProps = patchProps;
+        this.fixRepo = fixRepo;
+        this.baseSyncMaxRounds = baseSyncMaxRounds;
     }
 
     @Transactional
@@ -177,6 +187,47 @@ public class TaskCloseService {
         t.setCloseProgress(null);
         t.setClosePatchMode(null); // 다음 승인 때 다시 정한다
         return move(t, statusBeforeReview(t), "user", adminId, "종료 취소(병합 전)");
+    }
+
+    /**
+     * 병합 전에 실패한 종료(기준 브랜치와 충돌 등)를 "기준 브랜치 반영" 회차로 연다. 종료 취소와 같이 종료 흔적을 비우고,
+     * 같은 작업 브랜치에서 구현대기로 보낸다 — 워커가 기준 브랜치를 작업 브랜치에 병합·해결해 push한다.
+     * 회차 번호는 이 작업의 BASE_SYNC 회차 수 + 1 (수정 요청 회차와 따로 센다).
+     */
+    @Transactional
+    public Task syncBase(Long taskId, String adminId) {
+        Task t = taskRepo.findActiveByIdForUpdate(taskId).orElseThrow(TaskException::notFound);
+        if (t.getStatus() != TaskStatus.CLOSE_FAILED) {
+            throw TaskException.conflict("종료실패 상태에서만 기준 브랜치를 반영할 수 있습니다 (현재: " + t.getStatus().dbValue() + ")");
+        }
+        if (CloseStep.parse(t.getCloseProgress()).contains(CloseStep.MERGED)) {
+            throw TaskException.conflict("이미 병합되어 기준 브랜치를 반영할 수 없습니다 — 재시도로 마무리하세요");
+        }
+        if (t.getActiveFixRequestId() != null) {
+            throw TaskException.conflict("이미 진행 중인 회차가 있습니다");
+        }
+        if (isBlank(t.getHeadBranch()) || isBlank(t.getHeadSha())) {
+            throw TaskException.conflict("반영할 작업 브랜치·커밋 정보가 없습니다");
+        }
+        String base = t.getGithubBranch();
+        if (t.getHeadBranch().equals(base)) {
+            throw TaskException.conflict("작업 브랜치가 기준 브랜치(" + base + ")와 같습니다");
+        }
+        long used = fixRepo.countByTaskIdAndKind(t.getId(), FixRequestKind.BASE_SYNC);
+        if (used >= baseSyncMaxRounds) {
+            throw TaskException.conflict("기준 브랜치 반영은 작업당 " + baseSyncMaxRounds + "회까지입니다 — GitLab에서 직접 해결하세요");
+        }
+        TaskStatus from = statusBeforeReview(t);
+        t.setFailureReason(null);
+        t.setCloseProgress(null);
+        t.setClosePatchMode(null); // 다음 승인 때 다시 정한다
+        TaskFixRequest round = fixRepo.save(TaskFixRequest.baseSync(t.getId(), (int) used + 1, base, from, adminId));
+        t.setActiveFixRequestId(round.getId());
+        t.setImplementationLog(null);
+        t.setImplementationTimeoutMinutes(null);
+        t.setRestartRequeueCount(0);
+        return move(t, TaskStatus.APPROVED, "user", adminId,
+                "종료 취소(병합 전) → " + FixRounds.label(round) + " → 구현대기");
     }
 
     /**

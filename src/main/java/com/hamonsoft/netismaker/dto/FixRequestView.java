@@ -6,7 +6,7 @@ import java.time.OffsetDateTime;
 
 /**
  * 수정 요청 기록 한 건 (스펙 2026-11-03 §8). status는 PENDING|APPROVED|REJECTED|WITHDRAWN, implementationMode는
- * DIRECT|REVIEW(승인 전 null), outcome은 DEPLOYED|DEPLOY_FAILED|ABORTED(열려 있는 동안 null). round는 승인 때 확정.
+ * DIRECT|REVIEW(승인 전 null), outcome은 DEPLOYED|DEPLOY_FAILED|ABORTED|NO_CHANGE|SYNCED(열려 있는 동안 null), kind는 FIX|BASE_SYNC. round는 승인 때 확정.
  */
 public record FixRequestView(
         Long id,
@@ -21,7 +21,8 @@ public record FixRequestView(
         String decisionReason,
         int attempt,
         String outcome,
-        OffsetDateTime closedAt
+        OffsetDateTime closedAt,
+        String kind
 ) {
     public static FixRequestView of(TaskFixRequest r) {
         return new FixRequestView(
@@ -37,6 +38,7 @@ public record FixRequestView(
                 r.getDecisionReason(),
                 r.getAttempt(),
                 r.getOutcome() == null ? null : r.getOutcome().name(),
-                r.getClosedAt());
+                r.getClosedAt(),
+                r.getKind().name());
     }
 }

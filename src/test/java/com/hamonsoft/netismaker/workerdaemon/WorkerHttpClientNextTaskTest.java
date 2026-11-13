@@ -48,8 +48,8 @@ class WorkerHttpClientNextTaskTest {
 
         assertThat(new WorkerHttpClient(props).nextTask()).isEmpty();
         assertThat(seen.get())
-                .isEqualTo("GET /worker/next-task?workerId=w1&supports=refRepos,fixRounds,dbWrite,mockups");
-        assertThat(WorkerHttpClient.SUPPORTS).isEqualTo("refRepos,fixRounds,dbWrite,mockups");
+                .isEqualTo("GET /worker/next-task?workerId=w1&supports=refRepos,fixRounds,dbWrite,mockups,baseSync");
+        assertThat(WorkerHttpClient.SUPPORTS).isEqualTo("refRepos,fixRounds,dbWrite,mockups,baseSync");
     }
 
     /** WORKER_KINDS를 준 워커(다른 PC)는 받을 종류를 알린다 — 비면 예전 요청 그대로(위 테스트). */
@@ -60,7 +60,7 @@ class WorkerHttpClientNextTaskTest {
 
         assertThat(new WorkerHttpClient(props, " design, implementation ").nextTask()).isEmpty();
         assertThat(seen.get())
-                .isEqualTo("GET /worker/next-task?workerId=w1&supports=refRepos,fixRounds,dbWrite,mockups"
+                .isEqualTo("GET /worker/next-task?workerId=w1&supports=refRepos,fixRounds,dbWrite,mockups,baseSync"
                         + "&kinds=IMPLEMENTATION,DESIGN");
     }
 

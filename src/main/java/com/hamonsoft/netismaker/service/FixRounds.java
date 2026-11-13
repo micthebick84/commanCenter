@@ -1,10 +1,13 @@
 package com.hamonsoft.netismaker.service;
 
 import com.hamonsoft.netismaker.entity.FixOutcome;
+import com.hamonsoft.netismaker.entity.FixRequestKind;
 import com.hamonsoft.netismaker.entity.FixRequestStatus;
 import com.hamonsoft.netismaker.entity.ImplementationMode;
 import com.hamonsoft.netismaker.entity.Task;
 import com.hamonsoft.netismaker.entity.TaskFixRequest;
+import com.hamonsoft.netismaker.entity.TaskStatus;
+import com.hamonsoft.netismaker.entity.TaskType;
 import com.hamonsoft.netismaker.repository.TaskFixRequestRepository;
 
 import java.time.OffsetDateTime;
@@ -65,9 +68,26 @@ public final class FixRounds {
         return r;
     }
 
-    /** 이력 문구의 회차 이름 — {@code 수정 2회차}. 회차 번호를 모르면 {@code 수정 회차}. */
+    /** 기준 브랜치 반영 회차인가 — null이면 false. */
+    public static boolean isBaseSync(TaskFixRequest r) {
+        return r != null && r.getKind() == FixRequestKind.BASE_SYNC;
+    }
+
+    /**
+     * 기준 브랜치 반영 회차가 끝났을 때 작업이 돌아갈 상태 — 요청 시점 상태(from_status)가 배포완료·배포중단됨·PR생성이면 그대로,
+     * 아니면(요청이 없는 경우 포함) 배포한 적 없는 DB 작업은 PR생성, 그 밖은 배포중단됨.
+     */
+    public static TaskStatus baseSyncReturnStatus(TaskFixRequest r, Task t) {
+        TaskStatus from = r == null ? null : r.getFromStatus();
+        if (from == TaskStatus.DEPLOYED || from == TaskStatus.DEPLOY_LOST || from == TaskStatus.PR_CREATED) return from;
+        return t.getTaskType() == TaskType.DB_WORK && TaskCloseService.neverDeployed(t)
+                ? TaskStatus.PR_CREATED : TaskStatus.DEPLOY_LOST;
+    }
+
+    /** 이력 문구의 회차 이름 — {@code 수정 2회차}, 기준 브랜치 반영은 {@code 기준 브랜치 반영 2회차}. 회차 번호를 모르면 번호 없이. */
     public static String label(TaskFixRequest r) {
-        return r == null || r.getRound() == null ? "수정 회차" : "수정 " + r.getRound() + "회차";
+        String base = isBaseSync(r) ? "기준 브랜치 반영" : "수정";
+        return r == null || r.getRound() == null ? base + " 회차" : base + " " + r.getRound() + "회차";
     }
 
     /** 회차를 닫은 전이의 이력 사유 끝에 붙이는 말 — {@code  (수정 2회차 닫힘)}. */

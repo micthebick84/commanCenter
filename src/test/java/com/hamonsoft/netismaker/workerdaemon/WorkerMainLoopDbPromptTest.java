@@ -91,7 +91,7 @@ class WorkerMainLoopDbPromptTest {
         return new WorkerMainLoop(props(), http, repos, claude, mock(PromptResultParser.class),
                 mock(WorkerMcpSupport.class), worktrees, gitOps, mock(DeployService.class), reporter,
                 mock(SilentLossTracker.class), mock(DesignResultHarvester.class), mock(TaskCloser.class),
-                new SuperpowersPlugin(""), mock(ClaudeAuthProbe.class));
+                new SuperpowersPlugin(""), mock(ClaudeAuthProbe.class), mock(BaseSyncMerger.class));
     }
 
     // ---- 재료 ----

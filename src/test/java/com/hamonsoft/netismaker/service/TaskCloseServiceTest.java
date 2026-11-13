@@ -5,6 +5,7 @@ import com.hamonsoft.netismaker.entity.Task;
 import com.hamonsoft.netismaker.entity.TaskStatus;
 import com.hamonsoft.netismaker.entity.TaskStatusHistory;
 import com.hamonsoft.netismaker.repository.RepoCatalogRepository;
+import com.hamonsoft.netismaker.repository.TaskFixRequestRepository;
 import com.hamonsoft.netismaker.repository.TaskRepository;
 import com.hamonsoft.netismaker.repository.TaskStatusHistoryRepository;
 import org.junit.jupiter.api.BeforeEach;
@@ -47,7 +48,7 @@ class TaskCloseServiceTest {
         historyRepo = mock(TaskStatusHistoryRepository.class);
         when(historyRepo.save(any())).thenAnswer(i -> i.getArgument(0));
         catalogRepo = mock(RepoCatalogRepository.class);
-        service = new TaskCloseService(taskRepo, historyRepo, catalogRepo, new CloseArtifactProperties(false, null), new ClosePatchProperties(false, null));
+        service = new TaskCloseService(taskRepo, historyRepo, catalogRepo, new CloseArtifactProperties(false, null), new ClosePatchProperties(false, null), mock(TaskFixRequestRepository.class), 3);
     }
 
     @Test
@@ -189,7 +190,7 @@ class TaskCloseServiceTest {
     }
 
     private TaskCloseService enabledService() {
-        return new TaskCloseService(taskRepo, historyRepo, catalogRepo, new CloseArtifactProperties(true, null), new ClosePatchProperties(false, null));
+        return new TaskCloseService(taskRepo, historyRepo, catalogRepo, new CloseArtifactProperties(true, null), new ClosePatchProperties(false, null), mock(TaskFixRequestRepository.class), 3);
     }
 
     private RepoCatalogEntry catalog(boolean artifactEnabled) {
@@ -281,7 +282,7 @@ class TaskCloseServiceTest {
 
     private TaskCloseService patchService(boolean switchOn) {
         return new TaskCloseService(taskRepo, historyRepo, catalogRepo, new CloseArtifactProperties(false, null),
-                new ClosePatchProperties(switchOn, null));
+                new ClosePatchProperties(switchOn, null), mock(TaskFixRequestRepository.class), 3);
     }
 
     private RepoCatalogEntry patchCatalog(boolean patchEnabled, String prebuildCommand) {

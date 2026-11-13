@@ -138,6 +138,35 @@ class TaskServiceFixRoundRetryTest {
     }
 
     @Test
+    void 반영회차_재시도는_요청_방식을_무시하고_DIRECT() {
+        Task t = failedRound();
+        TaskFixRequest r = TaskFixRequest.baseSync(42L, 1, "main", TaskStatus.DEPLOYED, "admin");
+        ReflectionTestUtils.setField(r, "id", 502L);
+        when(fixRepo.findById(502L)).thenReturn(Optional.of(r));
+
+        service.retryImplementation(42L, "admin", "REVIEW");
+
+        assertThat(r.getImplementationMode()).isEqualTo(ImplementationMode.DIRECT);
+        assertThat(r.getAttempt()).isEqualTo(2);
+        assertThat(t.getStatus()).isEqualTo(TaskStatus.APPROVED);
+        assertThat(t.getHeadBranch()).isEqualTo(BRANCH);
+        assertThat(histories().get(0).getReason()).isEqualTo("기준 브랜치 반영 1회차 구현 재시도 (2회째, 구현 방식: 직접)");
+    }
+
+    @Test
+    void 반영회차_재시도는_SDD가_와도_400이_아니라_DIRECT() {
+        Task t = failedRound();
+        TaskFixRequest r = TaskFixRequest.baseSync(42L, 1, "main", TaskStatus.DEPLOYED, "admin");
+        ReflectionTestUtils.setField(r, "id", 502L);
+        when(fixRepo.findById(502L)).thenReturn(Optional.of(r));
+
+        service.retryImplementation(42L, "admin", "SDD");
+
+        assertThat(r.getImplementationMode()).isEqualTo(ImplementationMode.DIRECT);
+        assertThat(t.getStatus()).isEqualTo(TaskStatus.APPROVED);
+    }
+
+    @Test
     void 회차_구현재시도에_SDD는_400() {
         Task t = failedRound();
         TaskFixRequest r = round(2, ImplementationMode.REVIEW, 1);

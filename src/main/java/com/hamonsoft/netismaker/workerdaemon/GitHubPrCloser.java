@@ -78,11 +78,11 @@ public class GitHubPrCloser implements MergeRequestCloser {
         String head = pr.path("headRefOid").asText("");
         if (!head.equalsIgnoreCase(headSha)) {
             throw new CloseRefusedException("head 불일치: 확인한 커밋 " + shortSha(headSha) + " 이후 브랜치가 "
-                    + shortSha(head) + "(으)로 바뀌었습니다 — 확인되지 않은 커밋이라 병합하지 않습니다");
+                    + shortSha(head) + "(으)로 바뀌었습니다" + HEAD_MISMATCH_HINT);
         }
         String mss = pr.path("mergeStateStatus").asText("");
         if ("DIRTY".equals(mss)) {
-            throw new CloseRefusedException("충돌: base 브랜치와 충돌합니다 — 충돌을 해결한 뒤 재시도하세요");
+            throw new CloseRefusedException(CONFLICT_REFUSED);
         }
         boolean wasDraft = pr.path("isDraft").asBoolean(false);
         if (wasDraft) {

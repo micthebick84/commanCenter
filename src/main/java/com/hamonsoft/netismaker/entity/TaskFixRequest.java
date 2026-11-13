@@ -73,6 +73,11 @@ public class TaskFixRequest {
     @Column(name = "closed_at")
     private OffsetDateTime closedAt;
 
+    /** 회차 종류 — 기존 행·수정 요청은 FIX, 기준 브랜치 반영은 BASE_SYNC(스펙 2026-11-13). */
+    @Enumerated(EnumType.STRING)
+    @Column(nullable = false, length = 20)
+    private FixRequestKind kind = FixRequestKind.FIX;
+
     /** 등록자·관리자의 새 수정 요청 — 승인 대기 상태로 만든다. 회차·구현 방식은 승인 때 채운다. */
     public static TaskFixRequest pending(Long taskId, String body, TaskStatus fromStatus, String requestedBy) {
         TaskFixRequest r = new TaskFixRequest();
@@ -82,6 +87,26 @@ public class TaskFixRequest {
         r.fromStatus = fromStatus;
         r.requestedBy = requestedBy;
         r.requestedAt = OffsetDateTime.now();
+        return r;
+    }
+
+    /**
+     * 기준 브랜치 반영 회차 — 관리자가 종료 승인 때 바로 연다(승인 단계 없음). 직접 구현, 승인 상태로 만든다.
+     * 회차 번호는 호출자가 정한 값, 본문은 고정 문구.
+     */
+    public static TaskFixRequest baseSync(Long taskId, int round, String baseBranch, TaskStatus fromStatus, String adminId) {
+        TaskFixRequest r = new TaskFixRequest();
+        r.taskId = taskId;
+        r.kind = FixRequestKind.BASE_SYNC;
+        r.round = round;
+        r.body = "기준 브랜치 " + baseBranch + " 반영";
+        r.status = FixRequestStatus.APPROVED;
+        r.implementationMode = ImplementationMode.DIRECT;
+        r.fromStatus = fromStatus;
+        r.requestedBy = adminId;
+        r.requestedAt = OffsetDateTime.now();
+        r.decidedBy = adminId;
+        r.decidedAt = r.requestedAt;
         return r;
     }
 }

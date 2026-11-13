@@ -83,7 +83,7 @@ const TASKS = [
     // 간단 인터뷰(superpowers 끔) — 상세 머리줄(1280)의 칩과 정보 섹션(390)의 줄이 같은 마크업으로 하이드레이션돼야 한다(나머지 작업은 칸 없음 = 켬 = 칩 없음)
     interviewSuperpowersEnabled: false,
     // 수정 요청 회차 현황 — 작업 상세가 수정 요청 기록 카드를 마운트 뒤에 불러와 그린다(위 fix-requests 목)
-    fix: { activeRound: null, activeMode: null, approvedRounds: 1, maxRounds: 3 },
+    fix: { activeRound: null, activeMode: null, activeKind: null, approvedRounds: 1, maxRounds: 3 },
     // 작업 상세의 참조 칩 줄(DB 칩 다음)과 "레포" 옆 출처 질문 링크(/questions/3)
     refRepos: REF_REPOS,
     sourceQuestionId: 3,
@@ -102,7 +102,7 @@ const TASKS = [
     taskType: 'DB_WORK',
   }),
   // 수정승인대기 — 보드 배포 단계 그룹과 칩 색(스펙 2026-11-03 §6)
-  task(10, 'FIX_REVIEW', '수정승인대기', { fix: { activeRound: null, activeMode: null, approvedRounds: 0, maxRounds: 3 } }),
+  task(10, 'FIX_REVIEW', '수정승인대기', { fix: { activeRound: null, activeMode: null, activeKind: null, approvedRounds: 0, maxRounds: 3 } }),
   task(3, 'CANCELLED', '취소됨'),
   // 작업종료 + 부분 패치 — 종료 카드의 패치 줄(파일 이름·크기·파일 수·내려받기)과 목록 카드의 부분 패치 버튼(등록자 admin = 로그인 사용자)
   task(12, 'CLOSED', '작업종료', {
@@ -172,7 +172,7 @@ function apiResponse(path) {
   // 수정 요청 기록(최신순) — 작업 상세 카드
   if (/^\/api\/tasks\/\d+\/fix-requests$/.test(path)) {
     return [{
-      id: 1, round: 1, status: 'APPROVED', implementationMode: 'REVIEW', body: '스모크 수정 요청 **본문**', requestedBy: 'admin', requestedAt: NOW,
+      id: 1, kind: 'FIX', round: 1, status: 'APPROVED', implementationMode: 'REVIEW', body: '스모크 수정 요청 **본문**', requestedBy: 'admin', requestedAt: NOW,
       decidedBy: 'admin', decidedAt: NOW, decisionReason: null, attempt: 1, outcome: 'DEPLOYED', closedAt: NOW,
     }]
   }

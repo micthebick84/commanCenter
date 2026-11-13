@@ -140,7 +140,7 @@ public class WorkerHttpClient {
      * mockups가 없는 요청에게는 인터뷰 목업을 고른(또는 제외 번호가 있는) 구현·디자인을 넘기지 않는다(설계 2026-11-03 §7 —
      * 구버전은 목업을 버리고 진행한다).
      */
-    static final String SUPPORTS = "refRepos,fixRounds,dbWrite,mockups";
+    static final String SUPPORTS = "refRepos,fixRounds,dbWrite,mockups,baseSync";
 
     public Optional<WorkerTaskResponse> nextTask() {
         try {

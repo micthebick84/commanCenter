@@ -292,6 +292,19 @@ describe('종료 단계 (스펙 2026-10-13)', () => {
     expect(nextAction({ status: 'CLOSE_FAILED' }, false)?.primary).toBeUndefined()
     expect(nextAction({ status: 'CLOSED' }, true)?.primary).toBeUndefined()
   })
+  it('종료실패 관리자 문구 끝에 기준 브랜치 반영 안내가 붙는다', () => {
+    expect(nextAction({ status: 'CLOSE_FAILED' }, true)?.text).toMatch(/충돌이면 '기준 브랜치 반영'을 쓰세요$/)
+    expect(nextAction({ status: 'CLOSE_FAILED' }, false)?.text).not.toContain('기준 브랜치 반영')
+  })
+  it('열린 기준 브랜치 반영 회차의 구현대기·구현중은 반영 중 문구(버튼 없음), 수정 회차는 그대로', () => {
+    const sync = { activeRound: 1, activeKind: 'BASE_SYNC' }
+    for (const status of ['APPROVED', 'IMPLEMENTING']) {
+      const a = nextAction({ status, fix: sync }, true)
+      expect(a).toEqual({ text: '기준 브랜치 반영 중 — 끝나면 자동으로 다시 배포됩니다' })
+    }
+    expect(nextAction({ status: 'IMPLEMENTING', fix: { activeRound: 1, activeKind: 'FIX' } }, true)?.text).toBe('진행 중 — 완료되면 상태가 바뀝니다')
+    expect(nextAction({ status: 'IMPLEMENTING', fix: { activeRound: null, activeKind: 'BASE_SYNC' } }, true)?.text).toBe('진행 중 — 완료되면 상태가 바뀝니다')
+  })
   it('주의 그룹: 종료실패는 확인 필요, 종료승인대기는 관리자에게만, 작업종료는 완료', () => {
     expect(attentionGroup({ status: 'CLOSE_FAILED' }, false)).toBe('attention')
     expect(attentionGroup({ status: 'CLOSE_REVIEW' }, true)).toBe('attention')

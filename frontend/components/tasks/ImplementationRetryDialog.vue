@@ -22,6 +22,8 @@ const props = defineProps<{
   failureReason?: string | null
   /** 열린 수정 회차 번호 — 없거나 null이면 첫 구현의 재시도 */
   fixRound?: number | null
+  /** 열린 회차의 종류 — BASE_SYNC면 방식 선택 없이 같은 브랜치에서 반영을 다시 시도(서버가 DIRECT로 고정) */
+  fixKind?: 'FIX' | 'BASE_SYNC' | null
 }>()
 const emit = defineEmits<{
   (e: 'update:modelValue', v: boolean): void
@@ -34,6 +36,7 @@ const mode = ref<ImplementationMode>('DIRECT')
 const removeIds = ref<number[]>([])
 const submitting = ref(false)
 const inFixRound = computed(() => props.fixRound != null)
+const isBaseSync = computed(() => inFixRound.value && props.fixKind === 'BASE_SYNC')
 
 // 열 때마다 지금 방식으로 시작하고, 뺄 참조는 실패 사유가 가리키는 것만 미리 고른다
 watch(
@@ -59,13 +62,17 @@ async function submit() {
     await useApi(`/api/tasks/${props.taskId}/implementation/retry`, {
       method: 'POST',
       body: {
-        implementationMode: mode.value,
+        ...(isBaseSync.value ? {} : { implementationMode: mode.value }),
         ...(removeRefCatalogIds.length > 0 ? { removeRefCatalogIds } : {}),
       },
     })
     $q.notify({
       type: 'positive',
-      message: inFixRound.value ? `수정 ${props.fixRound}회차 구현 재시도 — 구현 큐에 다시 넣었습니다` : '구현 재시도 — 구현 큐에 다시 넣었습니다',
+      message: isBaseSync.value
+        ? `기준 브랜치 반영 ${props.fixRound}회차 재시도 — 구현 큐에 다시 넣었습니다`
+        : inFixRound.value
+          ? `수정 ${props.fixRound}회차 구현 재시도 — 구현 큐에 다시 넣었습니다`
+          : '구현 재시도 — 구현 큐에 다시 넣었습니다',
     })
     emit('update:modelValue', false)
     emit('submitted')
@@ -86,8 +93,11 @@ const fullscreen = useFullscreenDialog()
     @update:model-value="(v) => emit('update:modelValue', v)"
   >
     <q-card style="width: min(480px, 100vw)" data-test="impl-retry-dialog">
-      <q-card-section class="text-h6">{{ inFixRound ? `수정 ${fixRound}회차 구현 재시도 (같은 브랜치)` : '구현 재시도' }}</q-card-section>
-      <q-card-section v-if="inFixRound" class="q-pt-none text-caption text-grey-8" data-test="impl-retry-fix-note">
+      <q-card-section class="text-h6">{{ isBaseSync ? `기준 브랜치 반영 ${fixRound}회차 재시도` : inFixRound ? `수정 ${fixRound}회차 구현 재시도 (같은 브랜치)` : '구현 재시도' }}</q-card-section>
+      <q-card-section v-if="isBaseSync" class="q-pt-none text-caption text-grey-8" data-test="impl-retry-base-sync-note">
+        기준 브랜치 반영을 다시 시도합니다 (같은 브랜치)
+      </q-card-section>
+      <q-card-section v-else-if="inFixRound" class="q-pt-none text-caption text-grey-8" data-test="impl-retry-fix-note">
         새 브랜치를 따지 않고, 이 회차를 같은 브랜치에서 이어서 다시 구현합니다. 브랜치에 이미 있는 커밋(이전 배포분과 이전 시도의 push분)은 그대로 두고 그 위에 고칩니다.
         이전 실패 사유는 진행 이력에 남아 있습니다.
       </q-card-section>
@@ -95,7 +105,7 @@ const fullscreen = useFullscreenDialog()
         베이스에서 처음부터 새 브랜치(시도 번호 접미사)로 다시 구현합니다. 이전 실패 사유와 브랜치는 진행 이력에 남아 있습니다.
         push되지 않은 이전 부분 작업은 재시도하면 이 PC에서 지워질 수 있습니다.
       </q-card-section>
-      <q-card-section>
+      <q-card-section v-if="!isBaseSync">
         <ImplementationModePicker v-model="mode" :modes="inFixRound ? FIX_MODES : undefined" />
       </q-card-section>
       <q-card-section v-if="refRepos?.length" class="q-pt-none" data-test="impl-retry-refs">

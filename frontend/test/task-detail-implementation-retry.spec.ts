@@ -74,6 +74,24 @@ describe('pages/tasks/[id] — 구현 재시도 (스펙 2026-10-15 §5.5·§7)',
     await flushPromises()
   }
 
+  it('기준 브랜치 반영 회차(fixKind=BASE_SYNC): 제목·안내가 바뀌고 방식 선택이 없으며 바디에 implementationMode가 없다', async () => {
+    const task = {
+      ...failed, implementationMode: 'DIRECT',
+      fix: { activeRound: 1, activeMode: 'DIRECT', activeKind: 'BASE_SYNC', approvedRounds: 0, maxRounds: 3 },
+    }
+    const { w, dialog } = await openRetry(task)
+    expect(dialog.textContent).toContain('기준 브랜치 반영 1회차 재시도')
+    expect(dialog.textContent).toContain('기준 브랜치 반영을 다시 시도합니다 (같은 브랜치)')
+    expect(dialog.querySelector('[data-test="impl-mode-REVIEW"]')).toBeNull()
+    expect(dialog.querySelector('[data-test="impl-mode-DIRECT"]')).toBeNull()
+    expect(dialog.querySelector('[data-test="impl-mode-SDD"]')).toBeNull()
+    await submitRetry(task)
+    const call = useApiMock.mock.calls.find((c) => c[0] === '/api/tasks/42/implementation/retry')!
+    expect(call[1].method).toBe('POST')
+    expect(call[1].body).not.toHaveProperty('implementationMode')
+    w.unmount()
+  })
+
   it('참조가 있으면 목록·"이 참조 빼고 재시도"(기본 해제)·안내 문구, 고르지 않으면 바디는 { implementationMode }만', async () => {
     const task = { ...failed, refRepos: REFS }
     const { w, dialog } = await openRetry(task)

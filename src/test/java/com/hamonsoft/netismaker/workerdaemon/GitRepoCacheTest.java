@@ -321,4 +321,75 @@ class GitRepoCacheTest {
                 .satisfies(e -> assertThat(e.getMessage())
                         .doesNotContain("glpat-SECRETTOKEN").doesNotContain("oauth2:glpat"));
     }
+
+    // ── fetchForBaseSync (기준 브랜치 반영, 스펙 2026-11-13) ──
+
+    @Test
+    void fetchForBaseSync_깊이1_캐시에서도_공통조상을_확보한다() throws Exception {
+        BaseSyncFixture f = new BaseSyncFixture(tmp, java.util.Map.of("m.txt", "m"), java.util.Map.of("t.txt", "t"), 3);
+        // 캐시는 main을 --depth=1로 받은 상태로 이미 있다
+        f.cache.ensureFresh(f.ref, "main");
+        File cacheDir = tmp.resolve("repos").resolve("acme").resolve("widgets").toFile();
+        String headBefore = ProcessRunner.requireSuccess(cacheDir, List.of("git", "rev-parse", "HEAD"), 30).trim();
+
+        GitRepoCache.BaseSyncRepo r = f.cache.fetchForBaseSync(f.ref, "task", "main");
+
+        assertThat(r.baseRef()).isEqualTo("refs/netis-refs/main");
+        assertThat(r.dir()).isEqualTo(cacheDir);
+        assertThat(BaseSyncFixture.exit(r.dir(), "merge-base", "refs/remotes/origin/task", r.baseRef())).isZero();
+        assertThat(BaseSyncFixture.git(r.dir(), "rev-parse", "HEAD")).isEqualTo(headBefore);   // 캐시 HEAD 그대로
+        assertThat(BaseSyncFixture.git(r.dir(), "rev-parse", r.baseRef()))
+                .isEqualTo(BaseSyncFixture.git(f.bare.toFile(), "rev-parse", "refs/heads/main"));
+        assertThat(BaseSyncFixture.git(r.dir(), "remote", "get-url", "origin")).isEqualTo(f.ref.gitUrl());
+    }
+
+    @Test
+    void fetchForBaseSync_캐시가_없으면_작업_브랜치로_만든다() throws Exception {
+        BaseSyncFixture f = new BaseSyncFixture(tmp, java.util.Map.of("m.txt", "m"), java.util.Map.of("t.txt", "t"));
+
+        GitRepoCache.BaseSyncRepo r = f.cache.fetchForBaseSync(f.ref, "task", "main");
+
+        assertThat(BaseSyncFixture.exit(r.dir(), "merge-base", "refs/remotes/origin/task", r.baseRef())).isZero();
+        assertThat(BaseSyncFixture.git(r.dir(), "rev-parse", "refs/remotes/origin/task"))
+                .isEqualTo(BaseSyncFixture.git(f.bare.toFile(), "rev-parse", "refs/heads/task"));
+    }
+
+    @Test
+    void fetchForBaseSync_갈라진_뒤_이력이_50커밋을_넘으면_500으로_늘려_받는다() throws Exception {
+        BaseSyncFixture f = new BaseSyncFixture(tmp, java.util.Map.of("m.txt", "m"), java.util.Map.of("t.txt", "t"), 60);
+
+        GitRepoCache.BaseSyncRepo r = f.cache.fetchForBaseSync(f.ref, "task", "main");
+
+        assertThat(BaseSyncFixture.exit(r.dir(), "merge-base", "refs/remotes/origin/task", r.baseRef())).isZero();
+    }
+
+    @Test
+    void fetchForBaseSync_무관한_이력이면_NoCommonAncestorException() throws Exception {
+        Path seed = Files.createDirectories(tmp.resolve("seed-orphan"));
+        git(seed.toFile(), "init", "-b", "task");
+        Files.writeString(seed.resolve("a.txt"), "a");
+        git(seed.toFile(), "add", "-A");
+        git(seed.toFile(), "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-m", "task root");
+        git(seed.toFile(), "checkout", "--orphan", "main");
+        Files.writeString(seed.resolve("b.txt"), "b");
+        git(seed.toFile(), "add", "-A");
+        git(seed.toFile(), "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-m", "main root");
+        Path bare = tmp.resolve("orphan.git");
+        git(tmp.toFile(), "clone", "--bare", seed.toString(), bare.toString());
+        RepoRef ref = new RepoRef("github", "acme/orphans", bare.toUri().toString());
+
+        assertThatThrownBy(() -> new GitRepoCache(props(tmp.resolve("repos"))).fetchForBaseSync(ref, "task", "main"))
+                .isInstanceOf(GitRepoCache.NoCommonAncestorException.class)
+                .hasMessage("공통 조상을 찾지 못함(이력 500커밋 초과)");
+    }
+
+    @Test
+    void fetchForBaseSync_받기_실패_메시지에는_토큰이_없다() {
+        RepoRef ref = RepoRef.fromSnapshot("g/p", "https://gitlab.invalid.example/g/p.git");
+
+        assertThatThrownBy(() -> new GitRepoCache(props(tmp.resolve("repos"))).fetchForBaseSync(ref, "task", "main"))
+                .isInstanceOf(IOException.class)
+                .satisfies(e -> assertThat(e.getMessage())
+                        .doesNotContain("glpat-SECRETTOKEN").doesNotContain("oauth2:glpat"));
+    }
 }

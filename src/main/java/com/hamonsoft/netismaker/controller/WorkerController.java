@@ -62,6 +62,11 @@ public class WorkerController {
      * 없으면(구버전 워커) 목업을 고른 구현대기·디자인대기를 넘기지 않는다.
      */
     static final String SUPPORTS_MOCKUPS = "mockups";
+    /**
+     * next-task의 supports 토큰 — 기준 브랜치 반영 회차(kind=BASE_SYNC)를 아는 새 워커가 보낸다 (스펙 2026-11-13).
+     * 없으면(구버전 워커) 그 회차가 열린 구현대기를 넘기지 않는다 — FIX 회차는 {@link #SUPPORTS_FIX_ROUNDS}만 본다.
+     */
+    static final String SUPPORTS_BASE_SYNC = "baseSync";
 
     private final WorkerService workerService;
     private final DbMcpGrantService dbMcpGrantService;
@@ -86,6 +91,7 @@ public class WorkerController {
      * 구현대기를 넘기지 않는다 (스펙 2026-11-03 §7). {@value #SUPPORTS_DB_WRITE}는 큐를 거르지 않는다 — 있을 때만 구현 claim의
      * DB 연결에 쓰기 도구가 열릴 수 있고, 없으면(옛 워커) 작업은 그대로 받되 모든 연결이 읽기 전용이다 (스펙 2026-11-03 §6.1 조건 6).
      * {@value #SUPPORTS_MOCKUPS}가 없으면 인터뷰 목업을 고른(또는 제외 번호가 있는) 구현대기·디자인대기를 넘기지 않는다 (스펙 2026-11-03 §7).
+     * {@value #SUPPORTS_BASE_SYNC}가 없으면 기준 브랜치 반영 회차가 열린 구현대기를 넘기지 않는다 — FIX 회차는 그대로 (스펙 2026-11-13).
      * kinds: 이 워커가 받을 작업 종류(쉼표 구분, {@link WorkerTaskResponse.Kind} 이름). 없거나 비면 전부 —
      * 다른 PC의 워커가 볼트·미리 빌드 도구가 필요한 종료·배포를 잡지 않게 구현·디자인만 받을 때 쓴다.
      */
@@ -95,7 +101,7 @@ public class WorkerController {
                                                        @RequestParam(required = false) String kinds) {
         WorkerCapabilities caps = new WorkerCapabilities(supports(supports, SUPPORTS_REF_REPOS),
                 supports(supports, SUPPORTS_FIX_ROUNDS), supports(supports, SUPPORTS_DB_WRITE),
-                supports(supports, SUPPORTS_MOCKUPS));
+                supports(supports, SUPPORTS_MOCKUPS), supports(supports, SUPPORTS_BASE_SYNC));
         Optional<WorkerTaskResponse> claimed = workerService.claimNextTask(workerId, caps, parseKinds(kinds))
                 .map(r -> withDbMcp(r, caps));
         return claimed.map(ResponseEntity::ok)

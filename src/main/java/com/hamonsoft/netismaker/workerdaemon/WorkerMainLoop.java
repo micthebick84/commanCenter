@@ -68,6 +68,12 @@ import java.util.function.LongSupplier;
  *     → 실패면 wip 커밋을 같은 브랜치에 push / 성공이면 같은 브랜치에 fast-forward push(PR/MR은 새로 만들지 않음)
  *     → 보고는 성공·실패 모두 회차 표지(작업 시도 번호·회차 안 시도 번호·요청 id)와 회차 브랜치를 싣는다
  *   회차가 아닌 구현 보고에는 회차 표지를 싣지 않는다 — 실으면 API가 닫힌 회차의 늦은 보고로 무시한다.
+ *
+ *   기준 브랜치 반영 회차(claim의 implementation.fix.kind=BASE_SYNC)는 수정 회차와 달리 참조 repo 준비보다 앞에서 갈라진다(syncBaseRound):
+ *     반영 회차는 참조가 필요 없고, 참조 준비 실패나 준비 시간만큼 깎이는 Claude 상한이 이 회차에 영향을 주면 안 된다.
+ *     브랜치 확인 → 작업·기준 브랜치 fetch(공통 조상 확보) → 작업 브랜치 끝에 detached worktree → 기준 브랜치 병합(BaseSyncMerger)
+ *     → 이미 반영됨·충돌 없음이면 Claude 없이 / 텍스트 충돌이면 Claude가 충돌 파일만 풀고 워커가 풀렸는지·범위 밖 수정이 없는지 검증
+ *     → 병합 커밋 → 같은 브랜치에 fast-forward push → 수정 회차와 같은 표지로 성공 보고(PR 없음). 실패하면 worktree를 남기고 wip 보존은 하지 않는다.
  */
 @Component
 @Profile("worker")
@@ -89,6 +95,7 @@ public class WorkerMainLoop {
     private final TaskCloser closer;
     private final SuperpowersPlugin superpowers;
     private final ClaudeAuthProbe claudeAuth;
+    private final BaseSyncMerger merger;
 
     /** 기동 알림이 성공(또는 구 API의 404)한 뒤에만 claim한다. 스케줄러 스레드와 테스트가 함께 읽는다. */
     private volatile boolean startupReported;
@@ -110,7 +117,8 @@ public class WorkerMainLoop {
                           DesignResultHarvester designHarvester,
                           TaskCloser closer,
                           SuperpowersPlugin superpowers,
-                          ClaudeAuthProbe claudeAuth) {
+                          ClaudeAuthProbe claudeAuth,
+                          BaseSyncMerger merger) {
         this.props = props;
         this.http = http;
         this.repos = repos;
@@ -126,6 +134,7 @@ public class WorkerMainLoop {
         this.closer = closer;
         this.superpowers = superpowers;
         this.claudeAuth = claudeAuth;
+        this.merger = merger;
     }
 
     @Scheduled(fixedRateString = "#{${netis-maker.worker.heartbeat-interval-seconds:10} * 1000}")
@@ -277,6 +286,13 @@ public class WorkerMainLoop {
         ImplementationMode requested = ImplementationMode.fromWireOrDirect(spec == null ? null : spec.mode());
         int attempt = implementationAttemptOf(task);
 
+        // 기준 브랜치 반영 회차 — 참조 repo 준비(아래)보다 먼저 갈라진다: 참조가 필요 없고, 참조 준비 실패나 그 시간만큼 깎인 상한이 이 회차에 영향을 주면 안 된다
+        WorkerTaskResponse.FixRoundSpec fix = fixOf(task);
+        if (BaseSyncPrompts.isBaseSync(fix)) {
+            syncBaseRound(task, fix, attempt, implementationTimeoutOf(task, props.implementationTimeout()));
+            return;
+        }
+
         // 1. 참조 repo 준비 — 입력 순서대로 하나씩(레포 락도 한 번에 하나), 대상 fetch보다 먼저 (스펙 2026-10-24 §6.1~§6.3).
         //    대상 fetch와 대상 worktree 생성 사이에 두면 그 틈이 분 단위로 벌어진다 — worktree는 생성 시점의
         //    origin/{base}에서 분기하고 프롬프트·리뷰·커밋 판정의 baseSha는 fetch 때의 commitSha라, 그 틈에 같은 PC의
@@ -316,7 +332,6 @@ public class WorkerMainLoop {
         }
 
         // 수정 회차 — 베이스가 아니라 회차 브랜치 끝에서 이어 고친다 (스펙 2026-11-03 §7). 참조는 위와 같고 어떤 경로로 끝나든 지운다
-        WorkerTaskResponse.FixRoundSpec fix = fixOf(task);
         if (fix != null) {
             try {
                 implementFixRound(task, fix, requested, attempt, ready, claudeLimit);
@@ -718,6 +733,196 @@ public class WorkerMainLoop {
                 refWarnings.isEmpty() ? null : refWarnings), fix));
         log.info("{} 구현 완료: task={} {}@{} (방식 {}, 회차 안 {}회째{})", label, task.id(), branch,
                 RefRepoPrompts.sha7(headSha), mode, fix.attempt(), remoteAhead ? ", 원격 끝 위에서" : "");
+        worktrees.discard(repoKey, WorktreeKind.TASK, task.id());
+    }
+
+    /**
+     * 기준 브랜치 반영 회차 — 작업 브랜치에 기준 브랜치를 병합해 같은 브랜치에 fast-forward push한다(수정 회차와 같은 표지로 보고, PR 없음).
+     * 충돌이 없으면 Claude 없이 끝나고, 텍스트 충돌이면 Claude가 충돌 파일만 푼다. 모든 실패 사유는 회차 이름으로 시작하고
+     * 보고의 headBranch는 작업 브랜치이며 wip 보존({@code preservePartialWork})은 하지 않는다 — 실패하면 worktree를 남긴다.
+     */
+    private void syncBaseRound(WorkerTaskResponse task, WorkerTaskResponse.FixRoundSpec fix, int attempt,
+                               Duration claudeLimit) throws Exception {
+        String branch = fix.headBranch();
+        String base = task.githubBranch();
+        String label = BaseSyncPrompts.label(fix);
+        String repoKey = GitRemotes.localKey(task.repoRef());
+
+        // 1. 반영할 브랜치 확인 — 비었거나 기준 브랜치와 같으면 병합할 것이 없다(기준 브랜치에 직접 push하면 안 된다)
+        if (!isUsableFixBranch(branch, base)) {
+            String shown = branch == null || branch.isBlank() ? "없음" : branch.strip();
+            safePostImplementationFailure(task, attempt,
+                    label + ": 반영할 브랜치가 비었거나 기준 브랜치와 같음(" + shown + ") — 진행하지 않음",
+                    branch, null, null);
+            return;
+        }
+
+        // 2. 작업 브랜치와 기준 브랜치 fetch(공통 조상까지)
+        GitRepoCache.BaseSyncRepo repo;
+        try {
+            repo = repos.fetchForBaseSync(task.repoRef(), branch, base);
+        } catch (GitRepoCache.NoCommonAncestorException e) {
+            safePostImplementationFailure(task, attempt,
+                    label + ": 공통 조상을 찾지 못함(이력 500커밋 초과) — GitLab에서 직접 해결하세요", branch, null, null);
+            return;
+        } catch (Exception e) {
+            safePostImplementationFailure(task, attempt, label + ": 레포 fetch 실패: " + messageOf(e), branch, null, null);
+            return;
+        }
+
+        // 3. 작업 브랜치 끝에 detached worktree
+        WorktreeService.CreatedWorktree wt;
+        try {
+            wt = worktrees.createOnBranch(repo.dir(), repoKey, branch, task.id());
+        } catch (Exception e) {
+            safePostImplementationFailure(task, attempt, label + ": worktree 생성 실패: " + messageOf(e), branch, null, null);
+            return;
+        }
+        String tip;
+        try {
+            tip = gitOps.headSha(wt.dir());
+        } catch (Exception e) {
+            safePostImplementationFailure(task, attempt, label + ": 브랜치 끝 커밋 확인 실패: " + messageOf(e), branch, null, null);
+            return;
+        }
+        worktrees.ensureWorkerExcludes(wt.dir());
+        String logHead = "";
+        if (FixRoundPrompts.remoteAhead(tip, fix.headSha())) {
+            String note = FixRoundPrompts.remoteAheadNote(tip, fix.headSha());
+            log.warn("{}: task={} {}", label, task.id(), note);
+            logHead = "[" + label + "] " + note + "\n\n";
+        }
+        String headLog = logHead.isEmpty() ? null : logHead;
+        String message = BaseSyncPrompts.commitMessage(task, props.gitUserEmail());
+
+        // 4. 기준 브랜치 병합 시작
+        BaseSyncMerger.Started started;
+        try {
+            started = merger.start(wt.dir(), repo.baseRef());
+        } catch (Exception e) {
+            safePostImplementationFailure(task, attempt, label + ": 병합 시작 실패: " + messageOf(e), branch, tip, headLog);
+            return;
+        }
+        if (started.outcome() == BaseSyncMerger.Outcome.UP_TO_DATE) {
+            reportBaseSyncSuccess(task, fix, attempt, branch, tip,
+                    logHead + "기준 브랜치 " + base + "가 이미 반영돼 있습니다.", null, repoKey);
+            return;
+        }
+        if (started.outcome() == BaseSyncMerger.Outcome.CLEAN) {
+            String pushed;
+            try {
+                pushed = commitAndPushMerge(task, wt.dir(), branch, List.of(), message, tip, repo.baseRef());
+            } catch (BaseSyncMerger.NotMergingException e) {
+                safePostImplementationFailure(task, attempt, label + ": " + e.getMessage(), branch, tip, headLog);
+                return;
+            } catch (Exception e) {
+                safePostImplementationFailure(task, attempt, mergePushFailure(label, e), branch, tip, headLog);
+                return;
+            }
+            reportBaseSyncSuccess(task, fix, attempt, branch, pushed, logHead + "충돌 없이 병합했습니다.", null, repoKey);
+            return;
+        }
+
+        List<String> conflicted = started.conflicted();
+        if (!started.binaryConflicted().isEmpty()) {
+            safePostImplementationFailure(task, attempt,
+                    label + ": 바이너리 파일 충돌 — " + String.join(", ", started.binaryConflicted())
+                            + " — GitLab에서 직접 해결하세요", branch, tip, headLog);
+            return;
+        }
+        // 표식이 없는 충돌(한쪽 삭제·이름 변경 등)은 표식 검사로 풀렸는지 알 수 없다 — Claude 없이 사람에게 넘긴다
+        if (!started.markerless().isEmpty()) {
+            safePostImplementationFailure(task, attempt,
+                    label + ": 표식 없는 충돌(한쪽에서 삭제·이름 변경 등) — " + String.join(", ", started.markerless())
+                            + " — GitLab에서 직접 해결하세요", branch, tip, headLog);
+            return;
+        }
+
+        // 5. Claude가 충돌 파일만 푼다 — 작업별 MCP·DB 서버는 넘기지 않는다
+        String prompt = BaseSyncPrompts.render(task, fix, tip, conflicted);
+        ClaudeExecAdapter.ExecResult exec;
+        try {
+            exec = claude.exec(prompt, wt.dir(), claudeLimit, List.of(), true, task.model(), task.effort(),
+                    new ClaudeExecAdapter.ExecOptions(List.of(),
+                            gitAuthorEnv(props.gitUserName(), props.gitUserEmail())));
+        } catch (Exception e) {
+            safePostImplementationFailure(task, attempt, label + ": claude exec 실패: " + messageOf(e), branch, tip, headLog);
+            return;
+        }
+        String claudeLog = logHead + "[" + label + "] 충돌 파일: " + String.join(", ", conflicted) + "\n\n"
+                + nvl(exec.stdout(), "");
+        if (exec.exitCode() != 0) {
+            safePostImplementationFailure(task, attempt,
+                    label + ": claude exit=" + exec.exitCode() + "\n" + tail(exec.stdout(), 4000),
+                    branch, tip, claudeLog, usageOf(exec));
+            return;
+        }
+
+        // 6. 검증 — 충돌이 다 풀렸는지, 충돌 파일 밖을 건드리지 않았는지
+        try {
+            List<String> unresolved = merger.unresolved(wt.dir(), conflicted);
+            if (!unresolved.isEmpty()) {
+                safePostImplementationFailure(task, attempt,
+                        label + ": 충돌 해결 실패 — 남은 충돌 파일: " + String.join(", ", unresolved),
+                        branch, tip, claudeLog, usageOf(exec));
+                return;
+            }
+            List<String> stray = merger.strayChanges(wt.dir(), started);
+            if (!stray.isEmpty()) {
+                safePostImplementationFailure(task, attempt,
+                        label + ": 충돌 파일 밖을 수정함 — " + String.join(", ", stray),
+                        branch, tip, claudeLog, usageOf(exec));
+                return;
+            }
+        } catch (Exception e) {
+            safePostImplementationFailure(task, attempt, label + ": 충돌 해결 검증 실패: " + messageOf(e),
+                    branch, tip, claudeLog, usageOf(exec));
+            return;
+        }
+
+        // 7. 병합 커밋 → 같은 브랜치에 fast-forward push
+        String pushed;
+        try {
+            pushed = commitAndPushMerge(task, wt.dir(), branch, conflicted, message, tip, repo.baseRef());
+        } catch (BaseSyncMerger.NotMergingException e) {
+            safePostImplementationFailure(task, attempt, label + ": " + e.getMessage(), branch, tip, claudeLog, usageOf(exec));
+            return;
+        } catch (Exception e) {
+            safePostImplementationFailure(task, attempt, mergePushFailure(label, e), branch, tip, claudeLog, usageOf(exec));
+            return;
+        }
+        reportBaseSyncSuccess(task, fix, attempt, branch, pushed, claudeLog, exec, repoKey);
+    }
+
+    /** 병합 커밋을 만들고 작업 브랜치에 fast-forward push — 새 원격 끝. */
+    private String commitAndPushMerge(WorkerTaskResponse task, File dir, String branch, List<String> conflicted,
+                                      String message, String tip, String baseRef) throws Exception {
+        merger.commitMerge(dir, conflicted, message, tip, baseRef);
+        return gitOps.pushHead(dir, task.repoRef(), branch);
+    }
+
+    private static String mergePushFailure(String label, Exception e) {
+        // push 거절은 원격이 앞섰다는 뜻 — 구현 재시도가 새 원격 끝에서 다시 병합한다
+        if (isPushRejected(e)) return label + ": push 실패: " + messageOf(e) + PUSH_REJECTED_NOTE;
+        return label + ": 병합 커밋/push 실패: " + messageOf(e);
+    }
+
+    /** 기준 브랜치 반영 성공 보고 — PR 없이 같은 브랜치의 새 끝(수정 회차 표지). 보고 뒤 worktree를 정리한다. */
+    private void reportBaseSyncSuccess(WorkerTaskResponse task, WorkerTaskResponse.FixRoundSpec fix, int attempt,
+                                       String branch, String headSha, String implementationLog,
+                                       ClaudeExecAdapter.ExecResult exec, String repoKey) {
+        reporter.reportTerminal(task.id(), withFixMarks(new WorkerResultRequest(
+                props.id(),
+                TaskStatus.PR_CREATED,
+                null, null, null, exec == null ? null : exec.durationMs(), null,
+                null, null, branch, headSha, implementationLog,
+                null, null, null, null, null,
+                null, null, null, null,
+                usageOf(exec),
+                null,
+                attempt,
+                null), fix));
+        log.info("{} 완료: task={} {}@{}", BaseSyncPrompts.label(fix), task.id(), branch, RefRepoPrompts.sha7(headSha));
         worktrees.discard(repoKey, WorktreeKind.TASK, task.id());
     }
 

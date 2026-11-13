@@ -118,7 +118,7 @@ class DeployBuiltShaTest {
                 mock(PromptResultParser.class), mock(WorkerMcpSupport.class), mock(WorktreeService.class),
                 mock(GitOpsService.class), deploy, reporter, mock(SilentLossTracker.class),
                 mock(DesignResultHarvester.class), mock(TaskCloser.class), new SuperpowersPlugin(""),
-                mock(ClaudeAuthProbe.class)).pollAndProcess();
+                mock(ClaudeAuthProbe.class), mock(BaseSyncMerger.class)).pollAndProcess();
         ArgumentCaptor<WorkerResultRequest> cap = ArgumentCaptor.forClass(WorkerResultRequest.class);
         verify(reporter).reportTerminal(eq(20L), cap.capture());
         return cap.getValue();

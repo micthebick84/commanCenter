@@ -1,6 +1,7 @@
 package com.hamonsoft.netismaker.service;
 
 import com.hamonsoft.netismaker.dto.TaskResponse;
+import com.hamonsoft.netismaker.entity.FixRequestKind;
 import com.hamonsoft.netismaker.entity.FixRequestStatus;
 import com.hamonsoft.netismaker.entity.ImplementationMode;
 import com.hamonsoft.netismaker.entity.Task;
@@ -150,7 +151,15 @@ class TaskFixServiceTest {
     @Test
     void 관리자_요청의_회차는_이미_승인된_수_더하기_1() {
         task(DEPLOYED);
-        when(fixRepo.countByTaskIdAndStatus(42L, APPROVED)).thenReturn(2L);
+        when(fixRepo.countByTaskIdAndStatusAndKind(42L, APPROVED, FixRequestKind.FIX)).thenReturn(2L);
+        svc.request(42L, ADMIN, true, "본문", null);
+        assertThat(savedFix().getRound()).isEqualTo(3);
+    }
+
+    @Test
+    void 수정요청_상한은_반영회차를_세지_않는다() {
+        task(DEPLOYED);
+        when(fixRepo.countByTaskIdAndStatusAndKind(42L, APPROVED, FixRequestKind.FIX)).thenReturn(2L);
         svc.request(42L, ADMIN, true, "본문", null);
         assertThat(savedFix().getRound()).isEqualTo(3);
     }
@@ -242,7 +251,7 @@ class TaskFixServiceTest {
     @Test
     void 승인_3회_뒤에는_409_새작업_안내() {
         task(DEPLOYED);
-        when(fixRepo.countByTaskIdAndStatus(42L, APPROVED)).thenReturn(3L);
+        when(fixRepo.countByTaskIdAndStatusAndKind(42L, APPROVED, FixRequestKind.FIX)).thenReturn(3L);
         assertThatThrownBy(() -> svc.request(42L, OWNER, false, "본문", null))
                 .isInstanceOf(TaskException.class)
                 .satisfies(e -> assertThat(((TaskException) e).getStatus()).isEqualTo(HttpStatus.CONFLICT))
@@ -253,7 +262,7 @@ class TaskFixServiceTest {
     @Test
     void 승인_2회까지는_더_요청할_수_있다() {
         task(DEPLOYED);
-        when(fixRepo.countByTaskIdAndStatus(42L, APPROVED)).thenReturn(2L);
+        when(fixRepo.countByTaskIdAndStatusAndKind(42L, APPROVED, FixRequestKind.FIX)).thenReturn(2L);
         assertThat(svc.request(42L, OWNER, false, "본문", null).getStatus()).isEqualTo(FIX_REVIEW);
     }
 
@@ -309,7 +318,7 @@ class TaskFixServiceTest {
     void 승인은_회차를_승인수_더하기_1로() {
         Task t = task(FIX_REVIEW);
         TaskFixRequest r = pending(DEPLOY_LOST);
-        when(fixRepo.countByTaskIdAndStatus(42L, APPROVED)).thenReturn(1L);
+        when(fixRepo.countByTaskIdAndStatusAndKind(42L, APPROVED, FixRequestKind.FIX)).thenReturn(1L);
 
         Task out = svc.approve(42L, ADMIN, "DIRECT");
 
@@ -409,7 +418,7 @@ class TaskFixServiceTest {
     void 승인_때도_한도를_넘으면_409() {
         task(FIX_REVIEW);
         pending(DEPLOYED);
-        when(fixRepo.countByTaskIdAndStatus(42L, APPROVED)).thenReturn(3L);
+        when(fixRepo.countByTaskIdAndStatusAndKind(42L, APPROVED, FixRequestKind.FIX)).thenReturn(3L);
         assertThatThrownBy(() -> svc.approve(42L, ADMIN, null))
                 .isInstanceOf(TaskException.class)
                 .satisfies(e -> assertThat(((TaskException) e).getStatus()).isEqualTo(HttpStatus.CONFLICT))
@@ -485,12 +494,28 @@ class TaskFixServiceTest {
     @Test
     void 열린_회차가_없으면_보기는_회차_없음() {
         Task t = task(DEPLOYED);
-        when(fixRepo.countByTaskIdAndStatus(42L, APPROVED)).thenReturn(2L);
+        when(fixRepo.countByTaskIdAndStatusAndKind(42L, APPROVED, FixRequestKind.FIX)).thenReturn(2L);
         TaskResponse.FixView v = svc.fixViewOf(t);
         assertThat(v.activeRound()).isNull();
         assertThat(v.activeMode()).isNull();
         assertThat(v.approvedRounds()).isEqualTo(2);
         assertThat(v.maxRounds()).isEqualTo(3);
+        assertThat(v.activeKind()).isNull();
+    }
+
+    @Test
+    void 열린_회차의_종류가_보기에_실린다() {
+        Task t = task(IMPLEMENTING);
+        t.setActiveFixRequestId(77L);
+        TaskFixRequest r = TaskFixRequest.baseSync(42L, 1, "main", DEPLOYED, ADMIN);
+        when(fixRepo.findById(77L)).thenReturn(Optional.of(r));
+        assertThat(svc.fixViewOf(t).activeKind()).isEqualTo("BASE_SYNC");
+
+        TaskFixRequest fix = TaskFixRequest.pending(42L, "a", DEPLOYED, OWNER);
+        fix.setStatus(APPROVED);
+        fix.setRound(1);
+        when(fixRepo.findById(77L)).thenReturn(Optional.of(fix));
+        assertThat(svc.fixViewOf(t).activeKind()).isEqualTo("FIX");
     }
 
     @Test
@@ -502,7 +527,7 @@ class TaskFixServiceTest {
         r.setRound(2);
         r.setImplementationMode(ImplementationMode.DIRECT);
         when(fixRepo.findById(77L)).thenReturn(Optional.of(r));
-        when(fixRepo.countByTaskIdAndStatus(42L, APPROVED)).thenReturn(2L);
+        when(fixRepo.countByTaskIdAndStatusAndKind(42L, APPROVED, FixRequestKind.FIX)).thenReturn(2L);
 
         TaskResponse.FixView v = svc.fixViewOf(t);
 
@@ -571,6 +596,51 @@ class TaskFixServiceTest {
         assertThat(h.getActorType()).isEqualTo("user");
         assertThat(h.getActorId()).isEqualTo(ADMIN);
         assertThat(h.getReason()).isEqualTo("수정 2회차 중단 → PR생성");
+    }
+
+    @Test
+    void 반영회차_중단은_직전상태로_돌아간다() {
+        // 기준 브랜치 반영 회차 — 배포가 떠 있어도(컨테이너·주소 있음) 배포 중지가 아니라 요청 전 상태로 되돌린다. head_sha는 그대로.
+        Task t = task(IMPLEMENTATION_FAILED);
+        t.setFailureReason("충돌");
+        t.setHeadSha("aaa1111");
+        t.setDeployContainerId("c0ffee");
+        t.setDeployUrl("https://task-42-win.micthebick.dev");
+        TaskFixRequest r = TaskFixRequest.baseSync(42L, 1, "main", DEPLOYED, ADMIN);
+        ReflectionTestUtils.setField(r, "id", 77L);
+        t.setActiveFixRequestId(77L);
+        when(fixRepo.findById(77L)).thenReturn(Optional.of(r));
+
+        Task out = svc.abort(42L, ADMIN);
+
+        assertThat(out.getStatus()).isEqualTo(DEPLOYED);   // UNDEPLOY_PENDING·PR_CREATED 아님
+        assertThat(out.getHeadSha()).isEqualTo("aaa1111");
+        assertThat(out.getActiveFixRequestId()).isNull();
+        assertThat(out.getFailureReason()).isNull();
+        assertThat(out.getDeployContainerId()).isEqualTo("c0ffee");
+        assertThat(r.getOutcome()).isEqualTo(com.hamonsoft.netismaker.entity.FixOutcome.ABORTED);
+        assertThat(r.getClosedAt()).isNotNull();
+        verify(fixRepo).save(r);
+        TaskStatusHistory h = savedHistory();
+        assertThat(h.getFromStatus()).isEqualTo("구현실패");
+        assertThat(h.getToStatus()).isEqualTo("배포완료");
+        assertThat(h.getActorId()).isEqualTo(ADMIN);
+        assertThat(h.getReason()).isEqualTo("기준 브랜치 반영 1회차 중단 → 배포완료");
+    }
+
+    @Test
+    void 반영회차_중단은_배포중단됨_PR생성_직전상태도_그대로() {
+        for (TaskStatus from : new TaskStatus[]{DEPLOY_LOST, PR_CREATED}) {
+            setUp();
+            Task t = task(IMPLEMENTATION_FAILED);
+            TaskFixRequest r = TaskFixRequest.baseSync(42L, 2, "main", from, ADMIN);
+            ReflectionTestUtils.setField(r, "id", 77L);
+            t.setActiveFixRequestId(77L);
+            when(fixRepo.findById(77L)).thenReturn(Optional.of(r));
+
+            assertThat(svc.abort(42L, ADMIN).getStatus()).as(from.name()).isEqualTo(from);
+            assertThat(savedHistory().getReason()).isEqualTo("기준 브랜치 반영 2회차 중단 → " + from.dbValue());
+        }
     }
 
     @Test

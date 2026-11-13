@@ -21,7 +21,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 /** 수정 요청 회차 현황(fix)·기록 뷰·요청 바디 검증 (스펙 2026-11-03 §6·§8). */
 class TaskResponseFixTest {
 
-    private static final TaskResponse.FixView FIX = new TaskResponse.FixView(2, "DIRECT", 2, 3);
+    private static final TaskResponse.FixView FIX = new TaskResponse.FixView(2, "DIRECT", 2, 3, "FIX");
 
     private Task task() {
         Task t = Task.create("owner/repo", "main", "T", "d", "user1", 3, List.of(), "claude-opus-5-5", "high");

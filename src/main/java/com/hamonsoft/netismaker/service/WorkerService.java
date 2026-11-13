@@ -247,12 +247,12 @@ public class WorkerService {
         if (kinds == null) {
             candidates = caps.needsFilteredQueue()
                     ? taskRepo.findClaimableAmongForUpdateSkipLocked(TaskRepository.CLAIMABLE_STATUSES,
-                            caps.refRepos(), caps.fixRounds(), caps.mockups())
+                            caps.refRepos(), caps.fixRounds(), caps.mockups(), caps.baseSync())
                     : taskRepo.findClaimableForUpdateSkipLocked(PageRequest.of(0, 1));
         } else {
             List<TaskStatus> statuses = kinds.stream().map(WorkerService::claimableStatusFor).toList();
             candidates = taskRepo.findClaimableAmongForUpdateSkipLocked(statuses, caps.refRepos(), caps.fixRounds(),
-                    caps.mockups());
+                    caps.mockups(), caps.baseSync());
         }
         // claim이 null이면(수정 회차 기록이 깨진 작업을 구현실패로 치웠다) 이번 poll은 빈 응답 — 큐 머리가 치워졌으니 다음 poll이 뒤를 잡는다
         return candidates.isEmpty() ? Optional.empty() : Optional.ofNullable(claim(candidates.get(0), workerId));
@@ -372,12 +372,13 @@ public class WorkerService {
     private OpenFixRound openFixRoundOf(Task t) {
         TaskFixRequest r = FixRounds.openRequest(fixRequestRepo, t);
         if (r == null) return null;
-        List<String> previous = fixRequestRepo
-                .findByTaskIdAndStatusAndRoundLessThanOrderByRoundAsc(t.getId(), FixRequestStatus.APPROVED, r.getRound())
+        List<String> previous = FixRounds.isBaseSync(r) ? List.of() : fixRequestRepo
+                .findByTaskIdAndStatusAndKindAndRoundLessThanOrderByRoundAsc(t.getId(), FixRequestStatus.APPROVED,
+                        FixRequestKind.FIX, r.getRound())
                 .stream().map(TaskFixRequest::getBody).toList();
         ImplementationMode mode = FixRounds.modeOf(r);
         return new OpenFixRound(mode, new WorkerTaskResponse.FixRoundSpec(r.getId(), r.getRound(), r.getAttempt(),
-                r.getBody(), previous, t.getHeadBranch(), t.getHeadSha()));
+                r.getBody(), previous, t.getHeadBranch(), t.getHeadSha(), r.getKind().name()));
     }
 
     /**
@@ -844,7 +845,33 @@ public class WorkerService {
         }
         TaskStatus from = t.getStatus();
         String label = FixRounds.label(round);
-        t.setHeadSha(req.headSha().strip());
+        String newSha = req.headSha().strip();
+        if (FixRounds.isBaseSync(round)) {
+            // 기준 브랜치 반영 회차 — head_sha 갱신 전에 비교한다. 대소문자만 다른 같은 커밋이면 반영할 것이 없던 것이다.
+            if (newSha.equalsIgnoreCase(t.getHeadSha() == null ? "" : t.getHeadSha().strip())) {
+                TaskStatus back = FixRounds.baseSyncReturnStatus(round, t);
+                t.setImplementationLog(req.implementationLog());
+                logRefWarnings(t, req);
+                accumulateUsage(t.getId(), TaskStageUsage.STAGE_IMPLEMENTATION, req);
+                FixRounds.close(t, round, FixOutcome.NO_CHANGE, OffsetDateTime.now());
+                if (round != null) fixRequestRepo.save(round);
+                finishBaseSyncRound(t, from, back, req, reasonPrefix + "기준 브랜치가 이미 반영돼 있음 → " + back.dbValue() + FixRounds.closedSuffix(round));
+                return;
+            }
+            if (TaskCloseService.neverDeployed(t)) {
+                // 배포한 적 없는 작업(PR생성에서 반영을 연 DB 작업뿐 — 배포한 작업은 직전 상태가 배포완료·중단됨·실패다) — 재배포할 것이 없다. 새 끝만 기록하고 PR생성으로 돌아가 회차를 닫는다.
+                t.setHeadSha(newSha);
+                t.setImplementationLog(req.implementationLog());
+                logRefWarnings(t, req);
+                accumulateUsage(t.getId(), TaskStageUsage.STAGE_IMPLEMENTATION, req);
+                FixRounds.close(t, round, FixOutcome.SYNCED, OffsetDateTime.now());
+                if (round != null) fixRequestRepo.save(round);
+                finishBaseSyncRound(t, from, TaskStatus.PR_CREATED, req,
+                        reasonPrefix + label + " 완료: " + FixRounds.shortSha(newSha) + " → PR생성" + FixRounds.closedSuffix(round));
+                return;
+            }
+        }
+        t.setHeadSha(newSha);
         t.setImplementationLog(req.implementationLog());
         applyEnvTemplate(t, req);   // 회차가 새 env를 남겼으면 템플릿 갱신 — 보통 구현 성공과 같다(null이면 기존 유지)
         historyRepo.save(TaskStatusHistory.log(t.getId(), from, TaskStatus.PR_CREATED, "worker", req.workerId(),
@@ -862,6 +889,16 @@ public class WorkerService {
                 "system", null, label + " 구현 완료 → 자동 재배포"));
     }
 
+    /** 기준 브랜치 반영 회차를 닫는 전이 — 점유·실패 사유를 비우고 이력 한 줄을 남긴다. */
+    private void finishBaseSyncRound(Task t, TaskStatus from, TaskStatus to, WorkerResultRequest req, String reason) {
+        t.setStatus(to);
+        t.setFailureReason(null);
+        t.setClaimedAt(null);
+        t.setWorkerId(null);
+        t.setUpdatedAt(OffsetDateTime.now());
+        historyRepo.save(TaskStatusHistory.log(t.getId(), from, to, "worker", req.workerId(), reason));
+    }
+
     /**
      * 회차 구현 실패 — 회차는 열어 둔다(관리자가 구현 재시도 또는 수정 중단을 고른다). 브랜치는 회차 브랜치 그대로 두고, 보고가 회차 브랜치의
      * 끝을 실었을 때만 head_sha로 받는다 — wip 커밋을 push했을 수 있어 수정 중단 뒤 배포·종료 병합의 기준이 된다(§7.1).
@@ -872,7 +909,10 @@ public class WorkerService {
         t.setStatus(TaskStatus.IMPLEMENTATION_FAILED);
         t.setFailureReason(req.failureReason() == null ? "원인 미상" : req.failureReason());
         t.setImplementationLog(req.implementationLog());
-        if (req.headSha() != null && !req.headSha().isBlank() && isRoundBranch(t, req)) t.setHeadSha(req.headSha().strip());
+        // 기준 브랜치 반영 회차는 head_sha를 바꾸지 않는다 — 배포로 확인한 커밋만 병합돼야 하는데, 이 브랜치 끝은 사람이 올린 확인 안 된 커밋일 수 있다.
+        if (!FixRounds.isBaseSync(round) && req.headSha() != null && !req.headSha().isBlank() && isRoundBranch(t, req)) {
+            t.setHeadSha(req.headSha().strip());
+        }
         t.setUpdatedAt(OffsetDateTime.now());
         historyRepo.save(TaskStatusHistory.log(t.getId(), from, TaskStatus.IMPLEMENTATION_FAILED, "worker", req.workerId(),
                 FixRounds.label(round) + " 구현 실패: " + t.getFailureReason()));

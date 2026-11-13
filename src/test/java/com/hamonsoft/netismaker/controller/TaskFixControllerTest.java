@@ -47,7 +47,7 @@ import static org.mockito.Mockito.when;
  */
 class TaskFixControllerTest {
 
-    private static final TaskResponse.FixView FIX = new TaskResponse.FixView(1, "REVIEW", 1, 3);
+    private static final TaskResponse.FixView FIX = new TaskResponse.FixView(1, "REVIEW", 1, 3, "FIX");
 
     private TaskFixService fixService;
     private TaskService taskService;

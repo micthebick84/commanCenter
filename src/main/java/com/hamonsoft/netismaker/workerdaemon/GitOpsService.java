@@ -157,6 +157,15 @@ public class GitOpsService {
         }
     }
 
+    /**
+     * 기준 브랜치 병합 커밋이 만들어진 worktree의 HEAD를 작업 브랜치에 fast-forward push하고(force 없음 — 원격이 앞서 있으면
+     * 기존 push와 같은 마스킹된 IOException) 그 sha를 돌려준다.
+     */
+    public String pushHead(File worktreeDir, RepoRef ref, String branchName) throws IOException, InterruptedException {
+        push(worktreeDir, ref, branchName);
+        return headSha(worktreeDir);
+    }
+
     private void commitAll(File worktreeDir, String message) throws IOException, InterruptedException {
         ProcessRunner.requireSuccess(worktreeDir,
                 List.of("git", "add", "-A"), GIT_TIMEOUT_SECONDS);

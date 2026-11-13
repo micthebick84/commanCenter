@@ -82,6 +82,39 @@ class TaskClaimFixRoundSupportIntegrationTest {
         return taskRepo.saveAndFlush(t);
     }
 
+    /** 구현대기 작업에 기준 브랜치 반영(BASE_SYNC) 회차를 열어 둔다. */
+    private Task withOpenBaseSyncRound(Task t, int round) {
+        TaskFixRequest r = fixRepo.saveAndFlush(
+                TaskFixRequest.baseSync(t.getId(), round, "main", TaskStatus.CLOSE_FAILED, "admin1"));
+        t.setActiveFixRequestId(r.getId());
+        return taskRepo.saveAndFlush(t);
+    }
+
+    @Test
+    void baseSync를_모르는_워커는_반영회차를_못_받고_FIX회차는_받는다() {
+        Task syncRound = withOpenBaseSyncRound(task(TaskStatus.APPROVED, 60), 1);          // A: 먼저 생성
+        Task fixRound = withOpenRound(task(TaskStatus.APPROVED, 30), 1, ImplementationMode.REVIEW, "수정");   // B
+
+        List<Task> oldClaim = taskRepo.findClaimableAmongForUpdateSkipLocked(
+                List.of(TaskStatus.APPROVED), true, true, true, false);
+        assertThat(oldClaim).extracting(Task::getId).containsExactly(fixRound.getId());
+
+        List<Task> newClaim = taskRepo.findClaimableAmongForUpdateSkipLocked(
+                List.of(TaskStatus.APPROVED), true, true, true, true);
+        assertThat(newClaim).extracting(Task::getId).containsExactly(syncRound.getId());
+    }
+
+    @Test
+    void baseSync를_모르는_워커도_반영회차의_구현대기_밖_상태는_받는다() {
+        Task deploy = withOpenBaseSyncRound(task(TaskStatus.DEPLOY_PENDING, 30), 1);
+
+        WorkerTaskResponse r = workerService.claimNextTask("old-worker",
+                new WorkerCapabilities(true, true, true, true, false), null).orElseThrow();
+
+        assertThat(r.id()).isEqualTo(deploy.getId());
+        assertThat(r.kind()).isEqualTo(WorkerTaskResponse.Kind.DEPLOY);
+    }
+
     private Task withRef(Task t) {
         t.setRefRepos(new ArrayList<>(List.of(new RefRepo(11L, "옛앱", "g/old",
                 "https://gitlab.hamon.vip/g/old.git", "release/6.5", SHA, "2026-10-24T10:00+09:00", null))));

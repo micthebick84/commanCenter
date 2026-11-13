@@ -99,6 +99,13 @@
 
 **우선순위**: 낮음.
 
+### [ ] GitHubPrCloser — mergeStateStatus UNKNOWN(계산 중) 대기 없음
+
+GitHubPrCloser는 mergeStateStatus UNKNOWN(계산 중)을 기다리지 않는다. GitLab은 2026-11-13에 추가했다(GitLabMrCloser.awaitMergeability).
+
+**우선순위**: 낮음.
+
+
 ## 완료
 
 ### [x] UI 잔손질 묶음 (2026-10-24, `fix/ui-polish`)

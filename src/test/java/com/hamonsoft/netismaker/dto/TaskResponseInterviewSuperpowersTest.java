@@ -56,7 +56,7 @@ class TaskResponseInterviewSuperpowersTest {
 
         assertThat(TaskResponse.withTotalCost(off, BigDecimal.ONE).interviewSuperpowersEnabled()).isFalse();
         assertThat(off.withRefRepos(List.of()).interviewSuperpowersEnabled()).isFalse();
-        assertThat(off.withFix(new TaskResponse.FixView(1, "DIRECT", 1, 3)).interviewSuperpowersEnabled()).isFalse();
+        assertThat(off.withFix(new TaskResponse.FixView(1, "DIRECT", 1, 3, "FIX")).interviewSuperpowersEnabled()).isFalse();
         assertThat(off.redactSecretValues().interviewSuperpowersEnabled()).isFalse();
 
         // 켬(true)과 세션 없음(null)도 사본에서 그대로다 — 값을 TRUE로 바꾸는 사본이 없다
@@ -79,7 +79,7 @@ class TaskResponseInterviewSuperpowersTest {
         assertThat(off.withRefRepos(List.of())).usingRecursiveComparison().isEqualTo(off);
         assertThat(off.withFix(null)).usingRecursiveComparison().isEqualTo(off);
         // withInterviewSuperpowersEnabled는 다른 사본이 올려 둔 칸(fix·참조·가림)을 지우지 않는다
-        TaskResponse fixed = TaskResponse.of(task(), null).withFix(new TaskResponse.FixView(2, "DIRECT", 2, 3));
+        TaskResponse fixed = TaskResponse.of(task(), null).withFix(new TaskResponse.FixView(2, "DIRECT", 2, 3, "FIX"));
         assertThat(fixed.withInterviewSuperpowersEnabled(false).fix()).isEqualTo(fixed.fix());
         TaskResponse redacted = TaskResponse.of(task(), null).redactSecretValues();
         assertThat(redacted.withInterviewSuperpowersEnabled(false).envVars()).extracting(EnvVar::value).containsExactly("");

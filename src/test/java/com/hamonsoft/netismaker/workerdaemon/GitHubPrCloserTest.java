@@ -60,14 +60,14 @@ class GitHubPrCloserTest {
     void head가_바뀌었으면_아무것도_안_하고_거부() {
         replies.add(view("OPEN", true, "ffff", "CLEAN", null));
         assertThatThrownBy(() -> closer().merge(ref(), 5, SHA, "merge"))
-                .isInstanceOf(MergeRequestCloser.CloseRefusedException.class).hasMessageContaining("head 불일치");
+                .isInstanceOf(MergeRequestCloser.CloseRefusedException.class).hasMessageContaining("head 불일치").hasMessageEndingWith(MergeRequestCloser.HEAD_MISMATCH_HINT);
         assertThat(calls).hasSize(1);
     }
 
     @Test
     void 충돌이면_아무것도_안_하고_거부() {
         replies.add(view("OPEN", false, SHA, "DIRTY", null));
-        assertThatThrownBy(() -> closer().merge(ref(), 5, SHA, "merge")).hasMessageContaining("충돌");
+        assertThatThrownBy(() -> closer().merge(ref(), 5, SHA, "merge")).hasMessage(MergeRequestCloser.CONFLICT_REFUSED);
         assertThat(calls).hasSize(1);
     }
 

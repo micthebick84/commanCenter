@@ -10,13 +10,20 @@ import {
   FIX_MODES,
   fixOutcomeLabel,
   fixRequestStatusLabel,
+  canSyncBase,
+  isBaseSyncRound,
+  fixRoundTitle,
+  SYNC_BASE_CONFIRM,
+  BASE_SYNC_ABORT_CONFIRM,
+  type FixView,
 } from './taskFix'
 
-const fix = (over: Partial<{ activeRound: number | null; activeMode: string | null; approvedRounds: number; maxRounds: number }> = {}) => ({
+const fix = (over: Partial<FixView> = {}): FixView => ({
   activeRound: null,
   activeMode: null,
   approvedRounds: 0,
   maxRounds: 3,
+  activeKind: null,
   ...over,
 })
 const task = (over: Record<string, unknown> = {}) => ({
@@ -147,5 +154,49 @@ describe('표시 문구', () => {
     expect(fixOutcomeLabel('DEPLOY_FAILED')).toBe('재배포 실패')
     expect(fixOutcomeLabel('ABORTED')).toBe('수정 중단')
     expect(fixOutcomeLabel(null)).toBeNull()
+  })
+})
+
+describe('기준 브랜치 반영 (BASE_SYNC)', () => {
+  const failedTask = (over: Record<string, unknown> = {}) =>
+    task({ status: 'CLOSE_FAILED', close: { progress: [] }, fix: fix(), ...over })
+
+  it('canSyncBase: 관리자·종료실패·병합 전·열린 회차 없음일 때만', () => {
+    expect(canSyncBase(failedTask(), true)).toBe(true)
+    expect(canSyncBase(failedTask({ close: null }), true)).toBe(true)
+    expect(canSyncBase(failedTask({ fix: null }), true)).toBe(true)
+    expect(canSyncBase(failedTask({ close: { progress: ['MERGED'] } }), true)).toBe(false)
+    expect(canSyncBase(failedTask(), false)).toBe(false)
+    expect(canSyncBase(failedTask({ status: 'DEPLOYED' }), true)).toBe(false)
+    expect(canSyncBase(failedTask({ fix: fix({ activeRound: 1, activeMode: 'DIRECT' }) }), true)).toBe(false)
+  })
+  it('isBaseSyncRound: 열린 BASE_SYNC 회차만', () => {
+    expect(isBaseSyncRound({ fix: { ...fix({ activeRound: 1 }), activeKind: 'BASE_SYNC' } })).toBe(true)
+    expect(isBaseSyncRound({ fix: { ...fix({ activeRound: 1 }), activeKind: 'FIX' } })).toBe(false)
+    expect(isBaseSyncRound({ fix: { ...fix(), activeKind: 'BASE_SYNC' } })).toBe(false)
+    expect(isBaseSyncRound({ fix: null })).toBe(false)
+    expect(isBaseSyncRound({})).toBe(false)
+  })
+  it('fixRoundTitle', () => {
+    expect(fixRoundTitle({ kind: 'BASE_SYNC', round: 1 })).toBe('기준 브랜치 반영 1회차')
+    expect(fixRoundTitle({ kind: 'FIX', round: 2 })).toBe('2회차')
+    expect(fixRoundTitle({ round: 3 })).toBe('3회차')
+  })
+  it('fixOutcomeLabel: BASE_SYNC 전용 문구, FIX·생략은 기존 값', () => {
+    expect(fixOutcomeLabel('NO_CHANGE', 'BASE_SYNC')).toBe('변경 없음')
+    expect(fixOutcomeLabel('SYNCED', 'BASE_SYNC')).toBe('반영됨')
+    expect(fixOutcomeLabel('DEPLOYED', 'BASE_SYNC')).toBe('재배포됨')
+    expect(fixOutcomeLabel('DEPLOY_FAILED', 'BASE_SYNC')).toBe('배포 실패')
+    expect(fixOutcomeLabel('ABORTED', 'BASE_SYNC')).toBe('중단')
+    expect(fixOutcomeLabel('ABORTED')).toBe('수정 중단')
+    expect(fixOutcomeLabel('ABORTED', 'FIX')).toBe('수정 중단')
+    expect(fixOutcomeLabel('DEPLOYED', 'FIX')).toBe('재배포 완료')
+    expect(fixOutcomeLabel(null, 'BASE_SYNC')).toBeNull()
+  })
+  it('확인 문구', () => {
+    expect(SYNC_BASE_CONFIRM('main')).toBe(
+      '종료를 취소하고 작업 브랜치에 기준 브랜치(main)를 반영합니다. 충돌이 있으면 Claude가 해결하고, 끝나면 자동으로 다시 배포됩니다. 배포 결과를 확인한 뒤 종료를 다시 요청해야 합니다.',
+    )
+    expect(BASE_SYNC_ABORT_CONFIRM).toBe('기준 브랜치 반영을 중단하고 종료 요청 전 상태로 되돌립니다. 작업 브랜치는 바뀌지 않습니다.')
   })
 })

@@ -1,11 +1,13 @@
 package com.hamonsoft.netismaker.service;
 
 import com.hamonsoft.netismaker.entity.FixOutcome;
+import com.hamonsoft.netismaker.entity.FixRequestKind;
 import com.hamonsoft.netismaker.entity.FixRequestStatus;
 import com.hamonsoft.netismaker.entity.ImplementationMode;
 import com.hamonsoft.netismaker.entity.Task;
 import com.hamonsoft.netismaker.entity.TaskFixRequest;
 import com.hamonsoft.netismaker.entity.TaskStatus;
+import com.hamonsoft.netismaker.entity.TaskType;
 import com.hamonsoft.netismaker.repository.TaskFixRequestRepository;
 import org.junit.jupiter.api.Test;
 import org.springframework.test.util.ReflectionTestUtils;
@@ -90,5 +92,65 @@ class FixRoundsTest {
         assertThat(FixRounds.shortSha("0123456789abcdef")).isEqualTo("0123456");
         assertThat(FixRounds.shortSha(" new9999 ")).isEqualTo("new9999");
         assertThat(FixRounds.shortSha(null)).isEmpty();
+    }
+
+    @Test
+    void label_기준브랜치반영() {
+        TaskFixRequest r = TaskFixRequest.baseSync(1L, 2, "main", TaskStatus.DEPLOYED, "admin");
+        assertThat(FixRounds.label(r)).isEqualTo("기준 브랜치 반영 2회차");
+        assertThat(FixRounds.isBaseSync(r)).isTrue();
+        assertThat(FixRounds.isOpen(r)).isTrue();
+        assertThat(r.getKind()).isEqualTo(FixRequestKind.BASE_SYNC);
+        assertThat(r.getBody()).isEqualTo("기준 브랜치 main 반영");
+        assertThat(r.getImplementationMode()).isEqualTo(ImplementationMode.DIRECT);
+        assertThat(r.getRequestedBy()).isEqualTo("admin");
+        assertThat(r.getDecidedBy()).isEqualTo("admin");
+        assertThat(r.getDecidedAt()).isNotNull();
+        assertThat(r.getStatus()).isEqualTo(FixRequestStatus.APPROVED);
+    }
+
+    @Test
+    void label_번호를_모르면_종류별_이름만() {
+        TaskFixRequest sync = TaskFixRequest.baseSync(1L, 1, "main", TaskStatus.DEPLOYED, "admin");
+        sync.setRound(null);
+        assertThat(FixRounds.label(sync)).isEqualTo("기준 브랜치 반영 회차");
+        assertThat(FixRounds.label(null)).isEqualTo("수정 회차");
+        assertThat(FixRounds.label(approved(1L, 3))).isEqualTo("수정 3회차");
+        assertThat(FixRounds.isBaseSync(null)).isFalse();
+        assertThat(FixRounds.isBaseSync(approved(1L, 3))).isFalse();
+    }
+
+    @Test
+    void 기존_pending_행의_kind는_FIX() {
+        assertThat(TaskFixRequest.pending(1L, "b", TaskStatus.DEPLOYED, "u").getKind()).isEqualTo(FixRequestKind.FIX);
+    }
+
+    @Test
+    void baseSyncReturnStatus_배포상태와_PR생성을_그대로_돌려준다() {
+        Task t = flagged(1L);
+        for (TaskStatus from : List.of(TaskStatus.DEPLOYED, TaskStatus.DEPLOY_LOST, TaskStatus.PR_CREATED)) {
+            TaskFixRequest r = TaskFixRequest.baseSync(42L, 1, "main", from, "admin");
+            assertThat(FixRounds.baseSyncReturnStatus(r, t)).as(from.name()).isEqualTo(from);
+        }
+    }
+
+    @Test
+    void baseSyncReturnStatus_모르는_값이면_배포한적없는_DB작업은_PR생성_그밖은_배포중단됨() {
+        TaskFixRequest r = TaskFixRequest.baseSync(42L, 1, "main", TaskStatus.CLOSE_FAILED, "admin");
+
+        Task dbNever = flagged(1L);
+        dbNever.setTaskType(TaskType.DB_WORK);
+        assertThat(FixRounds.baseSyncReturnStatus(r, dbNever)).isEqualTo(TaskStatus.PR_CREATED);
+
+        Task dbDeployed = flagged(1L);
+        dbDeployed.setTaskType(TaskType.DB_WORK);
+        dbDeployed.setDeployUrl("https://task-42.example");
+        assertThat(FixRounds.baseSyncReturnStatus(r, dbDeployed)).isEqualTo(TaskStatus.DEPLOY_LOST);
+
+        Task other = flagged(1L);
+        other.setTaskType(TaskType.BUG_FIX);
+        assertThat(FixRounds.baseSyncReturnStatus(r, other)).isEqualTo(TaskStatus.DEPLOY_LOST);
+        assertThat(FixRounds.baseSyncReturnStatus(null, dbNever)).isEqualTo(TaskStatus.PR_CREATED);
+        assertThat(FixRounds.baseSyncReturnStatus(null, other)).isEqualTo(TaskStatus.DEPLOY_LOST);
     }
 }

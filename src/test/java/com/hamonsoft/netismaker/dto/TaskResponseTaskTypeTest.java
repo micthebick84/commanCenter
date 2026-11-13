@@ -49,14 +49,14 @@ class TaskResponseTaskTypeTest {
         TaskResponse r = TaskResponse.of(task(TaskType.BUG_FIX), null);
         assertThat(TaskResponse.withTotalCost(r, BigDecimal.ONE).taskType()).isEqualTo("BUG_FIX");
         assertThat(r.withRefRepos(List.of()).taskType()).isEqualTo("BUG_FIX");
-        assertThat(r.withFix(new TaskResponse.FixView(1, "DIRECT", 1, 3)).taskType()).isEqualTo("BUG_FIX");
+        assertThat(r.withFix(new TaskResponse.FixView(1, "DIRECT", 1, 3, "FIX")).taskType()).isEqualTo("BUG_FIX");
         assertThat(r.redactSecretValues().taskType()).isEqualTo("BUG_FIX");
 
         // 타입 없음도 사본에서 그대로 null
         TaskResponse none = TaskResponse.of(task(null), null);
         assertThat(TaskResponse.withTotalCost(none, BigDecimal.ONE).taskType()).isNull();
         assertThat(none.withRefRepos(List.of()).taskType()).isNull();
-        assertThat(none.withFix(new TaskResponse.FixView(1, "DIRECT", 1, 3)).taskType()).isNull();
+        assertThat(none.withFix(new TaskResponse.FixView(1, "DIRECT", 1, 3, "FIX")).taskType()).isNull();
         assertThat(none.redactSecretValues().taskType()).isNull();
     }
 

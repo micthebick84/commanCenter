@@ -2,6 +2,7 @@ package com.hamonsoft.netismaker.service;
 
 import com.hamonsoft.netismaker.dto.TaskResponse;
 import com.hamonsoft.netismaker.entity.FixOutcome;
+import com.hamonsoft.netismaker.entity.FixRequestKind;
 import com.hamonsoft.netismaker.entity.FixRequestStatus;
 import com.hamonsoft.netismaker.entity.ImplementationMode;
 import com.hamonsoft.netismaker.entity.Task;
@@ -88,7 +89,7 @@ public class TaskFixService {
             throw TaskException.conflict("이어서 고칠 브랜치가 베이스 브랜치(" + t.getGithubBranch().strip()
                     + ")와 같아 수정을 요청할 수 없습니다 — 새 작업으로 등록하세요");
         }
-        long approved = fixRepo.countByTaskIdAndStatus(taskId, FixRequestStatus.APPROVED);
+        long approved = fixRepo.countByTaskIdAndStatusAndKind(taskId, FixRequestStatus.APPROVED, FixRequestKind.FIX);
         requireRoundLeft(approved);
 
         TaskStatus from = t.getStatus();
@@ -109,7 +110,7 @@ public class TaskFixService {
         Task t = taskRepo.findActiveByIdForUpdate(taskId).orElseThrow(TaskException::notFound);
         requireReview(t, "승인");
         TaskFixRequest r = pendingOf(taskId);
-        long approved = fixRepo.countByTaskIdAndStatus(taskId, FixRequestStatus.APPROVED);
+        long approved = fixRepo.countByTaskIdAndStatusAndKind(taskId, FixRequestStatus.APPROVED, FixRequestKind.FIX);
         requireRoundLeft(approved);
 
         openRound(r, (int) approved + 1, mode, adminId);
@@ -193,15 +194,17 @@ public class TaskFixService {
     public TaskResponse.FixView fixViewOf(Task t) {
         Integer activeRound = null;
         String activeMode = null;
+        String activeKind = null;
         if (t.getActiveFixRequestId() != null) {
             TaskFixRequest active = fixRepo.findById(t.getActiveFixRequestId()).orElse(null);
             if (active != null) {
                 activeRound = active.getRound();
                 activeMode = active.getImplementationMode() == null ? null : active.getImplementationMode().name();
+                activeKind = active.getKind().name();
             }
         }
-        int approved = (int) fixRepo.countByTaskIdAndStatus(t.getId(), FixRequestStatus.APPROVED);
-        return new TaskResponse.FixView(activeRound, activeMode, approved, maxRounds);
+        int approved = (int) fixRepo.countByTaskIdAndStatusAndKind(t.getId(), FixRequestStatus.APPROVED, FixRequestKind.FIX);
+        return new TaskResponse.FixView(activeRound, activeMode, approved, maxRounds, activeKind);
     }
 
     /**

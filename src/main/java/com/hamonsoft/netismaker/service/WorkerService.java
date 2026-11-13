@@ -372,12 +372,13 @@ public class WorkerService {
     private OpenFixRound openFixRoundOf(Task t) {
         TaskFixRequest r = FixRounds.openRequest(fixRequestRepo, t);
         if (r == null) return null;
-        List<String> previous = fixRequestRepo
-                .findByTaskIdAndStatusAndRoundLessThanOrderByRoundAsc(t.getId(), FixRequestStatus.APPROVED, r.getRound())
+        List<String> previous = FixRounds.isBaseSync(r) ? List.of() : fixRequestRepo
+                .findByTaskIdAndStatusAndKindAndRoundLessThanOrderByRoundAsc(t.getId(), FixRequestStatus.APPROVED,
+                        FixRequestKind.FIX, r.getRound())
                 .stream().map(TaskFixRequest::getBody).toList();
         ImplementationMode mode = FixRounds.modeOf(r);
         return new OpenFixRound(mode, new WorkerTaskResponse.FixRoundSpec(r.getId(), r.getRound(), r.getAttempt(),
-                r.getBody(), previous, t.getHeadBranch(), t.getHeadSha()));
+                r.getBody(), previous, t.getHeadBranch(), t.getHeadSha(), r.getKind().name()));
     }
 
     /**

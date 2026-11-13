@@ -1,6 +1,7 @@
 package com.hamonsoft.netismaker.service;
 
 import com.hamonsoft.netismaker.dto.WorkerTaskResponse;
+import com.hamonsoft.netismaker.entity.FixRequestKind;
 import com.hamonsoft.netismaker.entity.FixRequestStatus;
 import com.hamonsoft.netismaker.entity.ImplementationMode;
 import com.hamonsoft.netismaker.entity.Task;
@@ -81,7 +82,7 @@ class WorkerServiceFixRoundClaimTest {
         Task t = fixRoundTask(502L);
         when(fixRepo.findById(502L)).thenReturn(Optional.of(
                 approved(502L, 2, ImplementationMode.REVIEW, 1, "대상장비 탭 갱신 안 됨")));
-        when(fixRepo.findByTaskIdAndStatusAndRoundLessThanOrderByRoundAsc(42L, FixRequestStatus.APPROVED, 2))
+        when(fixRepo.findByTaskIdAndStatusAndKindAndRoundLessThanOrderByRoundAsc(42L, FixRequestStatus.APPROVED, FixRequestKind.FIX, 2))
                 .thenReturn(List.of(approved(501L, 1, ImplementationMode.DIRECT, 1, "장기분석 로딩")));
 
         WorkerTaskResponse r = svc.claimNextTask("w1", ALL, null).orElseThrow();
@@ -97,6 +98,7 @@ class WorkerServiceFixRoundClaimTest {
         assertThat(fix.previousBodies()).containsExactly("장기분석 로딩");
         assertThat(fix.headBranch()).isEqualTo("netismaker/task-42-x");
         assertThat(fix.headSha()).isEqualTo(HEAD_SHA);
+        assertThat(fix.kind()).isEqualTo("FIX");
         assertThat(r.implementation().timeoutMinutes()).isEqualTo(80);   // REVIEW 상한(작업 방식 DIRECT여도)
         assertThat(t.getImplementationTimeoutMinutes()).isEqualTo(80);
         assertThat(t.getStatus()).isEqualTo(TaskStatus.IMPLEMENTING);
@@ -152,12 +154,29 @@ class WorkerServiceFixRoundClaimTest {
         fixRoundTask(501L);
         when(fixRepo.findById(501L)).thenReturn(Optional.of(
                 approved(501L, 1, ImplementationMode.REVIEW, 1, "장기분석 로딩")));
-        when(fixRepo.findByTaskIdAndStatusAndRoundLessThanOrderByRoundAsc(42L, FixRequestStatus.APPROVED, 1))
+        when(fixRepo.findByTaskIdAndStatusAndKindAndRoundLessThanOrderByRoundAsc(42L, FixRequestStatus.APPROVED, FixRequestKind.FIX, 1))
                 .thenReturn(List.of());
 
         WorkerTaskResponse r = svc.claimNextTask("w1", ALL, null).orElseThrow();
 
         assertThat(r.implementation().fix().previousBodies()).isEmpty();
+    }
+
+    @Test
+    void 기준_브랜치_반영_회차는_kind가_BASE_SYNC이고_이전_본문_조회를_하지_않는다() {
+        fixRoundTask(503L);
+        TaskFixRequest sync = TaskFixRequest.baseSync(42L, 1, "main", TaskStatus.DEPLOYED, "admin");
+        ReflectionTestUtils.setField(sync, "id", 503L);
+        when(fixRepo.findById(503L)).thenReturn(Optional.of(sync));
+
+        WorkerTaskResponse r = svc.claimNextTask("w1", ALL, null).orElseThrow();
+
+        WorkerTaskResponse.FixRoundSpec fix = r.implementation().fix();
+        assertThat(fix.kind()).isEqualTo("BASE_SYNC");
+        assertThat(fix.previousBodies()).isEmpty();
+        assertThat(fix.body()).isEqualTo("기준 브랜치 main 반영");
+        assertThat(r.implementation().mode()).isEqualTo("DIRECT");
+        verify(fixRepo, never()).findByTaskIdAndStatusAndKindAndRoundLessThanOrderByRoundAsc(any(), any(), any(), any());
     }
 
     @Test

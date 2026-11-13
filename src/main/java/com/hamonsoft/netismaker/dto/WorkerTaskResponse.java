@@ -204,10 +204,16 @@ public record WorkerTaskResponse(
      * 수정 회차 구현 지시 — 같은 브랜치에서 이어 고친다(스펙 2026-11-03 §7). requestId는 task_fix_request.id, round는 승인 때
      * 확정한 회차 번호, attempt는 회차 안의 구현 시도 번호, body는 이번 회차의 수정 요청 본문, previousBodies는 앞선 승인
      * 회차의 요청 본문(오래된 것부터). headBranch·headSha는 이어 갈 브랜치와 기대하는 끝 커밋(원격이 앞서 있으면 워커가
-     * 원격 끝을 쓴다).
+     * 원격 끝을 쓴다). kind는 회차 종류(FIX|BASE_SYNC).
      */
     public record FixRoundSpec(Long requestId, int round, int attempt, String body, List<String> previousBodies,
-                               String headBranch, String headSha) {}
+                               String headBranch, String headSha, String kind) {
+        /** 종류(kind) 도입 전 7개 인자 — 수정 요청(FIX) 회차. */
+        public FixRoundSpec(Long requestId, int round, int attempt, String body, List<String> previousBodies,
+                            String headBranch, String headSha) {
+            this(requestId, round, attempt, body, previousBodies, headBranch, headSha, "FIX");
+        }
+    }
 
     /**
      * 구현 claim의 참조 repo 1개 — task.ref_repos 원소(RefRepo)의 스냅샷. githubRepo는 경로(GitHub owner/repo, GitLab 전체 경로),

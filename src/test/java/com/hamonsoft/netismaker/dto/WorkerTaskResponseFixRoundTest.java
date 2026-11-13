@@ -29,6 +29,13 @@ class WorkerTaskResponseFixRoundTest {
     }
 
     @Test
+    void 일곱_인자_FixRoundSpec은_kind가_FIX() {
+        assertThat(fix().kind()).isEqualTo("FIX");
+        var sync = new WorkerTaskResponse.FixRoundSpec(1L, 1, 1, "b", List.of(), "br", "sha", "BASE_SYNC");
+        assertThat(sync.kind()).isEqualTo("BASE_SYNC");
+    }
+
+    @Test
     void 세_인자_ImplementationSpec은_fix가_null() {
         var spec = new WorkerTaskResponse.ImplementationSpec("DIRECT", 1, 45);
 

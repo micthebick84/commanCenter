@@ -167,9 +167,10 @@ public record TaskResponse(
 
     /**
      * 수정 요청 회차 현황. activeRound·activeMode는 열린 회차가 없으면 null(activeMode는 DIRECT|REVIEW),
-     * approvedRounds는 승인된 요청 수, maxRounds는 작업당 승인 한도(app.task.fix-request-max-rounds).
+     * activeKind는 열린 회차의 종류(FIX|BASE_SYNC, 없으면 null), approvedRounds는 승인된 수정 요청(FIX) 수, maxRounds는 작업당 승인 한도(app.task.fix-request-max-rounds).
      */
-    public record FixView(Integer activeRound, String activeMode, int approvedRounds, int maxRounds) {}
+    public record FixView(Integer activeRound, String activeMode, int approvedRounds, int maxRounds,
+                          String activeKind) {}
 
     private static final Set<TaskStatus> CLOSE_PHASE = EnumSet.of(
             TaskStatus.CLOSE_REVIEW, TaskStatus.CLOSE_PENDING, TaskStatus.CLOSING,

@@ -255,6 +255,83 @@ class GitLabMrCloserTest {
         assertThat(GitLabMrCloser.classify("conflict")).isEqualTo("충돌");
     }
 
+    @Test
+    void non_Draft_MR은_detailed가_확정이면_merge_status가_늦어도_기다리지_않는다() throws Exception {
+        route("GET " + MR, 200, withMergeStatus(mr("opened", false, SHA, "mergeable", null), "unchecked"));
+        route("PUT " + MR + "/merge", 200, mr("merged", false, SHA, "not_open", "m3rg3"));
+        List<Long> sleeps = new ArrayList<>();
+
+        assertThat(new GitLabMrCloser("t", sleeps::add).merge(ref(), 9, SHA, "merge")).isEqualTo("m3rg3");
+        assertThat(sleeps).isEmpty();
+    }
+
+    @Test
+    void 기다리는_사이_브랜치가_바뀌면_병합요청_없이_head_불일치로_거부() {
+        route("GET " + MR, 200, mr("opened", false, SHA, "checking", null));
+        route("GET " + MR, 200, mr("opened", false, "ffff", "mergeable", null));
+
+        assertThatThrownBy(() -> new GitLabMrCloser("t", d -> { }).merge(ref(), 9, SHA, "merge"))
+                .isInstanceOf(MergeRequestCloser.CloseRefusedException.class)
+                .hasMessageContaining("head 불일치").hasMessageEndingWith(MergeRequestCloser.HEAD_MISMATCH_HINT);
+        assertThat(seen).noneMatch(s -> s.startsWith("PUT"));
+    }
+
+    @Test
+    void 기다리는_사이_밖에서_병합되면_그_커밋을_돌려주고_병합요청은_없다() throws Exception {
+        route("GET " + MR, 200, mr("opened", false, SHA, "checking", null));
+        route("GET " + MR, 200, mr("merged", false, SHA, "not_open", "ext1"));
+
+        assertThat(new GitLabMrCloser("t", d -> { }).merge(ref(), 9, SHA, "merge")).isEqualTo("ext1");
+        assertThat(seen).noneMatch(s -> s.startsWith("PUT"));
+    }
+
+    @Test
+    void draft_해제_뒤_대기_중_브랜치가_바뀌면_제목을_되돌리고_head_불일치로_거부() {
+        route("GET " + MR, 200, mr("opened", true, SHA, "draft_status", null));
+        route("GET " + MR, 200, mr("opened", false, "ffff", "mergeable", null));
+        route("PUT " + MR, 200, mr("opened", false, SHA, "checking", null));
+
+        assertThatThrownBy(() -> new GitLabMrCloser("t", d -> { }).merge(ref(), 9, SHA, "merge"))
+                .isInstanceOf(MergeRequestCloser.CloseRefusedException.class)
+                .hasMessageContaining("head 불일치").hasMessageContaining(MergeRequestCloser.HEAD_MISMATCH_HINT);
+        assertThat(seen.get(seen.size() - 1)).startsWith("PUT " + MR + " | ").contains("\"title\":\"Draft: 제목\"");
+        assertThat(seen).noneMatch(s -> s.startsWith("PUT " + MR + "/merge"));
+    }
+
+    @Test
+    void draft_해제_뒤_대기_중_밖에서_병합되면_그_커밋을_돌려주고_병합요청은_없다() throws Exception {
+        route("GET " + MR, 200, mr("opened", true, SHA, "draft_status", null));
+        route("GET " + MR, 200, mr("merged", false, SHA, "not_open", "ext2"));
+        route("PUT " + MR, 200, mr("opened", false, SHA, "checking", null));
+
+        assertThat(new GitLabMrCloser("t", d -> { }).merge(ref(), 9, SHA, "merge")).isEqualTo("ext2");
+        assertThat(seen).noneMatch(s -> s.startsWith("PUT " + MR + "/merge"));
+    }
+
+    @Test
+    void draft_해제_뒤_대기_조회가_500이면_제목을_되돌리고_예외를_전파한다() {
+        route("GET " + MR, 200, mr("opened", true, SHA, "draft_status", null));
+        route("GET " + MR, 500, "{\"message\":\"boom\"}");
+        route("PUT " + MR, 200, mr("opened", false, SHA, "checking", null));
+
+        assertThatThrownBy(() -> new GitLabMrCloser("t", d -> { }).merge(ref(), 9, SHA, "merge"))
+                .isInstanceOf(IOException.class).hasMessageContaining("500");
+        assertThat(seen.get(seen.size() - 1)).startsWith("PUT " + MR + " | ").contains("\"title\":\"Draft: 제목\"");
+        assertThat(seen).noneMatch(s -> s.startsWith("PUT " + MR + "/merge"));
+    }
+
+    @Test
+    void draft_해제_뒤_대기_중_중단되면_제목을_되돌리고_중단을_전파한다() {
+        route("GET " + MR, 200, mr("opened", true, SHA, "draft_status", null));
+        route("PUT " + MR, 200, mr("opened", false, SHA, "checking", null));
+
+        assertThatThrownBy(() -> new GitLabMrCloser("t", d -> {
+            throw new InterruptedException("stop");
+        }).merge(ref(), 9, SHA, "merge")).isInstanceOf(InterruptedException.class);
+        assertThat(seen.get(seen.size() - 1)).startsWith("PUT " + MR + " | ").contains("\"title\":\"Draft: 제목\"");
+        Thread.interrupted();   // 전파 때 켜 둔 인터럽트 표시가 다른 시험에 새지 않게
+    }
+
     private void assertRefusedBeforeAnyChange() {
         assertThat(seen).hasSize(1);
         assertNoChange();

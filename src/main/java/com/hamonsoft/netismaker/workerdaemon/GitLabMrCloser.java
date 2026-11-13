@@ -40,8 +40,9 @@ import java.util.regex.Pattern;
  *   - merge_status는 15.6부터 deprecated, 값은 unchecked·checking·can_be_merged·cannot_be_merged·cannot_be_merged_recheck.
  * 문서가 정하지 못해 통제자 판정으로 둘 다 구현한 것: Draft MR은 detailed_merge_status가 draft_status로 덮이는데
  *   (작업 42 MR !10 실측: draft_status, merge_status=cannot_be_merged, has_conflicts=true) 그때 merge_status가 계산 상태를
- *   보여 주는지는 문서로 확인하지 못했다. 그래서 ① Draft 해제 전에 merge_status ∈ LEGACY_COMPUTING도 계산 중으로 보고
- *   기다리고, ② Draft 해제 뒤 응답으로 같은 대기를 한 번 더 한다(해제하면 detailed_merge_status가 드러난다).
+ *   보여 주는지는 문서로 확인하지 못했다. 그래서 ① Draft 해제 전에, detailed_merge_status가 draft_status(또는 빈 값)일 때만
+ *   merge_status ∈ LEGACY_COMPUTING도 계산 중으로 보고 기다리고(detailed가 다른 값이면 COMPUTING만 본다 —
+ *   merge_status만 늦게 따라오는 non-Draft MR 보호), ② Draft 해제 뒤 응답으로 같은 대기를 한 번 더 한다(해제하면 detailed_merge_status가 드러난다).
  */
 @Slf4j
 public class GitLabMrCloser implements MergeRequestCloser {
@@ -64,7 +65,7 @@ public class GitLabMrCloser implements MergeRequestCloser {
     static final long MERGEABILITY_POLL_MILLIS = 2000;
     /** detailed_merge_status가 이 값이면 GitLab이 아직 병합 가능 여부를 계산 중이다(문서 확인). */
     static final Set<String> COMPUTING = Set.of("checking", "unchecked", "preparing");
-    /** 예전 칸 merge_status의 계산 중 값 — Draft MR은 detailed_merge_status가 draft_status로 덮이므로 이쪽도 본다(통제자 판정). */
+    /** 예전 칸 merge_status의 계산 중 값 — detailed_merge_status가 draft_status로 덮였을 때(또는 비었을 때)만 본다(통제자 판정). */
     static final Set<String> LEGACY_COMPUTING = Set.of("unchecked", "checking", "cannot_be_merged_recheck");
     private static final String COMPUTING_REFUSED = "병합 가능 여부 확인 중 — 잠시 뒤 재시도하세요";
 
@@ -100,16 +101,15 @@ public class GitLabMrCloser implements MergeRequestCloser {
             log.info("MR !{} 이미 병합됨 — 성공 처리", iid);
             return commitOf(mr);
         }
-        if (!"opened".equals(state)) {
-            throw new CloseRefusedException("MR !" + iid + "이 병합 없이 닫혀 있습니다(" + state + ") — 다시 열거나 직접 처리한 뒤 재시도하세요");
-        }
-        String sha = mr.path("sha").asText("");
-        if (!sha.equalsIgnoreCase(headSha)) {
-            throw new CloseRefusedException("head 불일치: 확인한 커밋 " + shortSha(headSha) + " 이후 브랜치가 "
-                    + shortSha(sha) + "(으)로 바뀌었습니다" + HEAD_MISMATCH_HINT);
-        }
+        requireOpenAndPinned(mr, iid, headSha);
         // 계산이 끝나기 전의 has_conflicts는 믿을 수 없다 — 먼저 기다린 뒤에 본다(Draft여도 아직 제목은 건드리지 않았다).
         mr = awaitMergeability(base, mr);
+        // 기다리는 사이 밖에서 병합되거나 push됐을 수 있다 — 같은 판정을 다시 적용한다.
+        if ("merged".equals(mr.path("state").asText(""))) {
+            log.info("MR !{} 대기 중 병합됨 — 성공 처리", iid);
+            return commitOf(mr);
+        }
+        requireOpenAndPinned(mr, iid, headSha);
         CloseRefusedException conflict = conflictOf(ref, mr);
         if (conflict != null) throw conflict;
         String title = mr.path("title").asText("");
@@ -132,13 +132,20 @@ public class GitLabMrCloser implements MergeRequestCloser {
             // 둘째 길: 해제하면 detailed_merge_status가 draft_status에서 풀려 계산 중이 보일 수 있다 — 다시 기다린다.
             // 여기서 거부하면 이미 해제한 제목을 원복해야 한다.
             CloseRefusedException refused;
+            JsonNode settled;
             try {
-                refused = conflictOf(ref, awaitMergeability(base, undrafted));
+                settled = awaitMergeability(base, undrafted);
+                if (!"merged".equals(settled.path("state").asText(""))) requireOpenAndPinned(settled, iid, headSha);
+                refused = conflictOf(ref, settled);
             } catch (CloseRefusedException | IOException | InterruptedException e) {
                 String undo = restoreTitle(base, title);
                 if (e instanceof InterruptedException) Thread.currentThread().interrupt();
                 if (e instanceof CloseRefusedException) throw new CloseRefusedException(e.getMessage() + undo);
                 throw e;
+            }
+            if ("merged".equals(settled.path("state").asText(""))) {
+                log.info("MR !{} 해제 뒤 대기 중 병합됨 — 성공 처리", iid);
+                return commitOf(settled);
             }
             if (refused != null) throw new CloseRefusedException(refused.getMessage() + restoreTitle(base, title));
         }
@@ -196,9 +203,29 @@ public class GitLabMrCloser implements MergeRequestCloser {
         return mr;
     }
 
+    /** 병합 없이 닫혔거나 확인한 커밋과 sha가 다르면 거부 — 처음 조회와 대기 뒤 재조회에 같은 판정을 쓴다. */
+    private static void requireOpenAndPinned(JsonNode mr, int iid, String headSha) throws CloseRefusedException {
+        String state = mr.path("state").asText("");
+        if (!"opened".equals(state)) {
+            throw new CloseRefusedException("MR !" + iid + "이 병합 없이 닫혀 있습니다(" + state + ") — 다시 열거나 직접 처리한 뒤 재시도하세요");
+        }
+        String sha = mr.path("sha").asText("");
+        if (!sha.equalsIgnoreCase(headSha)) {
+            throw new CloseRefusedException("head 불일치: 확인한 커밋 " + shortSha(headSha) + " 이후 브랜치가 "
+                    + shortSha(sha) + "(으)로 바뀌었습니다" + HEAD_MISMATCH_HINT);
+        }
+    }
+
+    /**
+     * detailed_merge_status가 COMPUTING이면 계산 중. 예전 칸 merge_status는 detailed_merge_status가 Draft로 덮였을 때
+     * (draft_status 또는 비어 있음)만 보조 신호로 쓴다 — 값이 이미 정해졌는데 merge_status만 늦게 따라오는 non-Draft MR을
+     * 20초 기다리다 거부하지 않도록.
+     */
     private static boolean isComputing(JsonNode mr) {
-        return COMPUTING.contains(mr.path("detailed_merge_status").asText(""))
-                || LEGACY_COMPUTING.contains(mr.path("merge_status").asText(""));
+        String detailed = mr.path("detailed_merge_status").asText("");
+        if (COMPUTING.contains(detailed)) return true;
+        boolean hiddenByDraft = detailed.isBlank() || "draft_status".equals(detailed);
+        return hiddenByDraft && LEGACY_COMPUTING.contains(mr.path("merge_status").asText(""));
     }
 
     /** 계산이 끝난 MR이 충돌이면 거부 예외, 아니면 null. */

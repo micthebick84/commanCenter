@@ -210,8 +210,8 @@ public class TaskCloseService {
             throw TaskException.conflict("반영할 작업 브랜치·커밋 정보가 없습니다");
         }
         String base = t.getGithubBranch();
-        if (t.getHeadBranch().equals(base)) {
-            throw TaskException.conflict("작업 브랜치가 기준 브랜치(" + base + ")와 같습니다");
+        if (base != null && t.getHeadBranch().strip().equals(base.strip())) {
+            throw TaskException.conflict("작업 브랜치가 기준 브랜치(" + base.strip() + ")와 같습니다");
         }
         long used = fixRepo.countByTaskIdAndKind(t.getId(), FixRequestKind.BASE_SYNC);
         if (used >= baseSyncMaxRounds) {

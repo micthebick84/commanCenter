@@ -157,6 +157,9 @@ class TaskCloseServiceBaseSyncTest {
 
         t.setHeadBranch("main");
         assertConflict(() -> service.syncBase(42L, "admin"), "작업 브랜치가 기준 브랜치(main)와 같습니다");
+
+        t.setHeadBranch(" main ");
+        assertConflict(() -> service.syncBase(42L, "admin"), "작업 브랜치가 기준 브랜치(main)와 같습니다");
     }
 
     @Test

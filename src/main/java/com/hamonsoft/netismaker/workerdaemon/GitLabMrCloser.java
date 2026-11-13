@@ -310,7 +310,7 @@ public class GitLabMrCloser implements MergeRequestCloser {
         return switch (detailed) {
             case "ci_still_running" -> "CI 대기 중";
             case "ci_must_pass" -> "CI 실패 또는 미통과";
-            case "conflict", "broken_status" -> "충돌";
+            case "conflict", "broken_status" -> "충돌 — 작업 상세의 '기준 브랜치 반영'으로 해결하세요";
             case "need_rebase" -> "리베이스 필요 — 작업 상세의 '기준 브랜치 반영'으로 해결하세요";
             case "not_approved" -> "승인 필요";
             case "discussions_not_resolved" -> "미해결 토론";

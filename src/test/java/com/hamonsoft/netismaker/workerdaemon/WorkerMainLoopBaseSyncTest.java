@@ -154,7 +154,7 @@ class WorkerMainLoopBaseSyncTest {
 
         verify(claude, never()).exec(anyString(), any(), any(), anyList(), anyBoolean(), any(), any(), any());
         verify(gitOps, never()).pushHead(any(), any(), anyString());
-        verify(merger, never()).commitMerge(any(), anyList(), anyString());
+        verify(merger, never()).commitMerge(any(), anyList(), anyString(), anyString(), anyString());
         WorkerResultRequest r = reported();
         assertThat(r.status()).isEqualTo(TaskStatus.PR_CREATED);
         assertThat(r.headSha()).isEqualTo(TIP);
@@ -172,7 +172,7 @@ class WorkerMainLoopBaseSyncTest {
         loop().pollAndProcess();
 
         verify(claude, never()).exec(anyString(), any(), any(), anyList(), anyBoolean(), any(), any(), any());
-        verify(merger).commitMerge(eq(wt.toFile()), eq(List.of()), startsWith("merge: 기준 브랜치 main 반영 — Add login"));
+        verify(merger).commitMerge(eq(wt.toFile()), eq(List.of()), startsWith("merge: 기준 브랜치 main 반영 — Add login"), eq(TIP), eq("origin/main"));
         verify(gitOps).pushHead(eq(wt.toFile()), any(), eq(BRANCH));
         WorkerResultRequest r = reported();
         assertThat(r.status()).isEqualTo(TaskStatus.PR_CREATED);
@@ -195,7 +195,7 @@ class WorkerMainLoopBaseSyncTest {
         assertThat(seen.get().prompt()).contains("- PLAN.md");
         assertThat(seen.get().extras()).isEmpty();
         assertThat(seen.get().timeout()).isEqualTo(Duration.ofMinutes(80));
-        verify(merger).commitMerge(eq(wt.toFile()), eq(List.of("PLAN.md")), startsWith("merge: 기준 브랜치 main 반영 — "));
+        verify(merger).commitMerge(eq(wt.toFile()), eq(List.of("PLAN.md")), startsWith("merge: 기준 브랜치 main 반영 — "), eq(TIP), eq("origin/main"));
         WorkerResultRequest r = reported();
         assertThat(r.status()).isEqualTo(TaskStatus.PR_CREATED);
         assertThat(r.headSha()).isEqualTo("merged1");
@@ -218,7 +218,7 @@ class WorkerMainLoopBaseSyncTest {
         assertFailedWithoutPush(r, LABEL + ": 충돌 해결 실패 — 남은 충돌 파일: PLAN.md");
         assertThat(r.headSha()).isEqualTo(TIP);
         assertThat(r.implementationLog()).contains("claude 출력");
-        verify(merger, never()).commitMerge(any(), anyList(), anyString());
+        verify(merger, never()).commitMerge(any(), anyList(), anyString(), anyString(), anyString());
     }
 
     @Test
@@ -235,7 +235,7 @@ class WorkerMainLoopBaseSyncTest {
         assertFailedWithoutPush(r, LABEL + ": 충돌 파일 밖을 수정함 — README.md");
         assertThat(r.headSha()).isEqualTo(TIP);
         assertThat(r.implementationLog()).contains("claude 출력");
-        verify(merger, never()).commitMerge(any(), anyList(), anyString());
+        verify(merger, never()).commitMerge(any(), anyList(), anyString(), anyString(), anyString());
     }
 
     @Test
@@ -379,5 +379,41 @@ class WorkerMainLoopBaseSyncTest {
         verify(merger, never()).start(any(), anyString());
         verify(repos).fetchOnly(any(), eq(BRANCH));
         verify(repos, never()).fetchForBaseSync(any(), anyString(), anyString());
+    }
+
+    @Test
+    void 병합_상태가_아니면_구현실패이고_push하지_않는다() throws Exception {
+        claims();
+        conflictOn("PLAN.md");
+        when(merger.unresolved(any(), anyList())).thenReturn(List.of());
+        when(merger.strayChanges(any(), any())).thenReturn(List.of());
+        claudeEnds(0);
+        when(merger.commitMerge(any(), anyList(), anyString(), anyString(), anyString()))
+                .thenThrow(new BaseSyncMerger.NotMergingException("병합 상태가 아님 — 병합이 취소됐거나 다른 커밋이 만들어짐"));
+
+        loop().pollAndProcess();
+
+        WorkerResultRequest r = reported();
+        assertThat(r.status()).isEqualTo(TaskStatus.IMPLEMENTATION_FAILED);
+        assertThat(r.failureReason()).startsWith(LABEL + ": ").contains("병합 상태가 아님");
+        assertThat(r.headSha()).isEqualTo(TIP);
+        assertThat(r.implementationLog()).contains("claude 출력");
+        hasFixMarks(r);
+        verify(gitOps, never()).pushHead(any(), any(), anyString());
+        verify(worktrees, never()).discard(anyString(), any(), anyLong());
+    }
+
+    @Test
+    void Claude_실행_예외는_구현실패이고_push하지_않는다() throws Exception {
+        claims();
+        conflictOn("PLAN.md");
+        when(claude.exec(anyString(), any(), any(), anyList(), anyBoolean(), any(), any(), any()))
+                .thenThrow(new IOException("boom"));
+
+        loop().pollAndProcess();
+
+        WorkerResultRequest r = reported();
+        assertFailedWithoutPush(r, LABEL + ": claude exec 실패: boom");
+        verify(merger, never()).commitMerge(any(), anyList(), anyString(), anyString(), anyString());
     }
 }

@@ -855,11 +855,11 @@ public class WorkerService {
                 accumulateUsage(t.getId(), TaskStageUsage.STAGE_IMPLEMENTATION, req);
                 FixRounds.close(t, round, FixOutcome.NO_CHANGE, OffsetDateTime.now());
                 if (round != null) fixRequestRepo.save(round);
-                finishBaseSyncRound(t, from, back, req, "기준 브랜치가 이미 반영돼 있음 → " + back.dbValue() + FixRounds.closedSuffix(round));
+                finishBaseSyncRound(t, from, back, req, reasonPrefix + "기준 브랜치가 이미 반영돼 있음 → " + back.dbValue() + FixRounds.closedSuffix(round));
                 return;
             }
             if (TaskCloseService.neverDeployed(t)) {
-                // 배포한 적 없는 작업 — 재배포할 것이 없다. 새 끝만 기록하고 PR생성으로 돌아가 회차를 닫는다.
+                // 배포한 적 없는 작업(PR생성에서 반영을 연 DB 작업뿐 — 배포한 작업은 직전 상태가 배포완료·중단됨·실패다) — 재배포할 것이 없다. 새 끝만 기록하고 PR생성으로 돌아가 회차를 닫는다.
                 t.setHeadSha(newSha);
                 t.setImplementationLog(req.implementationLog());
                 logRefWarnings(t, req);
@@ -867,7 +867,7 @@ public class WorkerService {
                 FixRounds.close(t, round, FixOutcome.SYNCED, OffsetDateTime.now());
                 if (round != null) fixRequestRepo.save(round);
                 finishBaseSyncRound(t, from, TaskStatus.PR_CREATED, req,
-                        label + " 완료: " + FixRounds.shortSha(newSha) + " → PR생성" + FixRounds.closedSuffix(round));
+                        reasonPrefix + label + " 완료: " + FixRounds.shortSha(newSha) + " → PR생성" + FixRounds.closedSuffix(round));
                 return;
             }
         }

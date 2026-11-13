@@ -252,7 +252,8 @@ class GitLabMrCloserTest {
         assertThat(GitLabMrCloser.classify("unchecked")).isEqualTo("병합 가능 여부 확인 중");
         assertThat(GitLabMrCloser.classify("need_rebase"))
                 .isEqualTo("리베이스 필요 — 작업 상세의 '기준 브랜치 반영'으로 해결하세요");
-        assertThat(GitLabMrCloser.classify("conflict")).isEqualTo("충돌");
+        assertThat(GitLabMrCloser.classify("conflict")).isEqualTo("충돌 — 작업 상세의 '기준 브랜치 반영'으로 해결하세요");
+        assertThat(GitLabMrCloser.classify("broken_status")).isEqualTo("충돌 — 작업 상세의 '기준 브랜치 반영'으로 해결하세요");
     }
 
     @Test

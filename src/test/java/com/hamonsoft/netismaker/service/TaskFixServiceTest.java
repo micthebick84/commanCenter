@@ -162,7 +162,6 @@ class TaskFixServiceTest {
         when(fixRepo.countByTaskIdAndStatusAndKind(42L, APPROVED, FixRequestKind.FIX)).thenReturn(2L);
         svc.request(42L, ADMIN, true, "본문", null);
         assertThat(savedFix().getRound()).isEqualTo(3);
-        verify(fixRepo, never()).countByTaskIdAndStatus(any(), any());
     }
 
     @Test

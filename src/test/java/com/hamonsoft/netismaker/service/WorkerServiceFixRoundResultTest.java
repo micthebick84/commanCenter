@@ -639,6 +639,35 @@ class WorkerServiceFixRoundResultTest {
     }
 
     @Test
+    void 구현실패로_회수된_반영회차의_늦은_성공은_정합화된다() {
+        Task t = baseSyncTask(DEPLOYED);
+        t.setStatus(IMPLEMENTATION_FAILED);
+        t.setWorkerId(null);
+        t.setFailureReason("Stale 회수: 처리 시간 초과(95분) (구현 중단)");
+
+        svc.recordResult(42L, syncReport(success(BRANCH, "bbb2222")));
+
+        assertThat(t.getStatus()).isEqualTo(DEPLOY_PENDING);
+        assertThat(t.getHeadSha()).isEqualTo("bbb2222");
+        assertThat(t.getFailureReason()).isNull();
+        assertThat(histories().get(0).getReason()).startsWith("지각 보고 정합화: stale 회수 → ");
+
+        // 같은 커밋이면 반영할 것이 없던 것 — 직전 상태로 돌아가고 회차는 NO_CHANGE
+        Task t2 = baseSyncTask(DEPLOYED);
+        t2.setStatus(IMPLEMENTATION_FAILED);
+        t2.setWorkerId(null);
+        t2.setFailureReason("Stale 회수: 처리 시간 초과(95분) (구현 중단)");
+        clearInvocations(historyRepo);
+
+        svc.recordResult(42L, syncReport(success(BRANCH, "aaa1111")));
+
+        assertThat(t2.getStatus()).isEqualTo(DEPLOYED);
+        assertThat(syncRound.getOutcome()).isEqualTo(FixOutcome.NO_CHANGE);
+        assertThat(t2.getActiveFixRequestId()).isNull();
+        assertThat(histories().get(0).getReason()).startsWith("지각 보고 정합화: stale 회수 → ");
+    }
+
+    @Test
     void 반영_실패는_head_sha를_바꾸지_않는다() {
         Task t = baseSyncTask(DEPLOYED);
 

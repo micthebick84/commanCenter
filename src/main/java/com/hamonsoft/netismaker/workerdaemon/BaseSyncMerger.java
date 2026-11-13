@@ -32,6 +32,11 @@ import java.util.concurrent.TimeUnit;
 @Profile("worker")
 public class BaseSyncMerger {
 
+    /** 병합 커밋이 될 수 없는 상태 */
+    public static class NotMergingException extends IOException {
+        public NotMergingException(String message) { super(message); }
+    }
+
     public enum Outcome { UP_TO_DATE, CLEAN, CONFLICTED }
 
     /**
@@ -84,12 +89,15 @@ public class BaseSyncMerger {
     /**
      * 아직 풀리지 않은 경로. 충돌 파일 중 줄 머리가 {@code <<<<<<< }·{@code >>>>>>> }인 줄이 남은 것과, 인덱스에 병합 안 됨으로
      * 남았는데 {@code conflicted} 목록에 없는 경로(커밋할 수 없다). {@code =======}만 있는 줄은 보지 않는다(Markdown 제목 밑줄).
-     * 사라진 파일(한쪽 삭제를 받아들임)과 표식 없이 남은 파일은 미해결이 아니다 — 스테이징은 {@link #commitMerge}가 한다.
+     * 작업 트리에서 사라진 충돌 파일은 미해결이다 — 표식 없는 충돌은 Claude를 돌리기 전에 거절되므로 여기 오는 경로는 모두
+     * 표식 있는 파일이었고, 지워 버린 세션은 병합한 것이 아니다. 표식 없이 남은 파일은 미해결이 아니다 — 스테이징은
+     * {@link #commitMerge}가 한다.
      */
     public List<String> unresolved(File worktreeDir, List<String> conflicted) throws IOException, InterruptedException {
         Set<String> out = new LinkedHashSet<>();
         for (String path : conflicted) {
-            if (hasMarkers(worktreeDir.toPath().resolve(path))) out.add(path);
+            Path file = worktreeDir.toPath().resolve(path);
+            if (!Files.exists(file) || hasMarkers(file)) out.add(path);
         }
         Set<String> known = new HashSet<>(conflicted);
         for (String path : unmergedPaths(worktreeDir)) {
@@ -116,16 +124,40 @@ public class BaseSyncMerger {
         return new ArrayList<>(out);
     }
 
-    /** 충돌 경로를 스테이징하고 병합 커밋을 만든다(트리가 HEAD와 같아도 병합 중이면 커밋된다). 새 HEAD sha. */
-    public String commitMerge(File worktreeDir, List<String> conflicted, String message)
+    /**
+     * 충돌 경로를 스테이징하고 병합 커밋을 만든다(트리가 HEAD와 같아도 병합 중이면 커밋된다). 새 HEAD sha.
+     * 커밋 전에 아직 병합 중인지(MERGE_HEAD가 있고 HEAD가 처음 받은 끝 {@code tipSha}인지), 커밋 뒤에 진짜 병합 커밋인지
+     * (첫 부모가 {@code tipSha}이고 {@code baseRef}가 조상인지) 확인한다 — Claude 세션이 병합을 취소하고 손으로 고쳐
+     * 한 부모 커밋이 만들어지는 것을 막는다. 아니면 {@link NotMergingException}.
+     */
+    public String commitMerge(File worktreeDir, List<String> conflicted, String message, String tipSha, String baseRef)
             throws IOException, InterruptedException {
+        int mergeHead = ProcessRunner.run(worktreeDir, List.of("git", "rev-parse", "-q", "--verify", "MERGE_HEAD"), TIMEOUT)
+                .exitCode();
+        if (mergeHead != 0 || !sameSha(revParse(worktreeDir, "HEAD"), tipSha)) {
+            throw new NotMergingException("병합 상태가 아님 — 병합이 취소됐거나 다른 커밋이 만들어짐");
+        }
         if (!conflicted.isEmpty()) {
             List<String> add = new ArrayList<>(List.of("git", "--literal-pathspecs", "add", "-A", "--"));
             add.addAll(conflicted);
             ProcessRunner.requireSuccess(worktreeDir, add, TIMEOUT);
         }
         ProcessRunner.requireSuccess(worktreeDir, withIdentity("commit", "--no-edit", "-m", message), TIMEOUT);
-        return GitOpsService.revParseHead(worktreeDir);
+        String head = GitOpsService.revParseHead(worktreeDir);
+        boolean baseMerged = ProcessRunner.run(worktreeDir,
+                List.of("git", "merge-base", "--is-ancestor", baseRef, "HEAD"), TIMEOUT).exitCode() == 0;
+        if (!sameSha(revParse(worktreeDir, "HEAD^1"), tipSha) || !baseMerged) {
+            throw new NotMergingException("병합 커밋 확인 실패 — 기준 브랜치가 반영되지 않음");
+        }
+        return head;
+    }
+
+    private static String revParse(File dir, String rev) throws IOException, InterruptedException {
+        return ProcessRunner.requireSuccess(dir, List.of("git", "rev-parse", rev), TIMEOUT).trim();
+    }
+
+    private static boolean sameSha(String a, String b) {
+        return a != null && b != null && a.strip().equalsIgnoreCase(b.strip());
     }
 
     // ── 내부 ──

@@ -811,7 +811,10 @@ public class WorkerMainLoop {
         if (started.outcome() == BaseSyncMerger.Outcome.CLEAN) {
             String pushed;
             try {
-                pushed = commitAndPushMerge(task, wt.dir(), branch, List.of(), message);
+                pushed = commitAndPushMerge(task, wt.dir(), branch, List.of(), message, tip, repo.baseRef());
+            } catch (BaseSyncMerger.NotMergingException e) {
+                safePostImplementationFailure(task, attempt, label + ": " + e.getMessage(), branch, tip, headLog);
+                return;
             } catch (Exception e) {
                 safePostImplementationFailure(task, attempt, mergePushFailure(label, e), branch, tip, headLog);
                 return;
@@ -843,7 +846,7 @@ public class WorkerMainLoop {
                     new ClaudeExecAdapter.ExecOptions(List.of(),
                             gitAuthorEnv(props.gitUserName(), props.gitUserEmail())));
         } catch (Exception e) {
-            safePostImplementationFailure(task, attempt, label + ": claude exec 실패: " + e.getMessage(), branch, tip, headLog);
+            safePostImplementationFailure(task, attempt, label + ": claude exec 실패: " + messageOf(e), branch, tip, headLog);
             return;
         }
         String claudeLog = logHead + "[" + label + "] 충돌 파일: " + String.join(", ", conflicted) + "\n\n"
@@ -880,7 +883,10 @@ public class WorkerMainLoop {
         // 7. 병합 커밋 → 같은 브랜치에 fast-forward push
         String pushed;
         try {
-            pushed = commitAndPushMerge(task, wt.dir(), branch, conflicted, message);
+            pushed = commitAndPushMerge(task, wt.dir(), branch, conflicted, message, tip, repo.baseRef());
+        } catch (BaseSyncMerger.NotMergingException e) {
+            safePostImplementationFailure(task, attempt, label + ": " + e.getMessage(), branch, tip, claudeLog, usageOf(exec));
+            return;
         } catch (Exception e) {
             safePostImplementationFailure(task, attempt, mergePushFailure(label, e), branch, tip, claudeLog, usageOf(exec));
             return;
@@ -890,8 +896,8 @@ public class WorkerMainLoop {
 
     /** 병합 커밋을 만들고 작업 브랜치에 fast-forward push — 새 원격 끝. */
     private String commitAndPushMerge(WorkerTaskResponse task, File dir, String branch, List<String> conflicted,
-                                      String message) throws Exception {
-        merger.commitMerge(dir, conflicted, message);
+                                      String message, String tip, String baseRef) throws Exception {
+        merger.commitMerge(dir, conflicted, message, tip, baseRef);
         return gitOps.pushHead(dir, task.repoRef(), branch);
     }
 

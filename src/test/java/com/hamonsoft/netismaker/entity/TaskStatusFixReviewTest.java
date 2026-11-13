@@ -57,6 +57,8 @@ class TaskStatusFixReviewTest {
                 FixRequestStatus.PENDING, FixRequestStatus.APPROVED,
                 FixRequestStatus.REJECTED, FixRequestStatus.WITHDRAWN);
         assertThat(FixOutcome.values()).containsExactly(
-                FixOutcome.DEPLOYED, FixOutcome.DEPLOY_FAILED, FixOutcome.ABORTED);
+                FixOutcome.DEPLOYED, FixOutcome.DEPLOY_FAILED, FixOutcome.ABORTED,
+                FixOutcome.NO_CHANGE, FixOutcome.SYNCED);
+        assertThat(FixRequestKind.values()).containsExactly(FixRequestKind.FIX, FixRequestKind.BASE_SYNC);
     }
 }

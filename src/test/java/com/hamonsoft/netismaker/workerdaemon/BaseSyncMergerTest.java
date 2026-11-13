@@ -12,6 +12,7 @@ import java.util.Map;
 
 import static com.hamonsoft.netismaker.workerdaemon.BaseSyncFixture.git;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /** 실제 git으로 보는 기준 브랜치 병합기(스펙 2026-11-13) — 병합 시작·충돌 목록·검증·병합 커밋. */
 class BaseSyncMergerTest {
@@ -39,12 +40,13 @@ class BaseSyncMergerTest {
     @Test
     void 겹치지_않는_변경이면_CLEAN이고_병합커밋의_부모는_둘() throws Exception {
         BaseSyncFixture f = fx(Map.of("main-only.txt", "m"), Map.of("task-only.txt", "t"));
+        String tip = git(f.dir(), "rev-parse", "HEAD");
 
         Started s = f.merger.start(f.dir(), f.repo.baseRef());
 
         assertThat(s.outcome()).isEqualTo(Outcome.CLEAN);
         assertThat(s.conflicted()).isEmpty();
-        String sha = f.merger.commitMerge(f.dir(), List.of(), "merge: 기준 브랜치 main 반영 — 제목\n\ntask #42");
+        String sha = f.merger.commitMerge(f.dir(), List.of(), "merge: 기준 브랜치 main 반영 — 제목\n\ntask #42", tip, f.repo.baseRef());
         assertThat(git(f.dir(), "rev-list", "--parents", "-n", "1", sha).split(" ")).hasSize(3);
         assertThat(git(f.dir(), "log", "-1", "--format=%an <%ae>")).isEqualTo("netisMaker <worker@example.com>");
         assertThat(git(f.dir(), "log", "-1", "--format=%B")).contains("task #42");
@@ -91,11 +93,12 @@ class BaseSyncMergerTest {
     @Test
     void 표식을_지우면_해결로_보고_제목_밑줄_등호줄은_표식이_아니다() throws Exception {
         BaseSyncFixture f = conflictOnPlan();
+        String tip = git(f.dir(), "rev-parse", "HEAD");
         Started s = f.merger.start(f.dir(), f.repo.baseRef());
         Files.writeString(f.dir().toPath().resolve("PLAN.md"), "제목\n=======\n본문\n");   // add 안 함
 
         assertThat(f.merger.unresolved(f.dir(), s.conflicted())).isEmpty();
-        String sha = f.merger.commitMerge(f.dir(), s.conflicted(), "merge: 기준 브랜치 main 반영 — t");
+        String sha = f.merger.commitMerge(f.dir(), s.conflicted(), "merge: 기준 브랜치 main 반영 — t", tip, f.repo.baseRef());
 
         assertThat(git(f.dir(), "status", "--porcelain")).isEmpty();
         assertThat(git(f.dir(), "rev-list", "--parents", "-n", "1", sha).split(" ")).hasSize(3);
@@ -121,20 +124,18 @@ class BaseSyncMergerTest {
     }
 
     @Test
-    void 한쪽_삭제를_받아들여_파일이_사라져도_미해결이_아니다() throws Exception {
+    void 충돌_파일을_지우면_미해결() throws Exception {
         BaseSyncFixture f = conflictOnPlan();
         Started s = f.merger.start(f.dir(), f.repo.baseRef());
         Files.delete(f.dir().toPath().resolve("PLAN.md"));
 
-        assertThat(f.merger.unresolved(f.dir(), s.conflicted())).isEmpty();
-        f.merger.commitMerge(f.dir(), s.conflicted(), "merge: x");
-        assertThat(git(f.dir(), "status", "--porcelain")).isEmpty();
-        assertThat(f.dir().toPath().resolve("PLAN.md")).doesNotExist();
+        assertThat(f.merger.unresolved(f.dir(), s.conflicted())).containsExactly("PLAN.md");
     }
 
     @Test
     void 공백과_한글이_든_경로도_그대로_나온다() throws Exception {
         BaseSyncFixture f = fx(Map.of("docs/작업 기록.md", "main 기록\n"), Map.of("docs/작업 기록.md", "task 기록\n"));
+        String tip = git(f.dir(), "rev-parse", "HEAD");
 
         Started s = f.merger.start(f.dir(), f.repo.baseRef());
 
@@ -143,7 +144,7 @@ class BaseSyncMergerTest {
         Files.writeString(f.dir().toPath().resolve("docs/작업 기록.md"), "합친 기록\n");
         assertThat(f.merger.unresolved(f.dir(), s.conflicted())).isEmpty();
         assertThat(f.merger.strayChanges(f.dir(), s)).isEmpty();
-        f.merger.commitMerge(f.dir(), s.conflicted(), "merge: x");
+        f.merger.commitMerge(f.dir(), s.conflicted(), "merge: x", tip, f.repo.baseRef());
         assertThat(git(f.dir(), "status", "--porcelain")).isEmpty();
     }
 
@@ -190,5 +191,32 @@ class BaseSyncMergerTest {
         f.merger.start(f.dir(), f.repo.baseRef());
 
         assertThat(f.merger.unresolved(f.dir(), List.of())).containsExactly("PLAN.md");
+    }
+
+    @Test
+    void 병합을_취소하고_손으로_고치면_commitMerge가_거부한다() throws Exception {
+        BaseSyncFixture f = conflictOnPlan();
+        String tip = git(f.dir(), "rev-parse", "HEAD");
+        Started s = f.merger.start(f.dir(), f.repo.baseRef());
+        git(f.dir(), "merge", "--abort");
+        Files.writeString(f.dir().toPath().resolve("PLAN.md"), "손으로 고침\n");
+
+        assertThatThrownBy(() -> f.merger.commitMerge(f.dir(), s.conflicted(), "merge: x", tip, f.repo.baseRef()))
+                .isInstanceOf(BaseSyncMerger.NotMergingException.class)
+                .hasMessageContaining("병합 상태가 아님");
+        assertThat(git(f.dir(), "rev-parse", "HEAD")).isEqualTo(tip);
+    }
+
+    @Test
+    void 세션이_직접_커밋했으면_commitMerge가_거부한다() throws Exception {
+        BaseSyncFixture f = conflictOnPlan();
+        String tip = git(f.dir(), "rev-parse", "HEAD");
+        Started s = f.merger.start(f.dir(), f.repo.baseRef());
+        Files.writeString(f.dir().toPath().resolve("PLAN.md"), "합침\n");
+        git(f.dir(), "add", "PLAN.md");
+        git(f.dir(), "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-m", "세션이 직접 커밋");
+
+        assertThatThrownBy(() -> f.merger.commitMerge(f.dir(), s.conflicted(), "merge: x", tip, f.repo.baseRef()))
+                .isInstanceOf(BaseSyncMerger.NotMergingException.class);
     }
 }

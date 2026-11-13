@@ -36,7 +36,7 @@ class BaseSyncGitFlowTest {
         Files.writeString(wt.dir().toPath().resolve("PLAN.md"), "main 내용\n\ntask 내용\n");   // 해결 흉내
         assertThat(f.merger.unresolved(wt.dir(), s.conflicted())).isEmpty();
         assertThat(f.merger.strayChanges(wt.dir(), s)).isEmpty();
-        f.merger.commitMerge(wt.dir(), s.conflicted(), "merge: 기준 브랜치 main 반영 — t");
+        f.merger.commitMerge(wt.dir(), s.conflicted(), "merge: 기준 브랜치 main 반영 — t", oldTip, r.baseRef());
 
         String pushed = f.gitOps.pushHead(wt.dir(), f.ref, "task");
 

@@ -3,6 +3,7 @@ package com.hamonsoft.netismaker.service;
 import com.hamonsoft.netismaker.dto.RepoCatalogDto;
 import com.hamonsoft.netismaker.dto.RequestBoardDto;
 import com.hamonsoft.netismaker.entity.RepoCatalogEntry;
+import com.hamonsoft.netismaker.entity.RequestAttachment;
 import com.hamonsoft.netismaker.entity.RequestComment;
 import com.hamonsoft.netismaker.entity.RequestCommentKind;
 import com.hamonsoft.netismaker.entity.RequestIssueType;
@@ -10,9 +11,12 @@ import com.hamonsoft.netismaker.entity.RequestKind;
 import com.hamonsoft.netismaker.entity.RequestPriority;
 import com.hamonsoft.netismaker.entity.RequestPost;
 import com.hamonsoft.netismaker.entity.RequestStatus;
+import com.hamonsoft.netismaker.entity.Task;
 import com.hamonsoft.netismaker.repository.RepoCatalogRepository;
+import com.hamonsoft.netismaker.repository.RequestAttachmentRepository;
 import com.hamonsoft.netismaker.repository.RequestCommentRepository;
 import com.hamonsoft.netismaker.repository.RequestPostRepository;
+import com.hamonsoft.netismaker.repository.TaskRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
@@ -49,6 +53,9 @@ class RequestBoardServiceTest {
     private RequestCommentRepository comments;
     private RepoCatalogRepository catalog;
     private RepoCatalogService catalogService;
+    private RequestAttachmentRepository attachments;
+    private TaskRepository tasks;
+    private AttachmentStorage storage;
     private RequestBoardService service;
 
     @BeforeEach
@@ -57,7 +64,11 @@ class RequestBoardServiceTest {
         comments = mock(RequestCommentRepository.class);
         catalog = mock(RepoCatalogRepository.class);
         catalogService = mock(RepoCatalogService.class);
-        service = new RequestBoardService(posts, comments, catalog, catalogService, 20, "https://gitlab.hamon.vip");
+        attachments = mock(RequestAttachmentRepository.class);
+        tasks = mock(TaskRepository.class);
+        storage = mock(AttachmentStorage.class);
+        service = new RequestBoardService(posts, comments, attachments, catalog, catalogService, tasks, storage,
+                20, "https://gitlab.hamon.vip");
         when(posts.save(any())).thenAnswer(i -> i.getArgument(0));
         when(comments.save(any())).thenAnswer(i -> i.getArgument(0));
     }
@@ -600,5 +611,189 @@ class RequestBoardServiceTest {
 
         assertThatThrownBy(() -> service.assertOpenRepoRequest(99L))
                 .satisfies(t -> assertThat(statusOf(t)).isEqualTo(HttpStatus.NOT_FOUND));
+    }
+
+    // ---- 개발 요청 공개 규칙 (Task 3) ----
+
+    @Test
+    void DEV_상세는_남도_본다() {
+        post(1L, RequestKind.DEV, RequestStatus.RECEIVED, "user2");
+
+        RequestBoardDto.Detail d = service.getAndMarkRead(1L, "user1", false);
+
+        assertThat(d.id()).isEqualTo(1L);
+        assertThat(d.editable()).isFalse();
+        assertThat(d.cancellable()).isFalse();
+        assertThat(d.convertible()).isFalse();
+    }
+
+    @Test
+    void REPO_상세는_남에게_404() {
+        post(1L, RequestKind.REPO, RequestStatus.RECEIVED, "user2");
+        assertThatThrownBy(() -> service.getAndMarkRead(1L, "user1", false))
+                .satisfies(t -> assertThat(statusOf(t)).isEqualTo(HttpStatus.NOT_FOUND));
+    }
+
+    @Test
+    void FEATURE_상세는_남에게_404() {
+        post(1L, RequestKind.FEATURE, RequestStatus.RECEIVED, "user2");
+        assertThatThrownBy(() -> service.getAndMarkRead(1L, "user1", false))
+                .satisfies(t -> assertThat(statusOf(t)).isEqualTo(HttpStatus.NOT_FOUND));
+    }
+
+    @Test
+    void listDev는_DEV만_돌려준다() {
+        RequestPost dev = post(1L, RequestKind.DEV, RequestStatus.RECEIVED, "user2");
+        when(posts.findDev(eq(RequestKind.DEV), any(), any(), anyBoolean(), any())).thenReturn(List.of(dev));
+
+        List<RequestBoardDto.ListItem> items = service.listDev(null, Set.of(), "user1", false);
+
+        assertThat(items).extracting(RequestBoardDto.ListItem::kind).containsExactly(RequestKind.DEV);
+        assertThat(items.get(0).unread()).isFalse();
+        verify(posts).findDev(eq(RequestKind.DEV), eq(null), any(), eq(true), any(Pageable.class));
+    }
+
+    @Test
+    void listDev_issueType_필터와_상태() {
+        when(posts.findDev(any(), any(), any(), anyBoolean(), any())).thenReturn(List.of());
+
+        service.listDev(RequestIssueType.BUG, Set.of(RequestStatus.DONE), "user1", false);
+
+        verify(posts).findDev(eq(RequestKind.DEV), eq(RequestIssueType.BUG), eq(Set.of(RequestStatus.DONE)),
+                eq(false), any(Pageable.class));
+    }
+
+    @Test
+    void listDev_unread는_보는_사람_기준() {
+        RequestPost p = post(1L, RequestKind.DEV, RequestStatus.RECEIVED, "user2");
+        p.setLastRequesterActivityAt(OffsetDateTime.now());
+        p.setAdminReadAt(OffsetDateTime.now().minusMinutes(5));
+        p.setLastAdminActivityAt(OffsetDateTime.now());
+        p.setRequesterReadAt(OffsetDateTime.now().minusMinutes(5));
+        when(posts.findDev(any(), any(), any(), anyBoolean(), any())).thenReturn(List.of(p));
+
+        assertThat(service.listDev(null, Set.of(), "user2", false).get(0).unread()).isTrue();
+        assertThat(service.listDev(null, Set.of(), "admin1", true).get(0).unread()).isTrue();
+        assertThat(service.listDev(null, Set.of(), "user3", false).get(0).unread()).isFalse();
+    }
+
+    @Test
+    void 목록_연결작업_상태라벨_삭제됨() {
+        RequestPost p = post(1L, RequestKind.DEV, RequestStatus.DONE, "user2");
+        p.setTaskId(7L);
+        Task gone = mock(Task.class);
+        when(gone.getId()).thenReturn(7L);
+        when(gone.getDeletedAt()).thenReturn(OffsetDateTime.now());
+        when(tasks.findAllById(any())).thenReturn(List.of(gone));
+        when(posts.findDev(any(), any(), any(), anyBoolean(), any())).thenReturn(List.of(p));
+
+        RequestBoardDto.ListItem item = service.listDev(null, Set.of(), "user1", false).get(0);
+
+        assertThat(item.taskId()).isEqualTo(7L);
+        assertThat(item.taskStatusLabel()).isEqualTo("삭제됨");
+    }
+
+    @Test
+    void DEV_답글은_남도_단다() {
+        post(1L, RequestKind.DEV, RequestStatus.RECEIVED, "user2");
+
+        RequestBoardDto.CommentView v = service.addComment(1L, new RequestBoardDto.CommentRequest("저도요"),
+                "user1", false);
+
+        assertThat(v.authorId()).isEqualTo("user1");
+        assertThat(v.authorAdmin()).isFalse();
+    }
+
+    @Test
+    void REPO_답글은_남에게_404() {
+        post(1L, RequestKind.REPO, RequestStatus.RECEIVED, "user2");
+        assertThatThrownBy(() -> service.addComment(1L, new RequestBoardDto.CommentRequest("x"), "user1", false))
+                .satisfies(t -> assertThat(statusOf(t)).isEqualTo(HttpStatus.NOT_FOUND));
+        verify(comments, never()).save(any());
+    }
+
+    @Test
+    void 제3자_답글은_작성자와_관리자_모두_unread() {
+        RequestPost p = post(1L, RequestKind.DEV, RequestStatus.RECEIVED, "user2");
+        OffsetDateTime past = OffsetDateTime.now().minusMinutes(5);
+        p.setRequesterReadAt(past);
+        p.setAdminReadAt(past);
+        p.setLastRequesterActivityAt(past.minusMinutes(1));
+        assertThat(p.unreadFor(false)).isFalse();
+        assertThat(p.unreadFor(true)).isFalse();
+
+        service.addComment(1L, new RequestBoardDto.CommentRequest("저도요"), "user1", false);
+
+        assertThat(p.unreadFor(false)).isTrue();
+        assertThat(p.unreadFor(true)).isTrue();
+    }
+
+    @Test
+    void 제3자_열람은_읽음을_바꾸지_않는다() {
+        RequestPost p = post(1L, RequestKind.DEV, RequestStatus.RECEIVED, "user2");
+        OffsetDateTime past = OffsetDateTime.now().minusMinutes(5);
+        p.setRequesterReadAt(past);
+        p.setAdminReadAt(past);
+
+        service.getAndMarkRead(1L, "user1", false);
+
+        assertThat(p.getRequesterReadAt()).isEqualTo(past);
+        assertThat(p.getAdminReadAt()).isEqualTo(past);
+    }
+
+    @Test
+    void DEV_남의_답글이_있으면_취소_409() {
+        post(1L, RequestKind.DEV, RequestStatus.RECEIVED, "user1");
+        when(comments.existsByRequestIdAndKindAndAuthorIdNot(1L, RequestCommentKind.COMMENT, "user1"))
+                .thenReturn(true);
+
+        assertThatThrownBy(() -> service.cancel(1L, "user1"))
+                .satisfies(t -> assertThat(statusOf(t)).isEqualTo(HttpStatus.CONFLICT))
+                .hasMessage("다른 사람의 답글이 있는 요청은 취소할 수 없습니다");
+        verify(posts, never()).deleteById(anyLong());
+    }
+
+    @Test
+    void DEV_자기_답글만_있으면_취소_가능() {
+        post(1L, RequestKind.DEV, RequestStatus.RECEIVED, "user1");
+        when(comments.existsByRequestIdAndKindAndAuthorIdNot(1L, RequestCommentKind.COMMENT, "user1"))
+                .thenReturn(false);
+
+        service.cancel(1L, "user1");
+
+        verify(posts).deleteById(1L);
+    }
+
+    @Test
+    void convertible은_관리자에게만_true() {
+        post(1L, RequestKind.DEV, RequestStatus.RECEIVED, "user2");
+
+        assertThat(service.getAndMarkRead(1L, "admin1", true).convertible()).isTrue();
+        assertThat(service.getAndMarkRead(1L, "user1", false).convertible()).isFalse();
+        assertThat(service.getAndMarkRead(1L, "user2", false).convertible()).isFalse();
+    }
+
+    @Test
+    void convertible은_작업이_있거나_닫히면_false() {
+        RequestPost p = post(1L, RequestKind.DEV, RequestStatus.RECEIVED, "user2");
+        p.setTaskId(5L);
+        assertThat(service.getAndMarkRead(1L, "admin1", true).convertible()).isFalse();
+        p.setTaskId(null);
+        p.setStatus(RequestStatus.DONE);
+        assertThat(service.getAndMarkRead(1L, "admin1", true).convertible()).isFalse();
+    }
+
+    @Test
+    void 상세_첨부는_파일이_없으면_expired() {
+        post(1L, RequestKind.DEV, RequestStatus.RECEIVED, "user2");
+        RequestAttachment a = RequestAttachment.create(1L, 1, "a.png", "request-1/1-a.png", "image/png", 10);
+        ReflectionTestUtils.setField(a, "id", 9L);
+        when(attachments.findByRequestIdOrderByOrdinalAsc(1L)).thenReturn(List.of(a));
+        when(storage.exists("request-1/1-a.png")).thenReturn(false);
+
+        RequestBoardDto.AttachmentView v = service.getAndMarkRead(1L, "user1", false).attachments().get(0);
+
+        assertThat(v.id()).isEqualTo(9L);
+        assertThat(v.expired()).isTrue();
     }
 }

@@ -140,6 +140,16 @@ public class RequestPost {
         this.adminReadAt = now;
     }
 
+    /**
+     * 요청자도 관리자도 아닌 사용자의 활동(개발 요청 공개 답글). 요청자와 관리자 양쪽에 새 활동으로 보이게
+     * 활동 시각만 올리고, 읽음 시각은 건드리지 않는다.
+     */
+    public void touchByOther(OffsetDateTime now) {
+        this.lastRequesterActivityAt = now;
+        this.lastAdminActivityAt = now;
+        this.updatedAt = now;
+    }
+
     /** 상세 조회 시 열람자 쪽 읽음 시각을 갱신한다. 관리자가 자기 요청을 보면 둘 다 true. */
     public void markRead(boolean asRequester, boolean asAdmin, OffsetDateTime now) {
         if (asRequester) this.requesterReadAt = now;

@@ -70,9 +70,22 @@ public class RequestBoardDto {
             String statusLabel,
             String requesterId,
             boolean unread,
+            RequestIssueType issueType,
+            String issueTypeLabel,
+            RequestPriority priority,
+            String priorityLabel,
+            LocalDate dueDate,
+            String targetRepoAlias,
+            long attachmentCount,
+            long commentCount,
+            Long taskId,
+            String taskStatusLabel,
             OffsetDateTime createdAt,
             OffsetDateTime updatedAt
     ) {}
+
+    /** 첨부 한 건. expired = 저장된 파일이 더는 없음(보존 기간 지남 등). */
+    public record AttachmentView(Long id, String name, long sizeBytes, boolean expired) {}
 
     public record CommentView(
             Long id,
@@ -97,7 +110,19 @@ public class RequestBoardDto {
             String repoAlias,
             String repoGitUrl,
             boolean repoCatalogDeleted,
+            RequestIssueType issueType,
+            String issueTypeLabel,
+            RequestPriority priority,
+            String priorityLabel,
+            LocalDate dueDate,
+            Long targetRepoCatalogId,
+            String targetRepoAlias,
+            Long taskId,
+            String taskStatusLabel,
+            List<AttachmentView> attachments,
             boolean editable,
+            boolean cancellable,
+            boolean convertible,
             OffsetDateTime createdAt,
             OffsetDateTime updatedAt,
             List<CommentView> comments

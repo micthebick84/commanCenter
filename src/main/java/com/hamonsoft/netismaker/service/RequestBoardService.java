@@ -3,15 +3,20 @@ package com.hamonsoft.netismaker.service;
 import com.hamonsoft.netismaker.dto.RepoCatalogDto;
 import com.hamonsoft.netismaker.dto.RequestBoardDto;
 import com.hamonsoft.netismaker.entity.RepoCatalogEntry;
+import com.hamonsoft.netismaker.entity.RequestAttachment;
 import com.hamonsoft.netismaker.entity.RequestComment;
 import com.hamonsoft.netismaker.entity.RequestCommentKind;
+import com.hamonsoft.netismaker.entity.RequestIssueType;
 import com.hamonsoft.netismaker.entity.RequestKind;
 import com.hamonsoft.netismaker.entity.RequestPost;
 import com.hamonsoft.netismaker.entity.RequestPriority;
 import com.hamonsoft.netismaker.entity.RequestStatus;
+import com.hamonsoft.netismaker.entity.Task;
 import com.hamonsoft.netismaker.repository.RepoCatalogRepository;
+import com.hamonsoft.netismaker.repository.RequestAttachmentRepository;
 import com.hamonsoft.netismaker.repository.RequestCommentRepository;
 import com.hamonsoft.netismaker.repository.RequestPostRepository;
+import com.hamonsoft.netismaker.repository.TaskRepository;
 import com.hamonsoft.netismaker.util.RepoUrlParser;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Profile;
@@ -22,7 +27,11 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.OffsetDateTime;
+import java.util.EnumSet;
+import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 
 /**
@@ -39,21 +48,30 @@ public class RequestBoardService {
 
     private final RequestPostRepository posts;
     private final RequestCommentRepository comments;
+    private final RequestAttachmentRepository attachments;
     private final RepoCatalogRepository catalog;
     private final RepoCatalogService repoCatalogService;
+    private final TaskRepository tasks;
+    private final AttachmentStorage storage;
     private final int maxOpenPerUser;
     private final String gitlabBaseUrl;
 
     public RequestBoardService(RequestPostRepository posts,
                                RequestCommentRepository comments,
+                               RequestAttachmentRepository attachments,
                                RepoCatalogRepository catalog,
                                RepoCatalogService repoCatalogService,
+                               TaskRepository tasks,
+                               AttachmentStorage storage,
                                @Value("${app.request-board.max-open-per-user:20}") int maxOpenPerUser,
                                @Value("${app.gitlab.base-url:}") String gitlabBaseUrl) {
         this.posts = posts;
         this.comments = comments;
+        this.attachments = attachments;
         this.catalog = catalog;
         this.repoCatalogService = repoCatalogService;
+        this.tasks = tasks;
+        this.storage = storage;
         this.maxOpenPerUser = maxOpenPerUser;
         this.gitlabBaseUrl = gitlabBaseUrl;
     }
@@ -78,7 +96,7 @@ public class RequestBoardService {
             post = RequestPost.create(req.kind(), req.title(), req.content(), req.repoHint(), userId);
         }
         RequestPost saved = posts.save(post);
-        return toListItem(saved, false);
+        return toListItems(List.of(saved), p -> false).get(0);
     }
 
     /** 대상 레포가 있으면 카탈로그에서 확인한다(없는·비활성이면 그 메서드의 400). */
@@ -88,9 +106,32 @@ public class RequestBoardService {
 
     @Transactional(readOnly = true)
     public List<RequestBoardDto.ListItem> listMine(String userId) {
-        return posts.findByRequesterIdOrderByUpdatedAtDesc(userId, Limit.of(LIST_LIMIT)).stream()
-                .map(p -> toListItem(p, false))
-                .toList();
+        return toListItems(posts.findByRequesterIdOrderByUpdatedAtDesc(userId, Limit.of(LIST_LIMIT)), p -> p.unreadFor(false));
+    }
+
+    /** 개발 요청 전원 공개 목록. statuses가 비면 전체 상태. unread는 작성자·관리자일 때만 그 기준, 그 밖은 false. */
+    @Transactional(readOnly = true)
+    public List<RequestBoardDto.ListItem> listDev(RequestIssueType issueType, Set<RequestStatus> statuses,
+                                                  String viewerId, boolean viewerAdmin) {
+        boolean anyStatus = statuses == null || statuses.isEmpty();
+        // 빈 IN 절 방지: anyStatus면 자리표시로 전체 상태를 넘긴다.
+        Set<RequestStatus> effective = anyStatus ? EnumSet.allOf(RequestStatus.class) : statuses;
+        List<RequestPost> found = posts.findDev(RequestKind.DEV, issueType, effective, anyStatus,
+                PageRequest.of(0, LIST_LIMIT));
+        return toListItems(found, p -> viewerUnread(p, viewerId, viewerAdmin));
+    }
+
+    /** 3인자 호출(관리자 아님). */
+    @Transactional(readOnly = true)
+    public List<RequestBoardDto.ListItem> listDev(RequestIssueType issueType, Set<RequestStatus> statuses,
+                                                  String viewerId) {
+        return listDev(issueType, statuses, viewerId, false);
+    }
+
+    private static boolean viewerUnread(RequestPost p, String viewerId, boolean viewerAdmin) {
+        if (p.isOwnedBy(viewerId)) return p.unreadFor(false);
+        if (viewerAdmin) return p.unreadFor(true);
+        return false;
     }
 
     @Transactional(readOnly = true)
@@ -98,16 +139,16 @@ public class RequestBoardService {
                                                        boolean includeUnread) {
         // 빈 IN 절은 질의가 깨지거나 아무것도 못 찾으므로 기본값(열린 상태)으로 대체한다.
         Set<RequestStatus> effective = (statuses == null || statuses.isEmpty()) ? OPEN_STATUSES : statuses;
-        return posts.findForAdmin(kind, effective, includeUnread, PageRequest.of(0, LIST_LIMIT)).stream()
-                .map(p -> toListItem(p, true))
-                .toList();
+        return toListItems(posts.findForAdmin(kind, effective, includeUnread, PageRequest.of(0, LIST_LIMIT)),
+                p -> p.unreadFor(true));
     }
 
     @Transactional
     public RequestBoardDto.Detail getAndMarkRead(Long id, String viewerId, boolean admin) {
         RequestPost post = findVisible(id, viewerId, admin);
+        // 읽음은 작성자·관리자만 갱신한다. 공개된 개발 요청을 보는 제3자는 아무 시각도 바꾸지 않는다.
         post.markRead(post.isOwnedBy(viewerId), admin, OffsetDateTime.now());
-        return toDetail(post, viewerId);
+        return toDetail(post, viewerId, admin);
     }
 
     @Transactional
@@ -131,7 +172,7 @@ public class RequestBoardService {
             post.setTargetRepoCatalogId(req.targetRepoCatalogId());
         }
         post.touchRequester(OffsetDateTime.now());
-        return toDetail(post, userId);
+        return toDetail(post, userId, false);
     }
 
     @Transactional
@@ -140,7 +181,11 @@ public class RequestBoardService {
         if (post.getStatus() != RequestStatus.RECEIVED) {
             throw TaskException.conflict("접수 상태에서만 취소할 수 있습니다");
         }
-        if (comments.existsByRequestIdAndKindAndAuthorAdminTrue(id, RequestCommentKind.COMMENT)) {
+        if (post.getKind() == RequestKind.DEV) {
+            if (comments.existsByRequestIdAndKindAndAuthorIdNot(id, RequestCommentKind.COMMENT, userId)) {
+                throw TaskException.conflict("다른 사람의 답글이 있는 요청은 취소할 수 없습니다");
+            }
+        } else if (comments.existsByRequestIdAndKindAndAuthorAdminTrue(id, RequestCommentKind.COMMENT)) {
             throw TaskException.conflict("관리자 답글이 있는 요청은 취소할 수 없습니다");
         }
         posts.deleteById(id);
@@ -156,6 +201,8 @@ public class RequestBoardService {
         if (admin) post.touchAdmin(now);
         // 관리자가 자기 요청에 단 답글은 요청자 활동이기도 하다.
         if (post.isOwnedBy(userId)) post.touchRequester(now);
+        // 공개된 개발 요청에 제3자가 단 답글은 작성자와 관리자 모두에게 새 활동이다.
+        if (!admin && !post.isOwnedBy(userId)) post.touchByOther(now);
         return toCommentView(saved);
     }
 
@@ -165,7 +212,7 @@ public class RequestBoardService {
         RequestStatus current = post.getStatus();
         RequestStatus next = req.status();
         if (current == next) {
-            return toDetail(post, adminId);
+            return toDetail(post, adminId, true);
         }
         if (!current.canTransitionTo(next)) {
             throw TaskException.conflict("바꿀 수 없는 상태입니다: " + current.dbValue() + " → " + next.dbValue());
@@ -179,7 +226,7 @@ public class RequestBoardService {
         post.setStatus(next);
         comments.save(RequestComment.create(id, RequestCommentKind.SYSTEM, adminId, true, body));
         post.touchAdmin(OffsetDateTime.now());
-        return toDetail(post, adminId);
+        return toDetail(post, adminId, true);
     }
 
     @Transactional(readOnly = true)
@@ -221,7 +268,7 @@ public class RequestBoardService {
                 "관리자(" + adminId + ")가 레포 카탈로그에 " + entry.getAlias()
                         + " (" + project.pathWithNamespace() + ") " + (existing ? "연결" : "등록") + " — 처리완료"));
         post.touchAdmin(OffsetDateTime.now());
-        return toDetail(post, adminId);
+        return toDetail(post, adminId, true);
     }
 
     private RepoCatalogEntry registerNew(Long requestId, GitLabProjectClient.GitLabProject project,
@@ -280,14 +327,40 @@ public class RequestBoardService {
 
     private RequestPost findVisible(Long id, String viewerId, boolean admin) {
         RequestPost post = posts.findById(id).orElseThrow(RequestBoardService::notFound);
-        if (!admin && !post.isOwnedBy(viewerId)) throw notFound();
+        // 전원 공개는 개발 요청(DEV)뿐이다. 그 밖의 종류는 본인·관리자만, 아니면 존재를 숨긴다.
+        if (!post.getKind().publicToAll() && !admin && !post.isOwnedBy(viewerId)) throw notFound();
         return post;
     }
 
-    private RequestBoardDto.ListItem toListItem(RequestPost p, boolean asAdmin) {
-        return new RequestBoardDto.ListItem(p.getId(), p.getKind(), p.getKind().label(), p.getTitle(),
-                p.getStatus(), p.getStatus().dbValue(), p.getRequesterId(), p.unreadFor(asAdmin),
-                p.getCreatedAt(), p.getUpdatedAt());
+    /** 목록 변환. 연결 작업·대상 레포는 id 묶음으로 한 번에 조회한다. */
+    private List<RequestBoardDto.ListItem> toListItems(List<RequestPost> list,
+                                                       java.util.function.Predicate<RequestPost> unread) {
+        Set<Long> taskIds = new HashSet<>();
+        Set<Long> repoIds = new HashSet<>();
+        for (RequestPost p : list) {
+            if (p.getTaskId() != null) taskIds.add(p.getTaskId());
+            if (p.getTargetRepoCatalogId() != null) repoIds.add(p.getTargetRepoCatalogId());
+        }
+        Map<Long, Task> taskById = new HashMap<>();
+        if (!taskIds.isEmpty()) tasks.findAllById(taskIds).forEach(t -> taskById.put(t.getId(), t));
+        Map<Long, String> aliasById = new HashMap<>();
+        if (!repoIds.isEmpty()) catalog.findAllById(repoIds).forEach(e -> aliasById.put(e.getId(), e.getAlias()));
+        return list.stream().map(p -> new RequestBoardDto.ListItem(p.getId(), p.getKind(), p.getKind().label(),
+                p.getTitle(), p.getStatus(), p.getStatus().dbValue(), p.getRequesterId(), unread.test(p),
+                p.getIssueType(), p.getIssueType() == null ? null : p.getIssueType().label(),
+                p.getPriority(), p.getPriority() == null ? null : p.getPriority().label(),
+                p.getDueDate(), p.getTargetRepoCatalogId() == null ? null : aliasById.get(p.getTargetRepoCatalogId()),
+                attachments.countByRequestId(p.getId()),
+                comments.countByRequestIdAndKind(p.getId(), RequestCommentKind.COMMENT),
+                p.getTaskId(), taskStatusLabel(p.getTaskId(), taskById.get(p.getTaskId())),
+                p.getCreatedAt(), p.getUpdatedAt())).toList();
+    }
+
+    /** 연결 작업이 없으면 null, 작업이 없거나 소프트 삭제면 "삭제됨", 아니면 작업 상태 라벨. */
+    private static String taskStatusLabel(Long taskId, Task task) {
+        if (taskId == null) return null;
+        if (task == null || task.getDeletedAt() != null) return "삭제됨";
+        return task.getStatus().dbValue();
     }
 
     private RequestBoardDto.CommentView toCommentView(RequestComment c) {
@@ -295,18 +368,48 @@ public class RequestBoardService {
                 c.getBody(), c.getCreatedAt());
     }
 
-    private RequestBoardDto.Detail toDetail(RequestPost p, String viewerId) {
+    private RequestBoardDto.Detail toDetail(RequestPost p, String viewerId, boolean viewerAdmin) {
         String repoAlias = p.getRepoCatalogId() == null ? null
                 : catalog.findById(p.getRepoCatalogId()).map(RepoCatalogEntry::getAlias).orElse(null);
+        String targetAlias = p.getTargetRepoCatalogId() == null ? null
+                : catalog.findById(p.getTargetRepoCatalogId()).map(RepoCatalogEntry::getAlias).orElse(null);
         List<RequestBoardDto.CommentView> commentViews =
                 comments.findByRequestIdOrderByCreatedAtAscIdAsc(p.getId()).stream()
                         .map(this::toCommentView)
                         .toList();
+        List<RequestBoardDto.AttachmentView> attachmentViews =
+                attachments.findByRequestIdOrderByOrdinalAsc(p.getId()).stream()
+                        .map(this::toAttachmentView)
+                        .toList();
+        Task task = p.getTaskId() == null ? null : tasks.findById(p.getTaskId()).orElse(null);
+        boolean owner = p.isOwnedBy(viewerId);
+        boolean editable = owner && p.getStatus() == RequestStatus.RECEIVED;
+        boolean dev = p.getKind() == RequestKind.DEV;
         return new RequestBoardDto.Detail(p.getId(), p.getKind(), p.getKind().label(), p.getTitle(), p.getContent(),
                 p.getRepoHint(), p.getStatus(), p.getStatus().dbValue(), p.getRequesterId(),
                 p.getRepoCatalogId(), repoAlias, p.getRepoGitUrl(),
                 p.getRepoGitUrl() != null && p.getRepoCatalogId() == null,
-                p.isOwnedBy(viewerId) && p.getStatus() == RequestStatus.RECEIVED,
+                p.getIssueType(), p.getIssueType() == null ? null : p.getIssueType().label(),
+                p.getPriority(), p.getPriority() == null ? null : p.getPriority().label(),
+                p.getDueDate(), p.getTargetRepoCatalogId(), targetAlias,
+                p.getTaskId(), taskStatusLabel(p.getTaskId(), task),
+                attachmentViews,
+                editable,
+                editable && p.getTaskId() == null && cancelAllowedByComments(p, viewerId),
+                viewerAdmin && dev && p.getStatus().isOpen() && p.getTaskId() == null,
                 p.getCreatedAt(), p.getUpdatedAt(), commentViews);
+    }
+
+    /** cancel()의 답글 가드와 같은 규칙: DEV는 작성자 아닌 답글, 그 밖은 관리자 답글이 없어야 한다. */
+    private boolean cancelAllowedByComments(RequestPost p, String viewerId) {
+        if (p.getKind() == RequestKind.DEV) {
+            return !comments.existsByRequestIdAndKindAndAuthorIdNot(p.getId(), RequestCommentKind.COMMENT, viewerId);
+        }
+        return !comments.existsByRequestIdAndKindAndAuthorAdminTrue(p.getId(), RequestCommentKind.COMMENT);
+    }
+
+    private RequestBoardDto.AttachmentView toAttachmentView(RequestAttachment a) {
+        return new RequestBoardDto.AttachmentView(a.getId(), a.getOriginalName(), a.getSizeBytes(),
+                !storage.exists(a.getStoredPath()));
     }
 }

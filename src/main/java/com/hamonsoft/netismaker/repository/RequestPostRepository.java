@@ -1,5 +1,6 @@
 package com.hamonsoft.netismaker.repository;
 
+import com.hamonsoft.netismaker.entity.RequestIssueType;
 import com.hamonsoft.netismaker.entity.RequestKind;
 import com.hamonsoft.netismaker.entity.RequestPost;
 import com.hamonsoft.netismaker.entity.RequestStatus;
@@ -41,6 +42,23 @@ public interface RequestPostRepository extends JpaRepository<RequestPost, Long> 
                                    @Param("statuses") Collection<RequestStatus> statuses,
                                    @Param("includeUnread") boolean includeUnread,
                                    Pageable page);
+
+    /**
+     * 개발 요청 전원 공개 목록. anyStatus면 상태 조건을 건너뛴다(statuses는 비지 않은 자리표시 값이어야 한다).
+     * 최신 활동순. kind는 호출자가 DEV로 고정해 넘긴다.
+     */
+    @Query("""
+            select p from RequestPost p
+            where p.kind = :kind
+              and (:issueType is null or p.issueType = :issueType)
+              and (:anyStatus = true or p.status in :statuses)
+            order by p.updatedAt desc
+            """)
+    List<RequestPost> findDev(@Param("kind") RequestKind kind,
+                              @Param("issueType") RequestIssueType issueType,
+                              @Param("statuses") Collection<RequestStatus> statuses,
+                              @Param("anyStatus") boolean anyStatus,
+                              Pageable page);
 
     /** 관리자 주의 필요 건수: 접수이거나 관리자가 못 본 활동이 있는 요청. */
     @Query("""

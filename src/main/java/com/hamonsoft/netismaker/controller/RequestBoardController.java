@@ -1,11 +1,13 @@
 package com.hamonsoft.netismaker.controller;
 
 import com.hamonsoft.netismaker.dto.RequestBoardDto;
+import com.hamonsoft.netismaker.entity.RequestIssueType;
 import com.hamonsoft.netismaker.entity.RequestKind;
 import com.hamonsoft.netismaker.entity.RequestStatus;
 import com.hamonsoft.netismaker.service.RequestBoardService;
 import jakarta.validation.Valid;
 import org.springframework.context.annotation.Profile;
+import com.hamonsoft.netismaker.service.TaskException;
 import org.springframework.http.HttpStatus;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.security.oauth2.server.resource.authentication.JwtAuthenticationToken;
@@ -18,6 +20,7 @@ import java.util.Set;
  * 요청 게시판 API (스펙 2026-10-19). 남의 요청은 존재 자체를 숨겨 404로 답한다(서비스 규칙).
  *
  *   GET    /api/requests?all=&kind=&status=&includeUnread= — 인증. 관리자이고 all=true면 전체(필터 적용), 그 밖에는 내 요청만
+ *   GET    /api/requests?scope=dev[&issueType=][&status=]  — 인증. 개발 요청 전원 공개 목록(scope가 있으면 all·kind는 무시)
  *   POST   /api/requests                                   — 인증 (201)
  *   GET    /api/requests/{id}                              — 인증 (본인 또는 관리자, 열람 시 읽음 처리)
  *   PUT    /api/requests/{id}                              — 인증 (본인, 접수 상태에서만)
@@ -43,7 +46,13 @@ public class RequestBoardController {
             @RequestParam(required = false) RequestKind kind,
             @RequestParam(required = false) Set<RequestStatus> status,
             @RequestParam(required = false, defaultValue = "true") boolean includeUnread,
+            @RequestParam(required = false) String scope,
+            @RequestParam(required = false) RequestIssueType issueType,
             JwtAuthenticationToken auth) {
+        if (scope != null && !scope.isBlank()) {
+            if (!"dev".equals(scope)) throw new TaskException(HttpStatus.BAD_REQUEST, "알 수 없는 scope: " + scope);
+            return service.listDev(issueType, status, AuthContext.requireUserId(auth), AuthContext.isAdmin(auth));
+        }
         // 비관리자가 보낸 all=true는 무시한다.
         if (all && AuthContext.isAdmin(auth)) {
             return service.listForAdmin(kind, status, includeUnread);

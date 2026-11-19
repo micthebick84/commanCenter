@@ -435,4 +435,66 @@ describe('admin/repo-catalog', () => {
     expect(await submitAndBody()).toMatchObject({ dbMigrationManaged: true, dbScriptDir: 'db/changes' })
     w.unmount()
   })
+
+  describe('목록 검색', () => {
+    const rows = [
+      {
+        id: 1, alias: '동부병원', gitUrl: 'https://github.com/o/dongbu.git', host: 'github',
+        ownerRepo: 'o/dongbu', defaultBranch: 'main', description: '병원 대시보드', enabled: true,
+        createdBy: 'admin', createdAt: '', updatedAt: '', noteFolder: null,
+      },
+      {
+        id: 2, alias: 'Netis7.0', gitUrl: 'https://gitlab.hamon.vip/g/sub/netis.git', host: 'gitlab',
+        ownerRepo: 'g/sub/netis', defaultBranch: null, description: null, enabled: true,
+        createdBy: 'admin', createdAt: '', updatedAt: '', noteFolder: 'HamonSoft/Netis',
+      },
+    ]
+    async function typeSearch(w: any, value: string) {
+      await w.find('[data-test="catalog-search"]').setValue(value)
+      await flushPromises()
+    }
+
+    it('별칭·URL·설명을 대소문자 없이 찾고, 여러 낱말은 모두 들어 있어야 한다', async () => {
+      const w = await mountPage(rows)
+      await typeSearch(w, 'NETIS')
+      expect(w.text()).toContain('Netis7.0')
+      expect(w.text()).not.toContain('동부병원')
+      expect(w.find('[data-test="catalog-search-count"]').text()).toBe('2개 중 1개')
+
+      await typeSearch(w, '병원 대시')
+      expect(w.text()).toContain('동부병원')
+      expect(w.text()).not.toContain('Netis7.0')
+
+      await typeSearch(w, '병원 gitlab')
+      expect(w.text()).not.toContain('동부병원')
+
+      await typeSearch(w, 'gitlab.hamon')
+      expect(w.text()).toContain('Netis7.0')
+      expect(w.text()).not.toContain('동부병원')
+      w.unmount()
+    })
+
+    it('맞는 항목이 없으면 검색 결과가 없다고 알리고, 지우면 전부 보인다', async () => {
+      const w = await mountPage(rows)
+      await typeSearch(w, '없는레포')
+      expect(w.text()).toContain('검색 결과가 없습니다')
+      await typeSearch(w, '')
+      expect(w.text()).toContain('동부병원')
+      expect(w.text()).toContain('Netis7.0')
+      expect(w.find('[data-test="catalog-search-count"]').exists()).toBe(false)
+      w.unmount()
+    })
+
+    it('표는 셀을 줄바꿈하고 동작 열(수정 아이콘 포함)을 오른쪽 고정 칸에 둔다', async () => {
+      const w = await mountPage(rows)
+      // wrap-cells가 없으면 Quasar가 q-table--no-wrap(white-space: nowrap)을 붙인다
+      expect(w.find('.q-table__container').classes()).not.toContain('q-table--no-wrap')
+      const actions = w.findAll('[data-test="catalog-actions"]')
+      expect(actions).toHaveLength(2)
+      expect(actions[0].classes()).toContain('catalog-actions')
+      expect(actions[0].findAll('.q-icon').map((i) => i.text())).toContain('edit')
+      expect(w.find('th.catalog-actions').exists()).toBe(true)
+      w.unmount()
+    })
+  })
 })

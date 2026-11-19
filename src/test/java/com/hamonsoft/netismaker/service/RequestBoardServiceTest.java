@@ -592,7 +592,7 @@ class RequestBoardServiceTest {
 
         assertThatThrownBy(() -> service.completeRepoRequest(7L, project(), URL, "admin1"))
                 .satisfies(t -> assertThat(statusOf(t)).isEqualTo(HttpStatus.CONFLICT))
-                .hasMessage("REPO 추가 요청이 아닙니다");
+                .hasMessage("사이트 추가 요청이 아닙니다");
         verify(catalogService, never()).create(any(), any());
     }
 
@@ -782,6 +782,19 @@ class RequestBoardServiceTest {
         assertThat(service.getAndMarkRead(1L, "admin1", true).convertible()).isTrue();
         assertThat(service.getAndMarkRead(1L, "user1", false).convertible()).isFalse();
         assertThat(service.getAndMarkRead(1L, "user2", false).convertible()).isFalse();
+    }
+
+    @Test
+    void 관리자가_자기_개발_요청을_수정하면_응답_convertible은_true() {
+        post(1L, RequestKind.DEV, RequestStatus.RECEIVED, "admin1");
+
+        RequestBoardDto.Detail asAdmin = service.update(1L, devUpdate(null), List.of(), "admin1", true);
+        RequestBoardDto.Detail legacy = service.update(1L, devUpdate(null), "admin1");
+
+        assertThat(asAdmin.convertible()).isTrue();
+        assertThat(asAdmin.editable()).isTrue();
+        // 관리자 여부를 넘기지 않는 기존 오버로드는 관리자 아님으로 본다.
+        assertThat(legacy.convertible()).isFalse();
     }
 
     @Test

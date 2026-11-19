@@ -210,12 +210,20 @@ public class RequestBoardService {
 
     @Transactional
     public RequestBoardDto.Detail update(Long id, RequestBoardDto.UpdateRequest req, String userId) {
-        return update(id, req, List.of(), userId);
+        return update(id, req, List.of(), userId, false);
     }
 
+    /** 호출자가 관리자가 아닌 것으로 보고 수정한다(응답의 convertible은 false). */
     @Transactional
     public RequestBoardDto.Detail update(Long id, RequestBoardDto.UpdateRequest req, List<MultipartFile> files,
                                          String userId) {
+        return update(id, req, files, userId, false);
+    }
+
+    /** callerAdmin은 응답 Detail의 관리자 전용 표시(convertible)에만 쓴다 — 수정 권한은 늘 작성자 본인. */
+    @Transactional
+    public RequestBoardDto.Detail update(Long id, RequestBoardDto.UpdateRequest req, List<MultipartFile> files,
+                                         String userId, boolean callerAdmin) {
         RequestPost post = findOwnedForUpdate(id, userId);
         if (post.getStatus() != RequestStatus.RECEIVED) {
             throw TaskException.conflict("접수 상태에서만 수정할 수 있습니다");
@@ -255,7 +263,7 @@ public class RequestBoardService {
         List<String> removedPaths = removed.stream().map(RequestAttachment::getStoredPath).toList();
         afterCommit(() -> removedPaths.forEach(storage::deleteQuietly));
         post.touchRequester(OffsetDateTime.now());
-        return toDetail(post, userId, false);
+        return toDetail(post, userId, callerAdmin);
     }
 
     @Transactional
@@ -459,7 +467,7 @@ public class RequestBoardService {
 
     private static void requireOpenRepo(RequestPost post) {
         if (post.getKind() != RequestKind.REPO) {
-            throw TaskException.conflict("REPO 추가 요청이 아닙니다");
+            throw TaskException.conflict("사이트 추가 요청이 아닙니다");
         }
         if (!post.getStatus().isOpen()) {
             throw TaskException.conflict("이미 처리된 요청입니다");

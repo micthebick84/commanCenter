@@ -25,15 +25,19 @@ import java.util.List;
 import java.util.Set;
 
 /**
- * 요청 게시판 API (스펙 2026-10-19). 남의 요청은 존재 자체를 숨겨 404로 답한다(서비스 규칙).
+ * 요청 게시판 API (스펙 2026-10-19, 개발 요청 2026-11-19). 볼 수 없는 요청은 존재 자체를 숨겨 404로 답한다(서비스 규칙).
+ * 열람 범위: 개발 요청(DEV)은 로그인 사용자 누구나 열람·답글할 수 있고, 그 밖의 종류(REPO = 사이트 추가, 예전 FEATURE·MCP)는
+ * 본인·관리자만. 새로 등록할 수 있는 종류는 DEV·REPO뿐이다(그 밖은 400).
  *
  *   GET    /api/requests?all=&kind=&status=&includeUnread= — 인증. 관리자이고 all=true면 전체(필터 적용), 그 밖에는 내 요청만
- *   GET    /api/requests?scope=dev[&issueType=][&status=]  — 인증. 개발 요청 전원 공개 목록(scope가 있으면 all·kind는 무시)
- *   POST   /api/requests                                   — 인증 (201)
- *   GET    /api/requests/{id}                              — 인증 (본인 또는 관리자, 열람 시 읽음 처리)
- *   PUT    /api/requests/{id}                              — 인증 (본인, 접수 상태에서만)
- *   DELETE /api/requests/{id}                              — 인증 (본인, 접수 상태·관리자 답글 없을 때만) (204)
- *   POST   /api/requests/{id}/comments                     — 인증 (본인 또는 관리자) (201)
+ *   GET    /api/requests?scope=dev[&issueType=][&status=]  — 인증. 개발 요청 전원 공개 목록(scope가 있으면 all·kind는 무시, dev 밖은 400)
+ *   POST   /api/requests                                   — 인증 (201). JSON 또는 multipart(meta + files, 첨부는 DEV만)
+ *   GET    /api/requests/{id}                              — 인증 (DEV는 누구나, 그 밖은 본인·관리자. 작성자·관리자만 읽음 처리)
+ *   PUT    /api/requests/{id}                              — 인증 (본인, 접수 상태에서만). JSON 또는 multipart(첨부 추가·삭제는 DEV만)
+ *   DELETE /api/requests/{id}                              — 인증 (본인, 접수 상태에서만; 작업에 연결됐거나 남의 답글(DEV)·
+ *                                                            관리자 답글(그 밖)이 있으면 409) (204)
+ *   GET    /api/requests/{id}/attachments/{attId}          — 인증 (요청을 볼 수 있는 사람, 정리된 파일은 410)
+ *   POST   /api/requests/{id}/comments                     — 인증 (DEV는 누구나, 그 밖은 본인·관리자) (201)
  *   POST   /api/admin/requests/{id}/status                 — ADMIN (상태 변경)
  *   GET    /api/admin/requests/summary                     — ADMIN (배지용 건수)
  */
@@ -97,7 +101,7 @@ public class RequestBoardController {
             @RequestPart("meta") @Valid RequestBoardDto.UpdateRequest req,
             @RequestPart(value = "files", required = false) List<MultipartFile> files,
             JwtAuthenticationToken auth) {
-        return service.update(id, req, files, AuthContext.requireUserId(auth));
+        return service.update(id, req, files, AuthContext.requireUserId(auth), AuthContext.isAdmin(auth));
     }
 
     /** 첨부 내려받기 — 요청을 볼 수 있는 사람만(없으면 404, 정리된 파일은 410). QuestionController와 같은 헤더. */
@@ -125,7 +129,7 @@ public class RequestBoardController {
     public RequestBoardDto.Detail update(@PathVariable Long id,
                                          @RequestBody @Valid RequestBoardDto.UpdateRequest req,
                                          JwtAuthenticationToken auth) {
-        return service.update(id, req, AuthContext.requireUserId(auth));
+        return service.update(id, req, List.of(), AuthContext.requireUserId(auth), AuthContext.isAdmin(auth));
     }
 
     @DeleteMapping("/api/requests/{id}")

@@ -71,7 +71,7 @@ public class RepoRequestService {
         RequestPost post = posts.findById(requestId)
                 .orElseThrow(() -> new TaskException(HttpStatus.NOT_FOUND, NOT_FOUND_MESSAGE));
         if (post.getKind() != RequestKind.REPO) {
-            throw TaskException.conflict("REPO 추가 요청이 아닙니다");
+            throw TaskException.conflict("사이트 추가 요청이 아닙니다");
         }
         if (!client.configured()) {
             throw new TaskException(HttpStatus.SERVICE_UNAVAILABLE, "사내 GitLab이 설정되지 않았습니다");

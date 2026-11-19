@@ -181,7 +181,7 @@ class RepoRequestServiceTest {
         assertThatThrownBy(() -> service.candidates(8L))
                 .isInstanceOfSatisfying(TaskException.class, e -> {
                     assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT);
-                    assertThat(e.getMessage()).isEqualTo("REPO 추가 요청이 아닙니다");
+                    assertThat(e.getMessage()).isEqualTo("사이트 추가 요청이 아닙니다");
                 });
         verify(client, never()).search(anyString(), anyInt());
     }

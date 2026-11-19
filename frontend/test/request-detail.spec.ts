@@ -34,6 +34,18 @@ function detail(over: Record<string, unknown> = {}) {
     repoGitUrl: null,
     repoCatalogDeleted: false,
     editable: false,
+    cancellable: false,
+    convertible: false,
+    issueType: null,
+    issueTypeLabel: null,
+    priority: null,
+    priorityLabel: null,
+    dueDate: null,
+    targetRepoCatalogId: null,
+    targetRepoAlias: null,
+    attachments: [],
+    taskId: null,
+    taskStatusLabel: null,
     createdAt: '2026-10-19T01:00:00Z',
     updatedAt: '2026-10-19T02:00:00Z',
     comments: [],
@@ -55,6 +67,7 @@ function type(el: HTMLInputElement | HTMLTextAreaElement, value: string) {
 
 beforeEach(() => navigateToMock.mockReset())
 afterEach(() => {
+  delete (authStub as any).me
   document.querySelectorAll('.q-dialog, .q-menu').forEach((n) => n.remove())
 })
 
@@ -128,12 +141,12 @@ describe('requests/[id]', () => {
   })
 
   it('editable_shows_edit_and_cancel: editable=false이면 둘 다 없다', async () => {
-    let w = await mountPage(detail({ editable: true }))
+    let w = await mountPage(detail({ editable: true, cancellable: true }))
     expect(w.find('[data-test="req-edit"]').exists()).toBe(true)
     expect(w.find('[data-test="req-cancel"]').exists()).toBe(true)
     w.unmount()
 
-    w = await mountPage(detail({ editable: false }))
+    w = await mountPage(detail({ editable: false, cancellable: false }))
     expect(w.find('[data-test="req-edit"]').exists()).toBe(false)
     expect(w.find('[data-test="req-cancel"]').exists()).toBe(false)
     w.unmount()
@@ -156,7 +169,7 @@ describe('requests/[id]', () => {
   })
 
   it('취소는 확인 뒤 DELETE하고 목록으로 이동한다', async () => {
-    const w = await mountPage(detail({ editable: true }))
+    const w = await mountPage(detail({ cancellable: true }))
     await w.find('[data-test="req-cancel"]').trigger('click')
     await flushPromises()
     expect(useApiMock).not.toHaveBeenCalledWith('/api/requests/3', { method: 'DELETE' })
@@ -267,6 +280,116 @@ describe('requests/[id]', () => {
     authStub.isAdmin = false
     w = await mountPage(detail({ kind: 'REPO', kindLabel: 'REPO 추가' }))
     expect(w.find('[data-test="repo-add-slot"]').exists()).toBe(false)
+    w.unmount()
+  })
+
+  const dev = (over: Record<string, unknown> = {}) =>
+    detail({
+      kind: 'DEV', kindLabel: '개발 요청', issueType: 'BUG', issueTypeLabel: '버그', priority: 'HIGH',
+      priorityLabel: '▲ 높음', dueDate: '2026-12-01', targetRepoCatalogId: 5, targetRepoAlias: 'widgets', ...over,
+    })
+
+  it('DEV 머리: 유형 칩·우선순위·마감일·대상 레포·요청자 id', async () => {
+    const w = await mountPage(dev())
+    const meta = w.find('[data-test="request-dev-meta"]')
+    expect(meta.exists()).toBe(true)
+    expect(meta.text()).toContain('버그')
+    expect(meta.text()).toContain('▲ 높음')
+    expect(meta.text()).toContain('2026-12-01')
+    expect(meta.text()).toContain('widgets')
+    expect(meta.text()).toContain('hong')
+    w.unmount()
+  })
+
+  it('convertible이면 작업으로 등록 버튼이 보이고 누르면 /tasks?fromRequest=3로 간다', async () => {
+    const w = await mountPage(dev({ convertible: true }))
+    await w.find('[data-test="request-convert"]').trigger('click')
+    expect(navigateToMock).toHaveBeenCalledWith('/tasks?fromRequest=3')
+    w.unmount()
+    const w2 = await mountPage(dev({ convertible: false }))
+    expect(w2.find('[data-test="request-convert"]').exists()).toBe(false)
+    w2.unmount()
+  })
+
+  it('버튼은 서버 값만 따른다: cancellable=false면 취소 없음, editable=false면 수정 없음', async () => {
+    let w = await mountPage(dev({ editable: true, cancellable: false }))
+    expect(w.find('[data-test="req-edit"]').exists()).toBe(true)
+    expect(w.find('[data-test="req-cancel"]').exists()).toBe(false)
+    w.unmount()
+    w = await mountPage(dev({ editable: false, cancellable: true }))
+    expect(w.find('[data-test="req-edit"]').exists()).toBe(false)
+    expect(w.find('[data-test="req-cancel"]').exists()).toBe(true)
+    w.unmount()
+  })
+
+  it('제3자도 DEV 상세에서 답글 입력창을 본다', async () => {
+    const w = await mountPage(dev())
+    expect(w.find('[data-test="reply-input"]').exists()).toBe(true)
+    w.unmount()
+  })
+
+  it('연결 작업: 제3자는 글자만, 요청자·관리자는 /tasks/N 링크', async () => {
+    let w = await mountPage(dev({ taskId: 12, taskStatusLabel: '구현중' }))
+    let t = w.find('[data-test="request-task-link"]')
+    expect(t.text()).toBe('→ 작업 #12 · 구현중')
+    expect(t.attributes('href')).toBeUndefined()
+    w.unmount()
+
+    ;(authStub as any).me = { username: 'hong' }
+    w = await mountPage(dev({ taskId: 12, taskStatusLabel: '구현중' }))
+    t = w.find('[data-test="request-task-link"]')
+    expect(t.attributes('href')).toBe('/tasks/12')
+    w.unmount()
+    delete (authStub as any).me
+
+    authStub.isAdmin = true
+    w = await mountPage(dev({ taskId: 12, taskStatusLabel: '구현중' }))
+    expect(w.find('[data-test="request-task-link"]').attributes('href')).toBe('/tasks/12')
+    w.unmount()
+
+    w = await mountPage(dev())
+    expect(w.find('[data-test="request-task-link"]').exists()).toBe(false)
+    w.unmount()
+  })
+
+  it('첨부 목록: 이름·크기, 누르면 토큰 실은 다운로드, expired는 비활성', async () => {
+    const w = await mountPage(
+      dev({
+        attachments: [
+          { id: 7, name: '스펙.pdf', sizeBytes: 2048, expired: false },
+          { id: 8, name: '옛파일.zip', sizeBytes: 100, expired: true },
+        ],
+      }),
+    )
+    const box = w.find('[data-test="request-attachments"]')
+    expect(box.text()).toContain('스펙.pdf')
+    expect(box.text()).toContain('2KB')
+    const ok = box.find('[data-test="request-attachment-7"]')
+    const old = box.find('[data-test="request-attachment-8"]')
+    expect(old.attributes('disabled')).toBeDefined()
+    expect(ok.attributes('disabled')).toBeUndefined()
+    URL.createObjectURL = vi.fn(() => 'blob:x')
+    URL.revokeObjectURL = vi.fn()
+    useApiMock.mockResolvedValueOnce(new Blob(['x']))
+    await ok.trigger('click')
+    await flushPromises()
+    expect(useApiMock).toHaveBeenCalledWith('/api/requests/3/attachments/7', { responseType: 'blob' })
+    expect(useApiMock).not.toHaveBeenCalledWith('/api/requests/3/attachments/8', expect.anything())
+    w.unmount()
+  })
+
+  it('요청자 본인 답글에는 요청자 칩이 붙는다', async () => {
+    const w = await mountPage(
+      dev({
+        comments: [
+          { id: 1, kind: 'COMMENT', authorId: 'hong', authorAdmin: false, body: 'a', createdAt: '2026-10-19T03:00:00Z' },
+          { id: 2, kind: 'COMMENT', authorId: 'kim', authorAdmin: false, body: 'b', createdAt: '2026-10-19T03:01:00Z' },
+        ],
+      }),
+    )
+    const b = w.findAll('[data-test="comment-bubble"]')
+    expect(b[0]!.text()).toContain('요청자')
+    expect(b[1]!.text()).not.toContain('요청자')
     w.unmount()
   })
 

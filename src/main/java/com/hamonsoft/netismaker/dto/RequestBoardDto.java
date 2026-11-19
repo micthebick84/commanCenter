@@ -1,12 +1,15 @@
 package com.hamonsoft.netismaker.dto;
 
 import com.hamonsoft.netismaker.entity.RequestCommentKind;
+import com.hamonsoft.netismaker.entity.RequestIssueType;
 import com.hamonsoft.netismaker.entity.RequestKind;
+import com.hamonsoft.netismaker.entity.RequestPriority;
 import com.hamonsoft.netismaker.entity.RequestStatus;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Size;
 
+import java.time.LocalDate;
 import java.time.OffsetDateTime;
 import java.util.List;
 
@@ -17,14 +20,33 @@ public class RequestBoardDto {
             @NotNull RequestKind kind,
             @NotBlank @Size(max = 200) String title,
             @NotBlank @Size(max = 10000) String content,
-            @Size(max = 500) String repoHint
-    ) {}
+            @Size(max = 500) String repoHint,
+            RequestIssueType issueType,
+            RequestPriority priority,
+            LocalDate dueDate,
+            Long targetRepoCatalogId
+    ) {
+        /** 기존 4인자 호출용(개발 요청 칸 없음). */
+        public CreateRequest(RequestKind kind, String title, String content, String repoHint) {
+            this(kind, title, content, repoHint, null, null, null, null);
+        }
+    }
 
     public record UpdateRequest(
             @NotBlank @Size(max = 200) String title,
             @NotBlank @Size(max = 10000) String content,
-            @Size(max = 500) String repoHint
-    ) {}
+            @Size(max = 500) String repoHint,
+            RequestIssueType issueType,
+            RequestPriority priority,
+            LocalDate dueDate,
+            Long targetRepoCatalogId,
+            List<Long> removeAttachmentIds
+    ) {
+        /** 기존 3인자 호출용(개발 요청 칸 없음). */
+        public UpdateRequest(String title, String content, String repoHint) {
+            this(title, content, repoHint, null, null, null, null, null);
+        }
+    }
 
     public record CommentRequest(@NotBlank @Size(max = 5000) String body) {}
 

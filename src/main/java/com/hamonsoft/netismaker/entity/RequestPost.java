@@ -110,6 +110,18 @@ public class RequestPost {
         return p;
     }
 
+    /** 개발 요청(DEV) 등록용. repoHint는 받지 않는다. */
+    public static RequestPost createDev(String title, String content, RequestIssueType issueType,
+                                        RequestPriority priority, LocalDate dueDate,
+                                        Long targetRepoCatalogId, String requesterId) {
+        RequestPost p = create(RequestKind.DEV, title, content, null, requesterId);
+        p.issueType = issueType;
+        p.priority = priority;
+        p.dueDate = dueDate;
+        p.targetRepoCatalogId = targetRepoCatalogId;
+        return p;
+    }
+
     public boolean isOwnedBy(String userId) {
         return requesterId != null && requesterId.equals(userId);
     }

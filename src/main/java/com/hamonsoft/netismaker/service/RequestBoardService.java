@@ -7,6 +7,7 @@ import com.hamonsoft.netismaker.entity.RequestComment;
 import com.hamonsoft.netismaker.entity.RequestCommentKind;
 import com.hamonsoft.netismaker.entity.RequestKind;
 import com.hamonsoft.netismaker.entity.RequestPost;
+import com.hamonsoft.netismaker.entity.RequestPriority;
 import com.hamonsoft.netismaker.entity.RequestStatus;
 import com.hamonsoft.netismaker.repository.RepoCatalogRepository;
 import com.hamonsoft.netismaker.repository.RequestCommentRepository;
@@ -59,13 +60,30 @@ public class RequestBoardService {
 
     @Transactional
     public RequestBoardDto.ListItem create(RequestBoardDto.CreateRequest req, String userId) {
+        if (req.kind() == null || !req.kind().creatable()) {
+            throw new TaskException(HttpStatus.BAD_REQUEST, "더 이상 받지 않는 요청 종류입니다");
+        }
         if (posts.countByRequesterIdAndStatusIn(userId, OPEN_STATUSES) >= maxOpenPerUser) {
             throw new TaskException(HttpStatus.TOO_MANY_REQUESTS,
                     "처리 중인 요청이 너무 많습니다(최대 " + maxOpenPerUser + "건)");
         }
-        RequestPost saved = posts.save(
-                RequestPost.create(req.kind(), req.title(), req.content(), req.repoHint(), userId));
+        RequestPost post;
+        if (req.kind() == RequestKind.DEV) {
+            if (req.issueType() == null) throw new TaskException(HttpStatus.BAD_REQUEST, "유형을 선택하세요");
+            checkTargetRepo(req.targetRepoCatalogId());
+            post = RequestPost.createDev(req.title(), req.content(), req.issueType(),
+                    req.priority() == null ? RequestPriority.NORMAL : req.priority(),
+                    req.dueDate(), req.targetRepoCatalogId(), userId);
+        } else {
+            post = RequestPost.create(req.kind(), req.title(), req.content(), req.repoHint(), userId);
+        }
+        RequestPost saved = posts.save(post);
         return toListItem(saved, false);
+    }
+
+    /** 대상 레포가 있으면 카탈로그에서 확인한다(없는·비활성이면 그 메서드의 400). */
+    private void checkTargetRepo(Long targetRepoCatalogId) {
+        if (targetRepoCatalogId != null) repoCatalogService.resolveForRegistration(targetRepoCatalogId);
     }
 
     @Transactional(readOnly = true)
@@ -98,9 +116,20 @@ public class RequestBoardService {
         if (post.getStatus() != RequestStatus.RECEIVED) {
             throw TaskException.conflict("접수 상태에서만 수정할 수 있습니다");
         }
+        boolean dev = post.getKind() == RequestKind.DEV;
+        if (dev && req.issueType() == null) {
+            throw new TaskException(HttpStatus.BAD_REQUEST, "유형을 선택하세요");
+        }
+        if (dev) checkTargetRepo(req.targetRepoCatalogId());
         post.setTitle(req.title());
         post.setContent(req.content());
         post.setRepoHint(post.getKind() == RequestKind.REPO ? req.repoHint() : null);
+        if (dev) {
+            post.setIssueType(req.issueType());
+            post.setPriority(req.priority() == null ? RequestPriority.NORMAL : req.priority());
+            post.setDueDate(req.dueDate());
+            post.setTargetRepoCatalogId(req.targetRepoCatalogId());
+        }
         post.touchRequester(OffsetDateTime.now());
         return toDetail(post, userId);
     }

@@ -5,7 +5,9 @@ import com.hamonsoft.netismaker.dto.RequestBoardDto;
 import com.hamonsoft.netismaker.entity.RepoCatalogEntry;
 import com.hamonsoft.netismaker.entity.RequestComment;
 import com.hamonsoft.netismaker.entity.RequestCommentKind;
+import com.hamonsoft.netismaker.entity.RequestIssueType;
 import com.hamonsoft.netismaker.entity.RequestKind;
+import com.hamonsoft.netismaker.entity.RequestPriority;
 import com.hamonsoft.netismaker.entity.RequestPost;
 import com.hamonsoft.netismaker.entity.RequestStatus;
 import com.hamonsoft.netismaker.repository.RepoCatalogRepository;
@@ -18,6 +20,7 @@ import org.springframework.data.domain.Pageable;
 import org.springframework.http.HttpStatus;
 import org.springframework.test.util.ReflectionTestUtils;
 
+import java.time.LocalDate;
 import java.time.OffsetDateTime;
 import java.util.Collection;
 import java.util.List;
@@ -93,7 +96,7 @@ class RequestBoardServiceTest {
         when(posts.countByRequesterIdAndStatusIn(eq("user1"), any())).thenReturn(20L);
 
         assertThatThrownBy(() -> service.create(
-                new RequestBoardDto.CreateRequest(RequestKind.FEATURE, "t", "c", null), "user1"))
+                new RequestBoardDto.CreateRequest(RequestKind.REPO, "t", "c", null), "user1"))
                 .isInstanceOf(TaskException.class)
                 .satisfies(t -> assertThat(statusOf(t)).isEqualTo(HttpStatus.TOO_MANY_REQUESTS))
                 .hasMessage("처리 중인 요청이 너무 많습니다(최대 20건)");
@@ -105,13 +108,113 @@ class RequestBoardServiceTest {
         when(posts.countByRequesterIdAndStatusIn(eq("user1"), any())).thenReturn(19L);
 
         RequestBoardDto.ListItem item = service.create(
-                new RequestBoardDto.CreateRequest(RequestKind.FEATURE, "t", "c", "무시됨"), "user1");
+                new RequestBoardDto.CreateRequest(RequestKind.REPO, "t", "c", "힌트"), "user1");
 
         assertThat(item.status()).isEqualTo(RequestStatus.RECEIVED);
         assertThat(item.statusLabel()).isEqualTo("접수");
-        assertThat(item.kindLabel()).isEqualTo("기능 추가");
+        assertThat(item.kindLabel()).isEqualTo("사이트 추가");
         assertThat(item.unread()).isFalse();
         verify(comments, never()).save(any());
+    }
+
+    private RequestPost savedPost() {
+        ArgumentCaptor<RequestPost> cap = ArgumentCaptor.forClass(RequestPost.class);
+        verify(posts).save(cap.capture());
+        return cap.getValue();
+    }
+
+    private static RequestBoardDto.CreateRequest dev(RequestIssueType type, RequestPriority pr,
+                                                     LocalDate due, Long repoId) {
+        return new RequestBoardDto.CreateRequest(RequestKind.DEV, "t", "c", "무시", type, pr, due, repoId);
+    }
+
+    @Test
+    void create_FEATURE는_400() {
+        assertThatThrownBy(() -> service.create(
+                new RequestBoardDto.CreateRequest(RequestKind.FEATURE, "t", "c", null), "user1"))
+                .satisfies(t -> assertThat(statusOf(t)).isEqualTo(HttpStatus.BAD_REQUEST))
+                .hasMessage("더 이상 받지 않는 요청 종류입니다");
+        verify(posts, never()).save(any());
+    }
+
+    @Test
+    void create_MCP는_400() {
+        assertThatThrownBy(() -> service.create(
+                new RequestBoardDto.CreateRequest(RequestKind.MCP, "t", "c", null), "user1"))
+                .satisfies(t -> assertThat(statusOf(t)).isEqualTo(HttpStatus.BAD_REQUEST))
+                .hasMessage("더 이상 받지 않는 요청 종류입니다");
+        verify(posts, never()).save(any());
+    }
+
+    @Test
+    void create_DEV_유형없으면_400() {
+        assertThatThrownBy(() -> service.create(dev(null, RequestPriority.HIGH, null, null), "user1"))
+                .satisfies(t -> assertThat(statusOf(t)).isEqualTo(HttpStatus.BAD_REQUEST))
+                .hasMessage("유형을 선택하세요");
+        verify(posts, never()).save(any());
+    }
+
+    @Test
+    void create_DEV_우선순위_기본_NORMAL() {
+        service.create(dev(RequestIssueType.BUG, null, null, null), "user1");
+
+        RequestPost saved = savedPost();
+        assertThat(saved.getPriority()).isEqualTo(RequestPriority.NORMAL);
+        assertThat(saved.getIssueType()).isEqualTo(RequestIssueType.BUG);
+        assertThat(saved.getRepoHint()).isNull();
+    }
+
+    @Test
+    void create_DEV_없는_레포면_400() {
+        when(catalogService.resolveForRegistration(99L)).thenThrow(
+                new TaskException(HttpStatus.BAD_REQUEST, "존재하지 않는 레포 카탈로그 id: 99"));
+
+        assertThatThrownBy(() -> service.create(dev(RequestIssueType.DEV, null, null, 99L), "user1"))
+                .satisfies(t -> assertThat(statusOf(t)).isEqualTo(HttpStatus.BAD_REQUEST));
+        verify(posts, never()).save(any());
+    }
+
+    @Test
+    void create_DEV_과거_마감일_허용() {
+        LocalDate past = LocalDate.now().minusDays(30);
+
+        service.create(dev(RequestIssueType.INQUIRY, RequestPriority.LOW, past, null), "user1");
+
+        assertThat(savedPost().getDueDate()).isEqualTo(past);
+    }
+
+    @Test
+    void create_REPO는_개발요청_칸을_버린다() {
+        service.create(new RequestBoardDto.CreateRequest(RequestKind.REPO, "t", "c", "힌트",
+                RequestIssueType.BUG, RequestPriority.HIGH, LocalDate.now(), 5L), "user1");
+
+        RequestPost saved = savedPost();
+        assertThat(saved.getIssueType()).isNull();
+        assertThat(saved.getPriority()).isNull();
+        assertThat(saved.getDueDate()).isNull();
+        assertThat(saved.getTargetRepoCatalogId()).isNull();
+        assertThat(saved.getRepoHint()).isEqualTo("힌트");
+        verify(catalogService, never()).resolveForRegistration(any());
+    }
+
+    @Test
+    void update_DEV_칸_변경() {
+        RequestPost p = post(1L, RequestKind.DEV, RequestStatus.RECEIVED, "user1");
+        LocalDate due = LocalDate.now().plusDays(3);
+
+        service.update(1L, new RequestBoardDto.UpdateRequest("새", "새 내용", "힌트",
+                RequestIssueType.INQUIRY, RequestPriority.HIGH, due, 7L, null), "user1");
+
+        assertThat(p.getIssueType()).isEqualTo(RequestIssueType.INQUIRY);
+        assertThat(p.getPriority()).isEqualTo(RequestPriority.HIGH);
+        assertThat(p.getDueDate()).isEqualTo(due);
+        assertThat(p.getTargetRepoCatalogId()).isEqualTo(7L);
+        assertThat(p.getRepoHint()).isNull();
+        verify(catalogService).resolveForRegistration(7L);
+        assertThatThrownBy(() -> service.update(1L,
+                new RequestBoardDto.UpdateRequest("t", "c", null), "user1"))
+                .satisfies(t -> assertThat(statusOf(t)).isEqualTo(HttpStatus.BAD_REQUEST))
+                .hasMessage("유형을 선택하세요");
     }
 
     @Test

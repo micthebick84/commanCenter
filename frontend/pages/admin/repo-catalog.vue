@@ -40,6 +40,21 @@ const entries = ref<RepoEntry[]>([])
 const loading = ref(false)
 const checkingIds = ref<Set<number>>(new Set())
 
+// 목록 검색 — 별칭·경로·Git URL·브랜치·설명·노트 폴더·호스트에서 대소문자 없이 찾는다(공백으로 나눈 낱말이 모두 들어 있어야 함)
+const search = ref<string | null>('')
+const searchActive = computed(() => !!search.value?.trim())
+const filteredEntries = computed(() => {
+  const words = (search.value ?? '').trim().toLowerCase().split(/\s+/).filter(Boolean)
+  if (!words.length) return entries.value
+  return entries.value.filter((e) => {
+    const text = [e.alias, e.ownerRepo, e.gitUrl, e.defaultBranch, e.description, e.noteFolder, e.host]
+      .filter(Boolean)
+      .join(' ')
+      .toLowerCase()
+    return words.every((w) => text.includes(w))
+  })
+})
+
 // 레포별 공용 DB 접속정보 (스펙 2026-10-02 §7)
 const dbAdminOpen = ref(false)
 const dbAdminRepo = ref<{ id: number; alias: string } | null>(null)
@@ -260,12 +275,32 @@ const canSubmit = computed(
       (GitHub와 사내 GitLab 레포를 등록할 수 있습니다. 그 밖의 호스트는 저장은 되지만 작업 등록은 불가)
     </AdminInfoBanner>
 
+    <q-input
+      v-model="search"
+      outlined
+      dense
+      clearable
+      placeholder="별칭·경로·URL·설명으로 검색"
+      aria-label="레포 카탈로그 검색"
+      class="q-mb-md catalog-search"
+      autocapitalize="off"
+      autocorrect="off"
+      spellcheck="false"
+      data-test="catalog-search"
+    >
+      <template #prepend><q-icon name="search" /></template>
+    </q-input>
+    <div v-if="searchActive && entries.length" class="text-caption text-grey-7 q-mb-sm" data-test="catalog-search-count">
+      {{ entries.length }}개 중 {{ filteredEntries.length }}개
+    </div>
+
     <!-- 모바일: 7열 표는 가로 스크롤이 되므로 카드 목록으로 -->
     <div v-if="$q.screen.lt.md" class="catalog-cards" data-test="catalog-cards">
       <div v-if="loading && !entries.length" class="catalog-empty"><q-spinner size="28px" color="primary" /></div>
       <div v-else-if="!entries.length" class="catalog-empty">등록된 레포가 없습니다</div>
+      <div v-else-if="!filteredEntries.length" class="catalog-empty" data-test="catalog-search-empty">검색 결과가 없습니다</div>
       <AdminCatalogCard
-        v-for="e in entries"
+        v-for="e in filteredEntries"
         :key="e.id"
         :title="e.alias"
         :enabled="e.enabled"
@@ -342,13 +377,18 @@ const canSubmit = computed(
       </AdminCatalogCard>
     </div>
 
+    <!-- wrap-cells: 긴 설명·URL이 줄바꿈되게(기본 nowrap이면 표가 넓어져 오른쪽 수정 아이콘이 가로 스크롤 뒤로 숨는다).
+         그래도 넘치는 폭에서는 동작 열을 오른쪽에 고정한다(.catalog-table 스타일) -->
     <q-table
       v-else
-      :rows="entries"
+      :rows="filteredEntries"
       :loading="loading"
       row-key="id"
       flat
       bordered
+      wrap-cells
+      class="catalog-table"
+      :no-data-label="entries.length ? '검색 결과가 없습니다' : '등록된 레포가 없습니다'"
       :pagination="{ rowsPerPage: 50 }"
       :columns="[
         { name: 'enabled', label: '', field: 'enabled', align: 'center', style: 'width:60px' },
@@ -357,7 +397,7 @@ const canSubmit = computed(
         { name: 'gitUrl', label: 'Git URL', field: 'gitUrl', align: 'left' },
         { name: 'defaultBranch', label: '기본 브랜치', field: 'defaultBranch', align: 'center' },
         { name: 'description', label: '설명', field: 'description', align: 'left' },
-        { name: 'actions', label: '', field: () => '', align: 'right' },
+        { name: 'actions', label: '', field: () => '', align: 'right', headerClasses: 'catalog-actions' },
       ]"
     >
       <template #body-cell-enabled="props">
@@ -427,7 +467,7 @@ const canSubmit = computed(
         </q-td>
       </template>
       <template #body-cell-actions="props">
-        <q-td :props="props">
+        <q-td :props="props" class="catalog-actions" data-test="catalog-actions">
           <q-btn
             flat
             dense
@@ -616,3 +656,18 @@ const canSubmit = computed(
     <DbConnectionAdminDialog v-model="dbAdminOpen" :repo="dbAdminRepo" />
   </q-page>
 </template>
+
+<style scoped>
+.catalog-search {
+  max-width: 420px;
+}
+/* 동작 아이콘 4개는 한 줄로, 표가 넘쳐도 오른쪽 끝에 붙어 보이게 */
+.catalog-table :deep(.catalog-actions) {
+  position: sticky;
+  right: 0;
+  z-index: 1;
+  white-space: nowrap;
+  background: #fff;
+  box-shadow: -1px 0 0 rgba(0, 0, 0, 0.12);
+}
+</style>

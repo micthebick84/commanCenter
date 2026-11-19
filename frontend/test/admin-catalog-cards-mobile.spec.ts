@@ -72,6 +72,20 @@ describe('관리 카탈로그 모바일 카드 목록', () => {
     w.unmount()
   })
 
+  it('레포: 모바일 카드 목록도 검색어로 거른다', async () => {
+    await setViewportWidth(390)
+    const w = await mountPage(RepoCatalog, repoRows)
+    await w.find('[data-test="catalog-search"]').setValue('gitlab')
+    await flushPromises()
+    expect(cards(w)).toHaveLength(1)
+    expect(cards(w)[0].text()).toContain('GL')
+    await w.find('[data-test="catalog-search"]').setValue('zzz')
+    await flushPromises()
+    expect(cards(w)).toHaveLength(0)
+    expect(w.find('[data-test="catalog-search-empty"]').exists()).toBe(true)
+    w.unmount()
+  })
+
   it('레포: 카드 토글은 enabled를 뒤집어 PUT하고, 연결 확인은 check를 호출한다', async () => {
     await setViewportWidth(390)
     const w = await mountPage(RepoCatalog, repoRows)

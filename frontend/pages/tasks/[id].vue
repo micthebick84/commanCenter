@@ -177,6 +177,8 @@ interface TaskResponse {
   refRepos?: RefRepoView[]
   /** 질문 대화에서 이어 등록했으면 그 질문 id (스펙 2026-10-24 §4.1) — "레포" 옆 출처 링크. */
   sourceQuestionId?: number | null
+  /** 요청 게시판의 개발 요청에서 등록했으면 그 요청 id (스펙 2026-11-19 §5.4). */
+  sourceRequestId?: number | null
   /** 수정 요청 회차 현황 (스펙 2026-11-03 §6) — 상세 응답에만 있다. */
   fix?: FixView | null
   /** 작업 타입 (스펙 2026-11-03 §4) — null·없음은 타입 없음(기존 작업). 칩은 타입이 있을 때만 그린다. */
@@ -1188,6 +1190,13 @@ function onAction(kind: NextActionKind) {
               class="text-caption q-ml-xs"
               data-test="source-question-link"
             >↩ 질문 #{{ task.sourceQuestionId }}에서 이어짐</NuxtLink>
+            <!-- 요청 게시판의 개발 요청에서 등록한 작업 (스펙 2026-11-19 §5.4) -->
+            <NuxtLink
+              v-if="task.sourceRequestId"
+              :to="`/requests/${task.sourceRequestId}`"
+              class="text-caption q-ml-xs"
+              data-test="source-request-link"
+            >↩ 요청 #{{ task.sourceRequestId }}에서 이어짐</NuxtLink>
           </div>
         </q-card-section>
         <q-separator />

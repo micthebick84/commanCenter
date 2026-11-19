@@ -5,7 +5,7 @@ import RepoAddDropdown from '~/components/requests/RepoAddDropdown.vue'
 import RequestFormDialog from '~/components/requests/RequestFormDialog.vue'
 import { useHydrationSafeAuth } from '~/composables/useHydrationSafeAuth'
 import {
-  KIND_OPTIONS,
+  KIND_FILTER_OPTIONS,
   OPEN_STATUSES,
   STATUS_COLOR,
   STATUS_OPTIONS,
@@ -30,7 +30,7 @@ const kindFilter = ref<RequestKind | null>(null)
 const statusFilter = ref<RequestStatus[]>([...OPEN_STATUSES])
 const includeUnread = ref(true)
 
-const kindFilterOptions = [{ value: null, label: '전체 종류' }, ...KIND_OPTIONS]
+const kindFilterOptions = [{ value: null, label: '전체 종류' }, ...KIND_FILTER_OPTIONS]
 
 function buildUrl(): string {
   if (!auth.isAdmin || !showAll.value) return '/api/requests'

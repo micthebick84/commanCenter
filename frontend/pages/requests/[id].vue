@@ -229,7 +229,7 @@ async function confirmReject() {
 
       <!-- REPO 처리 결과 -->
       <div v-if="repoResult" class="q-mb-md text-body2" data-test="repo-result">{{ repoResult }}</div>
-      <!-- REPO 추가 처리 — 등록되면 응답 상세로 화면을 바꾼다(상태·답글·등록된 레포 갱신) -->
+      <!-- 사이트 추가 처리 — 등록되면 응답 상세로 화면을 바꾼다(상태·답글·등록된 레포 갱신) -->
       <div v-if="showRepoAddSlot" class="q-mb-md" data-test="repo-add-slot">
         <RepoAddDropdown :request-id="req.id" @added="onRepoAdded" />
       </div>

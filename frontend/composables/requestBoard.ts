@@ -1,6 +1,8 @@
 // 요청 게시판 공용 타입·상수 (스펙 2026-10-19). 필드 이름은 백엔드 RequestBoardDto와 같다.
 
-export type RequestKind = 'FEATURE' | 'MCP' | 'REPO'
+export type RequestKind = 'DEV' | 'REPO' | 'FEATURE' | 'MCP'
+export type RequestIssueType = 'BUG' | 'DEV' | 'INQUIRY'
+export type RequestPriority = 'HIGH' | 'NORMAL' | 'LOW'
 export type RequestStatus = 'RECEIVED' | 'REVIEWING' | 'DONE' | 'REJECTED'
 export type RequestCommentKind = 'COMMENT' | 'SYSTEM'
 
@@ -13,8 +15,26 @@ export interface RequestListItem {
   statusLabel: string
   requesterId: string
   unread: boolean
+  issueType: RequestIssueType | null
+  issueTypeLabel: string | null
+  priority: RequestPriority | null
+  priorityLabel: string | null
+  /** yyyy-MM-dd */
+  dueDate: string | null
+  targetRepoAlias: string | null
+  attachmentCount: number
+  commentCount: number
+  taskId: number | null
+  taskStatusLabel: string | null
   createdAt: string
   updatedAt: string
+}
+
+export interface RequestAttachmentView {
+  id: number
+  name: string
+  sizeBytes: number
+  expired: boolean
 }
 
 export interface RequestComment {
@@ -40,7 +60,20 @@ export interface RequestDetail {
   repoAlias: string | null
   repoGitUrl: string | null
   repoCatalogDeleted: boolean
+  issueType: RequestIssueType | null
+  issueTypeLabel: string | null
+  priority: RequestPriority | null
+  priorityLabel: string | null
+  /** yyyy-MM-dd */
+  dueDate: string | null
+  targetRepoCatalogId: number | null
+  targetRepoAlias: string | null
+  taskId: number | null
+  taskStatusLabel: string | null
+  attachments: RequestAttachmentView[]
   editable: boolean
+  cancellable: boolean
+  convertible: boolean
   createdAt: string
   updatedAt: string
   comments: RequestComment[]
@@ -55,11 +88,53 @@ export interface RepoCandidate {
   registered: boolean
 }
 
+/** 등록 폼용 종류 — 예전 종류(FEATURE·MCP)는 새로 등록하지 못한다. */
 export const KIND_OPTIONS: { value: RequestKind; label: string }[] = [
-  { value: 'FEATURE', label: '기능 추가' },
-  { value: 'MCP', label: 'MCP 추가' },
-  { value: 'REPO', label: 'REPO 추가' },
+  { value: 'DEV', label: '개발 요청' },
+  { value: 'REPO', label: '사이트 추가' },
 ]
+
+/** 관리자 목록 필터용 — 예전 종류 글도 걸러 볼 수 있다. */
+export const KIND_FILTER_OPTIONS: { value: RequestKind; label: string }[] = [
+  ...KIND_OPTIONS,
+  { value: 'FEATURE', label: '기능 추가(예전)' },
+  { value: 'MCP', label: 'MCP 추가(예전)' },
+]
+
+export const ISSUE_TYPE_OPTIONS: { value: RequestIssueType; label: string }[] = [
+  { value: 'BUG', label: '버그' },
+  { value: 'DEV', label: '개발요청' },
+  { value: 'INQUIRY', label: '기능문의' },
+]
+
+export const PRIORITY_OPTIONS: { value: RequestPriority; label: string }[] = [
+  { value: 'HIGH', label: '▲ 높음' },
+  { value: 'NORMAL', label: '● 보통' },
+  { value: 'LOW', label: '▼ 낮음' },
+]
+
+export const ISSUE_TYPE_COLOR: Record<RequestIssueType, string> = {
+  BUG: 'negative',
+  DEV: 'primary',
+  INQUIRY: 'grey-8',
+}
+
+export const PRIORITY_COLOR: Record<RequestPriority, string> = {
+  HIGH: 'negative',
+  NORMAL: 'grey-8',
+  LOW: 'blue-grey-5',
+}
+
+/** 요청 한 건의 첨부 한도 — 서버 AttachmentStorage.validate와 같은 값(composables/attachmentLimits.ts의 MAX_FILES). */
+export const MAX_REQUEST_FILES = 10
+
+/** 개발 요청 multipart 본문: meta(application/json Blob) + 반복 files. pages/tasks/index.vue와 같은 모양. */
+export function requestFormData(meta: object, files: File[]): FormData {
+  const form = new FormData()
+  form.append('meta', new Blob([JSON.stringify(meta)], { type: 'application/json' }))
+  for (const f of files) form.append('files', f, f.name)
+  return form
+}
 
 export const STATUS_OPTIONS: { value: RequestStatus; label: string }[] = [
   { value: 'RECEIVED', label: '접수' },
@@ -68,7 +143,7 @@ export const STATUS_OPTIONS: { value: RequestStatus; label: string }[] = [
   { value: 'REJECTED', label: '반려' },
 ]
 
-/** 처리 중인 상태(접수·검토중) — 관리자 목록 기본 필터와 REPO 추가 버튼 노출 기준. */
+/** 처리 중인 상태(접수·검토중) — 관리자 목록 기본 필터와 사이트 추가 버튼 노출 기준. */
 export const OPEN_STATUSES: RequestStatus[] = ['RECEIVED', 'REVIEWING']
 
 export const STATUS_COLOR: Record<RequestStatus, string> = {

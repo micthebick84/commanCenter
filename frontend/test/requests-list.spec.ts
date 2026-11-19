@@ -135,14 +135,14 @@ describe('requests/index', () => {
     w.unmount()
   })
 
-  it('create_posts_repo_hint_only_for_repo: FEATURE는 repoHint 없이, REPO는 입력값과 함께 보낸다', async () => {
+  it('create_posts_repo_hint_only_for_repo: 개발 요청 폼에는 힌트 칸이 없고, 사이트 추가는 입력값과 함께 보낸다', async () => {
     const w = await mountPage([])
-    async function create(kind: 'FEATURE' | 'REPO', hint: string | null) {
+    async function create(kind: 'REPO', hint: string) {
       await w.find('[data-test="open-create"]').trigger('click')
       await flushPromises()
       // 종류 선택은 토글 버튼 그룹: 라벨이 같은 버튼을 누른다
-      const label = kind === 'FEATURE' ? '기능 추가' : 'REPO 추가'
-      const kindBtn = Array.from(document.querySelectorAll('[data-test="req-kind"] button')).find((b) =>
+      const label = kind === 'REPO' ? '사이트 추가' : ''
+      const kindBtn = Array.from(document.querySelectorAll('[data-test="request-kind"] button')).find((b) =>
         b.textContent?.includes(label),
       ) as HTMLElement
       kindBtn.click()
@@ -154,25 +154,21 @@ describe('requests/index', () => {
       content.value = '내용'
       content.dispatchEvent(new Event('input'))
       await flushPromises()
-      if (hint !== null) {
-        const h = document.querySelector('[data-test="req-hint"]') as HTMLInputElement
-        h.value = hint
-        h.dispatchEvent(new Event('input'))
-        await flushPromises()
-      } else {
-        expect(document.querySelector('[data-test="req-hint"]')).toBeNull()
-      }
+      const h = document.querySelector('[data-test="req-hint"]') as HTMLInputElement
+      h.value = hint
+      h.dispatchEvent(new Event('input'))
+      await flushPromises()
       useApiMock.mockResolvedValueOnce({ id: 5 }) // POST
       useApiMock.mockResolvedValueOnce([]) // reload
       ;(document.querySelector('[data-test="req-submit"]') as HTMLElement).click()
       await flushPromises()
     }
 
-    await create('FEATURE', null)
-    const featCall = useApiMock.mock.calls.find((c) => c[0] === '/api/requests' && c[1]?.method === 'POST')!
-    expect(featCall[1].body.kind).toBe('FEATURE')
-    expect(featCall[1].body.repoHint ?? null).toBeNull()
-
+    // 새 요청의 기본 종류는 개발 요청 — 레포 힌트 칸이 없다
+    await w.find('[data-test="open-create"]').trigger('click')
+    await flushPromises()
+    expect(document.querySelector('[data-test="req-hint"]')).toBeNull()
+    ;(document.querySelector('[data-test="form-close"]') as HTMLElement | null)?.click()
     useApiMock.mockClear()
     await create('REPO', 'https://gitlab.hamon.vip/g/p')
     const repoCall = useApiMock.mock.calls.find((c) => c[0] === '/api/requests' && c[1]?.method === 'POST')!

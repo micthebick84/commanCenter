@@ -1,9 +1,10 @@
 import { mount, flushPromises } from '@vue/test-utils'
 import { describe, it, expect, afterEach, beforeEach, vi } from 'vitest'
 import { defineComponent, h } from 'vue'
-import { QLayout, QPageContainer, QSelect } from 'quasar'
+import { QBtnToggle, QLayout, QPageContainer, QSelect } from 'quasar'
 import RequestsIndex from '../pages/requests/index.vue'
 import { authStub, useApiMock } from './mocks/nuxt'
+import { setViewportWidth } from './mocks/screen'
 
 const navigateToMock = vi.fn()
 Object.assign(globalThis, { navigateTo: navigateToMock })
@@ -175,5 +176,109 @@ describe('requests/index', () => {
     expect(repoCall[1].body.kind).toBe('REPO')
     expect(repoCall[1].body.repoHint).toBe('https://gitlab.hamon.vip/g/p')
     w.unmount()
+  })
+})
+
+function issueSelect(w: ReturnType<typeof mount>) {
+  return w
+    .findAllComponents(QSelect)
+    .find((c) => c.element.matches('[data-test="requests-issue-type-filter"]') || c.element.querySelector('[data-test="requests-issue-type-filter"]'))!
+}
+
+function devItem(over: Record<string, unknown> = {}) {
+  return item({
+    id: 20,
+    kind: 'DEV',
+    kindLabel: '개발 요청',
+    title: '로그인 오류',
+    issueType: 'BUG',
+    issueTypeLabel: '버그',
+    priority: 'HIGH',
+    priorityLabel: '▲ 높음',
+    dueDate: '2026-12-03',
+    targetRepoAlias: 'hm-core',
+    attachmentCount: 2,
+    commentCount: 3,
+    taskId: 5,
+    taskStatusLabel: '구현중',
+    ...over,
+  })
+}
+
+describe('requests/index — 전체 개발 요청', () => {
+  it('user_scope_segment: 일반 사용자에게 세그먼트가 보이고 전체 개발 요청을 고르면 scope=dev로 조회한다', async () => {
+    const w = await mountPage([item()])
+    expect(w.find('[data-test="requests-scope"]').exists()).toBe(true)
+    useApiMock.mockResolvedValueOnce([devItem()])
+    w.findComponent(QBtnToggle).vm.$emit('update:modelValue', 'dev')
+    await flushPromises()
+    const url = String(useApiMock.mock.calls[useApiMock.mock.calls.length - 1][0])
+    expect(url).toBe('/api/requests?scope=dev')
+    expect(w.text()).toContain('로그인 오류')
+    w.unmount()
+  })
+
+  it('user_dev_filters: 유형을 고르면 서버로 보내고 상태가 비어 있으면 생략한다', async () => {
+    const w = await mountPage([item()])
+    useApiMock.mockResolvedValueOnce([devItem()])
+    w.findComponent(QBtnToggle).vm.$emit('update:modelValue', 'dev')
+    await flushPromises()
+    useApiMock.mockResolvedValueOnce([devItem()])
+    issueSelect(w).vm.$emit('update:modelValue', 'BUG')
+    await flushPromises()
+    const url = String(useApiMock.mock.calls[useApiMock.mock.calls.length - 1][0])
+    expect(url).toContain('scope=dev')
+    expect(url).toContain('issueType=BUG')
+    expect(url).not.toContain('status=')
+    w.unmount()
+  })
+
+  it('admin_no_scope: 관리자에게는 세그먼트가 없고 유형 필터는 화면에서 거른다(백엔드가 issueType을 안 읽는다)', async () => {
+    authStub.isAdmin = true
+    const w = await mountPage([
+      devItem({ id: 1, title: '버그글' }),
+      devItem({ id: 2, title: '개발글', issueType: 'DEV', issueTypeLabel: '개발요청' }),
+    ])
+    expect(w.find('[data-test="requests-scope"]').exists()).toBe(false)
+    expect(w.text()).toContain('개발글')
+    issueSelect(w).vm.$emit('update:modelValue', 'BUG')
+    await flushPromises()
+    expect(w.text()).toContain('버그글')
+    expect(w.text()).not.toContain('개발글')
+    expect(useApiMock.mock.calls.every((c) => !String(c[0]).includes('issueType'))).toBe(true)
+    w.unmount()
+  })
+
+  it('dev_row_meta: DEV 줄에 유형 칩·우선순위·둘째 줄·작업 연결이 보이고 REPO 줄에는 둘째 줄이 없다', async () => {
+    const w = await mountPage([
+      devItem(),
+      item({ id: 30, kind: 'REPO', kindLabel: '사이트 추가', title: '레포 요청' }),
+    ])
+    const rows = w.findAll('[data-test="request-row"]')
+    expect(rows).toHaveLength(2)
+    expect(rows[0].text()).toContain('버그')
+    expect(rows[0].text()).toContain('▲ 높음')
+    expect(rows[0].text()).toContain('hm-core')
+    expect(rows[0].text()).toContain('hong')
+    expect(rows[0].text()).toContain('마감 12.03')
+    expect(rows[0].text()).toContain('📎2')
+    expect(rows[0].text()).toContain('💬3')
+    expect(rows[0].find('[data-test="request-row-task"]').text()).toBe('→ 작업 #5 구현중')
+    expect(rows[1].find('[data-test="request-row-meta"]').exists()).toBe(false)
+    expect(rows[1].find('[data-test="request-row-task"]').exists()).toBe(false)
+    w.unmount()
+  })
+})
+
+describe('requests/index — 좁은 화면', () => {
+  it('mobile_dev_meta: 카드에도 유형 칩·둘째 줄(줄바꿈)·작업 연결이 보인다', async () => {
+    await setViewportWidth(500)
+    const w = await mountPage([devItem()])
+    const row = w.find('[data-test="request-row"]')
+    expect(row.text()).toContain('버그')
+    expect(row.find('[data-test="request-row-meta"]').classes()).toContain('wrap')
+    expect(row.find('[data-test="request-row-task"]').text()).toBe('→ 작업 #5 구현중')
+    w.unmount()
+    await setViewportWidth(1024)
   })
 })

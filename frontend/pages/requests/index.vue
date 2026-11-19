@@ -5,12 +5,17 @@ import RepoAddDropdown from '~/components/requests/RepoAddDropdown.vue'
 import RequestFormDialog from '~/components/requests/RequestFormDialog.vue'
 import { useHydrationSafeAuth } from '~/composables/useHydrationSafeAuth'
 import {
+  ISSUE_TYPE_COLOR,
+  ISSUE_TYPE_OPTIONS,
   KIND_FILTER_OPTIONS,
   OPEN_STATUSES,
+  PRIORITY_COLOR,
   STATUS_COLOR,
   STATUS_OPTIONS,
+  type RequestIssueType,
   type RequestKind,
   type RequestListItem,
+  type RequestPriority,
   type RequestStatus,
 } from '~/composables/requestBoard'
 
@@ -32,8 +37,28 @@ const includeUnread = ref(true)
 
 const kindFilterOptions = [{ value: null, label: '전체 종류' }, ...KIND_FILTER_OPTIONS]
 
+// 일반 사용자: 내 요청 / 전체 개발 요청(모든 사용자의 DEV 요청). 전체 개발 요청의 상태 칩은 비면 전체 상태
+type Scope = 'mine' | 'dev'
+const scope = ref<Scope>('mine')
+const scopeOptions = [
+  { value: 'mine', label: '내 요청' },
+  { value: 'dev', label: '전체 개발 요청' },
+]
+const devStatusFilter = ref<RequestStatus[]>([])
+// 유형 필터 — 전체 개발 요청은 서버가, 관리자 전체 목록은 백엔드가 issueType을 안 읽어 화면에서 거른다
+const issueTypeFilter = ref<RequestIssueType | null>(null)
+const issueTypeOptions = [{ value: null, label: '전체 유형' }, ...ISSUE_TYPE_OPTIONS]
+
 function buildUrl(): string {
-  if (!auth.isAdmin || !showAll.value) return '/api/requests'
+  if (!auth.isAdmin) {
+    if (scope.value !== 'dev') return '/api/requests'
+    const dq = new URLSearchParams()
+    dq.set('scope', 'dev')
+    if (issueTypeFilter.value) dq.set('issueType', issueTypeFilter.value)
+    for (const st of devStatusFilter.value) dq.append('status', st)
+    return `/api/requests?${dq.toString()}`
+  }
+  if (!showAll.value) return '/api/requests'
   const qs = new URLSearchParams()
   qs.set('all', 'true')
   if (kindFilter.value) qs.set('kind', kindFilter.value)
@@ -55,7 +80,14 @@ async function load() {
   }
 }
 onMounted(load)
-watch([showAll, kindFilter, statusFilter, includeUnread], load)
+watch([showAll, kindFilter, statusFilter, includeUnread, scope, devStatusFilter], load)
+// 유형은 관리자 전체 목록에서는 화면 필터라 다시 읽지 않는다
+watch(issueTypeFilter, () => {
+  if (!auth.isAdmin) load()
+})
+const shownRows = computed(() =>
+  auth.isAdmin && showAll.value && issueTypeFilter.value ? rows.value.filter((r) => r.issueType === issueTypeFilter.value) : rows.value,
+)
 
 function fmt(iso: string) {
   return new Date(iso).toLocaleString()
@@ -63,6 +95,11 @@ function fmt(iso: string) {
 function open(r: RequestListItem) {
   navigateTo('/requests/' + r.id)
 }
+function dueLabel(r: RequestListItem) {
+  return r.dueDate ? `마감 ${r.dueDate.slice(5).replace('-', '.')}` : ''
+}
+// 둘째 줄은 DEV 요청에만
+const hasMeta = (r: RequestListItem) => r.kind === 'DEV'
 const isOpenRepo = (r: RequestListItem) => r.kind === 'REPO' && OPEN_STATUSES.includes(r.status)
 
 const showCreate = ref(false)
@@ -81,6 +118,45 @@ const showCreate = ref(false)
         data-test="open-create"
         @click="showCreate = true"
       />
+    </div>
+
+    <!-- 일반 사용자: 내 요청 / 전체 개발 요청 -->
+    <div v-if="!isAdmin" class="row items-center q-gutter-sm q-mb-md">
+      <q-btn-toggle
+        v-model="scope"
+        :options="scopeOptions"
+        no-caps
+        unelevated
+        toggle-color="primary"
+        color="white"
+        text-color="grey-9"
+        data-test="requests-scope"
+      />
+      <template v-if="scope === 'dev'">
+        <q-select
+          v-model="issueTypeFilter"
+          :options="issueTypeOptions"
+          emit-value
+          map-options
+          dense
+          outlined
+          style="min-width: 140px"
+          data-test="requests-issue-type-filter"
+        />
+        <q-select
+          v-model="devStatusFilter"
+          :options="STATUS_OPTIONS"
+          emit-value
+          map-options
+          multiple
+          use-chips
+          dense
+          outlined
+          label="상태"
+          style="min-width: 220px"
+          data-test="requests-status-filter"
+        />
+      </template>
     </div>
 
     <!-- 관리자 필터 -->
@@ -110,18 +186,31 @@ const showCreate = ref(false)
           style="min-width: 220px"
           data-test="filter-status"
         />
+        <q-select
+          v-model="issueTypeFilter"
+          :options="issueTypeOptions"
+          emit-value
+          map-options
+          dense
+          outlined
+          style="min-width: 140px"
+          data-test="requests-issue-type-filter"
+        />
         <q-toggle v-model="includeUnread" label="안 읽은 건 포함" data-test="filter-unread" />
       </template>
     </div>
 
     <!-- 모바일: 카드 목록 -->
     <div v-if="$q.screen.lt.md" class="request-cards" data-test="request-cards">
-      <div v-if="loading && !rows.length" class="text-center q-pa-lg"><q-spinner size="28px" color="primary" /></div>
-      <div v-else-if="!rows.length" class="text-center text-grey-7 q-pa-lg">요청이 없습니다</div>
-      <q-card v-for="r in rows" :key="r.id" flat bordered class="q-mb-sm cursor-pointer" @click="open(r)">
+      <div v-if="loading && !shownRows.length" class="text-center q-pa-lg"><q-spinner size="28px" color="primary" /></div>
+      <div v-else-if="!shownRows.length" class="text-center text-grey-7 q-pa-lg">요청이 없습니다</div>
+      <q-card v-for="r in shownRows" :key="r.id" flat bordered class="q-mb-sm cursor-pointer" @click="open(r)">
         <q-card-section class="q-pb-sm" :data-test="`req-row-${r.id}`">
+          <div data-test="request-row">
           <div class="row items-center no-wrap q-gutter-x-xs q-mb-xs">
             <q-chip dense size="sm" color="blue-grey-1" text-color="grey-9" :label="r.kindLabel" class="q-ma-none" />
+            <q-chip v-if="r.issueType" dense size="sm" outline :color="ISSUE_TYPE_COLOR[r.issueType]" :label="r.issueTypeLabel" class="q-ma-none" />
+            <span v-if="r.priority" class="text-caption" :class="`text-${PRIORITY_COLOR[r.priority]}`">{{ r.priorityLabel }}</span>
             <q-chip dense size="sm" :color="STATUS_COLOR[r.status]" text-color="white" :label="r.statusLabel" class="q-ma-none" />
             <q-space />
             <span v-if="r.unread" class="unread-dot" role="img" data-test="unread-dot" aria-label="새 활동" />
@@ -130,6 +219,16 @@ const showCreate = ref(false)
           <NuxtLink :to="`/requests/${r.id}`" class="text-subtitle2 text-weight-medium request-title-link" :data-test="`req-link-${r.id}`" @click.stop>{{ r.title }}</NuxtLink>
           <div class="text-caption text-grey-7">
             <span v-if="isAdmin">{{ r.requesterId }} · </span>{{ fmt(r.updatedAt) }}
+          </div>
+          <!-- 좁은 화면이라 둘째 줄은 줄바꿈 -->
+          <div v-if="hasMeta(r)" class="row items-center wrap q-gutter-x-sm text-caption text-grey-8" data-test="request-row-meta">
+            <span v-if="r.targetRepoAlias">{{ r.targetRepoAlias }}</span>
+            <span>{{ r.requesterId }}</span>
+            <span v-if="r.dueDate">{{ dueLabel(r) }}</span>
+            <span v-if="r.attachmentCount">📎{{ r.attachmentCount }}</span>
+            <span v-if="r.commentCount">💬{{ r.commentCount }}</span>
+            <span v-if="r.taskId" data-test="request-row-task">→ 작업 #{{ r.taskId }} {{ r.taskStatusLabel }}</span>
+          </div>
           </div>
         </q-card-section>
         <q-card-actions v-if="isAdmin && isOpenRepo(r)" align="right" @click.stop>
@@ -140,7 +239,7 @@ const showCreate = ref(false)
 
     <q-table
       v-else
-      :rows="rows"
+      :rows="shownRows"
       :loading="loading"
       row-key="id"
       flat
@@ -164,13 +263,25 @@ const showCreate = ref(false)
       </template>
       <template #body-cell-title="props">
         <q-td :props="props" class="cursor-pointer" :data-test="`req-row-${props.row.id}`">
-          <NuxtLink
-            :to="`/requests/${props.row.id}`"
-            class="text-weight-medium request-title-link"
-            :data-test="`req-link-${props.row.id}`"
-            @click.stop
-          >{{ props.row.title }}</NuxtLink>
-          <span v-if="props.row.unread" class="unread-dot q-ml-sm" role="img" data-test="unread-dot" aria-label="새 활동" />
+          <div data-test="request-row">
+            <q-chip v-if="props.row.issueType" dense size="sm" outline :color="ISSUE_TYPE_COLOR[props.row.issueType as RequestIssueType]" :label="props.row.issueTypeLabel" class="q-ma-none q-mr-xs" />
+            <span v-if="props.row.priority" class="text-caption q-mr-xs" :class="`text-${PRIORITY_COLOR[props.row.priority as RequestPriority]}`">{{ props.row.priorityLabel }}</span>
+            <NuxtLink
+              :to="`/requests/${props.row.id}`"
+              class="text-weight-medium request-title-link"
+              :data-test="`req-link-${props.row.id}`"
+              @click.stop
+            >{{ props.row.title }}</NuxtLink>
+            <span v-if="props.row.unread" class="unread-dot q-ml-sm" role="img" data-test="unread-dot" aria-label="새 활동" />
+            <div v-if="hasMeta(props.row)" class="row items-center no-wrap q-gutter-x-sm text-caption text-grey-8" data-test="request-row-meta">
+              <span v-if="props.row.targetRepoAlias">{{ props.row.targetRepoAlias }}</span>
+              <span>{{ props.row.requesterId }}</span>
+              <span v-if="props.row.dueDate">{{ dueLabel(props.row) }}</span>
+              <span v-if="props.row.attachmentCount">📎{{ props.row.attachmentCount }}</span>
+              <span v-if="props.row.commentCount">💬{{ props.row.commentCount }}</span>
+              <span v-if="props.row.taskId" data-test="request-row-task">→ 작업 #{{ props.row.taskId }} {{ props.row.taskStatusLabel }}</span>
+            </div>
+          </div>
         </q-td>
       </template>
       <template #body-cell-status="props">

@@ -988,4 +988,89 @@ class RequestBoardServiceTest {
         assertThatThrownBy(() -> service.download(3L, 10L, "user1", false))
                 .satisfies(t -> assertThat(statusOf(t)).isEqualTo(HttpStatus.GONE));
     }
+
+    // ---- 요청 → 작업 등록 연결 (Task 6) ----
+
+    private Task linkedTask(Long id, boolean deleted) {
+        Task t = mock(Task.class);
+        when(t.getId()).thenReturn(id);
+        when(t.getDeletedAt()).thenReturn(deleted ? OffsetDateTime.now() : null);
+        when(tasks.findById(id)).thenReturn(Optional.of(t));
+        return t;
+    }
+
+    @Test
+    void linkTask는_처리완료와_시스템_답글() {
+        RequestPost p = devPost(1L, "user2");
+        assertThat(p.getLastAdminActivityAt()).isNull();
+
+        service.linkTask(1L, 9L, "admin1");
+
+        assertThat(p.getTaskId()).isEqualTo(9L);
+        assertThat(p.getStatus()).isEqualTo(RequestStatus.DONE);
+        assertThat(p.getLastAdminActivityAt()).isNotNull();
+        List<RequestComment> saved = savedComments();
+        assertThat(saved).hasSize(1);
+        assertThat(saved.get(0).getKind()).isEqualTo(RequestCommentKind.SYSTEM);
+        assertThat(saved.get(0).isAuthorAdmin()).isTrue();
+        assertThat(saved.get(0).getBody()).isEqualTo("관리자(admin1)가 작업 #9으로 등록 — 처리완료");
+        verify(posts).findByIdForUpdate(1L);
+    }
+
+    @Test
+    void 연결된_요청_되돌리기_409() {
+        RequestPost p = devPost(1L, "user2");
+        p.setStatus(RequestStatus.DONE);
+        p.setTaskId(9L);
+        linkedTask(9L, false);
+
+        assertThatThrownBy(() -> service.changeStatus(1L,
+                new RequestBoardDto.StatusChangeRequest(RequestStatus.REVIEWING, null), "admin1"))
+                .satisfies(t -> assertThat(statusOf(t)).isEqualTo(HttpStatus.CONFLICT))
+                .hasMessage("작업 #9에 연결된 요청은 되돌릴 수 없습니다");
+        assertThat(p.getStatus()).isEqualTo(RequestStatus.DONE);
+        assertThat(p.getTaskId()).isEqualTo(9L);
+        verify(comments, never()).save(any());
+    }
+
+    @Test
+    void 연결_작업이_삭제됐으면_되돌리며_연결_해제() {
+        RequestPost p = devPost(1L, "user2");
+        p.setStatus(RequestStatus.DONE);
+        p.setTaskId(9L);
+        linkedTask(9L, true);
+
+        RequestBoardDto.Detail d = service.changeStatus(1L,
+                new RequestBoardDto.StatusChangeRequest(RequestStatus.REVIEWING, null), "admin1");
+
+        assertThat(p.getStatus()).isEqualTo(RequestStatus.REVIEWING);
+        assertThat(p.getTaskId()).isNull();
+        assertThat(d.taskId()).isNull();
+        assertThat(savedComments()).extracting(RequestComment::getBody)
+                .containsExactly("관리자(admin1)가 상태를 검토중으로 변경 (작업 #9 연결 해제)");
+    }
+
+    @Test
+    void 연결_작업이_없어졌어도_되돌리며_연결_해제() {
+        RequestPost p = devPost(1L, "user2");
+        p.setStatus(RequestStatus.DONE);
+        p.setTaskId(9L);
+        when(tasks.findById(9L)).thenReturn(Optional.empty());
+
+        service.changeStatus(1L, new RequestBoardDto.StatusChangeRequest(RequestStatus.REVIEWING, null), "admin1");
+
+        assertThat(p.getTaskId()).isNull();
+        assertThat(p.getStatus()).isEqualTo(RequestStatus.REVIEWING);
+    }
+
+    @Test
+    void 작업에_연결된_요청은_취소_409() {
+        RequestPost p = devPost(1L, "user1");
+        p.setTaskId(9L);
+
+        assertThatThrownBy(() -> service.cancel(1L, "user1"))
+                .satisfies(t -> assertThat(statusOf(t)).isEqualTo(HttpStatus.CONFLICT))
+                .hasMessage("작업에 연결된 요청은 취소할 수 없습니다");
+        verify(posts, never()).deleteById(anyLong());
+    }
 }

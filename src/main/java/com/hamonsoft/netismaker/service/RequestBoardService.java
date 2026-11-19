@@ -261,6 +261,10 @@ public class RequestBoardService {
     @Transactional
     public void cancel(Long id, String userId) {
         RequestPost post = findOwnedForUpdate(id, userId);
+        // 연결 검사가 상태 검사보다 먼저 — 연결된 요청은 보통 처리완료라 순서가 바뀌면 이 문구가 나오지 않는다.
+        if (post.getTaskId() != null) {
+            throw TaskException.conflict("작업에 연결된 요청은 취소할 수 없습니다");
+        }
         if (post.getStatus() != RequestStatus.RECEIVED) {
             throw TaskException.conflict("접수 상태에서만 취소할 수 있습니다");
         }
@@ -323,12 +327,60 @@ public class RequestBoardService {
         if (next == RequestStatus.REJECTED && reason.isEmpty()) {
             throw new TaskException(HttpStatus.BAD_REQUEST, "반려 사유를 입력하세요");
         }
+        // 되돌리기 가드 (스펙 2026-11-19 §5.4): 작업이 연결된 처리완료 요청은 연결 작업이 소프트 삭제(또는 행이 없음)됐을
+        // 때만 다시 열 수 있고, 그때 연결을 끊는다.
+        Long unlinkedTaskId = null;
+        if (current == RequestStatus.DONE && post.getTaskId() != null) {
+            Long linked = post.getTaskId();
+            Task task = tasks.findById(linked).orElse(null);
+            if (task != null && task.getDeletedAt() == null) {
+                throw TaskException.conflict("작업 #" + linked + "에 연결된 요청은 되돌릴 수 없습니다");
+            }
+            unlinkedTaskId = linked;
+        }
         String body = "관리자(" + adminId + ")가 상태를 " + next.dbValue() + withParticle(next.dbValue()) + " 변경";
         if (next == RequestStatus.REJECTED) body += " — 사유: " + reason;
+        if (unlinkedTaskId != null) {
+            body += " (작업 #" + unlinkedTaskId + " 연결 해제)";
+            post.setTaskId(null);
+        }
         post.setStatus(next);
         comments.save(RequestComment.create(id, RequestCommentKind.SYSTEM, adminId, true, body));
         post.touchAdmin(OffsetDateTime.now());
         return toDetail(post, adminId, true);
+    }
+
+    /** 작업 등록 재료 — 요청 id, 원 요청자, 첨부(순번 순). */
+    public record RequestSource(Long id, String requesterId, List<RequestAttachment> attachments) {}
+
+    /**
+     * 개발 요청을 작업 등록용으로 잡는다 (스펙 2026-11-19 §5.4). 행 락(FOR UPDATE)을 잡고 검증하므로 같은 요청의 두 번째
+     * 등록은 앞선 커밋을 기다렸다가 연결 검사에서 409로 거절된다. 호출자(TaskService.create)의 트랜잭션에 합류해야 한다 —
+     * 락이 커밋까지 유지되고, 뒤에서 실패하면 {@link #linkTask}까지 함께 롤백된다.
+     * 연결 검사를 상태 검사보다 먼저 한다 — 연결된 요청은 늘 처리완료라 순서가 바뀌면 연결 문구가 나오지 않는다.
+     */
+    @Transactional
+    public RequestSource claimForTask(Long requestId, boolean callerIsAdmin) {
+        if (!callerIsAdmin) throw new TaskException(HttpStatus.FORBIDDEN, "요청을 작업으로 등록할 권한이 없습니다");
+        RequestPost post = posts.findByIdForUpdate(requestId).orElseThrow(RequestBoardService::notFound);
+        if (post.getKind() != RequestKind.DEV) throw TaskException.conflict("개발 요청이 아닙니다");
+        if (post.getTaskId() != null) {
+            throw TaskException.conflict("이미 작업 #" + post.getTaskId() + "으로 등록된 요청입니다");
+        }
+        if (!post.getStatus().isOpen()) throw TaskException.conflict("이미 처리된 요청입니다");
+        return new RequestSource(post.getId(), post.getRequesterId(),
+                attachments.findByRequestIdOrderByOrdinalAsc(requestId));
+    }
+
+    /** 등록한 작업을 요청에 연결하고 처리완료로 닫는다(시스템 답글). claimForTask와 같은 트랜잭션에서 부른다. */
+    @Transactional
+    public void linkTask(Long requestId, Long taskId, String adminId) {
+        RequestPost post = posts.findByIdForUpdate(requestId).orElseThrow(RequestBoardService::notFound);
+        post.setTaskId(taskId);
+        post.setStatus(RequestStatus.DONE);
+        comments.save(RequestComment.create(requestId, RequestCommentKind.SYSTEM, adminId, true,
+                "관리자(" + adminId + ")가 작업 #" + taskId + "으로 등록 — 처리완료"));
+        post.touchAdmin(OffsetDateTime.now());
     }
 
     @Transactional(readOnly = true)

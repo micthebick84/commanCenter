@@ -10,6 +10,7 @@ import com.hamonsoft.netismaker.entity.RenderStatus;
 import com.hamonsoft.netismaker.entity.ImplementationMode;
 import com.hamonsoft.netismaker.entity.QuestionAttachment;
 import com.hamonsoft.netismaker.entity.RefRepo;
+import com.hamonsoft.netismaker.entity.RequestAttachment;
 import com.hamonsoft.netismaker.entity.Task;
 import com.hamonsoft.netismaker.entity.TaskAnalysis;
 import com.hamonsoft.netismaker.entity.TaskAttachment;
@@ -110,6 +111,17 @@ public class TaskService {
         this.fixRequestRepo = fixRequestRepo;
     }
 
+    /**
+     * 요청 게시판 개발 요청 → 작업 등록 (스펙 2026-11-19 §5.4). RequestBoardService는 TaskService에 의존하지 않으므로
+     * 순환이 없다. 생성자를 바꾸지 않으려고 setter 주입 — 출처 요청 없는 단위 테스트에서는 null.
+     */
+    private RequestBoardService requestBoardService;
+
+    @Autowired
+    void setRequestBoardService(RequestBoardService requestBoardService) {
+        this.requestBoardService = requestBoardService;
+    }
+
     public TaskService(TaskRepository taskRepo,
                        TaskAnalysisRepository analysisRepo,
                        TaskDesignRepository designRepo,
@@ -169,7 +181,12 @@ public class TaskService {
             attachTranscript(reg, 1, requesterId, written);
             // 질문 첨부 승계는 대화 전문 다음 순번부터 (스펙 2026-10-27 §7.5)
             InheritOutcome inherited = inheritQuestionAttachments(reg.task(), 2, written);
-            if (inherited.renderPending()) events.publishEvent(new AttachmentRenderRequested());
+            // 요청 첨부 승계는 (대화 전문)·질문 첨부 다음 순번부터 (스펙 2026-11-19 §5.4)
+            int next = 1 + (reg.transcript() != null ? 1 : 0) + inherited.copied();
+            InheritOutcome fromRequest = inheritRequestAttachments(reg.task(), reg.requestSource(), next, written);
+            if (inherited.renderPending() || fromRequest.renderPending()) {
+                events.publishEvent(new AttachmentRenderRequested());
+            }
         } catch (RuntimeException e) {
             written.forEach(attachmentStorage::deleteQuietly);
             throw e;   // tx 롤백 → task/메타 행 전부 취소
@@ -230,6 +247,9 @@ public class TaskService {
             // 질문 첨부 승계는 대화 전문 다음 순번부터 (스펙 2026-10-27 §7.5)
             InheritOutcome inherited = inheritQuestionAttachments(saved, ordinal + 1, written);
             pendingRender |= inherited.renderPending();
+            // 요청 첨부 승계는 사용자 파일·(대화 전문)·질문 첨부 다음 순번부터 (스펙 2026-11-19 §5.4)
+            int next = ordinal + (reg.transcript() != null ? 1 : 0) + inherited.copied();
+            pendingRender |= inheritRequestAttachments(saved, reg.requestSource(), next, written).renderPending();
             // 렌더링 대기 첨부가 있으면 업로드당 한 번 깨운다(리스너는 커밋 뒤에 받는다)
             if (pendingRender) events.publishEvent(new AttachmentRenderRequested());
         } catch (RuntimeException e) {
@@ -239,21 +259,36 @@ public class TaskService {
         return saved;
     }
 
-    /** 등록 결과 — 저장한 작업과, 출처 질문이 있으면 첨부할 대화 전문(없으면 null). */
-    private record Registration(Task task, String transcript) {}
+    /**
+     * 등록 결과 — 저장한 작업과, 출처 질문이 있으면 첨부할 대화 전문(없으면 null), 출처 요청이 있으면 그 재료(없으면 null).
+     */
+    private record Registration(Task task, String transcript, RequestBoardService.RequestSource requestSource) {}
 
     /**
-     * 작업 행 + 등록 이력. 거절(429 한도·400 카탈로그/참조·403/404/409 출처 질문)은 모두 저장 전에 난다.
+     * 작업 행 + 등록 이력. 거절(429 한도·400 카탈로그/참조·403/404/409 출처 질문·출처 요청)은 모두 저장 전에 난다.
      * 출처 질문은 등록자가 볼 수 있고 답변이 끝난 것이어야 한다(InterviewService.questionTranscript).
+     * 출처 요청(스펙 2026-11-19 §5.4)이면 호출자(requesterId)는 관리자이고, 작업의 등록자는 요청의 원 요청자가 된다 —
+     * 맨 먼저 요청 행을 잠가 검증하고, 원 요청자의 동시 보유 한도는 보지 않으며, 저장 뒤 요청을 작업에 연결해 닫는다.
      */
     private Registration register(TaskCreateRequest req, String requesterId, String requesterEmail,
                                   boolean requesterIsAdmin) {
+        RequestBoardService.RequestSource source = null;
+        if (req.sourceRequestId() != null) {
+            if (req.sourceQuestionId() != null) {
+                throw new TaskException(HttpStatus.BAD_REQUEST, "출처는 하나만 지정할 수 있습니다");
+            }
+            source = requestBoardService.claimForTask(req.sourceRequestId(), requesterIsAdmin);
+        }
+        String adminId = source == null ? null : requesterId;
+        String ownerId = source == null ? requesterId : source.requesterId();
         // 작업 타입 (스펙 2026-11-03 §4.2) — 모르는 값은 400, 없으면 타입 없음(null). 아무것도 저장하기 전에 해석한다.
         TaskType taskType = TaskType.parseRequest(req.taskType());
-        long active = taskRepo.countActiveByRequester(requesterId);
-        if (active >= userConcurrentLimit) {
-            throw TaskException.tooManyRequests(
-                    "동시에 보유할 수 있는 미완료 작업 한도(" + userConcurrentLimit + ")를 초과했습니다");
+        if (source == null) {
+            long active = taskRepo.countActiveByRequester(requesterId);
+            if (active >= userConcurrentLimit) {
+                throw TaskException.tooManyRequests(
+                        "동시에 보유할 수 있는 미완료 작업 한도(" + userConcurrentLimit + ")를 초과했습니다");
+            }
         }
         RepoCatalogService.ResolvedRepo repo = repoCatalogService.resolveForRegistration(req.repoCatalogId());
         // 읽기 전용 참조 repo (스펙 2026-10-24 §4.1) — 대상 기준 검증·스냅샷(400이면 저장 전에 끝난다)
@@ -262,20 +297,24 @@ public class TaskService {
                 : interviewService.questionTranscript(req.sourceQuestionId(), requesterId, requesterIsAdmin);
         // 모델/effort/MCP는 승인 시점에 관리자가 결정 — 등록은 서버 기본값으로 시작한다.
         Task t = Task.create(repo.ownerRepo(), req.githubBranch(), req.title(),
-                             req.description(), requesterId, maxRetry,
+                             req.description(), ownerId, maxRetry,
                              new ArrayList<>(), null, null);
         t.setStatus(TaskStatus.AWAITING_APPROVAL);
         t.setGitUrl(repo.gitUrl());
         t.setRepoAlias(repo.alias());
         t.setRepoCatalogId(repo.catalogId());
-        t.setRequesterEmail(requesterEmail);
+        // 출처 요청이면 관리자의 JWT email을 남기지 않는다 — 종료 메일은 원 요청자의 com."user".email로 대체된다.
+        t.setRequesterEmail(source == null ? requesterEmail : null);
         t.setRefRepos(new ArrayList<>(refs));
         t.setSourceQuestionId(req.sourceQuestionId());
+        t.setSourceRequestId(source == null ? null : source.id());
         t.setTaskType(taskType);
         Task saved = taskRepo.save(t);
         historyRepo.save(TaskStatusHistory.log(saved.getId(), null, TaskStatus.AWAITING_APPROVAL,
-                "user", requesterId, "작업 등록"));
-        return new Registration(saved, transcript);
+                "user", requesterId,
+                source == null ? "작업 등록" : "요청 #" + source.id() + "에서 등록(관리자 " + adminId + ")"));
+        if (source != null) requestBoardService.linkTask(source.id(), saved.getId(), adminId);
+        return new Registration(saved, transcript, source);
     }
 
     /**
@@ -350,6 +389,59 @@ public class TaskService {
         }
         int skipped = skippedMissing + skippedOverLimit;
         String reason = "질문 #" + questionId + " 첨부 승계: " + copied + "개"
+                + (skipped > 0 ? " / 제외 " + skipped + "개(정리됨·용량 상한)" : "");
+        historyRepo.save(TaskStatusHistory.log(saved.getId(), saved.getStatus(), saved.getStatus(),
+                "user", saved.getRequesterId(), reason));
+        return new InheritOutcome(copied, skippedMissing, skippedOverLimit, renderPending);
+    }
+
+    /**
+     * 출처 요청의 첨부(순번 순)를 작업 첨부로 복사한다 (스펙 2026-11-19 §5.4) — 순번은 firstOrdinal부터.
+     * {@link #inheritQuestionAttachments}와 같은 규칙: 원본이 없으면 건너뛰고, 원본 크기 누적이 inheritMaxTotalMb를 넘는 첨부도
+     * 건너뛰며, 복사보다 먼저 정리 목록에 넣는다. 요청 첨부는 렌더링·텍스트 추출을 하지 않으므로 작업에 직접 올린 첨부와
+     * 같게 Tika sidecar를 만들고 렌더 상태는 정책 초기값으로 둔다. 복사가 실패하면 예외 — 호출자가 정리하고 롤백한다
+     * (같은 tx의 linkTask도 함께 취소된다). 승계 대상이 하나라도 있으면 이력 한 줄, 없으면 이력도 없다.
+     */
+    private InheritOutcome inheritRequestAttachments(Task saved, RequestBoardService.RequestSource src,
+                                                     int firstOrdinal, List<String> written) {
+        if (src == null || src.attachments().isEmpty()) return InheritOutcome.NONE;
+        long capBytes = (long) inheritMaxTotalMb * 1024 * 1024;
+        long totalBytes = 0;
+        int ordinal = firstOrdinal;
+        int copied = 0;
+        int skippedMissing = 0;
+        int skippedOverLimit = 0;
+        boolean renderPending = false;
+        for (RequestAttachment r : src.attachments()) {
+            if (!attachmentStorage.exists(r.getStoredPath())) {
+                skippedMissing++;   // 요청 첨부 정리 잡이 이미 지웠다(다운로드 410과 같은 경우)
+                continue;
+            }
+            if (totalBytes + r.getSizeBytes() > capBytes) {
+                skippedOverLimit++;
+                continue;
+            }
+            String name = r.getOriginalName();
+            String rel = attachmentStorage.relativePath(saved.getId(), ordinal, name);
+            written.add(rel);   // 복사보다 먼저 — 반쯤 복사된 파일도 롤백 때 지운다
+            attachmentStorage.copyTree(r.getStoredPath(), rel);
+            String extractedRel = null;
+            Optional<String> text = tika.extractText(attachmentStorage.resolve(rel), name);
+            if (text.isPresent()) {
+                extractedRel = attachmentStorage.extractedTextRelativePath(rel);
+                written.add(extractedRel);
+                attachmentStorage.writeText(extractedRel, text.get());
+            }
+            AttachmentRendition rendition = renderPolicy.initial(name);
+            renderPending |= rendition != null && rendition.getStatus() == RenderStatus.PENDING;
+            attachmentRepo.save(TaskAttachment.create(saved.getId(), AttachmentStorage.sanitize(name), rel,
+                    r.getMimeType(), r.getSizeBytes(), src.requesterId(), extractedRel, rendition, null));
+            totalBytes += r.getSizeBytes();
+            ordinal++;
+            copied++;
+        }
+        int skipped = skippedMissing + skippedOverLimit;
+        String reason = "요청 첨부 승계: " + copied + "개"
                 + (skipped > 0 ? " / 제외 " + skipped + "개(정리됨·용량 상한)" : "");
         historyRepo.save(TaskStatusHistory.log(saved.getId(), saved.getStatus(), saved.getStatus(),
                 "user", saved.getRequesterId(), reason));

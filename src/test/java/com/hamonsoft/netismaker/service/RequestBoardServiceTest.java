@@ -19,6 +19,15 @@ import com.hamonsoft.netismaker.repository.RequestPostRepository;
 import com.hamonsoft.netismaker.repository.TaskRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
+import org.springframework.mock.web.MockMultipartFile;
+import org.springframework.web.multipart.MultipartFile;
+import java.nio.file.Path;
+import java.util.ArrayList;
+import static org.mockito.ArgumentMatchers.anyInt;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.Mockito.doNothing;
+import static org.mockito.Mockito.doThrow;
 import org.mockito.ArgumentCaptor;
 import org.springframework.data.domain.Pageable;
 import org.springframework.http.HttpStatus;
@@ -69,6 +78,8 @@ class RequestBoardServiceTest {
         storage = mock(AttachmentStorage.class);
         service = new RequestBoardService(posts, comments, attachments, catalog, catalogService, tasks, storage,
                 20, "https://gitlab.hamon.vip");
+        when(storage.relativePathForRequest(anyLong(), anyInt(), any())).thenCallRealMethod();
+        when(storage.requestRootRelative(anyLong())).thenCallRealMethod();
         when(posts.save(any())).thenAnswer(i -> i.getArgument(0));
         when(comments.save(any())).thenAnswer(i -> i.getArgument(0));
     }
@@ -795,5 +806,186 @@ class RequestBoardServiceTest {
 
         assertThat(v.id()).isEqualTo(9L);
         assertThat(v.expired()).isTrue();
+    }
+
+    // ---- 개발 요청 첨부 (Task 4) ----
+
+    @TempDir Path tmp;
+
+    private static MultipartFile mf(String name, int bytes) {
+        return new MockMultipartFile("files", name, "text/plain", new byte[bytes]);
+    }
+
+    private static RequestAttachment att(Long id, long requestId, int ordinal, String name) {
+        RequestAttachment a = RequestAttachment.create(requestId, ordinal, name,
+                "request-" + requestId + "/" + ordinal + "-" + name, "text/plain", 5);
+        ReflectionTestUtils.setField(a, "id", id);
+        return a;
+    }
+
+    private RequestPost devPost(Long id, String requester) {
+        RequestPost p = RequestPost.createDev("제목", "내용", RequestIssueType.BUG, RequestPriority.NORMAL,
+                null, null, requester);
+        ReflectionTestUtils.setField(p, "id", id);
+        when(posts.findById(id)).thenReturn(Optional.of(p));
+        when(posts.findByIdForUpdate(id)).thenReturn(Optional.of(p));
+        return p;
+    }
+
+    private static RequestBoardDto.UpdateRequest devUpdate(List<Long> remove) {
+        return new RequestBoardDto.UpdateRequest("t", "c", null, RequestIssueType.BUG, null, null, null, remove);
+    }
+
+    private void saveAssignsId50() {
+        when(posts.save(any())).thenAnswer(i -> {
+            RequestPost p = i.getArgument(0);
+            ReflectionTestUtils.setField(p, "id", 50L);
+            return p;
+        });
+    }
+
+    @Test
+    void DEV_첨부와_함께_등록() {
+        saveAssignsId50();
+
+        service.create(dev(RequestIssueType.BUG, null, null, null),
+                List.of(mf("a.txt", 3), mf("b.png", 4)), "user1");
+
+        verify(storage).validate(any(), eq(0));
+        verify(storage).write(eq("request-50/1-a.txt"), any());
+        verify(storage).write(eq("request-50/2-b.png"), any());
+        ArgumentCaptor<RequestAttachment> cap = ArgumentCaptor.forClass(RequestAttachment.class);
+        verify(attachments, times(2)).save(cap.capture());
+        assertThat(cap.getAllValues()).extracting(RequestAttachment::getOrdinal).containsExactly(1, 2);
+        assertThat(cap.getAllValues().get(0).getStoredPath()).isEqualTo("request-50/1-a.txt");
+        assertThat(cap.getAllValues().get(0).getRequestId()).isEqualTo(50L);
+        assertThat(cap.getAllValues().get(1).getSizeBytes()).isEqualTo(4L);
+    }
+
+    @Test
+    void REPO에_첨부면_400() {
+        assertThatThrownBy(() -> service.create(
+                new RequestBoardDto.CreateRequest(RequestKind.REPO, "t", "c", "힌트"),
+                List.of(mf("a.txt", 3)), "user1"))
+                .satisfies(t -> assertThat(statusOf(t)).isEqualTo(HttpStatus.BAD_REQUEST))
+                .hasMessage("첨부는 개발 요청에만 올릴 수 있습니다");
+        verify(posts, never()).save(any());
+        verify(storage, never()).write(any(), any());
+    }
+
+    @Test
+    void 수정_첨부_추가와_삭제() {
+        devPost(3L, "user1");
+        RequestAttachment a1 = att(10L, 3L, 1, "old1.txt");
+        RequestAttachment a2 = att(11L, 3L, 3, "old2.txt");
+        when(attachments.findByRequestIdOrderByOrdinalAsc(3L)).thenReturn(List.of(a1, a2));
+
+        service.update(3L, devUpdate(List.of(10L)), List.of(mf("n.txt", 2)), "user1");
+
+        verify(attachments).delete(a1);
+        verify(attachments, never()).delete(a2);
+        verify(storage).deleteQuietly("request-3/1-old1.txt");
+        verify(storage).write(eq("request-3/4-n.txt"), any());
+        ArgumentCaptor<RequestAttachment> cap = ArgumentCaptor.forClass(RequestAttachment.class);
+        verify(attachments).save(cap.capture());
+        assertThat(cap.getValue().getOrdinal()).isEqualTo(4);
+    }
+
+    @Test
+    void 수정_남의_첨부_id는_400() {
+        devPost(3L, "user1");
+        when(attachments.findByRequestIdOrderByOrdinalAsc(3L)).thenReturn(List.of(att(10L, 3L, 1, "x.txt")));
+
+        assertThatThrownBy(() -> service.update(3L, devUpdate(List.of(99L)), List.of(), "user1"))
+                .satisfies(t -> assertThat(statusOf(t)).isEqualTo(HttpStatus.BAD_REQUEST));
+        verify(storage, never()).deleteQuietly(any());
+    }
+
+    @Test
+    void 수정_합계_10개_초과_400() {
+        AttachmentStorage real = new AttachmentStorage(tmp.toString(), 10, 20, 50);
+        RequestBoardService svc = new RequestBoardService(posts, comments, attachments, catalog, catalogService,
+                tasks, real, 20, "https://gitlab.hamon.vip");
+        devPost(3L, "user1");
+        List<RequestAttachment> existing = new ArrayList<>();
+        for (int i = 1; i <= 9; i++) existing.add(att((long) i, 3L, i, "f" + i + ".txt"));
+        when(attachments.findByRequestIdOrderByOrdinalAsc(3L)).thenReturn(existing);
+
+        assertThatThrownBy(() -> svc.update(3L, devUpdate(null), List.of(mf("a.txt", 1), mf("b.txt", 1)), "user1"))
+                .satisfies(t -> assertThat(statusOf(t)).isEqualTo(HttpStatus.BAD_REQUEST))
+                .hasMessage("첨부는 최대 10개까지 가능합니다");
+        verify(attachments, never()).save(any());
+        assertThat(tmp.resolve("request-3")).doesNotExist();
+
+        // 하나를 지우면 남는 8 + 새 2 = 10 이라 통과한다
+        svc.update(3L, devUpdate(List.of(1L)), List.of(mf("a.txt", 1), mf("b.txt", 1)), "user1");
+        verify(attachments, times(2)).save(any());
+    }
+
+    @Test
+    void 쓰기_실패면_파일을_지우고_롤백() {
+        saveAssignsId50();
+        doNothing().when(storage).write(eq("request-50/1-a.txt"), any());
+        doThrow(new TaskException(HttpStatus.INTERNAL_SERVER_ERROR, "첨부 파일 저장에 실패했습니다: x"))
+                .when(storage).write(eq("request-50/2-b.txt"), any());
+
+        assertThatThrownBy(() -> service.create(dev(RequestIssueType.BUG, null, null, null),
+                List.of(mf("a.txt", 3), mf("b.txt", 3)), "user1"))
+                .satisfies(t -> assertThat(statusOf(t)).isEqualTo(HttpStatus.INTERNAL_SERVER_ERROR));
+        verify(storage).deleteQuietly("request-50/1-a.txt");
+        verify(storage).deleteQuietly("request-50/2-b.txt");
+    }
+
+    @Test
+    void 취소하면_첨부_폴더를_지운다() {
+        devPost(4L, "user1");
+
+        service.cancel(4L, "user1");
+
+        verify(storage).deleteQuietly("request-4");
+    }
+
+    @Test
+    void DEV_첨부_내려받기는_남도_받는다() {
+        devPost(3L, "user2");
+        when(attachments.findByIdAndRequestId(10L, 3L)).thenReturn(Optional.of(att(10L, 3L, 1, "x.txt")));
+        Path file = tmp.resolve("x.txt");
+        when(storage.exists("request-3/1-x.txt")).thenReturn(true);
+        when(storage.resolve("request-3/1-x.txt")).thenReturn(file);
+
+        RequestBoardService.AttachmentDownload d = service.download(3L, 10L, "user1", false);
+
+        assertThat(d.path()).isEqualTo(file);
+        assertThat(d.name()).isEqualTo("x.txt");
+        assertThat(d.mimeType()).isEqualTo("text/plain");
+    }
+
+    @Test
+    void REPO_첨부_내려받기는_남에게_404() {
+        post(1L, RequestKind.REPO, RequestStatus.RECEIVED, "user2");
+        when(attachments.findByIdAndRequestId(10L, 1L)).thenReturn(Optional.of(att(10L, 1L, 1, "x.txt")));
+        when(storage.exists(anyString())).thenReturn(true);
+
+        assertThatThrownBy(() -> service.download(1L, 10L, "user1", false))
+                .satisfies(t -> assertThat(statusOf(t)).isEqualTo(HttpStatus.NOT_FOUND));
+    }
+
+    @Test
+    void 없는_첨부_id는_404() {
+        devPost(3L, "user1");
+        when(attachments.findByIdAndRequestId(10L, 3L)).thenReturn(Optional.empty());
+
+        assertThatThrownBy(() -> service.download(3L, 10L, "user1", false))
+                .satisfies(t -> assertThat(statusOf(t)).isEqualTo(HttpStatus.NOT_FOUND));
+    }
+
+    @Test
+    void 정리된_첨부는_410() {
+        devPost(3L, "user1");
+        when(attachments.findByIdAndRequestId(10L, 3L)).thenReturn(Optional.of(att(10L, 3L, 1, "x.txt")));
+        when(storage.exists("request-3/1-x.txt")).thenReturn(false);
+
+        assertThatThrownBy(() -> service.download(3L, 10L, "user1", false))
+                .satisfies(t -> assertThat(statusOf(t)).isEqualTo(HttpStatus.GONE));
     }
 }

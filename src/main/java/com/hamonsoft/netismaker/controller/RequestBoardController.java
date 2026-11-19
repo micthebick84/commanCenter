@@ -8,7 +8,15 @@ import com.hamonsoft.netismaker.service.RequestBoardService;
 import jakarta.validation.Valid;
 import org.springframework.context.annotation.Profile;
 import com.hamonsoft.netismaker.service.TaskException;
+import org.springframework.core.io.FileSystemResource;
+import org.springframework.core.io.Resource;
+import org.springframework.http.ContentDisposition;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.MediaType;
+import org.springframework.http.ResponseEntity;
+import org.springframework.web.multipart.MultipartFile;
+import java.nio.charset.StandardCharsets;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.security.oauth2.server.resource.authentication.JwtAuthenticationToken;
 import org.springframework.web.bind.annotation.*;
@@ -66,6 +74,44 @@ public class RequestBoardController {
     public RequestBoardDto.ListItem create(@RequestBody @Valid RequestBoardDto.CreateRequest req,
                                            JwtAuthenticationToken auth) {
         return service.create(req, AuthContext.requireUserId(auth));
+    }
+
+    /**
+     * 첨부가 있는 등록(multipart: meta JSON + files). 위의 JSON 매핑에는 consumes를 달지 않는다 —
+     * consumes가 있으면 Content-Type이 없거나 다른 요청이 405/415로 바뀐다(TaskController.createMultipart와 같은 이유).
+     */
+    @PostMapping(value = "/api/requests", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+    @PreAuthorize("isAuthenticated()")
+    @ResponseStatus(HttpStatus.CREATED)
+    public RequestBoardDto.ListItem createMultipart(
+            @RequestPart("meta") @Valid RequestBoardDto.CreateRequest req,
+            @RequestPart(value = "files", required = false) List<MultipartFile> files,
+            JwtAuthenticationToken auth) {
+        return service.create(req, files, AuthContext.requireUserId(auth));
+    }
+
+    @PutMapping(value = "/api/requests/{id}", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+    @PreAuthorize("isAuthenticated()")
+    public RequestBoardDto.Detail updateMultipart(
+            @PathVariable Long id,
+            @RequestPart("meta") @Valid RequestBoardDto.UpdateRequest req,
+            @RequestPart(value = "files", required = false) List<MultipartFile> files,
+            JwtAuthenticationToken auth) {
+        return service.update(id, req, files, AuthContext.requireUserId(auth));
+    }
+
+    /** 첨부 내려받기 — 요청을 볼 수 있는 사람만(없으면 404, 정리된 파일은 410). QuestionController와 같은 헤더. */
+    @GetMapping("/api/requests/{id}/attachments/{attId}")
+    @PreAuthorize("isAuthenticated()")
+    public ResponseEntity<Resource> downloadAttachment(@PathVariable Long id, @PathVariable Long attId,
+                                                       JwtAuthenticationToken auth) {
+        RequestBoardService.AttachmentDownload d = service.download(id, attId,
+                AuthContext.requireUserId(auth), AuthContext.isAdmin(auth));
+        ContentDisposition cd = ContentDisposition.attachment().filename(d.name(), StandardCharsets.UTF_8).build();
+        return ResponseEntity.ok()
+                .header(HttpHeaders.CONTENT_DISPOSITION, cd.toString())
+                .contentType(MediaType.APPLICATION_OCTET_STREAM)
+                .body(new FileSystemResource(d.path()));
     }
 
     @GetMapping("/api/requests/{id}")

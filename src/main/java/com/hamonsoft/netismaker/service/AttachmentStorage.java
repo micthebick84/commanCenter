@@ -59,7 +59,12 @@ public class AttachmentStorage {
 
     /** 한도·확장자·빈파일 검증. 위반 시 400 + 한국어 메시지 (스펙 §6.1 순서). */
     public void validate(List<MultipartFile> files) {
-        if (files.size() > maxFiles) {
+        validate(files, 0);
+    }
+
+    /** keptCount = 이미 붙어 있고 남는 첨부 수 — 개수 한도는 (남는 수 + 새 파일 수)로 본다(요청 수정). */
+    public void validate(List<MultipartFile> files, int keptCount) {
+        if (keptCount + files.size() > maxFiles) {
             throw new TaskException(HttpStatus.BAD_REQUEST,
                     "첨부는 최대 " + maxFiles + "개까지 가능합니다");
         }
@@ -177,6 +182,18 @@ public class AttachmentStorage {
 
     public String relativePath(long taskId, int ordinal, String originalFilename) {
         return "task-" + taskId + "/" + ordinal + "-" + sanitize(originalFilename);
+    }
+
+    // ── 요청 게시판 개발 요청 첨부 ──
+
+    /** 요청 첨부 루트(상대) = request-{id}. 요청 취소 때 통째로 지운다. */
+    public String requestRootRelative(long requestId) {
+        return "request-" + requestId;
+    }
+
+    /** 요청 첨부 상대경로 = request-{id}/{ordinal}-{sanitized}. 순번은 그 요청의 최대 순번 + 1부터. */
+    public String relativePathForRequest(long requestId, int ordinal, String originalFilename) {
+        return requestRootRelative(requestId) + "/" + ordinal + "-" + sanitize(originalFilename);
     }
 
     // ── 질문 세션 첨부 (스펙 2026-09-13 §5.2) ──────────────────────────────────

@@ -26,10 +26,17 @@ import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
+import org.springframework.web.multipart.MultipartFile;
+
+import java.nio.file.Path;
 import java.time.OffsetDateTime;
+import java.util.ArrayList;
 import java.util.EnumSet;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -78,9 +85,17 @@ public class RequestBoardService {
 
     @Transactional
     public RequestBoardDto.ListItem create(RequestBoardDto.CreateRequest req, String userId) {
+        return create(req, List.of(), userId);
+    }
+
+    @Transactional
+    public RequestBoardDto.ListItem create(RequestBoardDto.CreateRequest req, List<MultipartFile> files,
+                                           String userId) {
+        List<MultipartFile> attached = files == null ? List.of() : files;
         if (req.kind() == null || !req.kind().creatable()) {
             throw new TaskException(HttpStatus.BAD_REQUEST, "더 이상 받지 않는 요청 종류입니다");
         }
+        if (!attached.isEmpty() && req.kind() != RequestKind.DEV) throw attachmentsOnlyForDev();
         if (posts.countByRequesterIdAndStatusIn(userId, OPEN_STATUSES) >= maxOpenPerUser) {
             throw new TaskException(HttpStatus.TOO_MANY_REQUESTS,
                     "처리 중인 요청이 너무 많습니다(최대 " + maxOpenPerUser + "건)");
@@ -95,8 +110,50 @@ public class RequestBoardService {
         } else {
             post = RequestPost.create(req.kind(), req.title(), req.content(), req.repoHint(), userId);
         }
+        storage.validate(attached, 0);
         RequestPost saved = posts.save(post);
+        writeAttachments(saved.getId(), 1, attached, new ArrayList<>());
         return toListItems(List.of(saved), p -> false).get(0);
+    }
+
+    private static TaskException attachmentsOnlyForDev() {
+        return new TaskException(HttpStatus.BAD_REQUEST, "첨부는 개발 요청에만 올릴 수 있습니다");
+    }
+
+    /**
+     * 파일을 디스크에 쓰고 메타 행을 남긴다(순번은 firstOrdinal부터). 쓰기보다 먼저 정리 목록에 넣어 반쯤 쓰인
+     * 파일도 지운다 — 실패하면 쓴 파일을 지우고 예외를 다시 던져 트랜잭션을 롤백한다(TaskService.create와 같은 규칙).
+     */
+    private void writeAttachments(Long requestId, int firstOrdinal, List<MultipartFile> files, List<String> written) {
+        try {
+            int ordinal = firstOrdinal;
+            for (MultipartFile f : files) {
+                String name = f.getOriginalFilename();
+                String rel = storage.relativePathForRequest(requestId, ordinal, name);
+                written.add(rel);
+                storage.write(rel, f);
+                attachments.save(RequestAttachment.create(requestId, ordinal,
+                        AttachmentStorage.sanitize(name), rel, f.getContentType(), f.getSize()));
+                ordinal++;
+            }
+        } catch (RuntimeException e) {
+            written.forEach(storage::deleteQuietly);
+            throw e;
+        }
+    }
+
+    /** 커밋 뒤에 실행한다(롤백이면 실행하지 않는다). 트랜잭션 밖에서 불렸으면 바로 실행한다. */
+    private static void afterCommit(Runnable action) {
+        if (TransactionSynchronizationManager.isSynchronizationActive()) {
+            TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+                @Override
+                public void afterCommit() {
+                    action.run();
+                }
+            });
+        } else {
+            action.run();
+        }
     }
 
     /** 대상 레포가 있으면 카탈로그에서 확인한다(없는·비활성이면 그 메서드의 400). */
@@ -153,15 +210,36 @@ public class RequestBoardService {
 
     @Transactional
     public RequestBoardDto.Detail update(Long id, RequestBoardDto.UpdateRequest req, String userId) {
+        return update(id, req, List.of(), userId);
+    }
+
+    @Transactional
+    public RequestBoardDto.Detail update(Long id, RequestBoardDto.UpdateRequest req, List<MultipartFile> files,
+                                         String userId) {
         RequestPost post = findOwnedForUpdate(id, userId);
         if (post.getStatus() != RequestStatus.RECEIVED) {
             throw TaskException.conflict("접수 상태에서만 수정할 수 있습니다");
         }
         boolean dev = post.getKind() == RequestKind.DEV;
+        List<MultipartFile> attached = files == null ? List.of() : files;
+        if (!attached.isEmpty() && !dev) throw attachmentsOnlyForDev();
         if (dev && req.issueType() == null) {
             throw new TaskException(HttpStatus.BAD_REQUEST, "유형을 선택하세요");
         }
         if (dev) checkTargetRepo(req.targetRepoCatalogId());
+        // 첨부 변경은 디스크에 닿기 전에 모두 검증한다: 지울 id는 이 요청의 것이어야 하고, 한도는 (남는 수 + 새 수).
+        List<RequestAttachment> current = attachments.findByRequestIdOrderByOrdinalAsc(id);
+        List<RequestAttachment> removed = new ArrayList<>();
+        if (req.removeAttachmentIds() != null) {
+            for (Long attId : new LinkedHashSet<>(req.removeAttachmentIds())) {
+                RequestAttachment found = current.stream().filter(a -> a.getId().equals(attId)).findFirst()
+                        .orElseThrow(() -> new TaskException(HttpStatus.BAD_REQUEST,
+                                "삭제할 첨부를 찾을 수 없습니다: " + attId));
+                removed.add(found);
+            }
+        }
+        storage.validate(attached, current.size() - removed.size());
+        int nextOrdinal = current.stream().mapToInt(RequestAttachment::getOrdinal).max().orElse(0) + 1;
         post.setTitle(req.title());
         post.setContent(req.content());
         post.setRepoHint(post.getKind() == RequestKind.REPO ? req.repoHint() : null);
@@ -171,6 +249,11 @@ public class RequestBoardService {
             post.setDueDate(req.dueDate());
             post.setTargetRepoCatalogId(req.targetRepoCatalogId());
         }
+        removed.forEach(attachments::delete);
+        writeAttachments(id, nextOrdinal, attached, new ArrayList<>());
+        // 지운 행의 파일은 커밋 뒤에 지운다(롤백되면 행이 살아 있으므로 파일도 남겨야 한다).
+        List<String> removedPaths = removed.stream().map(RequestAttachment::getStoredPath).toList();
+        afterCommit(() -> removedPaths.forEach(storage::deleteQuietly));
         post.touchRequester(OffsetDateTime.now());
         return toDetail(post, userId, false);
     }
@@ -189,6 +272,25 @@ public class RequestBoardService {
             throw TaskException.conflict("관리자 답글이 있는 요청은 취소할 수 없습니다");
         }
         posts.deleteById(id);
+        afterCommit(() -> storage.deleteQuietly(storage.requestRootRelative(id)));
+    }
+
+    /** 첨부 내려받기 재료. */
+    public record AttachmentDownload(Path path, String name, String mimeType) {}
+
+    /**
+     * 첨부 내려받기. 요청을 볼 수 있는 사람(findVisible)만 받는다 — 다른 종류의 남의 요청은 404.
+     * 행은 있는데 파일이 없으면 410(정리됐거나 유실).
+     */
+    @Transactional(readOnly = true)
+    public AttachmentDownload download(Long id, Long attId, String viewerId, boolean admin) {
+        findVisible(id, viewerId, admin);
+        RequestAttachment att = attachments.findByIdAndRequestId(attId, id)
+                .orElseThrow(() -> new TaskException(HttpStatus.NOT_FOUND, "첨부를 찾을 수 없습니다"));
+        if (!storage.exists(att.getStoredPath())) {
+            throw new TaskException(HttpStatus.GONE, "첨부 파일이 서버에 남아 있지 않습니다");
+        }
+        return new AttachmentDownload(storage.resolve(att.getStoredPath()), att.getOriginalName(), att.getMimeType());
     }
 
     @Transactional

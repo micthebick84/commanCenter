@@ -2,7 +2,9 @@ package com.hamonsoft.netismaker.service;
 
 import com.hamonsoft.netismaker.entity.InterviewKind;
 import com.hamonsoft.netismaker.entity.InterviewStatus;
+import com.hamonsoft.netismaker.entity.RequestStatus;
 import com.hamonsoft.netismaker.repository.InterviewSessionRepository;
+import com.hamonsoft.netismaker.repository.RequestPostRepository;
 import com.hamonsoft.netismaker.repository.TaskRepository;
 import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.BeforeEach;
@@ -40,12 +42,21 @@ class AttachmentCleanupJobTest {
 
     private final TaskRepository taskRepo = mock(TaskRepository.class);
     private final InterviewSessionRepository sessionRepo = mock(InterviewSessionRepository.class);
+    private final RequestPostRepository requestRepo = mock(RequestPostRepository.class);
+    private final List<RequestState> requestRows = new ArrayList<>();
     private final List<TaskState> taskRows = new ArrayList<>();
     private final List<SessionState> sessionRows = new ArrayList<>();
 
     record TaskState(Long id, OffsetDateTime deletedAt) implements TaskRepository.AttachmentOwnerState {
         @Override public Long getId() { return id; }
         @Override public OffsetDateTime getDeletedAt() { return deletedAt; }
+    }
+
+    record RequestState(Long id, RequestStatus status, OffsetDateTime updatedAt)
+            implements RequestPostRepository.AttachmentOwnerState {
+        @Override public Long getId() { return id; }
+        @Override public RequestStatus getStatus() { return status; }
+        @Override public OffsetDateTime getUpdatedAt() { return updatedAt; }
     }
 
     record SessionState(Long id, InterviewKind kind, InterviewStatus status, OffsetDateTime lastActivityAt)
@@ -67,13 +78,18 @@ class AttachmentCleanupJobTest {
             Collection<Long> ids = inv.getArgument(0);
             return sessionRows.stream().filter(r -> ids.contains(r.id())).toList();
         });
+        when(requestRepo.findAttachmentOwnerStates(any())).thenAnswer(inv -> {
+            Collection<Long> ids = inv.getArgument(0);
+            return requestRows.stream().filter(r -> ids.contains(r.id())).toList();
+        });
+        when(requestRepo.findMaxId()).thenReturn(100L);
         when(taskRepo.findMaxId()).thenReturn(100L);
         when(sessionRepo.findMaxId()).thenReturn(100L);
     }
 
     private AttachmentCleanupJob job(boolean enabled) {
         return new AttachmentCleanupJob(new AttachmentStorage(root.toString(), 10, 20, 50),
-                taskRepo, sessionRepo, enabled, 30, 90, 24);
+                taskRepo, sessionRepo, requestRepo, enabled, 30, 90, 90, 24);
     }
 
     private static OffsetDateTime daysAgo(long days) {
@@ -195,6 +211,42 @@ class AttachmentCleanupJobTest {
     }
 
     @Test
+    void 요청_폴더도_정책대로_지우고_나머지는_남긴다() throws Exception {
+        Instant old = NOW.minus(Duration.ofDays(400));
+        Path closedExpired = ownerDir("request-1", old, "1-a.png", "2-b.png");
+        requestRows.add(new RequestState(1L, RequestStatus.DONE, daysAgo(100)));
+        Path closedRecent = ownerDir("request-2", old, "1-a.png");
+        requestRows.add(new RequestState(2L, RequestStatus.REJECTED, daysAgo(10)));
+        Path open = ownerDir("request-3", old, "1-a.png");
+        requestRows.add(new RequestState(3L, RequestStatus.REVIEWING, daysAgo(300)));
+        Path orphan = ownerDir("request-4", NOW.minus(Duration.ofDays(2)), "1-a.png");
+
+        AttachmentCleanupJob.Summary s = job(true).runOnce(NOW);
+
+        assertThat(closedExpired).doesNotExist();
+        assertThat(orphan).doesNotExist();
+        assertThat(closedRecent.resolve("1-a.png")).exists();
+        assertThat(open.resolve("1-a.png")).exists();
+        assertThat(s.deletedRequest()).isEqualTo(1);
+        assertThat(s.deletedOrphan()).isEqualTo(1);
+        assertThat(s.kept()).isEqualTo(2);
+    }
+
+    @Test
+    void 요청_조회가_실패하면_요청_폴더뿐_아니라_아무것도_지우지_않는다() throws Exception {
+        Path doomedTask = ownerDir("task-2", NOW.minus(Duration.ofDays(400)), "1-a.txt");
+        taskRows.add(new TaskState(2L, daysAgo(40)));
+        Path doomedRequest = ownerDir("request-1", NOW.minus(Duration.ofDays(400)), "1-a.png");
+        when(requestRepo.findAttachmentOwnerStates(any())).thenThrow(new IllegalStateException("DB down"));
+
+        assertThatThrownBy(() -> job(true).runOnce(NOW)).isInstanceOf(IllegalStateException.class);
+        job(true).cleanup();
+
+        assertThat(doomedTask.resolve("1-a.txt")).exists();
+        assertThat(doomedRequest.resolve("1-a.png")).exists();
+    }
+
+    @Test
     void 비활성화면_스캔도_조회도_하지_않는다() throws Exception {
         Path doomed = ownerDir("task-2", NOW.minus(Duration.ofDays(400)), "1-a.txt");
         taskRows.add(new TaskState(2L, daysAgo(400)));
@@ -202,7 +254,7 @@ class AttachmentCleanupJobTest {
         job(false).cleanup();
 
         assertThat(doomed.resolve("1-a.txt")).exists();
-        verifyNoInteractions(taskRepo, sessionRepo);
+        verifyNoInteractions(taskRepo, sessionRepo, requestRepo);
     }
 
     @Test
@@ -210,7 +262,7 @@ class AttachmentCleanupJobTest {
         AttachmentCleanupJob.Summary s = job(true).runOnce(NOW);
         assertThat(s.deleted()).isZero();
         assertThat(s.kept()).isZero();
-        verifyNoInteractions(taskRepo, sessionRepo);
+        verifyNoInteractions(taskRepo, sessionRepo, requestRepo);
     }
 
     @Test
@@ -222,6 +274,8 @@ class AttachmentCleanupJobTest {
 
         verify(sessionRepo, never()).findAttachmentOwnerStates(any());
         verify(sessionRepo, never()).findMaxId();
+        verify(requestRepo, never()).findAttachmentOwnerStates(any());
+        verify(requestRepo, never()).findMaxId();
     }
 
     @Test
@@ -242,11 +296,11 @@ class AttachmentCleanupJobTest {
     @Test
     void 설정값_검증() {
         AttachmentStorage storage = new AttachmentStorage(root.toString(), 10, 20, 50);
-        assertThatThrownBy(() -> new AttachmentCleanupJob(storage, taskRepo, sessionRepo, true, -1, 90, 24))
+        assertThatThrownBy(() -> new AttachmentCleanupJob(storage, taskRepo, sessionRepo, requestRepo, true, -1, 90, 90, 24))
                 .isInstanceOf(IllegalArgumentException.class);
-        assertThatThrownBy(() -> new AttachmentCleanupJob(storage, taskRepo, sessionRepo, true, 30, -1, 24))
+        assertThatThrownBy(() -> new AttachmentCleanupJob(storage, taskRepo, sessionRepo, requestRepo, true, 30, -1, 90, 24))
                 .isInstanceOf(IllegalArgumentException.class);
-        assertThatThrownBy(() -> new AttachmentCleanupJob(storage, taskRepo, sessionRepo, true, 30, 90, 0))
+        assertThatThrownBy(() -> new AttachmentCleanupJob(storage, taskRepo, sessionRepo, requestRepo, true, 30, 90, 90, 0))
                 .isInstanceOf(IllegalArgumentException.class);
     }
 

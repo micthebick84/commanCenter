@@ -213,6 +213,7 @@ app:
       cron: "0 30 3 * * *"                # 매일 03:30 (서버 로컬 시각)
       task-deleted-retention-days: 30     # soft-delete 후 경과 시 task-{id}/ 삭제. 삭제 안 된 작업은 나이 무관 보존
       question-closed-retention-days: 90  # 종료(취소·만료·실패) 후 경과 시 question-{sid}/ 삭제. 진행 중·답변 완료는 보존
+      request-closed-retention-days: 90   # 처리완료·반려 후(마지막 갱신 기준) 경과 시 request-{id}/ 삭제. 접수·검토중은 나이 무관 보존
       orphan-grace-hours: 24              # 소유 행 없는 디렉터리(등록 롤백 잔재)는 mtime이 이보다 오래됐을 때만 삭제 (최소 1)
   close:
     artifact:                             # 종료 산출물 보관 (스펙 2026-10-14). 켜도 카탈로그에서 켠 레포만 대상

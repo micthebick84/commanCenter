@@ -12,6 +12,7 @@ import org.springframework.data.jpa.repository.Lock;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
+import java.time.OffsetDateTime;
 import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
@@ -70,4 +71,21 @@ public interface RequestPostRepository extends JpaRepository<RequestPost, Long> 
     long countAttention();
 
     long countByStatus(RequestStatus status);
+
+    /** 첨부 정리 잡(AttachmentCleanupJob)용 경량 행 — id + 상태 + 마지막 갱신 시각. */
+    interface AttachmentOwnerState {
+        Long getId();
+
+        RequestStatus getStatus();
+
+        OffsetDateTime getUpdatedAt();
+    }
+
+    /** 행이 없는 id는 결과에서 빠진다(고아). */
+    @Query("SELECT p.id AS id, p.status AS status, p.updatedAt AS updatedAt FROM RequestPost p WHERE p.id IN :ids")
+    List<AttachmentOwnerState> findAttachmentOwnerStates(@Param("ids") Collection<Long> ids);
+
+    /** 첨부 정리 잡의 고아 판정 가드 — 이 DB가 발급한 적 있는 id의 상한. 빈 테이블이면 null. */
+    @Query("SELECT MAX(p.id) FROM RequestPost p")
+    Long findMaxId();
 }

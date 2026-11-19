@@ -6,6 +6,7 @@ import lombok.Getter;
 import lombok.NoArgsConstructor;
 import lombok.Setter;
 
+import java.time.LocalDate;
 import java.time.OffsetDateTime;
 
 /**
@@ -52,6 +53,27 @@ public class RequestPost {
     /** 등록 당시 스냅샷(카탈로그 삭제 후에도 표시). */
     @Column(name = "repo_git_url", length = 1000)
     private String repoGitUrl;
+
+    /** 개발 요청의 이슈 유형(스펙 2026-11-19 §6). 다른 종류는 null. */
+    @Enumerated(EnumType.STRING)
+    @Column(name = "issue_type", length = 20)
+    private RequestIssueType issueType;
+
+    @Enumerated(EnumType.STRING)
+    @Column(length = 10)
+    private RequestPriority priority;
+
+    /** 희망 완료일. */
+    @Column(name = "due_date")
+    private LocalDate dueDate;
+
+    /** 개발 요청의 대상 레포 카탈로그 항목. 카탈로그 삭제 시 null. */
+    @Column(name = "target_repo_catalog_id")
+    private Long targetRepoCatalogId;
+
+    /** 이 요청으로 등록한 작업 id(기록용, FK 없음). */
+    @Column(name = "task_id")
+    private Long taskId;
 
     @Column(name = "last_requester_activity_at", nullable = false)
     private OffsetDateTime lastRequesterActivityAt;

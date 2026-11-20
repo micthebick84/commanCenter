@@ -6,6 +6,7 @@ import lombok.Getter;
 import lombok.NoArgsConstructor;
 import lombok.Setter;
 
+import java.time.LocalDate;
 import java.time.OffsetDateTime;
 
 /**
@@ -53,6 +54,27 @@ public class RequestPost {
     @Column(name = "repo_git_url", length = 1000)
     private String repoGitUrl;
 
+    /** 개발 요청의 이슈 유형(스펙 2026-11-19 §6). 다른 종류는 null. */
+    @Enumerated(EnumType.STRING)
+    @Column(name = "issue_type", length = 20)
+    private RequestIssueType issueType;
+
+    @Enumerated(EnumType.STRING)
+    @Column(length = 10)
+    private RequestPriority priority;
+
+    /** 희망 완료일. */
+    @Column(name = "due_date")
+    private LocalDate dueDate;
+
+    /** 개발 요청의 대상 레포 카탈로그 항목. 카탈로그 삭제 시 null. */
+    @Column(name = "target_repo_catalog_id")
+    private Long targetRepoCatalogId;
+
+    /** 이 요청으로 등록한 작업 id(기록용, FK 없음). */
+    @Column(name = "task_id")
+    private Long taskId;
+
     @Column(name = "last_requester_activity_at", nullable = false)
     private OffsetDateTime lastRequesterActivityAt;
 
@@ -88,6 +110,18 @@ public class RequestPost {
         return p;
     }
 
+    /** 개발 요청(DEV) 등록용. repoHint는 받지 않는다. */
+    public static RequestPost createDev(String title, String content, RequestIssueType issueType,
+                                        RequestPriority priority, LocalDate dueDate,
+                                        Long targetRepoCatalogId, String requesterId) {
+        RequestPost p = create(RequestKind.DEV, title, content, null, requesterId);
+        p.issueType = issueType;
+        p.priority = priority;
+        p.dueDate = dueDate;
+        p.targetRepoCatalogId = targetRepoCatalogId;
+        return p;
+    }
+
     public boolean isOwnedBy(String userId) {
         return requesterId != null && requesterId.equals(userId);
     }
@@ -104,6 +138,16 @@ public class RequestPost {
         this.lastAdminActivityAt = now;
         this.updatedAt = now;
         this.adminReadAt = now;
+    }
+
+    /**
+     * 요청자도 관리자도 아닌 사용자의 활동(개발 요청 공개 답글). 요청자와 관리자 양쪽에 새 활동으로 보이게
+     * 활동 시각만 올리고, 읽음 시각은 건드리지 않는다.
+     */
+    public void touchByOther(OffsetDateTime now) {
+        this.lastRequesterActivityAt = now;
+        this.lastAdminActivityAt = now;
+        this.updatedAt = now;
     }
 
     /** 상세 조회 시 열람자 쪽 읽음 시각을 갱신한다. 관리자가 자기 요청을 보면 둘 다 true. */

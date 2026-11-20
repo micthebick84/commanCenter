@@ -116,6 +116,11 @@ public class Task {
     @Setter
     private Long sourceQuestionId;
 
+    /** 이 작업을 등록한 요청 게시판 개발 요청 id (스펙 2026-11-19 §5.4). 기록용이라 FK가 없다. */
+    @Column(name = "source_request_id")
+    @Setter
+    private Long sourceRequestId;
+
     /** 작업 등록 시 선택된 Claude 모델. 워커가 claude --model에 사용.
      *  기본값은 ModelEffortPolicy.DEFAULT_MODEL과 반드시 일치해야 한다(둘 다 바꿀 것). */
     @Column(name = "model", nullable = false, length = 64)

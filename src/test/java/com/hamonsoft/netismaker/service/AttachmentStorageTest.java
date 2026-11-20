@@ -566,4 +566,20 @@ class AttachmentStorageTest {
             Files.deleteIfExists(link);
         }
     }
+
+    // ── 요청 게시판 첨부 경로 ──────────────────────────────────
+
+    @Test
+    void relativePathForRequest_형식() {
+        AttachmentStorage st = storage();
+        assertThat(st.requestRootRelative(7)).isEqualTo("request-7");
+        assertThat(st.relativePathForRequest(7, 3, "../a/보고서.pdf")).isEqualTo("request-7/3-보고서.pdf");
+    }
+
+    @Test
+    void 남는_기존_수를_더해_개수_초과는_400() {
+        assertThatThrownBy(() -> storage().validate(List.of(file("a.txt", 1), file("b.txt", 1)), 1))
+                .isInstanceOf(TaskException.class)
+                .hasMessage("첨부는 최대 2개까지 가능합니다");
+    }
 }

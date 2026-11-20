@@ -8,6 +8,8 @@ import { renderMarkdown } from '~/composables/useMarkdown'
 const props = defineProps<{
   comments: RequestComment[]
   requestId: number
+  /** 요청자 로그인 id — 본인 답글에 '요청자' 칩을 붙인다 */
+  requesterId?: string
 }>()
 const emit = defineEmits<{
   posted: [comment: RequestComment]
@@ -50,6 +52,7 @@ async function send() {
       <div v-else class="bubble-row q-mb-md" :class="{ 'bubble-row--admin': c.authorAdmin }" data-test="comment-bubble">
         <div class="row items-center no-wrap q-gutter-x-xs q-mb-xs">
           <span class="text-caption text-weight-medium">{{ c.authorId }}</span>
+          <q-chip v-if="requesterId && c.authorId === requesterId" dense size="sm" color="blue-grey-2" text-color="grey-9" label="요청자" class="q-ma-none" />
           <q-chip v-if="c.authorAdmin" dense size="sm" color="primary" text-color="white" label="관리자" class="q-ma-none" />
           <span class="text-caption text-grey-7">{{ fmt(c.createdAt) }}</span>
         </div>

@@ -2,6 +2,8 @@ package com.hamonsoft.netismaker.service;
 
 import com.hamonsoft.netismaker.entity.InterviewKind;
 import com.hamonsoft.netismaker.entity.InterviewStatus;
+import com.hamonsoft.netismaker.entity.RequestStatus;
+import com.hamonsoft.netismaker.service.AttachmentCleanupPlanner.RequestRow;
 import com.hamonsoft.netismaker.service.AttachmentCleanupPlanner.Owner;
 import com.hamonsoft.netismaker.service.AttachmentCleanupPlanner.OwnerDir;
 import com.hamonsoft.netismaker.service.AttachmentCleanupPlanner.Owners;
@@ -26,7 +28,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 class AttachmentCleanupPlannerTest {
 
     private static final Instant NOW = Instant.parse("2026-09-30T03:30:00Z");
-    private static final Policy POLICY = new Policy(Duration.ofDays(30), Duration.ofDays(90), Duration.ofHours(24));
+    private static final Policy POLICY = new Policy(Duration.ofDays(30), Duration.ofDays(90), Duration.ofDays(90), Duration.ofHours(24));
 
     private static OffsetDateTime daysAgo(long days) {
         return OffsetDateTime.ofInstant(NOW.minus(Duration.ofDays(days)), ZoneOffset.ofHours(9));
@@ -41,11 +43,19 @@ class AttachmentCleanupPlannerTest {
     }
 
     private static Owners tasks(Map<Long, TaskRow> rows) {
-        return new Owners(rows, 1000L, Map.of(), 1000L);
+        return new Owners(rows, 1000L, Map.of(), 1000L, Map.of(), 1000L);
     }
 
     private static Owners sessions(Map<Long, SessionRow> rows) {
-        return new Owners(Map.of(), 1000L, rows, 1000L);
+        return new Owners(Map.of(), 1000L, rows, 1000L, Map.of(), 1000L);
+    }
+
+    private static OwnerDir requestDir(long id) {
+        return new OwnerDir("request-" + id, Owner.REQUEST, id, NOW.minus(Duration.ofDays(400)));
+    }
+
+    private static Owners requests(Map<Long, RequestRow> rows) {
+        return new Owners(Map.of(), 1000L, Map.of(), 1000L, rows, 1000L);
     }
 
     private static Verdict decide(OwnerDir dir, Owners owners) {
@@ -148,7 +158,7 @@ class AttachmentCleanupPlannerTest {
 
     @Test
     void 고아는_유예가_지나고_발급된_id일_때만_삭제() {
-        Owners none = new Owners(Map.of(), 50L, Map.of(), 50L);
+        Owners none = new Owners(Map.of(), 50L, Map.of(), 50L, Map.of(), 50L);
         OwnerDir oldTask = new OwnerDir("task-7", Owner.TASK, 7, NOW.minus(Duration.ofHours(25)));
         OwnerDir oldQuestion = new OwnerDir("question-7", Owner.QUESTION, 7, NOW.minus(Duration.ofHours(25)));
         assertThat(decide(oldTask, none)).isEqualTo(Verdict.DELETE_ORPHAN);
@@ -166,11 +176,11 @@ class AttachmentCleanupPlannerTest {
     @Test
     void 테이블_최대_id보다_큰_고아나_빈_테이블이면_유지() {
         OwnerDir old = new OwnerDir("task-51", Owner.TASK, 51, Instant.EPOCH);
-        assertThat(decide(old, new Owners(Map.of(), 50L, Map.of(), 50L))).isEqualTo(Verdict.KEEP_ORPHAN_UNALLOCATED);
+        assertThat(decide(old, new Owners(Map.of(), 50L, Map.of(), 50L, Map.of(), 50L))).isEqualTo(Verdict.KEEP_ORPHAN_UNALLOCATED);
         // 빈 DB(엉뚱한 datasource 등)에 붙었을 때 전부 고아로 보여 대량 삭제되는 사고 방지
-        assertThat(decide(old, new Owners(Map.of(), null, Map.of(), null))).isEqualTo(Verdict.KEEP_ORPHAN_UNALLOCATED);
+        assertThat(decide(old, new Owners(Map.of(), null, Map.of(), null, Map.of(), null))).isEqualTo(Verdict.KEEP_ORPHAN_UNALLOCATED);
         OwnerDir oldQuestion = new OwnerDir("question-3", Owner.QUESTION, 3, Instant.EPOCH);
-        assertThat(decide(oldQuestion, new Owners(Map.of(), 50L, Map.of(), null)))
+        assertThat(decide(oldQuestion, new Owners(Map.of(), 50L, Map.of(), null, Map.of(), null)))
                 .isEqualTo(Verdict.KEEP_ORPHAN_UNALLOCATED);
     }
 
@@ -178,20 +188,70 @@ class AttachmentCleanupPlannerTest {
     void 작업과_질문의_id_공간은_섞이지_않는다() {
         // task-5 판정은 세션 5와 무관 — 작업 행이 없으면 고아
         Owners onlySession = new Owners(Map.of(), 50L,
-                Map.of(5L, new SessionRow(InterviewKind.QUESTION, InterviewStatus.RUNNING, daysAgo(1))), 50L);
+                Map.of(5L, new SessionRow(InterviewKind.QUESTION, InterviewStatus.RUNNING, daysAgo(1))), 50L, Map.of(), 50L);
         assertThat(decide(taskDir(5), onlySession)).isEqualTo(Verdict.DELETE_ORPHAN);
         // question-5 판정은 작업 5와 무관
-        Owners onlyTask = new Owners(Map.of(5L, new TaskRow(null)), 50L, Map.of(), 50L);
+        Owners onlyTask = new Owners(Map.of(5L, new TaskRow(null)), 50L, Map.of(), 50L, Map.of(), 50L);
         assertThat(decide(questionDir(5), onlyTask)).isEqualTo(Verdict.DELETE_ORPHAN);
     }
 
     @Test
     void plan은_입력_순서대로_판정을_돌려준다() {
         Owners owners = new Owners(Map.of(1L, new TaskRow(null), 2L, new TaskRow(daysAgo(40))), 10L,
-                Map.of(3L, new SessionRow(InterviewKind.QUESTION, InterviewStatus.AWAITING_INPUT, daysAgo(200))), 10L);
+                Map.of(3L, new SessionRow(InterviewKind.QUESTION, InterviewStatus.AWAITING_INPUT, daysAgo(200))), 10L, Map.of(), 10L);
         var decisions = AttachmentCleanupPlanner.plan(List.of(taskDir(1), taskDir(2), questionDir(3)), owners, NOW, POLICY);
         assertThat(decisions).extracting(d -> d.verdict())
                 .containsExactly(Verdict.KEEP_TASK_ACTIVE, Verdict.DELETE_TASK_DELETED, Verdict.KEEP_QUESTION_OPEN);
         assertThat(decisions).extracting(d -> d.verdict().delete()).containsExactly(false, true, false);
+    }
+
+    // ── request-{id} ───────────────────────────────────────
+
+    @Test
+    void parse_request_폴더() {
+        assertThat(AttachmentCleanupPlanner.parse("request-12", NOW)).hasValueSatisfying(d -> {
+            assertThat(d.owner()).isEqualTo(Owner.REQUEST);
+            assertThat(d.id()).isEqualTo(12L);
+        });
+        assertThat(AttachmentCleanupPlanner.parse("request-012", NOW)).isEmpty();
+        assertThat(AttachmentCleanupPlanner.parse("request-1x", NOW)).isEmpty();
+        assertThat(AttachmentCleanupPlanner.parse("request-9999999999999999999", NOW)).isEmpty();
+    }
+
+    @Test
+    void 닫힌_요청_90일_지나면_삭제() {
+        assertThat(decide(requestDir(5), requests(Map.of(5L, new RequestRow(RequestStatus.DONE, daysAgo(91))))))
+                .isEqualTo(Verdict.DELETE_REQUEST_CLOSED);
+        assertThat(decide(requestDir(6), requests(Map.of(6L, new RequestRow(RequestStatus.REJECTED, daysAgo(91))))))
+                .isEqualTo(Verdict.DELETE_REQUEST_CLOSED);
+    }
+
+    @Test
+    void 열린_요청은_보존() {
+        assertThat(decide(requestDir(5), requests(Map.of(5L, new RequestRow(RequestStatus.RECEIVED, daysAgo(500))))))
+                .isEqualTo(Verdict.KEEP_REQUEST_OPEN);
+        assertThat(decide(requestDir(6), requests(Map.of(6L, new RequestRow(RequestStatus.REVIEWING, daysAgo(500))))))
+                .isEqualTo(Verdict.KEEP_REQUEST_OPEN);
+    }
+
+    @Test
+    void 닫힌_지_89일이면_보존() {
+        assertThat(decide(requestDir(5), requests(Map.of(5L, new RequestRow(RequestStatus.DONE, daysAgo(89))))))
+                .isEqualTo(Verdict.KEEP_REQUEST_RETENTION);
+        assertThat(decide(requestDir(5), requests(Map.of(5L, new RequestRow(RequestStatus.DONE, null)))))
+                .isEqualTo(Verdict.KEEP_REQUEST_RETENTION);
+    }
+
+    @Test
+    void 행_없는_요청_폴더는_고아_규칙() {
+        Owners owners = new Owners(Map.of(), 50L, Map.of(), 50L, Map.of(), 50L);
+        assertThat(decide(new OwnerDir("request-7", Owner.REQUEST, 7, NOW.minus(Duration.ofHours(25))), owners))
+                .isEqualTo(Verdict.DELETE_ORPHAN);
+        assertThat(decide(new OwnerDir("request-7", Owner.REQUEST, 7, NOW.minus(Duration.ofHours(23))), owners))
+                .isEqualTo(Verdict.KEEP_ORPHAN_GRACE);
+        assertThat(decide(new OwnerDir("request-51", Owner.REQUEST, 51, Instant.EPOCH), owners))
+                .isEqualTo(Verdict.KEEP_ORPHAN_UNALLOCATED);
+        assertThat(decide(new OwnerDir("request-7", Owner.REQUEST, 7, Instant.EPOCH),
+                new Owners(Map.of(), 50L, Map.of(), 50L, Map.of(), null))).isEqualTo(Verdict.KEEP_ORPHAN_UNALLOCATED);
     }
 }

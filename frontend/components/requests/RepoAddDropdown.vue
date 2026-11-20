@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { failMsg } from '~/composables/failMessage'
-// REPO 추가 요청 처리 — 사내 GitLab 후보를 골라 한 번에 카탈로그에 등록한다(확인 창 없음).
+// 사이트 추가 요청 처리 — 사내 GitLab 후보를 골라 한 번에 카탈로그에 등록한다(확인 창 없음).
 // 열면 요청 힌트로 추측한 후보를 읽고, 검색창(300ms 디바운스·2자 이상)으로 GitLab 전체를 찾을 수 있다.
 import { useQuasar } from 'quasar'
 import type { RepoCandidate, RequestDetail } from '~/composables/requestBoard'

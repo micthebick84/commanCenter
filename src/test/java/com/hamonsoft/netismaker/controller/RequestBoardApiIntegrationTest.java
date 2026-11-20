@@ -1,6 +1,8 @@
 package com.hamonsoft.netismaker.controller;
 
 import com.hamonsoft.netismaker.TestcontainersConfig;
+import com.hamonsoft.netismaker.entity.RequestKind;
+import com.hamonsoft.netismaker.entity.RequestPost;
 import com.hamonsoft.netismaker.repository.RequestPostRepository;
 import com.jayway.jsonpath.JsonPath;
 import org.junit.jupiter.api.BeforeEach;
@@ -23,7 +25,9 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
 
 /**
- * 요청 게시판 API 표면·권한 경계 (스펙 2026-10-19). 시드 사용자 user1, user2, admin1 (init-test-schema.sql).
+ * 요청 게시판 API 표면·권한 경계 (스펙 2026-10-19, 2026-11-19). 시드 사용자 user1, user2, admin1 (init-test-schema.sql).
+ * 새로 등록할 수 있는 종류는 DEV·REPO뿐이라 API로는 REPO(본인·관리자만)를 기본으로 만들고,
+ * 예전 종류(FEATURE·MCP) 행이 필요하면 리포지토리로 직접 넣는다.
  * 컨텍스트가 뜨면서 V30 마이그레이션과 엔티티 {@code ddl-auto: validate}도 함께 검증된다.
  */
 @EnabledIfEnvironmentVariable(named = "RUN_TESTCONTAINERS", matches = "true")
@@ -50,7 +54,13 @@ class RequestBoardApiIntegrationTest {
 
     private static String createBody(String kind, String title) {
         return "{\"kind\":\"" + kind + "\",\"title\":\"" + title + "\",\"content\":\"본문 " + title + "\""
-                + ("REPO".equals(kind) ? ",\"repoHint\":\"사내 GitLab group/" + title + "\"" : "") + "}";
+                + ("REPO".equals(kind) ? ",\"repoHint\":\"사내 GitLab group/" + title + "\"" : "")
+                + ("DEV".equals(kind) ? ",\"issueType\":\"BUG\"" : "") + "}";
+    }
+
+    /** 더 이상 API로 만들 수 없는 예전 종류 행을 직접 넣는다. */
+    private long insertLegacy(RequestKind kind, String title, String requesterId) {
+        return posts.save(RequestPost.create(kind, title, "본문 " + title, null, requesterId)).getId();
     }
 
     private long create(RequestPostProcessor who, String kind, String title) throws Exception {
@@ -64,19 +74,46 @@ class RequestBoardApiIntegrationTest {
     @Test
     void create_returns_201_with_labels() throws Exception {
         mvc.perform(post("/api/requests").with(user("user1")).contentType(APPLICATION_JSON)
-                        .content(createBody("FEATURE", "다크 모드")))
+                        .content(createBody("REPO", "collector")))
                 .andExpect(status().isCreated())
-                .andExpect(jsonPath("$.kind").value("FEATURE"))
-                .andExpect(jsonPath("$.kindLabel").value("기능 추가"))
+                .andExpect(jsonPath("$.kind").value("REPO"))
+                .andExpect(jsonPath("$.kindLabel").value("사이트 추가"))
                 .andExpect(jsonPath("$.status").value("RECEIVED"))
                 .andExpect(jsonPath("$.statusLabel").value("접수"))
                 .andExpect(jsonPath("$.requesterId").value("user1"))
-                .andExpect(jsonPath("$.title").value("다크 모드"));
+                .andExpect(jsonPath("$.title").value("collector"));
+
+        mvc.perform(post("/api/requests").with(user("user1")).contentType(APPLICATION_JSON)
+                        .content(createBody("DEV", "결재선 오류")))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.kind").value("DEV"))
+                .andExpect(jsonPath("$.kindLabel").value("개발 요청"))
+                .andExpect(jsonPath("$.issueType").value("BUG"))
+                .andExpect(jsonPath("$.issueTypeLabel").value("버그"))
+                .andExpect(jsonPath("$.status").value("RECEIVED"))
+                .andExpect(jsonPath("$.requesterId").value("user1"))
+                .andExpect(jsonPath("$.title").value("결재선 오류"));
+    }
+
+    @Test
+    void create_rejects_retired_kinds_with_400() throws Exception {
+        mvc.perform(post("/api/requests").with(user("user1")).contentType(APPLICATION_JSON)
+                        .content(createBody("FEATURE", "다크 모드")))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.message").value("더 이상 받지 않는 요청 종류입니다"));
+        mvc.perform(post("/api/requests").with(user("user1")).contentType(APPLICATION_JSON)
+                        .content(createBody("MCP", "slack MCP")))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.message").value("더 이상 받지 않는 요청 종류입니다"));
+
+        // 아무것도 만들어지지 않았다.
+        mvc.perform(get("/api/requests").with(user("user1")))
+                .andExpect(jsonPath("$", hasSize(0)));
     }
 
     @Test
     void user_cannot_see_others_request() throws Exception {
-        long id = create(user("user1"), "FEATURE", "user1의 요청");
+        long id = create(user("user1"), "REPO", "user1의 요청");
 
         mvc.perform(get("/api/requests/" + id).with(user("user2")))
                 .andExpect(status().isNotFound())
@@ -89,6 +126,10 @@ class RequestBoardApiIntegrationTest {
                 .andExpect(status().isNotFound());
         mvc.perform(delete("/api/requests/" + id).with(user("user2")))
                 .andExpect(status().isNotFound());
+        // 전원 공개 목록(scope=dev)은 개발 요청만 — 남의 사이트 추가 요청은 나오지 않는다.
+        mvc.perform(get("/api/requests").param("scope", "dev").with(user("user2")))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$", hasSize(0)));
 
         // 아무것도 바뀌지 않았다.
         mvc.perform(get("/api/requests/" + id).with(user("user1")))
@@ -99,7 +140,7 @@ class RequestBoardApiIntegrationTest {
 
     @Test
     void non_admin_forbidden_on_admin_paths() throws Exception {
-        long id = create(user("user1"), "FEATURE", "관리자 경로 시험");
+        long id = create(user("user1"), "REPO", "관리자 경로 시험");
 
         mvc.perform(get("/api/admin/requests/summary").with(user("user1")))
                 .andExpect(status().isForbidden());
@@ -113,7 +154,7 @@ class RequestBoardApiIntegrationTest {
 
     @Test
     void user_all_param_is_ignored() throws Exception {
-        create(user("user1"), "FEATURE", "user1의 요청");
+        create(user("user1"), "REPO", "user1의 요청");
 
         mvc.perform(get("/api/requests").param("all", "true").with(user("user2")))
                 .andExpect(status().isOk())
@@ -124,16 +165,25 @@ class RequestBoardApiIntegrationTest {
 
     @Test
     void admin_lists_all_with_filters() throws Exception {
-        create(user("user1"), "FEATURE", "기능 요청");
+        create(user("user1"), "DEV", "개발 요청");
         create(user("user1"), "REPO", "레포 요청");
-        create(user("user2"), "MCP", "MCP 요청");
+        insertLegacy(RequestKind.MCP, "MCP 요청", "user2");
 
-        // 필터 없음: 열린 요청 셋 모두
+        // 필터 없음: 열린 요청 셋 모두(예전 종류 행 포함)
         mvc.perform(get("/api/requests").param("all", "true").with(admin()))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$", hasSize(3)))
-                .andExpect(jsonPath("$[*].title", containsInAnyOrder("기능 요청", "레포 요청", "MCP 요청")))
+                .andExpect(jsonPath("$[*].title", containsInAnyOrder("개발 요청", "레포 요청", "MCP 요청")))
                 .andExpect(jsonPath("$[*].requesterId", containsInAnyOrder("user1", "user1", "user2")));
+
+        // kind=DEV: 개발 요청 하나만
+        mvc.perform(get("/api/requests").param("all", "true").param("kind", "DEV").with(admin()))
+                .andExpect(jsonPath("$", hasSize(1)))
+                .andExpect(jsonPath("$[0].title").value("개발 요청"));
+        // kind=MCP: 예전 종류 행도 관리자 목록에서 여전히 걸러 볼 수 있다
+        mvc.perform(get("/api/requests").param("all", "true").param("kind", "MCP").with(admin()))
+                .andExpect(jsonPath("$", hasSize(1)))
+                .andExpect(jsonPath("$[0].kindLabel").value("MCP 추가"));
 
         // kind=REPO: 레포 요청 하나만
         mvc.perform(get("/api/requests").param("all", "true").param("kind", "REPO").with(admin()))
@@ -157,7 +207,7 @@ class RequestBoardApiIntegrationTest {
 
     @Test
     void flow_comment_unread_read() throws Exception {
-        long id = create(user("user1"), "FEATURE", "답글 흐름");
+        long id = create(user("user1"), "REPO", "답글 흐름");
 
         // 새로 만든 요청은 요청자에게 안 읽음이 아니다.
         mvc.perform(get("/api/requests").with(user("user1")))
@@ -185,7 +235,7 @@ class RequestBoardApiIntegrationTest {
 
     @Test
     void summary_counts_attention_for_reply_on_done() throws Exception {
-        long id = create(user("user1"), "FEATURE", "처리 뒤 답글");
+        long id = create(user("user1"), "REPO", "처리 뒤 답글");
         // 새 요청: 접수이므로 관리자 주의 필요
         mvc.perform(get("/api/admin/requests/summary").with(admin()))
                 .andExpect(jsonPath("$.received").value(1))
@@ -212,7 +262,7 @@ class RequestBoardApiIntegrationTest {
 
     @Test
     void owner_can_cancel_received_request() throws Exception {
-        long id = create(user("user1"), "FEATURE", "취소할 요청");
+        long id = create(user("user1"), "REPO", "취소할 요청");
         mvc.perform(delete("/api/requests/" + id).with(user("user1")))
                 .andExpect(status().isNoContent());
         mvc.perform(get("/api/requests/" + id).with(user("user1")))
@@ -222,7 +272,7 @@ class RequestBoardApiIntegrationTest {
     @Test
     void validation_400_on_blank_title() throws Exception {
         mvc.perform(post("/api/requests").with(user("user1")).contentType(APPLICATION_JSON)
-                        .content("{\"kind\":\"FEATURE\",\"title\":\"   \",\"content\":\"본문\"}"))
+                        .content("{\"kind\":\"REPO\",\"title\":\"   \",\"content\":\"본문\"}"))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.fields.title").exists());
         mvc.perform(get("/api/requests").with(user("user1")))

@@ -5,14 +5,20 @@ import { useQuasar } from 'quasar'
 import RepoAddDropdown from '~/components/requests/RepoAddDropdown.vue'
 import RequestFormDialog from '~/components/requests/RequestFormDialog.vue'
 import RequestThread from '~/components/requests/RequestThread.vue'
+import { downloadAttachment } from '~/composables/attachmentDownload'
+import { formatSize } from '~/composables/attachmentLimits'
 import { confirmDialog } from '~/composables/confirmDialog'
+import { EXPIRED_ATTACHMENT_TIP } from '~/composables/questions'
 import {
+  ISSUE_TYPE_COLOR,
   OPEN_STATUSES,
+  PRIORITY_COLOR,
   STATUS_COLOR,
   STATUS_OPTIONS,
   adminTransitions,
   type RequestComment,
   type RequestDetail,
+  type RequestAttachmentView,
   type RequestListItem,
   type RequestStatus,
 } from '~/composables/requestBoard'
@@ -24,7 +30,7 @@ definePageMeta({ layout: 'default' })
 const $q = useQuasar()
 const route = useRoute()
 // 템플릿의 관리자 분기는 하이드레이션 안전 값
-const { isAdmin } = useHydrationSafeAuth()
+const { isAdmin, me } = useHydrationSafeAuth()
 
 const id = computed(() => String(route.params.id))
 const req = ref<RequestDetail | null>(null)
@@ -67,6 +73,31 @@ const repoResult = computed(() => {
 const showRepoAddSlot = computed(
   () => isAdmin.value && req.value?.kind === 'REPO' && OPEN_STATUSES.includes(req.value.status),
 )
+
+// 연결 작업 링크는 요청자·관리자만(작업 상세는 그 둘만 볼 수 있다)
+const isRequester = computed(() => {
+  const m = me.value
+  const mine = m?.username ?? (m?.user_id != null ? String(m.user_id) : null)
+  return !!mine && mine === req.value?.requesterId
+})
+const canOpenTask = computed(() => isAdmin.value || isRequester.value)
+
+function openConvert() {
+  if (req.value) navigateTo('/tasks?fromRequest=' + req.value.id)
+}
+function openTask() {
+  if (req.value?.taskId != null) navigateTo(`/tasks/${req.value.taskId}`)
+}
+
+// ── 첨부 내려받기 ──
+async function downloadReqAttachment(a: RequestAttachmentView) {
+  if (!req.value || a.expired) return
+  try {
+    await downloadAttachment(`/api/requests/${req.value.id}/attachments/${a.id}`, a.name)
+  } catch (e: any) {
+    $q.notify({ type: 'negative', message: e?.message ?? failMsg('다운로드') })
+  }
+}
 
 // ── 답글 ──
 function onPosted(c: RequestComment) {
@@ -164,6 +195,17 @@ async function confirmReject() {
         />
         <q-space />
         <q-btn
+          v-if="req.convertible"
+          unelevated
+          dense
+          no-caps
+          color="primary"
+          icon="assignment_turned_in"
+          label="작업으로 등록"
+          data-test="request-convert"
+          @click="openConvert"
+        />
+        <q-btn
           v-if="req.editable"
           flat
           dense
@@ -174,7 +216,7 @@ async function confirmReject() {
           @click="showEdit = true"
         />
         <q-btn
-          v-if="req.editable"
+          v-if="req.cancellable"
           flat
           dense
           no-caps
@@ -217,6 +259,31 @@ async function confirmReject() {
         <span v-if="req.updatedAt !== req.createdAt" data-test="request-activity"> · 최근 활동 {{ fmt(req.updatedAt) }}</span>
       </div>
 
+      <!-- 개발 요청 머리 -->
+      <div v-if="req.kind === 'DEV'" class="row items-center q-gutter-sm q-mb-md" data-test="request-dev-meta">
+        <q-chip
+          v-if="req.issueType"
+          dense
+          size="sm"
+          :color="ISSUE_TYPE_COLOR[req.issueType]"
+          text-color="white"
+          :label="req.issueTypeLabel ?? req.issueType"
+          class="q-ma-none"
+        />
+        <q-chip
+          v-if="req.priority"
+          dense
+          size="sm"
+          outline
+          :color="PRIORITY_COLOR[req.priority]"
+          :label="req.priorityLabel ?? req.priority"
+          class="q-ma-none"
+        />
+        <span v-if="req.dueDate" class="text-body2">마감 {{ req.dueDate }}</span>
+        <span v-if="req.targetRepoAlias" class="text-body2">대상 레포 {{ req.targetRepoAlias }}</span>
+        <span class="text-body2 text-grey-7">요청자 {{ req.requesterId }}</span>
+      </div>
+
       <!-- 본문 -->
       <q-card flat bordered class="q-mb-md">
         <q-card-section>
@@ -227,16 +294,44 @@ async function confirmReject() {
         </q-card-section>
       </q-card>
 
+      <!-- 첨부 -->
+      <div v-if="req.attachments?.length" class="q-mb-md" data-test="request-attachments">
+        <div class="text-subtitle2 q-mb-xs">첨부</div>
+        <div class="column items-start q-gutter-y-xs">
+          <q-btn
+            v-for="a in req.attachments"
+            :key="a.id"
+            flat
+            dense
+            no-caps
+            align="left"
+            :icon="a.expired ? 'history' : 'attach_file'"
+            :disable="a.expired"
+            :label="`${a.name} (${formatSize(a.sizeBytes)})`"
+            :data-test="`request-attachment-${a.id}`"
+            @click="downloadReqAttachment(a)"
+          >
+            <q-tooltip v-if="a.expired">{{ EXPIRED_ATTACHMENT_TIP }}</q-tooltip>
+          </q-btn>
+        </div>
+      </div>
+
+      <!-- 연결 작업 -->
+      <div v-if="req.taskId != null" class="q-mb-md text-body2">
+        <a v-if="canOpenTask" :href="`/tasks/${req.taskId}`" @click.prevent="openTask" data-test="request-task-link">→ 작업 #{{ req.taskId }} · {{ req.taskStatusLabel }}</a>
+        <span v-else data-test="request-task-link">→ 작업 #{{ req.taskId }} · {{ req.taskStatusLabel }}</span>
+      </div>
+
       <!-- REPO 처리 결과 -->
       <div v-if="repoResult" class="q-mb-md text-body2" data-test="repo-result">{{ repoResult }}</div>
-      <!-- REPO 추가 처리 — 등록되면 응답 상세로 화면을 바꾼다(상태·답글·등록된 레포 갱신) -->
+      <!-- 사이트 추가 처리 — 등록되면 응답 상세로 화면을 바꾼다(상태·답글·등록된 레포 갱신) -->
       <div v-if="showRepoAddSlot" class="q-mb-md" data-test="repo-add-slot">
         <RepoAddDropdown :request-id="req.id" @added="onRepoAdded" />
       </div>
 
       <!-- 답글 스레드 -->
       <div class="text-subtitle1 text-weight-medium q-mb-sm">답글</div>
-      <RequestThread :comments="req.comments" :request-id="req.id" @posted="onPosted" />
+      <RequestThread :comments="req.comments" :request-id="req.id" :requester-id="req.requesterId" @posted="onPosted" />
 
       <RequestFormDialog v-model="showEdit" :initial="req" @saved="onSaved" />
 

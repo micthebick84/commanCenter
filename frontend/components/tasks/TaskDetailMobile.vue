@@ -42,6 +42,7 @@ export interface DetailTask {
   refRepos?: RefRepoView[]
   /** 질문 대화에서 이어 등록했으면 그 질문 id — 정보 영역 출처 링크 */
   sourceQuestionId?: number | null
+  sourceRequestId?: number | null
   /** 작업 타입(스펙 2026-11-03 §4) — 요청 상세 섹션 머리의 칩. null·없음은 타입 없음이라 칩이 없다. */
   taskType?: string | null
   /** 이 작업 인터뷰의 superpowers 켬/끔(설계 2026-11-03 interview-superpowers-toggle §4) — false(간단 인터뷰)일 때만 정보 영역에 줄을 그린다. null·없음은 켬이다. */
@@ -301,6 +302,7 @@ const deployCaption = computed(() => {
               <div v-if="task.dbConnectionIds?.length" data-test="task-db-caption"><span class="k">DB</span>{{ task.dbConnectionIds.length }}개 연결 ({{ dbWritable ? '구현 단계에서는 쓰기 가능' : '읽기 전용' }})</div>
               <div v-if="task.refRepos?.length" data-test="info-refs"><RefRepoChips :items="task.refRepos" :context="taskRefContext(task.status)" /></div>
               <div v-if="task.sourceQuestionId"><span class="k">출처</span><NuxtLink :to="`/questions/${task.sourceQuestionId}`" data-test="info-source-question">↩ 질문 #{{ task.sourceQuestionId }}에서 이어짐</NuxtLink></div>
+              <div v-if="task.sourceRequestId"><span class="k">출처</span><NuxtLink :to="`/requests/${task.sourceRequestId}`" data-test="info-source-request">↩ 요청 #{{ task.sourceRequestId }}에서 이어짐</NuxtLink></div>
               <div v-if="task.attachments.length" class="column" style="gap: 4px">
                 <span class="k">첨부</span>
                 <q-chip v-for="a in task.attachments" :key="a.id" clickable dense icon="attach_file" :label="`${a.fileName} (${fmtSize(a.sizeBytes)})`" @click="emit('download', a)" />

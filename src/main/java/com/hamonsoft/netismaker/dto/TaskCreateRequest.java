@@ -41,16 +41,28 @@ public record TaskCreateRequest(
          * 문자열로 받아 서비스가 저장 전에 해석한다(앞뒤 공백은 자르고 대소문자 구분, 모르는 값은 400).
          * null·공백 = 타입 없음 — 키가 없는 옛 화면·다른 호출자를 막지 않는다.
          */
-        String taskType
+        String taskType,
+
+        /**
+         * 요청 게시판 개발 요청에서 등록할 때의 요청 id (스펙 2026-11-19 §5.4) — 관리자만, 등록자는 요청의 원 요청자가 된다.
+         * null = 없음. sourceQuestionId와 함께 오면 400.
+         */
+        Long sourceRequestId
 ) {
+    /** 출처 요청 도입 전 7인자(타입까지) — 기존 호출처/테스트 호환. 출처 요청 없음. */
+    public TaskCreateRequest(Long repoCatalogId, String githubBranch, String title, String description,
+                             List<RefRepoInput> refRepos, Long sourceQuestionId, String taskType) {
+        this(repoCatalogId, githubBranch, title, description, refRepos, sourceQuestionId, taskType, null);
+    }
+
     /** 타입 도입 전 6인자(참조·출처 질문) — 기존 호출처/테스트 호환. 타입 없음. */
     public TaskCreateRequest(Long repoCatalogId, String githubBranch, String title, String description,
                              List<RefRepoInput> refRepos, Long sourceQuestionId) {
-        this(repoCatalogId, githubBranch, title, description, refRepos, sourceQuestionId, null);
+        this(repoCatalogId, githubBranch, title, description, refRepos, sourceQuestionId, null, null);
     }
 
     /** 참조·출처 질문 없는 등록 — 기존 호출처/테스트 호환. */
     public TaskCreateRequest(Long repoCatalogId, String githubBranch, String title, String description) {
-        this(repoCatalogId, githubBranch, title, description, null, null, null);
+        this(repoCatalogId, githubBranch, title, description, null, null, null, null);
     }
 }

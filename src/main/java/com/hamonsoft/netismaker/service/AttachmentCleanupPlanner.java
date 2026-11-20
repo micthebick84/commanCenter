@@ -2,6 +2,7 @@ package com.hamonsoft.netismaker.service;
 
 import com.hamonsoft.netismaker.entity.InterviewKind;
 import com.hamonsoft.netismaker.entity.InterviewStatus;
+import com.hamonsoft.netismaker.entity.RequestStatus;
 
 import java.time.Duration;
 import java.time.Instant;
@@ -23,6 +24,8 @@ import java.util.regex.Pattern;
  *                   last_activity_at(종결 전이가 touch한 시각)이 보존 기간보다 오래됐을 때만 삭제.
  *                   진행 중·답변 완료(AWAITING_INPUT) 세션은 인터뷰 서비스가 attachmentRoot 절대경로로
  *                   읽으므로 절대 건드리지 않는다.
+ *  request-{id}   : 소유 요청이 처리완료·반려(닫힘)이고 updated_at이 보존 기간보다 오래됐을 때만 삭제.
+ *                   접수·검토중(열림)은 나이와 무관하게 보존한다. 행이 없으면 아래 고아 규칙.
  *  고아(행 없음)  : 등록 트랜잭션이 파일을 쓴 뒤 롤백된 잔재. id가 테이블 최대 id 이하(= 이 DB의 시퀀스가
  *                   실제로 발급했던 id)이고 디렉터리 mtime이 유예 기간보다 오래됐을 때만 삭제 — 진행 중인
  *                   등록(미커밋 행)과의 경합, 빈/엉뚱한 DB에 붙었을 때의 대량 오판정을 막는다.
@@ -34,6 +37,7 @@ public final class AttachmentCleanupPlanner {
     /** 정규형만 허용 — 선행 0·부호·접미사 붙은 이름은 앱이 만든 디렉터리가 아니다. 18자리로 long 오버플로 차단. */
     private static final Pattern TASK_DIR = Pattern.compile("task-([1-9][0-9]{0,17})");
     private static final Pattern QUESTION_DIR = Pattern.compile("question-([1-9][0-9]{0,17})");
+    private static final Pattern REQUEST_DIR = Pattern.compile("request-([1-9][0-9]{0,17})");
 
     /**
      * 질문 세션 종결 상태. InterviewService 기준 이 셋에서 나가는 전이가 없다(submitAnswer=AWAITING_INPUT,
@@ -45,7 +49,7 @@ public final class AttachmentCleanupPlanner {
 
     private AttachmentCleanupPlanner() {}
 
-    public enum Owner { TASK, QUESTION }
+    public enum Owner { TASK, QUESTION, REQUEST }
 
     /** 첨부 루트 바로 아래의 소유 디렉터리 1개. modifiedAt = 디렉터리 자체 mtime(링크 미추적). */
     public record OwnerDir(String name, Owner owner, long id, Instant modifiedAt) {}
@@ -56,13 +60,18 @@ public final class AttachmentCleanupPlanner {
     /** 소유 세션 행. */
     public record SessionRow(InterviewKind kind, InterviewStatus status, OffsetDateTime lastActivityAt) {}
 
+    /** 소유 요청 행 — 상태와 마지막 갱신 시각. */
+    public record RequestRow(RequestStatus status, OffsetDateTime updatedAt) {}
+
     /**
      * 스캔된 id들의 DB 스냅샷. 맵에 없는 id = 행 없음. maxTaskId/maxSessionId = 테이블 최대 id(빈 테이블이면 null).
      */
     public record Owners(Map<Long, TaskRow> tasks, Long maxTaskId,
-                         Map<Long, SessionRow> sessions, Long maxSessionId) {}
+                         Map<Long, SessionRow> sessions, Long maxSessionId,
+                         Map<Long, RequestRow> requests, Long maxRequestId) {}
 
-    public record Policy(Duration taskDeletedRetention, Duration questionClosedRetention, Duration orphanGrace) {}
+    public record Policy(Duration taskDeletedRetention, Duration questionClosedRetention,
+                         Duration requestClosedRetention, Duration orphanGrace) {}
 
     public enum Verdict {
         DELETE_TASK_DELETED(true, "삭제된 작업 — 보존 기간 경과"),
@@ -72,6 +81,9 @@ public final class AttachmentCleanupPlanner {
         KEEP_TASK_RETENTION(false, "삭제된 작업 — 보존 기간 이내"),
         KEEP_QUESTION_OPEN(false, "진행 중/답변 완료 질문"),
         KEEP_QUESTION_RETENTION(false, "종료된 질문 — 보존 기간 이내"),
+        DELETE_REQUEST_CLOSED(true, "닫힌 요청 — 보존 기간 경과"),
+        KEEP_REQUEST_OPEN(false, "접수·검토중 요청"),
+        KEEP_REQUEST_RETENTION(false, "닫힌 요청 — 보존 기간 이내"),
         KEEP_NOT_QUESTION(false, "질문 세션이 아닌 행"),
         KEEP_ORPHAN_GRACE(false, "소유 행 없음(고아) — 유예 기간 이내"),
         KEEP_ORPHAN_UNALLOCATED(false, "소유 행 없음 — 테이블 최대 id 초과(미할당 id, 다른 DB 의심)");
@@ -91,13 +103,15 @@ public final class AttachmentCleanupPlanner {
 
     public record Decision(OwnerDir dir, Verdict verdict) {}
 
-    /** 디렉터리 이름이 task-{id}/question-{id} 정규형이면 OwnerDir, 아니면 empty(정리 대상 아님). */
+    /** 디렉터리 이름이 task-{id}/question-{id}/request-{id} 정규형이면 OwnerDir, 아니면 empty(정리 대상 아님). */
     public static Optional<OwnerDir> parse(String name, Instant modifiedAt) {
         if (name == null) return Optional.empty();
         Matcher m = TASK_DIR.matcher(name);
         if (m.matches()) return Optional.of(new OwnerDir(name, Owner.TASK, Long.parseLong(m.group(1)), modifiedAt));
         m = QUESTION_DIR.matcher(name);
         if (m.matches()) return Optional.of(new OwnerDir(name, Owner.QUESTION, Long.parseLong(m.group(1)), modifiedAt));
+        m = REQUEST_DIR.matcher(name);
+        if (m.matches()) return Optional.of(new OwnerDir(name, Owner.REQUEST, Long.parseLong(m.group(1)), modifiedAt));
         return Optional.empty();
     }
 
@@ -121,6 +135,13 @@ public final class AttachmentCleanupPlanner {
                 if (!QUESTION_CLOSED.contains(row.status())) yield Verdict.KEEP_QUESTION_OPEN;
                 yield olderThan(row.lastActivityAt(), now, policy.questionClosedRetention())
                         ? Verdict.DELETE_QUESTION_CLOSED : Verdict.KEEP_QUESTION_RETENTION;
+            }
+            case REQUEST -> {
+                RequestRow row = owners.requests().get(dir.id());
+                if (row == null) yield orphan(dir, owners.maxRequestId(), now, policy);
+                if (row.status() == null || row.status().isOpen()) yield Verdict.KEEP_REQUEST_OPEN;
+                yield olderThan(row.updatedAt(), now, policy.requestClosedRetention())
+                        ? Verdict.DELETE_REQUEST_CLOSED : Verdict.KEEP_REQUEST_RETENTION;
             }
         };
     }

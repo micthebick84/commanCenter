@@ -18,6 +18,7 @@ import RefRepoChips from '~/components/RefRepoChips.vue'
 import RefRepoAddForm from '~/components/RefRepoAddForm.vue'
 import { toInputs, useRefDraft, type RefRepoView } from '~/composables/refRepos'
 import { taskPrefillFromQuestion, type QuestionDetail } from '~/composables/questions'
+import { taskPrefillFromRequest, type RequestDetail } from '~/composables/requestBoard'
 import { taskPrefillFromTask, type FollowUpSource } from '~/composables/taskFix'
 import { TASK_TYPES, TASK_TYPE_FILTERS, taskTypeLabel } from '~/composables/taskType'
 import { fetchDeferredWarning } from '~/composables/taskDbChanges'
@@ -299,6 +300,9 @@ const source = ref<{ id: number; title: string } | null>(null)
 // 질문 첨부 승계 안내(스펙 2026-10-27) — 서버가 질문의 첨부를 작업에 복사한다. 이름 목록은 접어 두고 버튼으로 펼친다.
 const inheritedNames = ref<string[]>([])
 const inheritedOpen = ref(false)
+// 출처 요청(스펙 2026-11-19 §5.4) — `/tasks?fromRequest={id}`로 들어왔을 때만. 있으면 등록 바디에 sourceRequestId를 싣는다(관리자만 — 서버가 403·409로 가른다).
+const sourceRequestId = ref<number | null>(null)
+const requestAttachmentCount = ref(0)
 
 // 참조 repo 줄: 브랜치 선택 바로 아래 편집 칩 줄 + "＋ 참조 추가"가 그 아래에 펼치는 추가 폼(새 질문 화면 B안과 같은 모양).
 // 펼침·후보 제외(대상 + 이미 고른 참조)·추가(접힘)·빼기는 승인 다이얼로그·인터뷰 중 참조 변경과 같은 useRefDraft로.
@@ -460,6 +464,8 @@ async function openCreate() {
   draft.title = ''
   draft.description = ''
   source.value = null
+  sourceRequestId.value = null
+  requestAttachmentCount.value = 0
   inheritedNames.value = []
   inheritedOpen.value = false
   resetRefs() // 참조를 비우고 추가 폼을 접는다
@@ -540,9 +546,45 @@ async function prefillFromTask() {
     $q.notify({ type: 'warning', message: '원래 작업의 대상 레포를 카탈로그에서 찾을 수 없습니다 — 레포를 골라 주세요' })
   }
 }
+// 요청 게시판에서 넘어온 경우(`/tasks?fromRequest={id}`, 스펙 2026-11-19 §5.4) — 개발 요청의 "작업으로 등록".
+// 앞의 둘과 같은 원리(마운트 뒤에만, 무엇보다 먼저 쿼리를 뺀다). fromQuestion·fromTask가 같이 있으면 그쪽이 먼저다.
+// 요청을 읽어 `convertible`이 아니면 알림만 띄우고 창을 열지 않는다. 작업 타입은 버그일 때만 미리 고른다.
+async function prefillFromRequest() {
+  const raw = route.query?.fromRequest
+  if (raw == null || route.query?.fromQuestion != null || route.query?.fromTask != null) return
+  await navigateTo({ path: '/tasks', query: {} }, { replace: true })
+  const id = Number(Array.isArray(raw) ? raw[0] : raw)
+  if (!Number.isInteger(id) || id <= 0) return
+  let r: RequestDetail
+  try {
+    r = await useApi<RequestDetail>(`/api/requests/${id}`)
+  } catch (e) {
+    $q.notify({
+      type: 'negative',
+      message: (e as { data?: { message?: string } })?.data?.message ?? '요청을 불러오지 못했습니다',
+    })
+    return
+  }
+  if (!r.convertible) {
+    $q.notify({ type: 'warning', message: '작업으로 등록할 수 없는 요청입니다' })
+    return
+  }
+  await openCreate()
+  const p = taskPrefillFromRequest(r, repoCatalog.value)
+  draft.title = p.title
+  draft.description = p.description
+  draft.taskType = p.taskType
+  sourceRequestId.value = id
+  requestAttachmentCount.value = p.attachmentCount
+  if (p.repoCatalogId != null) {
+    draft.repoCatalogId = p.repoCatalogId
+    onRepoSelected(p.repoCatalogId, undefined, '요청')
+  }
+}
 onMounted(() => {
   prefillFromQuestion()
   prefillFromTask()
+  prefillFromRequest()
 })
 
 const canSubmit = computed(
@@ -567,6 +609,8 @@ async function submit() {
     ...(draft.refRepos.length > 0 ? { refRepos: toInputs(draft.refRepos) } : {}),
     // 출처 질문도 있을 때만 — 서버가 그 질문의 대화 전문을 작업 첨부로 붙인다 (스펙 2026-10-24 §7.2)
     ...(source.value ? { sourceQuestionId: source.value.id } : {}),
+    // 출처 요청도 있을 때만 — 서버가 요청의 첨부를 작업에 복사하고 요청을 작업에 연결한다 (스펙 2026-11-19 §5.4)
+    ...(sourceRequestId.value != null ? { sourceRequestId: sourceRequestId.value } : {}),
   }
   if (draftFiles.value.length > 0) {
     const err = validateFiles(draftFiles.value)
@@ -577,17 +621,23 @@ async function submit() {
   }
   submitting.value = true
   try {
+    let created: { id?: number } | null = null
     if (draftFiles.value.length > 0) {
       // Content-Type을 명시하지 않는다 — $fetch가 FormData boundary를 스스로 설정 (스펙 §8.1)
       const form = new FormData()
       form.append('meta', new Blob([JSON.stringify(meta)], { type: 'application/json' }))
       for (const f of draftFiles.value) form.append('files', f, f.name)
-      await useApi('/api/tasks', { method: 'POST', body: form })
+      created = await useApi<{ id?: number }>('/api/tasks', { method: 'POST', body: form })
     } else {
-      await useApi('/api/tasks', { method: 'POST', body: meta })
+      created = await useApi<{ id?: number }>('/api/tasks', { method: 'POST', body: meta })
     }
     $q.notify({ type: 'positive', message: '작업 등록 완료' })
     showCreate.value = false
+    // 요청에서 등록했으면 새 작업 상세로 — 등록자는 요청자라 관리자는 상세를 그대로 열 수 있다
+    if (sourceRequestId.value != null && created?.id) {
+      navigateTo(`/tasks/${created.id}`)
+      return
+    }
     refresh()
   } catch (e: any) {
     const msg = e?.data?.message ?? failMsg('등록')
@@ -924,6 +974,12 @@ const fullscreen = useFullscreenDialog()
               <ul v-if="inheritedOpen" class="q-my-none q-pl-md">
                 <li v-for="(n, i) in inheritedNames" :key="i" data-test="inherited-attachment-name">{{ n }}</li>
               </ul>
+            </div>
+          </q-card-section>
+          <!-- 출처 요청 안내 (스펙 2026-11-19 §5.4) — 첨부가 있을 때만 -->
+          <q-card-section v-if="sourceRequestId != null && requestAttachmentCount > 0" class="q-py-none">
+            <div class="text-caption" data-test="request-attachments-notice">
+              요청 첨부 {{ requestAttachmentCount }}개가 함께 등록됩니다
             </div>
           </q-card-section>
           <q-card-section class="q-gutter-md">

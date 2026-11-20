@@ -11,4 +11,9 @@ public interface RequestCommentRepository extends JpaRepository<RequestComment, 
 
     /** 취소 가드: 관리자 답글(COMMENT)이 하나라도 있으면 접수 상태여도 취소할 수 없다. */
     boolean existsByRequestIdAndKindAndAuthorAdminTrue(Long requestId, RequestCommentKind kind);
+
+    /** 개발 요청 취소 가드: 작성자가 아닌 사람의 답글이 하나라도 있으면 취소할 수 없다. */
+    boolean existsByRequestIdAndKindAndAuthorIdNot(Long requestId, RequestCommentKind kind, String authorId);
+
+    long countByRequestIdAndKind(Long requestId, RequestCommentKind kind);
 }

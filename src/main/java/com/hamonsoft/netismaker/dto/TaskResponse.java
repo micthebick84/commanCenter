@@ -72,6 +72,8 @@ public record TaskResponse(
         List<InterviewResponse.RefRepoView> refRepos,
         /** 이 작업을 등록한 질문 세션 id. 질문에서 등록하지 않았으면 null. */
         Long sourceQuestionId,
+        /** 이 작업을 등록한 요청 게시판 개발 요청 id (스펙 2026-11-19 §5.4). 요청에서 등록하지 않았으면 null(키는 항상 나간다). */
+        Long sourceRequestId,
         /** 수정 요청 회차 현황 (스펙 2026-11-03 §6). 작업 상세 응답에서만 non-null — 목록·다른 엔드포인트는 null. */
         FixView fix,
         /** 작업 타입 NEW_FEATURE|FEATURE_CHANGE|BUG_FIX|DB_WORK (스펙 2026-11-03 §4.2). 타입 없음은 null 그대로 나간다. */
@@ -271,6 +273,7 @@ public record TaskResponse(
                 r.implementationTimeoutMinutes(),
                 r.refRepos(),
                 r.sourceQuestionId(),
+                r.sourceRequestId(),
                 r.fix(),
                 r.taskType(),
                 r.interviewSuperpowersEnabled(),
@@ -285,7 +288,7 @@ public record TaskResponse(
                 model, effort, designRequested, analysis, design, implementation, deployment, interviewSessionId,
                 attachments, stageUsage, totalCostUsd, totalTokens, close, repoCatalogId, dbConnectionIds,
                 implementationMode, implementationAttempt, claimedAt, implementationTimeoutMinutes,
-                refViews(refs), sourceQuestionId, fix, taskType, interviewSuperpowersEnabled, implementationMockupIds);
+                refViews(refs), sourceQuestionId, sourceRequestId, fix, taskType, interviewSuperpowersEnabled, implementationMockupIds);
     }
 
     /** 수정 요청 회차 현황만 바꾼 사본 — 작업 상세 응답이 싣는다(목록은 null). */
@@ -295,7 +298,7 @@ public record TaskResponse(
                 model, effort, designRequested, analysis, design, implementation, deployment, interviewSessionId,
                 attachments, stageUsage, totalCostUsd, totalTokens, close, repoCatalogId, dbConnectionIds,
                 implementationMode, implementationAttempt, claimedAt, implementationTimeoutMinutes,
-                refRepos, sourceQuestionId, fixView, taskType, interviewSuperpowersEnabled, implementationMockupIds);
+                refRepos, sourceQuestionId, sourceRequestId, fixView, taskType, interviewSuperpowersEnabled, implementationMockupIds);
     }
 
     /**
@@ -308,7 +311,7 @@ public record TaskResponse(
                 model, effort, designRequested, analysis, design, implementation, deployment, interviewSessionId,
                 attachments, stageUsage, totalCostUsd, totalTokens, close, repoCatalogId, dbConnectionIds,
                 implementationMode, implementationAttempt, claimedAt, implementationTimeoutMinutes,
-                refRepos, sourceQuestionId, fix, taskType, enabled, implementationMockupIds);
+                refRepos, sourceQuestionId, sourceRequestId, fix, taskType, enabled, implementationMockupIds);
     }
 
     /** JSONB로 읽은 List<Long>은 Integer를 담아 올 수 있다(코드베이스 선례) — Number로 받아 Long으로 바꾼다. */
@@ -338,7 +341,7 @@ public record TaskResponse(
                 model, effort, designRequested, analysis, design, implementation, deployment, interviewSessionId,
                 attachments, stageUsage, totalCostUsd, totalTokens, close, repoCatalogId, dbConnectionIds,
                 implementationMode, implementationAttempt, claimedAt, implementationTimeoutMinutes,
-                refRepos, sourceQuestionId, fix, taskType, interviewSuperpowersEnabled, implementationMockupIds);
+                refRepos, sourceQuestionId, sourceRequestId, fix, taskType, interviewSuperpowersEnabled, implementationMockupIds);
     }
 
     private static TaskResponse build(Task t, TaskAnalysis a, TaskDesign d, Long interviewSessionId,
@@ -418,6 +421,7 @@ public record TaskResponse(
                 t.getImplementationTimeoutMinutes(),
                 refViews(t.getRefRepos()),
                 t.getSourceQuestionId(),
+                t.getSourceRequestId(),
                 null,
                 t.getTaskType() == null ? null : t.getTaskType().name(),
                 null,

@@ -1,12 +1,14 @@
 package com.hamonsoft.netismaker.service;
 
 import com.hamonsoft.netismaker.repository.InterviewSessionRepository;
+import com.hamonsoft.netismaker.repository.RequestPostRepository;
 import com.hamonsoft.netismaker.repository.TaskRepository;
 import com.hamonsoft.netismaker.service.AttachmentCleanupPlanner.Decision;
 import com.hamonsoft.netismaker.service.AttachmentCleanupPlanner.Owner;
 import com.hamonsoft.netismaker.service.AttachmentCleanupPlanner.OwnerDir;
 import com.hamonsoft.netismaker.service.AttachmentCleanupPlanner.Owners;
 import com.hamonsoft.netismaker.service.AttachmentCleanupPlanner.Policy;
+import com.hamonsoft.netismaker.service.AttachmentCleanupPlanner.RequestRow;
 import com.hamonsoft.netismaker.service.AttachmentCleanupPlanner.SessionRow;
 import com.hamonsoft.netismaker.service.AttachmentCleanupPlanner.TaskRow;
 import com.hamonsoft.netismaker.service.AttachmentCleanupPlanner.Verdict;
@@ -29,7 +31,7 @@ import java.util.stream.Collectors;
 
 /**
  * 첨부 디렉터리 보존 기간 정리 (api 프로파일). 매일 cron(기본 03:30)에 app.attachment.dir 바로 아래의
- * task-{id}/ · question-{sid}/ 를 스캔 → 소유 행 상태를 DB에서 일괄 조회 → AttachmentCleanupPlanner로 판정 → 삭제.
+ * task-{id}/ · question-{sid}/ · request-{id}/ 를 스캔 → 소유 행 상태를 DB에서 일괄 조회 → AttachmentCleanupPlanner로 판정 → 삭제.
  *
  *  - 판정을 전부 끝낸 뒤에 지운다: DB 조회가 실패하면 아무것도 지우지 않고 이번 주기를 건너뛴다(fail-closed).
  *  - DB 첨부 행(task_attachment/question_attachment)은 감사용으로 남긴다 — 파일만 지운다.
@@ -48,17 +50,20 @@ public class AttachmentCleanupJob {
     private final AttachmentStorage storage;
     private final TaskRepository taskRepo;
     private final InterviewSessionRepository sessionRepo;
+    private final RequestPostRepository requestRepo;
     private final boolean enabled;
     private final Policy policy;
 
     public AttachmentCleanupJob(AttachmentStorage storage,
                                 TaskRepository taskRepo,
                                 InterviewSessionRepository sessionRepo,
+                                RequestPostRepository requestRepo,
                                 @Value("${app.attachment.cleanup.enabled:true}") boolean enabled,
                                 @Value("${app.attachment.cleanup.task-deleted-retention-days:30}") int taskDeletedRetentionDays,
                                 @Value("${app.attachment.cleanup.question-closed-retention-days:90}") int questionClosedRetentionDays,
+                                @Value("${app.attachment.cleanup.request-closed-retention-days:90}") int requestClosedRetentionDays,
                                 @Value("${app.attachment.cleanup.orphan-grace-hours:24}") int orphanGraceHours) {
-        if (taskDeletedRetentionDays < 0 || questionClosedRetentionDays < 0) {
+        if (taskDeletedRetentionDays < 0 || questionClosedRetentionDays < 0 || requestClosedRetentionDays < 0) {
             throw new IllegalArgumentException("app.attachment.cleanup.*-retention-days는 0 이상이어야 합니다");
         }
         // 유예 0이면 등록 트랜잭션이 파일을 쓰는 중(행 미커밋)인 디렉터리를 고아로 볼 수 있다.
@@ -68,15 +73,16 @@ public class AttachmentCleanupJob {
         this.storage = storage;
         this.taskRepo = taskRepo;
         this.sessionRepo = sessionRepo;
+        this.requestRepo = requestRepo;
         this.enabled = enabled;
         this.policy = new Policy(Duration.ofDays(taskDeletedRetentionDays),
-                Duration.ofDays(questionClosedRetentionDays), Duration.ofHours(orphanGraceHours));
+                Duration.ofDays(questionClosedRetentionDays), Duration.ofDays(requestClosedRetentionDays), Duration.ofHours(orphanGraceHours));
     }
 
     /** 한 주기 결과 — 요약 로그와 테스트 검증용. */
-    public record Summary(int deletedTask, int deletedQuestion, int deletedOrphan,
+    public record Summary(int deletedTask, int deletedQuestion, int deletedRequest, int deletedOrphan,
                           long freedBytes, int kept, int skipped, int failed) {
-        public int deleted() { return deletedTask + deletedQuestion + deletedOrphan; }
+        public int deleted() { return deletedTask + deletedQuestion + deletedRequest + deletedOrphan; }
     }
 
     @Scheduled(cron = "${app.attachment.cleanup.cron:0 30 3 * * *}")
@@ -94,11 +100,11 @@ public class AttachmentCleanupJob {
         AttachmentStorage.OwnerDirScan scan = storage.scanOwnerDirectories();
         if (scan.dirs().isEmpty()) {
             log.debug("첨부 정리: 대상 디렉터리 없음 (건너뜀 {}개)", scan.skipped());
-            return new Summary(0, 0, 0, 0, 0, scan.skipped(), 0);
+            return new Summary(0, 0, 0, 0, 0, 0, scan.skipped(), 0);
         }
         List<Decision> decisions = AttachmentCleanupPlanner.plan(scan.dirs(), lookupOwners(scan.dirs()), now, policy);
 
-        int deletedTask = 0, deletedQuestion = 0, deletedOrphan = 0, kept = 0, failed = 0;
+        int deletedTask = 0, deletedQuestion = 0, deletedRequest = 0, deletedOrphan = 0, kept = 0, failed = 0;
         long freed = 0;
         // 유지는 디렉터리별로 찍지 않고 사유별 개수만 요약에 싣는다 — 패키지 로그 레벨이 DEBUG라 작업 수만큼 줄이 쌓인다.
         Map<Verdict, Integer> keptBy = new EnumMap<>(Verdict.class);
@@ -114,6 +120,7 @@ public class AttachmentCleanupJob {
                 switch (d.verdict()) {
                     case DELETE_TASK_DELETED -> deletedTask++;
                     case DELETE_QUESTION_CLOSED -> deletedQuestion++;
+                    case DELETE_REQUEST_CLOSED -> deletedRequest++;
                     case DELETE_ORPHAN -> deletedOrphan++;
                     default -> { }
                 }
@@ -123,9 +130,9 @@ public class AttachmentCleanupJob {
                 log.warn("첨부 정리: 삭제 실패 {} — 다음 주기에 재시도", d.dir().name(), e);
             }
         }
-        Summary s = new Summary(deletedTask, deletedQuestion, deletedOrphan, freed, kept, scan.skipped(), failed);
-        log.info("첨부 정리 완료: 삭제 {}개(삭제된 작업 {}, 종료된 질문 {}, 고아 {}), 해제 {}, 유지 {}개{}, 건너뜀 {}개, 실패 {}개",
-                s.deleted(), deletedTask, deletedQuestion, deletedOrphan, humanBytes(freed), kept, breakdown(keptBy),
+        Summary s = new Summary(deletedTask, deletedQuestion, deletedRequest, deletedOrphan, freed, kept, scan.skipped(), failed);
+        log.info("첨부 정리 완료: 삭제 {}개(삭제된 작업 {}, 종료된 질문 {}, 닫힌 요청 {}, 고아 {}), 해제 {}, 유지 {}개{}, 건너뜀 {}개, 실패 {}개",
+                s.deleted(), deletedTask, deletedQuestion, deletedRequest, deletedOrphan, humanBytes(freed), kept, breakdown(keptBy),
                 s.skipped(), failed);
         return s;
     }
@@ -134,6 +141,7 @@ public class AttachmentCleanupJob {
     private Owners lookupOwners(List<OwnerDir> dirs) {
         List<Long> taskIds = idsOf(dirs, Owner.TASK);
         List<Long> sessionIds = idsOf(dirs, Owner.QUESTION);
+        List<Long> requestIds = idsOf(dirs, Owner.REQUEST);
 
         Map<Long, TaskRow> tasks = new HashMap<>();
         for (List<Long> chunk : chunks(taskIds)) {
@@ -147,9 +155,16 @@ public class AttachmentCleanupJob {
                 sessions.put(r.getId(), new SessionRow(r.getKind(), r.getStatus(), r.getLastActivityAt()));
             }
         }
+        Map<Long, RequestRow> requests = new HashMap<>();
+        for (List<Long> chunk : chunks(requestIds)) {
+            for (RequestPostRepository.AttachmentOwnerState r : requestRepo.findAttachmentOwnerStates(chunk)) {
+                requests.put(r.getId(), new RequestRow(r.getStatus(), r.getUpdatedAt()));
+            }
+        }
         Long maxTaskId = taskIds.isEmpty() ? null : taskRepo.findMaxId();
         Long maxSessionId = sessionIds.isEmpty() ? null : sessionRepo.findMaxId();
-        return new Owners(tasks, maxTaskId, sessions, maxSessionId);
+        Long maxRequestId = requestIds.isEmpty() ? null : requestRepo.findMaxId();
+        return new Owners(tasks, maxTaskId, sessions, maxSessionId, requests, maxRequestId);
     }
 
     private static List<Long> idsOf(List<OwnerDir> dirs, Owner owner) {

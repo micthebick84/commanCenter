@@ -63,7 +63,9 @@ const task = (id, status, statusLabel, extra = {}) => ({
   failureReason: null, mcpsExtra: [], envVars: [], createdAt: NOW, updatedAt: NOW, model: 'claude-opus-5-5',
   effort: 'medium', designRequested: false, analysis: null, design: null, implementation: null, deployment: null, close: null,
   interviewSessionId: null, attachments: [], stageUsage: [], totalCostUsd: null, totalTokens: null,
-  implementationMode: 'DIRECT', implementationAttempt: 1, claimedAt: null, implementationTimeoutMinutes: null, ...extra,
+  implementationMode: 'DIRECT', implementationAttempt: 1, claimedAt: null, implementationTimeoutMinutes: null,
+  sourceRequestId: null, // 요청 게시판에서 이어진 작업이 아니면 null — 출처 요청 줄은 값이 있을 때만 그린다
+  ...extra,
 })
 // 읽기 전용 참조 repo — 커밋 고정·아직 안 받음·실패 각 1개: 질문 대화 화면과 작업 상세의 칩 줄이 세 상태(고정 칩의 툴팁·대기 안내·⚠)를 모두 그린다
 const REF_REPOS = [
@@ -141,6 +143,10 @@ const REQUESTS = [{ id: 1, kind: 'REPO', kindLabel: 'REPO 추가', title: '스�
 const REQUEST_DETAIL = {
   ...REQUESTS[0], content: '스모크 **본문**', repoHint: null, repoCatalogId: null, repoAlias: null, repoGitUrl: null,
   repoCatalogDeleted: false, editable: true,
+  // 개발 요청 칸(스펙 2026-11-19) — 상세·목록이 유형·우선순위·마감·대상 레포·첨부·작업 연결을 그린다
+  issueType: 'BUG', issueTypeLabel: '버그', priority: 'NORMAL', priorityLabel: '● 보통', dueDate: null,
+  targetRepoCatalogId: null, targetRepoAlias: null, taskId: null, taskStatusLabel: null,
+  attachments: [], cancellable: true, convertible: false, attachmentCount: 0, commentCount: 2,
   comments: [
     { id: 1, kind: 'COMMENT', authorId: 'admin', authorAdmin: true, body: '검토 **시작**', createdAt: NOW },
     { id: 2, kind: 'SYSTEM', authorId: 'admin', authorAdmin: true, body: '상태가 검토중으로 바뀌었습니다', createdAt: NOW },
@@ -204,7 +210,7 @@ function apiResponse(path) {
   if (path === '/api/workers/health') return WORKERS
   if (path === '/api/db-connections') return []
   if (path === '/api/admin/requests/summary') return { received: 1, attention: 1 }
-  if (path === '/api/requests') return REQUESTS
+  if (path === '/api/requests') return REQUESTS // pathname만 비교하므로 ?scope=dev 같은 쿼리 변형도 같은 목으로 답한다
   if (/^\/api\/requests\/\d+$/.test(path)) return REQUEST_DETAIL
   return undefined
 }

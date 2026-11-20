@@ -236,19 +236,24 @@ describe('RepoRouteCard (스펙 2026-11-20 §5.3·§5.4)', () => {
       branches: { 1: () => b1.promise, 2: () => Promise.resolve(branchRes(['main', 'dev2'], 'dev2')) },
       db: { 1: () => d1.promise, 2: dbList([conn(20, 'REPO', { repoCatalogId: 2 })]) },
     })
-    const w = await mountCard(route({ dbNeeded: true }))
+    // 카탈로그 기본 브랜치가 없어야 조회 응답의 기본 브랜치가 그대로 드러난다(있으면 initialBranch가 늘 그 값을 고른다).
+    const noDefault = catalog.map((e) => (e.id === 1 || e.id === 2 ? { ...e, defaultBranch: null } : e))
+    const w = await mountCard(route({ dbNeeded: true }), {}, noDefault)
     await w.find('[data-test="route-chip-2"]').trigger('click')
     await flushPromises()
-    expect((w.vm as any).branch).toBe('main') // 카탈로그 기본 브랜치
+    const options = () => w.findComponent({ name: 'QSelect' }).props('options')
+    expect((w.vm as any).branch).toBe('dev2')
+    expect(options()).toEqual(['main', 'dev2'])
     expect((w.vm as any).dbIds).toEqual([20])
     b1.resolve(branchRes(['old'], 'old'))
     d1.resolve({ enabled: true, items: [conn(10, 'REPO')] })
     await flushPromises()
     expect((w.vm as any).selectedId).toBe(2)
-    expect((w.vm as any).branch).toBe('main')
+    expect((w.vm as any).branch).toBe('dev2')
+    expect(options()).toEqual(['main', 'dev2'])
     expect((w.vm as any).dbIds).toEqual([20])
     await startBtn(w).trigger('click')
-    expect(w.emitted('start')![0][0]).toEqual({ repoCatalogId: 2, githubBranch: 'main', dbConnectionIds: [20] })
+    expect(w.emitted('start')![0][0]).toEqual({ repoCatalogId: 2, githubBranch: 'dev2', dbConnectionIds: [20] })
     w.unmount()
   })
 

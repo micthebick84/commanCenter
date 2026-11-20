@@ -23,7 +23,7 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 /**
- * REPO 추가 요청 처리: 사내 GitLab 후보 추측·검색, 클릭 한 번으로 카탈로그 등록(스펙 2026-10-19).
+ * 사이트 추가(REPO) 요청 처리: 사내 GitLab 후보 추측·검색, 클릭 한 번으로 카탈로그 등록(스펙 2026-10-19).
  *
  * addRepo는 일부러 트랜잭션을 걸지 않는다 — GitLab HTTP 호출이 DB 트랜잭션(행 락) 안에서 일어나면 안 되고,
  * 실제 완료 처리는 {@link RequestBoardService#completeRepoRequest}가 자기 트랜잭션에서 행을 잠그고 다시 검사한다.

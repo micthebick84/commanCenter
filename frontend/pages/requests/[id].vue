@@ -94,8 +94,8 @@ async function downloadReqAttachment(a: RequestAttachmentView) {
   if (!req.value || a.expired) return
   try {
     await downloadAttachment(`/api/requests/${req.value.id}/attachments/${a.id}`, a.name)
-  } catch (e: any) {
-    $q.notify({ type: 'negative', message: e?.message ?? failMsg('다운로드') })
+  } catch (e: unknown) {
+    $q.notify({ type: 'negative', message: e instanceof Error && e.message ? e.message : failMsg('다운로드') })
   }
 }
 
@@ -318,7 +318,7 @@ async function confirmReject() {
 
       <!-- 연결 작업 -->
       <div v-if="req.taskId != null" class="q-mb-md text-body2">
-        <a v-if="canOpenTask" :href="`/tasks/${req.taskId}`" @click.prevent="openTask" data-test="request-task-link">→ 작업 #{{ req.taskId }} · {{ req.taskStatusLabel }}</a>
+        <a v-if="canOpenTask" :href="`/tasks/${req.taskId}`" data-test="request-task-link" @click.prevent="openTask">→ 작업 #{{ req.taskId }} · {{ req.taskStatusLabel }}</a>
         <span v-else data-test="request-task-link">→ 작업 #{{ req.taskId }} · {{ req.taskStatusLabel }}</span>
       </div>
 

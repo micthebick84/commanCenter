@@ -15,7 +15,7 @@ const entry = (id: number, alias: string, over: Partial<RouteCatalogEntry> = {})
   defaultBranch: 'main',
   ...over,
 })
-const catalog = [entry(1, '강원대시보드'), entry(2, 'Netis7.0'), entry(3, '사천시청'), entry(4, '우리은행'), entry(5, 'Netis6.8')]
+const catalog = [entry(1, '강원대시보드'), entry(2, 'Netis7.0'), entry(3, '시험사이트'), entry(4, '우리은행'), entry(5, 'Netis6.8')]
 
 const route = (over: Partial<QuestionRoute> = {}): QuestionRoute => ({
   routeId: 9,

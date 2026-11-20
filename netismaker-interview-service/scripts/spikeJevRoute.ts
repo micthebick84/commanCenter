@@ -6,6 +6,7 @@
  *   cd netismaker-interview-service
  *   npx tsx scripts/spikeJevRoute.ts --dry-run   # 입력 검증 + 요청 바디 두 개 출력, 네트워크·키 없음
  *   npx tsx scripts/spikeJevRoute.ts             # 실제 호출(키 필요), 두 변형(별칭만 / 키워드 포함)을 차례로 잰다
+ *     옵션: --limit=N(앞 N건만) --variant=alias|hints --shape(첫 응답 필드 구조 출력)
  * 입력: %USERPROFILE%\netis-maker\jev-route-spike.json  (repos[{id,alias,hint}], cases[{q,kind,expect}]) — 고객사 이름이 있어 커밋 금지
  * 키:   %USERPROFILE%\netis-maker\typesafe.env 의 TYPESAFE_API_KEY=… 한 줄. 출력하지 않는다.
  * 판정: 임계값은 스펙 §6.2 시작값(mentions·listed-yes ≥ 0.7, listed-no ≤ 0.3, 1위 ≥ 0.5, needs_db ≥ 0.6).
@@ -46,6 +47,9 @@ const MIN_DB = 8;
 const inputPath = join(homedir(), 'netis-maker', 'jev-route-spike.json');
 const keyPath = join(homedir(), 'netis-maker', 'typesafe.env');
 const dryRun = process.argv.includes('--dry-run');
+const limitArg = process.argv.find((a) => a.startsWith('--limit='));
+const limit = limitArg ? Number(limitArg.slice('--limit='.length)) : undefined;
+const showShape = process.argv.includes('--shape'); // 첫 응답의 필드 이름(값 제외)만 출력
 
 function loadInput(): Input {
   const raw = JSON.parse(readFileSync(inputPath, 'utf8')) as Input;
@@ -130,6 +134,13 @@ interface Answer {
   model?: string;
 }
 
+let shapeShown = false;
+function shapeOf(v: unknown): unknown {
+  if (Array.isArray(v)) return v.length ? [shapeOf(v[0])] : [];
+  if (v && typeof v === 'object') return Object.fromEntries(Object.entries(v).map(([k, x]) => [k, k === 'probabilities' ? { 'r<id>': 'number' } : shapeOf(x)]));
+  return typeof v;
+}
+
 async function ask(key: string, body: unknown): Promise<Answer> {
   const started = Date.now();
   for (let attempt = 0; ; attempt++) {
@@ -144,7 +155,9 @@ async function ask(key: string, body: unknown): Promise<Answer> {
       continue;
     }
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const j = (await res.json()) as {
+    const rawJson: unknown = await res.json();
+    if (showShape && !shapeShown) { shapeShown = true; console.log('응답 필드 구조:', JSON.stringify(shapeOf(rawJson))); }
+    const j = rawJson as {
       model?: string;
       answers: {
         repo: { probabilities: Record<string, number> };
@@ -170,11 +183,12 @@ async function ask(key: string, body: unknown): Promise<Answer> {
   }
 }
 
-function decide(a: Answer): State {
-  if (a.mentions >= T.mentions && a.listed >= T.listedYes && a.topP >= T.top) return 'CONFIDENT';
-  if (a.mentions >= T.mentions && a.listed <= T.listedNo) return 'NO_MATCH';
+function decideWith(a: Answer, t: typeof T): State {
+  if (a.mentions >= t.mentions && a.listed >= t.listedYes && a.topP >= t.top) return 'CONFIDENT';
+  if (a.mentions >= t.mentions && a.listed <= t.listedNo) return 'NO_MATCH';
   return 'AMBIGUOUS';
 }
+const decide = (a: Answer): State => decideWith(a, T);
 
 const pct = (n: number, d: number): string => (d === 0 ? '-' : `${((100 * n) / d).toFixed(1)}% (${n}/${d})`);
 
@@ -189,6 +203,7 @@ async function runVariant(key: string, input: Input, withHints: boolean): Promis
   const wrong: string[] = [];
   let seenModel: string | undefined;
 
+  const done: Array<{ c: Case; a: Answer }> = [];
   for (const c of input.cases) {
     let a: Answer;
     try {
@@ -199,6 +214,7 @@ async function runVariant(key: string, input: Input, withHints: boolean): Promis
       continue;
     }
     seenModel = a.model ?? seenModel;
+    done.push({ c, a });
     answered += 1;
     msSum += a.ms;
     const st = decide(a);
@@ -227,6 +243,21 @@ async function runVariant(key: string, input: Input, withHints: boolean): Promis
     console.log(`none 질문 repo 1위 확률: 최소 ${s[0].toFixed(3)}, 중앙 ${med.toFixed(3)}, 최대 ${s[s.length - 1].toFixed(3)}`);
   }
   console.log(`평균 응답 시간: ${answered === 0 ? '-' : Math.round(msSum / answered)}ms`);
+  // 참고: 임계값을 바꿨을 때 상태 적중이 얼마나 달라지는지(권고 아님)
+  const alt: Array<[string, typeof T]> = [
+    ['기본', T],
+    ['top 0.4', { ...T, top: 0.4 }],
+    ['top 0.6', { ...T, top: 0.6 }],
+    ['top 0.7', { ...T, top: 0.7 }],
+    ['listedYes 0.5', { ...T, listedYes: 0.5 }],
+    ['listedYes 0.85', { ...T, listedYes: 0.85 }],
+    ['listedNo 0.15', { ...T, listedNo: 0.15 }],
+    ['listedNo 0.5', { ...T, listedNo: 0.5 }],
+  ];
+  for (const [name, t] of alt) {
+    const ok = done.filter(({ c, a }) => decideWith(a, t) === c.expect.state).length;
+    console.log(`  [임계값 관찰] ${name}: 상태 적중 ${pct(ok, done.length)}`);
+  }
   console.log(`틀린 사례 ${wrong.length}건`);
   for (const w of wrong) console.log(`  - ${w}`);
 }
@@ -252,8 +283,10 @@ async function main(): Promise<void> {
     console.error(`키 파일이 없거나 TYPESAFE_API_KEY가 비어 있습니다: ${keyPath}`);
     process.exit(2);
   }
-  await runVariant(key, input, false);
-  await runVariant(key, input, true);
+  const run: Input = limit ? { ...input, cases: input.cases.slice(0, limit) } : input;
+  const only = process.argv.find((a) => a.startsWith('--variant='))?.slice('--variant='.length);
+  if (only !== 'hints') await runVariant(key, run, false);
+  if (only !== 'alias') await runVariant(key, run, true);
 }
 
 main().catch((e) => {

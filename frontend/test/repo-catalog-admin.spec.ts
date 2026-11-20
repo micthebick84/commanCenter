@@ -76,6 +76,7 @@ describe('admin/repo-catalog', () => {
         gitUrl: 'https://github.com/micthebick84/netis7.0.git',
         defaultBranch: null,
         description: null,
+        routeHint: '',
         enabled: true,
         artifactEnabled: false,
         artifactPath: null,
@@ -433,6 +434,82 @@ describe('admin/repo-catalog', () => {
     setInput('[data-test="form-db-script-dir"]', 'db/changes')
     await flushPromises()
     expect(await submitAndBody()).toMatchObject({ dbMigrationManaged: true, dbScriptDir: 'db/changes' })
+    w.unmount()
+  })
+
+  // 질문 레포 추천 키워드 (스펙 2026-11-20 question-repo-route §7)
+  const hintRow = { ...noteRow, id: 31, alias: '추천 레포', routeHint: '동부병원 6.8 로그인' }
+  const HINT_TEXT = '질문에서 이 레포를 찾을 때 쓰는 말(고객사·사이트 별칭, 버전, 주요 화면). 외부 추천 서비스로 전송되니 사람 이름·접속정보는 적지 마세요.'
+
+  it('폼에 추천 키워드 칸과 외부 전송 안내 문구가 있다', async () => {
+    const w = await mountPage([])
+    await w.find('[data-test="open-create"]').trigger('click')
+    await flushPromises()
+    const el = document.querySelector('[data-test="route-hint-input"]') as HTMLTextAreaElement
+    expect(el).not.toBeNull()
+    expect(el.tagName).toBe('TEXTAREA')
+    expect(document.body.textContent).toContain('추천 키워드 (선택)')
+    expect(document.body.textContent).toContain(HINT_TEXT)
+    w.unmount()
+  })
+
+  it('수정 창을 열면 기존 추천 키워드가 채워진다', async () => {
+    const w = await mountPage([hintRow])
+    await openEditOf(w)
+    expect((document.querySelector('[data-test="route-hint-input"]') as HTMLTextAreaElement).value).toBe('동부병원 6.8 로그인')
+    w.unmount()
+  })
+
+  it('저장 바디에 routeHint를 싣는다 — 비우면 빈 문자열', async () => {
+    const w = await mountPage([hintRow])
+    await openEditOf(w)
+    setInput('[data-test="route-hint-input"]', '새 키워드')
+    await flushPromises()
+    expect(await submitAndBody()).toMatchObject({ routeHint: '새 키워드' })
+    w.unmount()
+
+    const w2 = await mountPage([hintRow])
+    await openEditOf(w2)
+    setInput('[data-test="route-hint-input"]', '')
+    await flushPromises()
+    expect(await submitAndBody()).toMatchObject({ routeHint: '' })
+    w2.unmount()
+
+    const w3 = await mountPage([])
+    await w3.find('[data-test="open-create"]').trigger('click')
+    await flushPromises()
+    await fillRequired()
+    expect(await submitAndBody()).toMatchObject({ routeHint: '' })
+    w3.unmount()
+  })
+
+  it('켜기/끄기 토글 바디에는 routeHint가 없다', async () => {
+    const w = await mountPage([hintRow])
+    useApiMock.mockClear()
+    useApiMock.mockResolvedValueOnce({})
+    useApiMock.mockResolvedValueOnce([])
+    await w.find('.q-toggle').trigger('click')
+    await flushPromises()
+    const put = useApiMock.mock.calls.find((c: any[]) => c[1]?.method === 'PUT')!
+    expect(put[1].body).not.toHaveProperty('routeHint')
+    w.unmount()
+  })
+
+  it('추천 키워드는 500자를 넘길 수 없다', async () => {
+    const w = await mountPage([])
+    await w.find('[data-test="open-create"]').trigger('click')
+    await flushPromises()
+    const el = document.querySelector('[data-test="route-hint-input"]') as HTMLTextAreaElement
+    expect(el.getAttribute('maxlength')).toBe('500')
+    w.unmount()
+  })
+
+  it('추천 키워드도 목록 검색 대상이다', async () => {
+    const w = await mountPage([hintRow, { ...noteRow, id: 32, alias: '다른 레포', routeHint: null }])
+    await w.find('[data-test="catalog-search"]').setValue('로그인')
+    await flushPromises()
+    expect(w.text()).toContain('추천 레포')
+    expect(w.text()).not.toContain('다른 레포')
     w.unmount()
   })
 

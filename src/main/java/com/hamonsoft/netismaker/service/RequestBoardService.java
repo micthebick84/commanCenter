@@ -12,6 +12,7 @@ import com.hamonsoft.netismaker.entity.RequestPost;
 import com.hamonsoft.netismaker.entity.RequestPriority;
 import com.hamonsoft.netismaker.entity.RequestStatus;
 import com.hamonsoft.netismaker.entity.Task;
+import com.hamonsoft.netismaker.entity.TaskStatus;
 import com.hamonsoft.netismaker.repository.RepoCatalogRepository;
 import com.hamonsoft.netismaker.repository.RequestAttachmentRepository;
 import com.hamonsoft.netismaker.repository.RequestCommentRepository;
@@ -335,13 +336,13 @@ public class RequestBoardService {
         if (next == RequestStatus.REJECTED && reason.isEmpty()) {
             throw new TaskException(HttpStatus.BAD_REQUEST, "반려 사유를 입력하세요");
         }
-        // 되돌리기 가드 (스펙 2026-11-19 §5.4): 작업이 연결된 처리완료 요청은 연결 작업이 소프트 삭제(또는 행이 없음)됐을
-        // 때만 다시 열 수 있고, 그때 연결을 끊는다.
+        // 되돌리기 가드 (스펙 2026-11-19 §5.4): 작업이 연결된 처리완료 요청은 연결 작업이 취소됨·소프트 삭제(또는 행이 없음)일
+        // 때만 다시 열 수 있고, 그때 연결을 끊는다. 취소됨 포함은 2026-11-20 — 잘못 넘긴 작업을 취소만 해도 요청이 풀리게.
         Long unlinkedTaskId = null;
         if (current == RequestStatus.DONE && post.getTaskId() != null) {
             Long linked = post.getTaskId();
             Task task = tasks.findById(linked).orElse(null);
-            if (task != null && task.getDeletedAt() == null) {
+            if (task != null && task.getDeletedAt() == null && task.getStatus() != TaskStatus.CANCELLED) {
                 throw TaskException.conflict("작업 #" + linked + "에 연결된 요청은 되돌릴 수 없습니다");
             }
             unlinkedTaskId = linked;

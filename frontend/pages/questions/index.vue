@@ -198,6 +198,14 @@ const mode = ref<RepoMode>('auto')
 // compose = 입력 중, routing = 추천 호출 중, card = 추천 카드 확인 중 (auto에서만 compose 밖으로 간다)
 const phase = ref<'compose' | 'routing' | 'card'>('compose')
 const route = ref<QuestionRoute | null>(null)
+// 긴 질문이면 내 말풍선이 대화 영역을 채워 대기 표시·카드가 화면 밖에 만들어진다 — 두 전환마다 그 자리를 보이게 한다.
+const routeTail = ref<HTMLElement | null>(null)
+watch(phase, async (p) => {
+  if (p !== 'routing' && p !== 'card') return
+  await nextTick()
+  const el = routeTail.value
+  if (el && typeof el.scrollIntoView === 'function') el.scrollIntoView({ block: 'nearest' })
+})
 let routeSeq = 0 // 질문 고치기 뒤에 늦게 온 추천 응답을 버리는 가드
 
 function readStoredMode(): RepoMode {
@@ -364,19 +372,21 @@ defineExpose({ draft, submit, onRepoSelected, db, mode, phase, route, startFromC
             @click="editQuestion"
           />
         </div>
-        <div v-if="phase === 'routing'" class="route-waiting" role="status" aria-label="레포를 찾는 중" data-test="route-waiting">
-          <div class="route-waiting-avatar" aria-hidden="true">AI</div>
-          <div class="route-waiting-bubble">
-            <span class="route-dots" aria-hidden="true"><span class="route-dot" /><span class="route-dot" /><span class="route-dot" /></span>
+        <div ref="routeTail">
+          <div v-if="phase === 'routing'" class="route-waiting" role="status" aria-label="레포를 찾는 중" data-test="route-waiting">
+            <div class="route-waiting-avatar" aria-hidden="true">AI</div>
+            <div class="route-waiting-bubble">
+              <span class="route-dots" aria-hidden="true"><span class="route-dot" /><span class="route-dot" /><span class="route-dot" /></span>
+            </div>
           </div>
+          <RepoRouteCard
+            v-else-if="route"
+            :route="route"
+            :catalog="repoCatalog"
+            :starting="submitting"
+            @start="startFromCard"
+          />
         </div>
-        <RepoRouteCard
-          v-else-if="route"
-          :route="route"
-          :catalog="repoCatalog"
-          :starting="submitting"
-          @start="startFromCard"
-        />
       </div>
       <div class="composer-wrap" :class="phase === 'compose' ? 'q-mt-lg' : 'q-mt-sm'">
         <QuestionComposer

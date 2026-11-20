@@ -1,6 +1,7 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi, afterEach } from 'vitest'
 import {
   fetchQuestionRoute,
+  ROUTE_TIMEOUT_MS,
   routeCardModel,
   searchRepos,
   seedDbSelection,
@@ -46,9 +47,32 @@ describe('fetchQuestionRoute', () => {
   it('POST /api/questions/route에 { question }을 보낸다', async () => {
     useApiMock.mockResolvedValue(route({ recommendedRepoCatalogId: 1 }))
     const r = await fetchQuestionRoute('질문')
-    expect(useApiMock).toHaveBeenCalledWith('/api/questions/route', { method: 'POST', body: { question: '질문' } })
+    expect(useApiMock).toHaveBeenCalledWith('/api/questions/route', {
+      method: 'POST',
+      body: { question: '질문' },
+      timeout: ROUTE_TIMEOUT_MS,
+    })
     expect(r.state).toBe('CONFIDENT')
     expect(r.recommendedRepoCatalogId).toBe(1)
+  })
+
+  describe('시간 제한', () => {
+    afterEach(() => vi.useRealTimers())
+
+    it('응답이 오지 않으면 5000ms 뒤 UNAVAILABLE을 돌려준다', async () => {
+      vi.useFakeTimers()
+      useApiMock.mockReturnValue(new Promise(() => {}))
+      let result: QuestionRoute | null = null
+      const p = fetchQuestionRoute('질문').then((r) => {
+        result = r
+      })
+      await vi.advanceTimersByTimeAsync(ROUTE_TIMEOUT_MS - 1)
+      expect(result).toBeNull()
+      await vi.advanceTimersByTimeAsync(1)
+      await p
+      expect(ROUTE_TIMEOUT_MS).toBe(5000)
+      expect(result).toEqual(UNAVAILABLE_ROUTE)
+    })
   })
 
   it('호출이 던지면 UNAVAILABLE_ROUTE를 돌려준다(새 객체)', async () => {

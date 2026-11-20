@@ -124,7 +124,10 @@ async function onDbSaved(view: { id: number }) {
 }
 
 // 칩·검색
-const searchOpen = ref(viewState.value === 'NO_MATCH')
+// 고를 칩이 하나도 없으면(키 설정 전·질문 기록이 없는 사용자) 버튼만 보이지 않도록 처음부터 검색을 연다.
+const noChips =
+  !model.value.recommended && !model.value.others.length && !model.value.recent.length && !model.value.similar.length
+const searchOpen = ref(viewState.value === 'NO_MATCH' || noChips)
 const searchText = ref('')
 const showSearch = computed(() => viewState.value === 'NO_MATCH' || searchOpen.value)
 const results = computed(() => searchRepos(model.value.searchable, searchText.value))
@@ -147,6 +150,8 @@ const canStart = computed(
     dbList.value != null &&
     !props.starting,
 )
+const dbLabel = (c: { name: string; dbType: string; scope: string }) =>
+  `${c.name} · ${dbTypeLabel(c.dbType)} · ${c.scope === 'REPO' ? '공용' : '내 접속'}`
 function onStart() {
   if (!canStart.value || selectedId.value == null) return
   emit('start', {
@@ -323,6 +328,7 @@ defineExpose({ pick, selectedId, branch, dbIds })
                   :model-value="dbIds.includes(c.id)"
                   :disable="starting"
                   dense
+                  :aria-label="dbLabel(c)"
                   :data-test="`route-db-${c.id}`"
                   @update:model-value="toggleDb(c.id)"
                 />
@@ -409,6 +415,13 @@ defineExpose({ pick, selectedId, branch, dbIds })
   gap: 8px;
   font-size: 12.5px;
   color: #25303f;
+}
+/* 폰 폭에서는 아바타 옆 남는 폭을 카드가 모두 쓴다(승인된 목업) */
+@media (max-width: 599px) {
+  .route-card {
+    flex: 1 1 auto;
+    max-width: 100%;
+  }
 }
 .route-title {
   font-weight: 600;

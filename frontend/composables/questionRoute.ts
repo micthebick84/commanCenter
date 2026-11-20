@@ -24,6 +24,9 @@ export interface RouteCatalogEntry {
 /** 모호할 때 "비슷한 레포" 칩에 넣는 최소 확률(Task 1 측정 결과). */
 export const SIMILAR_MIN_PROBABILITY = 0
 
+/** 추천 호출을 기다리는 최대 시간(서버 상한 3초 + 여유) — 넘으면 UNAVAILABLE 카드. */
+export const ROUTE_TIMEOUT_MS = 5000
+
 const MAX_OTHERS = 2
 const MAX_RECENT = 3
 const MAX_SIMILAR = 3
@@ -51,11 +54,19 @@ export const UNAVAILABLE_ROUTE: QuestionRoute = Object.freeze(unavailableRoute()
  * 질문 레포 추천 호출. 절대 던지지 않는다 — 네트워크 오류·모양 이상은 UNAVAILABLE 경로.
  */
 export async function fetchQuestionRoute(question: string): Promise<QuestionRoute> {
+  let timer: ReturnType<typeof setTimeout> | undefined
   try {
-    const res = await useApi<Partial<QuestionRoute> | null>('/api/questions/route', {
+    // ofetch의 timeout은 요청을 끊고, 아래 경주는 그 옵션이 먹지 않는 경우에도 화면이 멈추지 않게 하는 안전망이다.
+    const timedOut = new Promise<never>((_, reject) => {
+      timer = setTimeout(() => reject(new Error('route timeout')), ROUTE_TIMEOUT_MS)
+    })
+    const call = useApi<Partial<QuestionRoute> | null>('/api/questions/route', {
       method: 'POST',
       body: { question },
+      timeout: ROUTE_TIMEOUT_MS,
     })
+    call.catch(() => {}) // 경주에서 진 호출의 늦은 실패가 처리되지 않은 거부로 남지 않게
+    const res = await Promise.race([call, timedOut])
     if (!res || typeof res !== 'object') return unavailableRoute()
     if (!STATES.includes(res.state as RouteState)) return unavailableRoute()
     if (!Array.isArray(res.candidates) || !Array.isArray(res.recentRepoCatalogIds)) return unavailableRoute()
@@ -72,6 +83,8 @@ export async function fetchQuestionRoute(question: string): Promise<QuestionRout
     }
   } catch {
     return unavailableRoute()
+  } finally {
+    if (timer) clearTimeout(timer)
   }
 }
 

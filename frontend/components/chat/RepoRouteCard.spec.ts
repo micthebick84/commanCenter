@@ -281,6 +281,25 @@ describe('RepoRouteCard (스펙 2026-11-20 §5.3·§5.4)', () => {
     w.unmount()
   })
 
+  it('DB: 체크박스(role=checkbox)에 "이름 · 종류 · 공용|내 접속" 접근 가능한 이름이 붙는다', async () => {
+    api({ db: { 1: dbList([conn(10, 'REPO'), conn(11, 'USER')]) } })
+    const w = await mountCard(route({ dbNeeded: true }))
+    const a = w.find('[data-test="route-db-10"]')
+    const b = w.find('[data-test="route-db-11"]')
+    expect(a.attributes('role')).toBe('checkbox')
+    expect(a.attributes('aria-label')).toBe('conn10 · PostgreSQL · 공용')
+    expect(b.attributes('aria-label')).toBe('conn11 · PostgreSQL · 내 접속')
+    w.unmount()
+  })
+
+  it('칩이 하나도 없으면(UNAVAILABLE + 최근 기록 없음) 검색이 처음부터 열려 있다', async () => {
+    const w = await mountCard(
+      route({ state: 'UNAVAILABLE', recommendedRepoCatalogId: null, candidates: [], recentRepoCatalogIds: [] }),
+    )
+    expect(w.find('[data-test="route-search"]').exists()).toBe(true)
+    w.unmount()
+  })
+
   it('DB: 접속 있음 + dbNeeded=false → 체크 없이 보인다', async () => {
     api({ db: { 1: dbList([conn(10, 'REPO')]) } })
     const w = await mountCard(route({ dbNeeded: false }))

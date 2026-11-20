@@ -7,6 +7,7 @@ import RepoRouteCard from '../components/chat/RepoRouteCard.vue'
 import QuestionComposer from '../components/chat/QuestionComposer.vue'
 import { useApiMock } from './mocks/nuxt'
 import { setViewportWidth } from './mocks/screen'
+import { ROUTE_TIMEOUT_MS } from '../composables/questionRoute'
 
 // navigateTo는 Nuxt 자동 임포트 — setup.ts에 없어 여기서 전역 주입.
 const navigateToMock = vi.fn()
@@ -639,7 +640,11 @@ describe('pages/questions/index — 자동 모드 — 레포 추천 카드', () 
 
   it('보내면 /api/questions/route를 부르고 내 말풍선과 카드를 그린다 — 이때 /api/questions POST는 없다', async () => {
     const { w, vm } = await toCard()
-    expect(useApiMock).toHaveBeenCalledWith('/api/questions/route', { method: 'POST', body: { question: AUTO_Q } })
+    expect(useApiMock).toHaveBeenCalledWith('/api/questions/route', {
+      method: 'POST',
+      body: { question: AUTO_Q },
+      timeout: ROUTE_TIMEOUT_MS,
+    })
     expect(vm.phase).toBe('card')
     expect(w.find('.bubble.user').text()).toContain(AUTO_Q)
     expect(routeCard(w).exists()).toBe(true)
@@ -647,6 +652,30 @@ describe('pages/questions/index — 자동 모드 — 레포 추천 카드', () 
     expect(w.text()).not.toContain('무엇이 궁금하세요?') // 히어로는 숨는다
     expect(questionPost()).toBeUndefined()
     w.unmount()
+  })
+
+  it('대기 표시와 카드가 생길 때마다 그 자리를 화면 안으로 스크롤한다', async () => {
+    const scroll = vi.fn()
+    const original = Element.prototype.scrollIntoView
+    Element.prototype.scrollIntoView = scroll
+    try {
+      const { w, vm } = await mountAuto()
+      let resolveRoute!: (v: unknown) => void
+      overrideApi(isRouteCall, () => new Promise((r) => { resolveRoute = r }))
+      const pending = vm.submit()
+      await flushPromises()
+      expect(vm.phase).toBe('routing')
+      expect(scroll).toHaveBeenCalledTimes(1)
+      expect(scroll).toHaveBeenLastCalledWith({ block: 'nearest' })
+      resolveRoute(ROUTE_CONFIDENT)
+      await pending
+      await flushPromises()
+      expect(vm.phase).toBe('card')
+      expect(scroll).toHaveBeenCalledTimes(2)
+      w.unmount()
+    } finally {
+      Element.prototype.scrollIntoView = original
+    }
   })
 
   it('route 호출 중에는 입력창이 잠기고 카드 자리에 대기 표시가 있다', async () => {

@@ -44,7 +44,8 @@ interface Input { repos: Repo[]; cases: Case[] }
 const MIN_KIND: Record<Kind, number> = { site: 8, version: 6, none: 6, unlisted: 4 };
 const MIN_DB = 8;
 
-const inputPath = join(homedir(), 'netis-maker', 'jev-route-spike.json');
+const inputArg = process.argv.find((a) => a.startsWith('--input='));
+const inputPath = inputArg ? inputArg.slice('--input='.length) : join(homedir(), 'netis-maker', 'jev-route-spike.json');
 const keyPath = join(homedir(), 'netis-maker', 'typesafe.env');
 const dryRun = process.argv.includes('--dry-run');
 const limitArg = process.argv.find((a) => a.startsWith('--limit='));
@@ -61,8 +62,9 @@ function loadInput(): Input {
     ids.add(r.id);
   }
   raw.cases.forEach((c, i) => {
-    if (!c.q || !c.kind || !c.expect || !c.expect.state || typeof c.expect.db !== 'boolean') errs.push(`case ${i}: 필드 누락`);
-    if (!(c.kind in MIN_KIND)) errs.push(`case ${i}: 알 수 없는 kind`);
+    if (!c || typeof c.q !== 'string' || !c.q) { errs.push(`case ${i}: q 누락`); return; }
+    if (typeof c.kind !== 'string' || !(c.kind in MIN_KIND)) { errs.push(`case ${i}: kind 누락 또는 알 수 없는 값`); return; }
+    if (!c.expect || typeof c.expect !== 'object' || !c.expect.state || typeof c.expect.db !== 'boolean') { errs.push(`case ${i}: expect 필드 누락`); return; }
     if (c.expect.repoId !== undefined && !ids.has(c.expect.repoId)) errs.push(`case ${i}: repoId가 repos에 없음`);
     for (const a of c.expect.alt ?? []) if (!ids.has(a)) errs.push(`case ${i}: alt가 repos에 없음`);
     if ((c.kind === 'site' || c.kind === 'version') && (c.expect.state !== 'CONFIDENT' || c.expect.repoId === undefined))
@@ -72,7 +74,7 @@ function loadInput(): Input {
   });
   const counts = countKinds(raw.cases);
   for (const k of Object.keys(MIN_KIND) as Kind[]) if (counts[k] < MIN_KIND[k]) errs.push(`kind ${k} ${counts[k]}개 < 최소 ${MIN_KIND[k]}`);
-  const db = raw.cases.filter((c) => c.expect.db).length;
+  const db = raw.cases.filter((c) => c?.expect?.db).length;
   if (db < MIN_DB) errs.push(`DB 필요 질문 ${db}개 < 최소 ${MIN_DB}`);
   if (errs.length > 0) throw new Error(`입력 검증 실패:\n - ${errs.join('\n - ')}`);
   return raw;
@@ -80,7 +82,7 @@ function loadInput(): Input {
 
 function countKinds(cases: Case[]): Record<Kind, number> {
   const c: Record<Kind, number> = { site: 0, version: 0, none: 0, unlisted: 0 };
-  for (const x of cases) c[x.kind] += 1;
+  for (const x of cases) if (x && typeof x.kind === 'string' && x.kind in c) c[x.kind] += 1;
   return c;
 }
 
@@ -169,7 +171,9 @@ async function ask(key: string, body: unknown): Promise<Answer> {
     let top: number | undefined;
     let topP = -1;
     for (const [k, p] of Object.entries(j.answers.repo.probabilities)) {
-      if (p > topP) { topP = p; top = Number(k.slice(1)); }
+      const id = Number(k.slice(1));
+      // 동률이면 repo id가 작은 쪽(셔플 순서에 따라 결과가 바뀌지 않게)
+      if (p > topP || (p === topP && top !== undefined && id < top)) { topP = p; top = id; }
     }
     return {
       top,

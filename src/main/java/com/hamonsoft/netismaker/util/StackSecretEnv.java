@@ -14,7 +14,8 @@ public final class StackSecretEnv {
 
     public static final List<String> NAMES = List.of(
             "WORKER_API_KEY", "SPRING_DATASOURCE_PASSWORD", "GITLAB_TOKEN", "GITHUB_PAT", "GH_TOKEN", "GITHUB_TOKEN",
-            "CLOUDFLARE_API_TOKEN", "NETISMAKER_DB_SECRET_KEY", "NETISMAKER_DB_SECRET_SALT", "MAIL_PASSWORD", "PGPASSWORD");
+            "CLOUDFLARE_API_TOKEN", "NETISMAKER_DB_SECRET_KEY", "NETISMAKER_DB_SECRET_SALT", "MAIL_PASSWORD", "PGPASSWORD",
+            "TYPESAFE_API_KEY");
 
     private StackSecretEnv() {}
 

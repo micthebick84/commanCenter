@@ -11,6 +11,10 @@ import { MAX_DB_SELECTION, fetchDbConnections, type DbConnectionView } from '~/c
 import RefRepoChips from '~/components/RefRepoChips.vue'
 import RefRepoAddForm from '~/components/RefRepoAddForm.vue'
 import { toInputs, type RefRepoView } from '~/composables/refRepos'
+import ChatBubble from '~/components/chat/ChatBubble.vue'
+import RepoRouteCard from '~/components/chat/RepoRouteCard.vue'
+import { fetchQuestionRoute, type QuestionRoute } from '~/composables/questionRoute'
+import type { TurnAttachment } from '~/composables/useInterviewStream'
 
 definePageMeta({ layout: 'default' })
 
@@ -60,6 +64,7 @@ interface RepoCatalogEntry {
   host: string
   ownerRepo: string | null
   defaultBranch: string | null
+  description: string | null
 }
 const repoCatalog = ref<RepoCatalogEntry[]>([])
 const repoCatalogLoading = ref(false)
@@ -185,32 +190,119 @@ function removeRef(catalogId: number | null) {
   draft.refRepos = draft.refRepos.filter((r) => r.catalogId !== catalogId)
 }
 
-onMounted(loadRepoCatalog)
+// 레포 정하는 방식 (스펙 2026-11-20 §5.1): auto = 질문을 보고 추천 카드로 확인받기(기본), manual = 지금의 레포·브랜치 선택.
+// 기억한 값은 마운트 뒤에만 읽는다 — SSR과 첫 클라이언트 렌더는 항상 auto라 하이드레이션이 어긋나지 않는다.
+type RepoMode = 'auto' | 'manual'
+const MODE_STORAGE_KEY = 'netis-maker-question-repo-mode'
+const mode = ref<RepoMode>('auto')
+// compose = 입력 중, routing = 추천 호출 중, card = 추천 카드 확인 중 (auto에서만 compose 밖으로 간다)
+const phase = ref<'compose' | 'routing' | 'card'>('compose')
+const route = ref<QuestionRoute | null>(null)
+let routeSeq = 0 // 질문 고치기 뒤에 늦게 온 추천 응답을 버리는 가드
 
-const canSubmit = computed(
-  () =>
-    !submitting.value &&
-    draft.repoCatalogId !== null &&
-    !!draft.githubBranch &&
-    !!draft.question.trim(),
+function readStoredMode(): RepoMode {
+  try {
+    return localStorage.getItem(MODE_STORAGE_KEY) === 'manual' ? 'manual' : 'auto'
+  } catch {
+    return 'auto'
+  }
+}
+function storeMode(next: RepoMode) {
+  try {
+    localStorage.setItem(MODE_STORAGE_KEY, next)
+  } catch {
+    // 저장 못 해도 이번 화면에서는 바뀐 모드로 동작한다
+  }
+}
+function setMode(next: RepoMode) {
+  if (mode.value === next) return
+  if (next === 'auto') {
+    // 직접 모드에서 고른 것을 모두 비운다 — 자동 모드의 등록 바디에는 레포·참조 선택이 섞이지 않는다
+    inflightRepo = 0 // 진행 중이던 브랜치 응답이 비운 값을 다시 채우지 않게
+    draft.repoCatalogId = null
+    onRepoSelected(null)
+    draft.refRepos = []
+    refAddOpen.value = false
+  }
+  mode.value = next
+  storeMode(next)
+}
+
+onMounted(() => {
+  mode.value = readStoredMode()
+  loadRepoCatalog()
+})
+
+const canSubmit = computed(() =>
+  mode.value === 'auto'
+    ? !submitting.value && !!draft.question.trim()
+    : !submitting.value && draft.repoCatalogId !== null && !!draft.githubBranch && !!draft.question.trim(),
 )
 
 async function submit() {
   if (!canSubmit.value) return
+  if (mode.value === 'auto') {
+    await startRouting()
+    return
+  }
+  // title 없음 — 서버가 질문 첫 줄로 생성 (QuestionService.deriveTitle)
+  await createQuestion({
+    repoCatalogId: draft.repoCatalogId,
+    githubBranch: draft.githubBranch,
+    question: draft.question,
+    model: draft.model,
+    effort: draft.effort,
+    mcpCatalogIds: draft.mcpCatalogIds,
+    ...(db.enabled ? { dbConnectionIds: draft.dbConnectionIds } : {}),
+    // 참조는 하나라도 골랐을 때만 싣는다 — 없으면 필드를 생략해 등록 바디가 예전과 같다 (스펙 2026-10-22 §7.2)
+    ...(draft.refRepos.length > 0 ? { refRepos: toInputs(draft.refRepos) } : {}),
+  })
+}
+
+// 자동 모드: 질문을 보내면 레포를 추천받고 카드로 확인받는다. 세션은 카드에서 시작을 눌러야 만들어진다(자동 확정 없음).
+async function startRouting() {
+  if (phase.value !== 'compose') return
+  const seq = ++routeSeq
+  route.value = null
+  phase.value = 'routing'
+  const res = await fetchQuestionRoute(draft.question) // 던지지 않는다 — 실패는 UNAVAILABLE 카드
+  if (seq !== routeSeq || phase.value !== 'routing') return // 그 사이 질문 고치기를 눌렀다
+  route.value = res
+  phase.value = 'card'
+}
+
+function editQuestion() {
+  if (submitting.value) return
+  routeSeq++
+  route.value = null
+  phase.value = 'compose'
+}
+
+function startFromCard(payload: { repoCatalogId: number; githubBranch: string; dbConnectionIds: number[] | null }) {
+  const current = route.value
+  if (submitting.value || phase.value !== 'card' || !current) return
+  // 참조 repo는 싣지 않는다(자동 모드에는 참조 선택이 없다)
+  return createQuestion({
+    repoCatalogId: payload.repoCatalogId,
+    githubBranch: payload.githubBranch,
+    question: draft.question,
+    model: draft.model,
+    effort: draft.effort,
+    mcpCatalogIds: draft.mcpCatalogIds,
+    ...(payload.dbConnectionIds !== null ? { dbConnectionIds: payload.dbConnectionIds } : {}),
+    ...(current.routeId !== null ? { routeId: current.routeId } : {}),
+  })
+}
+
+// 대화 모양일 때 내 말풍선 아래에 붙는 첨부 칩(이름·크기만, 내려받기 없음)
+const bubbleAttachments = computed<TurnAttachment[]>(() =>
+  files.value.map((f) => ({ fileName: f.name, sizeBytes: f.size })),
+)
+
+// 등록 요청 한 곳 — 직접 모드의 submit()과 카드의 startFromCard()가 같이 쓴다 (성공·실패 처리 동일)
+async function createQuestion(meta: Record<string, unknown>) {
   submitting.value = true
   try {
-    // title 없음 — 서버가 질문 첫 줄로 생성 (QuestionService.deriveTitle)
-    const meta = {
-      repoCatalogId: draft.repoCatalogId,
-      githubBranch: draft.githubBranch,
-      question: draft.question,
-      model: draft.model,
-      effort: draft.effort,
-      mcpCatalogIds: draft.mcpCatalogIds,
-      ...(db.enabled ? { dbConnectionIds: draft.dbConnectionIds } : {}),
-      // 참조는 하나라도 골랐을 때만 싣는다 — 없으면 필드를 생략해 등록 바디가 예전과 같다 (스펙 2026-10-22 §7.2)
-      ...(draft.refRepos.length > 0 ? { refRepos: toInputs(draft.refRepos) } : {}),
-    }
     let created: { id: number }
     if (files.value.length > 0) {
       // 파일이 있으면 multipart(meta = 위 JSON 그대로 + files). Content-Type은 $fetch가 boundary와 함께 설정 (스펙 2026-09-13 §5.1)
@@ -235,7 +327,7 @@ async function submit() {
 }
 
 // 테스트에서 q-select/입력창 조작 대신 직접 호출 (McpPicker.toggle 선례)
-defineExpose({ draft, submit, onRepoSelected, db })
+defineExpose({ draft, submit, onRepoSelected, db, mode, phase, route, startFromCard })
 </script>
 
 <template>
@@ -243,26 +335,94 @@ defineExpose({ draft, submit, onRepoSelected, db })
     <div v-if="$q.screen.lt.md || listHidden" class="row items-center q-px-sm q-pt-sm">
       <q-btn flat dense round icon="menu" aria-label="질문 목록 열기" data-test="open-drawer" @click="openDrawer" />
     </div>
-    <div class="col column no-wrap items-center q-px-lg new-question-body">
-      <div class="hero text-center">
+    <div
+      class="col column no-wrap items-center q-px-lg new-question-body"
+      :class="{ 'is-conversation': phase !== 'compose' }"
+    >
+      <div v-if="phase === 'compose'" class="hero text-center">
         <div class="text-h5">무엇이 궁금하세요?</div>
-        <div class="text-body2 text-grey-8 q-mt-xs">
+        <div v-if="mode === 'auto'" class="text-body2 text-grey-8 q-mt-xs">
+          질문을 보내면 맞는 레포를 찾아 확인받은 뒤 답합니다. 코드는 수정되지 않으며, 구현이 필요하면 작업 등록을 이용하세요.
+        </div>
+        <div v-else class="text-body2 text-grey-8 q-mt-xs">
           선택한 레포를 읽고 답합니다. 코드는 수정되지 않으며, 구현이 필요하면 작업 등록을 이용하세요.
         </div>
       </div>
-      <div class="composer-wrap q-mt-lg">
+      <!-- 대화 모양(자동 모드에서 질문을 보낸 뒤): 내 말풍선 → 질문 고치기 → 대기 표시 또는 추천 카드 -->
+      <div v-else class="conversation-wrap" data-test="route-conversation">
+        <ChatBubble role="user" :content="draft.question" :attachments="bubbleAttachments" />
+        <div class="route-edit-row">
+          <q-btn
+            flat
+            dense
+            no-caps
+            size="sm"
+            color="grey-8"
+            label="✎ 질문 고치기"
+            :disable="submitting"
+            data-test="route-edit"
+            @click="editQuestion"
+          />
+        </div>
+        <div v-if="phase === 'routing'" class="route-waiting" role="status" aria-label="레포를 찾는 중" data-test="route-waiting">
+          <div class="route-waiting-avatar" aria-hidden="true">AI</div>
+          <div class="route-waiting-bubble">
+            <span class="route-dots" aria-hidden="true"><span class="route-dot" /><span class="route-dot" /><span class="route-dot" /></span>
+          </div>
+        </div>
+        <RepoRouteCard
+          v-else-if="route"
+          :route="route"
+          :catalog="repoCatalog"
+          :starting="submitting"
+          @start="startFromCard"
+        />
+      </div>
+      <div class="composer-wrap" :class="phase === 'compose' ? 'q-mt-lg' : 'q-mt-sm'">
         <QuestionComposer
           v-model="draft.question"
           v-model:model="draft.model"
           v-model:effort="draft.effort"
           v-model:files="files"
-          placeholder="예: 로그인 요청은 어느 컨트롤러가 처리하고 토큰은 어디서 검증하나요?"
+          :placeholder="
+            phase === 'compose'
+              ? '예: 로그인 요청은 어느 컨트롤러가 처리하고 토큰은 어디서 검증하나요?'
+              : '레포를 확정하면 답변이 시작됩니다'
+          "
           :can-send="canSubmit"
           :sending="submitting"
+          :disabled="phase !== 'compose'"
           :hint="!$q.screen.lt.md"
           @send="submit"
         >
-          <template #top>
+          <template v-if="phase === 'compose'" #top>
+            <div v-if="mode === 'auto'" class="row items-center no-wrap q-pa-sm" data-test="repo-auto-line">
+              <span class="text-body2 text-grey-8">레포: 질문을 보면 찾아 드려요</span>
+              <q-space />
+              <q-btn
+                flat
+                dense
+                no-caps
+                size="sm"
+                color="primary"
+                label="직접 고르기"
+                data-test="repo-mode-manual"
+                @click="setMode('manual')"
+              />
+            </div>
+            <template v-else>
+            <div class="row justify-end q-px-sm q-pt-sm">
+              <q-btn
+                flat
+                dense
+                no-caps
+                size="sm"
+                color="primary"
+                label="자동으로 찾기"
+                data-test="repo-mode-auto"
+                @click="setMode('auto')"
+              />
+            </div>
             <div class="row q-col-gutter-md q-pa-sm">
               <q-select
                 v-model="draft.repoCatalogId"
@@ -320,6 +480,7 @@ defineExpose({ draft, submit, onRepoSelected, db })
                 <RefRepoAddForm :catalog="repoCatalog" :exclude-ids="refExcludeIds" @add="addRef" />
               </div>
             </div>
+            </template>
           </template>
           <template #tools>
             <!-- xs(<600px)에서는 라벨이 두 줄로 꺾이므로 아이콘만 — 이름은 aria-label로 유지 (2026-09-06 모바일 QA) -->
@@ -330,6 +491,7 @@ defineExpose({ draft, submit, onRepoSelected, db })
               icon="extension"
               :label="$q.screen.xs ? undefined : 'MCP 도구'"
               aria-label="MCP 도구"
+              :disable="phase !== 'compose'"
               data-test="mcp-button"
             >
               <q-badge v-if="draft.mcpCatalogIds.length" color="primary" floating>
@@ -390,6 +552,91 @@ defineExpose({ draft, submit, onRepoSelected, db })
 }
 .hero {
   max-width: 760px;
+}
+/* 대화 모양: 위에서부터 쌓이고, 대화만 스크롤하며 입력창은 그 아래에 둔다 */
+.new-question-body.is-conversation {
+  overflow-y: hidden;
+  padding-bottom: 24px;
+}
+.new-question-body.is-conversation > :first-child {
+  margin-top: 0;
+}
+.new-question-body.is-conversation > :last-child {
+  margin-bottom: 0;
+}
+.conversation-wrap {
+  flex: 1 1 auto;
+  min-height: 0;
+  width: 100%;
+  max-width: 760px;
+  overflow-y: auto;
+  padding-top: 8px;
+}
+.route-edit-row {
+  display: flex;
+  justify-content: flex-end;
+  margin: -4px 0 8px;
+}
+.route-waiting {
+  display: flex;
+  gap: 8px;
+  align-items: flex-end;
+  margin-bottom: 11px;
+}
+.route-waiting-avatar {
+  width: 26px;
+  height: 26px;
+  flex: 0 0 26px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 10px;
+  font-weight: 700;
+  background: #e3f2fd;
+  color: #1565c0;
+}
+.route-waiting-bubble {
+  background: #eef2f8;
+  border-radius: 14px;
+  border-bottom-left-radius: 4px;
+  padding: 11px 14px;
+}
+.route-dots {
+  display: inline-flex;
+  gap: 5px;
+  align-items: center;
+}
+.route-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #7f8ea3;
+  animation: route-bounce 1.2s infinite ease-in-out;
+}
+.route-dot:nth-child(2) {
+  animation-delay: 0.18s;
+}
+.route-dot:nth-child(3) {
+  animation-delay: 0.36s;
+}
+@keyframes route-bounce {
+  0%,
+  60%,
+  100% {
+    transform: translateY(0);
+    opacity: 0.4;
+  }
+  30% {
+    transform: translateY(-5px);
+    opacity: 1;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .route-dot {
+    animation: none;
+    opacity: 0.6;
+  }
 }
 .composer-wrap {
   width: 100%;

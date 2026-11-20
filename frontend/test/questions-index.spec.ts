@@ -3,6 +3,8 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { ref } from 'vue'
 import { QFile, QSelect } from 'quasar'
 import QuestionsIndex from '../pages/questions/index.vue'
+import RepoRouteCard from '../components/chat/RepoRouteCard.vue'
+import QuestionComposer from '../components/chat/QuestionComposer.vue'
 import { useApiMock } from './mocks/nuxt'
 import { setViewportWidth } from './mocks/screen'
 
@@ -35,6 +37,7 @@ function stubApi() {
 describe('pages/questions/index — 새 질문 입력창 (스펙 2026-09-05 §3·§6)', () => {
   beforeEach(() => {
     navigateToMock.mockReset()
+    localStorage.setItem('netis-maker-question-repo-mode', 'manual')
     stubApi()
   })
 
@@ -337,6 +340,7 @@ function stubBranches() {
 describe('pages/questions/index — 참조 repo (스펙 2026-10-22 §7.2)', () => {
   beforeEach(() => {
     navigateToMock.mockReset()
+    localStorage.setItem('netis-maker-question-repo-mode', 'manual')
     stubApi()
   })
 
@@ -545,5 +549,367 @@ describe('pages/questions/index — 참조 repo (스펙 2026-10-22 §7.2)', () =
     await w.find('[data-test="ref-add"]').trigger('click')
     expect(w.find('[data-test="ref-add-form"]').exists()).toBe(false)
     w.unmount()
+  })
+})
+
+// ── 자동 모드 — 레포 추천 카드 (스펙 2026-11-20 §5.1·§5.2·§6.1·§6.3) ──
+const MODE_KEY = 'netis-maker-question-repo-mode'
+const ROUTE_CONFIDENT = {
+  routeId: 55,
+  state: 'CONFIDENT',
+  recommendedRepoCatalogId: 1,
+  candidates: [{ repoCatalogId: 1, probability: 0.9 }],
+  recentRepoCatalogIds: [],
+  eligibleRepoCatalogIds: [1, 2, 3],
+  dbNeeded: true,
+}
+const AUTO_Q = '로그인은 어디서 처리하나요?'
+
+function stubAuto(route: unknown = ROUTE_CONFIDENT, dbEnabled = true) {
+  useApiMock.mockImplementation((url: string, opts?: { method?: string }) => {
+    if (url === '/api/questions/route') return Promise.resolve(route)
+    if (url === '/api/questions' && opts?.method === 'POST') return Promise.resolve({ id: 12 })
+    if (url === '/api/repo-catalog') return Promise.resolve([
+      { id: 1, alias: 'Netis7.0', description: '본사 7.0', host: 'github', ownerRepo: 'a/b', defaultBranch: 'main' },
+      { id: 2, alias: '옛앱', description: null, host: 'gitlab', ownerRepo: 'p/old', defaultBranch: 'release/6.5' },
+    ])
+    if (url === '/api/mcp-catalog') return Promise.resolve([])
+    if (url === '/api/usage/claude') return Promise.resolve({ limits: [] })
+    if (url === '/api/repos/branches') return Promise.resolve({ defaultBranch: 'main', branches: [{ name: 'main', sha: 'a' }] })
+    if (url === '/api/db-connections?repoCatalogId=1') return Promise.resolve(
+      dbEnabled
+        ? { enabled: true, items: [{ id: 7, scope: 'REPO', repoCatalogId: 1, name: '운영', dbType: 'MYSQL', host: 'h', port: 3306, databaseName: 'app', username: 'u', enabled: true, mine: false }] }
+        : { enabled: false, items: [] },
+    )
+    return Promise.resolve(null)
+  })
+}
+
+const routeCard = (w: Wrapper) => w.findComponent(RepoRouteCard)
+const composerOf = (w: Wrapper) => w.findComponent(QuestionComposer)
+const startPayload = { repoCatalogId: 1, githubBranch: 'main', dbConnectionIds: [7] as number[] | null }
+const questionPost = () => useApiMock.mock.calls.find((c) => c[0] === '/api/questions' && c[1]?.method === 'POST')
+
+/** 기본 구현을 유지한 채 일부 URL만 덮어쓴다 */
+function overrideApi(match: (url: string, opts?: { method?: string }) => boolean, handler: () => unknown) {
+  const base = useApiMock.getMockImplementation()!
+  useApiMock.mockImplementation((url: string, opts?: { method?: string }) => (match(url, opts) ? handler() : base(url, opts)))
+}
+const isRouteCall = (url: string) => url === '/api/questions/route'
+const isCreateCall = (url: string, opts?: { method?: string }) => url === '/api/questions' && opts?.method === 'POST'
+
+async function mountAuto(route: unknown = ROUTE_CONFIDENT, dbEnabled = true) {
+  stubAuto(route, dbEnabled)
+  const w = mount(QuestionsIndex)
+  await flushPromises()
+  const vm = w.vm as any
+  vm.draft.question = AUTO_Q
+  return { w, vm }
+}
+/** 질문을 보내 카드가 뜰 때까지 */
+async function toCard(route: unknown = ROUTE_CONFIDENT, dbEnabled = true) {
+  const m = await mountAuto(route, dbEnabled)
+  await m.vm.submit()
+  await flushPromises()
+  return m
+}
+
+describe('pages/questions/index — 자동 모드 — 레포 추천 카드', () => {
+  beforeEach(() => {
+    navigateToMock.mockReset()
+    localStorage.removeItem(MODE_KEY)
+    stubAuto()
+  })
+
+  it('기본은 자동 모드다 — 레포·브랜치 선택 상자와 참조 칩 줄이 없고 본문만 있으면 보낼 수 있다', async () => {
+    const { w, vm } = await mountAuto()
+    expect(vm.mode).toBe('auto')
+    expect(w.find('[data-test="repo-select"]').exists()).toBe(false)
+    expect(w.find('[data-test="ref-repo-chips"]').exists()).toBe(false)
+    expect(w.text()).toContain('질문을 보면 찾아 드려요')
+    expect(w.text()).toContain('맞는 레포를 찾아 확인받은 뒤 답합니다')
+    expect(w.find('[data-test="repo-mode-manual"]').exists()).toBe(true)
+    await flushPromises()
+    expect(w.find('[data-test="composer-send"]').attributes('disabled')).toBeUndefined()
+    vm.draft.question = '  '
+    await flushPromises()
+    expect(w.find('[data-test="composer-send"]').attributes('disabled')).toBeDefined()
+    w.unmount()
+  })
+
+  it('보내면 /api/questions/route를 부르고 내 말풍선과 카드를 그린다 — 이때 /api/questions POST는 없다', async () => {
+    const { w, vm } = await toCard()
+    expect(useApiMock).toHaveBeenCalledWith('/api/questions/route', { method: 'POST', body: { question: AUTO_Q } })
+    expect(vm.phase).toBe('card')
+    expect(w.find('.bubble.user').text()).toContain(AUTO_Q)
+    expect(routeCard(w).exists()).toBe(true)
+    expect(w.find('[data-test="route-edit"]').exists()).toBe(true)
+    expect(w.text()).not.toContain('무엇이 궁금하세요?') // 히어로는 숨는다
+    expect(questionPost()).toBeUndefined()
+    w.unmount()
+  })
+
+  it('route 호출 중에는 입력창이 잠기고 카드 자리에 대기 표시가 있다', async () => {
+    const { w, vm } = await mountAuto()
+    let resolveRoute!: (v: unknown) => void
+    overrideApi(isRouteCall, () => new Promise((r) => { resolveRoute = r }))
+    const pending = vm.submit()
+    await flushPromises()
+    expect(vm.phase).toBe('routing')
+    expect(composerOf(w).props('disabled')).toBe(true)
+    expect(composerOf(w).props('placeholder')).toBe('레포를 확정하면 답변이 시작됩니다')
+    expect(w.find('[data-test="route-waiting"]').exists()).toBe(true)
+    expect(routeCard(w).exists()).toBe(false)
+    resolveRoute(ROUTE_CONFIDENT)
+    await pending
+    await flushPromises()
+    expect(w.find('[data-test="route-waiting"]').exists()).toBe(false)
+    expect(routeCard(w).exists()).toBe(true)
+    w.unmount()
+  })
+
+  it('카드에서 시작하면 routeId·고른 레포·브랜치·dbConnectionIds로 POST하고 대화로 이동한다', async () => {
+    const refresh = vi.fn()
+    stubAuto()
+    const w = mount(QuestionsIndex, { global: { provide: { 'questions:refresh': refresh } } })
+    await flushPromises()
+    const vm = w.vm as any
+    Object.assign(vm.draft, { question: AUTO_Q, model: 'claude-sonnet-5', effort: 'medium' })
+    await vm.submit()
+    await flushPromises()
+    routeCard(w).vm.$emit('start', startPayload)
+    await flushPromises()
+    const call = questionPost()!
+    expect(call[1].body).toEqual({
+      repoCatalogId: 1, githubBranch: 'main', question: AUTO_Q,
+      model: 'claude-sonnet-5', effort: 'medium', mcpCatalogIds: [], dbConnectionIds: [7], routeId: 55,
+    })
+    expect(Object.keys(call[1].body)).toEqual([
+      'repoCatalogId', 'githubBranch', 'question', 'model', 'effort', 'mcpCatalogIds', 'dbConnectionIds', 'routeId',
+    ])
+    expect(refresh).toHaveBeenCalled()
+    expect(navigateToMock).toHaveBeenCalledWith('/questions/12')
+    w.unmount()
+  })
+
+  it('카드의 시작 버튼을 눌러도 같은 바디로 POST한다 (실제 카드 연동)', async () => {
+    const { w } = await toCard()
+    await vi.waitFor(() => expect(w.find('[data-test="route-start"]').attributes('disabled')).toBeUndefined())
+    await w.find('[data-test="route-start"]').trigger('click')
+    await flushPromises()
+    expect(questionPost()![1].body).toMatchObject({ repoCatalogId: 1, githubBranch: 'main', dbConnectionIds: [7], routeId: 55 })
+    w.unmount()
+  })
+
+  it('DB 기능이 꺼져 있으면 dbConnectionIds를 싣지 않는다', async () => {
+    const { w } = await toCard(ROUTE_CONFIDENT, false)
+    routeCard(w).vm.$emit('start', { ...startPayload, dbConnectionIds: null })
+    await flushPromises()
+    expect('dbConnectionIds' in questionPost()![1].body).toBe(false)
+    w.unmount()
+  })
+
+  it('routeId가 null이면(추천 호출 실패) routeId를 싣지 않는다', async () => {
+    const { w, vm } = await toCard(null) // 모양 이상 → UNAVAILABLE, routeId null
+    expect(vm.route.routeId).toBeNull()
+    expect(vm.route.state).toBe('UNAVAILABLE')
+    routeCard(w).vm.$emit('start', startPayload)
+    await flushPromises()
+    expect('routeId' in questionPost()![1].body).toBe(false)
+    w.unmount()
+  })
+
+  it('자동 모드의 등록 바디에는 refRepos가 없다', async () => {
+    const { w, vm } = await toCard()
+    vm.draft.refRepos.push({ catalogId: 2, alias: '옛앱', branch: 'release/6.5' }) // 만에 하나 남아 있어도 싣지 않는다
+    routeCard(w).vm.$emit('start', startPayload)
+    await flushPromises()
+    expect('refRepos' in questionPost()![1].body).toBe(false)
+    w.unmount()
+  })
+
+  it('첨부가 있으면 multipart(meta + files)로 보낸다', async () => {
+    const { w, vm } = await mountAuto()
+    w.findComponent(QFile).vm.$emit('update:modelValue', [new File(['x'], '설계.docx')])
+    await flushPromises()
+    await vm.submit()
+    await flushPromises()
+    expect(w.find('.bubble-attachments').text()).toContain('설계.docx') // 말풍선에 이름 칩
+    routeCard(w).vm.$emit('start', startPayload)
+    await flushPromises()
+    const body = questionPost()![1].body as FormData
+    expect(body).toBeInstanceOf(FormData)
+    const meta = JSON.parse(await (body.get('meta') as Blob).text())
+    expect(meta).toMatchObject({ repoCatalogId: 1, githubBranch: 'main', question: AUTO_Q, dbConnectionIds: [7], routeId: 55 })
+    expect('refRepos' in meta).toBe(false)
+    expect((body.getAll('files') as File[]).map((f) => f.name)).toEqual(['설계.docx'])
+    expect(navigateToMock).toHaveBeenCalledWith('/questions/12')
+    w.unmount()
+  })
+
+  it('질문 고치기를 누르면 입력창으로 돌아가고 본문·첨부가 남아 있다', async () => {
+    const { w, vm } = await mountAuto()
+    w.findComponent(QFile).vm.$emit('update:modelValue', [new File(['x'], '설계.docx')])
+    await flushPromises()
+    await vm.submit()
+    await flushPromises()
+    await w.find('[data-test="route-edit"]').trigger('click')
+    await flushPromises()
+    expect(vm.phase).toBe('compose')
+    expect(vm.route).toBeNull()
+    expect(vm.draft.question).toBe(AUTO_Q)
+    expect(w.find('[data-test="composer-files"]').text()).toContain('설계.docx')
+    expect(routeCard(w).exists()).toBe(false)
+    expect(w.text()).toContain('무엇이 궁금하세요?')
+    expect(composerOf(w).props('disabled')).toBe(false)
+    w.unmount()
+  })
+
+  it('질문 고치기 뒤에 늦게 도착한 route 응답은 카드를 되살리지 않는다', async () => {
+    const { w, vm } = await mountAuto()
+    let resolveRoute!: (v: unknown) => void
+    overrideApi(isRouteCall, () => new Promise((r) => { resolveRoute = r }))
+    const pending = vm.submit()
+    await flushPromises()
+    await w.find('[data-test="route-edit"]').trigger('click')
+    resolveRoute(ROUTE_CONFIDENT)
+    await pending
+    await flushPromises()
+    expect(vm.phase).toBe('compose')
+    expect(vm.route).toBeNull()
+    expect(routeCard(w).exists()).toBe(false)
+    w.unmount()
+  })
+
+  it('등록이 400으로 실패하면 카드에 남아 서버 문구를 알린다', async () => {
+    const { w, vm } = await toCard()
+    overrideApi(isCreateCall, () => Promise.reject({ statusCode: 400, data: { message: '레포를 읽을 수 없습니다' } }))
+    routeCard(w).vm.$emit('start', startPayload)
+    await flushPromises()
+    expect(document.body.textContent).toContain('레포를 읽을 수 없습니다')
+    expect(vm.phase).toBe('card')
+    expect(routeCard(w).exists()).toBe(true)
+    expect(routeCard(w).props('starting')).toBe(false)
+    expect(navigateToMock).not.toHaveBeenCalled()
+    w.unmount()
+  })
+
+  it('등록이 429면 경고 톤으로 알리고 카드에 남는다', async () => {
+    const { w, vm } = await toCard()
+    overrideApi(isCreateCall, () =>
+      Promise.reject({ statusCode: 429, data: { message: '동시에 진행할 수 있는 질문 세션 한도(3)를 초과했습니다' } }))
+    routeCard(w).vm.$emit('start', startPayload)
+    await flushPromises()
+    const notif = Array.from(document.querySelectorAll('.q-notification')).find((n) => n.textContent?.includes('한도(3)'))
+    expect(notif).toBeTruthy()
+    expect(notif!.className).toContain('bg-warning')
+    expect(vm.phase).toBe('card')
+    expect(navigateToMock).not.toHaveBeenCalled()
+    w.unmount()
+  })
+
+  it('등록 중에는 카드에 starting을 주고 두 번째 start는 무시한다', async () => {
+    const { w } = await toCard()
+    let resolvePost!: (v: unknown) => void
+    overrideApi(isCreateCall, () => new Promise((r) => { resolvePost = r }))
+    routeCard(w).vm.$emit('start', startPayload)
+    await flushPromises()
+    expect(routeCard(w).props('starting')).toBe(true)
+    routeCard(w).vm.$emit('start', startPayload)
+    await flushPromises()
+    expect(useApiMock.mock.calls.filter((c) => c[0] === '/api/questions' && c[1]?.method === 'POST')).toHaveLength(1)
+    resolvePost({ id: 12 })
+    await flushPromises()
+    expect(navigateToMock).toHaveBeenCalledTimes(1)
+    w.unmount()
+  })
+
+  it('직접 고르기로 바꾸면 지금의 선택 상자가 보이고 선택이 저장된다(localStorage)', async () => {
+    const { w, vm } = await mountAuto()
+    await w.find('[data-test="repo-mode-manual"]').trigger('click')
+    await flushPromises()
+    expect(vm.mode).toBe('manual')
+    expect(w.find('[data-test="repo-select"]').exists()).toBe(true)
+    expect(w.find('[data-test="ref-repo-chips"]').exists()).toBe(true)
+    expect(w.find('[data-test="repo-mode-auto"]').exists()).toBe(true)
+    expect(w.text()).toContain('선택한 레포를 읽고 답합니다')
+    expect(localStorage.getItem(MODE_KEY)).toBe('manual')
+    w.unmount()
+    // 다음 방문: onMounted에서 읽는다
+    const again = mount(QuestionsIndex)
+    await flushPromises()
+    expect((again.vm as any).mode).toBe('manual')
+    again.unmount()
+  })
+
+  it('저장된 값이 manual이 아니면 자동이다', async () => {
+    localStorage.setItem(MODE_KEY, 'weird')
+    const w = mount(QuestionsIndex)
+    await flushPromises()
+    expect((w.vm as any).mode).toBe('auto')
+    w.unmount()
+  })
+
+  it('직접 모드에서 보내면 route를 부르지 않고 예전과 같은 바디로 POST한다', async () => {
+    localStorage.setItem(MODE_KEY, 'manual')
+    stubAuto()
+    const w = mount(QuestionsIndex)
+    await flushPromises()
+    const vm = w.vm as any
+    Object.assign(vm.draft, {
+      repoCatalogId: 2, githubBranch: 'dev', question: 'q', model: 'claude-sonnet-5', effort: 'medium', mcpCatalogIds: [9],
+    })
+    await vm.submit()
+    await flushPromises()
+    expect(useApiMock).not.toHaveBeenCalledWith('/api/questions/route', expect.anything())
+    expect(questionPost()![1].body).toEqual({
+      repoCatalogId: 2, githubBranch: 'dev', question: 'q', model: 'claude-sonnet-5', effort: 'medium', mcpCatalogIds: [9],
+    })
+    expect(vm.phase).toBe('compose')
+    w.unmount()
+  })
+
+  it('자동으로 찾기로 돌아가면 고른 레포·브랜치·DB·참조가 비워진다', async () => {
+    localStorage.setItem(MODE_KEY, 'manual')
+    stubAuto()
+    const w = mount(QuestionsIndex)
+    await flushPromises()
+    const vm = w.vm as any
+    vm.draft.repoCatalogId = 1
+    vm.onRepoSelected(1)
+    await flushPromises()
+    expect(vm.draft.githubBranch).toBe('main')
+    expect(vm.draft.dbConnectionIds).toEqual([7])
+    vm.draft.refRepos.push({ catalogId: 2, alias: '옛앱', branch: 'release/6.5' })
+    await w.find('[data-test="ref-add"]').trigger('click')
+    expect(w.find('[data-test="ref-add-form"]').exists()).toBe(true)
+
+    await w.find('[data-test="repo-mode-auto"]').trigger('click')
+    await flushPromises()
+    expect(vm.mode).toBe('auto')
+    expect(vm.draft.repoCatalogId).toBeNull()
+    expect(vm.draft.githubBranch).toBe('')
+    expect(vm.draft.dbConnectionIds).toEqual([])
+    expect(vm.db.enabled).toBe(false)
+    expect(vm.draft.refRepos).toEqual([])
+    expect(localStorage.getItem(MODE_KEY)).toBe('auto')
+    // 다시 직접 모드로 가도 참조 추가 폼은 접혀 있다
+    await w.find('[data-test="repo-mode-manual"]').trigger('click')
+    await flushPromises()
+    expect(w.find('[data-test="ref-add-form"]').exists()).toBe(false)
+    w.unmount()
+  })
+
+  it('폰 폭(390px)에서 카드와 잠긴 입력창이 함께 그려진다', async () => {
+    await setViewportWidth(390)
+    try {
+      const { w } = await toCard()
+      expect(routeCard(w).exists()).toBe(true)
+      expect(composerOf(w).props('disabled')).toBe(true)
+      expect(w.find('.bubble.user').exists()).toBe(true)
+      w.unmount()
+    } finally {
+      await setViewportWidth(1024)
+    }
   })
 })

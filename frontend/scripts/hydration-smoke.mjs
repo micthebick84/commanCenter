@@ -199,6 +199,7 @@ function apiResponse(path) {
     const m = MOCKUPS.find((x) => x.id === Number(mk[1]))
     return m ? { ...m, taskId: 1, html: '<!doctype html><p>목업</p>' } : null
   }
+  if (path === '/api/questions/route') return { routeId: 1, state: 'UNAVAILABLE', recommendedRepoCatalogId: null, candidates: [], recentRepoCatalogIds: [], eligibleRepoCatalogIds: [], dbNeeded: null }
   if (path === '/api/questions') return [QUESTION]
   if (/^\/api\/questions\/\d+$/.test(path)) return QUESTION
   if (path === '/api/usage/claude') return { limits: [] }

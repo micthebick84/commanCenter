@@ -30,14 +30,25 @@ public class RepoCatalogDto {
             String noteFolder,
             boolean dbMigrationManaged,
             String dbScriptDir,
-            boolean patchEnabled
+            boolean patchEnabled,
+            /** 질문 레포 추천용 키워드(관리자 입력). 일반 사용자 목록에서는 withoutRouteHint()로 비운다. */
+            String routeHint
     ) {
         public static View of(RepoCatalogEntry e) {
             return new View(e.getId(), e.getAlias(), e.getGitUrl(), e.getHost(), e.getOwnerRepo(),
                     e.getDefaultBranch(), e.getDescription(), e.isEnabled(),
                     e.getCreatedBy(), e.getCreatedAt(), e.getUpdatedAt(), e.isArtifactEnabled(), e.getArtifactPath(),
                     e.isPrebuildEnabled(), e.getPrebuildCommand(), e.getPrebuildArtifact(), e.getPrebuildToolchain(),
-                    e.getNoteFolder(), e.isDbMigrationManaged(), e.getDbScriptDir(), e.isPatchEnabled());
+                    e.getNoteFolder(), e.isDbMigrationManaged(), e.getDbScriptDir(), e.isPatchEnabled(),
+                    e.getRouteHint());
+        }
+
+        /** 일반 사용자 목록용 — 관리자만 보는 추천 키워드를 비운 사본. */
+        public View withoutRouteHint() {
+            return new View(id, alias, gitUrl, host, ownerRepo, defaultBranch, description, enabled,
+                    createdBy, createdAt, updatedAt, artifactEnabled, artifactPath,
+                    prebuildEnabled, prebuildCommand, prebuildArtifact, prebuildToolchain,
+                    noteFolder, dbMigrationManaged, dbScriptDir, patchEnabled, null);
         }
 
         /** host/ownerRepo를 저장값 대신 현재 설정으로 재해석한 값으로 내보낸다(스펙 §3.3). */
@@ -46,7 +57,8 @@ public class RepoCatalogDto {
                     e.getDefaultBranch(), e.getDescription(), e.isEnabled(),
                     e.getCreatedBy(), e.getCreatedAt(), e.getUpdatedAt(), e.isArtifactEnabled(), e.getArtifactPath(),
                     e.isPrebuildEnabled(), e.getPrebuildCommand(), e.getPrebuildArtifact(), e.getPrebuildToolchain(),
-                    e.getNoteFolder(), e.isDbMigrationManaged(), e.getDbScriptDir(), e.isPatchEnabled());
+                    e.getNoteFolder(), e.isDbMigrationManaged(), e.getDbScriptDir(), e.isPatchEnabled(),
+                    e.getRouteHint());
         }
     }
 
@@ -97,8 +109,23 @@ public class RepoCatalogDto {
             String dbScriptDir,
 
             /** 종료 부분 패치 (스펙 2026-11-10). null이면 그대로 둔다. 켜려면 미리 빌드 명령이 있어야 한다. */
-            Boolean patchEnabled
+            Boolean patchEnabled,
+
+            /** 질문 레포 추천용 키워드 (스펙 2026-11-20 §6.4). 수정 때 null이면 그대로, 공백이면 비움. */
+            @Size(max = 500)
+            String routeHint
     ) {
+        /** 추천 키워드 칸 도입 전 15개 인자 — 기존 호출부·테스트 호환(추천 키워드 유지). */
+        public UpsertRequest(String alias, String gitUrl, String defaultBranch, String description, Boolean enabled,
+                             Boolean artifactEnabled, String artifactPath, Boolean prebuildEnabled,
+                             String prebuildCommand, String prebuildArtifact, String prebuildToolchain,
+                             String noteFolder, Boolean dbMigrationManaged, String dbScriptDir,
+                             Boolean patchEnabled) {
+            this(alias, gitUrl, defaultBranch, description, enabled, artifactEnabled, artifactPath,
+                    prebuildEnabled, prebuildCommand, prebuildArtifact, prebuildToolchain, noteFolder,
+                    dbMigrationManaged, dbScriptDir, patchEnabled, null);
+        }
+
         /** 부분 패치 칸 도입 전 14개 인자 — 기존 호출부·테스트 호환(부분 패치 유지). */
         public UpsertRequest(String alias, String gitUrl, String defaultBranch, String description, Boolean enabled,
                              Boolean artifactEnabled, String artifactPath, Boolean prebuildEnabled,

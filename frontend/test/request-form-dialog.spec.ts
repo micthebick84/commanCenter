@@ -113,6 +113,20 @@ describe('RequestFormDialog 개발 요청', () => {
     w.unmount()
   })
 
+  it('수정 중인 요청의 대상 레포가 후보에 없으면 별칭으로 덧붙인다', async () => {
+    useApiMock.mockResolvedValueOnce(catalog)
+    const gone = { ...devDetail, targetRepoCatalogId: 99, targetRepoAlias: '비활성 사이트' }
+    const w = mount(RequestFormDialog, { props: { modelValue: true, initial: gone }, attachTo: document.body })
+    await flushPromises()
+    const opts = (w.vm as any).repoOptions
+    expect(opts.map((o: any) => [o.label, o.value])).toEqual([
+      ['선택 안 함', null],
+      ['사이트A', 3],
+      ['비활성 사이트', 99],
+    ])
+    w.unmount()
+  })
+
   it('REPO로 바꾸면 레포 힌트 칸만 보인다', async () => {
     useApiMock.mockResolvedValueOnce(catalog)
     const w = mount(RequestFormDialog, { props: { modelValue: true }, attachTo: document.body })

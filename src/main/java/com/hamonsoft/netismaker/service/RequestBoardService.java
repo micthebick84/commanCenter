@@ -40,6 +40,7 @@ import java.util.HashSet;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 
 /**
@@ -235,7 +236,10 @@ public class RequestBoardService {
         if (dev && req.issueType() == null) {
             throw new TaskException(HttpStatus.BAD_REQUEST, "유형을 선택하세요");
         }
-        if (dev) checkTargetRepo(req.targetRepoCatalogId());
+        // 바꾼 대상 레포만 검증한다 — 등록 뒤 비활성이 된 레포를 그대로 둔 수정까지 400으로 막지 않게(2026-11-20).
+        if (dev && !Objects.equals(req.targetRepoCatalogId(), post.getTargetRepoCatalogId())) {
+            checkTargetRepo(req.targetRepoCatalogId());
+        }
         // 첨부 변경은 디스크에 닿기 전에 모두 검증한다: 지울 id는 이 요청의 것이어야 하고, 한도는 (남는 수 + 새 수).
         List<RequestAttachment> current = attachments.findByRequestIdOrderByOrdinalAsc(id);
         List<RequestAttachment> removed = new ArrayList<>();
@@ -406,7 +410,7 @@ public class RequestBoardService {
         requireOpenRepo(posts.findById(id).orElseThrow(RequestBoardService::notFound));
     }
 
-    /** REPO 추가 요청을 카탈로그 등록(또는 기존 항목 연결)과 함께 처리완료로 닫는다. */
+    /** 사이트 추가(REPO) 요청을 카탈로그 등록(또는 기존 항목 연결)과 함께 처리완료로 닫는다. */
     @Transactional
     public RequestBoardDto.Detail completeRepoRequest(Long id, GitLabProjectClient.GitLabProject project,
                                                       String gitUrl, String adminId) {
@@ -495,15 +499,23 @@ public class RequestBoardService {
         return post;
     }
 
-    /** 목록 변환. 연결 작업·대상 레포는 id 묶음으로 한 번에 조회한다. */
+    /** 목록 변환. 연결 작업·대상 레포·첨부 수·답글 수는 id 묶음으로 한 번씩 조회한다. */
     private List<RequestBoardDto.ListItem> toListItems(List<RequestPost> list,
                                                        java.util.function.Predicate<RequestPost> unread) {
+        if (list.isEmpty()) return List.of();
         Set<Long> taskIds = new HashSet<>();
         Set<Long> repoIds = new HashSet<>();
+        Set<Long> postIds = new HashSet<>();
         for (RequestPost p : list) {
+            postIds.add(p.getId());
             if (p.getTaskId() != null) taskIds.add(p.getTaskId());
             if (p.getTargetRepoCatalogId() != null) repoIds.add(p.getTargetRepoCatalogId());
         }
+        Map<Long, Long> attachmentCount = new HashMap<>();
+        attachments.countByRequestIds(postIds).forEach(c -> attachmentCount.put(c.getRequestId(), c.getTotal()));
+        Map<Long, Long> commentCount = new HashMap<>();
+        comments.countByRequestIdsAndKind(postIds, RequestCommentKind.COMMENT)
+                .forEach(c -> commentCount.put(c.getRequestId(), c.getTotal()));
         Map<Long, Task> taskById = new HashMap<>();
         if (!taskIds.isEmpty()) tasks.findAllById(taskIds).forEach(t -> taskById.put(t.getId(), t));
         Map<Long, String> aliasById = new HashMap<>();
@@ -513,8 +525,8 @@ public class RequestBoardService {
                 p.getIssueType(), p.getIssueType() == null ? null : p.getIssueType().label(),
                 p.getPriority(), p.getPriority() == null ? null : p.getPriority().label(),
                 p.getDueDate(), p.getTargetRepoCatalogId() == null ? null : aliasById.get(p.getTargetRepoCatalogId()),
-                attachments.countByRequestId(p.getId()),
-                comments.countByRequestIdAndKind(p.getId(), RequestCommentKind.COMMENT),
+                attachmentCount.getOrDefault(p.getId(), 0L),
+                commentCount.getOrDefault(p.getId(), 0L),
                 p.getTaskId(), taskStatusLabel(p.getTaskId(), taskById.get(p.getTaskId())),
                 p.getCreatedAt(), p.getUpdatedAt())).toList();
     }

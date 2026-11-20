@@ -11,7 +11,7 @@ import org.springframework.web.bind.annotation.*;
 import java.util.List;
 
 /**
- * REPO 추가 요청 관리자 API (스펙 2026-10-19). 전부 관리자 전용.
+ * 사이트 추가(REPO) 요청 관리자 API (스펙 2026-10-19). 전부 관리자 전용.
  *
  *   GET  /api/admin/requests/{id}/repo-candidates — ADMIN (요청 내용에서 추측한 사내 GitLab 후보, 최대 5개)
  *   GET  /api/admin/gitlab-projects?search=       — ADMIN (사내 GitLab 프로젝트 직접 검색, 최대 10개)

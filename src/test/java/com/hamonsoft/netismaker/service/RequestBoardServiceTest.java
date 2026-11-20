@@ -16,6 +16,7 @@ import com.hamonsoft.netismaker.entity.TaskStatus;
 import com.hamonsoft.netismaker.repository.RepoCatalogRepository;
 import com.hamonsoft.netismaker.repository.RequestAttachmentRepository;
 import com.hamonsoft.netismaker.repository.RequestCommentRepository;
+import com.hamonsoft.netismaker.repository.RequestCountView;
 import com.hamonsoft.netismaker.repository.RequestPostRepository;
 import com.hamonsoft.netismaker.repository.TaskRepository;
 import org.junit.jupiter.api.BeforeEach;
@@ -238,6 +239,29 @@ class RequestBoardServiceTest {
                 new RequestBoardDto.UpdateRequest("t", "c", null), "user1"))
                 .satisfies(t -> assertThat(statusOf(t)).isEqualTo(HttpStatus.BAD_REQUEST))
                 .hasMessage("유형을 선택하세요");
+    }
+
+    /** 대상 레포가 등록 뒤 비활성이 돼도 그 값을 그대로 둔 수정은 막지 않는다 — 바꾼 값만 검증한다(2026-11-20). */
+    @Test
+    void update_대상_레포를_안_바꾸면_다시_검증하지_않는다() {
+        RequestPost p = post(1L, RequestKind.DEV, RequestStatus.RECEIVED, "user1");
+        p.setTargetRepoCatalogId(7L);
+        when(catalogService.resolveForRegistration(7L)).thenThrow(
+                new TaskException(HttpStatus.BAD_REQUEST, "비활성 레포"));
+
+        service.update(1L, new RequestBoardDto.UpdateRequest("새", "새 내용", null,
+                RequestIssueType.BUG, RequestPriority.NORMAL, null, 7L, null), "user1");
+
+        assertThat(p.getTitle()).isEqualTo("새");
+        assertThat(p.getTargetRepoCatalogId()).isEqualTo(7L);
+        verify(catalogService, never()).resolveForRegistration(any());
+
+        // 다른 레포로 바꾸면 지금처럼 검증한다
+        when(catalogService.resolveForRegistration(8L)).thenThrow(
+                new TaskException(HttpStatus.BAD_REQUEST, "없는 레포"));
+        assertThatThrownBy(() -> service.update(1L, new RequestBoardDto.UpdateRequest("새", "새 내용", null,
+                RequestIssueType.BUG, RequestPriority.NORMAL, null, 8L, null), "user1"))
+                .hasMessage("없는 레포");
     }
 
     @Test
@@ -663,6 +687,43 @@ class RequestBoardServiceTest {
         assertThat(items).extracting(RequestBoardDto.ListItem::kind).containsExactly(RequestKind.DEV);
         assertThat(items.get(0).unread()).isFalse();
         verify(posts).findDev(eq(RequestKind.DEV), eq(null), any(), eq(true), any(Pageable.class));
+    }
+
+    /** 목록은 첨부·답글 수를 글마다 세지 않고 id 묶음 한 번씩으로 센다(2026-11-20, 공개 목록이 생겨 질의 수가 커짐). */
+    @Test
+    void 목록_첨부_답글_수는_묶음_조회_한_번씩() {
+        RequestPost a = post(1L, RequestKind.DEV, RequestStatus.RECEIVED, "user2");
+        RequestPost b = post(2L, RequestKind.DEV, RequestStatus.RECEIVED, "user3");
+        when(posts.findDev(any(), any(), any(), anyBoolean(), any())).thenReturn(List.of(a, b));
+        when(attachments.countByRequestIds(any())).thenReturn(List.of(count(1L, 2)));
+        when(comments.countByRequestIdsAndKind(any(), eq(RequestCommentKind.COMMENT)))
+                .thenReturn(List.of(count(1L, 1), count(2L, 3)));
+
+        List<RequestBoardDto.ListItem> items = service.listDev(null, Set.of(), "user1", false);
+
+        assertThat(items).extracting(RequestBoardDto.ListItem::attachmentCount).containsExactly(2L, 0L);
+        assertThat(items).extracting(RequestBoardDto.ListItem::commentCount).containsExactly(1L, 3L);
+        verify(attachments, times(1)).countByRequestIds(Set.of(1L, 2L));
+        verify(comments, times(1)).countByRequestIdsAndKind(Set.of(1L, 2L), RequestCommentKind.COMMENT);
+        verify(attachments, never()).countByRequestId(any());
+        verify(comments, never()).countByRequestIdAndKind(any(), any());
+    }
+
+    @Test
+    void 빈_목록은_개수를_조회하지_않는다() {
+        when(posts.findDev(any(), any(), any(), anyBoolean(), any())).thenReturn(List.of());
+
+        service.listDev(null, Set.of(), "user1", false);
+
+        verify(attachments, never()).countByRequestIds(any());
+        verify(comments, never()).countByRequestIdsAndKind(any(), any());
+    }
+
+    private static RequestCountView count(Long requestId, long total) {
+        return new RequestCountView() {
+            @Override public Long getRequestId() { return requestId; }
+            @Override public long getTotal() { return total; }
+        };
     }
 
     @Test

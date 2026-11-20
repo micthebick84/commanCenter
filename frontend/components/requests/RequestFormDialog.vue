@@ -72,10 +72,16 @@ interface RepoCatalogEntry {
   host: string
 }
 const repoCatalog = ref<RepoCatalogEntry[]>([])
-const repoOptions = computed(() => [
-  { label: '선택 안 함', value: null as number | null },
-  ...repoCatalog.value.filter((r) => r.host !== 'other').map((r) => ({ label: r.alias, value: r.id as number | null })),
-])
+// 수정 중인 요청의 대상 레포가 활성 후보에 없으면(등록 뒤 비활성·삭제) 별칭으로 덧붙여 select가 숫자 id를 보이지 않게 한다.
+// 서버는 바꾸지 않은 대상 레포를 다시 검증하지 않으므로 그대로 저장할 수 있다.
+const repoOptions = computed(() => {
+  const active = repoCatalog.value.filter((r) => r.host !== 'other').map((r) => ({ label: r.alias, value: r.id as number | null }))
+  const current = props.initial?.targetRepoCatalogId ?? null
+  const kept = current != null && !active.some((o) => o.value === current)
+    ? [{ label: props.initial?.targetRepoAlias || `레포 #${current}`, value: current as number | null }]
+    : []
+  return [{ label: '선택 안 함', value: null as number | null }, ...active, ...kept]
+})
 let catalogLoaded = false
 async function loadRepoCatalog() {
   if (catalogLoaded) return

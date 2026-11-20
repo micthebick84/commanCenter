@@ -91,6 +91,22 @@ public class QuestionRouteService {
                 decision.candidates(), recent, eligible, decision.dbNeeded());
     }
 
+    /**
+     * 사용자가 실제로 고른 레포와 만든 세션을 추천 기록에 적는다. @Transactional을 달지 않는다 — 질문 등록 트랜잭션에
+     * 참여해 관리 중인 엔티티의 변경 감지로 반영된다(save 호출 없음). 없는·남의·이미 선택된 기록은 조용히 넘기고,
+     * 어떤 예외도 밖으로 내지 않는다(스펙 §6.3).
+     */
+    public void linkChoice(Long routeId, String userId, Long chosenRepoCatalogId, Long sessionId) {
+        if (routeId == null) return;
+        try {
+            QuestionRouteLog row = logs.findById(routeId).orElse(null);
+            if (row == null || !java.util.Objects.equals(row.getUserId(), userId) || row.getChosenAt() != null) return;
+            row.markChosen(chosenRepoCatalogId, sessionId);
+        } catch (RuntimeException e) {
+            log.warn("질문 레포 추천 선택 기록 실패 type={}", e.getClass().getSimpleName());
+        }
+    }
+
     /** 후보·추천을 등록 가능한 id로 제한한다. 추천이 걸러지면 AMBIGUOUS(추천 없음). */
     private static RouteDecision.Decision guard(RouteDecision.Decision d, Set<Long> eligible) {
         List<RouteDecision.Candidate> candidates = d.candidates().stream()

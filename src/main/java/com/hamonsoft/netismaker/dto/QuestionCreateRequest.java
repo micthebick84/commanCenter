@@ -39,18 +39,28 @@ public record QuestionCreateRequest(
          * null/빈 = 없음. @Valid가 있어야 원소의 @Size(branch 255자)가 적용된다.
          */
         @Valid
-        List<RefRepoInput> refRepos
+        List<RefRepoInput> refRepos,
+
+        /** 선택. 추천 응답의 routeId — 있으면 고른 레포·세션을 추천 기록에 연결한다(없거나 남의 것이면 조용히 무시). */
+        Long routeId
 ) {
+    /** routeId 없는 등록 — 기존 호출처/테스트 호환. */
+    public QuestionCreateRequest(Long repoCatalogId, String githubBranch, String title, String question,
+                                 String model, String effort, List<Long> mcpCatalogIds,
+                                 List<Long> dbConnectionIds, List<RefRepoInput> refRepos) {
+        this(repoCatalogId, githubBranch, title, question, model, effort, mcpCatalogIds, dbConnectionIds, refRepos, null);
+    }
+
     /** 참조 repo 없는 등록 — 기존 호출처/테스트 호환. */
     public QuestionCreateRequest(Long repoCatalogId, String githubBranch, String title, String question,
                                  String model, String effort, List<Long> mcpCatalogIds,
                                  List<Long> dbConnectionIds) {
-        this(repoCatalogId, githubBranch, title, question, model, effort, mcpCatalogIds, dbConnectionIds, null);
+        this(repoCatalogId, githubBranch, title, question, model, effort, mcpCatalogIds, dbConnectionIds, null, null);
     }
 
     /** DB·참조 선택 없는 등록 — 기존 호출처/테스트 호환. */
     public QuestionCreateRequest(Long repoCatalogId, String githubBranch, String title, String question,
                                  String model, String effort, List<Long> mcpCatalogIds) {
-        this(repoCatalogId, githubBranch, title, question, model, effort, mcpCatalogIds, null, null);
+        this(repoCatalogId, githubBranch, title, question, model, effort, mcpCatalogIds, null, null, null);
     }
 }

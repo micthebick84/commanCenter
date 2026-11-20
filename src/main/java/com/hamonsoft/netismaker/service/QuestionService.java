@@ -20,6 +20,7 @@ import com.hamonsoft.netismaker.repository.QuestionAttachmentRepository;
 import org.springframework.beans.factory.annotation.Value;
 import com.hamonsoft.netismaker.service.render.AttachmentRenderRequested;
 import com.hamonsoft.netismaker.service.render.RenderTargetPolicy;
+import com.hamonsoft.netismaker.service.route.QuestionRouteService;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.context.annotation.Profile;
 import org.springframework.http.HttpStatus;
@@ -63,6 +64,7 @@ public class QuestionService {
     private final DbConnectionService dbConnectionService;
     private final RenderTargetPolicy renderPolicy;
     private final ApplicationEventPublisher events;
+    private final QuestionRouteService routeService;
     private final int maxActivePerUser;
     private final int maxQaTurns;
 
@@ -77,6 +79,7 @@ public class QuestionService {
                            DbConnectionService dbConnectionService,
                            RenderTargetPolicy renderPolicy,
                            ApplicationEventPublisher events,
+                           QuestionRouteService routeService,
                            @Value("${app.question.max-active-per-user:3}") int maxActivePerUser,
                            @Value("${app.question.max-qa-turns:10}") int maxQaTurns) {
         this.interviewService = interviewService;
@@ -90,6 +93,7 @@ public class QuestionService {
         this.dbConnectionService = dbConnectionService;
         this.renderPolicy = renderPolicy;
         this.events = events;
+        this.routeService = routeService;
         this.maxActivePerUser = maxActivePerUser;
         this.maxQaTurns = maxQaTurns;
     }
@@ -135,7 +139,10 @@ public class QuestionService {
         s.setMcpCatalogIds(req.mcpCatalogIds() == null ? new ArrayList<>() : new ArrayList<>(req.mcpCatalogIds()));
         s.setDbConnectionIds(dbIds);
         s.setRefRepos(new ArrayList<>(refs));   // resolveReferences는 불변 리스트를 돌려준다
-        return sessionRepo.save(s);
+        InterviewSession saved = sessionRepo.save(s);
+        // 추천 기록 연결 — routeId 때문에 등록이 실패하면 안 된다(linkChoice가 예외를 삼키고 null이면 바로 끝낸다)
+        routeService.linkChoice(req.routeId(), requesterId, repo.catalogId(), saved.getId());
+        return saved;
     }
 
     /**

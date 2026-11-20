@@ -204,4 +204,54 @@ class QuestionRouteServiceTest {
         assertThat(r.routeId()).isNull();
         assertThat(r.state()).isEqualTo("CONFIDENT");
     }
+
+    private QuestionRouteLog existingLog(Long id, String userId) {
+        QuestionRouteLog l = QuestionRouteLog.of(userId, "발췌", RouteDecision.unavailable(), null, null);
+        ReflectionTestUtils.setField(l, "id", id);
+        return l;
+    }
+
+    @Test
+    void linkChoice는_고른_레포와_세션과_시각을_적는다() {
+        QuestionRouteLog l = existingLog(77L, "u1");
+        when(logs.findById(77L)).thenReturn(Optional.of(l));
+        service.linkChoice(77L, "u1", 8L, 500L);
+        assertThat(l.getChosenRepoCatalogId()).isEqualTo(8L);
+        assertThat(l.getSessionId()).isEqualTo(500L);
+        assertThat(l.getChosenAt()).isNotNull();
+    }
+
+    @Test
+    void linkChoice는_routeId가_null이면_저장소를_건드리지_않는다() {
+        service.linkChoice(null, "u1", 8L, 500L);
+        org.mockito.Mockito.verifyNoInteractions(logs);
+    }
+
+    @Test
+    void linkChoice는_없는_기록과_남의_기록을_조용히_무시한다() {
+        when(logs.findById(1L)).thenReturn(Optional.empty());
+        QuestionRouteLog other = existingLog(2L, "someone-else");
+        when(logs.findById(2L)).thenReturn(Optional.of(other));
+        service.linkChoice(1L, "u1", 8L, 500L);
+        service.linkChoice(2L, "u1", 8L, 500L);
+        assertThat(other.getChosenAt()).isNull();
+        assertThat(other.getChosenRepoCatalogId()).isNull();
+    }
+
+    @Test
+    void linkChoice는_이미_선택된_기록을_덮지_않는다() {
+        QuestionRouteLog l = existingLog(77L, "u1");
+        when(logs.findById(77L)).thenReturn(Optional.of(l));
+        service.linkChoice(77L, "u1", 8L, 500L);
+        service.linkChoice(77L, "u1", 3L, 501L);
+        assertThat(l.getChosenRepoCatalogId()).isEqualTo(8L);
+        assertThat(l.getSessionId()).isEqualTo(500L);
+    }
+
+    @Test
+    void linkChoice는_저장소가_예외를_던져도_밖으로_내지_않는다() {
+        when(logs.findById(org.mockito.ArgumentMatchers.anyLong())).thenThrow(new IllegalStateException("db down"));
+        org.assertj.core.api.Assertions.assertThatCode(() -> service.linkChoice(77L, "u1", 8L, 500L))
+                .doesNotThrowAnyException();
+    }
 }

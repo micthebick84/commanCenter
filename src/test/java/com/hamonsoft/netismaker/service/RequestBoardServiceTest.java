@@ -12,6 +12,7 @@ import com.hamonsoft.netismaker.entity.RequestPriority;
 import com.hamonsoft.netismaker.entity.RequestPost;
 import com.hamonsoft.netismaker.entity.RequestStatus;
 import com.hamonsoft.netismaker.entity.Task;
+import com.hamonsoft.netismaker.entity.TaskStatus;
 import com.hamonsoft.netismaker.repository.RepoCatalogRepository;
 import com.hamonsoft.netismaker.repository.RequestAttachmentRepository;
 import com.hamonsoft.netismaker.repository.RequestCommentRepository;
@@ -1059,6 +1060,26 @@ class RequestBoardServiceTest {
         assertThat(p.getStatus()).isEqualTo(RequestStatus.REVIEWING);
         assertThat(p.getTaskId()).isNull();
         assertThat(d.taskId()).isNull();
+        assertThat(savedComments()).extracting(RequestComment::getBody)
+                .containsExactly("관리자(admin1)가 상태를 검토중으로 변경 (작업 #9 연결 해제)");
+    }
+
+    /** 잘못 넘긴 작업을 관리자가 취소만 해도(삭제 전) 요청을 다시 열 수 있어야 한다 — 2026-11-20 라이브 확인에서 막혔던 경우. */
+    @Test
+    void 연결_작업이_취소됐으면_되돌리며_연결_해제() {
+        RequestPost p = devPost(1L, "user2");
+        p.setStatus(RequestStatus.DONE);
+        p.setTaskId(9L);
+        Task cancelled = linkedTask(9L, false);
+        when(cancelled.getStatus()).thenReturn(TaskStatus.CANCELLED);
+
+        RequestBoardDto.Detail d = service.changeStatus(1L,
+                new RequestBoardDto.StatusChangeRequest(RequestStatus.REVIEWING, null), "admin1");
+
+        assertThat(p.getStatus()).isEqualTo(RequestStatus.REVIEWING);
+        assertThat(p.getTaskId()).isNull();
+        assertThat(d.taskId()).isNull();
+        assertThat(d.convertible()).isTrue();
         assertThat(savedComments()).extracting(RequestComment::getBody)
                 .containsExactly("관리자(admin1)가 상태를 검토중으로 변경 (작업 #9 연결 해제)");
     }

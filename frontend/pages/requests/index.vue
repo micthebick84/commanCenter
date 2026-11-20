@@ -209,7 +209,7 @@ const showCreate = ref(false)
           <div data-test="request-row">
           <div class="row items-center no-wrap q-gutter-x-xs q-mb-xs">
             <q-chip dense size="sm" color="blue-grey-1" text-color="grey-9" :label="r.kindLabel" class="q-ma-none" />
-            <q-chip v-if="r.issueType" dense size="sm" outline :color="ISSUE_TYPE_COLOR[r.issueType]" :label="r.issueTypeLabel" class="q-ma-none" />
+            <q-chip v-if="r.issueType" dense size="sm" outline :color="ISSUE_TYPE_COLOR[r.issueType]" :label="r.issueTypeLabel ?? undefined" class="q-ma-none" />
             <span v-if="r.priority" class="text-caption" :class="`text-${PRIORITY_COLOR[r.priority]}`">{{ r.priorityLabel }}</span>
             <q-chip dense size="sm" :color="STATUS_COLOR[r.status]" text-color="white" :label="r.statusLabel" class="q-ma-none" />
             <q-space />

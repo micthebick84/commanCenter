@@ -37,6 +37,9 @@ class JevClientTest {
     /** 호출 순번(0부터)마다 응답을 돌려주는 규칙. 기본은 항상 정상 응답. */
     private volatile java.util.function.IntFunction<Reply> script = n -> new Reply(200, ok("{\"r3\":0.9,\"r8\":0.1}"));
     private volatile long delayMs = 0;
+    /** true면 200 헤더(chunked)와 본문 일부만 보낸 뒤 release될 때까지 멈춘다. */
+    private volatile boolean stallBody = false;
+    private final java.util.concurrent.CountDownLatch release = new java.util.concurrent.CountDownLatch(1);
 
     record Reply(int status, String body) {}
 
@@ -54,6 +57,18 @@ class JevClientTest {
                     Thread.currentThread().interrupt();
                 }
             }
+            if (stallBody) {
+                try {
+                    ex.sendResponseHeaders(200, 0);
+                    ex.getResponseBody().write("{\"mod".getBytes(StandardCharsets.UTF_8));
+                    ex.getResponseBody().flush();
+                    release.await();
+                } catch (IOException | InterruptedException ignored) {
+                    // 클라이언트가 끊었거나 정리 중
+                }
+                ex.close();
+                return;
+            }
             Reply r = script.apply(n);
             byte[] bytes = r.body().getBytes(StandardCharsets.UTF_8);
             try {
@@ -69,6 +84,7 @@ class JevClientTest {
 
     @AfterEach
     void stop() {
+        release.countDown();
         server.stop(0);
     }
 
@@ -206,6 +222,14 @@ class JevClientTest {
         long t0 = System.nanoTime();
         assertThat(client(true, KEY, 300).ask("질문", repos())).isEmpty();
         assertThat((System.nanoTime() - t0) / 1_000_000).isLessThan(1200);
+    }
+
+    @Test
+    void 헤더만_보내고_본문이_멈춰도_전체_상한_안에_빈_값() {
+        stallBody = true;
+        long t0 = System.nanoTime();
+        assertThat(client(true, KEY, 400).ask("질문", repos())).isEmpty();
+        assertThat((System.nanoTime() - t0) / 1_000_000).isLessThan(400 + 1500);
     }
 
     @Test

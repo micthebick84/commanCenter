@@ -205,6 +205,17 @@ class QuestionRouteServiceTest {
         assertThat(r.state()).isEqualTo("CONFIDENT");
     }
 
+    @Test
+    void Jev_호출이_뜻밖의_예외를_던져도_UNAVAILABLE이고_기록은_남는다() {
+        when(jev.ask(anyString(), anyList())).thenThrow(new IllegalStateException("boom"));
+
+        QuestionRouteResponse r = service.route("질문", "user1");
+
+        assertThat(r.state()).isEqualTo("UNAVAILABLE");
+        assertThat(r.routeId()).isNotNull();
+        verify(logs).save(any());
+    }
+
     private QuestionRouteLog existingLog(Long id, String userId) {
         QuestionRouteLog l = QuestionRouteLog.of(userId, "발췌", RouteDecision.unavailable(), null, null);
         ReflectionTestUtils.setField(l, "id", id);

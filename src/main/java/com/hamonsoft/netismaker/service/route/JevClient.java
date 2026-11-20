@@ -16,6 +16,10 @@ import java.net.http.HttpResponse;
 import java.net.http.HttpTimeoutException;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashSet;
@@ -92,6 +96,7 @@ public class JevClient {
             long remaining = budgetMs - elapsedMs(start);
             if (remaining <= 0) return fail("timeout", -1, start);
             HttpResponse<String> res;
+            CompletableFuture<HttpResponse<String>> future = null;
             try {
                 HttpRequest req = HttpRequest.newBuilder(URI.create(props.endpoint()))
                         .header("Authorization", "Bearer " + props.apiKey().strip())
@@ -99,14 +104,23 @@ public class JevClient {
                         .timeout(Duration.ofMillis(remaining))
                         .POST(HttpRequest.BodyPublishers.ofString(body, StandardCharsets.UTF_8))
                         .build();
-                res = http.send(req, HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
-            } catch (HttpTimeoutException e) {
+                // HttpRequest.timeout은 응답 헤더까지만 잰다 — 본문이 멈추는 경우까지 전체 예산으로 묶으려고 future에서 기다린다.
+                future = http.sendAsync(req, HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
+                res = future.get(remaining, TimeUnit.MILLISECONDS);
+            } catch (TimeoutException e) {
+                future.cancel(true);
                 return fail("timeout", -1, start);
             } catch (InterruptedException e) {
+                if (future != null) future.cancel(true);
                 Thread.currentThread().interrupt();
                 return fail("timeout", -1, start);
-            } catch (IOException | IllegalArgumentException e) {
+            } catch (ExecutionException e) {
+                Throwable cause = e.getCause() == null ? e : e.getCause();
+                if (cause instanceof HttpTimeoutException) return fail("timeout", -1, start);
                 // 예외 메시지에 URL·헤더가 섞일 수 있어 종류만 남긴다.
+                log.warn("질문 레포 추천 Jev I/O 오류 type={}", cause.getClass().getSimpleName());
+                return fail("http", -1, start);
+            } catch (IllegalArgumentException e) {
                 log.warn("질문 레포 추천 Jev I/O 오류 type={}", e.getClass().getSimpleName());
                 return fail("http", -1, start);
             }

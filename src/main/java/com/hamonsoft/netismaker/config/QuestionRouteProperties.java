@@ -25,4 +25,13 @@ public record QuestionRouteProperties(
             @DefaultValue("0.5") double topProbability,
             @DefaultValue("0.6") double needsDb) {
     }
+
+    /** record 기본 toString은 apiKey를 그대로 찍는다 — 키는 절대 문자열로 나가지 않게 가린다. */
+    @Override
+    public String toString() {
+        return "QuestionRouteProperties[enabled=" + enabled
+                + ", apiKey=" + (apiKey == null || apiKey.isBlank() ? "" : "***")
+                + ", model=" + model + ", endpoint=" + endpoint + ", timeoutMs=" + timeoutMs
+                + ", excerptChars=" + excerptChars + ", threshold=" + threshold + "]";
+    }
 }

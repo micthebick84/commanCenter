@@ -140,7 +140,8 @@ public class QuestionService {
         s.setDbConnectionIds(dbIds);
         s.setRefRepos(new ArrayList<>(refs));   // resolveReferences는 불변 리스트를 돌려준다
         InterviewSession saved = sessionRepo.save(s);
-        // 추천 기록 연결 — routeId 때문에 등록이 실패하면 안 된다(linkChoice가 예외를 삼키고 null이면 바로 끝낸다)
+        // 추천 기록 연결 — 없는·남의·이미 선택된 routeId는 조용히 무시되고 linkChoice 안의 예외는 잡힌다. 다만 등록 트랜잭션 안에서
+        // 도므로 진짜 DB 장애는(어차피 등록도 실패할) 예외다
         routeService.linkChoice(req.routeId(), requesterId, repo.catalogId(), saved.getId());
         return saved;
     }

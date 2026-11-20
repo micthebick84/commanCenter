@@ -71,12 +71,19 @@ public class QuestionRouteService {
             List<JevClient.RepoOption> options = routable.stream()
                     .map(e -> new JevClient.RepoOption(e.getId(), e.getAlias(), e.getRouteHint())).toList();
             long start = System.nanoTime();
-            Optional<JevClient.JevAnswers> got = jev.ask(excerpt, options);
-            latencyMs = (int) ((System.nanoTime() - start) / 1_000_000);
-            if (got.isPresent()) {
-                answers = got.get();
-                decision = guard(RouteDecision.decide(answers, props.threshold()), eligibleSet);
+            try {
+                Optional<JevClient.JevAnswers> got = jev.ask(excerpt, options);
+                if (got.isPresent()) {
+                    answers = got.get();
+                    decision = guard(RouteDecision.decide(answers, props.threshold()), eligibleSet);
+                }
+            } catch (RuntimeException e) {
+                // ask는 예상한 실패를 스스로 삼키지만, 뜻밖의 예외도 500이 아니라 200 + UNAVAILABLE이어야 한다. 종류만 남긴다.
+                log.warn("질문 레포 추천 판단 중 예외 type={}", e.getClass().getSimpleName());
+                answers = null;
+                decision = RouteDecision.unavailable();
             }
+            latencyMs = (int) ((System.nanoTime() - start) / 1_000_000);
         }
 
         Long routeId = null;
@@ -94,7 +101,8 @@ public class QuestionRouteService {
     /**
      * 사용자가 실제로 고른 레포와 만든 세션을 추천 기록에 적는다. @Transactional을 달지 않는다 — 질문 등록 트랜잭션에
      * 참여해 관리 중인 엔티티의 변경 감지로 반영된다(save 호출 없음). 없는·남의·이미 선택된 기록은 조용히 넘기고,
-     * 어떤 예외도 밖으로 내지 않는다(스펙 §6.3).
+     * 이 안에서 나는 예외는 잡아 로그만 남긴다(스펙 §6.3). 다만 질문 등록 트랜잭션 안에서 도므로 진짜 DB 장애는
+     * (어차피 등록도 실패할) 예외다 — "어떤 경우에도 등록이 실패하지 않는다"는 뜻이 아니다.
      */
     public void linkChoice(Long routeId, String userId, Long chosenRepoCatalogId, Long sessionId) {
         if (routeId == null) return;

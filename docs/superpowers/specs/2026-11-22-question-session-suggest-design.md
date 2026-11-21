@@ -37,7 +37,11 @@
 ## 3. 제약 (코드에서 확인한 것)
 
 - 질문 턴은 `interviewRunner.ts`의 `runQuestionTurn`이 SDK `query` → `relay` → `postQuestion`(바디 `WorkerQuestionRequest`)으로 끝낸다. 내장 SDK MCP 서버를 턴마다 만드는 선례가 둘 있다: DB(`dbMcp.ts`, `db-<id>`)와 인터뷰 목업(`mockupMcp.ts`, `mockup`).
-- 질문 게이트는 default-deny다(`permissions.ts`의 `buildCanUseTool` → `questionMcpGate`). 새 내장 서버의 도구는 여기서 명시적으로 허용해야 불린다.
+- 질문 게이트는 기본 도구에는 default-deny지만 MCP에는 아니다: `questionMcpGate`(`permissions.ts`)는 Obsidian 계열(읽기 도구 allowlist)·내장 DB 서버(`db-<id>`, SQL 검사)만 따로 보고, 그 밖의 서버는 도구 이름에 쓰기·실행 동사가 있을 때만 막는다. 그래서 새 내장 서버의 도구 이름은 지금 게이트를 그대로 통과한다.
+- 세션의 MCP 서버는 운영자 `~/.claude.json` 스냅샷(`mcpsBase`) → 카탈로그 extras → 내장 서버 순으로 합쳐진다(`sessionOptions.ts`). 같은 이름이면 뒤가 이긴다.
+- 대화 화면은 보낼 때마다 초안 전체(모델·추론·MCP·DB·참조·첨부)를 싣는다(`pages/questions/[id].vue`). `InterviewPanel`의 `sendAnswer`는 입력창의 글만 보내고 밖에서 부를 수 없다.
+- `/api/db-connections`는 **보는 사람** 기준으로 거른다(관리자는 모든 레포 공용 연결 + 자기 개인 연결). 반면 `ask`의 DB 검증은 **세션 요청자** 기준이다(`validateSelection`).
+- `resolveReferences`는 지원하지 않는 호스트의 레포와, 브랜치를 주지 않았는데 기본 브랜치가 없는 레포를 400으로 거절한다.
 - 대화 중 DB·참조 변경 경로는 이미 있다: `POST /api/questions/{id}/ask` 바디 `dbConnectionIds`·`refRepos`(null=유지, 같은 집합이면 no-op, 상한 각 3개) → `QuestionService.applyDbChange`·`applyRefChange`가 검증하고 `system/note` 턴을 남긴다. 다음 claim부터 반영된다.
 - 문답 상한 `app.question.max-qa-turns`(기본 10)는 `ask`가 센다. 제안을 받아들여 다시 묻는 것도 한 턴이다.
 - 답변은 SSE `question` 이벤트와 스냅샷(`InterviewResponse.turns`)으로 화면에 간다. 목업은 별도 이벤트 `mockup`으로 간다(`InterviewStreamService.pushMockup`).
@@ -100,8 +104,9 @@ B의 비용은 **한 턴**이다. Claude는 코드만으로 답을 먼저 내고
 `InterviewClaimResponse`에 선택 필드 `suggest`를 더한다. 질문 세션이고, 기능이 켜져 있고(`app.question.suggest.enabled`, 기본 true), 이번 턴 뒤에 문답이 한 번 이상 남았을 때만 채운다.
 
 - `dbCandidates`: `[{id, name, dbType}]` — 대상 레포에서 **요청자**가 고를 수 있는 연결(`validateSelection`과 같은 기준) 중 세션에 아직 안 붙은 것. DB 기능이 꺼졌거나 세션에 이미 3개가 붙었으면 빈 목록. 접속정보는 싣지 않는다(이름·종류만).
-- `refCandidates`: `[{catalogId, alias, hint}]` — 켜진 카탈로그 항목 중 대상이 아니고 세션에 아직 참조로 안 붙은 것. `hint`는 `route_hint`(없으면 생략)이고 `description`은 싣지 않는다. 이미 3개가 붙었으면 빈 목록.
+- `refCandidates`: `[{catalogId, alias, hint}]` — 켜진 카탈로그 항목 중 대상이 아니고 세션에 아직 참조로 안 붙은 것. **기본 브랜치로 `resolveReferences`를 통과할 항목만**이다(지원하는 호스트, 기본 브랜치 있음) — 받아들이면 반드시 붙을 수 있는 것만 알린다. `hint`는 `route_hint`(없으면 생략)이고 `description`은 싣지 않는다. 이미 3개가 붙었으면 빈 목록.
 - 두 목록이 모두 비면 `suggest` 자체를 생략한다.
+- 후보 계산은 한 곳에 두고 claim·제안 보고 검증(§6.2)·화면용 선택지(§6.2 끝)가 함께 쓴다.
 
 ### 6.2 제안 저장 — `com.question_suggestion` (V48)
 
@@ -123,6 +128,8 @@ B의 비용은 **한 턴**이다. Claude는 코드만으로 답을 먼저 내고
 
 화면 전달: 스냅샷 `InterviewResponse.suggestions`(세션의 모든 제안, 턴 seq·상태 포함)와 실시간 SSE 이벤트 `suggestion`(답변 이벤트 뒤에 보낸다). 본인·관리자만 본다(세션 조회 권한 그대로).
 
+`PENDING`인 DB 제안에는 **지금 붙일 수 있는 연결 선택지**(`dbOptions`: `[{id, name, dbType}]`)를 함께 싣는다 — 보는 사람이 아니라 **세션 요청자** 기준으로, 조회할 때마다 §6.1과 같은 계산으로 만든다. 관리자가 남의 세션을 볼 때도 `ask`가 받아 줄 연결만 보이고, 요청자의 개인 연결은 이름·종류만 보인다. `PENDING`인 참조 제안에는 별칭과 기본 브랜치를 싣는다. 남은 자리 수(`dbSlotsLeft`·`refSlotsLeft`, 3 − 붙은 수)도 함께 준다.
+
 ### 6.3 받아들이기·닫기
 
 - `QuestionAskRequest`에 선택 필드 `acceptSuggestionIds`를 더한다. `ask`가 답변 턴·연결 변경과 **같은 트랜잭션**에서 그 id들을 `ACCEPTED`로 바꾼다. 이 세션의 `PENDING`이 아닌 id는 조용히 무시한다(붙이는 것은 `dbConnectionIds`·`refRepos`가 하고, 이 칸은 기록만 한다).
@@ -131,13 +138,13 @@ B의 비용은 **한 턴**이다. Claude는 코드만으로 답을 먼저 내고
 
 ### 6.4 예약 이름
 
-MCP 카탈로그 이름 `suggest`는 `db-*`처럼 예약한다(등록·수정 400) — 내장 서버 이름과 겹치면 세션 옵션에서 카탈로그 쪽이 가려진다.
+MCP 카탈로그 이름 `suggest`는 `db-*`처럼 예약한다(등록·수정 400). 운영자 `~/.claude.json`에 같은 이름의 서버가 있어도 내장 서버가 마지막에 합쳐져 이긴다(후보가 있는 턴에서만 가려진다) — 인터뷰 서비스는 기동 때 그 이름이 스냅샷에 있으면 경고를 한 줄 남긴다.
 
 ## 7. 인터뷰 서비스
 
 - 새 파일 `src/sdk/suggestMcp.ts`: `createSuggestMcp(candidates)` → 내장 서버 `suggest`와 수집 함수. 도구는 후보가 있는 종류만 만든다(`suggest_db`는 `dbCandidates`가, `suggest_ref_repo`는 `refCandidates`가 비지 않을 때). 입력은 zod로 검증하고, 후보에 없는 id는 `isError` 결과로 돌려준다(예외 없음, `dbMcp.ts`·`mockupMcp.ts`와 같은 모양). 성공 결과 문구는 "제안을 남겼습니다 — 사용자가 연결하면 다음 답변부터 쓸 수 있습니다. 지금은 코드로 확인한 범위에서 답을 마무리하세요."
 - `runQuestionTurn`: `claim.suggest`가 있으면 서버를 만들어 옵션의 MCP 서버에 더하고, 프롬프트 접두에 제안 절을 더하고, `postQuestion` 바디에 수집한 `suggestions`를 싣는다(없으면 키 생략). 턴이 실패하면 보고하지 않는다(`refStates`와 같다).
-- 게이트: `questionMcpGate`가 `mcp__suggest__suggest_db`·`mcp__suggest__suggest_ref_repo` 두 이름만 허용한다. 서버가 붙지 않은 턴에는 그 이름도 거부한다.
+- 게이트: 코드를 바꾸지 않는다 — 두 도구 이름(`mcp__suggest__suggest_db`·`mcp__suggest__suggest_ref_repo`)은 지금의 `questionMcpGate`를 통과한다(쓰기·실행 동사 없음). 이름이 앞으로 denylist에 걸리지 않게 시험 하나로 고정한다. 서버가 붙지 않은 턴에는 도구 자체가 없다. 내장 서버는 `mcpsBase`·extras **뒤에** 합친다(§6.4).
 - 제안 절(매 턴 접두, 후보가 있을 때만)에 담는 규칙:
   - 언제 부르는가 — DB: 코드를 읽어 보니 답이 **실제 DB의 구조나 저장된 값**에 달려 있고 지금 연결된 DB로는 볼 수 없을 때만. 참조: 답이 목록의 **다른 레포 코드**에 달려 있을 때만(호출 대상·공유 모듈 등 근거를 코드에서 확인했을 때).
   - 추측으로 부르지 않는다. 한 답변에 종류별 한 번이면 충분하다.
@@ -149,8 +156,10 @@ MCP 카탈로그 이름 `suggest`는 `db-*`처럼 예약한다(등록·수정 40
 
 - 제안 카드는 **가장 최근 답변** 아래, 그 답변에 `PENDING` 제안이 있을 때만 뜬다. 입력 대기 상태가 아니면(답변 중·종료됨) 버튼이 꺼진다.
 - 카드 한 장에 그 답변의 제안을 모은다: DB 줄(이유, 보고 싶은 테이블, 연결 체크박스 목록)과 참조 줄(별칭, 이유, 체크박스). 버튼은 `연결하고 다시 묻기`(체크된 것이 있을 때만 켜짐)와 `닫기`.
-- DB 연결 목록은 claim 시점 후보가 아니라 화면이 지금 받아 둔 연결 목록(`/api/db-connections?repoCatalogId=`)에서 그린다 — 대화 화면의 DB 메뉴와 같은 출처. Claude가 고른 연결이 그 목록에 있으면 미리 체크하고, 없으면 아무것도 체크하지 않는다.
-- `연결하고 다시 묻기`는 대화 화면이 지금 쓰는 전송 경로(`InterviewPanel`의 `sendAnswer`)로 보낸다: `dbConnectionIds` = 지금 붙은 것 + 고른 것, `refRepos` = 지금 붙은 것 + 고른 것(기본 브랜치), `acceptSuggestionIds`, `answer` = §5.3 문장. 화면의 DB·참조 초안 상태도 같은 값으로 맞춘다.
+- DB 연결 목록은 제안에 실려 온 선택지(`dbOptions`, §6.2)로 그린다 — `/api/db-connections`는 보는 사람 기준이라 관리자가 남의 세션을 볼 때 어긋난다. Claude가 고른 연결이 선택지에 있으면 미리 체크하고, 없으면 선택지가 하나일 때만 그것을 체크한다. 선택지가 비었으면(그사이 연결이 지워짐 등) DB 줄은 `붙일 수 있는 연결이 없습니다`로 바뀐다.
+- 체크할 수 있는 수는 남은 자리 수까지다(`dbSlotsLeft`·`refSlotsLeft`). 넘으면 나머지 체크박스가 꺼지고 사유를 보인다.
+- `연결하고 다시 묻기`는 **보통의 전송과 같은 바디**로 보낸다 — 화면에 보이는 초안(모델·추론·MCP·DB·참조) 그대로에 고른 연결·참조를 더하고(`dbConnectionIds` = DB 초안 + 고른 것, `refRepos` = 참조 초안 + 고른 것·기본 브랜치), `acceptSuggestionIds`를 싣고, `answer`만 §5.3의 고정 문장으로 바꾼다. 화면에 보이는 칩과 보내는 값이 같아야 하기 때문이다. **입력창에 쓰던 글과 아직 안 보낸 첨부는 보내지 않고 그대로 둔다**(다음 전송 때 쓴다).
+- 이를 위해 `InterviewPanel`의 전송 함수가 글을 인자로 받을 수 있어야 하고(입력창을 건드리지 않는 경로), 카드가 그것을 부를 수 있어야 한다. 전송 뒤 DB·참조 초안은 지금처럼 서버 값으로 다시 맞춰진다.
 - 지난 제안은 접힌 한 줄로 남는다(§5.4).
 - 좁은 화면에서도 같은 카드다. 클래스 이름은 Quasar 반응형 표시 헬퍼 이름과 겹치지 않게 한다(CLAUDE.md).
 - `scripts/hydration-smoke.mjs`의 질문 상세 목에 `suggestions`를 더한다.
@@ -177,6 +186,9 @@ MCP 카탈로그 이름 `suggest`는 `db-*`처럼 예약한다(등록·수정 40
 - 제안은 표에 따로 저장한다(턴의 JSON 칸이 아니라) — 얼마나 제안했고 얼마나 받아들였는지 SQL로 바로 본다.
 - 지난 답변의 제안은 다시 누를 수 없다.
 - 한 턴의 상한: DB 1개·참조 2개, 이유 200자.
+- 받아들일 때 입력창에 쓰던 글·안 보낸 첨부는 보내지 않고 남긴다. 모델·MCP·DB·참조 초안은 보통 전송처럼 함께 간다.
+- 관리자가 남의 세션에서 받아들일 때도 선택지는 요청자 기준이다(요청자의 개인 연결은 이름·종류만 보인다).
+- 받아들이면 반드시 붙는 후보만 Claude에게 알린다(기본 브랜치 없는 레포·지원하지 않는 호스트 제외).
 
 ## 11. 만드는 사람에게 맡기는 것
 

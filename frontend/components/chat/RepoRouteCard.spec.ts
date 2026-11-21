@@ -420,7 +420,7 @@ describe('RepoRouteCard (스펙 2026-11-20 §5.3·§5.4)', () => {
     const w = await mountCard(route())
     const bad = /^(xs|sm|md|lg|xl|gt-.*|lt-.*|.*-hide)$/
     const classes = new Set<string>()
-    w.element.querySelectorAll('[class]').forEach((el) => el.classList.forEach((c) => classes.add(c)))
+    w.element.querySelectorAll('[class]').forEach((el: Element) => el.classList.forEach((c: string) => classes.add(c)))
     expect([...classes].filter((c) => bad.test(c))).toEqual([])
     w.unmount()
   })

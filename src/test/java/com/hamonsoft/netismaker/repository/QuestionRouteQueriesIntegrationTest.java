@@ -87,7 +87,9 @@ class QuestionRouteQueriesIntegrationTest {
         Long r3 = newRepo();
         Long rOther = newRepo();
         OffsetDateTime now = OffsetDateTime.now();
+        // interview_session.requester_id는 com."user" FK — 다른 시험의 질문 세션과 섞이지 않게 이 시험만의 사용자를 만든다.
         String user = "u-" + UUID.randomUUID().toString().substring(0, 8);
+        jdbc.update("INSERT INTO com.\"user\" (user_id, user_name, password) VALUES (?, ?, 'x')", user, user);
         session(true, user, r8, now.minusHours(5));
         session(true, user, r3, now.minusHours(3));
         session(true, user, r8, now.minusHours(1));

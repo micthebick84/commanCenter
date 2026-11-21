@@ -87,6 +87,27 @@ class DbConnectionServiceTest {
     }
 
     @Test
+    void selectableChips는_validateSelection이_받아_줄_연결만_id_이름_종류로_돌려준다() {
+        DbConnection pub = row(1, DbConnectionScope.REPO, null, 1, true);
+        DbConnection off = row(2, DbConnectionScope.REPO, null, 1, false);
+        DbConnection mine = row(3, DbConnectionScope.USER, "user1", 1, true);
+        DbConnection other = row(4, DbConnectionScope.USER, "user2", 1, true);
+        when(repo.findByRepoCatalogIdOrderByScopeAscNameAsc(1L)).thenReturn(List.of(pub, off, mine, other));
+
+        assertThat(service.selectableChips(1L, "user1"))
+                .containsExactly(new DbConnectionDto.Chip(1L, "conn1", "POSTGRESQL"),
+                        new DbConnectionDto.Chip(3L, "conn3", "POSTGRESQL"));
+        assertThat(service.selectableChips(null, "user1")).isEmpty();
+    }
+
+    @Test
+    void selectableChips는_기능이_꺼졌으면_빈_목록이다() {
+        service = new DbConnectionService(repo, new DbSecretCipher("", ""), tester, repoCatalogRepo, dbObjects, WRITE_PROPS);
+        assertThat(service.selectableChips(1L, "user1")).isEmpty();
+        verifyNoInteractions(repo);
+    }
+
+    @Test
     void list_when_disabled_returns_enabled_false() {
         service = new DbConnectionService(repo, new DbSecretCipher("", ""), tester, repoCatalogRepo, dbObjects, WRITE_PROPS);
         assertThat(service.list(1L, "user1", false)).isEqualTo(new DbConnectionDto.ListResponse(false, List.of()));

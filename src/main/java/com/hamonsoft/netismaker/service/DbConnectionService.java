@@ -214,6 +214,19 @@ public class DbConnectionService {
         return new ArrayList<>(distinct);
     }
 
+    /**
+     * 대화 중 제안 후보 — {@link #validateSelection}이 받아 줄 연결만(같은 레포·켜짐·REPO 범위 또는 내 것).
+     * 기능이 꺼졌거나 레포가 없으면 빈 목록. 칩에는 id·이름·종류만 담고 접속정보는 읽지 않는다.
+     */
+    @Transactional(readOnly = true)
+    public List<DbConnectionDto.Chip> selectableChips(Long repoCatalogId, String ownerId) {
+        if (!cipher.isEnabled() || repoCatalogId == null) return List.of();
+        return repo.findByRepoCatalogIdOrderByScopeAscNameAsc(repoCatalogId).stream()
+                .filter(c -> c.isEnabled() && (c.getScope() == DbConnectionScope.REPO || c.isOwnedBy(ownerId)))
+                .map(c -> new DbConnectionDto.Chip(c.getId(), c.getName(), c.getDbType().name()))
+                .toList();
+    }
+
     @Transactional(readOnly = true)
     public List<DbConnectionDto.Chip> chipsFor(List<? extends Number> ids) {
         if (ids == null || ids.isEmpty()) return List.of();

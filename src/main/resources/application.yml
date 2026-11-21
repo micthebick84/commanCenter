@@ -85,6 +85,13 @@ management:
       enabled: false         # 메일 서버 접속 실패가 /actuator/health를 DOWN으로 만들지 않게
 
 app:
+  question-route:                         # 질문 레포 추천(스펙 2026-11-20). 키가 없으면 추천만 꺼진다
+    enabled: true
+    api-key: ${TYPESAFE_API_KEY:}
+    model: jev-1.14.0
+    endpoint: https://api.typesafe.ai/v1/systemone
+    timeout-ms: 3000
+    excerpt-chars: 500
   request-board:
     # 사용자별 열린(접수·검토중) 요청 상한. 초과하면 등록이 429.
     max-open-per-user: 20

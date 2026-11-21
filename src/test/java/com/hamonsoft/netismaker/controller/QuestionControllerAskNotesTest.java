@@ -31,7 +31,8 @@ class QuestionControllerAskNotesTest {
 
     private final QuestionService questionService = mock(QuestionService.class);
     private final InterviewStreamService stream = mock(InterviewStreamService.class);
-    private final QuestionController controller = new QuestionController(questionService, stream);
+    private final QuestionController controller = new QuestionController(questionService, stream,
+            mock(com.hamonsoft.netismaker.service.route.QuestionRouteService.class));
 
     private static JwtAuthenticationToken user() {
         return new JwtAuthenticationToken(

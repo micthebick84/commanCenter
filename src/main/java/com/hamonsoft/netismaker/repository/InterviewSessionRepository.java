@@ -18,6 +18,17 @@ import java.util.Optional;
 
 public interface InterviewSessionRepository extends JpaRepository<InterviewSession, Long> {
 
+    /** 사용자가 질문 세션에 마지막으로 쓴 순서의 레포 카탈로그 id (스펙 2026-11-20 §6.1 최근 레포). */
+    @Query("""
+        SELECT s.repoCatalogId FROM InterviewSession s
+        WHERE s.requesterId = :requesterId
+          AND s.kind = com.hamonsoft.netismaker.entity.InterviewKind.QUESTION
+          AND s.repoCatalogId IS NOT NULL
+        GROUP BY s.repoCatalogId
+        ORDER BY MAX(s.createdAt) DESC
+    """)
+    List<Long> findRecentQuestionRepoCatalogIds(@Param("requesterId") String requesterId, Pageable pageable);
+
     /** 단건 조회 (인터뷰는 soft-delete 없음 — id로 직접). */
     @Query("SELECT s FROM InterviewSession s WHERE s.id = :id")
     Optional<InterviewSession> findActiveById(@Param("id") Long id);

@@ -3,6 +3,9 @@ package com.hamonsoft.netismaker.controller;
 import com.hamonsoft.netismaker.dto.InterviewResponse;
 import com.hamonsoft.netismaker.dto.QuestionAskRequest;
 import com.hamonsoft.netismaker.dto.QuestionCreateRequest;
+import com.hamonsoft.netismaker.dto.QuestionRouteRequest;
+import com.hamonsoft.netismaker.dto.QuestionRouteResponse;
+import com.hamonsoft.netismaker.service.route.QuestionRouteService;
 import com.hamonsoft.netismaker.dto.QuestionSummaryResponse;
 import com.hamonsoft.netismaker.entity.InterviewSession;
 import com.hamonsoft.netismaker.entity.InterviewStatus;
@@ -44,10 +47,19 @@ public class QuestionController {
 
     private final QuestionService questionService;
     private final InterviewStreamService interviewStream;
+    private final QuestionRouteService routeService;
 
-    public QuestionController(QuestionService questionService, InterviewStreamService interviewStream) {
+    public QuestionController(QuestionService questionService, InterviewStreamService interviewStream,
+                              QuestionRouteService routeService) {
         this.questionService = questionService;
         this.interviewStream = interviewStream;
+        this.routeService = routeService;
+    }
+
+    /** 질문 등록 전 레포 추천 (스펙 2026-11-20 §6.1). 추천 쪽 문제는 오류가 아니라 200 + UNAVAILABLE. */
+    @PostMapping("/route")
+    public QuestionRouteResponse route(@RequestBody @Valid QuestionRouteRequest req, JwtAuthenticationToken auth) {
+        return routeService.route(req.question(), AuthContext.requireUserId(auth));
     }
 
     @PostMapping

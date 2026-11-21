@@ -35,6 +35,7 @@ describe('childEnv', () => {
         'NETISMAKER_DB_SECRET_SALT',
         'PGPASSWORD',
         'SPRING_DATASOURCE_PASSWORD',
+        'TYPESAFE_API_KEY',
         'WORKER_API_KEY',
       ].sort(),
     );

@@ -15,6 +15,7 @@ import com.hamonsoft.netismaker.entity.RefRepo;
 import com.hamonsoft.netismaker.entity.RenderStatus;
 import com.hamonsoft.netismaker.service.render.AttachmentRenderRequested;
 import com.hamonsoft.netismaker.service.render.RenderTargetPolicy;
+import com.hamonsoft.netismaker.service.route.QuestionRouteService;
 import com.hamonsoft.netismaker.entity.TaskMcpSpec;
 import com.hamonsoft.netismaker.repository.InterviewSessionRepository;
 import com.hamonsoft.netismaker.repository.InterviewTurnRepository;
@@ -68,6 +69,7 @@ class QuestionServiceTest {
     private DbConnectionService dbConnections;
     private RenderTargetPolicy renderPolicy;
     private ApplicationEventPublisher events;
+    private QuestionRouteService routeService;
     private QuestionService service;
 
     @BeforeEach
@@ -83,12 +85,13 @@ class QuestionServiceTest {
         dbConnections = mock(DbConnectionService.class);
         renderPolicy = mock(RenderTargetPolicy.class);
         events = mock(ApplicationEventPublisher.class);
+        routeService = mock(QuestionRouteService.class);
         when(dbConnections.validateSelection(any(), any(), any())).thenAnswer(i -> {
             List<Long> ids = i.getArgument(2);
             return ids == null ? new ArrayList<Long>() : new ArrayList<>(ids);
         });
         service = new QuestionService(interviewService, sessionRepo, turnRepo, repoCatalog, mcpCatalog,
-                attachmentStorage, tika, attachmentRepo, dbConnections, renderPolicy, events, 3, 10);
+                attachmentStorage, tika, attachmentRepo, dbConnections, renderPolicy, events, routeService, 3, 10);
         when(sessionRepo.save(any())).thenAnswer(i -> {
             InterviewSession s = i.getArgument(0);
             if (s.getId() == null) ReflectionTestUtils.setField(s, "id", 5L);   // IDENTITY 흉내 — 첨부 경로에 id 필요
@@ -118,6 +121,25 @@ class QuestionServiceTest {
 
     private static QuestionCreateRequest reqWithTitle(String title, String question) {
         return new QuestionCreateRequest(1L, "dev", title, question, null, null, null);
+    }
+
+    @Test
+    void 등록은_routeId가_있으면_저장된_세션_id로_linkChoice를_부른다() {
+        when(sessionRepo.countActiveQuestionsByRequester("user1")).thenReturn(0L);
+        QuestionCreateRequest r = new QuestionCreateRequest(1L, "dev", "인증 흐름", "로그인은 어디서 처리되나요?",
+                null, null, null, null, null, 77L);
+        InterviewSession s = service.create(r, "user1");
+        verify(routeService).linkChoice(77L, "user1", 1L, s.getId());
+        assertThat(s.getId()).isEqualTo(5L);
+    }
+
+    @Test
+    void 등록은_routeId가_없어도_linkChoice를_null로_부르고_세션은_예전과_같다() {
+        when(sessionRepo.countActiveQuestionsByRequester("user1")).thenReturn(0L);
+        InterviewSession s = service.create(req(null, null, null), "user1");
+        verify(routeService).linkChoice(null, "user1", 1L, 5L);
+        assertThat(s.getKind()).isEqualTo(InterviewKind.QUESTION);
+        assertThat(s.getStatus()).isEqualTo(InterviewStatus.QUEUED);
     }
 
     @Test

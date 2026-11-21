@@ -50,6 +50,25 @@ public class RepoCatalogService {
         return repo.findByEnabledTrueOrderByAlias();
     }
 
+    /**
+     * 질문 레포 추천 후보 — 켜져 있고 git_url이 지금 설정으로 GitHub/사내 GitLab으로 해석되는 행, 별칭 순.
+     * 해석에 실패하거나 지원하지 않는 호스트인 행은 던지지 않고 뺀다.
+     */
+    @Transactional(readOnly = true)
+    public List<RepoCatalogEntry> listRoutable() {
+        return repo.findByEnabledTrueOrderByAlias().stream()
+                .filter(RepoCatalogEntry::isEnabled)
+                .filter(e -> {
+                    try {
+                        RepoUrlParser.Parsed p = RepoUrlParser.parse(e.getGitUrl(), gitlabBaseUrl);
+                        return !"other".equals(p.host()) && p.ownerRepo() != null;
+                    } catch (IllegalArgumentException ex) {
+                        return false;
+                    }
+                })
+                .toList();
+    }
+
     @Transactional(readOnly = true)
     public List<RepoCatalogEntry> listAll() {
         return repo.findAllByOrderByAlias();
@@ -72,6 +91,7 @@ public class RepoCatalogService {
         applyPatch(e, req);
         applyNoteFolder(e, req, true);
         applyDbWrite(e, req);
+        applyRouteHint(e, req, true);
         return repo.save(e);
     }
 
@@ -102,6 +122,7 @@ public class RepoCatalogService {
         applyPatch(e, req);
         applyNoteFolder(e, req, false);
         applyDbWrite(e, req);
+        applyRouteHint(e, req, false);
         e.setUpdatedAt(OffsetDateTime.now());
         return e;
     }
@@ -309,6 +330,12 @@ public class RepoCatalogService {
         }
         if (req.dbMigrationManaged() != null) e.setDbMigrationManaged(req.dbMigrationManaged());
         if (req.dbScriptDir() != null) e.setDbScriptDir(dir);
+    }
+
+    /** 추천 키워드 (스펙 2026-11-20 §6.4). 수정 때 null이면 그대로, 공백이면 비움, 그 밖은 앞뒤 공백을 뺀 값. 등록은 null·공백 모두 비움. */
+    private static void applyRouteHint(RepoCatalogEntry e, RepoCatalogDto.UpsertRequest req, boolean creating) {
+        if (!creating && req.routeHint() == null) return;
+        e.setRouteHint(blankToNull(req.routeHint()));
     }
 
     private static final Pattern PREBUILD_TOOLCHAIN = Pattern.compile("^[A-Za-z0-9._-]{1,50}$");

@@ -16,7 +16,8 @@ import org.springframework.scheduling.annotation.EnableScheduling;
 @SpringBootApplication
 @EnableScheduling
 @EnableConfigurationProperties({com.hamonsoft.netismaker.config.RenderProperties.class, WorkerProperties.class, CloseProperties.class, CloseArtifactProperties.class, ClosePatchProperties.class,
-        ArtifactProperties.class, PrebuildProperties.class, ClosePatchWorkerProperties.class, DbWriteProperties.class})
+        ArtifactProperties.class, PrebuildProperties.class, ClosePatchWorkerProperties.class, DbWriteProperties.class,
+        com.hamonsoft.netismaker.config.QuestionRouteProperties.class})
 public class NetisMakerApplication {
 
     public static void main(String[] args) {

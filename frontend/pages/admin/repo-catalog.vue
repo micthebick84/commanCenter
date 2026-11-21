@@ -18,6 +18,8 @@ interface RepoEntry {
   ownerRepo: string | null
   defaultBranch: string | null
   description: string | null
+  /** 질문 레포 추천에 외부로 보내는 말 — 서버 PUT/POST는 null=유지, 빈 문자열=비움 */
+  routeHint: string | null
   enabled: boolean
   createdBy: string | null
   createdAt: string
@@ -47,7 +49,7 @@ const filteredEntries = computed(() => {
   const words = (search.value ?? '').trim().toLowerCase().split(/\s+/).filter(Boolean)
   if (!words.length) return entries.value
   return entries.value.filter((e) => {
-    const text = [e.alias, e.ownerRepo, e.gitUrl, e.defaultBranch, e.description, e.noteFolder, e.host]
+    const text = [e.alias, e.ownerRepo, e.gitUrl, e.defaultBranch, e.description, e.routeHint, e.noteFolder, e.host]
       .filter(Boolean)
       .join(' ')
       .toLowerCase()
@@ -108,6 +110,7 @@ const form = reactive({
   gitUrl: '',
   defaultBranch: '',
   description: '',
+  routeHint: '',
   enabled: true,
   artifactEnabled: false,
   artifactPath: '',
@@ -138,6 +141,7 @@ function openCreate() {
   form.gitUrl = ''
   form.defaultBranch = ''
   form.description = ''
+  form.routeHint = ''
   form.enabled = true
   form.artifactEnabled = false
   form.artifactPath = ''
@@ -158,6 +162,7 @@ function openEdit(e: RepoEntry) {
   form.gitUrl = e.gitUrl
   form.defaultBranch = e.defaultBranch ?? ''
   form.description = e.description ?? ''
+  form.routeHint = e.routeHint ?? ''
   form.enabled = e.enabled
   form.artifactEnabled = e.artifactEnabled ?? false
   form.artifactPath = e.artifactPath ?? ''
@@ -183,6 +188,8 @@ async function submit() {
       gitUrl: form.gitUrl,
       defaultBranch: form.defaultBranch || null,
       description: form.description || null,
+      // 빈 문자열 = 비움(수정), 등록은 서버가 null로 저장 — null을 보내면 서버가 '유지'로 읽는다
+      routeHint: form.routeHint,
       enabled: form.enabled,
       artifactEnabled: form.artifactEnabled,
       artifactPath: form.artifactPath || null,
@@ -539,6 +546,18 @@ const canSubmit = computed(
           outlined
           autogrow
           rows="2"
+        />
+        <q-input
+          v-model="form.routeHint"
+          label="추천 키워드 (선택)"
+          hint="질문에서 이 레포를 찾을 때 쓰는 말(고객사·사이트 별칭, 버전, 주요 화면). 외부 추천 서비스로 전송되니 사람 이름·접속정보는 적지 마세요."
+          type="textarea"
+          outlined
+          autogrow
+          rows="2"
+          maxlength="500"
+          counter
+          data-test="route-hint-input"
         />
         <q-toggle v-model="form.enabled" label="활성화 (사용자에게 노출)" color="positive" />
         <q-toggle

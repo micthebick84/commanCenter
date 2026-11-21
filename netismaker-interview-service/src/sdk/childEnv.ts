@@ -17,6 +17,7 @@ export const STACK_SECRET_ENV: readonly string[] = [
   'NETISMAKER_DB_SECRET_SALT',
   'MAIL_PASSWORD',
   'PGPASSWORD',
+  'TYPESAFE_API_KEY',
 ];
 
 const SECRET_NAMES = new Set(STACK_SECRET_ENV.map((k) => k.toUpperCase()));

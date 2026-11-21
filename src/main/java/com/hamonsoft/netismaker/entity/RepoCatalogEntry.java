@@ -101,6 +101,10 @@ public class RepoCatalogEntry {
     @Column(name = "patch_enabled", nullable = false)
     private boolean patchEnabled;
 
+    /** 질문 레포 추천 때 모델에 함께 보낼 관리자 입력 키워드 (스펙 2026-11-20 §6.4). null 가능. */
+    @Column(name = "route_hint", columnDefinition = "TEXT")
+    private String routeHint;
+
     @Column(name = "created_by", length = 20)
     private String createdBy;
 

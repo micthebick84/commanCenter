@@ -155,6 +155,36 @@ describe('pages/questions/[id] — 대화 중 제안 받아들이기 (스펙 202
     w.unmount()
   })
 
+  it.each([
+    ['조회 실패', () => Promise.reject({ statusCode: 500 })],
+    ['기능 꺼짐 응답', () => Promise.resolve({ enabled: false, items: [] })],
+  ])('DB 목록을 못 불러왔어도 고른 연결은 보낸다 — %s', async (_label: string, dbList: () => Promise<unknown>) => {
+    const base = useApiMock.getMockImplementation()!
+    useApiMock.mockImplementation((url: string, ...rest: unknown[]) =>
+      url === '/api/db-connections?repoCatalogId=1' ? dbList() : base(url, ...rest),
+    )
+    const w = mount(QuestionDetail)
+    await flushPromises()
+    expect(w.find('[data-test="db-button"]').exists()).toBe(false) // 화면은 DB 기능이 꺼진 것으로 안다
+    await accept(w, { dbConnectionIds: [4], refs: [], suggestionIds: [1] })
+    const body = askCall()![1].body
+    expect(body.dbConnectionIds).toEqual([3, 4])
+    expect(body.acceptSuggestionIds).toEqual([1])
+    w.unmount()
+  })
+
+  it('DB 목록을 못 불러왔고 DB를 고르지 않았으면 dbConnectionIds를 싣지 않는다', async () => {
+    const base = useApiMock.getMockImplementation()!
+    useApiMock.mockImplementation((url: string, ...rest: unknown[]) =>
+      url === '/api/db-connections?repoCatalogId=1' ? Promise.reject({ statusCode: 500 }) : base(url, ...rest),
+    )
+    const w = mount(QuestionDetail)
+    await flushPromises()
+    await accept(w, { dbConnectionIds: [], refs: [{ repoCatalogId: 11, branch: 'main' }], suggestionIds: [2] })
+    expect(askCall()![1].body).not.toHaveProperty('dbConnectionIds')
+    w.unmount()
+  })
+
   it('전송이 실패하면 초안을 바꾸지 않는다', async () => {
     askResult = () => Promise.reject({ statusCode: 400, data: { message: '연결을 찾을 수 없습니다' } })
     const w = mount(QuestionDetail)

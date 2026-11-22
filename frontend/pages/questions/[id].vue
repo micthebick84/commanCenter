@@ -128,7 +128,9 @@ async function onAcceptSuggestion(send: SendFn, picks: SuggestPicks, shown: Sess
     model: picked.model,
     effort: picked.effort,
     mcpCatalogIds: pickedMcp.value,
-    ...(dbState.enabled ? { dbConnectionIds: dbIds } : {}),
+    // DB를 골랐으면 늘 싣는다 — 서버가 선택지를 줬으니 기능은 켜져 있고 ask가 id를 검증한다.
+    // dbState.enabled는 목록 조회가 끝나야(실패하면 영영) true라, 그것에 걸면 고른 연결 없이 '받아들임'만 기록된다.
+    ...(picks.dbConnectionIds.length > 0 || dbState.enabled ? { dbConnectionIds: dbIds } : {}),
     ...(picks.refs.length > 0 || refsChanged() ? { refRepos: refInputs } : {}),
     text: followUpText(picks.dbConnectionIds.length > 0, picks.refs.length > 0),
     acceptSuggestionIds: picks.suggestionIds,

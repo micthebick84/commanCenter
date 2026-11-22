@@ -90,19 +90,30 @@ describe('SessionSuggestCard (스펙 2026-11-22 §5·§8)', () => {
     w.unmount()
   })
 
-  it('참조 제안은 기본 브랜치로 낸다', async () => {
+  it('참조 제안은 미리 체크된다', async () => {
     const w = mountCard([refSg()])
-    expect(w.find('[data-test="suggest-ref-11"]').text()).toContain('이 레포도 함께 보면 좋습니다: 공통 UI')
-    expect(w.find('[data-test="suggest-ref-11"]').text()).toContain('공통 모듈이 이 레포에 있습니다')
-    await refBox(w, 11).trigger('click')
+    expect(refBox(w, 11).attributes('aria-checked')).toBe('true')
+    expect(isDisabled(accept(w))).toBe(false) // 아무것도 누르지 않아도 켜져 있다
     await accept(w).trigger('click')
     expect(acceptedPicks(w)).toEqual({ dbConnectionIds: [], refs: [{ repoCatalogId: 11, branch: 'main' }], suggestionIds: [2] })
     w.unmount()
   })
 
+  it('참조 제안은 기본 브랜치로 낸다', async () => {
+    const w = mountCard([refSg({ defaultBranch: 'release/6.5' })])
+    expect(w.find('[data-test="suggest-ref-11"]').text()).toContain('이 레포도 함께 보면 좋습니다: 공통 UI')
+    expect(w.find('[data-test="suggest-ref-11"]').text()).toContain('공통 모듈이 이 레포에 있습니다')
+    await accept(w).trigger('click')
+    expect(acceptedPicks(w)).toEqual({
+      dbConnectionIds: [],
+      refs: [{ repoCatalogId: 11, branch: 'release/6.5' }],
+      suggestionIds: [2],
+    })
+    w.unmount()
+  })
+
   it('DB와 참조를 함께 고르면 둘 다와 두 제안 id를 낸다', async () => {
     const w = mountCard([dbSg(), refSg()])
-    await refBox(w, 11).trigger('click')
     await accept(w).trigger('click')
     expect(acceptedPicks(w)).toEqual({
       dbConnectionIds: [4],
@@ -114,7 +125,9 @@ describe('SessionSuggestCard (스펙 2026-11-22 §5·§8)', () => {
 
   it('체크하지 않은 제안의 id는 내지 않는다', async () => {
     const w = mountCard([dbSg(), refSg(), refSg({ id: 3, repoCatalogId: 12, repoAlias: '배치 서버', defaultBranch: 'master' })])
-    await refBox(w, 12).trigger('click')
+    expect(refBox(w, 11).attributes('aria-checked')).toBe('true') // 둘 다 미리 체크돼 있다
+    expect(refBox(w, 12).attributes('aria-checked')).toBe('true')
+    await refBox(w, 11).trigger('click') // 미리 체크된 참조를 해제
     await w.find('[data-test="suggest-db-opt-4"]').trigger('click') // Claude가 고른 연결을 해제
     await accept(w).trigger('click')
     expect(acceptedPicks(w)).toEqual({
@@ -130,8 +143,9 @@ describe('SessionSuggestCard (스펙 2026-11-22 §5·§8)', () => {
       refSg({ refSlotsLeft: 1 }),
       refSg({ id: 3, repoCatalogId: 12, repoAlias: '배치 서버', defaultBranch: 'master', refSlotsLeft: 1 }),
     ])
-    expect(w.find('[data-test="suggest-ref-full"]').exists()).toBe(false)
-    await refBox(w, 11).trigger('click')
+    // 목록 순서대로 남은 자리(1)만큼만 미리 체크된다
+    expect(refBox(w, 11).attributes('aria-checked')).toBe('true')
+    expect(refBox(w, 12).attributes('aria-checked')).toBe('false')
     expect(isDisabled(refBox(w, 12))).toBe(true)
     expect(w.find('[data-test="suggest-ref-full"]').text()).toBe('참조 레포는 3개까지 붙일 수 있습니다')
     await refBox(w, 12).trigger('click') // 꺼진 체크박스는 눌러도 체크되지 않는다
@@ -141,6 +155,15 @@ describe('SessionSuggestCard (스펙 2026-11-22 §5·§8)', () => {
     await refBox(w, 11).trigger('click') // 해제하면 다시 고를 수 있다
     expect(isDisabled(refBox(w, 12))).toBe(false)
     expect(w.find('[data-test="suggest-ref-full"]').exists()).toBe(false)
+    w.unmount()
+  })
+
+  it('같은 제안이 다시 와도 사용자가 바꾼 체크를 되돌리지 않는다', async () => {
+    const w = mountCard([refSg()])
+    await refBox(w, 11).trigger('click') // 미리 체크된 참조를 해제
+    await w.setProps({ suggestions: [refSg(), dbSg()] }) // SSE가 같은 id를 다시 보내고 새 제안이 붙는다
+    expect(refBox(w, 11).attributes('aria-checked')).toBe('false')
+    expect(isChecked(w, '[data-test="suggest-db-opt-4"]')).toBe(true) // 새로 온 제안은 미리 체크
     w.unmount()
   })
 
@@ -165,11 +188,21 @@ describe('SessionSuggestCard (스펙 2026-11-22 §5·§8)', () => {
 
   it('기본 브랜치가 없는 참조 제안은 체크할 수 없다', async () => {
     const w = mountCard([refSg({ defaultBranch: null })])
+    expect(refBox(w, 11).attributes('aria-checked')).toBe('false') // 미리 체크되지 않는다
     expect(isDisabled(refBox(w, 11))).toBe(true)
     await refBox(w, 11).trigger('click')
     expect(refBox(w, 11).attributes('aria-checked')).toBe('false')
     expect(isDisabled(accept(w))).toBe(true)
     w.unmount()
+
+    // 자리도 쓰지 않는다 — 자리가 하나뿐이어도 뒤의 붙일 수 있는 참조가 미리 체크된다
+    const v = mountCard([
+      refSg({ defaultBranch: null, refSlotsLeft: 1 }),
+      refSg({ id: 3, repoCatalogId: 12, repoAlias: '배치 서버', defaultBranch: 'master', refSlotsLeft: 1 }),
+    ])
+    expect(refBox(v, 12).attributes('aria-checked')).toBe('true')
+    expect(v.find('[data-test="suggest-ref-full"]').exists()).toBe(false)
+    v.unmount()
   })
 
   it('닫기는 카드의 모든 제안 id를 낸다', async () => {

@@ -42,7 +42,8 @@ const refSuggestions = computed(() => props.suggestions.filter((s) => s.kind ===
 const locked = computed(() => props.disabled || props.busy)
 
 // 제안 id → 체크한 연결 id. SSE가 제안을 하나씩, 같은 id로 다시 보내므로 처음 본 id만 미리 체크하고
-// 이미 본 id는 사용자가 바꾼 체크를 그대로 둔다.
+// 이미 본 id는 사용자가 바꾼 체크를 그대로 둔다. 참조 제안도 Claude가 그 레포를 골랐으므로 목록 순서대로 남은 자리만큼 미리 체크한다
+// (버튼 한 번으로 붙게) — 기본 브랜치가 없는 것은 붙일 수 없으니 건너뛰고 자리도 쓰지 않는다.
 const dbPicks = ref<Record<number, number[]>>({})
 const refPicked = ref<Record<number, boolean>>({})
 const seen = new Set<number>()
@@ -52,7 +53,12 @@ watch(
     for (const s of list) {
       if (seen.has(s.id)) continue
       seen.add(s.id)
-      if (s.kind === 'DB') dbPicks.value = { ...dbPicks.value, [s.id]: initialDbPicks(s) }
+      if (s.kind === 'DB') {
+        dbPicks.value = { ...dbPicks.value, [s.id]: initialDbPicks(s) }
+      } else if (s.kind === 'REF_REPO' && s.repoCatalogId != null && s.defaultBranch) {
+        const checked = list.filter((x) => x.kind === 'REF_REPO' && refPicked.value[x.id]).length
+        if (canPickMore(checked, s.refSlotsLeft)) refPicked.value = { ...refPicked.value, [s.id]: true }
+      }
     }
   },
   { immediate: true },

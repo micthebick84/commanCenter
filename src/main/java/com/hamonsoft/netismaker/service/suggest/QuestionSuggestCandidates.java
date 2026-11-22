@@ -39,11 +39,21 @@ public class QuestionSuggestCandidates {
         this.catalog = catalog;
     }
 
+    /** 세션에 더 붙일 수 있는 DB 연결 수(상한 − 붙은 수, 0 이상). 후보 계산 없이 화면 뷰도 이 값을 쓴다. */
+    public static int dbSlotsLeft(InterviewSession s) {
+        return Math.max(0, DbConnectionService.MAX_SELECTION - idSet(s.getDbConnectionIds()).size());
+    }
+
+    /** 세션에 더 붙일 수 있는 참조 repo 수(상한 − 붙은 수, 0 이상). */
+    public static int refSlotsLeft(InterviewSession s) {
+        return Math.max(0, RepoCatalogService.MAX_REF_REPOS - (s.getRefRepos() == null ? 0 : s.getRefRepos().size()));
+    }
+
     public Candidates forSession(InterviewSession s) {
         Set<Long> attachedDb = idSet(s.getDbConnectionIds());
         List<RefRepo> attachedRefs = s.getRefRepos() == null ? List.of() : s.getRefRepos();
-        int dbSlotsLeft = Math.max(0, DbConnectionService.MAX_SELECTION - attachedDb.size());
-        int refSlotsLeft = Math.max(0, RepoCatalogService.MAX_REF_REPOS - attachedRefs.size());
+        int dbSlotsLeft = dbSlotsLeft(s);
+        int refSlotsLeft = refSlotsLeft(s);
 
         List<DbConnectionDto.Chip> db = List.of();
         // 연결 선택지는 요청자 기준 — 관리자가 남의 질문을 봐도 남의 개인 연결이 나오지 않는다

@@ -29,6 +29,16 @@ class QuestionSuggestionTest {
         assertThat(s.getDecidedAt()).isEqualTo(now);
     }
 
+    @Test void decide는_20자를_넘는_결정자를_잘라_저장한다() {
+        QuestionSuggestion s = QuestionSuggestion.refRepo(7L, 4, 9L, "r");
+        assertThat(s.decide(SuggestionStatus.DISMISSED, "admin-with-a-very-long-name-1", OffsetDateTime.now())).isTrue();
+        assertThat(s.getDecidedBy()).isEqualTo("admin-with-a-very-lo");
+
+        QuestionSuggestion n = QuestionSuggestion.refRepo(7L, 4, 9L, "r");
+        assertThat(n.decide(SuggestionStatus.SUPERSEDED, null, OffsetDateTime.now())).isTrue();
+        assertThat(n.getDecidedBy()).isNull();
+    }
+
     @Test void decide에_PENDING을_주면_거절한다() {
         assertThatThrownBy(() -> QuestionSuggestion.db(1L, 1, null, "r", List.of())
                 .decide(SuggestionStatus.PENDING, "u", OffsetDateTime.now())).isInstanceOf(IllegalArgumentException.class);

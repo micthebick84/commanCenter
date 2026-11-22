@@ -184,8 +184,12 @@ public class QuestionSuggestService {
         if (rows.isEmpty()) return List.of();
         InterviewSession s = sessions.findById(sessionId).orElse(null);
         if (s == null) return List.of();
-        // 선택지·남은 자리는 세션(요청자) 기준 - 보는 사람이 관리자여도 남의 개인 연결이 섞이지 않는다
-        Candidates c = candidates.forSession(s);
+        // 선택지·남은 자리는 세션(요청자) 기준 - 보는 사람이 관리자여도 남의 개인 연결이 섞이지 않는다.
+        // 화면이 5초마다 폴링하므로 선택지가 필요한 PENDING이 있을 때만 후보를 계산하고, 없으면 남은 자리만 세션에서 센다.
+        boolean anyPending = rows.stream().anyMatch(q -> q.getStatus() == SuggestionStatus.PENDING);
+        Candidates c = anyPending ? candidates.forSession(s)
+                : new Candidates(List.of(), List.of(),
+                        QuestionSuggestCandidates.dbSlotsLeft(s), QuestionSuggestCandidates.refSlotsLeft(s));
         Set<Long> catalogIds = new HashSet<>();
         for (QuestionSuggestion q : rows) if (q.getRepoCatalogId() != null) catalogIds.add(q.getRepoCatalogId());
         Map<Long, RepoCatalogEntry> byId = new HashMap<>();

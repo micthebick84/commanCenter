@@ -255,6 +255,25 @@ class QuestionSuggestServiceRecordTest {
     }
 
     @Test
+    void PENDING이_없으면_후보를_계산하지_않는다() {
+        session.setDbConnectionIds(new ArrayList<>(List.of(9L)));
+        session.setRefRepos(new ArrayList<>(List.of(
+                new RefRepo(21L, "붙은참조1", "acme/a1", "https://x/acme/a1.git", "main", null, null, null),
+                new RefRepo(22L, "붙은참조2", "acme/a2", "https://x/acme/a2.git", "main", null, null, null))));
+        QuestionSuggestion decided = withId(QuestionSuggestion.db(5L, 1, 4L, "이유", List.of()), 1L);
+        decided.decide(SuggestionStatus.ACCEPTED, "user1", OffsetDateTime.now());
+        when(store.findBySessionIdOrderByIdAsc(5L)).thenReturn(List.of(decided));
+
+        List<SuggestionView> v = service.views(5L);
+
+        // 남은 자리는 세션에서 바로 센다 - 상한 3에서 붙은 수를 뺀 값
+        assertThat(v.get(0).dbOptions()).isEmpty();
+        assertThat(v.get(0).dbSlotsLeft()).isEqualTo(2);
+        assertThat(v.get(0).refSlotsLeft()).isEqualTo(1);
+        verifyNoInteractions(candidates);
+    }
+
+    @Test
     void viewsOf는_고른_id만_돌려준다() {
         when(store.findBySessionIdOrderByIdAsc(5L)).thenReturn(List.of(
                 withId(QuestionSuggestion.db(5L, 1, null, "a", List.of()), 1L),

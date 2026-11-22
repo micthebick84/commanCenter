@@ -55,6 +55,8 @@ public class QuestionSuggestion {
     @Column(name = "decided_at")
     private OffsetDateTime decidedAt;
 
+    static final int DECIDED_BY_MAX = 20;
+
     @Column(name = "decided_by", length = 20)
     private String decidedBy;
 
@@ -90,7 +92,8 @@ public class QuestionSuggestion {
         if (next == SuggestionStatus.PENDING) throw new IllegalArgumentException("PENDING으로는 결정할 수 없습니다");
         if (status != SuggestionStatus.PENDING) return false;
         this.status = next;
-        this.decidedBy = actorId;
+        // decided_by는 VARCHAR(20) - com."user" 행이 없는 긴 이름의 관리자도 결정할 수 있어 잘라 둔다(500 방지)
+        this.decidedBy = actorId == null || actorId.length() <= DECIDED_BY_MAX ? actorId : actorId.substring(0, DECIDED_BY_MAX);
         this.decidedAt = now;
         return true;
     }

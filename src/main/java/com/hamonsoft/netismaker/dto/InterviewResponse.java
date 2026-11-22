@@ -57,7 +57,7 @@ public record InterviewResponse(
          * 목록·확정 체크 목록을 채우는 스냅샷이다. 질문 세션과 목업 서비스가 없는 구성은 []. 항상 non-null.
          */
         List<InterviewMockupSummary> mockups,
-        /** 대화 중 제안 (스펙 2026-11-22 §6.2) — id 순. QuestionService.get이 withSuggestions로 채운다. 항상 non-null. */
+        /** 대화 중 제안 (스펙 2026-11-22 §6.2) — id 순. QuestionController가 응답 직전에 withSuggestions로 붙인다(조회 트랜잭션 밖). 항상 non-null. */
         List<SuggestionView> suggestions
 ) {
     public InterviewResponse {
@@ -88,7 +88,7 @@ public record InterviewResponse(
                 superpowersEnabled, mockups, suggestions);
     }
 
-    /** 제안 뷰만 바꾼 사본 (QuestionService.get이 채운다). */
+    /** 제안 뷰만 바꾼 사본 (QuestionController가 붙인다 — QuestionService.get은 제안을 건드리지 않는다). */
     public InterviewResponse withSuggestions(List<SuggestionView> suggestions) {
         return new InterviewResponse(id, githubRepo, githubBranch, title, description, status, statusName, currentPhase,
                 workDir, taskId, model, effort, turns, plan, createdAt, updatedAt, kind, totalCostUsd, contextTokens,

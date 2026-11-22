@@ -105,7 +105,7 @@ B의 비용은 **한 턴**이다. Claude는 코드만으로 답을 먼저 내고
 
 - `dbCandidates`: `[{id, name, dbType}]` — 대상 레포에서 **요청자**가 고를 수 있는 연결(`validateSelection`과 같은 기준) 중 세션에 아직 안 붙은 것. DB 기능이 꺼졌거나 세션에 이미 3개가 붙었으면 빈 목록. 접속정보는 싣지 않는다(이름·종류만).
 - `refCandidates`: `[{catalogId, alias, hint}]` — 켜진 카탈로그 항목 중 대상이 아니고 세션에 아직 참조로 안 붙은 것. **기본 브랜치로 `resolveReferences`를 통과할 항목만**이다(지원하는 호스트, 기본 브랜치 있음) — 받아들이면 반드시 붙을 수 있는 것만 알린다. `hint`는 `route_hint`(없으면 생략)이고 `description`은 싣지 않는다. 이미 3개가 붙었으면 빈 목록.
-- 두 목록이 모두 비면 `suggest` 자체를 생략한다.
+- 두 목록이 모두 비면 `suggest`는 `null`로 나간다(전역 non-null JSON 설정이 없어 키는 남는다 — 러너는 `null`과 키 없음을 똑같이 '후보 없음'으로 읽는다).
 - 후보 계산은 한 곳에 두고 claim·제안 보고 검증(§6.2)·화면용 선택지(§6.2 끝)가 함께 쓴다.
 
 ### 6.2 제안 저장 — `com.question_suggestion` (V48)
@@ -120,7 +120,7 @@ B의 비용은 **한 턴**이다. Claude는 코드만으로 답을 먼저 내고
 | `status` | `PENDING` \| `ACCEPTED` \| `DISMISSED` \| `SUPERSEDED` |
 | `decided_at`, `decided_by`, `created_at` | |
 
-`WorkerQuestionRequest.suggestions`(선택)를 `recordQuestion`이 처리한다. 러너의 출력을 그대로 믿지 않는다:
+`WorkerQuestionRequest.suggestions`(선택)는 답변 턴(`recordQuestion`)이 커밋된 뒤 워커 컨트롤러가 별도 트랜잭션의 `QuestionSuggestService.record`로 처리한다(`recordQuestion`은 제안을 모른다). 러너의 출력을 그대로 믿지 않는다:
 - 질문 세션이 아니면 무시한다.
 - 대상 id가 **지금** 후보 기준(§6.1과 같은 계산)에 맞지 않는 제안은 버린다. DB 제안에서 고른 연결만 틀렸으면 연결 없는 DB 제안으로 받는다.
 - 개수 상한(§5.2)을 넘는 것은 버리고, `reason`·`targets`는 길이를 자르고 비밀 가리기(`GitRemotes.mask`·`SecretMasks`)를 거친다. `reason`이 비면 그 제안은 버린다.
@@ -197,5 +197,5 @@ MCP 카탈로그 이름 `suggest`는 `db-*`처럼 예약한다(등록·수정 40
 - 컴포넌트 이름·위치, 카드의 세부 배치, 접힌 한 줄의 모양.
 - 제안 절·도구 설명의 정확한 문구(§7의 규칙을 담을 것), zod 스키마의 세부.
 - SSE 이벤트의 페이로드 모양, 스냅샷 DTO 이름, 표의 인덱스.
-- 후보 계산을 claim과 `recordQuestion`이 함께 쓰는 방식(한 곳에 둘 것).
+- 후보 계산을 claim과 제안 저장(`QuestionSuggestService.record` — 답변 커밋 뒤 워커 컨트롤러가 부른다)이 함께 쓰는 방식(한 곳에 둘 것).
 - 후보 수가 많아질 때 목록을 줄이는 방법(지금 카탈로그는 16개라 전부 싣는다).

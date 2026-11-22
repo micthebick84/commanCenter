@@ -110,9 +110,9 @@ class QuestionSuggestCandidatesTest {
 
     @Test
     void 참조_후보의_hint는_route_hint이고_설명은_싣지_않는다() {
-        when(catalog.listEnabled()).thenReturn(List.of(entry(11, "main", "대전 사업소, 7.0"), entry(12, "dev", " ")));
+        when(catalog.listEnabled()).thenReturn(List.of(entry(11, "main", "시험 사업소, 7.0"), entry(12, "dev", " ")));
         QuestionSuggestCandidates.Candidates c = candidates.forSession(session(new ArrayList<>(), List.of()));
-        assertThat(c.refs().get(0).hint()).isEqualTo("대전 사업소, 7.0");
+        assertThat(c.refs().get(0).hint()).isEqualTo("시험 사업소, 7.0");
         assertThat(c.refs().get(0).defaultBranch()).isEqualTo("main");
         assertThat(c.refs().get(0).alias()).isEqualTo("alias11");
         assertThat(c.refs().get(1).hint()).isNull();

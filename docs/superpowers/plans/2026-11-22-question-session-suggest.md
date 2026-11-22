@@ -14,7 +14,7 @@
 
 - 작업 폴더는 이 worktree(`.claude/worktrees/question-session-suggest`, 브랜치 `feature/question-session-suggest`)뿐이다. 본 체크아웃(`C:\Users\mic\NetisMaker\commanCenter`)에서 빌드·시험·git 변경을 하지 않는다(라이브가 거기서 돈다).
 - `npm install`·`npm ci`를 하지 않는다. `frontend/node_modules`와 `netismaker-interview-service/node_modules`는 본 체크아웃의 같은 폴더로 가는 **정션**으로 쓴다(Task 1 Step 1). 정션은 `rm -rf`·`Remove-Item -Recurse`로 지우지 않는다.
-- 커밋: `git -c user.name=khlee84 -c user.email=khlee84@hamonsoft.co.kr commit`, 메시지 끝에 `Co-Authored-By: Claude Fable 5.2 <noreply@anthropic.com>`. 푸시하지 않는다.
+- 커밋: 작성자 설정은 저장소 관례(`git -c user.name=… -c user.email=… commit`)를 따르고, 메시지 끝에 `Co-Authored-By: Claude Fable 5.2 <noreply@anthropic.com>`. 푸시하지 않는다.
 - 저장소는 **공개**다. 시험·문서·주석에 실제 고객·사이트 이름을 넣지 않는다(`acme/…`, `시험사이트`, `Netis7.0` 같은 일반 이름만).
 - 제안할 것이 없는 질문 세션(후보 없음·기능 꺼짐·구버전 API)은 프롬프트·SDK 옵션·보고 바디가 **지금과 바이트까지 같아야** 한다. INTERVIEW 세션은 어떤 경우에도 바뀌지 않는다.
 - Claude는 제안만 한다. 연결·참조를 붙이는 코드는 `QuestionService.ask`의 기존 `applyDbChange`·`applyRefChange`뿐이다 — 새로 붙이는 경로를 만들지 않는다.
@@ -176,7 +176,7 @@ CREATE INDEX ix_question_suggestion_session ON com.question_suggestion(session_i
 @Test void 참조_후보에서_대상과_붙은_레포와_참조할_수_없는_레포가_빠진다()
         // listEnabled=[대상(8), 붙은(9), 기본 브랜치 없음(10), 정상(11)] → refs=[11]
 @Test void 참조_후보의_hint는_route_hint이고_설명은_싣지_않는다()
-        // routeHint="대전 사업소, 7.0" → hint 그 값; RefCandidate 레코드에 description 성분이 없다(레코드 성분 이름 목록으로 확인)
+        // routeHint="시험 사업소, 7.0" → hint 그 값; RefCandidate 레코드에 description 성분이 없다(레코드 성분 이름 목록으로 확인)
 @Test void 참조가_3개_붙었으면_참조_후보가_빈다()
 @Test void 둘_다_비면_isEmpty다()
 ```

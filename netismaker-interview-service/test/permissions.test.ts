@@ -906,3 +906,11 @@ describe('INTERVIEW 게이트 — 작업 DB 도구 (스펙 2026-10-14 §5)', () 
     expect((await call('mcp__ctx7__resolve', {})).behavior).toBe('allow');
   });
 });
+
+describe('canUseTool — kind=QUESTION 제안 도구 (질문 세션 제안)', () => {
+  // 이름 고정용 — 질문 게이트의 mcp__ 분기가 제안 도구를 막는 변경이 생기면 여기서 깨진다.
+  it.each(['mcp__suggest__suggest_db', 'mcp__suggest__suggest_ref_repo'])('질문 게이트가 %s를 허용한다', async (name) => {
+    const q = buildCanUseTool('/tmp/repo', 'QUESTION', null, {}, []);
+    expect((await q(name, { reason: 'r' })).behavior).toBe('allow');
+  });
+});

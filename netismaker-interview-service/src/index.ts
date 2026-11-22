@@ -3,6 +3,7 @@ import { JavaApiClient } from './api/javaClient.js';
 import { realQuery } from './sdk/sdkAdapter.js';
 import { resolveClaudeCli } from './sdk/claudeCli.js';
 import { loadBaseMcpServers } from './sdk/mcpBase.js';
+import { SUGGEST_SERVER } from './sdk/suggestMcp.js';
 import { InterviewRunner } from './runner/interviewRunner.js';
 import { ClaimLoop } from './claimLoop.js';
 import { checkClaudeAuth, realClaudeAuthDeps } from './claudeAuth.js';
@@ -18,6 +19,9 @@ async function main(): Promise<void> {
   const claudeCliPath = resolveClaudeCli(cfg.claudeCliPath);
   // 베이스 MCP 합본: 부팅 시 1회 스냅샷 (Java WorkerMcpSupport @PostConstruct 패리티).
   const mcpsBase = loadBaseMcpServers();
+  if (SUGGEST_SERVER in mcpsBase) {
+    console.warn('[interview-service] ~/.claude.json의 MCP 서버 "suggest"는 제안할 후보가 있는 질문 턴에서 내장 제안 서버에 가려집니다');
+  }
   const client = new JavaApiClient(cfg);
   const runner = new InterviewRunner(client, realQuery, {
     superpowersPluginPath: cfg.superpowersPluginPath,

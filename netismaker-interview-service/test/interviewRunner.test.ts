@@ -8,6 +8,7 @@ import {
   refSection,
 } from '../src/runner/interviewRunner.js';
 import { MOCKUP_GUIDE, MOCKUP_RESTART_NOTE, SIMPLE_RESUME_PREFIX, processLine } from '../src/runner/interviewMode.js';
+import { suggestSection } from '../src/sdk/suggestMcp.js';
 import { taskTypeGuide } from '../src/runner/kickoffByType.js';
 import { REF_PREPARE_FALLBACK_REASON, type RefPrepared } from '../src/runner/repoPrepare.js';
 import type { InterviewClaimResponse, RefRepoClaim } from '../src/types.js';
@@ -865,6 +866,93 @@ describe('InterviewRunner kind=QUESTION (스펙 §6 — plan 경로 미진입, Q
       expect(captured.prompt.startsWith('사용 가능한 DB 도구')).toBe(true);
       expect(captured.prompt).toContain('PLANNING-ONLY');
       expect(prepared.close).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe('제안 서버 (질문 세션 제안)', () => {
+    const suggest = {
+      dbCandidates: [{ id: 5, name: '시험 DB', dbType: 'POSTGRESQL' }],
+      refCandidates: [{ catalogId: 9, alias: 'acme/lib', hint: '공유 모듈' }],
+    };
+    const comparable = (o: Record<string, unknown>) => {
+      const { canUseTool: _gate, env: _env, abortController: _ac, ...rest } = o;
+      return rest;
+    };
+    const runOnce = async (claim: unknown, extraDeps: Record<string, unknown> = {}) => {
+      const client = makeClient();
+      const { fakeQuery, captured } = capturing(() => questionStream());
+      await new InterviewRunner(client as never, fakeQuery as never, { ...deps, ...extraDeps } as never).run(claim as never);
+      await new Promise((r) => setImmediate(r)); // capturing()의 프롬프트 수집 루프가 끝나길 기다린다
+      return { client, captured, body: client.postQuestion.mock.calls[0]![1] as Record<string, unknown> };
+    };
+
+    it('claim.suggest가 없으면 프롬프트·옵션·보고 바디가 지금과 같다', async () => {
+      const baseline = await runOnce(questionClaim);
+      const nullSuggest = await runOnce({ ...questionClaim, suggest: null });
+      const emptySuggest = await runOnce({ ...questionClaim, suggest: { dbCandidates: [], refCandidates: [] } });
+      const nullFactory = await runOnce({ ...questionClaim, suggest }, { createSuggestMcp: vi.fn().mockReturnValue(null) });
+      for (const r of [nullSuggest, emptySuggest, nullFactory]) {
+        expect(r.captured.prompt).toEqual(baseline.captured.prompt);
+        expect(comparable(r.captured.options)).toEqual(comparable(baseline.captured.options));
+        expect(r.body).toEqual(baseline.body);
+        expect(r.body).not.toHaveProperty('suggestions');
+        expect(r.captured.options.mcpServers ?? {}).not.toHaveProperty('suggest');
+      }
+      expect(baseline.captured.prompt).not.toContain('[제안 도구]');
+    });
+
+    it('claim.suggest가 있으면 제안 절이 접두 끝에 붙고 서버가 붙는다', async () => {
+      const db = {
+        servers: { 'db-7': { type: 'sdk' as const, name: 'db-7', instance: {} } },
+        tools: {},
+        dialects: { 'db-7': 'mysql' as const },
+        labels: [{ serverName: 'db-7', label: '운영 DB (MySQL)' }],
+        notices: [],
+        close: vi.fn().mockResolvedValue(undefined),
+      };
+      const { captured } = await runOnce({ ...questionClaim, suggest }, { createDbMcp: vi.fn().mockReturnValue(db) });
+      const section = suggestSection(suggest);
+      expect(section).not.toBe('');
+      expect(captured.prompt).toContain(section);
+      expect(captured.prompt.indexOf(section)).toBeGreaterThan(captured.prompt.indexOf('사용 가능한 DB 도구'));
+      expect(captured.prompt.indexOf(section)).toBeLessThan(captured.prompt.indexOf('로그인은 어디서 처리되나요?'));
+      expect(captured.options.mcpServers).toHaveProperty('suggest');
+      expect(captured.options.allowedTools).toEqual([]);
+    });
+
+    const prepared = (items: unknown[]) => ({ servers: { suggest: { type: 'sdk' as const, name: 'suggest', instance: {} } }, tools: [], collected: () => items });
+
+    it('도구가 받은 제안이 보고 바디의 suggestions로 간다', async () => {
+      const { body } = await runOnce({ ...questionClaim, suggest }, { createSuggestMcp: vi.fn().mockReturnValue(prepared([{ kind: 'DB', reason: 'r' }])) });
+      expect(body.suggestions).toEqual([{ kind: 'DB', reason: 'r' }]);
+    });
+
+    it('제안을 하나도 받지 않았으면 suggestions 키가 없다', async () => {
+      const { body } = await runOnce({ ...questionClaim, suggest }, { createSuggestMcp: vi.fn().mockReturnValue(prepared([])) });
+      expect(body).not.toHaveProperty('suggestions');
+    });
+
+    it('작업 인터뷰(INTERVIEW) 턴은 claim.suggest가 있어도 무시한다', async () => {
+      const client = makeClient();
+      const base = capturing(() => planCompleteStream());
+      await new InterviewRunner(client as never, base.fakeQuery as never, deps as never).run(freshClaim);
+      const createSuggestMcp = vi.fn();
+      const withSuggest = capturing(() => planCompleteStream());
+      await new InterviewRunner(makeClient() as never, withSuggest.fakeQuery as never, { ...deps, createSuggestMcp } as never).run({ ...freshClaim, suggest } as never);
+      await new Promise((r) => setImmediate(r));
+      expect(createSuggestMcp).not.toHaveBeenCalled();
+      expect(withSuggest.captured.prompt).toEqual(base.captured.prompt);
+      expect(withSuggest.captured.prompt).not.toContain('[제안 도구]');
+      expect(withSuggest.captured.options.mcpServers ?? {}).not.toHaveProperty('suggest');
+    });
+
+    it('추가 질문(resume) 턴에도 제안 절이 접두로 붙는다', async () => {
+      const resume = { ...questionClaim, claudeSessionId: 'sess-q', lastAnswer: '추가 질문입니다', suggest };
+      const { captured } = await runOnce(resume);
+      const section = suggestSection(suggest);
+      expect(captured.prompt.startsWith(section)).toBe(true);
+      expect(captured.prompt).toContain('추가 질문입니다');
+      expect(captured.options.mcpServers).toHaveProperty('suggest');
     });
   });
 

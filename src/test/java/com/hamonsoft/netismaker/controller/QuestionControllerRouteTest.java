@@ -20,7 +20,8 @@ class QuestionControllerRouteTest {
 
     private final QuestionRouteService routeService = mock(QuestionRouteService.class);
     private final QuestionController controller = new QuestionController(
-            mock(QuestionService.class), mock(InterviewStreamService.class), routeService);
+            mock(QuestionService.class), mock(InterviewStreamService.class), routeService,
+            mock(com.hamonsoft.netismaker.service.suggest.QuestionSuggestService.class));
 
     @Test
     void route는_사용자_id로_서비스를_부르고_응답을_그대로_돌려준다() {

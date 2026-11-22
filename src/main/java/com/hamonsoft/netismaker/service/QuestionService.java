@@ -169,7 +169,7 @@ public class QuestionService {
         return rows.stream().map(QuestionSummaryResponse::of).toList();
     }
 
-    /** 대화 중 제안 뷰 (스펙 2026-11-22 §6.2). 생성자를 바꾸지 않으려고 setter 주입 - 없는 구성(단위 시험)에서는 제안 없이 돌려준다. */
+    /** 대화 중 제안 처리(받기·정리)용 (스펙 2026-11-22 §6.3, ask에서 쓴다). 생성자를 바꾸지 않으려고 setter 주입 - 없는 구성(단위 시험)에서는 건너뛴다. 화면용 조회는 여기서 하지 않는다(컨트롤러가 트랜잭션 밖에서 붙인다). */
     private QuestionSuggestService suggestService;
 
     @org.springframework.beans.factory.annotation.Autowired(required = false)
@@ -181,8 +181,7 @@ public class QuestionService {
     public InterviewResponse get(Long id, String viewerId, boolean isAdmin) {
         interviewService.requireKind(id, InterviewKind.QUESTION);
         InterviewResponse r = interviewService.getResponse(id, viewerId, isAdmin);
-        InterviewResponse withChips = r.withDbConnections(dbConnectionService.chipsFor(r.dbConnectionIds()));
-        return suggestService == null ? withChips : withChips.withSuggestions(suggestService.views(id));
+        return r.withDbConnections(dbConnectionService.chipsFor(r.dbConnectionIds()));
     }
 
     /** SSE 구독·첨부 다운로드 전 ACL 검증 (kind 404 → 소유자/관리자 403). */

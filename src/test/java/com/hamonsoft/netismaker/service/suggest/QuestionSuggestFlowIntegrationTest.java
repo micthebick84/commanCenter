@@ -6,6 +6,7 @@ import com.hamonsoft.netismaker.dto.SuggestionView;
 import com.hamonsoft.netismaker.dto.WorkerQuestionRequest;
 import com.hamonsoft.netismaker.entity.InterviewSession;
 import com.hamonsoft.netismaker.entity.InterviewStatus;
+import com.hamonsoft.netismaker.entity.InterviewTurn;
 import com.hamonsoft.netismaker.entity.RepoCatalogEntry;
 import com.hamonsoft.netismaker.repository.InterviewSessionRepository;
 import com.hamonsoft.netismaker.repository.RepoCatalogRepository;
@@ -24,7 +25,7 @@ import java.util.UUID;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * 답변 보고의 제안이 저장되고 질문 스냅샷에 PENDING으로 나오며, 세션의 참조는 그대로인지 (스펙 2026-11-22 §6.2).
+ * 답변 보고의 제안이 (답변 커밋 뒤 별도 트랜잭션에서) 저장되고 질문 스냅샷에 PENDING으로 나오며, 세션의 참조는 그대로인지 (스펙 2026-11-22 §6.2).
  *
  * Testcontainers 기반 (RUN_TESTCONTAINERS=true 일 때만 실행, 기본은 skip — 이 PC에는 Docker가 없어 CI에서만 돈다).
  */
@@ -37,6 +38,7 @@ class QuestionSuggestFlowIntegrationTest {
     @Autowired private RepoCatalogRepository catalogRepo;
     @Autowired private InterviewService interviewService;
     @Autowired private QuestionService questionService;
+    @Autowired private QuestionSuggestService suggestService;
 
     private RepoCatalogEntry newRepo(String alias) {
         String suffix = UUID.randomUUID().toString().substring(0, 8);
@@ -57,10 +59,12 @@ class QuestionSuggestFlowIntegrationTest {
         s = sessionRepo.saveAndFlush(s);
 
         var sug = List.of(new WorkerQuestionRequest.Suggestion("REF_REPO", null, other.getId(), "이 레포도 봐야 합니다", null));
-        interviewService.recordQuestion(s.getId(), "w-suggest", new WorkerQuestionRequest("답", "sess", "question",
-                BigDecimal.ZERO, null, null, null, null, null, null, null, sug));
+        InterviewTurn turn = interviewService.recordQuestion(s.getId(), "w-suggest", new WorkerQuestionRequest("답", "sess",
+                "question", BigDecimal.ZERO, null, null, null, null, null, null, null, sug));
+        // 컨트롤러가 하는 순서 그대로 - 답변이 커밋된 뒤 제안 저장, 화면 스냅샷에는 컨트롤러가 제안을 붙인다
+        suggestService.record(s.getId(), turn.getSeq(), sug);
 
-        InterviewResponse r = questionService.get(s.getId(), "user1", false);
+        InterviewResponse r = questionService.get(s.getId(), "user1", false).withSuggestions(suggestService.views(s.getId()));
         assertThat(r.suggestions()).hasSize(1);
         SuggestionView v = r.suggestions().get(0);
         assertThat(v.status()).isEqualTo("PENDING");

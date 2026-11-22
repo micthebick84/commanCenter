@@ -138,6 +138,7 @@ public class InterviewWorkerController {
     public void question(@PathVariable Long id, @RequestParam String workerId,
                          @RequestBody @Valid WorkerQuestionRequest req) {
         InterviewTurn turn = interviewService.recordQuestion(id, workerId, req);
+        saveSuggestions(id, turn.getSeq(), req); // 답변 턴이 커밋된 뒤 별도 트랜잭션으로
         if ("design".equals(turn.getKind())) interviewStream.pushDesign(id, turn.getSeq(), turn.getContent());
         else interviewStream.pushQuestion(id, turn.getSeq(), turn.getContent());
         pushMockups(id);
@@ -155,6 +156,20 @@ public class InterviewWorkerController {
                 plan.getDesignMarkdown(), plan.getPlanMarkdown(), plan.getPlanJson());
         pushMockups(id);
         interviewStream.pushStatus(id, InterviewStatus.PLAN_READY);
+    }
+
+    /**
+     * 답변과 함께 보고된 제안을 저장한다 (스펙 2026-11-22 §6.2). 답변 트랜잭션은 이미 커밋됐고, 제안 저장은 자기 트랜잭션이다 -
+     * 같은 트랜잭션 안이면 후보 계산이 거치는 다른 서비스의 예외가 트랜잭션을 롤백 전용으로 만들어 잡아도 답변 커밋이 실패한다.
+     * 실패해도 경고만 남기고 답변 전달(question·status 이벤트)은 계속한다. 로그에는 예외 종류만(사용자 글이 섞일 수 있다).
+     */
+    private void saveSuggestions(Long id, int turnSeq, WorkerQuestionRequest req) {
+        if (suggestService == null || req.suggestions() == null || req.suggestions().isEmpty()) return;
+        try {
+            suggestService.record(id, turnSeq, req.suggestions());
+        } catch (RuntimeException e) {
+            log.warn("제안 보고 저장 실패 session={}: {}", id, e.getClass().getSimpleName());
+        }
     }
 
     /**

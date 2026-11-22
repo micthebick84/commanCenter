@@ -14,6 +14,8 @@ import java.math.BigDecimal;
 import java.util.List;
 
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyInt;
+import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.*;
 
@@ -41,6 +43,49 @@ class InterviewWorkerControllerSuggestPushTest {
         when(t.getKind()).thenReturn("question");
         when(t.getContent()).thenReturn("답");
         return t;
+    }
+
+    @Test
+    void 제안이_있으면_답변_커밋_뒤에_저장한다() {
+        var sug = List.of(new WorkerQuestionRequest.Suggestion("REF_REPO", null, 11L, "이유", null));
+        var r = req(sug);
+        InterviewTurn t = turn();
+        when(interviewService.recordQuestion(9L, "w1", r)).thenReturn(t);
+
+        controller.question(9L, "w1", r);
+
+        var order = inOrder(interviewService, suggest, stream);
+        order.verify(interviewService).recordQuestion(9L, "w1", r);
+        order.verify(suggest).record(9L, 4, sug);
+        order.verify(stream).pushQuestion(9L, 4, "답");
+        order.verify(stream).pushStatus(9L, InterviewStatus.AWAITING_INPUT);
+    }
+
+    @Test
+    void 제안_저장이_실패해도_질문과_상태_이벤트는_나간다() {
+        var sug = List.of(new WorkerQuestionRequest.Suggestion("REF_REPO", null, 11L, "이유", null));
+        var r = req(sug);
+        InterviewTurn t = turn();
+        when(interviewService.recordQuestion(9L, "w1", r)).thenReturn(t);
+        when(suggest.record(9L, 4, sug)).thenThrow(new RuntimeException("boom"));
+
+        controller.question(9L, "w1", r);
+
+        verify(stream).pushQuestion(9L, 4, "답");
+        verify(stream).pushStatus(9L, InterviewStatus.AWAITING_INPUT);
+    }
+
+    @Test
+    void 제안이_없으면_저장을_부르지_않는다() {
+        for (var none : java.util.Arrays.<List<WorkerQuestionRequest.Suggestion>>asList(null, List.of())) {
+            var r = req(none);
+            InterviewTurn t = turn();
+            when(interviewService.recordQuestion(9L, "w1", r)).thenReturn(t);
+
+            controller.question(9L, "w1", r);
+        }
+
+        verify(suggest, never()).record(anyLong(), anyInt(), any());
     }
 
     @Test

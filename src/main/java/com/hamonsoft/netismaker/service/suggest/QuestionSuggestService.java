@@ -18,8 +18,6 @@ import com.hamonsoft.netismaker.repository.RepoCatalogRepository;
 import com.hamonsoft.netismaker.service.suggest.QuestionSuggestCandidates.Candidates;
 import com.hamonsoft.netismaker.service.suggest.QuestionSuggestCandidates.RefCandidate;
 import com.hamonsoft.netismaker.util.SecretMasks;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Profile;
 import org.springframework.stereotype.Service;
@@ -41,8 +39,6 @@ import java.util.Set;
 @Service
 @Profile("api")
 public class QuestionSuggestService {
-
-    private static final Logger log = LoggerFactory.getLogger(QuestionSuggestService.class);
 
     static final int REASON_MAX = 200;
     static final int TARGET_MAX = 80;
@@ -92,46 +88,45 @@ public class QuestionSuggestService {
     }
 
     /**
-     * 러너가 답변과 함께 보고한 제안을 정규화해 저장한다(스펙 §6.2). 호출자(recordQuestion)의 트랜잭션 안에서 돈다.
-     * 제안이 답변 보고를 실패시키면 안 되므로 예외는 잡아 경고만 남기고 빈 목록을 돌려준다 - 로그에는 예외 종류만(사용자 글이 섞일 수 있다).
+     * 러너가 답변과 함께 보고한 제안을 정규화해 저장한다(스펙 §6.2). 자기 트랜잭션이다 - 답변 턴이 커밋된 뒤 워커 컨트롤러가 부르고,
+     * 예외는 호출자가 잡는다(후보 계산이 거치는 다른 서비스의 예외가 답변 트랜잭션을 롤백 전용으로 만들지 못하게 밖으로 뺐다).
      * 후보는 한 번만 계산한다. 러너 보고는 믿지 않는다: 후보에 없는 레포는 버리고, 후보에 없는 연결은 연결 없는 제안으로 받는다.
+     * 세션의 연결·참조는 읽기만 한다 - 붙이는 것은 QuestionService.ask뿐이다.
      */
-    public List<QuestionSuggestion> record(InterviewSession s, int turnSeq, List<WorkerQuestionRequest.Suggestion> reqs) {
-        if (s == null || s.getKind() != InterviewKind.QUESTION || reqs == null || reqs.isEmpty()) return List.of();
-        try {
-            Candidates c = candidates.forSession(s);
-            Set<Long> dbIds = new HashSet<>();
-            for (DbConnectionDto.Chip chip : c.db()) dbIds.add(chip.id());
-            Set<Long> refIds = new HashSet<>();
-            for (RefCandidate r : c.refs()) refIds.add(r.catalogId());
-            int refLimit = Math.min(REFS_PER_TURN, c.refSlotsLeft());
+    @Transactional
+    public List<QuestionSuggestion> record(long sessionId, int turnSeq, List<WorkerQuestionRequest.Suggestion> reqs) {
+        if (reqs == null || reqs.isEmpty()) return List.of();
+        InterviewSession s = sessions.findById(sessionId).orElse(null);
+        if (s == null || s.getKind() != InterviewKind.QUESTION) return List.of();
+        Candidates c = candidates.forSession(s);
+        Set<Long> dbIds = new HashSet<>();
+        for (DbConnectionDto.Chip chip : c.db()) dbIds.add(chip.id());
+        Set<Long> refIds = new HashSet<>();
+        for (RefCandidate r : c.refs()) refIds.add(r.catalogId());
+        int refLimit = Math.min(REFS_PER_TURN, c.refSlotsLeft());
 
-            List<QuestionSuggestion> saved = new ArrayList<>();
-            boolean dbTaken = false;
-            Set<Long> refTaken = new HashSet<>();
-            for (WorkerQuestionRequest.Suggestion req : reqs) {
-                if (req == null) continue;
-                String reason = clean(req.reason(), REASON_MAX);
-                if (reason.isEmpty()) continue;
-                SuggestionKind kind = parseKind(req.kind());
-                if (kind == SuggestionKind.DB) {
-                    if (dbTaken || c.db().isEmpty()) continue;
-                    Long connId = req.dbConnectionId() != null && dbIds.contains(req.dbConnectionId())
-                            ? req.dbConnectionId() : null;
-                    dbTaken = true;
-                    saved.add(suggestions.save(QuestionSuggestion.db(s.getId(), turnSeq, connId, reason, cleanTargets(req.targets()))));
-                } else if (kind == SuggestionKind.REF_REPO) {
-                    Long id = req.repoCatalogId();
-                    if (id == null || !refIds.contains(id) || refTaken.contains(id) || refTaken.size() >= refLimit) continue;
-                    refTaken.add(id);
-                    saved.add(suggestions.save(QuestionSuggestion.refRepo(s.getId(), turnSeq, id, reason)));
-                }
+        List<QuestionSuggestion> saved = new ArrayList<>();
+        boolean dbTaken = false;
+        Set<Long> refTaken = new HashSet<>();
+        for (WorkerQuestionRequest.Suggestion req : reqs) {
+            if (req == null) continue;
+            String reason = clean(req.reason(), REASON_MAX);
+            if (reason.isEmpty()) continue;
+            SuggestionKind kind = parseKind(req.kind());
+            if (kind == SuggestionKind.DB) {
+                if (dbTaken || c.db().isEmpty()) continue;
+                Long connId = req.dbConnectionId() != null && dbIds.contains(req.dbConnectionId())
+                        ? req.dbConnectionId() : null;
+                dbTaken = true;
+                saved.add(suggestions.save(QuestionSuggestion.db(sessionId, turnSeq, connId, reason, cleanTargets(req.targets()))));
+            } else if (kind == SuggestionKind.REF_REPO) {
+                Long id = req.repoCatalogId();
+                if (id == null || !refIds.contains(id) || refTaken.contains(id) || refTaken.size() >= refLimit) continue;
+                refTaken.add(id);
+                saved.add(suggestions.save(QuestionSuggestion.refRepo(sessionId, turnSeq, id, reason)));
             }
-            return saved;
-        } catch (RuntimeException e) {
-            log.warn("제안 보고 저장 실패 session={}: {}", s.getId(), e.getClass().getSimpleName());
-            return List.of();
         }
+        return saved;
     }
 
     /** 세션의 제안 전부(id 순) - 화면 스냅샷용. */

@@ -13,7 +13,10 @@ import com.hamonsoft.netismaker.entity.InterviewTurn;
 import com.hamonsoft.netismaker.entity.QuestionAttachment;
 import com.hamonsoft.netismaker.service.InterviewStreamService;
 import com.hamonsoft.netismaker.service.QuestionService;
+import com.hamonsoft.netismaker.service.suggest.QuestionSuggestService;
 import jakarta.validation.Valid;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.context.annotation.Profile;
 import org.springframework.core.io.FileSystemResource;
 import org.springframework.core.io.Resource;
@@ -45,15 +48,32 @@ import java.util.List;
 @Profile("api")
 public class QuestionController {
 
+    private static final Logger log = LoggerFactory.getLogger(QuestionController.class);
+
     private final QuestionService questionService;
     private final InterviewStreamService interviewStream;
     private final QuestionRouteService routeService;
+    private final QuestionSuggestService suggestService;
 
     public QuestionController(QuestionService questionService, InterviewStreamService interviewStream,
-                              QuestionRouteService routeService) {
+                              QuestionRouteService routeService, QuestionSuggestService suggestService) {
         this.questionService = questionService;
         this.interviewStream = interviewStream;
         this.routeService = routeService;
+        this.suggestService = suggestService;
+    }
+
+    /**
+     * 질문 스냅샷에 대화 중 제안을 붙인다 (스펙 2026-11-22 §6.2). 질문 조회 트랜잭션 밖에서 - 안에서 하면 제안 조회의 예외가
+     * 트랜잭션을 롤백 전용으로 만들어 대화 화면 자체가 열리지 않는다. 실패하면 제안 없이 응답한다(로그에는 예외 종류만).
+     */
+    private InterviewResponse withSuggestions(InterviewResponse r) {
+        try {
+            return r.withSuggestions(suggestService.views(r.id()));
+        } catch (RuntimeException e) {
+            log.warn("질문 제안 조회 실패 session={}: {}", r.id(), e.getClass().getSimpleName());
+            return r;
+        }
     }
 
     /** 질문 등록 전 레포 추천 (스펙 2026-11-20 §6.1). 추천 쪽 문제는 오류가 아니라 200 + UNAVAILABLE. */
@@ -94,7 +114,7 @@ public class QuestionController {
 
     @GetMapping("/{id}")
     public InterviewResponse get(@PathVariable Long id, JwtAuthenticationToken auth) {
-        return questionService.get(id, AuthContext.requireUserId(auth), AuthContext.isAdmin(auth));
+        return withSuggestions(questionService.get(id, AuthContext.requireUserId(auth), AuthContext.isAdmin(auth)));
     }
 
     @GetMapping(value = "/{id}/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
@@ -136,7 +156,7 @@ public class QuestionController {
         if (dbNote != null) interviewStream.pushNote(id, dbNote.getSeq(), dbNote.getContent());
         InterviewTurn refNote = result.refNote();
         if (refNote != null) interviewStream.pushNote(id, refNote.getSeq(), refNote.getContent());
-        return questionService.get(id, userId, isAdmin);
+        return withSuggestions(questionService.get(id, userId, isAdmin));
     }
 
     @PostMapping("/{id}/close")
@@ -146,7 +166,7 @@ public class QuestionController {
         questionService.close(id, userId, isAdmin);
         interviewStream.pushStatus(id, InterviewStatus.CANCELLED);
         interviewStream.finish(id); // terminal → done 이벤트
-        return questionService.get(id, userId, isAdmin);
+        return withSuggestions(questionService.get(id, userId, isAdmin));
     }
 
     /**

@@ -45,12 +45,18 @@ export function upsertSuggestion(list: SessionSuggestion[], s: SessionSuggestion
   return next
 }
 
-export function pendingForTurn(list: SessionSuggestion[], turnSeq: number): SessionSuggestion[] {
-  return list.filter((s) => s.turnSeq === turnSeq && s.status === 'PENDING')
+/** 카드로 고를 수 있는 PENDING인가 — 카탈로그 행이 지워진 참조 제안(repoCatalogId null)은 붙일 수 없어 한 줄로만 보인다. */
+function actionable(s: SessionSuggestion): boolean {
+  return s.status === 'PENDING' && !(s.kind === 'REF_REPO' && s.repoCatalogId == null)
 }
 
+export function pendingForTurn(list: SessionSuggestion[], turnSeq: number): SessionSuggestion[] {
+  return list.filter((s) => s.turnSeq === turnSeq && actionable(s))
+}
+
+/** 결정된 제안과, PENDING이지만 고를 수 없는 제안(삭제된 레포) — 한 줄로 그린다. */
 export function decidedForTurn(list: SessionSuggestion[], turnSeq: number): SessionSuggestion[] {
-  return list.filter((s) => s.turnSeq === turnSeq && s.status !== 'PENDING')
+  return list.filter((s) => s.turnSeq === turnSeq && !actionable(s))
 }
 
 /** 카드가 처음 체크해 둘 DB 연결 id. */

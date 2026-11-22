@@ -92,7 +92,15 @@ const ui = computed(() =>
       },
 )
 
-const stream = useInterviewStream()
+// 질문 세션: 끊긴 사이에 온 제안·상태 변경은 서버 replay에 없다 → 다시 열리면 스냅샷을 받아 제안만 채운다(실패는 무시, 스트림은 계속).
+const stream = useInterviewStream({
+  onReconnected: () => {
+    if (!isQuestion.value) return
+    useApi<InterviewSnapshot>(`${apiBase.value}/${props.sessionId}`)
+      .then((snapshot) => stream.hydrateSuggestions(snapshot))
+      .catch(() => {})
+  },
+})
 const { connState, status, turns, designSections, plan, error, pending, mockups, suggestions } = stream
 
 // 질문 턴에 묶인 목업 — turnSeq별로 n 순. 말풍선 아래 카드로 그린다(계획 턴 목업은 목록에만).
@@ -365,15 +373,18 @@ async function sendAnswer(extra?: AskExtra): Promise<boolean> {
   sending.value = true
   try {
     const url = `${apiBase.value}/${props.sessionId}/${isQuestion.value ? 'ask' : 'answer'}`
+    let res: InterviewSnapshot | null | undefined
     if (files.length > 0) {
       // Content-Type을 명시하지 않는다 — $fetch가 FormData boundary를 스스로 설정 (pages/tasks/index.vue와 동일)
       const form = new FormData()
       form.append('meta', new Blob([JSON.stringify(body)], { type: 'application/json' }))
       for (const f of files) form.append('files', f, f.name)
-      await useApi(url, { method: 'POST', body: form })
+      res = await useApi<InterviewSnapshot>(url, { method: 'POST', body: form })
     } else {
-      await useApi(url, { method: 'POST', body })
+      res = await useApi<InterviewSnapshot>(url, { method: 'POST', body })
     }
+    // 질문 ask 응답은 스냅샷이다 — 받아들인 제안·밀려난 제안의 새 상태로 카드를 SSE를 기다리지 않고 정리한다(칸이 없으면 무시: 구 API)
+    if (isQuestion.value) stream.hydrateSuggestions(res)
     // 낙관적 추가: 서버 재큐 후 다음 질문이 새 seq로 도착한다. 첨부는 id 없이(서버 확정 전 — 클릭 불가) 이름·크기만.
     turns.value = [
       ...turns.value,

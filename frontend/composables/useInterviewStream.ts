@@ -89,7 +89,15 @@ const KNOWN_STATUSES: InterviewStatus[] = [
   'FAILED',
 ]
 
-export function useInterviewStream() {
+export interface InterviewStreamOptions {
+  /**
+   * 끊겼다가(reconnecting) 다시 열렸을 때만 부른다 — 첫 연결은 아니다. 서버 replay는 턴·목업만 다시 보내므로
+   * 끊긴 사이에 온 제안·상태 변경은 호출자가 스냅샷을 다시 받아 hydrateSuggestions로 채운다.
+   */
+  onReconnected?: () => void
+}
+
+export function useInterviewStream(options: InterviewStreamOptions = {}) {
   const auth = useAuthStore()
 
   const connState = ref<ConnState>('idle')
@@ -136,8 +144,10 @@ export function useInterviewStream() {
     connState.value = attempts === 0 ? 'connecting' : 'reconnecting'
     es = new EventSource(streamUrl(sessionId as number))
     es.onopen = () => {
+      const reconnected = connState.value === 'reconnecting'
       attempts = 0
       connState.value = 'open'
+      if (reconnected) options.onReconnected?.()
     }
     es.addEventListener('status', (e) => onStatus(e as MessageEvent))
     es.addEventListener('question', (e) => onQuestion(e as MessageEvent))
@@ -316,8 +326,17 @@ export function useInterviewStream() {
     if (Array.isArray(snapshot.mockups)) {
       for (const m of snapshot.mockups) mockups.value = upsertMockup(mockups.value, m)
     }
-    if (Array.isArray(snapshot.suggestions)) {
-      for (const g of snapshot.suggestions) suggestions.value = upsertSuggestion(suggestions.value, g)
+    hydrateSuggestions(snapshot)
+  }
+
+  // 스냅샷(또는 ask 응답)의 제안만 id로 덮어쓴다. 재연결·ask 응답에서 hydrate 전체를 다시 부르지 않는 이유:
+  // 낙관적 내 말풍선(seq x.5)이 서버의 실제 user 턴(정수 seq)과 dedup되지 않아 두 번 보이고, status·plan도 스트림보다 늦은 값으로 덮일 수 있다.
+  function hydrateSuggestions(snapshot: InterviewSnapshot | null | undefined) {
+    if (!snapshot || !Array.isArray(snapshot.suggestions)) return
+    for (const g of snapshot.suggestions) {
+      if (g && typeof g === 'object' && typeof g.id === 'number') {
+        suggestions.value = upsertSuggestion(suggestions.value, g)
+      }
     }
   }
 
@@ -380,5 +399,6 @@ export function useInterviewStream() {
     open,
     close,
     hydrate,
+    hydrateSuggestions,
   }
 }

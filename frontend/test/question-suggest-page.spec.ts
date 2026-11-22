@@ -185,6 +185,51 @@ describe('pages/questions/[id] — 대화 중 제안 받아들이기 (스펙 202
     w.unmount()
   })
 
+  it('상세가 오기 전에는 카드가 꺼져 있다', async () => {
+    // 패널(자식)의 스냅샷 GET이 먼저, 페이지 폴링의 첫 GET이 다음이다 — 폴링 응답만 붙잡아 둔다.
+    let calls = 0
+    let releaseDetail: (v: unknown) => void = () => {}
+    const base = useApiMock.getMockImplementation()!
+    useApiMock.mockImplementation((url: string, ...rest: unknown[]) => {
+      if (url !== '/api/questions/3') return base(url, ...rest)
+      calls += 1
+      if (calls === 1) return Promise.resolve({ ...detail })
+      return new Promise((resolve) => {
+        releaseDetail = resolve
+      })
+    })
+    const w = mount(QuestionDetail)
+    await flushPromises()
+    const card = () => w.findComponent(SessionSuggestCard)
+    expect(card().exists()).toBe(true)
+    expect(card().props('disabled')).toBe(true)
+    await accept(w, { dbConnectionIds: [4], refs: [], suggestionIds: [1] })
+    expect(askCall()).toBeUndefined() // 기존 연결·참조를 모르는 채로 보내지 않는다
+    releaseDetail({ ...detail })
+    await flushPromises()
+    expect(card().props('disabled')).toBe(false)
+    w.unmount()
+  })
+
+  it('초안을 시드하지 못한 세션(model 없음)은 상세의 연결·참조 위에 더해 보낸다', async () => {
+    const base = useApiMock.getMockImplementation()!
+    useApiMock.mockImplementation((url: string, ...rest: unknown[]) =>
+      url === '/api/questions/3' ? Promise.resolve({ ...detail, model: null }) : base(url, ...rest),
+    )
+    const w = mount(QuestionDetail)
+    await flushPromises()
+    expect((w.vm as unknown as { pickedSeeded: boolean }).pickedSeeded).toBe(false)
+    await accept(w, { dbConnectionIds: [4], refs: [{ repoCatalogId: 11, branch: 'main' }], suggestionIds: [1, 2] })
+    const body = askCall()![1].body
+    expect(body.dbConnectionIds).toEqual([3, 4])
+    expect(body.refRepos).toEqual([
+      { repoCatalogId: 2, branch: 'release/6.5' },
+      { repoCatalogId: 11, branch: 'main' },
+    ])
+    expect(body.acceptSuggestionIds).toEqual([1, 2])
+    w.unmount()
+  })
+
   it('전송이 실패하면 초안을 바꾸지 않는다', async () => {
     askResult = () => Promise.reject({ statusCode: 400, data: { message: '연결을 찾을 수 없습니다' } })
     const w = mount(QuestionDetail)

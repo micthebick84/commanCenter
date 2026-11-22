@@ -55,6 +55,15 @@ describe('sessionSuggest', () => {
     expect(decidedForTurn(list, 2).map((s: SessionSuggestion) => s.id)).toEqual([2, 4])
   })
 
+  it('삭제된 레포의 PENDING 참조 제안은 고를 수 없어 한 줄 쪽으로 간다', () => {
+    const list = [
+      sg({ id: 1, kind: 'REF_REPO', repoCatalogId: null }),
+      sg({ id: 2, kind: 'REF_REPO', repoCatalogId: 11, repoAlias: 'acme/y' }),
+    ]
+    expect(pendingForTurn(list, 2).map((s: SessionSuggestion) => s.id)).toEqual([2])
+    expect(decidedForTurn(list, 2).map((s: SessionSuggestion) => s.id)).toEqual([1])
+  })
+
   it('Claude가 고른 연결이 선택지에 있으면 그것을 미리 고른다', () => {
     const s = sg({
       dbConnectionId: 8,

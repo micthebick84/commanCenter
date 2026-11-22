@@ -1514,6 +1514,77 @@ describe('InterviewPanel 대화 중 제안 (스펙 2026-11-22 §5·§8)', () => 
     w.unmount()
   })
 
+  // 스트림을 끊었다가 다시 연다. 재연결 타이머(1초)만 페이크로 돌리고 flushPromises 전에 되돌린다.
+  async function reconnectWith(snapshot: unknown) {
+    vi.useFakeTimers()
+    FakeEventSource.last().triggerError()
+    vi.advanceTimersByTime(1000)
+    vi.useRealTimers()
+    useApiMock.mockResolvedValueOnce(snapshot)
+    FakeEventSource.last().triggerOpen()
+    await flushPromises()
+  }
+
+  it('재연결되면 스냅샷을 다시 받아 놓친 제안을 채운다', async () => {
+    const w = await mountWithSlots(snap([]))
+    FakeEventSource.last().triggerOpen()
+    expect(w.find('[data-test="slot-suggest"]').exists()).toBe(false)
+    const before = FakeEventSource.instances.length
+    await reconnectWith(snap([sg()]))
+    expect(FakeEventSource.instances.length).toBe(before + 1)
+    expect(useApiMock.mock.calls.filter((c: unknown[]) => c[0] === '/api/questions/9')).toHaveLength(2)
+    expect(w.find('[data-test="slot-ids"]').text()).toBe('1')
+    // 재연결 스냅샷의 턴으로 말풍선이 늘지 않는다(제안만 반영)
+    expect(w.findAll('.bubble-row.assistant')).toHaveLength(2)
+    w.unmount()
+  })
+
+  it('재연결 스냅샷이 놓친 상태 변경을 반영한다', async () => {
+    const w = await mountWithSlots(snap([sg()]))
+    expect(w.find('[data-test="slot-ids"]').text()).toBe('1')
+    await reconnectWith(snap([sg({ status: 'ACCEPTED' })]))
+    expect(w.find('[data-test="slot-suggest"]').exists()).toBe(false)
+    expect(w.findAll('[data-test="suggest-decided"]').map((n) => n.text())).toEqual(['제안: DB 연결 — 연결함'])
+    w.unmount()
+  })
+
+  it('재연결 스냅샷을 못 받아도 스트림은 그대로다', async () => {
+    const w = await mountWithSlots(snap([sg()]))
+    vi.useFakeTimers()
+    FakeEventSource.last().triggerError()
+    vi.advanceTimersByTime(1000)
+    vi.useRealTimers()
+    useApiMock.mockRejectedValueOnce(new Error('500'))
+    FakeEventSource.last().triggerOpen()
+    await flushPromises()
+    expect(w.find('[data-test="slot-ids"]').text()).toBe('1')
+    FakeEventSource.last().emit('suggestion', sg({ status: 'DISMISSED' }))
+    await flushPromises()
+    expect(w.find('[data-test="slot-suggest"]').exists()).toBe(false)
+    w.unmount()
+  })
+
+  it('ask 응답의 제안 상태로 카드를 바로 정리한다', async () => {
+    const w = await mountWithSlots(snap([sg()]))
+    useApiMock.mockResolvedValueOnce(snap([sg({ status: 'ACCEPTED' })], 'QUEUED'))
+    await w.find('[data-test="slot-accept"]').trigger('click')
+    await flushPromises()
+    expect(askCall()).toBeTruthy()
+    expect(w.find('[data-test="slot-suggest"]').exists()).toBe(false)
+    expect(w.findAll('[data-test="suggest-decided"]').map((n) => n.text())).toEqual(['제안: DB 연결 — 연결함'])
+    w.unmount()
+  })
+
+  it('삭제된 레포의 참조 제안만 있으면 카드를 그리지 않고 한 줄만 보인다', async () => {
+    const w = await mountWithSlots(snap([sg({ id: 7, kind: 'REF_REPO', repoCatalogId: null, repoAlias: null, dbOptions: [] })]))
+    expect(w.find('[data-test="slot-suggest"]').exists()).toBe(false)
+    const last = w.findAll('.bubble-row.assistant')[1]!
+    expect(last.findAll('[data-test="suggest-decided"]').map((n) => n.text())).toEqual([
+      '제안: 참조 레포 (삭제된 레포) — 연결하지 않음',
+    ])
+    w.unmount()
+  })
+
   it('작업 인터뷰(INTERVIEW) 패널에는 제안 슬롯이 없다', async () => {
     const w = await mountWithSlots(snap([sg({ id: 1, turnSeq: 3 }), sg({ id: 2, turnSeq: 1, status: 'DISMISSED' })]), {})
     expect(w.find('[data-test="slot-suggest"]').exists()).toBe(false)

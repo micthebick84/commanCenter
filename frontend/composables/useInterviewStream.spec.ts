@@ -1,5 +1,6 @@
 import { describe, it, expect, vi } from 'vitest'
 import { useInterviewStream } from './useInterviewStream'
+import type { SessionSuggestion } from './sessionSuggest'
 import { FakeEventSource } from '../test/mocks/eventsource'
 import { authStub } from '../test/mocks/nuxt'
 
@@ -475,7 +476,7 @@ describe('useInterviewStream — mockup 이벤트 (스펙 2026-11-03 인터뷰 �
 })
 
 describe('useInterviewStream — suggestion 이벤트 (질문 세션 대화 중 제안)', () => {
-  const sg = (over: Record<string, unknown> = {}) => ({
+  const sg = (over: Partial<SessionSuggestion> = {}): SessionSuggestion => ({
     id: 5,
     turnSeq: 2,
     kind: 'DB',
@@ -495,16 +496,51 @@ describe('useInterviewStream — suggestion 이벤트 (질문 세션 대화 중 
   it('스냅샷의 suggestions로 채운다', () => {
     authStub.accessToken = 'jwt'
     const s = useInterviewStream()
-    s.hydrate({ suggestions: [sg()] } as any)
-    expect(s.suggestions.value).toHaveLength(1)
+    s.hydrate({ suggestions: [sg({ id: 5 }), sg({ id: 6, kind: 'REF_REPO' })] })
+    expect(s.suggestions.value.map((g: SessionSuggestion) => g.id)).toEqual([5, 6])
     s.open(1)
-    FakeEventSource.last().emit('suggestion', sg())
-    expect(s.suggestions.value).toHaveLength(1)
+    // replay가 같은 id를 다른 상태로 보내면 덧붙지 않고 교체된다 — 스냅샷에서 온 6은 그대로 남는다
+    FakeEventSource.last().emit('suggestion', sg({ id: 5, status: 'ACCEPTED' }))
+    expect(s.suggestions.value.map((g: SessionSuggestion) => `${g.id}:${g.status}`)).toEqual(['5:ACCEPTED', '6:PENDING'])
     const t = useInterviewStream()
-    t.hydrate({ suggestions: null } as any)
+    t.hydrate({ suggestions: null })
     t.hydrate({ statusName: 'QUEUED' })
     expect(t.suggestions.value).toEqual([])
     s.close()
+  })
+
+  it('끊겼다가 다시 열릴 때만 onReconnected를 부른다', () => {
+    vi.useFakeTimers()
+    authStub.accessToken = 'jwt'
+    const onReconnected = vi.fn()
+    const s = useInterviewStream({ onReconnected })
+    s.open(1)
+    FakeEventSource.last().triggerOpen() // 첫 연결 — 부르지 않는다
+    expect(onReconnected).not.toHaveBeenCalled()
+    FakeEventSource.last().triggerError()
+    vi.advanceTimersByTime(1000)
+    FakeEventSource.last().triggerOpen()
+    expect(s.connState.value).toBe('open')
+    expect(onReconnected).toHaveBeenCalledTimes(1)
+    s.close()
+    vi.useRealTimers()
+  })
+
+  it('hydrateSuggestions는 제안만 덮어쓰고 턴·상태는 건드리지 않는다', () => {
+    authStub.accessToken = 'jwt'
+    const s = useInterviewStream()
+    s.hydrate({ statusName: 'QUEUED', turns: [{ seq: 1, role: 'assistant', kind: 'question', content: 'Q1' }], suggestions: [sg()] })
+    s.hydrateSuggestions({
+      statusName: 'AWAITING_INPUT',
+      turns: [{ seq: 2, role: 'user', kind: 'answer', content: 'A1' }],
+      suggestions: [sg({ status: 'ACCEPTED' }), sg({ id: 9 })],
+    })
+    expect(s.suggestions.value.map((g: SessionSuggestion) => `${g.id}:${g.status}`)).toEqual(['5:ACCEPTED', '9:PENDING'])
+    expect(s.turns.value).toHaveLength(1)
+    expect(s.status.value).toBe('QUEUED')
+    s.hydrateSuggestions(null)
+    s.hydrateSuggestions({ suggestions: null })
+    expect(s.suggestions.value).toHaveLength(2)
   })
 
   it('suggestion 이벤트가 같은 id를 교체한다', () => {

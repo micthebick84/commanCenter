@@ -30,8 +30,19 @@ public record QuestionAskRequest(
          * @Valid가 있어야 원소의 @Size(branch 255자)가 적용된다.
          */
         @Valid
-        List<RefRepoInput> refRepos
+        List<RefRepoInput> refRepos,
+        /**
+         * 이번 질문과 함께 받아들이는 제안 id (스펙 2026-11-22 §6.3). null/빈 목록 = 받아들이는 것 없음 - 남은 PENDING 제안은
+         * 지나감(SUPERSEDED)이 된다. 붙이는 것은 위 dbConnectionIds·refRepos이고, 이 칸은 제안 기록용이다.
+         */
+        List<Long> acceptSuggestionIds
 ) {
+    /** 제안 받아들임 없이 — 기존 호출처/테스트 호환. */
+    public QuestionAskRequest(String answer, Integer replyToSeq, String model, String effort,
+                              List<Long> mcpCatalogIds, List<Long> dbConnectionIds, List<RefRepoInput> refRepos) {
+        this(answer, replyToSeq, model, effort, mcpCatalogIds, dbConnectionIds, refRepos, null);
+    }
+
     /** MCP 변경 없이(유지) 답변만 — 기존 호출처/테스트 호환. */
     public QuestionAskRequest(String answer, Integer replyToSeq, String model, String effort) {
         this(answer, replyToSeq, model, effort, null, null, null);

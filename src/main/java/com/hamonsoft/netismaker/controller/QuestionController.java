@@ -7,6 +7,8 @@ import com.hamonsoft.netismaker.dto.QuestionRouteRequest;
 import com.hamonsoft.netismaker.dto.QuestionRouteResponse;
 import com.hamonsoft.netismaker.service.route.QuestionRouteService;
 import com.hamonsoft.netismaker.dto.QuestionSummaryResponse;
+import com.hamonsoft.netismaker.dto.SuggestionView;
+import com.hamonsoft.netismaker.service.TaskException;
 import com.hamonsoft.netismaker.entity.InterviewSession;
 import com.hamonsoft.netismaker.entity.InterviewStatus;
 import com.hamonsoft.netismaker.entity.InterviewTurn;
@@ -22,6 +24,7 @@ import org.springframework.core.io.FileSystemResource;
 import org.springframework.core.io.Resource;
 import org.springframework.http.ContentDisposition;
 import org.springframework.http.HttpHeaders;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.oauth2.server.resource.authentication.JwtAuthenticationToken;
@@ -156,7 +159,36 @@ public class QuestionController {
         if (dbNote != null) interviewStream.pushNote(id, dbNote.getSeq(), dbNote.getContent());
         InterviewTurn refNote = result.refNote();
         if (refNote != null) interviewStream.pushNote(id, refNote.getSeq(), refNote.getContent());
+        pushChangedSuggestions(id, result.changedSuggestionIds());
         return withSuggestions(questionService.get(id, userId, isAdmin));
+    }
+
+    /** ask 커밋 뒤 상태가 바뀐 제안을 화면에 민다. 실패해도 ask 응답은 그대로 나간다(다음 스냅샷이 바로잡는다). */
+    private void pushChangedSuggestions(Long id, List<Long> ids) {
+        if (ids == null || ids.isEmpty()) return;
+        try {
+            for (SuggestionView v : suggestService.viewsOf(id, ids)) interviewStream.pushSuggestion(id, v);
+        } catch (RuntimeException e) {
+            log.warn("질문 제안 밀기 실패 session={}: {}", id, e.getClass().getSimpleName());
+        }
+    }
+
+    /**
+     * 제안 닫기(스펙 2026-11-22 §6.3). 닫기가 커밋된 뒤에 뷰를 읽는다 - 뷰를 읽다 실패하면 그대로 올려 보낸다(이미 저장됐고 화면은 다음
+     * 스냅샷에서 알게 된다). 민 이벤트가 실패한 것은 응답에 영향이 없다.
+     */
+    @PostMapping("/{id}/suggestions/{suggestionId}/dismiss")
+    public SuggestionView dismissSuggestion(@PathVariable Long id, @PathVariable Long suggestionId,
+                                            JwtAuthenticationToken auth) {
+        long done = questionService.dismissSuggestion(id, suggestionId, AuthContext.requireUserId(auth), AuthContext.isAdmin(auth));
+        SuggestionView view = suggestService.viewsOf(id, List.of(done)).stream().findFirst()
+                .orElseThrow(() -> new TaskException(HttpStatus.NOT_FOUND, "제안을 찾을 수 없습니다"));
+        try {
+            interviewStream.pushSuggestion(id, view);
+        } catch (RuntimeException e) {
+            log.warn("질문 제안 밀기 실패 session={}: {}", id, e.getClass().getSimpleName());
+        }
+        return view;
     }
 
     @PostMapping("/{id}/close")

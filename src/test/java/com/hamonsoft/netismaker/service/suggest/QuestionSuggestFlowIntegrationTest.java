@@ -2,6 +2,11 @@ package com.hamonsoft.netismaker.service.suggest;
 
 import com.hamonsoft.netismaker.TestcontainersConfig;
 import com.hamonsoft.netismaker.dto.InterviewResponse;
+import com.hamonsoft.netismaker.dto.QuestionAskRequest;
+import com.hamonsoft.netismaker.dto.RefRepoInput;
+import com.hamonsoft.netismaker.entity.SuggestionStatus;
+import com.hamonsoft.netismaker.repository.QuestionSuggestionRepository;
+import com.hamonsoft.netismaker.service.TaskException;
 import com.hamonsoft.netismaker.dto.SuggestionView;
 import com.hamonsoft.netismaker.dto.WorkerQuestionRequest;
 import com.hamonsoft.netismaker.entity.InterviewSession;
@@ -23,6 +28,7 @@ import java.util.List;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
  * 답변 보고의 제안이 (답변 커밋 뒤 별도 트랜잭션에서) 저장되고 질문 스냅샷에 PENDING으로 나오며, 세션의 참조는 그대로인지 (스펙 2026-11-22 §6.2).
@@ -39,6 +45,51 @@ class QuestionSuggestFlowIntegrationTest {
     @Autowired private InterviewService interviewService;
     @Autowired private QuestionService questionService;
     @Autowired private QuestionSuggestService suggestService;
+    @Autowired private QuestionSuggestionRepository suggestionRepo;
+
+    /** 참조 제안 하나가 PENDING으로 저장된 AWAITING_INPUT 세션을 만든다. */
+    private InterviewSession sessionWithPendingSuggestion(RepoCatalogEntry target, RepoCatalogEntry suggested) {
+        InterviewSession s = InterviewSession.createQuestion("acme/x", "main", "t", "q?", "user1", List.of(), null, null);
+        s.setRepoCatalogId(target.getId());
+        s.setStatus(InterviewStatus.RUNNING);
+        s.setWorkerId("w-suggest");
+        s = sessionRepo.saveAndFlush(s);
+        var sug = List.of(new WorkerQuestionRequest.Suggestion("REF_REPO", null, suggested.getId(), "이 레포도 봐야 합니다", null));
+        InterviewTurn turn = interviewService.recordQuestion(s.getId(), "w-suggest", new WorkerQuestionRequest("답", "sess",
+                "question", BigDecimal.ZERO, null, null, null, null, null, null, null, sug));
+        suggestService.record(s.getId(), turn.getSeq(), sug);
+        return s;
+    }
+
+    @Test
+    void 받아들이면_참조가_붙고_제안이_ACCEPTED가_된다() {
+        RepoCatalogEntry target = newRepo("대상");
+        RepoCatalogEntry other = newRepo("다른");
+        InterviewSession s = sessionWithPendingSuggestion(target, other);
+        Long suggestionId = suggestionRepo.findBySessionIdOrderByIdAsc(s.getId()).get(0).getId();
+
+        questionService.ask(s.getId(), "user1", false, new QuestionAskRequest("보완해 주세요", null, null, null, null, null,
+                List.of(new RefRepoInput(other.getId(), null)), List.of(suggestionId)), null);
+
+        assertThat(sessionRepo.findById(s.getId()).orElseThrow().getRefRepos()).hasSize(1);
+        var row = suggestionRepo.findById(suggestionId).orElseThrow();
+        assertThat(row.getStatus()).isEqualTo(SuggestionStatus.ACCEPTED);
+        assertThat(row.getDecidedBy()).isEqualTo("user1");
+    }
+
+    @Test
+    void 붙일_수_없으면_ask가_400이고_제안은_PENDING_그대로다() {
+        RepoCatalogEntry target = newRepo("대상");
+        RepoCatalogEntry other = newRepo("다른");
+        InterviewSession s = sessionWithPendingSuggestion(target, other);
+        Long suggestionId = suggestionRepo.findBySessionIdOrderByIdAsc(s.getId()).get(0).getId();
+
+        assertThatThrownBy(() -> questionService.ask(s.getId(), "user1", false, new QuestionAskRequest("보완해 주세요", null, null, null,
+                null, null, List.of(new RefRepoInput(999_999_999L, null)), List.of(suggestionId)), null))
+                .isInstanceOfSatisfying(TaskException.class, e -> assertThat(e.getStatus().value()).isEqualTo(400));
+
+        assertThat(suggestionRepo.findById(suggestionId).orElseThrow().getStatus()).isEqualTo(SuggestionStatus.PENDING);
+    }
 
     private RepoCatalogEntry newRepo(String alias) {
         String suffix = UUID.randomUUID().toString().substring(0, 8);

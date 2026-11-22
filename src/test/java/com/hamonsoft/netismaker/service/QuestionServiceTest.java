@@ -16,6 +16,7 @@ import com.hamonsoft.netismaker.entity.RenderStatus;
 import com.hamonsoft.netismaker.service.render.AttachmentRenderRequested;
 import com.hamonsoft.netismaker.service.render.RenderTargetPolicy;
 import com.hamonsoft.netismaker.service.route.QuestionRouteService;
+import com.hamonsoft.netismaker.service.suggest.QuestionSuggestService;
 import com.hamonsoft.netismaker.entity.TaskMcpSpec;
 import com.hamonsoft.netismaker.repository.InterviewSessionRepository;
 import com.hamonsoft.netismaker.repository.InterviewTurnRepository;
@@ -1185,6 +1186,46 @@ class QuestionServiceTest {
         assertThat(r.dbNote().getContent()).isEqualTo("DB 연결 변경: 분석 DB");
         assertThat(r.refNote().getContent()).isEqualTo("참조 repo 변경: 없음(전부 해제)");
         assertThat(s.getRefRepos()).isEmpty();
+    }
+
+    @Test
+    void 새_턴이_생긴_ask는_제안을_받아들이고_나머지를_지나감으로_바꾼다() {
+        QuestionSuggestService suggest = mock(QuestionSuggestService.class);
+        service.setQuestionSuggestService(suggest);
+        when(interviewService.submitAnswer(eq(5L), eq("user1"), eq(false), any()))
+                .thenReturn(answered(questionSession("claude-opus-5", "high"), 5));
+        when(suggest.onAsk(5L, List.of(2L), "user1")).thenReturn(List.of(1L, 2L));
+
+        QuestionService.AskResult r = service.ask(5L, "user1", false,
+                new QuestionAskRequest("보완해 주세요", 3, null, null, null, null, null, List.of(2L)), null);
+
+        verify(suggest).onAsk(5L, List.of(2L), "user1");
+        assertThat(r.changedSuggestionIds()).containsExactly(1L, 2L);
+    }
+
+    @Test
+    void 중복_제출인_ask는_제안_상태를_건드리지_않는다() {
+        QuestionSuggestService suggest = mock(QuestionSuggestService.class);
+        service.setQuestionSuggestService(suggest);
+        when(interviewService.submitAnswer(eq(5L), eq("user1"), eq(false), any()))
+                .thenReturn(answered(questionSession("claude-opus-5", "high"), null));
+
+        QuestionService.AskResult r = service.ask(5L, "user1", false,
+                new QuestionAskRequest("보완해 주세요", 3, null, null, null, null, null, List.of(2L)), null);
+
+        verify(suggest, never()).onAsk(anyLong(), any(), anyString());
+        assertThat(r.changedSuggestionIds()).isEmpty();
+    }
+
+    @Test
+    void 제안_서비스가_없어도_ask는_그대로_동작한다() {
+        when(interviewService.submitAnswer(eq(5L), eq("user1"), eq(false), any()))
+                .thenReturn(answered(questionSession("claude-opus-5", "high"), 5));
+
+        QuestionService.AskResult r = service.ask(5L, "user1", false,
+                new QuestionAskRequest("보완해 주세요", 3, null, null, null, null, null, List.of(2L)), null);
+
+        assertThat(r.changedSuggestionIds()).isEmpty();
     }
 
     @Test

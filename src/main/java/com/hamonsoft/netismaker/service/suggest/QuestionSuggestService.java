@@ -15,14 +15,17 @@ import com.hamonsoft.netismaker.repository.InterviewSessionRepository;
 import com.hamonsoft.netismaker.repository.InterviewTurnRepository;
 import com.hamonsoft.netismaker.repository.QuestionSuggestionRepository;
 import com.hamonsoft.netismaker.repository.RepoCatalogRepository;
+import com.hamonsoft.netismaker.service.TaskException;
 import com.hamonsoft.netismaker.service.suggest.QuestionSuggestCandidates.Candidates;
 import com.hamonsoft.netismaker.service.suggest.QuestionSuggestCandidates.RefCandidate;
 import com.hamonsoft.netismaker.util.SecretMasks;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Profile;
+import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.time.OffsetDateTime;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.HashMap;
@@ -127,6 +130,39 @@ public class QuestionSuggestService {
             }
         }
         return saved;
+    }
+
+    /**
+     * ask가 새 턴을 만들었을 때(스펙 2026-11-22 §6.3) 이 세션의 PENDING 제안을 정리한다 - acceptIds에 있으면 ACCEPTED, 나머지는
+     * SUPERSEDED(사용자가 다른 것을 물었다). ask 트랜잭션 안에서 돈다(호출자가 400으로 끝나면 같이 롤백). 제안 표만 읽고 쓰며
+     * 후보·뷰 계산이나 다른 서비스는 부르지 않는다. 다른 세션·이미 결정된 id는 PENDING 목록에 없으므로 조용히 무시된다.
+     * 붙이는 일 자체는 ask의 applyDbChange·applyRefChange가 한다 - 여기서는 기록만.
+     */
+    @Transactional
+    public List<Long> onAsk(long sessionId, List<Long> acceptIds, String actorId) {
+        Set<Long> accept = acceptIds == null ? Set.of() : new HashSet<>(acceptIds);
+        OffsetDateTime now = OffsetDateTime.now();
+        List<Long> changed = new ArrayList<>();
+        for (QuestionSuggestion q : suggestions.findBySessionIdAndStatusOrderByIdAsc(sessionId, SuggestionStatus.PENDING)) {
+            SuggestionStatus next = accept.contains(q.getId()) ? SuggestionStatus.ACCEPTED : SuggestionStatus.SUPERSEDED;
+            if (q.decide(next, actorId, now)) changed.add(q.getId());
+        }
+        return changed;
+    }
+
+    /**
+     * 제안 닫기(스펙 2026-11-22 §6.3). 자기 트랜잭션이고 뷰는 만들지 않는다 - 컨트롤러가 커밋 뒤에 viewsOf로 읽는다.
+     * 그 세션의 제안이 아니면 404, 이미 결정됐으면 409.
+     */
+    @Transactional
+    public long dismiss(long sessionId, long suggestionId, String actorId) {
+        QuestionSuggestion q = suggestions.findById(suggestionId)
+                .filter(x -> x.getSessionId() == sessionId)
+                .orElseThrow(() -> new TaskException(HttpStatus.NOT_FOUND, "제안을 찾을 수 없습니다"));
+        if (!q.decide(SuggestionStatus.DISMISSED, actorId, OffsetDateTime.now())) {
+            throw TaskException.conflict("이미 처리된 제안입니다");
+        }
+        return q.getId();
     }
 
     /** 세션의 제안 전부(id 순) - 화면 스냅샷용. */

@@ -473,3 +473,62 @@ describe('useInterviewStream — mockup 이벤트 (스펙 2026-11-03 인터뷰 �
     s.close()
   })
 })
+
+describe('useInterviewStream — suggestion 이벤트 (질문 세션 대화 중 제안)', () => {
+  const sg = (over: Record<string, unknown> = {}) => ({
+    id: 5,
+    turnSeq: 2,
+    kind: 'DB',
+    status: 'PENDING',
+    reason: '확인 필요',
+    targets: [],
+    dbConnectionId: null,
+    repoCatalogId: null,
+    repoAlias: null,
+    defaultBranch: null,
+    dbOptions: [],
+    dbSlotsLeft: 3,
+    refSlotsLeft: 3,
+    ...over,
+  })
+
+  it('스냅샷의 suggestions로 채운다', () => {
+    authStub.accessToken = 'jwt'
+    const s = useInterviewStream()
+    s.hydrate({ suggestions: [sg()] } as any)
+    expect(s.suggestions.value).toHaveLength(1)
+    s.open(1)
+    FakeEventSource.last().emit('suggestion', sg())
+    expect(s.suggestions.value).toHaveLength(1)
+    const t = useInterviewStream()
+    t.hydrate({ suggestions: null } as any)
+    t.hydrate({ statusName: 'QUEUED' })
+    expect(t.suggestions.value).toEqual([])
+    s.close()
+  })
+
+  it('suggestion 이벤트가 같은 id를 교체한다', () => {
+    authStub.accessToken = 'jwt'
+    const s = useInterviewStream()
+    s.open(1)
+    const es = FakeEventSource.last()
+    es.emit('suggestion', sg())
+    es.emit('suggestion', sg({ status: 'ACCEPTED' }))
+    expect(s.suggestions.value).toHaveLength(1)
+    expect(s.suggestions.value[0].status).toBe('ACCEPTED')
+    s.close()
+  })
+
+  it('모양이 틀린 suggestion 이벤트는 무시한다', () => {
+    authStub.accessToken = 'jwt'
+    const s = useInterviewStream()
+    s.open(1)
+    const es = FakeEventSource.last()
+    es.emit('suggestion', 'not-json-object')
+    es.emit('suggestion', null)
+    es.emit('suggestion', { id: 'x' })
+    es.emit('suggestion', [1])
+    expect(s.suggestions.value).toEqual([])
+    s.close()
+  })
+})

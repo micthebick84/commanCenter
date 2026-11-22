@@ -3,6 +3,7 @@
 // adds reconnect + typed handlers for question/design/plan_ready/status/note/done.
 import type { AttachmentView } from '~/composables/questions'
 import { dropUnbound, upsertMockup, type MockupSummary } from '~/composables/interviewMockups'
+import { upsertSuggestion, type SessionSuggestion } from '~/composables/sessionSuggest'
 
 export type InterviewStatus =
   | 'QUEUED'
@@ -62,6 +63,8 @@ export interface InterviewSnapshot {
   plan?: { designMarkdown?: string; planMarkdown?: string; planJson?: unknown } | null
   /** 인터뷰 목업 요약(html 없음). 칸이 없거나 null이면 무시한다(구 API·질문 세션). */
   mockups?: MockupSummary[] | null
+  /** 질문 세션의 대화 중 제안(DB 연결·참조 레포). 칸이 없거나 null이면 무시한다(구 API·인터뷰 세션). */
+  suggestions?: SessionSuggestion[] | null
 }
 
 export interface InterviewPlan {
@@ -96,6 +99,7 @@ export function useInterviewStream() {
   const plan = ref<InterviewPlan | null>(null)
   const pending = ref<PendingActivity | null>(null)
   const mockups = ref<MockupSummary[]>([])
+  const suggestions = ref<SessionSuggestion[]>([])
   const error = ref<string | null>(null)
 
   let es: EventSource | null = null
@@ -142,6 +146,7 @@ export function useInterviewStream() {
     es.addEventListener('plan_ready', (e) => onPlanReady(e as MessageEvent))
     es.addEventListener('note', (e) => onNote(e as MessageEvent))
     es.addEventListener('mockup', (e) => onMockup(e as MessageEvent))
+    es.addEventListener('suggestion', (e) => onSuggestion(e as MessageEvent))
     es.addEventListener('done', () => close())
     es.onerror = () => onError()
   }
@@ -190,6 +195,14 @@ export function useInterviewStream() {
     const data = parse(e)
     if (!data || typeof data.id !== 'number') return
     mockups.value = upsertMockup(mockups.value, data as MockupSummary)
+  }
+
+  // `suggestion` 페이로드 = SuggestionView 하나. 상태가 바뀔 때마다(PENDING → ACCEPTED 등) 다시 오므로 id로 덮어쓴다.
+  // 재연결 replay와 스냅샷이 겹쳐도 중복 없이 합쳐지고, 모양이 틀린 페이로드는 버린다.
+  function onSuggestion(e: MessageEvent) {
+    const data = parse(e)
+    if (!data || typeof data !== 'object' || typeof data.id !== 'number') return
+    suggestions.value = upsertSuggestion(suggestions.value, data as SessionSuggestion)
   }
 
   function onDesign(e: MessageEvent) {
@@ -303,6 +316,9 @@ export function useInterviewStream() {
     if (Array.isArray(snapshot.mockups)) {
       for (const m of snapshot.mockups) mockups.value = upsertMockup(mockups.value, m)
     }
+    if (Array.isArray(snapshot.suggestions)) {
+      for (const g of snapshot.suggestions) suggestions.value = upsertSuggestion(suggestions.value, g)
+    }
   }
 
   // Dedup by seq so SSE replay-on-reconnect does not duplicate turns.
@@ -359,6 +375,7 @@ export function useInterviewStream() {
     plan,
     pending,
     mockups,
+    suggestions,
     error,
     open,
     close,

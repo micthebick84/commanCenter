@@ -131,6 +131,8 @@ const QUESTION = {
   // 읽기 전용 참조 repo — 대화 화면 칩 줄 (위 REF_REPOS, 작업 1과 같은 값)
   refRepos: REF_REPOS,
   turns: [{ seq: 1, role: 'assistant', kind: 'question', content: '**AuthController**입니다' }], plan: null,
+  // 대화 중 제안(스펙 2026-11-22) — 없으면 카드도 한 줄도 그리지 않는다
+  suggestions: [],
 }
 // 2·3은 질문의 참조 — 5(인증 서버)는 일부러 빼서 등록 창 프리필의 "카탈로그에 없는 참조" 알림 경로도 지난다
 const REPOS = [
@@ -202,6 +204,14 @@ function apiResponse(path) {
   if (path === '/api/questions/route') return { routeId: 1, state: 'UNAVAILABLE', recommendedRepoCatalogId: null, candidates: [], recentRepoCatalogIds: [], eligibleRepoCatalogIds: [], dbNeeded: null }
   if (path === '/api/questions') return [QUESTION]
   if (/^\/api\/questions\/\d+$/.test(path)) return QUESTION
+  // 제안 닫기(POST) — 닫힌 제안 하나를 돌려준다
+  const sgd = path.match(/^\/api\/questions\/\d+\/suggestions\/(\d+)\/dismiss$/)
+  if (sgd) {
+    return {
+      id: Number(sgd[1]), turnSeq: 1, kind: 'DB', status: 'DISMISSED', reason: '스모크 제안', targets: [], dbConnectionId: null,
+      repoCatalogId: null, repoAlias: null, defaultBranch: null, dbOptions: [], dbSlotsLeft: 3, refSlotsLeft: 3,
+    }
+  }
   if (path === '/api/usage/claude') return { limits: [] }
   if (path === '/api/usage/summary') return USAGE_SUMMARY
   if (path === '/api/queue/stats') return { avgDurationMs: null }

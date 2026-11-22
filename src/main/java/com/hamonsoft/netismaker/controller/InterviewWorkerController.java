@@ -3,6 +3,7 @@ package com.hamonsoft.netismaker.controller;
 import com.hamonsoft.netismaker.dto.InterviewClaimResponse;
 import com.hamonsoft.netismaker.dto.InterviewMockupSummary;
 import com.hamonsoft.netismaker.dto.InterviewStartupResponse;
+import com.hamonsoft.netismaker.dto.SuggestionView;
 import com.hamonsoft.netismaker.dto.WorkerActivityRequest;
 import com.hamonsoft.netismaker.dto.WorkerPlanRequest;
 import com.hamonsoft.netismaker.dto.WorkerQuestionRequest;
@@ -140,6 +141,7 @@ public class InterviewWorkerController {
         if ("design".equals(turn.getKind())) interviewStream.pushDesign(id, turn.getSeq(), turn.getContent());
         else interviewStream.pushQuestion(id, turn.getSeq(), turn.getContent());
         pushMockups(id);
+        pushSuggestions(id, turn.getSeq(), req);
         interviewStream.pushStatus(id, InterviewStatus.AWAITING_INPUT); // 영문 enum name
     }
 
@@ -153,6 +155,21 @@ public class InterviewWorkerController {
                 plan.getDesignMarkdown(), plan.getPlanMarkdown(), plan.getPlanJson());
         pushMockups(id);
         interviewStream.pushStatus(id, InterviewStatus.PLAN_READY);
+    }
+
+    /**
+     * 답변과 함께 보고된 제안이 저장됐으면 그 턴의 제안을 화면에 민다 (스펙 2026-11-22 §6.2). status 앞 - 화면이 status를 받으면 입력이 열린다.
+     * 보고는 이미 커밋됐으므로 조회·push가 실패해도 경고만 남긴다(답변 전달을 막지 않는다). 제안 없는 보고는 조회하지 않는다.
+     */
+    private void pushSuggestions(Long id, int turnSeq, WorkerQuestionRequest req) {
+        if (suggestService == null || req.suggestions() == null || req.suggestions().isEmpty()) return;
+        try {
+            for (SuggestionView v : suggestService.views(id)) {
+                if (v.turnSeq() == turnSeq) interviewStream.pushSuggestion(id, v);
+            }
+        } catch (RuntimeException e) {
+            log.warn("보고 뒤 제안 push 실패 session={}: {}", id, e.getClass().getSimpleName());
+        }
     }
 
     /**

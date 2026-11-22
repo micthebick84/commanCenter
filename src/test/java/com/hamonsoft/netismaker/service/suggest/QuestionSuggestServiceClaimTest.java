@@ -25,7 +25,9 @@ class QuestionSuggestServiceClaimTest {
     private final QuestionSuggestCandidates candidates = mock(QuestionSuggestCandidates.class);
 
     private QuestionSuggestService service(boolean enabled) {
-        return new QuestionSuggestService(sessions, turns, candidates, enabled, 10);
+        return new QuestionSuggestService(sessions, turns, candidates,
+                mock(com.hamonsoft.netismaker.repository.QuestionSuggestionRepository.class),
+                mock(com.hamonsoft.netismaker.repository.RepoCatalogRepository.class), enabled, 10);
     }
 
     private InterviewSession question() {

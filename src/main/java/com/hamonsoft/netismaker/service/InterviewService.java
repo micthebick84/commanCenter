@@ -1,6 +1,7 @@
 package com.hamonsoft.netismaker.service;
 
 import com.hamonsoft.netismaker.dbmcp.DbWriteGate;
+import com.hamonsoft.netismaker.service.suggest.QuestionSuggestService;
 import com.hamonsoft.netismaker.dto.AnswerRequest;
 import com.hamonsoft.netismaker.dto.InterviewClaimResponse;
 import com.hamonsoft.netismaker.dto.InterviewMockupSummary;
@@ -125,6 +126,17 @@ public class InterviewService {
     @Autowired(required = false)
     void setInterviewMockupService(InterviewMockupService mockupService) {
         this.mockupService = mockupService;
+    }
+
+    /**
+     * 질문 세션 대화 중 제안 저장 (스펙 2026-11-22 §6.2). 생성자를 바꾸지 않으려고 setter 주입 — 없는 구성에서는 제안 보고를 건너뛴다.
+     * 보고가 세션의 연결·참조를 바꾸는 일은 없다(붙이는 것은 QuestionService.ask뿐).
+     */
+    private QuestionSuggestService suggestService;
+
+    @Autowired(required = false)
+    void setQuestionSuggestService(QuestionSuggestService suggestService) {
+        this.suggestService = suggestService;
     }
 
     /** claim이 첨부 슬라이드 렌더링을 기다리는 최대 시간(초, 스펙 2026-10-27 §7.2). 0이면 기다리지 않는다. 생성자를 바꾸지 않으려고 setter 주입. */
@@ -443,6 +455,10 @@ public class InterviewService {
         InterviewTurn turn = appendTurn(sessionId, "assistant", kind,
                 req.content() == null ? "" : req.content());
         bindMockups(s, turn);
+        // record는 예외를 밖으로 내지 않는다 — 제안이 답변 보고를 실패시키면 안 된다
+        if (suggestService != null && s.isQuestion() && req.suggestions() != null && !req.suggestions().isEmpty()) {
+            suggestService.record(s, turn.getSeq(), req.suggestions());
+        }
         s.setStatus(InterviewStatus.AWAITING_INPUT);
         s.setWorkerId(null);
         s.setClaimedAt(null);

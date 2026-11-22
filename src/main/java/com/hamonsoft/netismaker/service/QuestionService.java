@@ -1,5 +1,6 @@
 package com.hamonsoft.netismaker.service;
 
+import com.hamonsoft.netismaker.service.suggest.QuestionSuggestService;
 import com.hamonsoft.netismaker.dto.DbConnectionDto;
 import com.hamonsoft.netismaker.dto.InterviewResponse;
 import com.hamonsoft.netismaker.dto.QuestionAskRequest;
@@ -168,11 +169,20 @@ public class QuestionService {
         return rows.stream().map(QuestionSummaryResponse::of).toList();
     }
 
+    /** 대화 중 제안 뷰 (스펙 2026-11-22 §6.2). 생성자를 바꾸지 않으려고 setter 주입 - 없는 구성(단위 시험)에서는 제안 없이 돌려준다. */
+    private QuestionSuggestService suggestService;
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    void setQuestionSuggestService(QuestionSuggestService suggestService) {
+        this.suggestService = suggestService;
+    }
+
     @Transactional(readOnly = true)
     public InterviewResponse get(Long id, String viewerId, boolean isAdmin) {
         interviewService.requireKind(id, InterviewKind.QUESTION);
         InterviewResponse r = interviewService.getResponse(id, viewerId, isAdmin);
-        return r.withDbConnections(dbConnectionService.chipsFor(r.dbConnectionIds()));
+        InterviewResponse withChips = r.withDbConnections(dbConnectionService.chipsFor(r.dbConnectionIds()));
+        return suggestService == null ? withChips : withChips.withSuggestions(suggestService.views(id));
     }
 
     /** SSE 구독·첨부 다운로드 전 ACL 검증 (kind 404 → 소유자/관리자 403). */

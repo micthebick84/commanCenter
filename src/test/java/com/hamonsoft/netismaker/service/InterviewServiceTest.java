@@ -1930,4 +1930,46 @@ class InterviewServiceTest {
         assertThat(cutoff.getAllValues().get(1)).isBetween(before, after);
     }
 
+
+    @Test
+    void 제안_보고는_세션의_연결과_참조를_바꾸지_않는다() {
+        var suggestService = mock(com.hamonsoft.netismaker.service.suggest.QuestionSuggestService.class);
+        service.setQuestionSuggestService(suggestService);
+        InterviewSession s = questionSession(2L, InterviewStatus.RUNNING);
+        s.setWorkerId("w1");
+        s.setDbConnectionIds(new ArrayList<>(List.of(4L)));
+        s.setRefRepos(new ArrayList<>(List.of(new RefRepo(11L, "ref", "acme/ref", "https://x/acme/ref.git", "main", null, null, null))));
+        List<Long> dbBefore = new ArrayList<>(s.getDbConnectionIds());
+        List<RefRepo> refsBefore = new ArrayList<>(s.getRefRepos());
+        when(sessionRepo.findByIdForUpdate(2L)).thenReturn(Optional.of(s));
+        when(turnRepo.findMaxSeq(2L)).thenReturn(null);
+        var sug = List.of(new WorkerQuestionRequest.Suggestion("REF_REPO", null, 12L, "이유", null));
+        var req = new WorkerQuestionRequest("답", "sess", "question", BigDecimal.ZERO,
+                null, null, null, null, null, null, null, sug);
+
+        InterviewTurn turn = service.recordQuestion(2L, "w1", req);
+
+        assertThat(s.getDbConnectionIds()).isEqualTo(dbBefore);
+        assertThat(s.getRefRepos()).isEqualTo(refsBefore);
+        verify(suggestService, times(1)).record(s, turn.getSeq(), sug);
+    }
+
+    @Test
+    void 제안이_없는_보고는_제안_저장을_부르지_않는다() {
+        var suggestService = mock(com.hamonsoft.netismaker.service.suggest.QuestionSuggestService.class);
+        service.setQuestionSuggestService(suggestService);
+        InterviewSession s = questionSession(2L, InterviewStatus.RUNNING);
+        s.setWorkerId("w1");
+        when(sessionRepo.findByIdForUpdate(2L)).thenReturn(Optional.of(s));
+        when(turnRepo.findMaxSeq(2L)).thenReturn(null);
+
+        service.recordQuestion(2L, "w1", new WorkerQuestionRequest("답", "sess", "question", BigDecimal.ZERO,
+                null, null, null, null, null, null));
+        s.setStatus(InterviewStatus.RUNNING);
+        s.setWorkerId("w1");
+        service.recordQuestion(2L, "w1", new WorkerQuestionRequest("답", "sess", "question", BigDecimal.ZERO,
+                null, null, null, null, null, null, null, List.of()));
+
+        verifyNoInteractions(suggestService);
+    }
 }

@@ -31,7 +31,7 @@ class InterviewWorkerControllerMockupPushTest {
     private final InterviewService interviewService = mock(InterviewService.class);
     private final InterviewStreamService stream = mock(InterviewStreamService.class);
     private final InterviewWorkerController controller =
-            new InterviewWorkerController(interviewService, stream, mock(DbConnectionService.class));
+            new InterviewWorkerController(interviewService, stream, mock(DbConnectionService.class), mock(com.hamonsoft.netismaker.service.suggest.QuestionSuggestService.class));
 
     private static final WorkerQuestionRequest QUESTION = new WorkerQuestionRequest("목업 1과 2 중 어느 쪽인가요?",
             "sess-1", "question", BigDecimal.ZERO, null, null, null, null, null, null);

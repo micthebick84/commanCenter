@@ -12,6 +12,7 @@ import com.hamonsoft.netismaker.entity.InterviewTurn;
 import com.hamonsoft.netismaker.service.DbConnectionService;
 import com.hamonsoft.netismaker.service.InterviewService;
 import com.hamonsoft.netismaker.service.InterviewStreamService;
+import com.hamonsoft.netismaker.service.suggest.QuestionSuggestService;
 import jakarta.validation.Valid;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -48,9 +49,11 @@ public class InterviewWorkerController {
     private final InterviewService interviewService;
     private final InterviewStreamService interviewStream;
     private final DbConnectionService dbConnectionService;
+    private final QuestionSuggestService suggestService;
 
     public InterviewWorkerController(InterviewService interviewService, InterviewStreamService interviewStream,
-                                     DbConnectionService dbConnectionService) {
+                                     DbConnectionService dbConnectionService, QuestionSuggestService suggestService) {
+        this.suggestService = suggestService;
         this.interviewService = interviewService;
         this.interviewStream = interviewStream;
         this.dbConnectionService = dbConnectionService;
@@ -58,7 +61,7 @@ public class InterviewWorkerController {
 
     @PostMapping("/claim")
     public ResponseEntity<InterviewClaimResponse> claim(@RequestParam String workerId) {
-        Optional<InterviewClaimResponse> claimed = interviewService.claim(workerId).map(this::withDb);
+        Optional<InterviewClaimResponse> claimed = interviewService.claim(workerId).map(this::withDb).map(this::withSuggest);
         return claimed.map(ResponseEntity::ok).orElseGet(() -> ResponseEntity.noContent().build());
     }
 
@@ -79,6 +82,19 @@ public class InterviewWorkerController {
                     : "DB 접속정보를 불러오지 못해 DB 도구 없이 진행합니다";
             // DB 도구가 없는 인터뷰에 "구현 때 이 연결에 쓰인다"고 알리면 읽을 수도 없는 연결 이야기가 된다 — 쓰기 목록도 비운다 (스펙 2026-11-03 §5.1)
             return c.withDb(List.of(), List.of(notice)).withWritableDbConnections(List.of());
+        }
+    }
+
+    /**
+     * 질문 세션이면 대화 중 제안 후보를 싣는다. withDb와 같은 원칙 — claim 트랜잭션은 이미 커밋됐으므로
+     * 여기서 실패해도 응답을 깨지 않고(500이면 세션이 RUNNING에 묶인다) 후보 없이 그대로 돌려준다.
+     */
+    private InterviewClaimResponse withSuggest(InterviewClaimResponse c) {
+        try {
+            return suggestService.claimCandidates(c.sessionId()).map(c::withSuggest).orElse(c);
+        } catch (RuntimeException e) {
+            log.warn("claim 제안 후보 조회 실패 session={}: {}", c.sessionId(), e.getClass().getSimpleName());
+            return c;
         }
     }
 

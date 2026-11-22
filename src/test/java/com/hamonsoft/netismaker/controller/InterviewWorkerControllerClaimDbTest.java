@@ -22,7 +22,7 @@ class InterviewWorkerControllerClaimDbTest {
     private final InterviewService interviewService = mock(InterviewService.class);
     private final DbConnectionService db = mock(DbConnectionService.class);
     private final InterviewWorkerController controller =
-            new InterviewWorkerController(interviewService, mock(InterviewStreamService.class), db);
+            new InterviewWorkerController(interviewService, mock(InterviewStreamService.class), db, mock(com.hamonsoft.netismaker.service.suggest.QuestionSuggestService.class));
 
     private static InterviewClaimResponse claimOf(boolean question, List<Long> dbIds) {
         InterviewSession s = question

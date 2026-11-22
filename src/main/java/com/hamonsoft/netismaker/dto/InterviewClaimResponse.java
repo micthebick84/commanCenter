@@ -83,7 +83,12 @@ public record InterviewClaimResponse(
          * 아래 with* 사본 다섯 곳은 값을 그대로 실어 나른다 — 따로 with*는 없다(세션 값이 곧 claim 값).
          * 인터뷰 서비스는 QUESTION 세션에서 이 값을 보지 않는다.
          */
-        Boolean superpowersEnabled
+        Boolean superpowersEnabled,
+        /**
+         * 질문 세션 대화 중 제안 후보 — QuestionSuggestService.claimCandidates 결과를 컨트롤러가 withSuggest로 채운다.
+         * null이면 제안할 것이 없다(기능 꺼짐·후보 없음·옛 API와 같은 뜻).
+         */
+        Suggest suggest
 ) {
     /** 어느 경로로 생성돼도 non-null 계약 유지 (스펙 §5.4). */
     public InterviewClaimResponse {
@@ -100,6 +105,19 @@ public record InterviewClaimResponse(
     public RepoRef repoRef() {
         return RepoRef.fromSnapshot(githubRepo, gitUrl);
     }
+
+    /** 제안 후보 묶음 — DB 연결(id·name·dbType)과 참조 repo(id·alias·hint)만, 접속정보·description은 싣지 않는다. */
+    public record Suggest(List<DbCandidate> dbCandidates, List<RefCandidate> refCandidates) {
+        public Suggest {
+            dbCandidates = dbCandidates == null ? List.of() : List.copyOf(dbCandidates);
+            refCandidates = refCandidates == null ? List.of() : List.copyOf(refCandidates);
+        }
+    }
+
+    public record DbCandidate(long id, String name, String dbType) {}
+
+    /** 기본 브랜치는 러너에 필요 없다 — 제안 보고 검증은 API가 후보를 다시 계산해서 한다. */
+    public record RefCandidate(long catalogId, String alias, String hint) {}
 
     /** attachments = 이 턴(user answer)에 첨부된 파일. 항상 non-null (QUESTION 외엔 []). */
     public record Turn(int seq, String role, String kind, String content, Integer replyToSeq,
@@ -196,7 +214,7 @@ public record InterviewClaimResponse(
                 attachmentRoot,
                 s.getGitUrl(), RepoRef.fromSnapshot(s.getGithubRepo(), s.getGitUrl()).host(),
                 s.getDbConnectionIds() == null ? List.of() : List.copyOf(s.getDbConnectionIds()), List.of(), List.of(),
-                List.of(), false, null, List.of(), s.isSuperpowersEnabled());
+                List.of(), false, null, List.of(), s.isSuperpowersEnabled(), null);
     }
 
     /** DB 접속정보만 채운 사본 (스펙 §5.4). 참조 repo·refsCleared·taskType·writableDbConnections·superpowersEnabled는 그대로 실어 나른다. */
@@ -204,7 +222,7 @@ public record InterviewClaimResponse(
         return new InterviewClaimResponse(sessionId, githubRepo, githubBranch, title, description, claudeSessionId,
                 currentPhase, workDir, lastAnswer, replyToSeq, mcpsExtra, turns, model, effort, totalCostUsd,
                 attachments, kind, attachmentRoot, gitUrl, repoHost, dbConnectionIds, refs, notices, refRepos,
-                refsCleared, taskType, writableDbConnections, superpowersEnabled);
+                refsCleared, taskType, writableDbConnections, superpowersEnabled, suggest);
     }
 
     /** 참조 repo만 채운 사본 (스펙 2026-10-22 §4.4). DB 접속정보·refsCleared·taskType·writableDbConnections·superpowersEnabled는 그대로 실어 나른다. */
@@ -212,7 +230,7 @@ public record InterviewClaimResponse(
         return new InterviewClaimResponse(sessionId, githubRepo, githubBranch, title, description, claudeSessionId,
                 currentPhase, workDir, lastAnswer, replyToSeq, mcpsExtra, turns, model, effort, totalCostUsd,
                 attachments, kind, attachmentRoot, gitUrl, repoHost, dbConnectionIds, dbConnections, dbNotices, refs,
-                refsCleared, taskType, writableDbConnections, superpowersEnabled);
+                refsCleared, taskType, writableDbConnections, superpowersEnabled, suggest);
     }
 
     /** refsCleared만 바꾼 사본 (스펙 2026-10-24 §4.4). 나머지는 그대로 실어 나른다. */
@@ -220,7 +238,7 @@ public record InterviewClaimResponse(
         return new InterviewClaimResponse(sessionId, githubRepo, githubBranch, title, description, claudeSessionId,
                 currentPhase, workDir, lastAnswer, replyToSeq, mcpsExtra, turns, model, effort, totalCostUsd,
                 attachments, kind, attachmentRoot, gitUrl, repoHost, dbConnectionIds, dbConnections, dbNotices,
-                refRepos, cleared, taskType, writableDbConnections, superpowersEnabled);
+                refRepos, cleared, taskType, writableDbConnections, superpowersEnabled, suggest);
     }
 
     /** taskType만 바꾼 사본 (스펙 2026-11-03 §5.1). 나머지는 그대로 실어 나른다. */
@@ -228,7 +246,7 @@ public record InterviewClaimResponse(
         return new InterviewClaimResponse(sessionId, githubRepo, githubBranch, title, description, claudeSessionId,
                 currentPhase, workDir, lastAnswer, replyToSeq, mcpsExtra, turns, model, effort, totalCostUsd,
                 attachments, kind, attachmentRoot, gitUrl, repoHost, dbConnectionIds, dbConnections, dbNotices,
-                refRepos, refsCleared, taskType, writableDbConnections, superpowersEnabled);
+                refRepos, refsCleared, taskType, writableDbConnections, superpowersEnabled, suggest);
     }
 
     /** writableDbConnections만 바꾼 사본 (스펙 2026-11-03 §5.1). 나머지는 그대로 실어 나른다. null은 빈 목록. */
@@ -236,6 +254,14 @@ public record InterviewClaimResponse(
         return new InterviewClaimResponse(sessionId, githubRepo, githubBranch, title, description, claudeSessionId,
                 currentPhase, workDir, lastAnswer, replyToSeq, mcpsExtra, turns, model, effort, totalCostUsd,
                 attachments, kind, attachmentRoot, gitUrl, repoHost, dbConnectionIds, dbConnections, dbNotices,
-                refRepos, refsCleared, taskType, labels, superpowersEnabled);
+                refRepos, refsCleared, taskType, labels, superpowersEnabled, suggest);
+    }
+
+    /** suggest만 바꾼 사본. 나머지는 그대로 실어 나른다. */
+    public InterviewClaimResponse withSuggest(Suggest suggest) {
+        return new InterviewClaimResponse(sessionId, githubRepo, githubBranch, title, description, claudeSessionId,
+                currentPhase, workDir, lastAnswer, replyToSeq, mcpsExtra, turns, model, effort, totalCostUsd,
+                attachments, kind, attachmentRoot, gitUrl, repoHost, dbConnectionIds, dbConnections, dbNotices,
+                refRepos, refsCleared, taskType, writableDbConnections, superpowersEnabled, suggest);
     }
 }

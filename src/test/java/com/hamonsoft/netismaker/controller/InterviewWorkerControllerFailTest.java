@@ -19,7 +19,7 @@ class InterviewWorkerControllerFailTest {
     private final InterviewService interviewService = mock(InterviewService.class);
     private final InterviewStreamService stream = mock(InterviewStreamService.class);
     private final InterviewWorkerController controller =
-            new InterviewWorkerController(interviewService, stream, mock(com.hamonsoft.netismaker.service.DbConnectionService.class));
+            new InterviewWorkerController(interviewService, stream, mock(com.hamonsoft.netismaker.service.DbConnectionService.class), mock(com.hamonsoft.netismaker.service.suggest.QuestionSuggestService.class));
 
     @Test
     void fail_pushes_the_reason_note_before_the_terminal_status() {

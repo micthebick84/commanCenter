@@ -168,6 +168,20 @@ describe('suggestSection', () => {
     expect(lines).toContain('함께 볼 수 있는 레포: 12 · acme/x · 공유 모듈');
   });
 
+  it('목록 줄의 줄바꿈은 공백으로 바뀐다', () => {
+    const s = suggestSection({
+      dbCandidates: [{ id: 4, name: '기본\nDB', dbType: 'MARIA\r\nDB' }],
+      refCandidates: [
+        { catalogId: 11, alias: 'Netis\n7.0', hint: ' 공유\n\n모듈 ' },
+        { catalogId: 12, alias: 'acme/x', hint: '\n \t' },
+      ],
+    });
+    const lines = s.split('\n');
+    expect(lines).toContain('연결할 수 있는 DB: 4 · 기본 DB · MARIA DB');
+    expect(lines).toContain('함께 볼 수 있는 레포: 11 · Netis 7.0 · 공유 모듈');
+    expect(lines).toContain('함께 볼 수 있는 레포: 12 · acme/x');
+  });
+
   it('후보가 없으면 제안 절은 빈 문자열이다', () => {
     for (const c of [null, undefined, {}, { dbCandidates: [], refCandidates: [] }]) expect(suggestSection(c)).toBe('');
   });

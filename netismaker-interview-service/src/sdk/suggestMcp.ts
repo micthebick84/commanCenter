@@ -118,6 +118,9 @@ export function createSuggestMcp(candidates: SuggestCandidates | null | undefine
   };
 }
 
+/** 목록 한 줄이 이름·키워드 안의 줄바꿈으로 갈라지지 않게 공백 덩어리를 한 칸으로 줄인다. */
+const oneLine = (s: string | null | undefined): string => (s ?? '').replace(/\s+/g, ' ').trim();
+
 /** 제안 절(끝에 빈 줄 포함). 후보가 없으면 ''. 연결 이름·종류와 레포 별칭·키워드만 싣는다(접속정보·description 없음). */
 export function suggestSection(candidates: SuggestCandidates | null | undefined): string {
   const dbs = hasAny(candidates?.dbCandidates) ? candidates!.dbCandidates! : [];
@@ -141,7 +144,10 @@ export function suggestSection(candidates: SuggestCandidates | null | undefined)
     '- 추측으로 부르지 않습니다. 한 답변에 종류마다 한 번이면 충분합니다.',
     '- 제안을 남겨도 코드로 확인한 답은 이 답변에서 끝까지 쓰고, 확인하지 못한 부분이 무엇인지 한 문장으로 밝힙니다.',
   );
-  for (const d of dbs) lines.push(`연결할 수 있는 DB: ${d.id} · ${d.name} · ${d.dbType}`);
-  for (const r of refs) lines.push(`함께 볼 수 있는 레포: ${r.catalogId} · ${r.alias}${r.hint ? ` · ${r.hint}` : ''}`);
+  for (const d of dbs) lines.push(`연결할 수 있는 DB: ${d.id} · ${oneLine(d.name)} · ${oneLine(d.dbType)}`);
+  for (const r of refs) {
+    const hint = oneLine(r.hint);
+    lines.push(`함께 볼 수 있는 레포: ${r.catalogId} · ${oneLine(r.alias)}${hint ? ` · ${hint}` : ''}`);
+  }
   return lines.join('\n') + '\n\n';
 }

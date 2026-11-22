@@ -334,9 +334,11 @@ export function useInterviewStream(options: InterviewStreamOptions = {}) {
   function hydrateSuggestions(snapshot: InterviewSnapshot | null | undefined) {
     if (!snapshot || !Array.isArray(snapshot.suggestions)) return
     for (const g of snapshot.suggestions) {
-      if (g && typeof g === 'object' && typeof g.id === 'number') {
-        suggestions.value = upsertSuggestion(suggestions.value, g)
-      }
+      if (!g || typeof g !== 'object' || typeof g.id !== 'number') continue
+      // 상태는 PENDING에서 벗어나기만 한다 — GET이 도는 사이 SSE로 먼저 온 결정을 늦게 온 옛 PENDING이 되돌리지 않게
+      const have = suggestions.value.find((x) => x.id === g.id)
+      if (g.status === 'PENDING' && have && have.status !== 'PENDING') continue
+      suggestions.value = upsertSuggestion(suggestions.value, g)
     }
   }
 

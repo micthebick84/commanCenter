@@ -543,6 +543,16 @@ describe('useInterviewStream — suggestion 이벤트 (질문 세션 대화 중 
     expect(s.suggestions.value).toHaveLength(2)
   })
 
+  it('hydrateSuggestions는 이미 결정된 제안을 늦게 온 PENDING으로 되돌리지 않는다', () => {
+    authStub.accessToken = 'jwt'
+    const s = useInterviewStream()
+    s.open(1)
+    FakeEventSource.last().emit('suggestion', sg({ status: 'DISMISSED' }))
+    s.hydrateSuggestions({ suggestions: [sg(), sg({ id: 9 })] })
+    expect(s.suggestions.value.map((g: SessionSuggestion) => `${g.id}:${g.status}`)).toEqual(['5:DISMISSED', '9:PENDING'])
+    s.close()
+  })
+
   it('suggestion 이벤트가 같은 id를 교체한다', () => {
     authStub.accessToken = 'jwt'
     const s = useInterviewStream()

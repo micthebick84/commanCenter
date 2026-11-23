@@ -90,6 +90,32 @@ describe('taskInbox', () => {
     expect(shouldIgnoreShortcut({ key: 'x', target: document.body, ...base }, false)).toBe(true)
     expect(shouldIgnoreShortcut({ key: 'j', target: document.body, ...base }, false)).toBe(false)
   })
+  it('q-select·q-menu_안에서도_단축키를_무시', () => {
+    const base = { altKey: false, ctrlKey: false, metaKey: false }
+    // q-select는 포커스가 role=combobox인 div에 있다(입력칸이 아니다) — 작업 타입 select에서 j를 누르면 건이 바뀌면 안 된다
+    const combo = document.createElement('div')
+    combo.setAttribute('role', 'combobox')
+    combo.tabIndex = 0
+    const comboInner = document.createElement('span')
+    combo.appendChild(comboInner)
+    // q-menu(✎ 참조 변경 등) 안의 항목·목록
+    const menu = document.createElement('div')
+    menu.className = 'q-menu'
+    const menuItem = document.createElement('div')
+    menuItem.className = 'q-item'
+    menu.appendChild(menuItem)
+    const listbox = document.createElement('div')
+    listbox.setAttribute('role', 'listbox')
+    const option = document.createElement('div')
+    listbox.appendChild(option)
+    const roleMenu = document.createElement('div')
+    roleMenu.setAttribute('role', 'menu')
+    const plain = document.createElement('div')
+    for (const target of [combo, comboInner, menu, menuItem, option, roleMenu]) {
+      expect(shouldIgnoreShortcut({ key: 'j', target, ...base }, false)).toBe(true)
+    }
+    expect(shouldIgnoreShortcut({ key: 'k', target: plain, ...base }, false)).toBe(false)
+  })
   it('자동_이동_저장값은_0일_때만_끔', () => {
     localStorage.removeItem(AUTO_NEXT_KEY)
     expect(readAutoNext()).toBe(true)
@@ -100,9 +126,19 @@ describe('taskInbox', () => {
     expect(localStorage.getItem(AUTO_NEXT_KEY)).toBeNull()
   })
   it('저장소가_예외를_던지면_켬', () => {
-    const spy = vi.spyOn(Storage.prototype, 'getItem').mockImplementation(() => { throw new Error('blocked') })
-    expect(readAutoNext()).toBe(true)
-    expect(() => writeAutoNext(false)).not.toThrow()
-    spy.mockRestore()
+    // 읽기·쓰기·지우기 모두 막힌 저장소(사생활 보호 창·차단된 사이트 데이터)
+    const blocked = () => { throw new Error('blocked') }
+    const spies = [
+      vi.spyOn(Storage.prototype, 'getItem').mockImplementation(blocked),
+      vi.spyOn(Storage.prototype, 'setItem').mockImplementation(blocked),
+      vi.spyOn(Storage.prototype, 'removeItem').mockImplementation(blocked),
+    ]
+    try {
+      expect(readAutoNext()).toBe(true)
+      expect(() => writeAutoNext(false)).not.toThrow()
+      expect(() => writeAutoNext(true)).not.toThrow()
+    } finally {
+      spies.forEach((s) => s.mockRestore())
+    }
   })
 })

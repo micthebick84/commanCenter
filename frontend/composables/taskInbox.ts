@@ -113,7 +113,11 @@ export function countInbox(rows: Pick<InboxRow, 'status' | 'retryCount' | 'maxRe
   return rows.filter(isInboxCandidate).length
 }
 
-/** 목록 이동 단축키(j/k)를 무시할 상황인가. */
+/**
+ * 목록 이동 단축키(j/k)를 무시할 상황인가. dialogOpen은 다이얼로그·메뉴(.q-dialog, .q-menu)가 열려 있는지.
+ * 입력칸 말고도 Quasar q-select(포커스가 role=combobox인 div)·q-menu(✎ 참조 변경 등) 안이면 무시한다 —
+ * 승인 폼의 작업 타입 select에서 j를 누르면 건이 바뀌고 폼이 처음 값으로 돌아갔다.
+ */
 export function shouldIgnoreShortcut(
   e: Pick<KeyboardEvent, 'key' | 'target' | 'altKey' | 'ctrlKey' | 'metaKey'>,
   dialogOpen: boolean,
@@ -124,7 +128,9 @@ export function shouldIgnoreShortcut(
   const t = e.target as HTMLElement | null
   if (!t || typeof t.closest !== 'function') return false
   if (t.isContentEditable) return true
-  return !!t.closest('input, textarea, select, [contenteditable]')
+  return !!t.closest(
+    'input, textarea, select, [contenteditable], [role="combobox"], [role="listbox"], [role="menu"], .q-menu',
+  )
 }
 
 export const AUTO_NEXT_KEY = 'netis-maker-inbox-auto-next'

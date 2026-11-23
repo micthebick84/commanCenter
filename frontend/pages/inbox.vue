@@ -12,6 +12,7 @@ import {
   buildInbox,
   flattenInbox,
   inboxListParams,
+  isInboxCandidate,
   isTruncated,
   neighborId,
   pickNext,
@@ -86,8 +87,9 @@ watch(
       return
     }
     if (sel == null && !isPhone.value) {
-      const top = pickNext(flat.value)
-      if (top != null) select(top)
+      // 처리 기록이 남은 건(목록이 다시 읽혀 지워지기 전)은 저절로 다시 고르지 않는다 — 방금 처리하고 쿼리를 지운 건이 되살아나지 않게
+      const top = flat.value.find((r) => !handled.value.some((h) => h.id === r.id))
+      if (top) select(top.id)
     }
   },
   { immediate: true },
@@ -100,9 +102,13 @@ function setAutoNext(on: boolean) {
   writeAutoNext(on)
 }
 
-function onDone(mark: HandledMark) {
+function onDone(paneMark: HandledMark) {
   // 같은 처리의 알림이 두 번 오면(연타·알림 겹침) 한 번만 넘어간다
-  if (handled.value.some((h) => h.id === mark.id)) return
+  if (handled.value.some((h) => h.id === paneMark.id)) return
+  // 숨기는 기준은 그때 목록의 status·updatedAt이다(스펙 §5.4) — 목록 폴링이 상세보다 늦으면 처리 영역이 본 값으로는 행이 숨지 않는다.
+  // 목록에 그 건의 확인 필요 행이 없을 때만 처리 영역의 값을 쓴다.
+  const row = rows.value.find((r) => r.id === paneMark.id && isInboxCandidate(r))
+  const mark = row ? { id: row.id, status: row.status, updatedAt: row.updatedAt } : paneMark
   handled.value = [...handled.value, mark]
   refresh()
   if (!autoNext.value) return
@@ -231,7 +237,9 @@ function chipStyle(status: string) {
       />
     </div>
 
-    <q-dialog v-if="isPhone" v-model="sheetOpen" maximized transition-show="slide-up" transition-hide="slide-down">
+    <!-- no-route-dismiss: 고른 건이 주소(?task=)라 자동 이동·이전/다음·404 → 맨 위가 모두 주소를 바꾼다. QDialog의 기본값(주소가 바뀌면 닫기)이면
+         그때마다 창이 닫히고(update:modelValue false) 쿼리까지 지워진다 — 창은 내용만 바꾼다(스펙 §5.6). -->
+    <q-dialog v-if="isPhone" v-model="sheetOpen" maximized no-route-dismiss transition-show="slide-up" transition-hide="slide-down">
       <div class="inbox-sheet column no-wrap bg-white" data-test="inbox-sheet">
         <q-toolbar class="inbox-sheet__bar">
           <q-btn flat round dense icon="close" aria-label="닫기" data-test="inbox-sheet-close" @click="sheetOpen = false" />

@@ -1,6 +1,7 @@
 import { mount, flushPromises, type VueWrapper } from '@vue/test-utils'
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { defineComponent, h, onUnmounted, reactive } from 'vue'
+import { createMemoryHistory, createRouter, type Router } from 'vue-router'
 import { QLayout, QPageContainer } from 'quasar'
 import InboxPage from '../pages/inbox.vue'
 import InterviewPanel from '../components/InterviewPanel.vue'
@@ -15,11 +16,13 @@ import { AUTO_NEXT_KEY } from '../composables/taskInbox'
 // 쓰던 답변·참조 초안 유지, j/k, 폰 전체 화면 창.
 
 // 쿼리를 바꿀 수 있는 라우트 — navigateTo 목이 쿼리를 바꿔 고른 건이 따라온다.
+// 실제 라우터를 붙인 시험(activeRouter)에서는 라우터 주소도 같이 바꾼다 — QDialog가 $route 변화를 보는 앱과 같게.
 const route = reactive({ path: '/inbox', params: {} as Record<string, string>, query: {} as Record<string, string> })
 ;(globalThis as any).useRoute = () => route
+let activeRouter: Router | null = null
 const navigateToMock = vi.fn((to: { query?: Record<string, string> }) => {
   route.query = { ...(to.query ?? {}) }
-  return Promise.resolve()
+  return activeRouter ? activeRouter.replace({ path: '/inbox', query: to.query ?? {} }) : Promise.resolve()
 })
 ;(globalThis as any).navigateTo = navigateToMock
 
@@ -392,6 +395,51 @@ describe('pages/inbox — 처리함', () => {
     expect(wr.find('[data-test="inbox-truncated"]').text()).toBe(
       '최근 변경된 200건만 봤습니다 — 오래된 작업은 작업 목록에서 확인하세요',
     )
+  })
+
+  it('목록이_늦어도_처리한_건은_그때_목록_값으로_숨고_마지막이면_빈_상태', async () => {
+    // 목록 폴링이 상세보다 늦다 — 행의 updatedAt(02:00)이 처리 영역이 본 값(02:30)보다 오래됐다. 숨기는 기준은 그때 목록의 값이다(스펙 §5.4).
+    list = [inputTask(), doneTask()]
+    details[5] = { ...inputTask(), updatedAt: '2026-11-23T02:30:00Z' }
+    route.query = { task: '5' }
+    const wr = await mountPage()
+    await answer(wr, '대시보드만 추가합니다')
+    // 남은 건이 없어 쿼리를 지우고, 방금 처리한 건을 다시 고르지 않는다
+    expect(navigateToMock).toHaveBeenCalledTimes(1)
+    expect(navigateToMock).toHaveBeenCalledWith({ query: {} }, { replace: true })
+    expect(route.query).toEqual({})
+    expect(rowIds(wr)).toEqual([])
+    expect(wr.find('[data-test="inbox-empty"]').text()).toContain('확인할 작업이 없습니다')
+    expect(wr.find('[data-test="inbox-pane"]').exists()).toBe(false)
+  })
+
+  it('폰_폭:_라우터가_있어도_자동_이동은_창을_닫지_않고_내용만_바꾼다', async () => {
+    // test/setup.ts에는 라우터가 없어 QDialog의 "주소가 바뀌면 닫기"가 돌지 않는다 — 실제 앱처럼 라우터를 붙인다
+    const router = createRouter({ history: createMemoryHistory(), routes: [{ path: '/inbox', component: { render: () => null } }] })
+    await router.push('/inbox')
+    await router.isReady()
+    activeRouter = router
+    await setViewportWidth(390)
+    try {
+      w = mount(PageWrapper, { ...mountOpts, global: { ...mountOpts.global, plugins: [router] } })
+      await flushPromises()
+      await w.find('[data-test="inbox-row"][data-id="5"]').trigger('click')
+      await flushPromises()
+      expect(router.currentRoute.value.query).toEqual({ task: '5' })
+      expect(navigateToMock).toHaveBeenLastCalledWith({ query: { task: '5' } }, { replace: true })
+      expect(document.querySelector('[data-test="inbox-sheet"]')).not.toBeNull()
+
+      // 답하면 창은 그대로, 내용만 다음 건(#2)으로
+      await answer(w, '대시보드만 추가합니다')
+      await flushPromises()
+      expect(navigateToMock).toHaveBeenLastCalledWith({ query: { task: '2' } }, { replace: true })
+      expect(router.currentRoute.value.query).toEqual({ task: '2' })
+      expect(document.querySelector('[data-test="inbox-sheet"]')).not.toBeNull()
+      expect(w.findComponent(ApproveForm).exists()).toBe(true)
+    } finally {
+      activeRouter = null
+      await setViewportWidth(1024)
+    }
   })
 
   it('폰_폭:_행을_누르면_전체_화면_창을_열고_마지막_건을_처리하면_닫고_알린다', async () => {

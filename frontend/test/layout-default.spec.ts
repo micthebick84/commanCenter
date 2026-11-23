@@ -104,7 +104,7 @@ describe('layouts/default — 하단 내비 (스펙 2026-09-06 §4.4, 결정 4)'
     Object.assign(authStub, { isAuthenticated: true, isAdmin: true, me: { username: 'admin', email: null } })
   })
 
-  it('lt.md: 헤더 탭은 사라지고 하단 내비에 작업·질문·요청·관리 4탭', async () => {
+  it('lt.md: 헤더 탭은 사라지고 하단 내비에 관리자는 작업·처리함·질문·요청·관리 5탭', async () => {
     await setViewportWidth(390)
     try {
       const w = mountLayout()
@@ -112,7 +112,7 @@ describe('layouts/default — 하단 내비 (스펙 2026-09-06 §4.4, 결정 4)'
       expect(w.find('.q-header .q-tab-stub').exists()).toBe(false)
       const nav = w.find('[data-test="bottom-nav"]')
       expect(nav.exists()).toBe(true)
-      expect(nav.findAll('.q-tab-stub').map((t) => t.text())).toEqual(['작업', '질문', '요청', '관리'])
+      expect(nav.findAll('.q-tab-stub').map((t) => t.text())).toEqual(['작업', '처리함', '질문', '요청', '관리'])
       w.unmount()
     } finally {
       await setViewportWidth(1024)
@@ -132,10 +132,11 @@ describe('layouts/default — 하단 내비 (스펙 2026-09-06 §4.4, 결정 4)'
     }
   })
 
-  it('데스크톱: 헤더 탭 6개, 하단 내비 없음', async () => {
+  it('데스크톱: 관리자 헤더 탭 7개(작업 다음에 처리함), 하단 내비 없음', async () => {
     const w = mountLayout()
     await flushPromises()
-    expect(w.findAll('.q-header .q-tab-stub')).toHaveLength(6)
+    expect(w.findAll('.q-header .q-tab-stub')).toHaveLength(7)
+    expect(w.findAll('.q-header .q-tab-stub')[1].text()).toBe('처리함')
     expect(w.find('[data-test="bottom-nav"]').exists()).toBe(false)
     w.unmount()
   })
@@ -200,15 +201,14 @@ describe('layouts/default — 요청 탭·관리자 배지', () => {
       return Promise.resolve(url === '/api/tasks' ? tasksPage : { received: 0, attention: 0 })
     }
 
-    it('관리자는 전체 작업에서 관리자 대기까지 센다', async () => {
+    it('관리자에게는 tasks-badge가 없다', async () => {
       authStub.isAdmin = true
       useApiMock.mockImplementation(routeApi)
       await setViewportWidth(390)
       try {
         const w = mountLayout()
         await flushPromises()
-        expect(useApiMock).toHaveBeenCalledWith('/api/tasks', { params: { mine: 'false', size: 50 } })
-        expect(w.find('[data-test="tasks-badge"]').text()).toBe('2')
+        expect(w.find('[data-test="tasks-badge"]').exists()).toBe(false)
         w.unmount()
       } finally {
         await setViewportWidth(1024)
@@ -230,13 +230,85 @@ describe('layouts/default — 요청 탭·관리자 배지', () => {
       }
     })
 
-    it('넓은 화면에서는 작업 목록을 조회하지 않는다', async () => {
-      authStub.isAdmin = true
+    it('일반 사용자는 넓은 화면에서 작업 목록을 조회하지 않는다', async () => {
+      authStub.isAdmin = false
       useApiMock.mockImplementation(routeApi)
       const w = mountLayout()
       await flushPromises()
       expect(useApiMock).not.toHaveBeenCalledWith('/api/tasks', expect.anything())
       expect(w.find('[data-test="tasks-badge"]').exists()).toBe(false)
+      w.unmount()
+    })
+  })
+
+  describe('관리자 "처리함" 배지', () => {
+    const row = (status: string, extra: Record<string, unknown> = {}) => ({ status, retryCount: 0, maxRetry: 3, ...extra })
+    const inboxPage = {
+      content: [row('INTERVIEW_INPUT'), row('AWAITING_APPROVAL'), row('IMPLEMENTING'), row('DEPLOYED')],
+    }
+    function routeApi(page: unknown) {
+      return (url: string) => Promise.resolve(url === '/api/tasks' ? page : { received: 0, attention: 0 })
+    }
+
+    it('관리자_넓은_화면_위_탭에_처리함과_배지', async () => {
+      authStub.isAdmin = true
+      useApiMock.mockImplementation(routeApi(inboxPage))
+      const w = mountLayout()
+      await flushPromises()
+      const labels = w.findAll('.q-header .q-tab-stub').map((t) => t.text())
+      expect(labels.slice(0, 2)).toEqual(['작업', '처리함2'])
+      expect(w.find('.q-header [data-test="inbox-badge"]').text()).toBe('2')
+      w.unmount()
+    })
+
+    it('lt.md: 하단 내비 처리함 탭에 배지가 붙는다', async () => {
+      authStub.isAdmin = true
+      useApiMock.mockImplementation(routeApi(inboxPage))
+      await setViewportWidth(390)
+      try {
+        const w = mountLayout()
+        await flushPromises()
+        expect(w.find('[data-test="bottom-nav"] [data-test="inbox-badge"]').text()).toBe('2')
+        w.unmount()
+      } finally {
+        await setViewportWidth(1024)
+      }
+    })
+
+    it('0이면 배지가 없다', async () => {
+      authStub.isAdmin = true
+      useApiMock.mockImplementation(routeApi({ content: [row('IMPLEMENTING')] }))
+      const w = mountLayout()
+      await flushPromises()
+      expect(w.find('[data-test="inbox-badge"]').exists()).toBe(false)
+      w.unmount()
+    })
+
+    it('관리자_배지는_sort=updatedAt,desc&size=200으로_센다', async () => {
+      authStub.isAdmin = true
+      useApiMock.mockImplementation(routeApi(inboxPage))
+      const w = mountLayout()
+      await flushPromises()
+      expect(useApiMock).toHaveBeenCalledWith('/api/tasks', {
+        params: { mine: 'false', size: 200, sort: 'updatedAt,desc' },
+      })
+      w.unmount()
+    })
+
+    it('재시도_한도를_다_쓴_FAILED는_세지_않는다', async () => {
+      authStub.isAdmin = true
+      useApiMock.mockImplementation(
+        routeApi({
+          content: [
+            row('FAILED', { retryCount: 3, maxRetry: 3 }), // 뺀다
+            row('FAILED', { retryCount: 1, maxRetry: 3 }),
+            row('DEPLOY_FAILED'),
+          ],
+        }),
+      )
+      const w = mountLayout()
+      await flushPromises()
+      expect(w.find('[data-test="inbox-badge"]').text()).toBe('2')
       w.unmount()
     })
   })

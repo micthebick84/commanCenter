@@ -13,7 +13,7 @@ export default defineNuxtRouteMiddleware((to) => {
     return redirectTo('/login')
   }
   // 관리자 전용 경로 검사
-  if (to.path.startsWith('/admin') && !auth.isAdmin) {
+  if ((to.path.startsWith('/admin') || to.path === '/inbox') && !auth.isAdmin) {
     return redirectTo('/tasks')
   }
 })

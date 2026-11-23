@@ -5,6 +5,7 @@ import ApproveDialog from '~/components/ApproveDialog.vue'
 import { fetchDbConnections } from '~/composables/dbConnections'
 import { dbChipLabels, hasWritableSelection } from '~/composables/taskDbChips'
 import { useTaskActions } from '~/composables/useTaskActions'
+import { useInterviewRefDraft } from '~/composables/useInterviewRefDraft'
 import type { AttachmentMeta, StageUsageView, TaskResponse } from '~/composables/taskDetailTypes'
 import InterviewPanel from '~/components/InterviewPanel.vue'
 import InterviewHistoryCard from '~/components/InterviewHistoryCard.vue'
@@ -50,13 +51,7 @@ import RefRepoChips from '~/components/RefRepoChips.vue'
 import TaskRefChangeMenu from '~/components/tasks/TaskRefChangeMenu.vue'
 import type { InterviewStatus } from '~/composables/useInterviewStream'
 // 참조 repo — 이 값을 받는 자식들(ApproveTaskSummary·ImplementationRetryDialog·TaskRefChangeMenu)이 defineProps 타입 규칙으로 쓰는 상대 경로와 맞춘다.
-import {
-  sameRefSet,
-  taskRefContext,
-  toInputs,
-  type RefRepoInput,
-  type RefRepoView,
-} from '../../composables/refRepos'
+import { taskRefContext } from '../../composables/refRepos'
 
 definePageMeta({ layout: 'default' })
 
@@ -152,49 +147,8 @@ function onInterviewConfirmed() {
   refresh()
 }
 
-const isInterviewPhase = computed(() =>
-  ['INTERVIEWING', 'INTERVIEW_INPUT', 'INTERVIEW_REVIEW'].includes(task.value?.status ?? ''),
-)
-
-// 인터뷰 중 참조 변경 (작업 스펙 2026-10-24 §7.4) — 질문 대화 화면(1단계)과 같은 원리: "✎ 참조 변경" 메뉴가 고치는 것은
-// "다음 답변에 쓸 초안"(pickedRefs)이고, 칩 줄은 서버 값(task.refRepos — 인터뷰 단계면 진행 중 세션의 참조·상태)을 그대로 따른다.
-// 초안은 인터뷰 세션마다 시드한다 — 같은 페이지에서 취소·재승인으로 새 세션이 생겼는데 시드를 안 하면 낡은 초안이 재승인 때 뺀
-// 참조를 되살린다. 같은 세션의 폴링(5초)에서는 보내지 않은 변경이 없을 때만(초안 = 마지막으로 맞춘 서버 집합) 새 서버 집합을 따라간다 —
-// 무조건 서버 값으로 되돌리면 보내기 전의 변경이 지워지고, 한 번 시드하고 끝이면 다른 화면(휴대폰·다른 탭·다른 관리자)에서 바꾼 참조를
-// 이 화면의 다음 답변이 낡은 초안으로 되돌린다. 보내지 않은 변경이 있으면(초안 ≠ 맞춘 집합) 그대로 둔다.
-const pickedRefs = ref<RefRepoView[]>([])
-const refsSeededFor = ref<number | null>(null)
-let refsSyncedTo: RefRepoInput[] = [] // 초안을 마지막으로 맞춘 서버 집합(카탈로그 id·브랜치) — 화면에 쓰지 않으므로 반응형이 아니다
-watch(
-  task,
-  (t) => {
-    if (!t || !isInterviewPhase.value || t.interviewSessionId == null) return
-    const server = t.refRepos ?? []
-    const serverSet = toInputs(server)
-    if (t.interviewSessionId !== refsSeededFor.value) {
-      pickedRefs.value = [...server]
-      refsSyncedTo = serverSet
-      refsSeededFor.value = t.interviewSessionId
-      return
-    }
-    const draftSet = toInputs(pickedRefs.value)
-    if (sameRefSet(draftSet, serverSet)) {
-      refsSyncedTo = serverSet // 초안이 이미 서버와 같다(보낸 변경이 반영됨) — 기준만 옮긴다
-    } else if (sameRefSet(draftSet, refsSyncedTo)) {
-      pickedRefs.value = [...server] // 보내지 않은 변경 없음 — 다른 화면에서 바뀐 서버 집합을 따라간다
-      refsSyncedTo = serverSet
-    }
-  },
-  { immediate: true },
-)
-// 답변 바디에 실을 참조 — 시드된 세션에서 초안이 서버 값과 다른 집합일 때만(전부 해제면 []), 아니면 null(키 없음 = 유지).
-// 참조를 안 건드린 답변 바디는 예전과 같다. 두 InterviewPanel(모바일·데스크톱)에 같이 넘긴다.
-const answerRefs = computed<RefRepoInput[] | null>(() => {
-  const t = task.value
-  if (!t || t.interviewSessionId == null || t.interviewSessionId !== refsSeededFor.value) return null
-  const picked = toInputs(pickedRefs.value)
-  return sameRefSet(picked, toInputs(t.refRepos ?? [])) ? null : picked
-})
+// 인터뷰 중 참조 초안(세션별 시드·폴링 따라가기·답변 바디용 answerRefs·✎ 권한)은 공용 모듈이 맡는다 — 설명은 그 파일에 있다.
+const { isInterviewPhase, pickedRefs, answerRefs, canChangeRefs, showRefRow } = useInterviewRefDraft(task)
 // 패널의 실시간 상태(SSE, immediate emit) — "✎ 참조 변경"은 입력 대기일 때만 연다. 패널은 한 번에 하나만 마운트된다($q.screen.lt.md 분기 —
 // 모바일은 대화 시트가 열려 있는 동안만이고, 그때 "✎"도 시트 안에 있다. 시트를 다시 열면 패널이 null부터 다시 알린다).
 const interviewLive = ref<InterviewStatus | null>(null)
@@ -206,10 +160,6 @@ function onInterviewStatus(s: InterviewStatus | null) {
   interviewLive.value = s
   if (prev !== null && s !== prev && (s === 'PLAN_READY' || s === 'AWAITING_INPUT')) refresh()
 }
-// 바꿀 수 있는 사람은 관리자뿐(답변 API가 관리자 전용), 인터뷰 단계에서만. 칩 줄은 참조가 있거나 바꿀 수 있을 때만 그린다 —
-// 참조 없는 작업 상세는 지금 그대로이고, 인터뷰 중 관리자는 참조 없이 등록된 작업에도 더할 수 있다("참조 repo 없음" + ✎).
-const canChangeRefs = computed(() => auth.isAdmin && isInterviewPhase.value && !!task.value?.interviewSessionId)
-const showRefRow = computed(() => (task.value?.refRepos?.length ?? 0) > 0 || canChangeRefs.value)
 
 // 배포/재배포 환경변수 다이얼로그 (스펙 2026-10-07) — 추천 불러오기·전송은 DeployEnvDialog가 맡는다.
 const envDialog = ref(false)

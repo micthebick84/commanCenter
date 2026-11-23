@@ -84,8 +84,10 @@ function handleLogout() {
     <q-header elevated class="bg-primary text-white">
       <q-toolbar>
         <!-- 좁은 화면(lt.md)에서는 제목이 탭에 밀려 "n"까지 줄어들므로 flex-shrink:0으로 고정 — Quasar shrink(col-shrink)는
-             flex: 0 1 auto라 여전히 줄어든다. 데스크톱 배치는 그대로 (2026-09-06 모바일 QA) -->
-        <q-toolbar-title :class="{ 'toolbar-brand--fixed': $q.screen.lt.md }">
+             flex: 0 1 auto라 여전히 줄어든다. 데스크톱 배치는 그대로 (2026-09-06 모바일 QA)
+             넓은 화면도 제목이 남는 폭을 q-space와 반씩 나눠 가져, 관리자 위 탭이 7개가 된 1024px 부근에서 "Symphon"으로 잘렸다 —
+             toolbar-brand(min-width: max-content)로 내용 폭 아래로만 줄지 않게 막는다. 몫이 더 큰 넓은 화면의 배치는 그대로 (2026-11-24) -->
+        <q-toolbar-title class="toolbar-brand" :class="{ 'toolbar-brand--fixed': $q.screen.lt.md }">
           <!-- 브랜드: 마크(A4) + 워드마크 "Symphony" — 2026-10-11 디자인 승인. 마크는 currentColor라 헤더 글자색(흰색)을 따른다. -->
           <NuxtLink to="/tasks" class="brand-link" data-test="brand-link">
             <BrandMark :size="24" />
@@ -146,6 +148,10 @@ function handleLogout() {
 /* 좁은 화면 브랜드: 내용 폭 고정(줄어들지 않음). q-toolbar(.row)의 .col-shrink/.q-toolbar__title 규칙보다 구체적이어야 한다. */
 .q-toolbar > .toolbar-brand--fixed {
   flex: 0 0 auto;
+}
+/* 모든 폭: 브랜드(마크 + 워드마크)는 내용 폭 아래로 줄지 않는다 — Quasar .q-toolbar__title의 min-width: 1px보다 구체적이어야 한다 */
+.q-toolbar > .toolbar-brand {
+  min-width: max-content;
 }
 .brand-link {
   display: inline-flex;

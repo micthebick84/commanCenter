@@ -85,6 +85,17 @@ describe('layouts/default — 브랜드 (2026-10-11 디자인 승인: 마크 A4 
     w.unmount()
   })
 
+  it('넓은 화면에서도 브랜드 영역은 내용 폭보다 줄지 않는다(toolbar-brand) — 관리자 위 탭 7개인 1024px에서 "Symphon"으로 잘리던 결함', async () => {
+    // Quasar .q-toolbar__title은 flex: 1 1 0%라 남는 폭을 q-space와 반씩 나눈다 — 탭이 늘면 그 몫이 워드마크 폭보다 작아진다.
+    // toolbar-brand(min-width: max-content)가 내용 폭 아래로 줄지 않게 막고, 넓은 화면에서는 몫이 더 커서 배치가 그대로다.
+    const w = mountLayout()
+    await flushPromises()
+    const title = w.find('.q-toolbar__title')
+    expect(title.classes()).toContain('toolbar-brand')
+    expect(title.classes()).not.toContain('toolbar-brand--fixed') // 넓은 화면 배치(남는 폭 나누기)는 그대로
+    w.unmount()
+  })
+
   it('좁은 화면에서도 브랜드 영역은 고정폭(toolbar-brand--fixed)이라 마크·워드마크가 잘리지 않는다', async () => {
     await setViewportWidth(390)
     try {

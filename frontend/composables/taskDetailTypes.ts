@@ -2,6 +2,7 @@
 import type { CloseView } from './taskClose'
 import type { FixView } from './taskFix'
 import type { RefRepoView } from './refRepos'
+import type { EnvVar } from './deployEnvForm'
 
 export interface AnalysisView {
   markdownResult: string
@@ -46,12 +47,6 @@ export interface DeploymentView {
   deployImage: string | null
   deployedAt: string | null
   deployLog: string | null
-}
-
-export interface EnvVar {
-  key: string
-  value: string
-  secret: boolean
 }
 
 export interface AttachmentMeta {

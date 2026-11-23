@@ -56,7 +56,7 @@ function routeApi() {
 }
 
 let w: VueWrapper | undefined
-async function mountPane(t: Record<string, unknown>, stubs: Record<string, unknown> = {}) {
+async function mountPane(t: Record<string, unknown>, stubs: Record<string, boolean> = {}) {
   detail = t
   routeApi()
   w = mount(InboxTaskPane, {
@@ -85,7 +85,7 @@ describe('InboxTaskPane — 승인·실패 본문', () => {
   it.each([
     ['COMPLETED', 'inbox-act-approve-impl', '/approve', '승인'],
     ['FAILED', 'inbox-act-retry', '/retry', null],
-    ['CLOSE_REVIEW', 'inbox-act-approve-close', '/close/approve', '병합하고 종료'],
+    ['CLOSE_REVIEW', 'inbox-act-approve-close', '/close/approve', '종료 승인'],
     ['CLOSE_FAILED', 'inbox-act-retry-close', '/close/retry', '종료 재시도'],
     ['DEPLOY_LOST', 'inbox-act-undeploy', '/undeploy', '배포 중지'],
     ['FIX_REVIEW', 'inbox-act-approve-fix', '/fix-requests/approve', '승인'],
@@ -120,6 +120,29 @@ describe('InboxTaskPane — 승인·실패 본문', () => {
     expect(after.find('[data-test="inbox-act-cancel-close"]').exists()).toBe(false)
     expect(after.find('[data-test="inbox-act-sync-base"]').exists()).toBe(false)
     expect(after.find('[data-test="inbox-act-retry-close"]').exists()).toBe(true)
+  })
+
+  // 병합하지 않고 종료(스펙 2026-11-23 close-keep-branch) — 처리함도 같은 공용 동작·같은 단계 규칙을 쓴다
+  it('CLOSE_REVIEW_병합하지_않고_종료를_고르면_keepBranch_바디로_승인하고_done', async () => {
+    const wr = await mountPane(task('CLOSE_REVIEW', { close: { progress: [] } }))
+    await wr.find('[data-test="inbox-act-approve-close"]').trigger('click')
+    await vi.waitFor(() => expect(document.body.querySelectorAll('.q-dialog .q-radio')).toHaveLength(2))
+    document.body.querySelectorAll<HTMLElement>('.q-dialog .q-radio')[1]!.click()
+    await flushPromises()
+    await clickDialogButton('종료 승인')
+    await flushPromises()
+    expect(posts()).toContainEqual(['/api/tasks/42/close/approve', { method: 'POST', body: { keepBranch: true } }])
+    expect(wr.emitted('done')).toHaveLength(1)
+  })
+
+  it('CLOSE_FAILED_브랜치_유지_종료면_칩이_보이고_병합·브랜치_삭제는_건너뜀이며_배포_중지_뒤엔_취소·반영이_없다', async () => {
+    const wr = await mountPane(task('CLOSE_FAILED', { failureReason: '노트 실패', close: { progress: ['UNDEPLOYED'], keepBranch: true } }))
+    expect(wr.find('[data-test="inbox-close-keep-chip"]').text()).toContain('미병합 종료 · 브랜치 유지')
+    expect(wr.find('[data-test="inbox-close-step-MERGED"]').text()).toContain('(건너뜀)')
+    expect(wr.find('[data-test="inbox-close-step-BRANCH_DELETED"]').text()).toContain('(건너뜀)')
+    expect(wr.find('[data-test="inbox-act-cancel-close"]').exists()).toBe(false)
+    expect(wr.find('[data-test="inbox-act-sync-base"]').exists()).toBe(false)
+    expect(wr.find('[data-test="inbox-act-retry-close"]').exists()).toBe(true)
   })
 
   it('IMPLEMENTATION_FAILED_재시도_창이_submitted면_done', async () => {

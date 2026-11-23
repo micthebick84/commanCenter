@@ -3,7 +3,7 @@
 // 실패 사유는 처리 영역 머리글이 보인다. 창이 필요한 동작(구현 재시도·재배포·수정 요청)은 open으로 부모에게 열어 달라고 한다.
 import { computed } from 'vue'
 import { mrRef } from '~/composables/mergeRequestLabel'
-import { closeSteps } from '~/composables/taskClose'
+import { closeSteps, isKeepBranchClose } from '~/composables/taskClose'
 import { canRequestFix } from '~/composables/taskFix'
 import InboxCloseSteps from '~/components/inbox/InboxCloseSteps.vue'
 // defineProps 타입이므로 상대 경로
@@ -65,7 +65,7 @@ const deployUrl = computed(() => props.task.deployment?.deployUrl ?? null)
     </template>
 
     <template v-else-if="task.status === 'CLOSE_FAILED'">
-      <InboxCloseSteps :steps="steps" />
+      <InboxCloseSteps :steps="steps" :keep-branch="isKeepBranchClose(task.close)" />
       <div class="row q-gutter-sm">
         <q-btn unelevated no-caps color="primary" icon="refresh" label="종료 재시도" data-test="inbox-act-retry-close" @click="run(actions.retryClose)" />
         <q-btn v-if="actions.canSyncBaseNow.value" outline no-caps color="primary" icon="merge" label="기준 브랜치 반영" data-test="inbox-act-sync-base" @click="run(actions.syncBase)" />

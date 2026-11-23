@@ -40,13 +40,26 @@ public enum CloseStep {
 
     /** 이 작업이 작업종료가 되려면 끝나야 하는 단계. 산출물·패치 단계는 각 모드가 REQUIRED일 때만. */
     public static EnumSet<CloseStep> required(String artifactMode, String patchMode) {
+        return required(artifactMode, patchMode, false);
+    }
+
+    /** keepBranch면 병합과 브랜치 삭제를 하지 않는다(브랜치·PR 유지). */
+    public static EnumSet<CloseStep> required(String artifactMode, String patchMode, boolean keepBranch) {
         EnumSet<CloseStep> s = EnumSet.allOf(CloseStep.class);
         if (!ARTIFACT_REQUIRED.equals(artifactMode)) s.remove(ARTIFACT_UPLOADED);
         if (!PATCH_REQUIRED.equals(patchMode)) s.remove(PATCH_BUILT);
+        if (keepBranch) {
+            s.remove(MERGED);
+            s.remove(BRANCH_DELETED);
+        }
         return s;
     }
 
     public static boolean allDone(String csv, String artifactMode, String patchMode) {
-        return parse(csv).containsAll(required(artifactMode, patchMode));
+        return allDone(csv, artifactMode, patchMode, false);
+    }
+
+    public static boolean allDone(String csv, String artifactMode, String patchMode, boolean keepBranch) {
+        return parse(csv).containsAll(required(artifactMode, patchMode, keepBranch));
     }
 }

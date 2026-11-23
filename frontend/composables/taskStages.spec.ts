@@ -292,6 +292,13 @@ describe('종료 단계 (스펙 2026-10-13)', () => {
     expect(nextAction({ status: 'CLOSE_FAILED' }, false)?.primary).toBeUndefined()
     expect(nextAction({ status: 'CLOSED' }, true)?.primary).toBeUndefined()
   })
+  it('브랜치 유지 종료: 작업종료 문구는 병합 없음을 말하고, 종료실패 문구에는 기준 브랜치 반영 안내가 없다', () => {
+    const keep = { keepBranch: true }
+    expect(nextAction({ status: 'CLOSED', close: keep }, true)?.text).toBe('작업 종료 — 병합하지 않고 종료했습니다(작업 브랜치·PR 유지)')
+    expect(nextAction({ status: 'CLOSED', close: { keepBranch: false } }, true)?.text).toBe('작업 종료 — PR이 병합되고 정리가 끝났습니다')
+    expect(nextAction({ status: 'CLOSE_FAILED', close: keep }, true)?.text).not.toContain('기준 브랜치 반영')
+    expect(nextAction({ status: 'CLOSE_FAILED', close: keep }, true)?.primary?.kind).toBe('retry-close')
+  })
   it('종료실패 관리자 문구 끝에 기준 브랜치 반영 안내가 붙는다', () => {
     expect(nextAction({ status: 'CLOSE_FAILED' }, true)?.text).toMatch(/충돌이면 '기준 브랜치 반영'을 쓰세요$/)
     expect(nextAction({ status: 'CLOSE_FAILED' }, false)?.text).not.toContain('기준 브랜치 반영')

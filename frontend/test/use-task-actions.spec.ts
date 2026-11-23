@@ -49,14 +49,37 @@ describe('useTaskActions', () => {
     authStub.isAdmin = false
   })
 
-  it('approveClose_확인하면_true이고_close/approve를_부른다', async () => {
+  // 종료 승인은 선택창(스펙 2026-11-23 close-keep-branch §4.5) — 기본 선택은 병합하고 종료(바디 없음)
+  it('approveClose_기본_선택으로_승인하면_true이고_바디_없이_close/approve를_부른다', async () => {
     useApiMock.mockResolvedValueOnce([]) // fetchDeferredWarning
     useApiMock.mockResolvedValueOnce({})
     const p = actions.approveClose()
-    await clickDialogButton('병합하고 종료')
+    await vi.waitFor(() => expect(document.body.textContent).toContain('병합하고 종료 — PR을 feature/x에 병합'))
+    await clickDialogButton('종료 승인')
     expect(await p).toBe(true)
-    expect(useApiMock).toHaveBeenCalledWith('/api/tasks/42/close/approve', expect.objectContaining({ method: 'POST' }))
+    expect(useApiMock).toHaveBeenCalledWith('/api/tasks/42/close/approve', { method: 'POST', body: undefined })
     expect(refresh).toHaveBeenCalled()
+  })
+
+  it('approveClose_병합하지_않고_종료를_고르면_keepBranch_바디를_싣는다', async () => {
+    useApiMock.mockResolvedValueOnce([]) // fetchDeferredWarning
+    useApiMock.mockResolvedValueOnce({})
+    const p = actions.approveClose()
+    await vi.waitFor(() => expect(document.body.querySelectorAll('.q-dialog .q-radio')).toHaveLength(2))
+    document.body.querySelectorAll<HTMLElement>('.q-dialog .q-radio')[1]!.click()
+    await flushPromises()
+    await clickDialogButton('종료 승인')
+    expect(await p).toBe(true)
+    expect(useApiMock).toHaveBeenCalledWith('/api/tasks/42/close/approve', { method: 'POST', body: { keepBranch: true } })
+  })
+
+  it('approveClose_선택창을_취소하면_false이고_승인을_보내지_않는다', async () => {
+    useApiMock.mockResolvedValueOnce([]) // fetchDeferredWarning
+    const p = actions.approveClose()
+    await clickDialogButton('취소')
+    expect(await p).toBe(false)
+    expect(useApiMock).not.toHaveBeenCalledWith('/api/tasks/42/close/approve', expect.anything())
+    expect(refresh).not.toHaveBeenCalled()
   })
 
   it('확인창을_취소하면_false이고_API를_부르지_않는다', async () => {
@@ -136,5 +159,24 @@ describe('useTaskActions', () => {
     authStub.isAdmin = false
     setup({ status: 'CLOSE_FAILED', close: { progress: [] } as any })
     expect(actions.canCancelClose.value).toBe(false)
+  })
+
+  it('브랜치_유지_종료는_진행_단계가_없을_때만_종료_취소', async () => {
+    wrapper.unmount()
+    setup({ status: 'CLOSE_FAILED', close: { progress: ['UNDEPLOYED'], keepBranch: true } as any })
+    expect(actions.canCancelClose.value).toBe(false)
+    expect(actions.canSyncBaseNow.value).toBe(false)
+    wrapper.unmount()
+    setup({ status: 'CLOSE_FAILED', close: { progress: [], keepBranch: true } as any })
+    expect(actions.canCancelClose.value).toBe(true)
+  })
+
+  it('retryClose_문구는_브랜치_유지_종료면_병합하지_않는다고_말한다', async () => {
+    wrapper.unmount()
+    setup({ status: 'CLOSE_FAILED', close: { progress: ['UNDEPLOYED'], keepBranch: true } as any })
+    const p = actions.retryClose()
+    await vi.waitFor(() => expect(document.body.textContent).toContain('남은 종료 단계(배포 중지·노트)를 다시 실행합니다. 병합하지 않습니다.'))
+    await clickDialogButton('취소')
+    expect(await p).toBe(false)
   })
 })

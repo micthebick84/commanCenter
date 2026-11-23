@@ -4,10 +4,11 @@ import { computed, type ComputedRef, type Ref } from 'vue'
 import { useQuasar } from 'quasar'
 import { failMsg } from '~/composables/failMessage'
 import { confirmDialog } from '~/composables/confirmDialog'
+import { chooseCloseMode, closeApproveBody } from '~/composables/closeApprove'
 import { fetchDeferredWarning } from '~/composables/taskDbChanges'
 import { isDbWorkPrCreated, DB_WORK_CLOSE_REQUEST_CONFIRM } from '~/composables/taskStages'
 import { BASE_SYNC_ABORT_CONFIRM, SYNC_BASE_CONFIRM, canAbortFix, canSyncBase, isBaseSyncRound, type FixView } from '~/composables/taskFix'
-import { canSkipArtifact, canSkipPatch, MAIL_STATUS_LABEL, type CloseView } from '~/composables/taskClose'
+import { canSkipArtifact, canSkipPatch, isKeepBranchClose, MAIL_STATUS_LABEL, type CloseView } from '~/composables/taskClose'
 
 export interface ActionTask {
   id: number
@@ -37,7 +38,7 @@ export interface TaskActions {
   withdrawFix(): Promise<boolean>
   abortFix(): Promise<boolean>
   /** 확인창 없이 종료·수정 동작 하나를 부른다(종료 요청 철회 등 화면이 직접 쓰는 길). */
-  closeAction(path: string, ok: string | ((res: { status?: string } | null) => CloseNotice), body?: Record<string, string>): Promise<boolean>
+  closeAction(path: string, ok: string | ((res: { status?: string } | null) => CloseNotice), body?: Record<string, unknown>): Promise<boolean>
   canCancelClose: ComputedRef<boolean>
   canSyncBaseNow: ComputedRef<boolean>
   canSkipArtifactClose: ComputedRef<boolean>
@@ -112,7 +113,7 @@ export function useTaskActions<T extends ActionTask>(task: Ref<T | null>, refres
   async function closeAction(
     path: string,
     ok: string | ((res: { status?: string } | null) => CloseNotice),
-    body?: Record<string, string>,
+    body?: Record<string, unknown>,
   ): Promise<boolean> {
     if (closeInFlight) return false // 요청이 끝나기 전의 중복 클릭은 무시한다
     closeInFlight = true
@@ -170,20 +171,23 @@ export function useTaskActions<T extends ActionTask>(task: Ref<T | null>, refres
     // DB 작업 PR생성(스펙 2026-11-03 §6.9)은 띄운 앱이 없으니 배포 결과가 아니라 개발 DB 반영 결과를 묻는다
     const message = task.value && isDbWorkPrCreated(task.value)
       ? DB_WORK_CLOSE_REQUEST_CONFIRM
-      : '배포 결과를 확인했나요? 관리자가 승인하면 PR을 main에 병합하고, 배포를 중지하고, 브랜치를 삭제합니다. 병합은 되돌릴 수 없습니다.'
+      : `배포 결과를 확인했나요? 관리자가 승인하면 PR을 기준 브랜치(${task.value?.githubBranch ?? '기준 브랜치'})에 병합하고, 배포를 중지하고, 브랜치를 삭제합니다(관리자가 '병합하지 않고 종료'를 고르면 브랜치·PR은 그대로 둡니다). 병합은 되돌릴 수 없습니다.`
     if (!(await confirmDialog($q, message, { title: '종료 요청', ok: '종료 요청' }))) return false
     return closeAction('close-request', '종료 요청 등록')
   }
 
+  // 종료 승인 선택창(스펙 2026-11-23 close-keep-branch §4.5) — 병합하고 종료 / 병합하지 않고 종료(브랜치·PR 유지). 취소면 요청하지 않는다.
   async function approveClose(): Promise<boolean> {
     // 승인 대기 SQL이 남아 있으면 확인창에 건수 한 줄을 덧붙인다(스펙 2026-11-03 §6.5) — 조회가 실패하면 경고 없이 그대로 승인할 수 있다
     const warning = await fetchDeferredWarning(taskId())
-    if (!(await confirmDialog($q, `PR을 main에 병합하고, 배포를 중지하고, 옵시디언 노트를 쓴 뒤 브랜치를 삭제합니다. 되돌릴 수 없습니다.${warning}`, { title: '종료 승인', ok: '병합하고 종료' }))) return false
-    return closeAction('close/approve', '종료 큐 등록')
+    const mode = await chooseCloseMode($q, { taskId: taskId(), baseBranch: task.value?.githubBranch ?? null, extraWarning: warning })
+    if (mode === null) return false
+    return closeAction('close/approve', '종료 큐 등록', closeApproveBody(mode))
   }
 
   async function retryClose(): Promise<boolean> {
-    if (!(await confirmDialog($q, '남은 종료 단계(병합 포함 가능)를 다시 실행합니다. 병합은 되돌릴 수 없습니다.', { title: '종료 재시도', ok: '종료 재시도' }))) return false
+    const retryMsg = isKeepBranchClose(task.value?.close) ? '남은 종료 단계(배포 중지·노트)를 다시 실행합니다. 병합하지 않습니다.' : '남은 종료 단계(병합 포함 가능)를 다시 실행합니다. 병합은 되돌릴 수 없습니다.'
+    if (!(await confirmDialog($q, retryMsg, { title: '종료 재시도', ok: '종료 재시도' }))) return false
     return closeAction('close/retry', '종료 재시도 큐 등록')
   }
 
@@ -191,9 +195,12 @@ export function useTaskActions<T extends ActionTask>(task: Ref<T | null>, refres
   const canAdminRequestCloseLost = computed(() => auth.isAdmin && task.value?.status === 'DEPLOY_LOST')
 
   // 병합 전(MERGED 없음) 종료실패만 취소할 수 있다 — 서버도 같은 규칙으로 409를 낸다
-  const canCancelClose = computed(
-    () => auth.isAdmin && task.value?.status === 'CLOSE_FAILED' && !(task.value.close?.progress ?? []).includes('MERGED'),
-  )
+  // 브랜치 유지 종료는 병합이 없어 기준이 다르다 — 진행 단계가 하나라도 있으면(배포 중지 등 되돌릴 수 없는 일) 취소할 수 없다
+  const canCancelClose = computed(() => {
+    if (!auth.isAdmin || task.value?.status !== 'CLOSE_FAILED') return false
+    const progress = task.value.close?.progress ?? []
+    return isKeepBranchClose(task.value.close) ? progress.length === 0 : !progress.includes('MERGED')
+  })
 
   async function cancelClose(): Promise<boolean> {
     if (!(await confirmDialog($q, '병합 전 단계에서 실패한 종료를 취소하고 배포 상태로 되돌립니다.', { title: '종료 취소', ok: '종료 취소', cancel: '돌아가기' }))) return false

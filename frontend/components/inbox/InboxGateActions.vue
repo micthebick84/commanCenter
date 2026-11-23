@@ -3,7 +3,7 @@
 // 버튼과 확인창은 작업 상세와 같은 공용 동작(useTaskActions)을 쓴다. 동작이 서버에 받아들여졌을 때만 done을 올린다.
 import { computed } from 'vue'
 import { mrRef } from '~/composables/mergeRequestLabel'
-import { closeSteps } from '~/composables/taskClose'
+import { closeSteps, isKeepBranchClose } from '~/composables/taskClose'
 import DesignReviewCard from '~/components/DesignReviewCard.vue'
 import FixRequestHistory from '~/components/tasks/FixRequestHistory.vue'
 import InboxCloseSteps from '~/components/inbox/InboxCloseSteps.vue'
@@ -63,7 +63,7 @@ const deployUrl = computed(() => props.task.deployment?.deployUrl ?? null)
         <span class="text-caption text-grey-7">접속 URL </span>
         <a :href="deployUrl" target="_blank" rel="noopener">{{ deployUrl }}</a>
       </div>
-      <InboxCloseSteps :steps="steps" />
+      <InboxCloseSteps :steps="steps" :keep-branch="isKeepBranchClose(task.close)" />
       <div class="row q-gutter-sm">
         <q-btn unelevated no-caps color="primary" icon="task_alt" label="종료 승인" data-test="inbox-act-approve-close" @click="run(actions.approveClose)" />
         <q-btn outline no-caps color="negative" icon="block" label="반려" data-test="inbox-act-reject-close" @click="run(actions.rejectClose)" />

@@ -40,6 +40,8 @@ import { downloadAttachment as downloadBlob } from '~/composables/attachmentDown
 import {
   closeSteps,
   obsidianLink,
+  isKeepBranchClose,
+  KEEP_BRANCH_CHIP,
   patchButtonState,
   formatMb,
   startArtifactDownload,
@@ -477,6 +479,7 @@ function onAction(kind: NextActionKind) {
         <q-card-section class="row items-center" style="gap: 8px">
           <q-icon name="task_alt" color="primary" size="sm" />
           <div class="text-h6">작업 종료</div>
+          <q-chip v-if="isKeepBranchClose(task.close)" dense color="orange-2" text-color="orange-10" data-test="close-keep-chip">{{ KEEP_BRANCH_CHIP }}</q-chip>
           <q-space />
           <q-btn
             v-if="!$q.screen.lt.md && auth.isAdmin && task.status === 'CLOSE_REVIEW'"

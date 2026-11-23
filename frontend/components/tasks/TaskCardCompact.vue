@@ -13,7 +13,7 @@ import { mrRef } from '~/composables/mergeRequestLabel'
 import { elapsedLabel } from '~/composables/implementationMode'
 import { useNowTick } from '~/composables/useNowTick'
 import { taskTypeLabel } from '~/composables/taskType'
-import { patchButtonState } from '~/composables/taskClose'
+import { patchButtonState, isKeepBranchClose, KEEP_BRANCH_CHIP } from '~/composables/taskClose'
 
 export interface CardTask {
   id: number
@@ -34,7 +34,7 @@ export interface CardTask {
   /** 작업 타입(스펙 2026-11-03 §4) — null·없음은 타입 없음. 칩은 타입이 있을 때만 그린다. */
   taskType?: string | null
   /** 종료 부분 패치(스펙 2026-11-10) — 작업종료 카드의 '부분 패치' 버튼·'변경 없음' 글자용 */
-  close?: { patch?: { name: string | null; empty: boolean } | null } | null
+  close?: { patch?: { name: string | null; empty: boolean } | null; keepBranch?: boolean } | null
 }
 
 // canDownloadPatch = 등록자·관리자 여부 — 부모가 계산해 내려 준다(카드는 인증 정보를 모른다)
@@ -107,6 +107,8 @@ function segStyle(state: string, color: string) {
       >
       <!-- 타입 없음(기존 작업 전부)이면 칩을 그리지 않는다 — 같은 '타입 없음' 칩이 카드를 덮지 않게 -->
       <span v-if="task.taskType" class="card-type" data-test="task-type-chip">{{ taskTypeLabel(task.taskType) }}</span>
+      <!-- 병합하지 않고 종료(스펙 2026-11-23) — 승인 뒤에만 keepBranch가 켜지므로 종료 단계 상태에서만 나온다 -->
+      <span v-if="isKeepBranchClose(task.close)" class="card-type" data-test="card-keep-chip">{{ KEEP_BRANCH_CHIP }}</span>
       <div class="col column seg-col">
         <div class="row no-wrap seg-bar">
           <span

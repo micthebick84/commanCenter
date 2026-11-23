@@ -61,7 +61,9 @@ final class CloseNotePrompt {
         v.put("repo", nz(t.githubRepo()));
         v.put("branch", nz(t.githubBranch()));
         v.put("pr_url", nz(t.prUrl()));
-        v.put("merge_sha", mergeSha != null ? mergeSha : c == null ? "" : nz(c.mergeCommitSha()));
+        v.put("merge_sha", Boolean.TRUE.equals(t.closeKeepBranch())
+                ? "병합 안 함 — 작업 브랜치 " + nz(t.headBranch()) + "와 PR 유지(Symphony 밖에서 이어서 처리)"
+                : mergeSha != null ? mergeSha : c == null ? "" : nz(c.mergeCommitSha()));
         v.put("deploy_url", c == null ? "" : nz(c.deployUrl()));
         v.put("deployed_at", c == null || c.deployedAt() == null ? "" : c.deployedAt().toString());
         v.put("description", orNone(t.description()));

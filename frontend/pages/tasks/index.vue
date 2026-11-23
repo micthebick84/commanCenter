@@ -2,6 +2,7 @@
 import { failMsg } from '~/composables/failMessage'
 import { useQuasar } from 'quasar'
 import { confirmDialog } from '~/composables/confirmDialog'
+import { chooseCloseMode, closeApproveBody } from '~/composables/closeApprove'
 import TaskListMobile from '~/components/tasks/TaskListMobile.vue'
 import type { CardTask } from '~/components/tasks/TaskCardCompact.vue'
 import { buildStages, stageAccepts, cancelable, DB_WORK_CLOSE_REQUEST_CONFIRM, DEPLOY_ACTIVE_STATUSES, type MoveDef, type StageCard } from '~/composables/taskStages'
@@ -22,7 +23,7 @@ import { taskPrefillFromRequest, type RequestDetail } from '~/composables/reques
 import { taskPrefillFromTask, type FollowUpSource } from '~/composables/taskFix'
 import { TASK_TYPES, TASK_TYPE_FILTERS, taskTypeLabel } from '~/composables/taskType'
 import { fetchDeferredWarning } from '~/composables/taskDbChanges'
-import { patchButtonState, startPatchDownload, type CloseView } from '~/composables/taskClose'
+import { patchButtonState, startPatchDownload, isKeepBranchClose, KEEP_BRANCH_CHIP, type CloseView } from '~/composables/taskClose'
 import { useOneTimeDownload, downloadErrorMessage } from '~/composables/useOneTimeDownload'
 
 definePageMeta({ layout: 'default' })
@@ -187,13 +188,22 @@ async function applyMove(id: number, move: MoveDef) {
     return
   }
   // 종료 전이(close/approve·close/retry)는 병합이 끼어 있어 되돌릴 수 없음을 확인창에 밝힌다
-  const warn = move.path.startsWith('close/') ? ' PR 병합·배포 중지·브랜치 삭제는 되돌릴 수 없습니다.' : ''
+  const keep = isKeepBranchClose(tasks.value.find((t) => t.id === id)?.close)
+  const warn = move.path.startsWith('close/')
+    ? (keep ? ' 배포 중지는 되돌릴 수 없습니다. 병합하지 않습니다.' : ' PR 병합·배포 중지·브랜치 삭제는 되돌릴 수 없습니다.')
+    : ''
   // 종료 승인은 승인 대기 SQL이 남아 있으면 건수 한 줄을 더 붙인다(스펙 2026-11-03 §6.5) — 조회가 실패하면 경고 없이 그대로 승인할 수 있다
   const deferred = move.confirm && move.path === 'close/approve' ? await fetchDeferredWarning(id) : ''
-  if (move.confirm && !(await confirmDialog($q, `작업 #${id} — ${move.label}을(를) 실행할까요?${warn}${deferred}`, { ok: move.label }))) return
+  // 종료 승인은 확인창 대신 선택창(병합하고 종료 / 병합하지 않고 종료, 스펙 2026-11-23) — 고른 방식이 바디로 간다
+  let body: { keepBranch: true } | undefined
+  if (move.path === 'close/approve') {
+    const mode = await chooseCloseMode($q, { taskId: id, baseBranch: tasks.value.find((t) => t.id === id)?.githubBranch ?? null, extraWarning: deferred })
+    if (mode === null) return
+    body = closeApproveBody(mode)
+  } else if (move.confirm && !(await confirmDialog($q, `작업 #${id} — ${move.label}을(를) 실행할까요?${warn}${deferred}`, { ok: move.label }))) return
   moving.value = true
   try {
-    await useApi(`/api/tasks/${id}/${move.path}`, { method: 'POST' })
+    await useApi(`/api/tasks/${id}/${move.path}`, { method: 'POST', body })
     $q.notify({ type: 'positive', message: `작업 #${id} — ${move.label} 완료` })
     refresh()
   } catch (e: any) {
@@ -791,6 +801,7 @@ const fullscreen = useFullscreenDialog()
                     </span>
                     <!-- 타입 없음(기존 작업 전부)이면 칩을 그리지 않는다 — 같은 '타입 없음' 칩이 카드를 덮지 않게 -->
                     <span v-if="c.task.taskType" class="card-type" data-test="task-type-chip">{{ taskTypeLabel(c.task.taskType) }}</span>
+                    <span v-if="isKeepBranchClose(c.task.close)" class="card-type" data-test="board-keep-chip">{{ KEEP_BRANCH_CHIP }}</span>
                     <span v-if="costBadge(c.task)" class="card-cost">{{ costBadge(c.task) }}</span>
                     <span
                       v-if="elapsedOf(c.task)"

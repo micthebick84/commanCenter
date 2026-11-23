@@ -56,6 +56,20 @@ describe('pages/tasks — 작업종료 카드의 부분 패치 (스펙 2026-11-1
     w.unmount()
   })
 
+  it('데스크톱 보드: 브랜치 유지로 끝난 작업종료 카드에만 미병합 칩이 있다', async () => {
+    await setViewportWidth(1280)
+    stubApi([
+      closedTask(7, 'alice', { progress: [], mergeCommitSha: null, notePath: null, keepBranch: true }),
+      closedTask(8, 'alice', { progress: [], mergeCommitSha: null, notePath: null }),
+    ])
+    const w = mount(PageWrapper, { attachTo: document.body })
+    await flushPromises()
+    const chips = w.findAll('[data-test="board-keep-chip"]')
+    expect(chips).toHaveLength(1)
+    expect(chips[0].text()).toBe('미병합 종료 · 브랜치 유지')
+    w.unmount()
+  })
+
   it('변경 없음이면 회색 글자만 보인다', async () => {
     stubApi([closedTask(7, 'alice', closeWith({ name: null, sizeBytes: null, fileCount: 0, empty: true, uploadedAt: null }))])
     const w = mount(PageWrapper, { attachTo: document.body })

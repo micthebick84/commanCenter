@@ -32,6 +32,19 @@ class CloseStepTest {
     }
 
     @Test
+    void required_브랜치유지면_병합과_브랜치삭제를_뺀다() {
+        assertThat(CloseStep.required(null, null, true))
+                .containsExactlyInAnyOrder(CloseStep.UNDEPLOYED, CloseStep.NOTE_WRITTEN);
+        assertThat(CloseStep.required("REQUIRED", null, true)).contains(CloseStep.ARTIFACT_UPLOADED);
+    }
+
+    @Test
+    void allDone_브랜치유지_병합없이_완료() {
+        assertThat(CloseStep.allDone("UNDEPLOYED,NOTE_WRITTEN", null, null, true)).isTrue();
+        assertThat(CloseStep.allDone("UNDEPLOYED,NOTE_WRITTEN", null, null, false)).isFalse();
+    }
+
+    @Test
     void append는_산출물_단계를_배포_중지와_노트_사이에_둔다() {
         assertThat(CloseStep.append("MERGED,UNDEPLOYED,NOTE_WRITTEN", CloseStep.ARTIFACT_UPLOADED))
                 .isEqualTo("MERGED,UNDEPLOYED,ARTIFACT_UPLOADED,NOTE_WRITTEN");

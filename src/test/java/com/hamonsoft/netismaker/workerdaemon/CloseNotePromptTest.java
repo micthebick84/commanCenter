@@ -42,4 +42,17 @@ class CloseNotePromptTest {
         String p = CloseNotePrompt.render(null, task(), "newsha");
         assertThat(p).contains("설명 {plan}").contains("newsha");
     }
+
+    @Test
+    void 브랜치유지면_병합_커밋_자리에_병합_안_함_문구가_들어간다() {
+        WorkerTaskResponse t = task();
+        WorkerTaskResponse keep = new WorkerTaskResponse(t.id(), t.githubRepo(), t.githubBranch(), t.title(),
+                t.description(), t.kind(), t.mcpsExtra(), null, null, "netismaker/task-12", "abc", List.of(), null,
+                null, null, null, null, null, null, null, null, "github", null, 3, t.prUrl(), null,
+                t.closeContext(), null, null, null, List.of(), null, List.of(), List.of(), null, true);
+        assertThat(CloseNotePrompt.render(null, keep, null))
+                .contains("병합 커밋: 병합 안 함 — 작업 브랜치 netismaker/task-12와 PR 유지(Symphony 밖에서 이어서 처리)")
+                .doesNotContain("feed1234");
+        assertThat(CloseNotePrompt.render(null, t, null)).contains("병합 커밋: feed1234");
+    }
 }

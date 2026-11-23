@@ -243,6 +243,11 @@ public class Task {
     @Setter
     private String closePatchMode;
 
+    /** 병합하지 않고 종료 — 브랜치·PR을 그대로 둔다. 종료 승인 때 정한다. */
+    @Column(name = "close_keep_branch", nullable = false)
+    @Setter
+    private boolean closeKeepBranch;
+
     /** 부분 패치 기준 커밋(배포된 커밋). */
     @Column(name = "patch_base_sha", length = 40)
     @Setter

@@ -29,6 +29,14 @@ export interface CloseView {
   mail?: CloseMailView | null
   patchMode?: 'REQUIRED' | 'SKIPPED' | null
   patch?: ClosePatchView | null
+  /** 병합하지 않고 종료(브랜치·PR 유지, 스펙 2026-11-23) — 병합·브랜치 삭제 단계가 없다. */
+  keepBranch?: boolean
+}
+
+export const KEEP_BRANCH_CHIP = '미병합 종료 · 브랜치 유지'
+
+export function isKeepBranchClose(close: { keepBranch?: boolean } | null | undefined): boolean {
+  return close?.keepBranch === true
 }
 
 export type CloseStepState = 'done' | 'current' | 'failed' | 'future' | 'skipped'
@@ -50,7 +58,9 @@ export function closeSteps(close: CloseView | null, status: string) {
     (s) => (s.key !== 'ARTIFACT_UPLOADED' || mode !== null) && (s.key !== 'PATCH_BUILT' || patchMode !== null),
   )
   const done = new Set(close?.progress ?? [])
+  const keep = isKeepBranchClose(close)
   const skipped = (key: string) =>
+    (keep && (key === 'MERGED' || key === 'BRANCH_DELETED')) ||
     (key === 'ARTIFACT_UPLOADED' && mode === 'SKIPPED') || (key === 'PATCH_BUILT' && patchMode === 'SKIPPED')
   const nextIdx = steps.findIndex((s) => !done.has(s.key) && !skipped(s.key))
   return steps.map((s, i) => {
@@ -67,7 +77,7 @@ export function closeSteps(close: CloseView | null, status: string) {
 export function canSkipArtifact(close: CloseView | null, status: string): boolean {
   if (!close || status !== 'CLOSE_FAILED' || close.artifactMode !== 'REQUIRED') return false
   const done = new Set(close.progress)
-  return done.has('MERGED') && done.has('UNDEPLOYED') && !done.has('ARTIFACT_UPLOADED')
+  return (done.has('MERGED') || isKeepBranchClose(close)) && done.has('UNDEPLOYED') && !done.has('ARTIFACT_UPLOADED')
 }
 
 /** 패치 단계에서 멈춘 종료실패인가 — 관리자 '패치 없이 마무리'(close/skip-patch)가 가능한 조건. */

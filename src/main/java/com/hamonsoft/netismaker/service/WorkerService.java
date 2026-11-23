@@ -247,12 +247,12 @@ public class WorkerService {
         if (kinds == null) {
             candidates = caps.needsFilteredQueue()
                     ? taskRepo.findClaimableAmongForUpdateSkipLocked(TaskRepository.CLAIMABLE_STATUSES,
-                            caps.refRepos(), caps.fixRounds(), caps.mockups(), caps.baseSync())
+                            caps.refRepos(), caps.fixRounds(), caps.mockups(), caps.baseSync(), caps.closeKeepBranch())
                     : taskRepo.findClaimableForUpdateSkipLocked(PageRequest.of(0, 1));
         } else {
             List<TaskStatus> statuses = kinds.stream().map(WorkerService::claimableStatusFor).toList();
             candidates = taskRepo.findClaimableAmongForUpdateSkipLocked(statuses, caps.refRepos(), caps.fixRounds(),
-                    caps.mockups(), caps.baseSync());
+                    caps.mockups(), caps.baseSync(), caps.closeKeepBranch());
         }
         // claim이 null이면(수정 회차 기록이 깨진 작업을 구현실패로 치웠다) 이번 poll은 빈 응답 — 큐 머리가 치워졌으니 다음 poll이 뒤를 잡는다
         return candidates.isEmpty() ? Optional.empty() : Optional.ofNullable(claim(candidates.get(0), workerId));
@@ -1080,6 +1080,10 @@ public class WorkerService {
             throw new TaskException(HttpStatus.CONFLICT,
                     "다른 워커가 잡은 작업입니다 (소유: " + t.getWorkerId() + ")");
         }
+        if (t.isCloseKeepBranch() && (req.step() == CloseStep.MERGED || req.step() == CloseStep.BRANCH_DELETED)) {
+            throw new TaskException(HttpStatus.CONFLICT,
+                    "병합하지 않는 종료입니다 — " + req.step() + " 보고를 받지 않습니다");
+        }
         switch (req.step()) {
             case MERGED -> {
                 if (req.mergeCommitSha() != null && !req.mergeCommitSha().isBlank()) {
@@ -1188,7 +1192,8 @@ public class WorkerService {
         String reason;
         switch (req.status()) {
             case CLOSED -> {
-                if (!CloseStep.allDone(t.getCloseProgress(), t.getCloseArtifactMode(), t.getClosePatchMode())) {
+                if (!CloseStep.allDone(t.getCloseProgress(), t.getCloseArtifactMode(), t.getClosePatchMode(),
+                        t.isCloseKeepBranch())) {
                     throw new TaskException(HttpStatus.BAD_REQUEST,
                             "종료 단계가 모두 끝나지 않았습니다 (끝난 단계: "
                                     + (t.getCloseProgress() == null ? "없음" : t.getCloseProgress()) + ")");
@@ -1197,7 +1202,8 @@ public class WorkerService {
                 t.setFailureReason(null);
                 String sha = t.getMergeCommitSha();
                 reason = "작업 종료" + (sha == null || sha.isBlank() ? ""
-                        : ": 병합 " + sha.substring(0, Math.min(7, sha.length())));
+                        : ": 병합 " + sha.substring(0, Math.min(7, sha.length())))
+                        + (t.isCloseKeepBranch() ? " (병합 안 함·브랜치 유지)" : "");
                 if (events != null) events.publishEvent(new CloseCompletedEvent(t.getId()));
             }
             case CLOSE_FAILED -> {

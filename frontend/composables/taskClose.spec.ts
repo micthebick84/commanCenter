@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest'
-import { closeSteps, obsidianLink, canSkipArtifact, canSkipPatch, patchButtonState, startPatchDownload, formatMb, startArtifactDownload, MAIL_STATUS_LABEL, type CloseView } from './taskClose'
+import { closeSteps, obsidianLink, canSkipArtifact, canSkipPatch, patchButtonState, startPatchDownload, formatMb, startArtifactDownload, MAIL_STATUS_LABEL, isKeepBranchClose, KEEP_BRANCH_CHIP, type CloseView } from './taskClose'
 
 describe('closeSteps', () => {
   it('끝난 단계는 done, 종료중이면 다음 단계가 current', () => {
@@ -110,5 +110,28 @@ describe('산출물 표시·내려받기', () => {
     await startArtifactDownload(42, api, go)
     expect(api).toHaveBeenCalledWith('/api/tasks/42/artifact/download-link', { method: 'POST' })
     expect(go).toHaveBeenCalledWith('/api/artifact-downloads/tok')
+  })
+})
+
+describe('브랜치 유지 종료 (스펙 2026-11-23)', () => {
+  const keep = (progress: string[]): CloseView => ({ progress, mergeCommitSha: null, notePath: null, keepBranch: true })
+  it('isKeepBranchClose·칩 문구', () => {
+    expect(isKeepBranchClose(keep([]))).toBe(true)
+    const plain: CloseView = { progress: [], mergeCommitSha: null, notePath: null }
+    expect(isKeepBranchClose(plain)).toBe(false)
+    expect(isKeepBranchClose(null)).toBe(false)
+    expect(KEEP_BRANCH_CHIP).toBe('미병합 종료 · 브랜치 유지')
+  })
+  it('keep이면 MERGED·BRANCH_DELETED는 skipped', () => {
+    const s = closeSteps(keep(['UNDEPLOYED']), 'CLOSING')
+    expect(s.find((x) => x.key === 'MERGED')!.state).toBe('skipped')
+    expect(s.find((x) => x.key === 'BRANCH_DELETED')!.state).toBe('skipped')
+    expect(s.find((x) => x.key === 'UNDEPLOYED')!.state).toBe('done')
+    expect(s.find((x) => x.key === 'NOTE_WRITTEN')!.state).toBe('current')
+  })
+  it('canSkipArtifact: keep은 UNDEPLOYED만 있어도 참', () => {
+    expect(canSkipArtifact({ ...keep(['UNDEPLOYED']), artifactMode: 'REQUIRED' }, 'CLOSE_FAILED')).toBe(true)
+    expect(canSkipArtifact({ ...keep([]), artifactMode: 'REQUIRED' }, 'CLOSE_FAILED')).toBe(false)
+    expect(canSkipArtifact({ progress: ['UNDEPLOYED'], mergeCommitSha: null, notePath: null, artifactMode: 'REQUIRED' }, 'CLOSE_FAILED')).toBe(false)
   })
 })

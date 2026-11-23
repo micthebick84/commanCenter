@@ -161,6 +161,10 @@ describe('기준 브랜치 반영 (BASE_SYNC)', () => {
   const failedTask = (over: Record<string, unknown> = {}) =>
     task({ status: 'CLOSE_FAILED', close: { progress: [] }, fix: fix(), ...over })
 
+  it('canSyncBase: 브랜치 유지 종료는 거짓', () => {
+    expect(canSyncBase(failedTask({ close: { progress: [], keepBranch: true } }), true)).toBe(false)
+  })
+
   it('canSyncBase: 관리자·종료실패·병합 전·열린 회차 없음일 때만', () => {
     expect(canSyncBase(failedTask(), true)).toBe(true)
     expect(canSyncBase(failedTask({ close: null }), true)).toBe(true)

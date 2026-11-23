@@ -1,5 +1,6 @@
 package com.hamonsoft.netismaker.controller;
 
+import com.hamonsoft.netismaker.dto.ApproveCloseRequest;
 import com.hamonsoft.netismaker.dto.RejectCloseRequest;
 import com.hamonsoft.netismaker.dto.SkipArtifactRequest;
 import com.hamonsoft.netismaker.dto.TaskResponse;
@@ -19,7 +20,7 @@ import java.util.Map;
  *
  *   POST /{id}/close-request           등록자 본인 또는 관리자
  *   POST /{id}/close-request/withdraw  등록자 본인 또는 관리자
- *   POST /{id}/close/approve           ROLE_ADMIN
+ *   POST /{id}/close/approve           ROLE_ADMIN (바디 선택: keepBranch=true면 병합 없이 브랜치·PR 유지)
  *   POST /{id}/close/reject            ROLE_ADMIN (바디 reason)
  *   POST /{id}/close/retry             ROLE_ADMIN
  *   POST /{id}/close/cancel            ROLE_ADMIN (병합 전 종료실패만)
@@ -56,8 +57,11 @@ public class TaskCloseController {
 
     @PostMapping("/{id}/close/approve")
     @PreAuthorize("hasAuthority('ROLE_ADMIN')")
-    public TaskResponse approve(@PathVariable Long id, JwtAuthenticationToken auth) {
-        return view(closeService.approve(id, AuthContext.requireUserId(auth)), true);
+    public TaskResponse approve(@PathVariable Long id,
+                                @RequestBody(required = false) ApproveCloseRequest body,
+                                JwtAuthenticationToken auth) {
+        boolean keepBranch = body != null && Boolean.TRUE.equals(body.keepBranch());
+        return view(closeService.approve(id, AuthContext.requireUserId(auth), keepBranch), true);
     }
 
     @PostMapping("/{id}/close/reject")

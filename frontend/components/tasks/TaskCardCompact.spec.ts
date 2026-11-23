@@ -21,6 +21,16 @@ const base = {
 }
 
 describe('TaskCardCompact (스펙 2026-09-06 §4.1 카드)', () => {
+  it('브랜치 유지 종료(close.keepBranch)면 미병합 종료 칩이 보이고, 일반 종료·종료 정보 없음에는 없다', () => {
+    const closed = { ...base, status: 'CLOSED', statusLabel: '작업종료' }
+    const keep = mount(TaskCardCompact, { props: { task: { ...closed, close: { keepBranch: true } }, isAdmin: false } })
+    expect(keep.find('[data-test="card-keep-chip"]').text()).toBe('미병합 종료 · 브랜치 유지')
+    for (const close of [{ keepBranch: false }, {}, null]) {
+      const w = mount(TaskCardCompact, { props: { task: { ...closed, close }, isAdmin: false } })
+      expect(w.find('[data-test="card-keep-chip"]').exists()).toBe(false)
+    }
+  })
+
   it('제목·상태 칩·5세그먼트(분석 done·디자인 done·구현 current·배포 future·종료 future)·메타·PR 링크를 그린다', () => {
     const w = mount(TaskCardCompact, { props: { task: base, isAdmin: false } })
     expect(w.text()).toContain('#18')

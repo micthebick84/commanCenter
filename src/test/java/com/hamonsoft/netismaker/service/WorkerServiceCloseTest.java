@@ -14,6 +14,7 @@ import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.data.domain.Limit;
+import org.springframework.http.HttpStatus;
 import org.springframework.test.util.ReflectionTestUtils;
 
 import java.math.BigDecimal;
@@ -89,6 +90,18 @@ class WorkerServiceCloseTest {
         ReflectionTestUtils.setField(e, "id", 9L);
         e.setNoteFolder(noteFolder);
         return e;
+    }
+
+    @Test
+    void 종료_claim_응답은_브랜치_유지_작업이면_closeKeepBranch_true_일반은_false() {
+        Task keep = task(TaskStatus.CLOSE_PENDING);
+        keep.setCloseKeepBranch(true);
+        when(taskRepo.findClaimableForUpdateSkipLocked(any())).thenReturn(List.of(keep));
+        assertThat(service.claimNextTask("w1").orElseThrow().closeKeepBranch()).isTrue();
+
+        Task plain = task(TaskStatus.CLOSE_PENDING);
+        when(taskRepo.findClaimableForUpdateSkipLocked(any())).thenReturn(List.of(plain));
+        assertThat(service.claimNextTask("w2").orElseThrow().closeKeepBranch()).isFalse();
     }
 
     @Test
@@ -210,6 +223,39 @@ class WorkerServiceCloseTest {
     }
 
     @Test
+    void progress_브랜치유지_MERGED_409() {
+        Task t = task(TaskStatus.CLOSING);
+        t.setWorkerId("w1");
+        t.setCloseKeepBranch(true);
+        when(taskRepo.findActiveByIdForUpdate(7L)).thenReturn(Optional.of(t));
+        assertThatThrownBy(() -> service.recordCloseProgress(7L, new CloseProgressRequest("w1", CloseStep.MERGED, "abc", null)))
+                .isInstanceOfSatisfying(TaskException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT));
+        assertThat(t.getCloseProgress()).isNull();
+    }
+
+    @Test
+    void progress_브랜치유지_BRANCH_DELETED_409() {
+        Task t = task(TaskStatus.CLOSING);
+        t.setWorkerId("w1");
+        t.setCloseKeepBranch(true);
+        when(taskRepo.findActiveByIdForUpdate(7L)).thenReturn(Optional.of(t));
+        assertThatThrownBy(() -> service.recordCloseProgress(7L, new CloseProgressRequest("w1", CloseStep.BRANCH_DELETED, null, null)))
+                .isInstanceOfSatisfying(TaskException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT));
+        verify(taskRepo, never()).findActiveByBaseBranch(any(), any(), any());
+    }
+
+    @Test
+    void closed_브랜치유지_병합없이_완료() {
+        Task t = task(TaskStatus.CLOSING);
+        t.setWorkerId("w1");
+        t.setCloseKeepBranch(true);
+        t.setCloseProgress("UNDEPLOYED,NOTE_WRITTEN");
+        when(taskRepo.findActiveByIdForUpdate(7L)).thenReturn(Optional.of(t));
+        service.recordResult(7L, WorkerResultRequest.closed("w1", null));
+        assertThat(t.getStatus()).isEqualTo(TaskStatus.CLOSED);
+    }
+
+    @Test
     void 진행_보고는_종료중이_아니거나_다른_워커면_409() {
         Task t = task(TaskStatus.CLOSE_PENDING);
         when(taskRepo.findActiveByIdForUpdate(7L)).thenReturn(Optional.of(t));
@@ -219,6 +265,20 @@ class WorkerServiceCloseTest {
         t.setWorkerId("w2");
         assertThatThrownBy(() -> service.recordCloseProgress(7L, new CloseProgressRequest("w1", CloseStep.MERGED, null, null)))
                 .isInstanceOf(TaskException.class);
+    }
+
+    @Test
+    void 브랜치유지_작업종료_이력_사유에_병합_안_함이_붙는다() {
+        Task t = task(TaskStatus.CLOSING);
+        t.setWorkerId("w1");
+        t.setCloseKeepBranch(true);
+        t.setCloseProgress("UNDEPLOYED,NOTE_WRITTEN");
+        when(taskRepo.findActiveByIdForUpdate(7L)).thenReturn(Optional.of(t));
+        service.recordResult(7L, WorkerResultRequest.closed("w1", null));
+        assertThat(t.getStatus()).isEqualTo(TaskStatus.CLOSED);
+        var captor = org.mockito.ArgumentCaptor.forClass(TaskStatusHistory.class);
+        verify(historyRepo).save(captor.capture());
+        assertThat(captor.getValue().getReason()).isEqualTo("작업 종료 (병합 안 함·브랜치 유지)");
     }
 
     @Test

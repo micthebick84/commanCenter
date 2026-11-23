@@ -198,4 +198,14 @@ class CloseMailServiceTest {
         t.setStatus(TaskStatus.CLOSED);
         assertThat(service("bot@hamonsoft.co.kr").resend(7L)).isEqualTo("SENT");
     }
+
+    @Test
+    void 브랜치유지_작업은_병합_커밋_줄이_병합_안_함() {
+        t.setCloseKeepBranch(true);
+        t.setMergeCommitSha(null);
+        assertThat(service("bot@hamonsoft.co.kr").send(7L)).isEqualTo("SENT");
+        ArgumentCaptor<SimpleMailMessage> cap = ArgumentCaptor.forClass(SimpleMailMessage.class);
+        verify(sender).send(cap.capture());
+        assertThat(cap.getValue().getText()).contains("배포 커밋: abcdef1   병합 커밋: 병합 안 함(브랜치 유지)");
+    }
 }

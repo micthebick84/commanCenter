@@ -133,4 +133,25 @@ class CloseNoteWriterTest {
         String text = Files.readString(writer.write(vault, "N", m, "본문", day).file());
         assertThat(text).doesNotContain("SECRETSECRET").contains("https://***@a.test/tasks/12");
     }
+
+    @Test
+    void 브랜치유지면_프런트매터에_branch_kept와_빈_merge_commit_진행상황은_병합_안_함_표시() throws Exception {
+        java.nio.file.Path vault = java.nio.file.Files.createTempDirectory("vault");
+        CloseNoteWriter.NoteMeta m = new CloseNoteWriter.NoteMeta(12, "제목", "https://github.com/a/b/pull/3", null,
+                null, null, "netismaker/task-12");
+        CloseNoteWriter.Written w = new CloseNoteWriter().write(vault, "N", m, "본문",
+                java.time.LocalDate.parse("2026-11-23"));
+        String note = java.nio.file.Files.readString(w.file());
+        assertThat(note).contains("merge_commit: \n").contains("branch_kept: netismaker/task-12\n");
+        String progress = java.nio.file.Files.readString(vault.resolve("N/netisMaker-진행상황-2026-11-23.md"));
+        assertThat(progress).contains("— 작업 #12 종료(병합 안 함 · 브랜치 유지)");
+    }
+
+    @Test
+    void 병합종료는_branch_kept가_없다() throws Exception {
+        java.nio.file.Path vault = java.nio.file.Files.createTempDirectory("vault");
+        CloseNoteWriter.Written w = new CloseNoteWriter().write(vault, "N", meta, "본문",
+                java.time.LocalDate.parse("2026-11-23"));
+        assertThat(java.nio.file.Files.readString(w.file())).doesNotContain("branch_kept");
+    }
 }

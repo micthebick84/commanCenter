@@ -8,6 +8,11 @@ import { failMsg } from '~/composables/failMessage'
 import InterviewPanel from '~/components/InterviewPanel.vue'
 import ApproveForm from '~/components/ApproveForm.vue'
 import RefRepoChips from '~/components/RefRepoChips.vue'
+import InboxGateActions from '~/components/inbox/InboxGateActions.vue'
+import InboxFailureActions from '~/components/inbox/InboxFailureActions.vue'
+import DeployEnvDialog from '~/components/tasks/DeployEnvDialog.vue'
+import ImplementationRetryDialog from '~/components/tasks/ImplementationRetryDialog.vue'
+import FixRequestDialog from '~/components/tasks/FixRequestDialog.vue'
 import TaskRefChangeMenu from '~/components/tasks/TaskRefChangeMenu.vue'
 import { useTaskActions } from '~/composables/useTaskActions'
 import { useInterviewRefDraft } from '~/composables/useInterviewRefDraft'
@@ -120,23 +125,41 @@ async function cancelTask() {
   if (await actions.cancelTask()) emitDone(mark)
 }
 
-type Body = 'interview' | 'approve' | 'pending' | 'idle'
+// 승인 계열·실패 계열 본문은 각자 컴포넌트가 맡는다(스펙 §5.3 표). 표에 없는 상태는 처리할 것이 없는 상태로 그린다.
+const GATE_STATUSES = ['COMPLETED', 'DESIGN_REVIEW', 'FIX_REVIEW', 'CLOSE_REVIEW']
+const FAILURE_STATUSES = ['FAILED', 'DESIGN_FAILED', 'IMPLEMENTATION_FAILED', 'DEPLOY_FAILED', 'DEPLOY_LOST', 'CLOSE_FAILED']
+
+// 창 세 개 — 상세와 같은 부품·같은 props. 보내기에 성공하면(submitted) 처리한 것으로 본다.
+const implRetryOpen = ref(false)
+const fixRequestOpen = ref(false)
+const deployEnvOpen = ref(false)
+function openDialog(kind: 'implRetry' | 'deployEnv' | 'fixRequest') {
+  if (kind === 'implRetry') implRetryOpen.value = true
+  else if (kind === 'fixRequest') fixRequestOpen.value = true
+  else deployEnvOpen.value = true
+}
+function onDialogSubmitted() {
+  emitDone()
+  refresh()
+}
+
+type Body = 'interview' | 'approve' | 'gate' | 'failure' | 'idle'
 // 인터뷰 세 상태는 한 덩어리다 — 입력대기 ↔ 인터뷰중이 바뀌어도 패널을 다시 마운트하지 않는다(고른 첨부·스크롤 유지).
 const body = computed<Body | null>(() => {
   const t = task.value
   if (!t) return null
   if (isInterviewPhase.value && t.interviewSessionId != null) return 'interview'
   if (t.status === 'AWAITING_APPROVAL') return 'approve'
-  // 나머지 확인 필요 상태의 본문은 다음 Task가 채운다 — 그때까지 다음 할 일과 상세 열기만
-  if (isInboxCandidate(t)) return 'pending'
+  if (GATE_STATUSES.includes(t.status)) return 'gate'
+  if (FAILURE_STATUSES.includes(t.status)) return 'failure'
   return 'idle'
 })
 
 const nextText = computed(() => (task.value ? (nextAction(task.value, true)?.text ?? '') : ''))
-// 머리글의 다음 할 일 한 줄 — 처리할 본문이 있을 때만. 임시 본문·처리할 것이 없는 상태는 본문이 같은 줄을 직접 보이고,
+// 머리글의 다음 할 일 한 줄 — 처리할 본문이 있을 때만. 처리할 것이 없는 상태는 본문이 같은 줄을 직접 보이고,
 // 인터뷰중은 본문 위 안내("에이전트가 답을 만드는 중입니다")가 같은 말을 한다.
 const headNext = computed(() =>
-  body.value === 'approve' || (body.value === 'interview' && task.value?.status !== 'INTERVIEWING') ? nextText.value : '',
+  body.value === 'approve' || body.value === 'gate' || body.value === 'failure' || (body.value === 'interview' && task.value?.status !== 'INTERVIEWING') ? nextText.value : '',
 )
 const chip = computed(() => CHIP[task.value?.status ?? ''] ?? ['#f5f5f5', '#616161'])
 const FAILED_STATUSES = INBOX_GROUPS.find((g) => g.key === 'failed')?.statuses ?? []
@@ -269,10 +292,16 @@ async function downloadAttachment(att: Pick<AttachmentMeta, 'id' | 'fileName'>) 
           />
         </template>
 
-        <div v-else-if="body === 'pending'" class="pane-message" data-test="inbox-body-pending">
-          <div v-if="nextText">{{ nextText }}</div>
-          <q-btn outline no-caps color="primary" icon-right="open_in_new" label="상세 열기" :href="detailHref" target="_blank" rel="noopener" />
-        </div>
+        <InboxGateActions v-else-if="body === 'gate'" :task="task" :actions="actions" data-test="inbox-body-gate" @done="emitDone()" />
+
+        <InboxFailureActions
+          v-else-if="body === 'failure'"
+          :task="task"
+          :actions="actions"
+          data-test="inbox-body-failure"
+          @done="emitDone()"
+          @open="openDialog"
+        />
 
         <div v-else class="pane-message" data-test="inbox-body-idle">
           <div class="text-subtitle1">지금 처리할 것이 없습니다(현재: {{ task.statusLabel }})</div>
@@ -292,6 +321,32 @@ async function downloadAttachment(att: Pick<AttachmentMeta, 'id' | 'fileName'>) 
           </div>
         </div>
       </div>
+
+      <ImplementationRetryDialog
+        v-model="implRetryOpen"
+        :task-id="String(task.id)"
+        :current-mode="task.fix?.activeRound != null ? (task.fix.activeMode ?? 'REVIEW') : (task.implementationMode ?? 'DIRECT')"
+        :ref-repos="task.refRepos ?? []"
+        :failure-reason="task.failureReason"
+        :fix-round="task.fix?.activeRound ?? null"
+        :fix-kind="task.fix?.activeKind ?? null"
+        @submitted="onDialogSubmitted"
+      />
+      <FixRequestDialog
+        v-model="fixRequestOpen"
+        :task-id="String(task.id)"
+        :is-admin="auth.isAdmin"
+        :next-round="(task.fix?.approvedRounds ?? 0) + 1"
+        :max-rounds="task.fix?.maxRounds ?? 0"
+        @submitted="onDialogSubmitted"
+      />
+      <DeployEnvDialog
+        v-model="deployEnvOpen"
+        :task-id="String(task.id)"
+        mode="redeploy"
+        :saved-env-vars="task.envVars ?? []"
+        @submitted="onDialogSubmitted"
+      />
     </template>
   </div>
 </template>

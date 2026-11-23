@@ -173,11 +173,12 @@ export function fixOutcomeLabel(outcome: string | null | undefined, kind?: FixKi
 
 /** 기준 브랜치 반영을 열 수 있는가 — 관리자가, 병합 전(MERGED 없음) 종료실패에서, 열린 회차가 없을 때. 마지막 판단은 서버(409). */
 export function canSyncBase(
-  task: { status: string; close?: { progress?: string[] | null } | null; fix?: FixView | null },
+  task: { status: string; close?: { progress?: string[] | null; keepBranch?: boolean } | null; fix?: FixView | null },
   isAdmin: boolean,
 ): boolean {
   if (!isAdmin || task.status !== 'CLOSE_FAILED') return false
   if (task.close?.progress?.includes('MERGED')) return false
+  if (task.close?.keepBranch === true) return false // 브랜치 유지 종료는 기준 브랜치를 합치지 않는다
   return task.fix?.activeRound == null
 }
 

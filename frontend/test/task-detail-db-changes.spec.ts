@@ -332,7 +332,7 @@ describe('pages/tasks/[id] — DB 변경 카드 (스펙 2026-11-03 §6.5)', () =
 
   describe('종료 승인 확인창의 승인 대기 SQL 경고', () => {
     const closeReview = { ...baseTask, status: 'CLOSE_REVIEW', statusLabel: '종료승인대기', requesterId: 'alice', close: { progress: [] as string[], mergeCommitSha: null, notePath: null } }
-    const BASE = 'PR을 main에 병합하고, 배포를 중지하고, 옵시디언 노트를 쓴 뒤 브랜치를 삭제합니다. 되돌릴 수 없습니다.'
+    const BASE = '병합·배포 중지·브랜치 삭제는 되돌릴 수 없습니다.'
     const deferred = (id: number) => change(id, { classification: 'DEFERRED', executedAt: null })
 
     async function openApprove(s: Stub) {

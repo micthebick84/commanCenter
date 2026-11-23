@@ -2,6 +2,7 @@
 import { failMsg } from '~/composables/failMessage'
 import { useQuasar } from 'quasar'
 import { confirmDialog } from '~/composables/confirmDialog'
+import { chooseCloseMode, closeApproveBody } from '~/composables/closeApprove'
 import ApproveDialog from '~/components/ApproveDialog.vue'
 import { fetchDbConnections } from '~/composables/dbConnections'
 import { dbChipLabels, hasWritableSelection } from '~/composables/taskDbChips'
@@ -45,6 +46,8 @@ import {
   obsidianLink,
   canSkipArtifact,
   canSkipPatch,
+  isKeepBranchClose,
+  KEEP_BRANCH_CHIP,
   patchButtonState,
   formatMb,
   startArtifactDownload,
@@ -425,7 +428,7 @@ let closeInFlight = false
 async function closeAction(
   path: string,
   ok: string | ((res: { status?: string } | null) => CloseNotice),
-  body?: Record<string, string>,
+  body?: Record<string, unknown>,
 ) {
   if (closeInFlight) return // 요청이 끝나기 전의 중복 클릭은 무시한다
   closeInFlight = true
@@ -445,7 +448,7 @@ async function requestClose() {
   // DB 작업 PR생성(스펙 2026-11-03 §6.9)은 띄운 앱이 없으니 배포 결과가 아니라 개발 DB 반영 결과를 묻는다
   const message = task.value && isDbWorkPrCreated(task.value)
     ? DB_WORK_CLOSE_REQUEST_CONFIRM
-    : '배포 결과를 확인했나요? 관리자가 승인하면 PR을 main에 병합하고, 배포를 중지하고, 브랜치를 삭제합니다. 병합은 되돌릴 수 없습니다.'
+    : `배포 결과를 확인했나요? 관리자가 승인하면 PR을 기준 브랜치(${task.value?.githubBranch ?? '기준 브랜치'})에 병합하고, 배포를 중지하고, 브랜치를 삭제합니다(관리자가 '병합하지 않고 종료'를 고르면 브랜치·PR은 그대로 둡니다). 병합은 되돌릴 수 없습니다.`
   if (!(await confirmDialog($q, message, { title: '종료 요청', ok: '종료 요청' }))) return
   await closeAction('close-request', '종료 요청 등록')
 }
@@ -453,8 +456,9 @@ async function requestClose() {
 async function approveClose() {
   // 승인 대기 SQL이 남아 있으면 확인창에 건수 한 줄을 덧붙인다(스펙 2026-11-03 §6.5) — 조회가 실패하면 경고 없이 그대로 승인할 수 있다
   const warning = await fetchDeferredWarning(taskId.value)
-  if (!(await confirmDialog($q, `PR을 main에 병합하고, 배포를 중지하고, 옵시디언 노트를 쓴 뒤 브랜치를 삭제합니다. 되돌릴 수 없습니다.${warning}`, { title: '종료 승인', ok: '병합하고 종료' }))) return
-  await closeAction('close/approve', '종료 큐 등록')
+  const mode = await chooseCloseMode($q, { taskId: taskId.value, baseBranch: task.value?.githubBranch ?? null, extraWarning: warning })
+  if (mode === null) return
+  await closeAction('close/approve', '종료 큐 등록', closeApproveBody(mode))
 }
 
 async function retryClose() {
@@ -469,9 +473,12 @@ const canAdminRequestCloseLost = computed(() => auth.isAdmin && task.value?.stat
 const canAdminDeploySecondary = computed(() => auth.isAdmin && !!task.value && isDbWorkPrCreated(task.value))
 
 // 병합 전(MERGED 없음) 종료실패만 취소할 수 있다 — 서버도 같은 규칙으로 409를 낸다
-const canCancelClose = computed(
-  () => auth.isAdmin && task.value?.status === 'CLOSE_FAILED' && !(task.value.close?.progress ?? []).includes('MERGED'),
-)
+// 브랜치 유지 종료는 병합이 없어 기준이 다르다 — 진행 단계가 하나라도 있으면(배포 중지 등 되돌릴 수 없는 일) 취소할 수 없다
+const canCancelClose = computed(() => {
+  if (!auth.isAdmin || task.value?.status !== 'CLOSE_FAILED') return false
+  const progress = task.value.close?.progress ?? []
+  return isKeepBranchClose(task.value.close) ? progress.length === 0 : !progress.includes('MERGED')
+})
 
 async function cancelClose() {
   if (!(await confirmDialog($q, '병합 전 단계에서 실패한 종료를 취소하고 배포 상태로 되돌립니다.', { title: '종료 취소', ok: '종료 취소', cancel: '돌아가기' }))) return
@@ -880,6 +887,7 @@ function onAction(kind: NextActionKind) {
         <q-card-section class="row items-center" style="gap: 8px">
           <q-icon name="task_alt" color="primary" size="sm" />
           <div class="text-h6">작업 종료</div>
+          <q-chip v-if="isKeepBranchClose(task.close)" dense color="orange-2" text-color="orange-10" data-test="close-keep-chip">{{ KEEP_BRANCH_CHIP }}</q-chip>
           <q-space />
           <q-btn
             v-if="!$q.screen.lt.md && auth.isAdmin && task.status === 'CLOSE_REVIEW'"

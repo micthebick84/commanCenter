@@ -79,6 +79,53 @@ describe('pages/tasks/[id] — 작업 종료 (스펙 2026-10-13 §6)', () => {
     w.unmount()
   })
 
+  async function pickKeepBranch() {
+    document.body.querySelectorAll<HTMLElement>('.q-dialog .q-radio')[1]!.click()
+    await flushPromises()
+  }
+
+  it('관리자 종료 승인: 선택창 문구에 main 대신 작업의 기준 브랜치가 나온다', async () => {
+    authStub.isAdmin = true
+    const w = await mountWith({ ...baseTask, githubBranch: 'release/7.0', status: 'CLOSE_REVIEW', statusLabel: '종료승인대기', deployment, close: emptyClose })
+    await w.find('[data-test="next-action-primary"]').trigger('click')
+    await flushPromises()
+    expect(document.body.textContent).toContain('종료 승인 — 작업 #42')
+    expect(document.body.textContent).toContain('병합하고 종료 — PR을 release/7.0에 병합 · 배포 중지 · 노트 · 브랜치 삭제')
+    expect(document.body.textContent).toContain('병합하지 않고 종료 — 브랜치·PR 유지 · 배포 중지 · 노트')
+    w.unmount()
+  })
+
+  it('관리자 종료 승인: 병합하지 않고 종료를 고르면 바디 { keepBranch: true }', async () => {
+    authStub.isAdmin = true
+    const w = await mountWith({ ...baseTask, status: 'CLOSE_REVIEW', statusLabel: '종료승인대기', deployment, close: emptyClose })
+    useApiMock.mockClear()
+    await w.find('[data-test="next-action-primary"]').trigger('click')
+    await flushPromises()
+    await pickKeepBranch()
+    ;(document.body.querySelector('[data-test="confirm-dialog-ok"]') as HTMLElement).click()
+    await flushPromises()
+    expect(useApiMock).toHaveBeenCalledWith('/api/tasks/42/close/approve', { method: 'POST', body: { keepBranch: true } })
+    w.unmount()
+  })
+
+  it('브랜치 유지 종료: 칩이 보이고, 배포 중지가 끝난 뒤에는 종료 취소 버튼이 없으며 진행이 비었으면 있다', async () => {
+    authStub.isAdmin = true
+    let w = await mountWith({
+      ...baseTask, status: 'CLOSE_FAILED', statusLabel: '종료실패', failureReason: '노트 실패', deployment,
+      close: { progress: ['UNDEPLOYED'], mergeCommitSha: null, notePath: null, keepBranch: true },
+    })
+    expect(w.find('[data-test="close-keep-chip"]').text()).toContain('미병합 종료 · 브랜치 유지')
+    expect(w.find('[data-test="close-cancel"]').exists()).toBe(false)
+    w.unmount()
+    document.body.innerHTML = ''
+    w = await mountWith({
+      ...baseTask, status: 'CLOSE_FAILED', statusLabel: '종료실패', failureReason: '브랜치 없음', deployment,
+      close: { progress: [], mergeCommitSha: null, notePath: null, keepBranch: true },
+    })
+    expect(w.find('[data-test="close-cancel"]').exists()).toBe(true)
+    w.unmount()
+  })
+
   it('관리자 종료 승인: 확인 뒤 close/approve를 POST하고 작업을 다시 읽는다', async () => {
     authStub.isAdmin = true
     const w = await mountWith({ ...baseTask, status: 'CLOSE_REVIEW', statusLabel: '종료승인대기', deployment, close: emptyClose })

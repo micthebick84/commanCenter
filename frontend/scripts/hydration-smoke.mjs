@@ -110,7 +110,7 @@ const TASKS = [
   task(12, 'CLOSED', '작업종료', {
     close: {
       progress: ['MERGED', 'PATCH_BUILT', 'UNDEPLOYED', 'NOTE_WRITTEN', 'BRANCH_DELETED'], mergeCommitSha: 'abcdef1234567', notePath: null,
-      artifactMode: null, artifact: null, mail: null, patchMode: 'REQUIRED',
+      artifactMode: null, artifact: null, mail: null, patchMode: 'REQUIRED', keepBranch: false,
       patch: { name: 'patch-task-12.zip', sizeBytes: 3145728, fileCount: 7, empty: false, uploadedAt: NOW },
     },
   }),

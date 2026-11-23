@@ -26,6 +26,12 @@ const tasks = [
   t(9, 'CANCELLED', '취소됨', '2026-06-01T00:00:00Z'),
 ]
 
+async function pickKeepBranch() {
+  const radios = document.body.querySelectorAll<HTMLElement>('.q-dialog .q-radio')
+  radios[1]!.click()
+  await flushPromises()
+}
+
 async function confirmOk() {
   ;(document.body.querySelector('[data-test="confirm-dialog-ok"]') as HTMLElement).click()
   await flushPromises()
@@ -140,14 +146,36 @@ describe('pages/tasks — 모바일 리스트 (스펙 2026-09-06 §4.1)', () => 
     await flushPromises()
     ;(document.body.querySelector('[data-test="sheet-move"]') as HTMLElement).click()
     await flushPromises()
-    expect(document.body.textContent).toContain('작업 #30 — 종료 승인 — 병합·배포 중지·정리을(를) 실행할까요? PR 병합·배포 중지·브랜치 삭제는 되돌릴 수 없습니다.')
+    expect(document.body.textContent).toContain('종료 승인 — 작업 #30')
+    expect(document.body.textContent).toContain('병합·배포 중지·브랜치 삭제는 되돌릴 수 없습니다.')
+    expect(document.body.textContent).toContain('병합하고 종료 — PR을 main에 병합 · 배포 중지 · 노트 · 브랜치 삭제')
     await confirmOk()
-    expect(useApiMock).toHaveBeenCalledWith('/api/tasks/30/close/approve', { method: 'POST' })
+    expect(useApiMock).toHaveBeenCalledWith('/api/tasks/30/close/approve', { method: 'POST', body: undefined })
+    w.unmount()
+  })
+
+  it('목록 종료 승인: 병합하지 않고 종료를 고르면 바디 { keepBranch: true }', async () => {
+    await setViewportWidth(390)
+    useApiMock.mockImplementation((url: string) =>
+      url.startsWith('/api/tasks')
+        ? Promise.resolve({ content: [t(30, 'CLOSE_REVIEW', '종료승인대기', '2026-08-24T03:00:00Z'), tasks[1]], totalElements: 2, totalPages: 1 })
+        : Promise.resolve(null),
+    )
+    const w = mount(PageWrapper, { attachTo: document.body })
+    await flushPromises()
+    await w.findAll('[data-test="card-menu"]')[0]!.trigger('click')
+    await flushPromises()
+    ;(document.body.querySelector('[data-test="sheet-move"]') as HTMLElement).click()
+    await flushPromises()
+    await pickKeepBranch()
+    await confirmOk()
+    expect(useApiMock).toHaveBeenCalledWith('/api/tasks/30/close/approve', { method: 'POST', body: { keepBranch: true } })
     w.unmount()
   })
 
   describe('종료 승인 확인창의 승인 대기 SQL 경고 (스펙 2026-11-03 §6.5)', () => {
-    const MERGE_WARN = 'PR 병합·배포 중지·브랜치 삭제는 되돌릴 수 없습니다.'
+    const MERGE_WARN = 'PR 병합·배포 중지·브랜치 삭제는 되돌릴 수 없습니다.' // 종료 재시도 확인창
+    const APPROVE_WARN = '병합·배포 중지·브랜치 삭제는 되돌릴 수 없습니다.'
     const deferred = (id: number) => ({ id, classification: 'DEFERRED' })
     const closeTasks = [t(30, 'CLOSE_REVIEW', '종료승인대기', '2026-08-24T03:00:00Z'), tasks[1]]
 
@@ -175,16 +203,16 @@ describe('pages/tasks — 모바일 리스트 (스펙 2026-09-06 §4.1)', () => 
       stubClose(() => Promise.resolve([deferred(1), deferred(2), { id: 3, classification: 'EXECUTED' }]))
       const w = await openCloseApprove()
       expect(useApiMock).toHaveBeenCalledWith('/api/tasks/30/db-changes')
-      expect(document.body.textContent).toContain(`${MERGE_WARN} 승인 대기 SQL 2건 — 병합 뒤 실행 필요`)
+      expect(document.body.textContent).toContain(`${APPROVE_WARN} 승인 대기 SQL 2건 — 병합 뒤 실행 필요`)
       await confirmOk()
-      expect(useApiMock).toHaveBeenCalledWith('/api/tasks/30/close/approve', { method: 'POST' })
+      expect(useApiMock).toHaveBeenCalledWith('/api/tasks/30/close/approve', { method: 'POST', body: undefined })
       w.unmount()
     })
 
     it('승인 대기가 없으면 문장은 그대로다', async () => {
       stubClose(() => Promise.resolve([{ id: 3, classification: 'EXECUTED' }]))
       const w = await openCloseApprove()
-      expect(document.body.textContent).toContain(MERGE_WARN)
+      expect(document.body.textContent).toContain(APPROVE_WARN)
       expect(document.body.textContent).not.toContain('승인 대기 SQL')
       w.unmount()
     })
@@ -192,10 +220,10 @@ describe('pages/tasks — 모바일 리스트 (스펙 2026-09-06 §4.1)', () => 
     it('건수 조회가 실패하면 경고 없이 확인창을 띄우고 승인할 수 있다', async () => {
       stubClose(() => Promise.reject(new Error('500')))
       const w = await openCloseApprove()
-      expect(document.body.textContent).toContain(MERGE_WARN)
+      expect(document.body.textContent).toContain(APPROVE_WARN)
       expect(document.body.textContent).not.toContain('승인 대기 SQL')
       await confirmOk()
-      expect(useApiMock).toHaveBeenCalledWith('/api/tasks/30/close/approve', { method: 'POST' })
+      expect(useApiMock).toHaveBeenCalledWith('/api/tasks/30/close/approve', { method: 'POST', body: undefined })
       w.unmount()
     })
 

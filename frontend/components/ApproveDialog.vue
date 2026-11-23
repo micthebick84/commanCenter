@@ -16,7 +16,10 @@ const openSeq = ref(0)
 watch(
   show,
   (open) => {
-    if (open) openSeq.value++
+    if (open) {
+      approving.value = false
+      openSeq.value++
+    }
   },
   { immediate: true },
 )

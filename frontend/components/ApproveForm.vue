@@ -195,7 +195,11 @@ async function reloadDb() {
   }
 }
 const approving = ref(false)
-watch(approving, (v) => emit('update:approving', v))
+// watch가 아니라 바로 올린다 — 성공 때 창이 먼저 닫혀 폼이 사라지면 watch(pre flush)가 false를 못 올린다
+function setApproving(v: boolean) {
+  approving.value = v
+  emit('update:approving', v)
+}
 /** 이 작업의 지난(터미널) 인터뷰 세션, 최신순. 재승인 맥락 안내 + 초기값 프리필에 쓴다. */
 const previous = ref<SessionSummary[]>([])
 /** 마지막 세션의 설정을 초기값으로 채웠는지 — 캡션 표시용 */
@@ -270,7 +274,7 @@ onMounted(() => {
 
 async function approve() {
   if (dbLoading.value) return
-  approving.value = true
+  setApproving(true)
   try {
     await useApi(`/api/tasks/${props.task.id}/approve`, {
       method: 'POST',
@@ -289,11 +293,13 @@ async function approve() {
       type: 'positive',
       message: '승인 완료 — 인터뷰가 큐에 들어갔습니다',
     })
+    // 진행 표시를 먼저 내린다 — approved를 받은 부모가 창을 닫아 폼이 사라져도 false는 이미 올라갔다
+    setApproving(false)
     emit('approved')
   } catch (e: any) {
     $q.notify({ type: 'negative', message: e?.data?.message ?? failMsg('승인') })
   } finally {
-    approving.value = false
+    if (approving.value) setApproving(false)
   }
 }
 
@@ -430,11 +436,11 @@ const fullscreen = useFullscreenDialog()
         size="18px"
         class="q-mr-sm text-grey-7 next-step-icon"
       />
-      <!-- 상태 칩에 실제로 보이는 백엔드 라벨(입력대기)로 쓴다 -->
       <div v-if="context === 'inbox'">
         승인하면 인터뷰가 큐에 들어갑니다. 첫 질문이 오면 처리함의 답변 대기에 올라옵니다.
       </div>
       <div v-else>
+        <!-- 상태 칩에 실제로 보이는 백엔드 라벨(입력대기)로 쓴다 -->
         승인하면 인터뷰가 큐에 들어가고, 첫 질문이 오면 상태가
         <b>입력대기</b>로 바뀝니다. 답변은 이 작업 화면의
         <b>대화형 분석</b> 카드에서 합니다.

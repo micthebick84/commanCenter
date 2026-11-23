@@ -49,16 +49,21 @@ const auth = useAuthStore()
 
 const { data: task, error, refresh } = useTaskPolling<TaskResponse>(() => useApi(`/api/tasks/${props.taskId}`))
 
+function errorStatus(e: unknown): number | undefined {
+  const err = e as { statusCode?: number; response?: { status?: number }; status?: number } | null
+  return err?.statusCode ?? err?.response?.status ?? err?.status
+}
+
 // 지워졌거나 없는 작업(?task=) — 부모가 목록 맨 위를 고른다. 한 번만 알린다.
 let missingSent = false
 watch(error, (e) => {
-  const err = e as { statusCode?: number; response?: { status?: number }; status?: number } | null
-  const st = err?.statusCode ?? err?.response?.status ?? err?.status
-  if (st === 404 && !missingSent) {
+  if (errorStatus(e) === 404 && !missingSent) {
     missingSent = true
     emit('missing')
   }
 })
+// 404 말고 못 읽었으면(네트워크·5xx) 스피너만 돌리지 않고 알린다 — 폴링이 계속 다시 읽어 되면 그대로 그린다.
+const loadFailed = computed(() => error.value != null && errorStatus(error.value) !== 404)
 
 const actions = useTaskActions(task, refresh)
 
@@ -181,7 +186,21 @@ async function downloadAttachment(att: Pick<AttachmentMeta, 'id' | 'fileName'>) 
 <template>
   <div class="inbox-pane" :class="{ 'inbox-pane--fill column no-wrap': fill }" data-test="inbox-pane">
     <div v-if="!task" class="flex flex-center q-pa-xl">
-      <q-spinner-dots color="primary" size="2em" />
+      <div v-if="loadFailed" class="pane-message" data-test="inbox-pane-error">
+        <div class="text-subtitle1">작업을 읽지 못했습니다 — 잠시 뒤 다시 시도합니다</div>
+        <q-btn
+          outline
+          no-caps
+          color="primary"
+          icon-right="open_in_new"
+          label="상세 열기"
+          :href="detailHref"
+          target="_blank"
+          rel="noopener"
+          data-test="inbox-open-detail"
+        />
+      </div>
+      <q-spinner-dots v-else color="primary" size="2em" />
     </div>
     <template v-else>
       <div class="inbox-pane__head">

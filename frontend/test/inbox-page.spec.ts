@@ -2,7 +2,7 @@ import { mount, flushPromises, type VueWrapper } from '@vue/test-utils'
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { defineComponent, h, onUnmounted, reactive } from 'vue'
 import { createMemoryHistory, createRouter, type Router } from 'vue-router'
-import { QLayout, QPageContainer } from 'quasar'
+import { QLayout, QPageContainer, Screen } from 'quasar'
 import InboxPage from '../pages/inbox.vue'
 import InterviewPanel from '../components/InterviewPanel.vue'
 import ApproveForm from '../components/ApproveForm.vue'
@@ -109,6 +109,15 @@ async function mountPage() {
   w = mount(PageWrapper, mountOpts)
   await flushPromises()
   return w
+}
+
+// 하이드레이션 전 Quasar Screen — 폭을 재지 않은(width 0) 기본 xs 값(폭 쿠키 없음). composables/ssrScreen.ts도 width 0을 "아직 안 쟀음"으로 본다.
+// 다음 setViewportWidth가 폭이 0에서 바뀐 것으로 보고 모든 값을 다시 계산한다(하이드레이션 뒤 Screen이 실제 폭을 재는 것과 같다).
+function pinScreenBeforeMeasure() {
+  const s = Screen as unknown as Record<string, unknown> & { lt: Record<string, boolean>; gt: Record<string, boolean> }
+  Object.assign(s, { width: 0, name: 'xs', xs: true, sm: false, md: false, lg: false, xl: false })
+  Object.assign(s.lt, { sm: true, md: true, lg: true, xl: true })
+  Object.assign(s.gt, { xs: false, sm: false, md: false, lg: false })
 }
 
 const rowIds = (wr: VueWrapper) => wr.findAll('[data-test="inbox-row"]').map((r) => Number(r.attributes('data-id')))
@@ -352,6 +361,48 @@ describe('pages/inbox — 처리함', () => {
     expect(navigateToMock).toHaveBeenCalledWith({ query: { task: '5' } }, { replace: true })
   })
 
+  it('남은_확인_필요_건이_지워져_404면_다시_고르지_않고_목록을_다시_읽는다', async () => {
+    // 목록에는 아직 #5가 남아 있지만(다음 목록 폴링 전) 작업은 지워져 상세가 404
+    list = [inputTask(), doneTask()]
+    delete details[5]
+    const base = useApiMock.getMockImplementation()!
+    let gets = 0
+    useApiMock.mockImplementation((url: string, opts?: { method?: string }) => {
+      // 고치기 전에는 404 → 쿼리 지움 → 맨 위(#5) 다시 고르기가 되풀이될 수 있다 — 시험이 멈추지 않게 몇 번 뒤로는 답하지 않는다
+      if (url === '/api/tasks/5' && ++gets > 5) return new Promise(() => {})
+      return base(url, opts)
+    })
+    const wr = await mountPage()
+    expect(calls('/api/tasks/5')).toHaveLength(1)
+    expect(navigateToMock.mock.calls).toEqual([
+      [{ query: { task: '5' } }, { replace: true }],
+      [{ query: {} }, { replace: true }],
+    ])
+    expect(route.query).toEqual({})
+    expect(calls('/api/tasks')).toHaveLength(2) // 목록을 다시 읽는다
+    expect(wr.find('[data-test="inbox-pane"]').exists()).toBe(false)
+    expect(rowIds(wr)).toEqual([])
+    expect(wr.find('[data-test="inbox-empty"]').exists()).toBe(true)
+  })
+
+  it('목록을_못_읽으면_0건·스피너_대신_안내와_작업_목록_링크', async () => {
+    const base = useApiMock.getMockImplementation()!
+    useApiMock.mockImplementation((url: string, opts?: { method?: string }) =>
+      url === '/api/tasks' ? Promise.reject({ statusCode: 502, data: { message: 'Bad Gateway' } }) : base(url, opts),
+    )
+    route.query = { task: '5' }
+    const wr = await mountPage()
+    const side = wr.find('[data-test="inbox-list"]')
+    expect(side.find('[data-test="inbox-total"]').exists()).toBe(false) // "확인 필요 0건"이 아니다
+    expect(side.find('.q-spinner').exists()).toBe(false)
+    expect(side.find('[data-test="inbox-empty"]').exists()).toBe(false)
+    const banner = side.find('[data-test="inbox-list-error"]')
+    expect(banner.text()).toBe('목록을 읽지 못했습니다 — 작업 목록에서 확인하세요')
+    expect(banner.find('a').attributes('href')).toBe('/tasks')
+    // 고른 작업은 따로 읽으므로 그대로 처리할 수 있다
+    expect(wr.find('[data-test="inbox-pane"]').text()).toContain('작업 5')
+  })
+
   it('쿼리의_작업이_404면_맨_위를_고른다', async () => {
     route.query = { task: '31' }
     await mountPage()
@@ -379,6 +430,38 @@ describe('pages/inbox — 처리함', () => {
     w = undefined
     window.dispatchEvent(new KeyboardEvent('keydown', { key: 'j' }))
     expect(navigateToMock).not.toHaveBeenCalled()
+  })
+
+  // #2는 맨 아래 건이라 무시하지 않으면 k(이전)로 #5에 간다
+  it('승인_폼의_작업_타입_select_안에서는_k를_무시', async () => {
+    route.query = { task: '2' }
+    const wr = await mountPage()
+    // q-select의 포커스 대상(role=combobox — 지금 Quasar는 읽기 전용 input, 판정은 div 대상도 막는다). 글자를 누르면 select가
+    // 제 메뉴(.q-menu)를 열고 첫 글자는 삼키지만, 같은 글자를 이어 누르면(글자 찾기 반복) 삼키지 않아 window까지 올라온다
+    const combo = wr.findComponent(ApproveForm).find('[role="combobox"]')
+    expect(combo.exists()).toBe(true)
+    combo.element.dispatchEvent(new KeyboardEvent('keydown', { key: 'k', bubbles: true }))
+    combo.element.dispatchEvent(new KeyboardEvent('keydown', { key: 'k', bubbles: true }))
+    await flushPromises()
+    expect(navigateToMock).not.toHaveBeenCalled()
+    expect(wr.findComponent(ApproveForm).exists()).toBe(true)
+  })
+
+  it('메뉴(q-menu)가_열려_있으면_k를_무시', async () => {
+    route.query = { task: '2' }
+    await mountPage()
+    // q-select 펼침·✎ 참조 변경 메뉴는 body 아래 .q-menu로 열린다
+    const menu = document.createElement('div')
+    menu.className = 'q-menu'
+    document.body.appendChild(menu)
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'k' }))
+    await flushPromises()
+    expect(navigateToMock).not.toHaveBeenCalled()
+    // 메뉴가 닫히면 다시 움직인다
+    menu.remove()
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'k' }))
+    await flushPromises()
+    expect(navigateToMock).toHaveBeenCalledWith({ query: { task: '5' } }, { replace: true })
   })
 
   it('목록이_비면_빈_상태', async () => {
@@ -411,6 +494,45 @@ describe('pages/inbox — 처리함', () => {
     expect(rowIds(wr)).toEqual([])
     expect(wr.find('[data-test="inbox-empty"]').text()).toContain('확인할 작업이 없습니다')
     expect(wr.find('[data-test="inbox-pane"]').exists()).toBe(false)
+  })
+
+  // SSR·하이드레이션 동안 Quasar Screen은 폭을 재지 않은 고정값이다(width 0, 폭 쿠키가 없으면 xs — lt.md=true). 실제 폭은
+  // 하이드레이션 뒤(app:suspense:resolve)에 잰다 — 페이지 onMounted보다 늦다. 그 고정값으로 폰 창을 열면 데스크톱 첫 로드에서
+  // 창이 열리고(처리 영역이 작업을 읽고) 폭을 잰 뒤 사라진다.
+  it('폭을_재기_전에는_폰_창을_열지_않고_재서_폰_폭이면_연다', async () => {
+    pinScreenBeforeMeasure()
+    try {
+      route.query = { task: '5' }
+      const wr = await mountPage()
+      expect(document.querySelector('[data-test="inbox-sheet"]')).toBeNull()
+      expect(calls('/api/tasks/5')).toHaveLength(0)
+
+      await setViewportWidth(390)
+      await flushPromises()
+      expect(document.querySelector('[data-test="inbox-sheet"]')).not.toBeNull()
+      expect(calls('/api/tasks/5')).toHaveLength(1)
+      expect(wr.findComponent(InterviewPanel).props('fill')).toBe(true)
+    } finally {
+      await setViewportWidth(1024)
+    }
+  })
+
+  it('폭_쿠키_없는_데스크톱_첫_로드:_재서_넓으면_폰_창을_한_번도_열지_않는다', async () => {
+    pinScreenBeforeMeasure()
+    try {
+      route.query = { task: '5' }
+      const wr = await mountPage()
+      expect(document.querySelector('[data-test="inbox-sheet"]')).toBeNull()
+      expect(calls('/api/tasks/5')).toHaveLength(0)
+
+      await setViewportWidth(1024)
+      await flushPromises()
+      expect(document.querySelector('[data-test="inbox-sheet"]')).toBeNull()
+      expect(wr.find('[data-test="inbox-pane"]').text()).toContain('작업 5')
+      expect(calls('/api/tasks/5')).toHaveLength(1) // 넓은 화면의 처리 영역만 읽었다
+    } finally {
+      await setViewportWidth(1024)
+    }
   })
 
   it('폰_폭:_라우터가_있어도_자동_이동은_창을_닫지_않고_내용만_바꾼다', async () => {

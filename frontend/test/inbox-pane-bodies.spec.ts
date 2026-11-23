@@ -100,6 +100,50 @@ describe('InboxTaskPane — 승인·실패 본문', () => {
     expect(done![0][0]).toMatchObject({ id: 42, status, updatedAt: T })
   })
 
+  it('작업을_못_읽으면(404_말고)_안내와_상세_열기를_보이고_missing은_보내지_않는다', async () => {
+    useApiMock.mockImplementation((url: string) =>
+      url === '/api/tasks/42' ? Promise.reject({ statusCode: 502, data: { message: 'Bad Gateway' } }) : Promise.resolve(null),
+    )
+    w = mount(InboxTaskPane, {
+      props: { taskId: 42, answerDrafts: new Map(), refDraftStore: new Map(), canPrev: false, canNext: false },
+      attachTo: document.body,
+    })
+    await flushPromises()
+    // 스피너만 도는 대신 — 폴링은 계속 다시 읽는다
+    expect(w.find('[data-test="inbox-pane-error"]').text()).toContain('작업을 읽지 못했습니다 — 잠시 뒤 다시 시도합니다')
+    expect(w.find('.q-spinner').exists()).toBe(false)
+    const open = w.find('[data-test="inbox-open-detail"]')
+    expect(open.attributes('href')).toBe('/tasks/42')
+    expect(open.attributes('target')).toBe('_blank')
+    expect(w.emitted('missing')).toBeUndefined()
+  })
+
+  // 버튼 문구는 작업 상세(pages/tasks/[id].vue)와 같다 — 같은 동작이 두 화면에서 다른 이름으로 보이지 않게
+  const btnLabel = (wr: VueWrapper, testId: string) => wr.find(`[data-test="${testId}"] .block`).text()
+
+  it('재시도_버튼은_상세처럼_FAILED는_회차를_DESIGN_FAILED는_회차_없이', async () => {
+    const failed = await mountPane(task('FAILED', { retryCount: 1, maxRetry: 3, failureReason: '사유' }))
+    expect(btnLabel(failed, 'inbox-act-retry')).toBe('재시도 (1/3)')
+    failed.unmount()
+    w = undefined
+    // 디자인 재시도는 회차를 쓰지 않는다(상세도 회차 없이 '재시도')
+    const design = await mountPane(task('DESIGN_FAILED', { retryCount: 1, maxRetry: 3, failureReason: '사유' }))
+    expect(btnLabel(design, 'inbox-act-retry')).toBe('재시도')
+  })
+
+  it('COMPLETED_버튼은_상세처럼_이미_승인된_분석이면_구현_시작', async () => {
+    const approved = await mountPane(task('COMPLETED', { analysis: { ...baseTask.analysis, approved: true } }))
+    expect(btnLabel(approved, 'inbox-act-approve-impl')).toBe('구현 시작')
+    approved.unmount()
+    w = undefined
+    const fresh = await mountPane(task('COMPLETED', { analysis: { ...baseTask.analysis, approved: false } }))
+    expect(btnLabel(fresh, 'inbox-act-approve-impl')).toBe('구현 승인')
+    fresh.unmount()
+    w = undefined
+    const noAnalysis = await mountPane(task('COMPLETED', { analysis: null }))
+    expect(btnLabel(noAnalysis, 'inbox-act-approve-impl')).toBe('구현 승인')
+  })
+
   it('FIX_REVIEW_반려_확인창_취소면_done이_없다', async () => {
     const wr = await mountPane(task('FIX_REVIEW'))
     await wr.find('[data-test="inbox-act-reject-fix"]').trigger('click')

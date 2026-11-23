@@ -32,8 +32,17 @@ const deployUrl = computed(() => props.task.deployment?.deployUrl ?? null)
 <template>
   <div class="failure column q-gutter-y-sm">
     <template v-if="task.status === 'FAILED' || task.status === 'DESIGN_FAILED'">
+      <!-- 문구는 작업 상세와 같다 — 디자인 재시도는 회차(retryCount)를 쓰지 않아 회차 없이. 한도를 다 쓴 FAILED는 처리함에서 이 본문이 아니다 -->
       <div class="row q-gutter-sm">
-        <q-btn unelevated no-caps color="primary" icon="refresh" label="재시도" data-test="inbox-act-retry" @click="run(actions.retry)" />
+        <q-btn
+          unelevated
+          no-caps
+          color="primary"
+          icon="refresh"
+          :label="task.status === 'DESIGN_FAILED' ? '재시도' : `재시도 (${task.retryCount}/${task.maxRetry})`"
+          data-test="inbox-act-retry"
+          @click="run(actions.retry)"
+        />
       </div>
     </template>
 

@@ -26,8 +26,17 @@ const deployUrl = computed(() => props.task.deployment?.deployUrl ?? null)
 <template>
   <div class="gate column q-gutter-y-sm">
     <template v-if="task.status === 'COMPLETED'">
+      <!-- 문구는 작업 상세와 같다 — 이미 승인된 분석(구 데이터)은 상태만 넘기므로 '구현 시작' -->
       <div class="row q-gutter-sm">
-        <q-btn unelevated no-caps color="primary" icon="check" label="구현 승인" data-test="inbox-act-approve-impl" @click="run(actions.approveImpl)" />
+        <q-btn
+          unelevated
+          no-caps
+          color="primary"
+          icon="check"
+          :label="task.analysis?.approved ? '구현 시작' : '구현 승인'"
+          data-test="inbox-act-approve-impl"
+          @click="run(actions.approveImpl)"
+        />
       </div>
     </template>
 

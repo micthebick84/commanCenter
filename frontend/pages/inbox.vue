@@ -12,6 +12,7 @@ import {
   buildInbox,
   flattenInbox,
   inboxListParams,
+  isHidden,
   isInboxCandidate,
   isTruncated,
   neighborId,
@@ -36,7 +37,8 @@ const route = useRoute()
 const $q = useQuasar()
 const isPhone = computed(() => $q.screen.lt.md)
 
-const { data: page, refresh } = useTaskPolling<InboxListPage>(() => useApi('/api/tasks', { params: inboxListParams() }))
+// 목록을 못 읽으면(error) "0건"·빈 상태로 보이지 않고 안내한다 — 확인 필요 건을 조용히 놓치지 않게(스펙 §2 반목표). 폴링은 계속 다시 읽는다.
+const { data: page, error: listError, refresh } = useTaskPolling<InboxListPage>(() => useApi('/api/tasks', { params: inboxListParams() }))
 
 // 처리한 건 — 목록 행이 같은 status·updatedAt인 동안만 숨긴다. 목록이 올 때마다 바뀐(또는 사라진) 행의 기록을 지운다.
 const handled = ref<HandledMark[]>([])
@@ -81,6 +83,14 @@ watch(
     const sel = selectedId.value
     if (sel != null && sel === missingId.value) {
       missingId.value = null
+      // 지워진 건이 아직 목록에 남아 있으면(다음 목록 폴링 전) 처리한 건처럼 숨기고 목록을 바로 다시 읽는다 — 안 그러면 쿼리를 지운 뒤
+      // 맨 위 고르기가 그 건을 다시 골라 404 → 쿼리 지움 → 다시 고르기가 목록이 다시 올 때까지 되풀이된다.
+      // 404가 목록보다 먼저 와도 여기는 목록이 온 뒤라 행을 찾을 수 있다.
+      const row = rows.value.find((r) => r.id === sel)
+      if (row && !isHidden(row, handled.value)) {
+        handled.value = [...handled.value, { id: row.id, status: row.status, updatedAt: row.updatedAt }]
+      }
+      refresh()
       const next = pickNext(flat.value, sel)
       if (next != null) select(next)
       else clearSelection()
@@ -134,9 +144,9 @@ function move(dir: 1 | -1) {
   if (id != null && id !== selectedId.value) select(id)
 }
 
-// j 다음 / k 이전 — 입력칸 안이나 다이얼로그(폰 처리 창·확인창)가 열려 있으면 무시한다
+// j 다음 / k 이전 — 입력칸·select 안이거나 다이얼로그(폰 처리 창·확인창)·메뉴(q-select 펼침·✎ 참조 변경)가 열려 있으면 무시한다
 function onKeydown(e: KeyboardEvent) {
-  if (shouldIgnoreShortcut(e, !!document.querySelector('.q-dialog'))) return
+  if (shouldIgnoreShortcut(e, !!document.querySelector('.q-dialog, .q-menu'))) return
   move(e.key === 'j' ? 1 : -1)
 }
 onMounted(() => {
@@ -145,9 +155,15 @@ onMounted(() => {
 })
 onUnmounted(() => window.removeEventListener('keydown', onKeydown))
 
+// 폰 창은 Quasar Screen이 실제 폭을 잰 뒤에만 연다. SSR·하이드레이션 동안 $q.screen은 폭 쿠키 힌트로 고정된 값이고(쿠키가 없으면
+// xs — lt.md=true) 실제 폭은 하이드레이션 뒤(app:suspense:resolve)에 잰다 — 페이지 onMounted보다 늦어 마운트 플래그로는 못 막는다.
+// 고정값으로 열면 폭 쿠키 없는 데스크톱 첫 로드(?task=)에서 창이 열리고 처리 영역이 작업을 읽은 뒤 폭을 재면 사라진다.
+// 아직 안 쟀으면 width가 0이다(composables/ssrScreen.ts와 같은 기준). SSR에서도 0이라 SSR 마크업은 그대로(창 없음)다.
+const screenMeasured = computed(() => $q.screen.width > 0)
+
 // 폰: 고른 건이 있으면 전체 화면 창이 열려 있다. 닫으면 쿼리를 지운다.
 const sheetOpen = computed({
-  get: () => isPhone.value && selectedId.value != null,
+  get: () => screenMeasured.value && isPhone.value && selectedId.value != null,
   set: (open: boolean) => {
     if (!open) clearSelection()
   },
@@ -167,7 +183,7 @@ function chipStyle(status: string) {
   <q-page :class="isPhone ? 'inbox-page' : 'inbox-page inbox-page--wide row no-wrap'">
     <div class="inbox-list" :class="{ 'inbox-list--side': !isPhone }" data-test="inbox-list">
       <div class="row items-center no-wrap inbox-list__head">
-        <span class="text-subtitle2" data-test="inbox-total">확인 필요 {{ flat.length }}건</span>
+        <span v-if="page" class="text-subtitle2" data-test="inbox-total">확인 필요 {{ flat.length }}건</span>
         <q-space />
         <q-toggle
           :model-value="autoNext"
@@ -178,13 +194,19 @@ function chipStyle(status: string) {
           @update:model-value="setAutoNext"
         />
       </div>
-      <q-banner v-if="truncated" dense class="bg-orange-1 text-orange-10 inbox-truncated" data-test="inbox-truncated">
+      <!-- 마지막 목록 읽기가 실패했다 — 처음이면 목록 대신, 전에 읽은 목록이 있으면 그 위에 -->
+      <q-banner v-if="listError" dense class="bg-red-1 text-red-10 inbox-banner" data-test="inbox-list-error">
+        목록을 읽지 못했습니다 — <NuxtLink to="/tasks">작업 목록</NuxtLink>에서 확인하세요
+      </q-banner>
+      <q-banner v-if="truncated" dense class="bg-orange-1 text-orange-10 inbox-banner" data-test="inbox-truncated">
         최근 변경된 200건만 봤습니다 — 오래된 작업은 작업 목록에서 확인하세요
       </q-banner>
 
-      <div v-if="!page" class="flex flex-center q-pa-lg">
-        <q-spinner-dots color="primary" size="2em" />
-      </div>
+      <template v-if="!page">
+        <div v-if="!listError" class="flex flex-center q-pa-lg">
+          <q-spinner-dots color="primary" size="2em" />
+        </div>
+      </template>
       <div v-else-if="!flat.length" class="inbox-empty" data-test="inbox-empty">
         <div>확인할 작업이 없습니다</div>
         <NuxtLink to="/tasks">작업 목록</NuxtLink>
@@ -289,7 +311,7 @@ function chipStyle(status: string) {
   padding: 10px 12px;
   gap: 8px;
 }
-.inbox-truncated {
+.inbox-banner {
   margin: 0 12px 8px;
   border-radius: 4px;
 }

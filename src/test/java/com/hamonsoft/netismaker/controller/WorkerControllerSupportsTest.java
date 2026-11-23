@@ -70,14 +70,24 @@ class WorkerControllerSupportsTest {
         assertThat(WorkerController.SUPPORTS_BASE_SYNC).isEqualTo("baseSync");
         when(workerService.claimNextTask(anyString(), any(WorkerCapabilities.class), any())).thenReturn(Optional.empty());
 
-        controller.nextTask("new", "refRepos,fixRounds,dbWrite,mockups,baseSync", null);
+        controller.nextTask("new", "refRepos,fixRounds,dbWrite,mockups,baseSync,closeKeepBranch", null);
         controller.nextTask("old", "refRepos,fixRounds,dbWrite,mockups", null);
         controller.nextTask("none", null, null);
 
         verify(workerService).claimNextTask("new", WorkerCapabilities.ALL, null);
-        verify(workerService).claimNextTask("new", new WorkerCapabilities(true, true, true, true, true), null);
-        verify(workerService).claimNextTask("old", new WorkerCapabilities(true, true, true, true, false), null);
-        verify(workerService).claimNextTask("none", new WorkerCapabilities(false, false, false, false, false), null);
+        verify(workerService).claimNextTask("new", new WorkerCapabilities(true, true, true, true, true, true), null);
+        verify(workerService).claimNextTask("old", new WorkerCapabilities(true, true, true, true, false, false), null);
+        verify(workerService).claimNextTask("none", new WorkerCapabilities(false, false, false, false, false, false), null);
+    }
+
+    @Test
+    void supports에_closeKeepBranch가_있으면_여섯째_true_baseSync까지만_알면_false() {
+        assertThat(WorkerController.SUPPORTS_CLOSE_KEEP_BRANCH).isEqualTo("closeKeepBranch");
+        when(workerService.claimNextTask(anyString(), any(WorkerCapabilities.class), any())).thenReturn(Optional.empty());
+
+        controller.nextTask("prev", "refRepos,fixRounds,dbWrite,mockups,baseSync", null);
+
+        verify(workerService).claimNextTask("prev", new WorkerCapabilities(true, true, true, true, true, false), null);
     }
 
     @Test

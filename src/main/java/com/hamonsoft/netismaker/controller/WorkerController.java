@@ -68,6 +68,9 @@ public class WorkerController {
      */
     static final String SUPPORTS_BASE_SYNC = "baseSync";
 
+    /** 없으면(구버전 워커) 병합하지 않고 종료(close_keep_branch)하는 종료대기를 넘기지 않는다 — 구버전은 모드를 몰라 병합해 버린다 (스펙 2026-11-23 §4.4). */
+    static final String SUPPORTS_CLOSE_KEEP_BRANCH = "closeKeepBranch";
+
     private final WorkerService workerService;
     private final DbMcpGrantService dbMcpGrantService;
     private final DbWriteService dbWriteService;
@@ -101,7 +104,8 @@ public class WorkerController {
                                                        @RequestParam(required = false) String kinds) {
         WorkerCapabilities caps = new WorkerCapabilities(supports(supports, SUPPORTS_REF_REPOS),
                 supports(supports, SUPPORTS_FIX_ROUNDS), supports(supports, SUPPORTS_DB_WRITE),
-                supports(supports, SUPPORTS_MOCKUPS), supports(supports, SUPPORTS_BASE_SYNC));
+                supports(supports, SUPPORTS_MOCKUPS), supports(supports, SUPPORTS_BASE_SYNC),
+                supports(supports, SUPPORTS_CLOSE_KEEP_BRANCH));
         Optional<WorkerTaskResponse> claimed = workerService.claimNextTask(workerId, caps, parseKinds(kinds))
                 .map(r -> withDbMcp(r, caps));
         return claimed.map(ResponseEntity::ok)

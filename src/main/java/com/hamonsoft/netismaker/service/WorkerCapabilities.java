@@ -14,30 +14,37 @@ package com.hamonsoft.netismaker.service;
  *                  목업 없이 구현해 버리기 때문이다
  * @param baseSync  기준 브랜치 반영 회차(kind=BASE_SYNC)가 열린 구현대기를 받을 수 있다 (스펙 2026-11-13) — 구버전 워커는
  *                  회차의 kind를 버리고 빈 수정 요청으로 Claude를 돌려 버린다
+ * @param closeKeepBranch 병합하지 않고 종료(브랜치·PR 유지)하는 종료대기를 받을 수 있다 (스펙 2026-11-23 §4.4) — 구버전 워커는
+ *                  모드를 몰라 그냥 병합해 버린다
  */
 public record WorkerCapabilities(boolean refRepos, boolean fixRounds, boolean dbWrite, boolean mockups,
-                                 boolean baseSync) {
+                                 boolean baseSync, boolean closeKeepBranch) {
 
     /** 모든 기능을 아는 워커 — 거르는 조건이 없는 전체 큐. */
-    public static final WorkerCapabilities ALL = new WorkerCapabilities(true, true, true, true, true);
+    public static final WorkerCapabilities ALL = new WorkerCapabilities(true, true, true, true, true, true);
+
+    /** closeKeepBranch를 모르는 워커 — closeKeepBranch가 생기기 전 호출 호환. */
+    public WorkerCapabilities(boolean refRepos, boolean fixRounds, boolean dbWrite, boolean mockups, boolean baseSync) {
+        this(refRepos, fixRounds, dbWrite, mockups, baseSync, false);
+    }
 
     /** baseSync를 모르는 워커 — baseSync가 생기기 전 호출 호환. */
     public WorkerCapabilities(boolean refRepos, boolean fixRounds, boolean dbWrite, boolean mockups) {
-        this(refRepos, fixRounds, dbWrite, mockups, false);
+        this(refRepos, fixRounds, dbWrite, mockups, false, false);
     }
 
     /** mockups·baseSync를 모르는 워커 — mockups가 생기기 전 호출 호환. */
     public WorkerCapabilities(boolean refRepos, boolean fixRounds, boolean dbWrite) {
-        this(refRepos, fixRounds, dbWrite, false, false);
+        this(refRepos, fixRounds, dbWrite, false, false, false);
     }
 
     /** dbWrite·mockups·baseSync를 모르는 워커 — dbWrite가 생기기 전 호출 호환. */
     public WorkerCapabilities(boolean refRepos, boolean fixRounds) {
-        this(refRepos, fixRounds, false, false, false);
+        this(refRepos, fixRounds, false, false, false, false);
     }
 
     /** 거르는 조건이 하나라도 걸리는지. false면 전체 큐(JPQL)를 그대로 쓴다. dbWrite는 보지 않는다. */
     boolean needsFilteredQueue() {
-        return !(refRepos && fixRounds && mockups && baseSync);
+        return !(refRepos && fixRounds && mockups && baseSync && closeKeepBranch);
     }
 }

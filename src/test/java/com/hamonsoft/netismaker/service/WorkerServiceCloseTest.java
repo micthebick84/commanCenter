@@ -93,6 +93,18 @@ class WorkerServiceCloseTest {
     }
 
     @Test
+    void 종료_claim_응답은_브랜치_유지_작업이면_closeKeepBranch_true_일반은_false() {
+        Task keep = task(TaskStatus.CLOSE_PENDING);
+        keep.setCloseKeepBranch(true);
+        when(taskRepo.findClaimableForUpdateSkipLocked(any())).thenReturn(List.of(keep));
+        assertThat(service.claimNextTask("w1").orElseThrow().closeKeepBranch()).isTrue();
+
+        Task plain = task(TaskStatus.CLOSE_PENDING);
+        when(taskRepo.findClaimableForUpdateSkipLocked(any())).thenReturn(List.of(plain));
+        assertThat(service.claimNextTask("w2").orElseThrow().closeKeepBranch()).isFalse();
+    }
+
+    @Test
     void 종료_claim에_노트_폴더_재료를_싣는다() {
         Task t = task(TaskStatus.CLOSE_PENDING);
         t.setRepoAlias("동부병원 대시보드");

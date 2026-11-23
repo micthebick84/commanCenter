@@ -47,6 +47,25 @@ describe('middleware/auth.global — 첫 로드(SSR 하이드레이션 전)', ()
     expect(navigateToMock).toHaveBeenCalledExactlyOnceWith('/tasks', HARD)
   })
 
+  it('비관리자가_/inbox로_가면_/tasks로 — 문서를 새로 받는다', () => {
+    Object.assign(auth, { isAuthenticated: true, isAdmin: false })
+    middleware({ path: '/inbox' })
+    expect(navigateToMock).toHaveBeenCalledExactlyOnceWith('/tasks', HARD)
+  })
+
+  // 라우터는 끝 슬래시·대소문자를 가리지 않아(strict·sensitive 끔) 같은 처리함 페이지로 간다 — 검사도 같은 경로로 본다
+  it.each(['/inbox/', '/INBOX', '/Inbox/'])('비관리자가_%s(같은_처리함)로_가도_/tasks로', (path) => {
+    Object.assign(auth, { isAuthenticated: true, isAdmin: false })
+    middleware({ path })
+    expect(navigateToMock).toHaveBeenCalledExactlyOnceWith('/tasks', HARD)
+  })
+
+  it('관리자는_/inbox_통과', () => {
+    Object.assign(auth, { isAuthenticated: true, isAdmin: true })
+    expect(middleware({ path: '/inbox' })).toBeUndefined()
+    expect(navigateToMock).not.toHaveBeenCalled()
+  })
+
   it('로그인 상태면(관리자 /admin 포함) 그대로 통과한다', () => {
     Object.assign(auth, { isAuthenticated: true, isAdmin: true })
     expect(middleware({ path: '/questions' })).toBeUndefined()
@@ -76,6 +95,12 @@ describe('middleware/auth.global — 하이드레이션 뒤 앱 안 이동', () 
   it('비관리자 /admin/* 이면 기존대로 SPA로 /tasks', () => {
     Object.assign(auth, { isAuthenticated: true, isAdmin: false })
     middleware({ path: '/admin/mcp-catalog' })
+    expect(navigateToMock).toHaveBeenCalledExactlyOnceWith('/tasks')
+  })
+
+  it('비관리자 /inbox 이면 기존대로 SPA로 /tasks', () => {
+    Object.assign(auth, { isAuthenticated: true, isAdmin: false })
+    middleware({ path: '/inbox' })
     expect(navigateToMock).toHaveBeenCalledExactlyOnceWith('/tasks')
   })
 })

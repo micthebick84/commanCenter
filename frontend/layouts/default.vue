@@ -3,6 +3,7 @@ import { useQuasar } from 'quasar'
 import BrandMark from '~/components/BrandMark.vue'
 import { useHydrationSafeAuth } from '~/composables/useHydrationSafeAuth'
 import { attentionGroup } from '~/composables/taskStages'
+import { countInbox, inboxListParams, type InboxRow } from '~/composables/taskInbox'
 
 const auth = useAuthStore()
 // 인증 분기는 SSR(항상 비로그인)과 하이드레이션 결과가 같도록 게이트된 값으로 그린다 — 로그아웃 동작만 스토어를 직접 쓴다.
@@ -28,20 +29,36 @@ async function loadRequestsAttention() {
 onMounted(loadRequestsAttention)
 watch(() => route.path, loadRequestsAttention)
 
-// 하단 내비 "작업" 배지 — 모바일 목록의 "확인 필요" 그룹 건수(attentionGroup, 목록과 같은 50건 기준).
-// 관리자는 승인·검토 대기가 남의 작업에도 걸리므로 전체 작업으로, 그 외에는 내 작업으로 센다. 하단 내비가 있는 lt.md에서만 조회.
+// 처리함 배지 — 관리자에게만, 처리함 화면과 같은 기준(전체 작업 200건, 후보만)으로 센다. 폭과 무관하게 조회(위 탭·하단 내비 모두).
+const inboxCount = ref(0)
+async function loadInboxCount() {
+  if (!auth.isAdmin) {
+    inboxCount.value = 0
+    return
+  }
+  try {
+    const page = await useApi<{ content: InboxRow[] }>('/api/tasks', { params: inboxListParams() })
+    inboxCount.value = countInbox(page?.content ?? [])
+  } catch {
+    inboxCount.value = 0
+  }
+}
+onMounted(loadInboxCount)
+watch(() => route.path, loadInboxCount)
+
+// 하단 내비 "작업" 배지 — 일반 사용자의 모바일 목록 "확인 필요" 그룹 건수(attentionGroup, 목록과 같은 50건 기준), 내 작업만.
+// 관리자는 위 처리함 배지가 대신하므로 조회하지 않는다. 하단 내비가 있는 lt.md에서만 조회.
 const tasksAttention = ref(0)
 async function loadTasksAttention() {
-  if (!auth.isAuthenticated || !$q.screen.lt.md) {
+  if (!auth.isAuthenticated || auth.isAdmin || !$q.screen.lt.md) {
     tasksAttention.value = 0
     return
   }
   try {
     const page = await useApi<{ content: { status: string }[] }>('/api/tasks', {
-      params: { mine: String(!auth.isAdmin), size: 50 },
+      params: { mine: 'true', size: 50 },
     })
-    const admin = !!auth.isAdmin
-    tasksAttention.value = (page?.content ?? []).filter((t) => attentionGroup(t, admin) === 'attention').length
+    tasksAttention.value = (page?.content ?? []).filter((t) => attentionGroup(t, false) === 'attention').length
   } catch {
     tasksAttention.value = 0
   }
@@ -77,6 +94,9 @@ function handleLogout() {
         </q-toolbar-title>
         <q-tabs v-if="isAuthenticated && !$q.screen.lt.md" shrink>
           <q-route-tab to="/tasks" label="작업" />
+          <q-route-tab v-if="isAdmin" to="/inbox" label="처리함">
+            <q-badge v-if="inboxCount > 0" color="warning" text-color="dark" floating data-test="inbox-badge">{{ inboxCount }}</q-badge>
+          </q-route-tab>
           <q-route-tab to="/questions" label="질문" />
           <q-route-tab to="/requests" label="요청">
             <q-badge v-if="isAdmin && requestsAttention > 0" color="red-9" floating data-test="requests-badge">{{ requestsAttention }}</q-badge>
@@ -104,7 +124,10 @@ function handleLogout() {
     <q-footer v-if="isAuthenticated && $q.screen.lt.md" bordered class="bg-white bottom-nav" data-test="bottom-nav">
       <q-tabs dense no-caps align="justify" active-color="primary" indicator-color="transparent" class="text-grey-7">
         <q-route-tab to="/tasks" icon="assignment" label="작업">
-          <q-badge v-if="tasksAttention > 0" color="warning" text-color="dark" floating data-test="tasks-badge">{{ tasksAttention }}</q-badge>
+          <q-badge v-if="!isAdmin && tasksAttention > 0" color="warning" text-color="dark" floating data-test="tasks-badge">{{ tasksAttention }}</q-badge>
+        </q-route-tab>
+        <q-route-tab v-if="isAdmin" to="/inbox" icon="inbox" label="처리함">
+          <q-badge v-if="inboxCount > 0" color="warning" text-color="dark" floating data-test="inbox-badge">{{ inboxCount }}</q-badge>
         </q-route-tab>
         <q-route-tab to="/questions" icon="forum" label="질문" />
         <q-route-tab to="/requests" icon="campaign" label="요청">

@@ -51,12 +51,17 @@ const props = defineProps<{
   answerRefRepos?: RefRepoInput[] | null
   /** 확정 화면 분류용 세션 참조(커밋·사유 포함) — 패널은 폴링이 없어 작업 상세가 폴링하는 값을 받는다 (작업 스펙 2026-10-24 §7.5). */
   sessionRefRepos?: RefRepoView[]
+  /** 입력창 글을 바깥에서 묶는다(처리함) — 주면 마운트 때 입력창을 이 값으로 채우고 바뀔 때마다 update:draft를 보낸다. 안 주면 내보내지 않는다. */
+  draft?: string
 }>()
 const emit = defineEmits<{
   (e: 'confirmed', taskId: number): void
   (e: 'close'): void
   /** SSE 상태 변화 — 셸 헤더 배지가 폴링(5초)보다 먼저 반영하도록. immediate. */
   (e: 'status', status: InterviewStatus | null): void
+  /** 작업 인터뷰(질문 세션 아님)의 답변·계획 고쳐 달라기 전송이 성공한 직후 한 번 — 처리함이 다음 건으로 넘어가는 신호. */
+  (e: 'answered'): void
+  (e: 'update:draft', value: string): void
 }>()
 
 const isQuestion = computed(() => props.kind === 'QUESTION')
@@ -120,7 +125,11 @@ const cardsBySeq = computed(() => {
 const activeTab = ref<'chat' | 'design'>('chat')
 
 const $q = useQuasar()
-const answer = ref('')
+const answer = ref(props.draft ?? '')
+// draft를 준 경우에만 입력창 변화를 알린다(전송 뒤 비워진 것 포함). 안 주면 예전과 같다.
+watch(answer, (v) => {
+  if (props.draft !== undefined) emit('update:draft', v)
+})
 const sending = ref(false)
 
 // 마지막 미답변 assistant 질문의 seq (idempotency용 replyToSeq).
@@ -400,6 +409,7 @@ async function sendAnswer(extra?: AskExtra): Promise<boolean> {
     ]
     if (!fixedText) answer.value = '' // 받아들이기로 보낸 글은 입력창 글이 아니다 — 쓰던 글은 남긴다
     status.value = 'QUEUED'
+    if (!isQuestion.value) emit('answered')
     await nextTick()
     scrollToBottom() // 내가 보낸 답변은 항상 하단으로
     return true

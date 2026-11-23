@@ -12,8 +12,9 @@ export default defineNuxtRouteMiddleware((to) => {
   if (!auth.isAuthenticated) {
     return redirectTo('/login')
   }
-  // 관리자 전용 경로 검사
-  if (to.path.startsWith('/admin') && !auth.isAdmin) {
+  // 관리자 전용 경로 검사 — 라우터는 끝 슬래시·대소문자를 가리지 않으므로(/inbox/·/INBOX도 처리함) 맞춰 본다
+  const isInbox = to.path.replace(/\/+$/, '').toLowerCase() === '/inbox'
+  if ((to.path.startsWith('/admin') || isInbox) && !auth.isAdmin) {
     return redirectTo('/tasks')
   }
 })

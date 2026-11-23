@@ -1,0 +1,280 @@
+import { mount, flushPromises, type VueWrapper } from '@vue/test-utils'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
+import InboxTaskPane from '../components/inbox/InboxTaskPane.vue'
+import DesignReviewCard from '../components/DesignReviewCard.vue'
+import ImplementationRetryDialog from '../components/tasks/ImplementationRetryDialog.vue'
+import DeployEnvDialog from '../components/tasks/DeployEnvDialog.vue'
+import { authStub, useApiMock } from './mocks/nuxt'
+import { baseTask } from './fixtures/task'
+import { INBOX_GROUPS } from '../composables/taskInbox'
+
+// 처리함 처리 영역 — 승인 계열·실패 계열 본문 (스펙 2026-11-23 §5.3 표). 확인창은 실제 Quasar 다이얼로그를 누른다.
+
+function disposeGlobalDialogs() {
+  document.body.querySelectorAll<HTMLElement>('[id^="q-portal--dialog"]').forEach((el) => {
+    ;(el as unknown as { __vue_app__?: { unmount: () => void } }).__vue_app__?.unmount()
+  })
+}
+function dialogButton(label: string): HTMLButtonElement | undefined {
+  return Array.from(document.body.querySelectorAll<HTMLButtonElement>('.q-dialog button')).find((b) => b.textContent?.trim() === label)
+}
+async function clickDialogButton(label: string) {
+  await vi.waitFor(() => expect(dialogButton(label)).toBeTruthy())
+  dialogButton(label)!.click()
+  await flushPromises()
+}
+
+const T = '2026-11-23T05:00:00Z'
+function task(status: string, over: Record<string, unknown> = {}) {
+  return {
+    ...baseTask,
+    id: 42,
+    status,
+    statusLabel: status,
+    updatedAt: T,
+    analysis: null,
+    refRepos: [],
+    repoCatalogId: 1,
+    fix: { approvedRounds: 0, maxRounds: 3, activeRound: null },
+    deployment: { deployUrl: 'http://10.0.0.1:18000', deployHostPort: 18000, deployImage: 'img', deployedAt: null, deployLog: null },
+    ...over,
+  }
+}
+
+let detail: Record<string, unknown>
+function routeApi() {
+  useApiMock.mockImplementation((url: string, opts?: { method?: string }) => {
+    if (opts?.method === 'POST') return Promise.resolve({})
+    if (url === `/api/tasks/${detail.id}`) return Promise.resolve(detail)
+    if (url.endsWith('/fix-requests') || url.endsWith('/db-changes') || /\/interviews$/.test(url)) return Promise.resolve([])
+    if (/^\/api\/interviews\/\d+$/.test(url)) return Promise.resolve({ statusName: 'AWAITING_INPUT', turns: [], plan: null })
+    if (url === '/api/mcp-catalog' || url === '/api/repo-catalog') return Promise.resolve([])
+    if (url === '/api/usage/claude') return Promise.resolve({ limits: [] })
+    if (url.startsWith('/api/db-connections')) return Promise.resolve({ enabled: false, items: [] })
+    return Promise.resolve(null)
+  })
+}
+
+let w: VueWrapper | undefined
+async function mountPane(t: Record<string, unknown>, stubs: Record<string, boolean> = {}) {
+  detail = t
+  routeApi()
+  w = mount(InboxTaskPane, {
+    props: { taskId: Number(t.id), answerDrafts: new Map(), refDraftStore: new Map(), canPrev: false, canNext: false },
+    attachTo: document.body,
+    global: { stubs },
+  })
+  await flushPromises()
+  return w
+}
+const posts = () => useApiMock.mock.calls.filter((c) => c[1]?.method === 'POST')
+
+describe('InboxTaskPane — 승인·실패 본문', () => {
+  beforeEach(() => {
+    authStub.isAdmin = true
+    ;(authStub as any).isAuthenticated = true
+  })
+  afterEach(() => {
+    w?.unmount()
+    w = undefined
+    disposeGlobalDialogs()
+    document.body.innerHTML = ''
+    authStub.isAdmin = false
+  })
+
+  it.each([
+    ['COMPLETED', 'inbox-act-approve-impl', '/approve', '승인'],
+    ['FAILED', 'inbox-act-retry', '/retry', null],
+    ['CLOSE_REVIEW', 'inbox-act-approve-close', '/close/approve', '종료 승인'],
+    ['CLOSE_FAILED', 'inbox-act-retry-close', '/close/retry', '종료 재시도'],
+    ['DEPLOY_LOST', 'inbox-act-undeploy', '/undeploy', '배포 중지'],
+    ['FIX_REVIEW', 'inbox-act-approve-fix', '/fix-requests/approve', '승인'],
+  ])('%s: 버튼을_누르고_확인하면_API를_부르고_done', async (status, testId, suffix, confirmLabel) => {
+    const wr = await mountPane(task(status, status === 'CLOSE_FAILED' ? { close: { progress: [] } } : {}))
+    await wr.find(`[data-test="${testId}"]`).trigger('click')
+    if (confirmLabel) await clickDialogButton(confirmLabel)
+    await flushPromises()
+    expect(posts().some((c) => String(c[0]).endsWith(suffix))).toBe(true)
+    const done = wr.emitted('done')
+    expect(done).toHaveLength(1)
+    expect(done![0][0]).toMatchObject({ id: 42, status, updatedAt: T })
+  })
+
+  it('작업을_못_읽으면(404_말고)_안내와_상세_열기를_보이고_missing은_보내지_않는다', async () => {
+    useApiMock.mockImplementation((url: string) =>
+      url === '/api/tasks/42' ? Promise.reject({ statusCode: 502, data: { message: 'Bad Gateway' } }) : Promise.resolve(null),
+    )
+    w = mount(InboxTaskPane, {
+      props: { taskId: 42, answerDrafts: new Map(), refDraftStore: new Map(), canPrev: false, canNext: false },
+      attachTo: document.body,
+    })
+    await flushPromises()
+    // 스피너만 도는 대신 — 폴링은 계속 다시 읽는다
+    expect(w.find('[data-test="inbox-pane-error"]').text()).toContain('작업을 읽지 못했습니다 — 잠시 뒤 다시 시도합니다')
+    expect(w.find('.q-spinner').exists()).toBe(false)
+    const open = w.find('[data-test="inbox-open-detail"]')
+    expect(open.attributes('href')).toBe('/tasks/42')
+    expect(open.attributes('target')).toBe('_blank')
+    expect(w.emitted('missing')).toBeUndefined()
+  })
+
+  // 버튼 문구는 작업 상세(pages/tasks/[id].vue)와 같다 — 같은 동작이 두 화면에서 다른 이름으로 보이지 않게
+  const btnLabel = (wr: VueWrapper, testId: string) => wr.find(`[data-test="${testId}"] .block`).text()
+
+  it('재시도_버튼은_상세처럼_FAILED는_회차를_DESIGN_FAILED는_회차_없이', async () => {
+    const failed = await mountPane(task('FAILED', { retryCount: 1, maxRetry: 3, failureReason: '사유' }))
+    expect(btnLabel(failed, 'inbox-act-retry')).toBe('재시도 (1/3)')
+    failed.unmount()
+    w = undefined
+    // 디자인 재시도는 회차를 쓰지 않는다(상세도 회차 없이 '재시도')
+    const design = await mountPane(task('DESIGN_FAILED', { retryCount: 1, maxRetry: 3, failureReason: '사유' }))
+    expect(btnLabel(design, 'inbox-act-retry')).toBe('재시도')
+  })
+
+  it('COMPLETED_버튼은_상세처럼_이미_승인된_분석이면_구현_시작', async () => {
+    const approved = await mountPane(task('COMPLETED', { analysis: { ...baseTask.analysis, approved: true } }))
+    expect(btnLabel(approved, 'inbox-act-approve-impl')).toBe('구현 시작')
+    approved.unmount()
+    w = undefined
+    const fresh = await mountPane(task('COMPLETED', { analysis: { ...baseTask.analysis, approved: false } }))
+    expect(btnLabel(fresh, 'inbox-act-approve-impl')).toBe('구현 승인')
+    fresh.unmount()
+    w = undefined
+    const noAnalysis = await mountPane(task('COMPLETED', { analysis: null }))
+    expect(btnLabel(noAnalysis, 'inbox-act-approve-impl')).toBe('구현 승인')
+  })
+
+  it('FIX_REVIEW_반려_확인창_취소면_done이_없다', async () => {
+    const wr = await mountPane(task('FIX_REVIEW'))
+    await wr.find('[data-test="inbox-act-reject-fix"]').trigger('click')
+    await clickDialogButton('취소')
+    expect(posts()).toHaveLength(0)
+    expect(wr.emitted('done')).toBeUndefined()
+  })
+
+  it('CLOSE_FAILED_병합_전이면_종료_취소·기준_브랜치_반영이_보이고_병합_뒤면_안_보인다', async () => {
+    const before = await mountPane(task('CLOSE_FAILED', { close: { progress: [] } }))
+    expect(before.find('[data-test="inbox-act-cancel-close"]').exists()).toBe(true)
+    expect(before.find('[data-test="inbox-act-sync-base"]').exists()).toBe(true)
+    expect(before.find('[data-test="inbox-close-steps"]').exists()).toBe(true)
+    before.unmount()
+    w = undefined
+
+    const after = await mountPane(task('CLOSE_FAILED', { close: { progress: ['MERGED'] } }))
+    expect(after.find('[data-test="inbox-act-cancel-close"]').exists()).toBe(false)
+    expect(after.find('[data-test="inbox-act-sync-base"]').exists()).toBe(false)
+    expect(after.find('[data-test="inbox-act-retry-close"]').exists()).toBe(true)
+  })
+
+  // 병합하지 않고 종료(스펙 2026-11-23 close-keep-branch) — 처리함도 같은 공용 동작·같은 단계 규칙을 쓴다
+  it('CLOSE_REVIEW_병합하지_않고_종료를_고르면_keepBranch_바디로_승인하고_done', async () => {
+    const wr = await mountPane(task('CLOSE_REVIEW', { close: { progress: [] } }))
+    await wr.find('[data-test="inbox-act-approve-close"]').trigger('click')
+    await vi.waitFor(() => expect(document.body.querySelectorAll('.q-dialog .q-radio')).toHaveLength(2))
+    document.body.querySelectorAll<HTMLElement>('.q-dialog .q-radio')[1]!.click()
+    await flushPromises()
+    await clickDialogButton('종료 승인')
+    await flushPromises()
+    expect(posts()).toContainEqual(['/api/tasks/42/close/approve', { method: 'POST', body: { keepBranch: true } }])
+    expect(wr.emitted('done')).toHaveLength(1)
+  })
+
+  it('CLOSE_FAILED_브랜치_유지_종료면_칩이_보이고_병합·브랜치_삭제는_건너뜀이며_배포_중지_뒤엔_취소·반영이_없다', async () => {
+    const wr = await mountPane(task('CLOSE_FAILED', { failureReason: '노트 실패', close: { progress: ['UNDEPLOYED'], keepBranch: true } }))
+    expect(wr.find('[data-test="inbox-close-keep-chip"]').text()).toContain('미병합 종료 · 브랜치 유지')
+    expect(wr.find('[data-test="inbox-close-step-MERGED"]').text()).toContain('(건너뜀)')
+    expect(wr.find('[data-test="inbox-close-step-BRANCH_DELETED"]').text()).toContain('(건너뜀)')
+    expect(wr.find('[data-test="inbox-act-cancel-close"]').exists()).toBe(false)
+    expect(wr.find('[data-test="inbox-act-sync-base"]').exists()).toBe(false)
+    expect(wr.find('[data-test="inbox-act-retry-close"]').exists()).toBe(true)
+  })
+
+  it('IMPLEMENTATION_FAILED_재시도_창이_submitted면_done', async () => {
+    const wr = await mountPane(task('IMPLEMENTATION_FAILED', { failureReason: '실패', implementationMode: 'SDD' }))
+    expect(wr.find('[data-test="inbox-pr-link"]').exists()).toBe(true)
+    await wr.find('[data-test="inbox-act-impl-retry"]').trigger('click')
+    await flushPromises()
+    const dlg = wr.findComponent(ImplementationRetryDialog)
+    expect(dlg.props('modelValue')).toBe(true)
+    expect(wr.emitted('done')).toBeUndefined()
+    dlg.vm.$emit('submitted')
+    await flushPromises()
+    expect(wr.emitted('done')).toHaveLength(1)
+  })
+
+  it('DEPLOY_FAILED_재배포_창이_submitted면_done', async () => {
+    const wr = await mountPane(task('DEPLOY_FAILED', { failureReason: '배포 실패' }))
+    expect(wr.find('[data-test="inbox-act-fix-request"]').exists()).toBe(true)
+    await wr.find('[data-test="inbox-act-redeploy"]').trigger('click')
+    await flushPromises()
+    const dlg = wr.findComponent(DeployEnvDialog)
+    expect(dlg.props()).toMatchObject({ modelValue: true, mode: 'redeploy', taskId: '42' })
+    dlg.vm.$emit('submitted')
+    await flushPromises()
+    expect(wr.emitted('done')).toHaveLength(1)
+  })
+
+  it('DEPLOY_LOST_종료_요청·수정_요청도_보인다', async () => {
+    const wr = await mountPane(task('DEPLOY_LOST', { failureReason: '컨테이너 없음' }))
+    expect(wr.find('[data-test="inbox-deploy-url"]').text()).toContain('http://10.0.0.1:18000')
+    for (const id of ['redeploy', 'request-close', 'undeploy', 'fix-request']) {
+      expect(wr.find(`[data-test="inbox-act-${id}"]`).exists()).toBe(true)
+    }
+  })
+
+  it('DESIGN_REVIEW_카드가_refresh를_보내면_done', async () => {
+    const design = {
+      designMarkdown: '# d', mockupFilesJson: '[]', designProjectId: null, designUrl: null, rejectCount: 0,
+      feedbackHistoryJson: '[]', approved: false, approvedBy: null, approvedAt: null,
+    }
+    const wr = await mountPane(task('DESIGN_REVIEW', { design }), { DesignReviewCard: true })
+    const card = wr.findComponent(DesignReviewCard)
+    expect(card.exists()).toBe(true)
+    expect(card.props('isAdmin')).toBe(true)
+    card.vm.$emit('refresh')
+    await flushPromises()
+    expect(wr.emitted('done')).toHaveLength(1)
+  })
+
+  it('재시도_한도를_다_쓴_FAILED는_처리할_것이_없는_상태다', async () => {
+    const wr = await mountPane(task('FAILED', { retryCount: 3, maxRetry: 3, failureReason: '사유' }))
+    expect(wr.find('[data-test="inbox-body-idle"]').exists()).toBe(true)
+    expect(wr.find('[data-test="inbox-act-retry"]').exists()).toBe(false)
+  })
+
+  it('INTERVIEWING은_대화_패널을_계속_보인다', async () => {
+    const wr = await mountPane(task('INTERVIEWING', { interviewSessionId: 55 }))
+    expect(wr.find('[data-test="inbox-agent-working"]').exists()).toBe(true)
+    expect(wr.find('[data-test="inbox-body-idle"]').exists()).toBe(false)
+  })
+
+  it('DESIGN_REVIEW_카드_refresh_뒤_작업을_다시_읽는다', async () => {
+    const design = {
+      designMarkdown: '# d', mockupFilesJson: '[]', designProjectId: null, designUrl: null, rejectCount: 0,
+      feedbackHistoryJson: '[]', approved: false, approvedBy: null, approvedAt: null,
+    }
+    const wr = await mountPane(task('DESIGN_REVIEW', { design }), { DesignReviewCard: true })
+    const reads = () => useApiMock.mock.calls.filter((c) => c[0] === '/api/tasks/42').length
+    const before = reads()
+    wr.findComponent(DesignReviewCard).vm.$emit('refresh')
+    await flushPromises()
+    expect(reads()).toBeGreaterThan(before)
+  })
+
+  it('확인_필요_상태마다_본문이_있다', async () => {
+    const design = {
+      designMarkdown: '# d', mockupFilesJson: '[]', designProjectId: null, designUrl: null, rejectCount: 0,
+      feedbackHistoryJson: '[]', approved: false, approvedBy: null, approvedAt: null,
+    }
+    for (const status of INBOX_GROUPS.flatMap((g) => g.statuses)) {
+      const wr = await mountPane(
+        task(status, { interviewSessionId: 55, design, close: { progress: [] }, failureReason: '사유' }),
+        { DesignReviewCard: true },
+      )
+      expect(wr.find('[data-test="inbox-body-pending"]').exists(), status).toBe(false)
+      expect(wr.find('[data-test="inbox-body-idle"]').exists(), status).toBe(false)
+      wr.unmount()
+      w = undefined
+    }
+  })
+})

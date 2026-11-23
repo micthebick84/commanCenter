@@ -53,6 +53,9 @@ const AUTH_PATHS = [
   '/admin/repo-catalog',
   '/admin/mcp-catalog',
   '/admin/workers',
+  // 처리함(스펙 2026-11-23) — 목록·자동 선택 / ?task=2는 승인대기(AWAITING_APPROVAL)라 승인 폼(ApproveForm)을 그린다
+  '/inbox',
+  '/inbox?task=2',
 ]
 
 // ── API 목 ────────────────────────────────────────────────────────────────────

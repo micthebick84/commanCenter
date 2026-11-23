@@ -319,8 +319,10 @@ public class TaskCloser {
                         + (url == null ? "" : " — Symphony 작업 화면에서 로그인 후 내려받기: " + url);
             }
         }
-        String branchKept = Boolean.TRUE.equals(task.closeKeepBranch()) ? task.headBranch() : null;
-        return new CloseNoteWriter.NoteMeta(task.id(), task.title(), task.prUrl(), mergeSha, artifact, line, branchKept);
+        boolean keep = Boolean.TRUE.equals(task.closeKeepBranch());
+        String branchKept = keep ? task.headBranch() : null;
+        // 브랜치 유지 종료는 병합이 없으므로 병합 커밋 칸은 언제나 비운다 (방어 — claim에 옛 값이 남아 있어도)
+        return new CloseNoteWriter.NoteMeta(task.id(), task.title(), task.prUrl(), keep ? null : mergeSha, artifact, line, branchKept);
     }
 
     private ArtifactInfo publishArtifact(WorkerTaskResponse task) throws StepFailed {

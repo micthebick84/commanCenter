@@ -14,6 +14,7 @@ import java.time.LocalDate;
  *  - 노트: {noteFolder}/{slug}-작업{id}-{date}.md  (같은 경로면 덮어씀 — 재시도 멱등)
  *    산출물이 있으면 프런트매터에 artifact, 본문 끝에 한 줄(NoteMeta.artifactLine)을 더한다 (스펙 2026-10-14 §4)
  *  - 진행상황: {progressFolder}/netisMaker-진행상황-{date}.md 끝에 "- [[노트]] — 작업 #id 종료(병합 sha7)" (이미 있으면 생략)
+ *    병합하지 않고 종료한 노트(NoteMeta.branchKept)는 "(병합 sha7)" 대신 "(병합 안 함 · 브랜치 유지)", 프런트매터에 branch_kept
  */
 public class CloseNoteWriter {
 

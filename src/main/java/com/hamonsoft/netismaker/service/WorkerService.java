@@ -1202,7 +1202,8 @@ public class WorkerService {
                 t.setFailureReason(null);
                 String sha = t.getMergeCommitSha();
                 reason = "작업 종료" + (sha == null || sha.isBlank() ? ""
-                        : ": 병합 " + sha.substring(0, Math.min(7, sha.length())));
+                        : ": 병합 " + sha.substring(0, Math.min(7, sha.length())))
+                        + (t.isCloseKeepBranch() ? " (병합 안 함·브랜치 유지)" : "");
                 if (events != null) events.publishEvent(new CloseCompletedEvent(t.getId()));
             }
             case CLOSE_FAILED -> {

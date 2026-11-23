@@ -817,7 +817,8 @@ class TaskCloserTest {
         verify(worktrees).discard(anyString(), eq(WorktreeKind.TASK), eq(7L));
         assertThat(terminal().status()).isEqualTo(TaskStatus.CLOSED);
         Path note = tmp.resolve("vault/HamonSoft/netisMaker/로그인-수정-작업7-2026-10-13.md");
-        assertThat(Files.readString(note)).contains("branch_kept: netismaker/task-7");
+        assertThat(Files.readString(note)).contains("branch_kept: netismaker/task-7").contains("merge_commit: \n");
+        assertThat(TaskCloser.noteMeta(keepTask(null, plainCtx(), true), "deadbeef", null).mergeCommitSha()).isNull();
     }
 
     @Test

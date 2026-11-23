@@ -198,7 +198,7 @@ public class CloseMailService {
                 + "레포: " + repo + "\n"
                 + "산출물: " + t.getArtifactName() + " (" + mb + " MB)\n"
                 + "배포 커밋: " + sha7(t.getHeadSha()) + "   병합 커밋: "
-                + (t.isCloseKeepBranch() ? "병합 안 함(브랜치 유지)" : sha7(t.getMergeCommitSha())) +"\n\n"
+                + (t.isCloseKeepBranch() ? "병합 안 함(브랜치 유지)" : sha7(t.getMergeCommitSha())) + "\n\n"
                 + (link == null ? "Symphony에 로그인해 작업 " + t.getId() + " 화면에서 내려받으세요."
                                 : "로그인 후 내려받기: " + link) + "\n\n"
                 + "작업을 삭제하면 30일 뒤 파일도 지워집니다.\n";

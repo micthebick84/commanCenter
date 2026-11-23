@@ -462,7 +462,8 @@ async function approveClose() {
 }
 
 async function retryClose() {
-  if (!(await confirmDialog($q, '남은 종료 단계(병합 포함 가능)를 다시 실행합니다. 병합은 되돌릴 수 없습니다.', { title: '종료 재시도', ok: '종료 재시도' }))) return
+  const retryMsg = isKeepBranchClose(task.value?.close) ? '남은 종료 단계(배포 중지·노트)를 다시 실행합니다. 병합하지 않습니다.' : '남은 종료 단계(병합 포함 가능)를 다시 실행합니다. 병합은 되돌릴 수 없습니다.'
+  if (!(await confirmDialog($q, retryMsg, { title: '종료 재시도', ok: '종료 재시도' }))) return
   await closeAction('close/retry', '종료 재시도 큐 등록')
 }
 

@@ -480,6 +480,7 @@ export function nextAction(
     deployment?: { deployUrl: string | null } | null
     taskType?: string | null
     fix?: { activeRound: number | null; activeKind?: string | null } | null
+    close?: { keepBranch?: boolean } | null
   },
   isAdmin: boolean,
   isOwner = false,
@@ -543,10 +544,10 @@ export function nextAction(
       return { text: '수정 요청 승인을 기다리는 중입니다' }
     case 'CLOSE_FAILED':
       return isAdmin
-        ? { text: '종료 실패 — 사유를 확인하고 재시도하세요(끝난 단계는 건너뜁니다). 충돌이면 \'기준 브랜치 반영\'을 쓰세요', primary: { label: '종료 재시도', icon: 'refresh', kind: 'retry-close' } }
+        ? { text: `종료 실패 — 사유를 확인하고 재시도하세요(끝난 단계는 건너뜁니다).${task.close?.keepBranch === true ? '' : ' 충돌이면 \'기준 브랜치 반영\'을 쓰세요'}`, primary: { label: '종료 재시도', icon: 'refresh', kind: 'retry-close' } }
         : { text: '종료 실패 — 관리자 확인이 필요합니다' }
     case 'CLOSED':
-      return { text: '작업 종료 — PR이 병합되고 정리가 끝났습니다' }
+      return { text: task.close?.keepBranch === true ? '작업 종료 — 병합하지 않고 종료했습니다(작업 브랜치·PR 유지)' : '작업 종료 — PR이 병합되고 정리가 끝났습니다' }
     case 'FAILED':
     case 'DESIGN_FAILED':
       return { text: '실패 — 사유 확인 후 재시도', primary: { label: '재시도', icon: 'refresh', kind: 'retry' } }

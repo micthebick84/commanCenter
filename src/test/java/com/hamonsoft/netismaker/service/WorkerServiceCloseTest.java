@@ -268,6 +268,20 @@ class WorkerServiceCloseTest {
     }
 
     @Test
+    void 브랜치유지_작업종료_이력_사유에_병합_안_함이_붙는다() {
+        Task t = task(TaskStatus.CLOSING);
+        t.setWorkerId("w1");
+        t.setCloseKeepBranch(true);
+        t.setCloseProgress("UNDEPLOYED,NOTE_WRITTEN");
+        when(taskRepo.findActiveByIdForUpdate(7L)).thenReturn(Optional.of(t));
+        service.recordResult(7L, WorkerResultRequest.closed("w1", null));
+        assertThat(t.getStatus()).isEqualTo(TaskStatus.CLOSED);
+        var captor = org.mockito.ArgumentCaptor.forClass(TaskStatusHistory.class);
+        verify(historyRepo).save(captor.capture());
+        assertThat(captor.getValue().getReason()).isEqualTo("작업 종료 (병합 안 함·브랜치 유지)");
+    }
+
+    @Test
     void 작업종료_보고는_4단계가_다_끝났을때만_받는다() {
         Task t = task(TaskStatus.CLOSING);
         t.setWorkerId("w1");

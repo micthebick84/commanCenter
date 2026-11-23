@@ -108,6 +108,23 @@ describe('pages/tasks/[id] — 작업 종료 (스펙 2026-10-13 §6)', () => {
     w.unmount()
   })
 
+  it('종료 요청 확인 문구는 작업의 기준 브랜치를 말하고 main에 병합이라고 하지 않는다', async () => {
+    setMe('alice')
+    const w = await mountWith({ ...baseTask, githubBranch: 'release/7.0', status: 'DEPLOYED', statusLabel: '배포완료', requesterId: 'alice', deployment })
+    await w.find('[data-test="next-action-primary"]').trigger('click')
+    await flushPromises()
+    expect(document.body.textContent).toContain('기준 브랜치(release/7.0)')
+    expect(document.body.textContent).not.toContain('main에 병합')
+    w.unmount()
+  })
+
+  it('브랜치 유지로 끝난 작업의 배너는 병합하지 않았다고 말한다', async () => {
+    const w = await mountWith({ ...baseTask, status: 'CLOSED', statusLabel: '작업종료', deployment, close: { progress: [], mergeCommitSha: null, notePath: null, keepBranch: true } })
+    expect(w.text()).toContain('작업 종료 — 병합하지 않고 종료했습니다(작업 브랜치·PR 유지)')
+    expect(w.text()).not.toContain('PR이 병합되고')
+    w.unmount()
+  })
+
   it('브랜치 유지 종료: 칩이 보이고, 배포 중지가 끝난 뒤에는 종료 취소 버튼이 없으며 진행이 비었으면 있다', async () => {
     authStub.isAdmin = true
     let w = await mountWith({

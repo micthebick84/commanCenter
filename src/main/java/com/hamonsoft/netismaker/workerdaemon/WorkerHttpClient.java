@@ -138,7 +138,9 @@ public class WorkerHttpClient {
      * 구버전은 회차 정보를 버리고 base에서 -rN 브랜치를 새로 딴다). dbWrite가 없는 요청에게는 개발 DB 쓰기 도구(execute)를 붙이지 않는다
      * (task-type-db-write §6.1 조건 6 — 구버전은 쓰기 기록으로 SQL 스크립트 파일을 만들지 못해 실행한 SQL이 PR에서 빠진다).
      * mockups가 없는 요청에게는 인터뷰 목업을 고른(또는 제외 번호가 있는) 구현·디자인을 넘기지 않는다(설계 2026-11-03 §7 —
-     * 구버전은 목업을 버리고 진행한다).
+     * 구버전은 목업을 버리고 진행한다). baseSync가 없는 요청에게는 기준 브랜치 반영 회차 구현을 넘기지 않고(스펙 2026-11-13 —
+     * 구버전은 회차 종류를 몰라 일반 수정으로 돌린다), closeKeepBranch가 없는 요청에게는 병합하지 않고 종료하는 종료 작업을 넘기지 않는다
+     * (스펙 2026-11-23 — 구버전은 이 칸을 버리고 병합해 버린다).
      */
     static final String SUPPORTS = "refRepos,fixRounds,dbWrite,mockups,baseSync,closeKeepBranch";
 

@@ -35,7 +35,7 @@ export interface CloseView {
 
 export const KEEP_BRANCH_CHIP = '미병합 종료 · 브랜치 유지'
 
-export function isKeepBranchClose(close: CloseView | null | undefined): boolean {
+export function isKeepBranchClose(close: { keepBranch?: boolean } | null | undefined): boolean {
   return close?.keepBranch === true
 }
 

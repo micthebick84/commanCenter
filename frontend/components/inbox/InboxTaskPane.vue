@@ -46,8 +46,9 @@ const { data: task, error, refresh } = useTaskPolling<TaskResponse>(() => useApi
 
 // 지워졌거나 없는 작업(?task=) — 부모가 목록 맨 위를 고른다. 한 번만 알린다.
 let missingSent = false
-watch(error, (e: any) => {
-  const st = e?.statusCode ?? e?.response?.status ?? e?.status
+watch(error, (e) => {
+  const err = e as { statusCode?: number; response?: { status?: number }; status?: number } | null
+  const st = err?.statusCode ?? err?.response?.status ?? err?.status
   if (st === 404 && !missingSent) {
     missingSent = true
     emit('missing')
@@ -95,6 +96,12 @@ function markNow(): HandledMark | null {
 }
 function emitDone(mark: HandledMark | null = markNow()) {
   if (mark) emit('done', mark)
+}
+// 승인·계획 확정은 성공 뒤 작업을 바로 다시 읽는다(상세의 onApproved·onInterviewConfirmed와 같다) — 자동 이동을 껐으면 이 화면에 머물므로
+// 다음 폴링까지 끝난 승인 폼이 남아 다시 누를 수 있게 두지 않는다. 작업 취소는 공용 동작이 이미 다시 읽는다.
+function onFormDone() {
+  emitDone()
+  refresh()
 }
 
 // 패널의 실시간 상태(SSE) — "✎ 참조 변경"은 입력 대기일 때만 연다. 턴이 끝나 입력대기·계획 완료로 바뀌면 작업을 바로 다시 읽는다
@@ -237,7 +244,7 @@ async function downloadAttachment(att: Pick<AttachmentMeta, 'id' | 'fileName'>) 
               :draft="draftOf(task.interviewSessionId!)"
               @update:draft="saveDraft(task.interviewSessionId!, $event)"
               @answered="emitDone()"
-              @confirmed="emitDone()"
+              @confirmed="onFormDone"
               @close="refresh"
               @status="onStatus"
             />
@@ -246,7 +253,7 @@ async function downloadAttachment(att: Pick<AttachmentMeta, 'id' | 'fileName'>) 
 
         <template v-else-if="body === 'approve'">
           <q-card flat bordered>
-            <ApproveForm :key="task.id" :task="task" context="inbox" @approved="emitDone()" @update:approving="approving = $event" />
+            <ApproveForm :key="task.id" :task="task" context="inbox" @approved="onFormDone" @update:approving="approving = $event" />
           </q-card>
           <q-btn
             flat

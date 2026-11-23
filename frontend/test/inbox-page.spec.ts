@@ -17,7 +17,7 @@ import { AUTO_NEXT_KEY } from '../composables/taskInbox'
 // 쿼리를 바꿀 수 있는 라우트 — navigateTo 목이 쿼리를 바꿔 고른 건이 따라온다.
 const route = reactive({ path: '/inbox', params: {} as Record<string, string>, query: {} as Record<string, string> })
 ;(globalThis as any).useRoute = () => route
-const navigateToMock = vi.fn((to: { query?: Record<string, string> }, _opts?: unknown) => {
+const navigateToMock = vi.fn((to: { query?: Record<string, string> }) => {
   route.query = { ...(to.query ?? {}) }
   return Promise.resolve()
 })
@@ -202,6 +202,36 @@ describe('pages/inbox — 처리함', () => {
     // 다시 켜면 저장값을 지운다(없음 = 켬)
     await toggle.trigger('click')
     expect(localStorage.getItem(AUTO_NEXT_KEY)).toBeNull()
+  })
+
+  it('계획확인에서_구현_진행(confirmed)이면_다음_건', async () => {
+    const review = () => task(5, 'INTERVIEW_REVIEW', '플랜승인대기', { updatedAt: T_INPUT, interviewSessionId: 55 })
+    list = [approveTask(), review(), doneTask()]
+    details[5] = review()
+    route.query = { task: '5' }
+    const wr = await mountPage()
+    expect(wr.findAll('[data-test="inbox-group-label"]').map((g) => g.text())).toEqual(['계획 확인', '인터뷰 시작 승인'])
+    expect(wr.findComponent(InterviewPanel).props('sessionId')).toBe(55)
+    wr.findComponent(InterviewPanel).vm.$emit('confirmed', 5)
+    await flushPromises()
+    expect(navigateToMock).toHaveBeenCalledTimes(1)
+    expect(navigateToMock).toHaveBeenCalledWith({ query: { task: '2' } }, { replace: true })
+    expect(rowIds(wr)).toEqual([2])
+  })
+
+  it('토글을_끄면_승인_뒤_작업을_다시_읽어_끝난_폼이_남지_않는다', async () => {
+    localStorage.setItem(AUTO_NEXT_KEY, '0')
+    route.query = { task: '2' }
+    const wr = await mountPage()
+    expect(wr.findComponent(ApproveForm).exists()).toBe(true)
+    // 서버는 승인 뒤 인터뷰중으로 바꾼다 — 다음 폴링을 기다리지 않고 다시 읽어 대화 패널로 바뀐다
+    details[2] = task(2, 'INTERVIEWING', '인터뷰중', { updatedAt: '2026-11-23T06:00:00Z', interviewSessionId: 22 })
+    await wr.find('[data-test="approve-submit"]').trigger('click')
+    await flushPromises()
+    expect(navigateToMock).not.toHaveBeenCalled()
+    expect(wr.findComponent(ApproveForm).exists()).toBe(false)
+    expect(wr.findComponent(InterviewPanel).props('sessionId')).toBe(22)
+    expect(wr.find('[data-test="inbox-agent-working"]').exists()).toBe(true)
   })
 
   it('승인대기는_ApproveForm(inbox)를_펼치고_승인_성공이면_다음_건', async () => {

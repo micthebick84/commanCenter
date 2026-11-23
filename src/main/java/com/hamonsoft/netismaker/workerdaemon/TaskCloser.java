@@ -132,13 +132,17 @@ public class TaskCloser {
         RepoRef ref = task.repoRef();
         WorkerResultRequest.UsageReport usage = null;
         String mergeSha = task.closeContext() == null ? null : task.closeContext().mergeCommitSha();
+        // 병합하지 않고 종료(스펙 2026-11-23) — null(구버전 API)은 병합 종료
+        boolean keep = Boolean.TRUE.equals(task.closeKeepBranch());
         try {
             // 노트(③)가 남았으면 볼트를 먼저 확인한다 — 병합(되돌릴 수 없음) 뒤에 설정 누락으로 멈추지 않게
             if (!done.contains(CloseStep.NOTE_WRITTEN)) requireVault();
             // 부분 패치 대상 — claim에 지시가 있고 아직 만들지 않았다. 아니면 아래 패치 코드는 하나도 돌지 않는다.
-            boolean patchPending = task.closePatch() != null && !done.contains(CloseStep.PATCH_BUILT);
+            boolean patchPending = !keep && task.closePatch() != null && !done.contains(CloseStep.PATCH_BUILT);
             if (patchPending && !done.contains(CloseStep.MERGED)) requirePatchReady(task, ref);
-            if (!done.contains(CloseStep.MERGED)) {
+            // 브랜치 유지 — 배포 중지(되돌릴 수 없음) 전에 작업 브랜치가 원격에 있는지 확인한다. 실패해도 아직 한 일이 없어 재시도·취소 가능
+            if (keep && !done.contains(CloseStep.UNDEPLOYED)) requireRemoteBranch(task, ref);
+            if (!keep && !done.contains(CloseStep.MERGED)) {
                 if (task.prNumber() == null) throw new StepFailed("PR 번호가 없어 병합할 수 없습니다");
                 // 병합 직전 기준 브랜치 끝 — 패치 "전" 커밋 확인용. 읽지 못하면 null(패치 단계가 두 부모 규칙으로 판단)
                 String baseSha = patchPending ? gitOps.remoteBranchTip(ref, task.githubBranch()) : null;
@@ -175,14 +179,14 @@ public class TaskCloser {
                 usage = n.usage();
                 progress(task, CloseStep.NOTE_WRITTEN, null, n.relativePath(), n.recordFolder());
             }
-            if (!done.contains(CloseStep.BRANCH_DELETED)) {
+            if (!keep && !done.contains(CloseStep.BRANCH_DELETED)) {
                 retargetDependents(task, ref);
                 step("브랜치 삭제", () -> { closerFor(ref).deleteBranch(ref, task.headBranch()); return null; });
                 progress(task, CloseStep.BRANCH_DELETED, null, null);
             }
             cleanupLocal(task);
             reporter.reportTerminal(task.id(), WorkerResultRequest.closed(props.id(), usage));
-            log.info("작업 종료 완료: task={} merge={}", task.id(), mergeSha);
+            log.info("작업 종료 완료: task={} merge={}", task.id(), keep ? "없음(브랜치 유지)" : mergeSha);
         } catch (StepFailed e) {
             log.warn("작업 종료 실패: task={} {}", task.id(), GitRemotes.mask(e.getMessage()));
             reporter.reportTerminal(task.id(), WorkerResultRequest.closeFailed(props.id(),
@@ -315,7 +319,8 @@ public class TaskCloser {
                         + (url == null ? "" : " — Symphony 작업 화면에서 로그인 후 내려받기: " + url);
             }
         }
-        return new CloseNoteWriter.NoteMeta(task.id(), task.title(), task.prUrl(), mergeSha, artifact, line);
+        String branchKept = Boolean.TRUE.equals(task.closeKeepBranch()) ? task.headBranch() : null;
+        return new CloseNoteWriter.NoteMeta(task.id(), task.title(), task.prUrl(), mergeSha, artifact, line, branchKept);
     }
 
     private ArtifactInfo publishArtifact(WorkerTaskResponse task) throws StepFailed {
@@ -347,6 +352,15 @@ public class TaskCloser {
             http.postCloseProgress(task.id(), req);
             return null;
         });
+    }
+
+    /** 병합하지 않고 종료할 때 작업 브랜치가 원격에 남아 있는지. 없거나 읽지 못하면(null) 둘 다 실패 — 아직 한 일이 없다. */
+    private void requireRemoteBranch(WorkerTaskResponse task, RepoRef ref) throws StepFailed {
+        String tip = gitOps == null ? null : gitOps.remoteBranchTip(ref, task.headBranch());
+        if (tip == null) {
+            throw new StepFailed("브랜치 유지: 작업 브랜치 " + task.headBranch()
+                    + "를 원격에서 찾지 못했습니다 — 브랜치가 남아 있는지 확인하세요");
+        }
     }
 
     /**

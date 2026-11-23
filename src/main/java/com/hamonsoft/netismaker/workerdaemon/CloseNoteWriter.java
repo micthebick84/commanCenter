@@ -21,10 +21,16 @@ public class CloseNoteWriter {
      * artifact = 프런트매터 값(파일 이름 또는 '없음(관리자 건너뜀)'), artifactLine = 본문 끝 한 줄. 둘 다 null이면 산출물 표시 없음.
      */
     public record NoteMeta(long taskId, String title, String prUrl, String mergeCommitSha,
-                           String artifact, String artifactLine) {
+                           String artifact, String artifactLine, String branchKept) {
         /** 산출물 정보 도입 전 4개 인자 — 기존 호출부·테스트 호환. */
         public NoteMeta(long taskId, String title, String prUrl, String mergeCommitSha) {
-            this(taskId, title, prUrl, mergeCommitSha, null, null);
+            this(taskId, title, prUrl, mergeCommitSha, null, null, null);
+        }
+
+        /** 병합 종료(branchKept=null) 6개 인자 — 기존 호출부·테스트 호환. branchKept가 있으면 병합하지 않고 종료한 노트다. */
+        public NoteMeta(long taskId, String title, String prUrl, String mergeCommitSha,
+                        String artifact, String artifactLine) {
+            this(taskId, title, prUrl, mergeCommitSha, artifact, artifactLine, null);
         }
     }
 
@@ -81,6 +87,7 @@ public class CloseNoteWriter {
                 + "task_id: " + m.taskId() + "\n"
                 + "pr: " + (m.prUrl() == null ? "" : maskSecrets(m.prUrl())) + "\n"
                 + "merge_commit: " + (m.mergeCommitSha() == null ? "" : m.mergeCommitSha()) + "\n"
+                + (m.branchKept() == null ? "" : "branch_kept: " + m.branchKept() + "\n")
                 + (m.artifact() == null ? "" : "artifact: " + m.artifact() + "\n")
                 + "closed: " + date + "\n"
                 + "tags:\n  - netismaker/작업종료\n"
@@ -108,7 +115,7 @@ public class CloseNoteWriter {
         String link = "[[" + noteName + "]]";
         String existing = Files.exists(progress) ? Files.readString(progress, StandardCharsets.UTF_8) : null;
         if (existing != null && existing.contains(link)) return;
-        String sha = m.mergeCommitSha() == null ? "" : "(병합 " + m.mergeCommitSha().substring(0, Math.min(7, m.mergeCommitSha().length())) + ")";
+        String sha = m.branchKept() != null ? "(병합 안 함 · 브랜치 유지)" : m.mergeCommitSha() == null ? "" : "(병합 " + m.mergeCommitSha().substring(0, Math.min(7, m.mergeCommitSha().length())) + ")";
         String line = "- " + link + " — 작업 #" + m.taskId() + " 종료" + sha + "\n";
         if (existing == null) {
             Files.writeString(progress, "# netisMaker 진행상황 " + date + "\n\n" + line, StandardCharsets.UTF_8);

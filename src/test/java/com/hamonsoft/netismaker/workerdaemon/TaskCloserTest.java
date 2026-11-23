@@ -776,4 +776,94 @@ class TaskCloserTest {
         verifyNoInteractions(patchBuilder, prebuilder, gitOps);
         assertThat(terminal().status()).isEqualTo(TaskStatus.CLOSED);
     }
+
+    // ---- 병합하지 않고 종료(브랜치·PR 유지) ----
+
+    private GitOpsService keepGit;
+
+    private TaskCloser keepCloser() {
+        keepGit = mock(GitOpsService.class);
+        when(keepGit.remoteBranchTip(any(), eq("netismaker/task-7"))).thenReturn(SHA);
+        WorkerProperties props = mock(WorkerProperties.class);
+        when(props.id()).thenReturn("w1");
+        when(props.reposDir()).thenReturn(tmp.resolve("repos").toString());
+        CloseProperties cp = new CloseProperties(tmp.resolve("vault").toString(), "HamonSoft/netisMaker", "merge",
+                "sonnet", Duration.ofMinutes(1), null);
+        Clock clock = Clock.fixed(Instant.parse("2026-10-13T03:00:00Z"), ZoneId.of("Asia/Seoul"));
+        return new TaskCloser(props, cp, http, deploy, worktrees, claude, reporter, List.of(mr),
+                new CloseNoteWriter(), null, null, null, keepGit, clock);
+    }
+
+    private WorkerTaskResponse keepTask(String progress, CloseContext ctx, Boolean keep) {
+        return new WorkerTaskResponse(7L, "acme/w", "main", "로그인 수정", "d", WorkerTaskResponse.Kind.CLOSE,
+                List.of(), null, null, "netismaker/task-7", SHA, List.of(), null, null, null, null, null, null,
+                null, null, null, "github", null, 3, "https://github.com/acme/w/pull/3", progress, ctx,
+                null, null, null, List.of(), null, List.of(), List.of(), null, keep);
+    }
+
+    private CloseContext plainCtx() {
+        return new CloseContext(null, null, null, null, "http://h:1", null, List.of(), List.of());
+    }
+
+    @Test
+    void 브랜치유지_병합과_삭제를_건너뛴다() throws Exception {
+        keepCloser().process(keepTask(null, plainCtx(), true));
+
+        verify(mr, never()).merge(any(), anyInt(), any(), any());
+        verify(mr, never()).deleteBranch(any(), any());
+        verify(mr, never()).retargetDependents(any(), any(), any());
+        verify(deploy).undeploy(7L);
+        assertThat(reportedSteps()).containsExactly(CloseStep.UNDEPLOYED, CloseStep.NOTE_WRITTEN);
+        verify(worktrees).discard(anyString(), eq(WorktreeKind.TASK), eq(7L));
+        assertThat(terminal().status()).isEqualTo(TaskStatus.CLOSED);
+        Path note = tmp.resolve("vault/HamonSoft/netisMaker/로그인-수정-작업7-2026-10-13.md");
+        assertThat(Files.readString(note)).contains("branch_kept: netismaker/task-7");
+    }
+
+    @Test
+    void 브랜치없음_배포중지전실패() throws Exception {
+        TaskCloser c = keepCloser();
+        when(keepGit.remoteBranchTip(any(), any())).thenReturn(null);
+        c.process(keepTask(null, plainCtx(), true));
+
+        verify(deploy, never()).undeploy(anyLong());
+        assertThat(reportedSteps()).isEmpty();
+        WorkerResultRequest r = terminal();
+        assertThat(r.status()).isEqualTo(TaskStatus.CLOSE_FAILED);
+        assertThat(r.failureReason()).isEqualTo(
+                "브랜치 유지: 작업 브랜치 netismaker/task-7를 원격에서 찾지 못했습니다 — 브랜치가 남아 있는지 확인하세요");
+    }
+
+    @Test
+    void 재claim_UNDEPLOYED완료면_브랜치확인안함() throws Exception {
+        TaskCloser c = keepCloser();
+        c.process(keepTask("UNDEPLOYED", plainCtx(), true));
+
+        verify(keepGit, never()).remoteBranchTip(any(), any());
+        assertThat(reportedSteps()).containsExactly(CloseStep.NOTE_WRITTEN);
+        assertThat(terminal().status()).isEqualTo(TaskStatus.CLOSED);
+    }
+
+    @Test
+    void DB작업_배포없음_브랜치유지() throws Exception {
+        keepCloser().process(keepTask(null,
+                new CloseContext(null, null, null, null, null, null, List.of(), List.of()), true));
+
+        verify(deploy, never()).undeploy(anyLong());
+        assertThat(reportedSteps()).containsExactly(CloseStep.UNDEPLOYED, CloseStep.NOTE_WRITTEN);
+        assertThat(terminal().status()).isEqualTo(TaskStatus.CLOSED);
+    }
+
+    @Test
+    void 병합종료_기존동작_closeKeepBranch가_false나_null이면_병합과_삭제를_한다() throws Exception {
+        for (Boolean keep : new Boolean[] {false, null}) {
+            reset(mr, reporter);
+            when(mr.supports(any())).thenReturn(true);
+            when(mr.merge(any(), eq(3), eq(SHA), eq("merge"))).thenReturn("m3rg3");
+            keepCloser().process(keepTask(null, plainCtx(), keep));
+            verify(mr).merge(any(), eq(3), eq(SHA), eq("merge"));
+            verify(mr).deleteBranch(any(), eq("netismaker/task-7"));
+            verify(keepGit, never()).remoteBranchTip(any(), any());
+        }
+    }
 }

@@ -117,7 +117,8 @@ describe('브랜치 유지 종료 (스펙 2026-11-23)', () => {
   const keep = (progress: string[]): CloseView => ({ progress, mergeCommitSha: null, notePath: null, keepBranch: true })
   it('isKeepBranchClose·칩 문구', () => {
     expect(isKeepBranchClose(keep([]))).toBe(true)
-    expect(isKeepBranchClose({ progress: [], mergeCommitSha: null, notePath: null })).toBe(false)
+    const plain: CloseView = { progress: [], mergeCommitSha: null, notePath: null }
+    expect(isKeepBranchClose(plain)).toBe(false)
     expect(isKeepBranchClose(null)).toBe(false)
     expect(KEEP_BRANCH_CHIP).toBe('미병합 종료 · 브랜치 유지')
   })

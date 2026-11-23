@@ -12,7 +12,7 @@ export function closeApproveBody(mode: CloseMode): { keepBranch: true } | undefi
 
 export function chooseCloseMode(
   $q: QVueGlobals,
-  opts: { taskId: number; baseBranch: string | null; extraWarning?: string },
+  opts: { taskId: number | string; baseBranch: string | null; extraWarning?: string },
 ): Promise<CloseMode | null> {
   const base = opts.baseBranch?.trim() || '기준 브랜치'
   return new Promise((resolve) => {

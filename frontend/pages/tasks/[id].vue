@@ -1,11 +1,11 @@
 <script setup lang="ts">
 import { failMsg } from '~/composables/failMessage'
 import { useQuasar } from 'quasar'
-import { confirmDialog } from '~/composables/confirmDialog'
 import ApproveDialog from '~/components/ApproveDialog.vue'
 import { fetchDbConnections } from '~/composables/dbConnections'
 import { dbChipLabels, hasWritableSelection } from '~/composables/taskDbChips'
-import { fetchDeferredWarning } from '~/composables/taskDbChanges'
+import { useTaskActions } from '~/composables/useTaskActions'
+import type { AttachmentMeta, StageUsageView, TaskResponse } from '~/composables/taskDetailTypes'
 import InterviewPanel from '~/components/InterviewPanel.vue'
 import InterviewHistoryCard from '~/components/InterviewHistoryCard.vue'
 import TaskProgressStepper from '~/components/tasks/TaskProgressStepper.vue'
@@ -20,17 +20,13 @@ import AppLogCard from '~/components/tasks/AppLogCard.vue'
 import { appLogViewable } from '~/composables/appLog'
 import TaskInterviewMockups from '~/components/tasks/TaskInterviewMockups.vue'
 import TaskDbChanges from '~/components/tasks/TaskDbChanges.vue'
-import { stageSteps, nextAction, ageOf, isDbWorkPrCreated, DB_WORK_CLOSE_REQUEST_CONFIRM, type NextActionKind } from '~/composables/taskStages'
+import { stageSteps, nextAction, ageOf, isDbWorkPrCreated, type NextActionKind } from '~/composables/taskStages'
 import { renderMarkdown } from '~/composables/useMarkdown'
 import { mrNoun, mrRef } from '~/composables/mergeRequestLabel'
 import { elapsedLabel, implementationModeLabel, implementationModeText } from '~/composables/implementationMode'
 import {
-  BASE_SYNC_ABORT_CONFIRM,
-  SYNC_BASE_CONFIRM,
-  canAbortFix,
   canFollowUp,
   canRequestFix,
-  canSyncBase,
   fixLimitReached,
   followUpPath,
   isBaseSyncRound,
@@ -43,14 +39,11 @@ import { downloadAttachment as downloadBlob } from '~/composables/attachmentDown
 import {
   closeSteps,
   obsidianLink,
-  canSkipArtifact,
-  canSkipPatch,
   patchButtonState,
   formatMb,
   startArtifactDownload,
   startPatchDownload,
   MAIL_STATUS_LABEL,
-  type CloseView,
 } from '~/composables/taskClose'
 import { useOneTimeDownload, downloadErrorMessage } from '~/composables/useOneTimeDownload'
 import RefRepoChips from '~/components/RefRepoChips.vue'
@@ -67,126 +60,6 @@ import {
 
 definePageMeta({ layout: 'default' })
 
-interface AnalysisView {
-  markdownResult: string
-  subtasksJson: string
-  durationMs: number | null
-  approved: boolean
-  approvedBy: number | null
-  approvedAt: string | null
-  completedAt: string
-}
-
-interface TaskMcpSpec {
-  name: string
-  url: string
-  transport: string
-}
-
-interface ImplementationView {
-  prUrl: string | null
-  prNumber: number | null
-  headBranch: string | null
-  headSha: string | null
-  implementationLog: string | null
-}
-
-interface DesignView {
-  designMarkdown: string
-  mockupFilesJson: string
-  designProjectId: string | null
-  designUrl: string | null
-  rejectCount: number
-  feedbackHistoryJson: string
-  approved: boolean
-  approvedBy: string | null
-  approvedAt: string | null
-  completedAt: string
-}
-
-interface DeploymentView {
-  deployUrl: string | null
-  deployHostPort: number | null
-  deployImage: string | null
-  deployedAt: string | null
-  deployLog: string | null
-}
-
-interface EnvVar {
-  key: string
-  value: string
-  secret: boolean
-}
-
-interface AttachmentMeta {
-  id: number
-  fileName: string
-  contentType: string | null
-  sizeBytes: number
-  createdAt: string
-}
-
-interface StageUsageView {
-  stage: string
-  costUsd: number
-  inputTokens: number
-  outputTokens: number
-  cacheCreationTokens: number
-  cacheReadTokens: number
-}
-
-interface TaskResponse {
-  id: number
-  githubRepo: string
-  repoAlias: string | null
-  repoCatalogId?: number | null
-  dbConnectionIds?: number[]
-  githubBranch: string
-  title: string
-  description: string
-  status: string
-  statusLabel: string
-  requesterId: string
-  retryCount: number
-  maxRetry: number
-  failureReason: string | null
-  mcpsExtra: TaskMcpSpec[]
-  envVars: EnvVar[]
-  interviewSessionId: number | null
-  /** 확정 때 구현에 넘긴 인터뷰 목업 id (스펙 2026-11-03 인터뷰 목업) — 없으면 키 없음. */
-  implementationMockupIds?: number[]
-  createdAt: string
-  updatedAt: string
-  model: string
-  effort: string
-  designRequested: boolean
-  analysis: AnalysisView | null
-  design: DesignView | null
-  implementation: ImplementationView | null
-  deployment: DeploymentView | null
-  close: CloseView | null
-  attachments: AttachmentMeta[]
-  stageUsage: StageUsageView[]
-  totalCostUsd: number | null
-  totalTokens: number | null
-  implementationMode?: string
-  implementationAttempt?: number
-  claimedAt?: string | null
-  implementationTimeoutMinutes?: number | null
-  /** 읽기 전용 참조 repo (스펙 2026-10-24 §4.9) — 인터뷰 단계면 진행 중 세션의 참조(상태 포함), 그 밖에는 작업의 참조. */
-  refRepos?: RefRepoView[]
-  /** 질문 대화에서 이어 등록했으면 그 질문 id (스펙 2026-10-24 §4.1) — "레포" 옆 출처 링크. */
-  sourceQuestionId?: number | null
-  /** 요청 게시판의 개발 요청에서 등록했으면 그 요청 id (스펙 2026-11-19 §5.4). */
-  sourceRequestId?: number | null
-  /** 수정 요청 회차 현황 (스펙 2026-11-03 §6) — 상세 응답에만 있다. */
-  fix?: FixView | null
-  /** 작업 타입 (스펙 2026-11-03 §4) — null·없음은 타입 없음(기존 작업). 칩은 타입이 있을 때만 그린다. */
-  taskType?: string | null
-  /** 이 작업 인터뷰의 superpowers 켬/끔 (설계 2026-11-03 interview-superpowers-toggle §4) — false(간단 인터뷰)일 때만 칩을 그린다. null·없음은 켬이다. */
-  interviewSuperpowersEnabled?: boolean | null
-}
-
 const route = useRoute()
 const $q = useQuasar()
 const auth = useAuthStore()
@@ -195,6 +68,16 @@ const taskId = computed(() => route.params.id as string)
 const { data: task, refresh } = useTaskPolling<TaskResponse>(() =>
   useApi(`/api/tasks/${taskId.value}`),
 )
+
+// 확인창·알림·API 호출·버튼 조건은 처리함과 공용이다(composables/useTaskActions.ts) — 템플릿이 쓰는 이름으로 연결한다.
+const actions = useTaskActions(task, refresh)
+const {
+  approveImpl: approve, retry, cancelTask, undeploy,
+  requestClose, approveClose, retryClose, cancelClose, syncBase, rejectClose, skipPatch, skipArtifact, resendMail,
+  approveFix, rejectFix, withdrawFix, abortFix, closeAction,
+  canCancelClose, canSyncBaseNow, canSkipArtifactClose, canSkipPatchClose, canAbort, canAdminRequestCloseLost,
+  baseSyncOpen, abortLabel,
+} = actions
 
 const dbChips = ref<string[]>([])
 // 고른 연결 중 구현 단계 쓰기가 열릴 수 있는 것이 있는가(스펙 2026-11-03 §6.1) — 있을 때만 "읽기 전용" 문구를 바꾼다. 응답에 칸이 없으면 false(옛 API).
@@ -242,27 +125,6 @@ function fmtCost(c: number): string {
   return '$' + (c > 0 && c < 0.01 ? c.toFixed(4) : c.toFixed(2))
 }
 
-async function approve() {
-  if (
-    !(await confirmDialog(
-      $q,
-      '승인 즉시 워커가 worktree에서 구현 + Draft PR/MR을 생성합니다.',
-      { title: '이 분석 결과를 승인하시겠습니까?', ok: '승인' },
-    ))
-  )
-    return
-  try {
-    await useApi(`/api/tasks/${taskId.value}/approve`, { method: 'POST' })
-    $q.notify({
-      type: 'positive',
-      message: '승인 완료 — 구현 큐에 진입했습니다',
-    })
-    refresh()
-  } catch (e: any) {
-    $q.notify({ type: 'negative', message: e?.data?.message ?? failMsg('승인') })
-  }
-}
-
 const showApprove = ref(false)
 const showImplRetry = ref(false)
 
@@ -275,19 +137,6 @@ function openApprove() {
 const historyOpen = ref(false)
 // 모바일 아코디언 헤더에 건수를 보여주기 위한 값 — TaskHistoryTimeline의 loaded(count)를 받는다.
 const historyCount = ref<number | null>(null)
-
-// 승인대기 취소: 요청자 본인 또는 admin — getForView가 이미 조회 시점에 두 경우만
-// 통과시키므로(그 외 403) 별도 소유권 가드 없이 재시도 버튼과 동일한 패턴을 따른다.
-async function cancelTask() {
-  if (!(await confirmDialog($q, '이 작업을 취소하시겠습니까?', { title: '작업 취소', ok: '작업 취소', cancel: '돌아가기' }))) return
-  try {
-    await useApi(`/api/tasks/${taskId.value}/cancel`, { method: 'POST' })
-    $q.notify({ type: 'positive', message: '작업이 취소되었습니다' })
-    refresh()
-  } catch (e: any) {
-    $q.notify({ type: 'negative', message: e?.data?.message ?? failMsg('취소') })
-  }
-}
 
 // 승인 직후 작업을 다시 읽으면 대화형 분석 카드(#interview-card)가 생긴다 — 관리자가 바로 대화 위치를 보도록
 // 스크롤까지 이어 준다(승인 팝업 UI/UX 개선 2026-09-06). useTaskPolling.refresh()는 진행 중 폴링이 있어도
@@ -371,132 +220,8 @@ function openDeployDialog(mode: 'deploy' | 'redeploy') {
   envDialog.value = true
 }
 
-function undeploy() {
-  $q.dialog({
-    title: '배포 중지',
-    message: '실행 중인 컨테이너를 중지하고 제거합니다. 계속할까요?',
-    ok: { label: '배포 중지', flat: true },
-    cancel: { label: '취소', flat: true },
-    persistent: true,
-  }).onOk(async () => {
-    try {
-      await useApi(`/api/tasks/${taskId.value}/undeploy`, { method: 'POST' })
-      $q.notify({ type: 'positive', message: '배포 중지 요청 등록' })
-      refresh()
-    } catch (e: any) {
-      $q.notify({
-        type: 'negative',
-        message: e?.data?.message ?? failMsg('배포 중지'),
-      })
-    }
-  })
-}
-
-async function retry() {
-  try {
-    await useApi(`/api/tasks/${taskId.value}/retry`, { method: 'POST' })
-    $q.notify({ type: 'positive', message: '재시도 큐 등록' })
-    refresh()
-  } catch (e: any) {
-    $q.notify({ type: 'negative', message: e?.data?.message ?? failMsg('재시도') })
-  }
-}
-
-// 작업 종료 (스펙 2026-10-13) — 응답에 사용량이 없으므로 액션 뒤에는 항상 refresh()로 다시 읽는다.
-// 성공 알림은 문자열(항상 positive)이거나, 서버 응답으로 정하는 함수다 — 메일 다시 보내기는 재시도가 또 실패해도 200이다.
-type CloseNotice = { type: 'positive' | 'warning'; message: string }
-const CLOSE_ACTION_NAMES: Record<string, string> = {
-  'close-request': '종료 요청',
-  'close-request/withdraw': '종료 요청 철회',
-  'close/approve': '종료 승인',
-  'close/retry': '종료 재시도',
-  'close/cancel': '종료 취소',
-  'close/sync-base': '기준 브랜치 반영',
-  'close/reject': '종료 반려',
-  'close/skip-patch': '패치 없이 마무리',
-  'close/skip-artifact': '산출물 없이 마무리',
-  'close/mail/resend': '메일 다시 보내기',
-  'fix-requests/approve': '수정 요청 승인',
-  'fix-requests/reject': '수정 요청 반려',
-  'fix-requests/withdraw': '수정 요청 철회',
-  'fix-requests/abort': '수정 중단',
-}
-let closeInFlight = false
-async function closeAction(
-  path: string,
-  ok: string | ((res: { status?: string } | null) => CloseNotice),
-  body?: Record<string, string>,
-) {
-  if (closeInFlight) return // 요청이 끝나기 전의 중복 클릭은 무시한다
-  closeInFlight = true
-  try {
-    const res = await useApi<{ status?: string } | null>(`/api/tasks/${taskId.value}/${path}`, { method: 'POST', body })
-    $q.notify(typeof ok === 'function' ? ok(res) : { type: 'positive', message: ok })
-    refresh()
-  } catch (e: any) {
-    // 어느 동작이 실패했는지 말한다 — 예전엔 종료·수정 동작 여럿이 '요청 실패' 하나를 같이 썼다(2026-11-11 검토)
-    $q.notify({ type: 'negative', message: e?.data?.message ?? failMsg(CLOSE_ACTION_NAMES[path] ?? '요청') })
-  } finally {
-    closeInFlight = false
-  }
-}
-
-async function requestClose() {
-  // DB 작업 PR생성(스펙 2026-11-03 §6.9)은 띄운 앱이 없으니 배포 결과가 아니라 개발 DB 반영 결과를 묻는다
-  const message = task.value && isDbWorkPrCreated(task.value)
-    ? DB_WORK_CLOSE_REQUEST_CONFIRM
-    : '배포 결과를 확인했나요? 관리자가 승인하면 PR을 main에 병합하고, 배포를 중지하고, 브랜치를 삭제합니다. 병합은 되돌릴 수 없습니다.'
-  if (!(await confirmDialog($q, message, { title: '종료 요청', ok: '종료 요청' }))) return
-  await closeAction('close-request', '종료 요청 등록')
-}
-
-async function approveClose() {
-  // 승인 대기 SQL이 남아 있으면 확인창에 건수 한 줄을 덧붙인다(스펙 2026-11-03 §6.5) — 조회가 실패하면 경고 없이 그대로 승인할 수 있다
-  const warning = await fetchDeferredWarning(taskId.value)
-  if (!(await confirmDialog($q, `PR을 main에 병합하고, 배포를 중지하고, 옵시디언 노트를 쓴 뒤 브랜치를 삭제합니다. 되돌릴 수 없습니다.${warning}`, { title: '종료 승인', ok: '병합하고 종료' }))) return
-  await closeAction('close/approve', '종료 큐 등록')
-}
-
-async function retryClose() {
-  if (!(await confirmDialog($q, '남은 종료 단계(병합 포함 가능)를 다시 실행합니다. 병합은 되돌릴 수 없습니다.', { title: '종료 재시도', ok: '종료 재시도' }))) return
-  await closeAction('close/retry', '종료 재시도 큐 등록')
-}
-
-// 배포중단됨에서 관리자의 주 행동은 재배포라 종료 요청은 보조 버튼으로 — 관리자가 직접 등록한 작업은 이것 말고 종료할 길이 없다(API는 허용)
-const canAdminRequestCloseLost = computed(() => auth.isAdmin && task.value?.status === 'DEPLOY_LOST')
-
 // DB 작업 PR생성에서 관리자의 주 행동은 종료 요청(스펙 2026-11-03 §6.9)이라 배포는 보조 버튼 — DB 작업도 앱을 다시 띄우고 싶을 수 있어 길은 그대로 둔다
 const canAdminDeploySecondary = computed(() => auth.isAdmin && !!task.value && isDbWorkPrCreated(task.value))
-
-// 병합 전(MERGED 없음) 종료실패만 취소할 수 있다 — 서버도 같은 규칙으로 409를 낸다
-const canCancelClose = computed(
-  () => auth.isAdmin && task.value?.status === 'CLOSE_FAILED' && !(task.value.close?.progress ?? []).includes('MERGED'),
-)
-
-async function cancelClose() {
-  if (!(await confirmDialog($q, '병합 전 단계에서 실패한 종료를 취소하고 배포 상태로 되돌립니다.', { title: '종료 취소', ok: '종료 취소', cancel: '돌아가기' }))) return
-  await closeAction('close/cancel', '종료 취소')
-}
-
-// 기준 브랜치 반영 — 병합 전 종료실패에서 관리자가 연다(충돌 등). 종료를 취소하고 작업 브랜치에 기준 브랜치를 합친 뒤 자동 재배포한다.
-const canSyncBaseNow = computed(() => !!task.value && canSyncBase(task.value, auth.isAdmin))
-
-async function syncBase() {
-  if (!task.value) return
-  if (!(await confirmDialog($q, SYNC_BASE_CONFIRM(task.value.githubBranch), { title: '기준 브랜치 반영', ok: '기준 브랜치 반영', cancel: '돌아가기' }))) return
-  await closeAction('close/sync-base', '기준 브랜치 반영을 시작했습니다')
-}
-
-function rejectClose() {
-  $q.dialog({
-    title: '종료 반려',
-    message: '반려 사유를 입력하세요 (등록자에게 보입니다)',
-    prompt: { model: '', type: 'text', isValid: (v: string) => v.trim().length > 0 },
-    ok: { label: '반려', flat: true },
-    cancel: { label: '취소', flat: true },
-    persistent: true,
-  }).onOk((reason: string) => closeAction('close/reject', '종료 반려', { reason: reason.trim() }))
-}
 
 const liveLog = ref('')
 let logSource: EventSource | null = null
@@ -603,7 +328,6 @@ const action = computed(() => (task.value ? nextAction(task.value, auth.isAdmin,
 // 배포 뒤 수정 요청 (스펙 2026-11-03 §6·§7) — 요청·승인·반려·철회·중단·이력. 액션은 종료 액션과 같은 POST → 알림 → 재조회 흐름이라 closeAction을 쓴다.
 const showFixRequest = ref(false)
 const canFixRequest = computed(() => !!task.value && canRequestFix(task.value, auth.isAdmin, isOwner.value))
-const canAbort = computed(() => !!task.value && canAbortFix(task.value, auth.isAdmin))
 const showFollowUp = computed(() => !!task.value && canFollowUp(task.value, auth.isAdmin, isOwner.value))
 const followUpHref = computed(() => (task.value ? followUpPath(task.value) : '/tasks'))
 const fixNextRound = computed(() => (task.value?.fix?.approvedRounds ?? 0) + 1)
@@ -638,58 +362,6 @@ watch(
   },
 )
 
-function approveFix() {
-  $q.dialog({
-    title: '수정 요청 승인',
-    message: '구현 방식을 고르세요. 승인하면 같은 브랜치에서 이어 고친 뒤 자동으로 다시 배포합니다.',
-    options: {
-      type: 'radio',
-      model: 'REVIEW',
-      items: [
-        { label: '리뷰 — 구현 뒤 Opus 리뷰 1회 (기본)', value: 'REVIEW' },
-        { label: '직접 — 리뷰 없이 바로 구현', value: 'DIRECT' },
-      ],
-    },
-    ok: { label: '승인', flat: true, 'data-test': 'fix-approve-ok' },
-    cancel: { label: '취소', flat: true },
-    persistent: true,
-  }).onOk((mode: string) => closeAction('fix-requests/approve', '수정 요청 승인 — 구현 큐에 넣었습니다', { implementationMode: mode }))
-}
-
-function rejectFix() {
-  $q.dialog({
-    title: '수정 요청 반려',
-    message: '반려 사유를 입력하세요 (등록자에게 보입니다)',
-    prompt: { model: '', type: 'text', isValid: (v: string) => v.trim().length > 0 },
-    ok: { label: '반려', flat: true, 'data-test': 'fix-reject-ok' },
-    cancel: { label: '취소', flat: true },
-    persistent: true,
-  }).onOk((reason: string) => closeAction('fix-requests/reject', '수정 요청 반려', { reason: reason.trim() }))
-}
-
-async function withdrawFix() {
-  if (!(await confirmDialog($q, '수정 요청을 철회할까요? 직전 상태로 돌아가고, 필요하면 다시 요청할 수 있습니다.', { title: '수정 요청 철회', ok: '철회' }))) return
-  await closeAction('fix-requests/withdraw', '수정 요청 철회')
-}
-
-// 기준 브랜치 반영 회차면 중단 버튼·메뉴 라벨이 `반영 중단`이고 종료 요청 전 상태로 돌아간다(서버가 반영 직전 상태로 되돌림)
-const baseSyncOpen = computed(() => !!task.value && isBaseSyncRound(task.value))
-const abortLabel = computed(() => (baseSyncOpen.value ? '반영 중단' : '수정 중단'))
-
-async function abortFix() {
-  if (baseSyncOpen.value) {
-    if (!(await confirmDialog($q, BASE_SYNC_ABORT_CONFIRM, { title: '반영 중단', ok: '반영 중단' }))) return
-    await closeAction('fix-requests/abort', '기준 브랜치 반영 중단 — 종료 요청 전 상태로 되돌렸습니다')
-    return
-  }
-  if (!(await confirmDialog(
-    $q,
-    '수정 회차를 닫고 PR생성 상태로 되돌립니다. 이전 배포가 아직 떠 있으면 먼저 그 배포를 중지합니다. 이 브랜치에는 배포되지 않은 커밋이 남아 있을 수 있어요 — 이어서 배포하려면 PR생성에서 다시 배포하세요. 이 회차는 실패한 회차로 세어집니다.',
-    { title: '수정 중단', ok: '수정 중단' },
-  ))) return
-  await closeAction('fix-requests/abort', '수정 중단 — 회차를 닫았습니다')
-}
-
 // 구현 방식·경과 시간 (스펙 2026-10-15 §7) — 경과는 마운트 뒤 30초마다 다시 계산(API 호출 없음)
 const nowTick = useNowTick()
 const elapsed = computed(() => (task.value ? elapsedLabel(task.value, nowTick.value) : null))
@@ -711,10 +383,6 @@ const canResendMail = computed(() => {
   const mail = t.close.mail
   return mail ? ['FAILED', 'NO_ADDRESS', 'DISABLED'].includes(mail.status) : t.close.artifactMode === 'REQUIRED'
 })
-const canSkipArtifactClose = computed(
-  () => auth.isAdmin && !!task.value && canSkipArtifact(task.value.close, task.value.status),
-)
-
 // 내려받기 주소 토큰은 1회용 — 연타·성공 직후 쿨다운 잠금은 useOneTimeDownload가 맡는다(산출물·부분 패치 공용 규칙).
 const artifactDownload = useOneTimeDownload((id) => startArtifactDownload(id, (u, o) => useApi<{ url: string }>(u, o)))
 const downloadingArtifact = artifactDownload.busy
@@ -730,9 +398,6 @@ async function downloadArtifact() {
 // 종료 부분 패치(스펙 2026-11-10) — 내려받기는 등록자 본인·관리자, 패치 없이 마무리는 관리자
 const patchState = computed(() => patchButtonState(task.value?.close))
 const canDownloadPatch = computed(() => patchState.value === 'download' && (auth.isAdmin || isOwner.value))
-const canSkipPatchClose = computed(
-  () => auth.isAdmin && !!task.value && canSkipPatch(task.value.close, task.value.status),
-)
 const patchDownload = useOneTimeDownload((id) => startPatchDownload(id, (u, o) => useApi<{ url: string }>(u, o)))
 async function downloadPatch() {
   try {
@@ -740,24 +405,6 @@ async function downloadPatch() {
   } catch (e: unknown) {
     $q.notify({ type: 'negative', message: downloadErrorMessage(e) })
   }
-}
-async function skipPatch() {
-  if (!(await confirmDialog($q, '부분 패치 없이 배포 중지·노트·브랜치 정리를 이어 갑니다.', { title: '패치 없이 마무리', ok: '패치 없이 마무리' }))) return
-  await closeAction('close/skip-patch', '패치 없이 마무리 — 종료 큐 등록')
-}
-
-// 서버는 재시도 결과 상태를 200으로 돌려준다(스펙 2026-10-14 §7) — SENT만 성공이고 나머지는 경고로 결과를 알린다.
-async function resendMail() {
-  await closeAction('close/mail/resend', (res) =>
-    res?.status === 'SENT'
-      ? { type: 'positive', message: '메일 다시 보내기 완료' }
-      : { type: 'warning', message: `메일 다시 보내기 결과: ${MAIL_STATUS_LABEL[res?.status ?? ''] ?? res?.status ?? '알 수 없음'}` },
-  )
-}
-
-async function skipArtifact() {
-  if (!(await confirmDialog($q, '산출물 없이 노트·브랜치 정리를 이어 갑니다. 메일은 보내지 않습니다.', { title: '산출물 없이 마무리', ok: '산출물 없이 마무리' }))) return
-  await closeAction('close/skip-artifact', '산출물 없이 마무리 — 종료 큐 등록')
 }
 const stepCaption = computed(() => {
   const t = task.value

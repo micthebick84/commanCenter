@@ -74,6 +74,10 @@
 | 키보드 | `j` 다음 / `k` 이전 — 입력칸에 포커스가 있을 때는 동작 안 함 | 설계자 제안 |
 | 들어가는 곳 | 데스크톱 위 탭 “처리함”+배지, 폰 관리자 하단 바 “처리함”+배지(작업 탭의 관리자 배지는 처리함으로 옮김) | 설계자 제안 |
 | 서버 | 변경 없음. 목록은 `sort=updatedAt,desc&size=200` | 설계자 제안 |
+| 보내지 않은 참조 변경 | 쓰던 답변처럼 세션별로 유지 | 설계자 제안(설계 검토에서 나옴) |
+| 레거시 `FAILED` 재시도 소진 건 | 처리함·관리자 배지에서 뺌(할 수 있는 처리가 없음) | 설계자 제안(설계 검토에서 나옴) |
+| 배포중단됨의 배포 중지 | 상세와 같이 처리함에도 둠 | 설계자 제안(설계 검토에서 나옴) |
+| 주소의 `?task=` | 조회되면 그 작업, 404면 맨 위, 방문 기록은 쌓지 않음(`replace`) | 설계자 제안(설계 검토에서 나옴) |
 
 ## 5. 화면
 
@@ -99,6 +103,7 @@
   | 종료 승인 | `CLOSE_REVIEW` |
   | 실패 | `FAILED`, `DESIGN_FAILED`, `IMPLEMENTATION_FAILED`, `DEPLOY_FAILED`, `DEPLOY_LOST`, `CLOSE_FAILED` |
 
+- **뺄 것 하나**: 재시도 한도를 다 쓴 `FAILED`(`retryCount >= maxRetry`)는 처리함·관리자 배지에 넣지 않는다. 레거시 자동분석 경로(`TaskRecovery`·워커 분석 실패)에서만 생기는 상태이고, 상세 화면도 재시도 버튼이 꺼져 있으며 서버도 409로 막아 처리함에서 할 수 있는 것이 없다 — 남겨 두면 “모두 처리했습니다”에 영영 닿지 못한다. 작업 목록·상세에서는 그대로 보인다.
 - 묶음 안은 `updatedAt` 오름차순(오래 기다린 건이 위). 상태가 바뀔 때 `updatedAt`이 갱신되므로 “그 상태로 기다린 시간”에 가깝다.
 - 행: `#id 제목`(한 줄 말줄임), 레포 별칭, 상태 칩(`CHIP` 색), 타입 칩(있을 때), 대기 시간(`ageOf(updatedAt)`). 고른 행은 강조.
 - 처리한 건은 목록 폴링이 따라오기 전에도 바로 숨긴다(§5.4).
@@ -129,7 +134,7 @@
 | 실패·디자인실패 | 실패 사유 | 재시도 | 성공 |
 | 구현실패 | 실패 사유, PR/MR·브랜치 링크 | 구현 재시도(`ImplementationRetryDialog`, 회차 정보 포함) · 회차면 수정 중단/반영 중단 | 재시도 창 `submitted` / 중단 성공 |
 | 배포실패 | 실패 사유(배포 로그는 `상세 열기`) | 재배포(`DeployEnvDialog`) · 수정 요청(`FixRequestDialog`, 가능할 때) | 창 `submitted` |
-| 배포중단됨 | 실패 사유, 배포 주소 | 재배포 · 종료 요청 · 수정 요청(가능할 때) | 성공·창 `submitted` |
+| 배포중단됨 | 실패 사유, 배포 주소 | 재배포 · 종료 요청 · 배포 중지(확인창) · 수정 요청(가능할 때) | 성공·창 `submitted` |
 | 종료실패 | 실패 사유, 종료 단계 목록 | 종료 재시도 · 기준 브랜치 반영(가능할 때) · 종료 취소(병합 전) · 산출물 없이 마무리 · 패치 없이 마무리(가능할 때) | 성공 |
 
 **처리할 것이 없는 상태**(고른 건이 다른 곳에서 처리됐거나 처리 뒤 자동 이동을 껐을 때)
@@ -148,9 +153,13 @@
 
 ### 5.5 건 전환 · 키보드 · 쓰던 답변
 
-- 고른 작업은 주소 쿼리 `?task={id}`에 둔다(새로 고침·뒤로 가기·링크). 들어왔을 때 쿼리가 없거나 그 작업이 목록에 없으면 맨 위 건을 고른다(쿼리의 작업이 확인 필요에서 빠진 경우에는 §5.3 “처리할 것이 없는 상태”로 그 작업을 보인다).
+- 고른 작업은 주소 쿼리 `?task={id}`에 둔다(새로 고침·링크로 같은 건을 다시 연다). 쿼리를 바꿀 때는 `router.replace`로 — 건 전환·자동 이동·`j`/`k`가 방문 기록을 쌓지 않아, 뒤로 가기는 처리함을 떠난다.
+  - 쿼리의 작업은 `GET /api/tasks/{id}`가 되면 목록에 있든 없든 그 작업을 보인다(확인 필요가 아니면 §5.3 “처리할 것이 없는 상태”). 쿼리가 없거나 그 조회가 404이면 목록 맨 위 건을 고르고 쿼리를 그것으로 바꾼다. 목록이 비어 있으면 쿼리를 지운다.
+  - 폰은 쿼리에 작업이 있으면 처리 창을 연 채로 시작한다. 창을 닫으면 쿼리를 지운다.
 - `j` 다음 / `k` 이전(목록 순서). 포커스가 `input`·`textarea`·`[contenteditable]` 안이면 무시한다. 다이얼로그가 열려 있어도 무시한다.
-- 쓰던 답변: 처리함이 세션 id별 답변 글을 메모리에 들고 대화 패널과 양방향으로 묶는다(§7.4 `draft`). 다른 건을 갔다 돌아오면 남아 있고, 처리함을 떠나면 사라진다. 고른 첨부 파일은 전환 때 사라진다(안내 없음 — 승인 폼의 선택값도 전환 때 기본값으로 돌아간다).
+- 쓰던 답변: 처리함이 세션 id별 답변 글을 메모리에 들고 대화 패널과 양방향으로 묶는다(§7.4 `draft`). 다른 건을 갔다 돌아오면 남아 있고, 처리함을 떠나면 사라진다.
+- 보내지 않은 참조 변경(“✎ 참조 변경”으로 고친 초안)도 같은 방식으로 세션 id별로 남긴다(§7.2) — 답변 글만 남고 참조 변경이 사라지면 관리자가 모르고 참조 없이 답을 보낸다.
+- 고른 첨부 파일은 전환 때 사라진다(안내 없음). 승인 폼의 선택값도 전환 때 미리 채운 값으로 돌아간다.
 
 ### 5.6 폰 (`$q.screen.lt.md`)
 
@@ -182,7 +191,7 @@
 
 ### 7.1 작업 동작 공용 모듈 — `composables/useTaskActions.ts`
 
-`pages/tasks/[id].vue`의 동작 함수를 옮긴다: `approve`(레거시 구현 승인)·`retry`·`cancelTask`·`closeAction`과 그 위의 `requestClose`·`approveClose`·`retryClose`·`cancelClose`·`syncBase`·`rejectClose`·`skipPatch`·`skipArtifact`·`approveFix`·`rejectFix`·`withdrawFix`·`abortFix`, 그리고 버튼 표시 판정(`canCancelClose`·`canSyncBaseNow`·`canSkipArtifactClose`·`canSkipPatchClose`·`canAbort`·`canFixRequest`·`canAdminRequestCloseLost`).
+`pages/tasks/[id].vue`의 동작 함수를 옮긴다: `approve`(레거시 구현 승인)·`retry`·`cancelTask`·`undeploy`(배포 중지)·`closeAction`과 그 위의 `requestClose`·`approveClose`·`retryClose`·`cancelClose`·`syncBase`·`rejectClose`·`skipPatch`·`skipArtifact`·`approveFix`·`rejectFix`·`withdrawFix`·`abortFix`, 그리고 버튼 표시 판정(`canCancelClose`·`canSyncBaseNow`·`canSkipArtifactClose`·`canSkipPatchClose`·`canAbort`·`canFixRequest`·`canAdminRequestCloseLost`).
 - 입력: 작업 `Ref`, 다시 읽기 함수. 판정 계산에 쓰는 `isAdmin`·`isOwner`는 지금처럼 스토어에서 읽는다.
 - 각 동작은 **`Promise<boolean>`**(서버가 받아들였으면 true, 확인창 취소·실패면 false)을 돌려준다. `$q.dialog().onOk` 기반(`approveFix`·`rejectFix`·`rejectClose`)도 약속으로 감싼다. 상세는 반환값을 쓰지 않는다.
 - 확인창 문구·알림 문구·중복 클릭 방지(`closeInFlight`)는 그대로.
@@ -191,7 +200,9 @@
 
 ### 7.2 인터뷰 참조 초안 공용 모듈 — `composables/useInterviewRefDraft.ts`
 
-상세의 참조 초안(`pickedRefs`·`refsSeededFor`·`refsSyncedTo`·그 `watch`·`answerRefs`·`canChangeRefs`·`showRefRow`)을 옮겨 상세와 처리함이 같이 쓴다. 규칙(세션마다 시드, 보내지 않은 변경이 없을 때만 서버 집합을 따라감)은 그대로. 받아들이는 기준: `test/task-detail-refs.spec.ts`가 고치지 않고 통과한다.
+상세의 참조 초안(`pickedRefs`·`refsSeededFor`·`refsSyncedTo`·그 `watch`·`answerRefs`·`canChangeRefs`·`showRefRow`)을 옮겨 상세와 처리함이 같이 쓴다. 규칙(세션마다 시드, 보내지 않은 변경이 없을 때만 서버 집합을 따라감)은 그대로.
+- 처리함은 세션 id별 초안 저장소(메모리)를 넘겨, 다른 세션으로 갔다 돌아오면 그 세션의 초안(과 맞춘 서버 집합)을 되살린다(§5.5). 저장소를 넘기지 않으면(상세) 지금처럼 세션이 바뀔 때 새로 시드한다.
+- 받아들이는 기준: `test/task-detail-refs.spec.ts`가 고치지 않고 통과한다.
 
 ### 7.3 승인 폼 분리 — `components/ApproveForm.vue`
 
@@ -219,12 +230,12 @@
 
 ## 8. 시험
 
-- `taskInbox.spec.ts`(순수): 묶음·순서·대기 시간 정렬, **확인 필요 상태 전부가 정확히 한 묶음에 들고 묶음의 상태는 전부 확인 필요인지**(`STAGES`의 모든 상태로 `attentionGroup(…, true)`를 돌려 대조 — 새 대기 상태가 생기면 이 시험이 깨진다), 처리한 건 숨기기(같은 status·updatedAt이면 숨김, updatedAt이 바뀌면 다시 보임), 다음 건 = 맨 위, 200건 안내 판정, 키보드 무시 판정.
+- `taskInbox.spec.ts`(순수): 묶음·순서·대기 시간 정렬, **확인 필요 상태 전부가 정확히 한 묶음에 들고 묶음의 상태는 전부 확인 필요인지**(`STAGES`의 모든 상태로 `attentionGroup(…, true)`를 돌려 대조 — 새 대기 상태가 생기면 이 시험이 깨진다), 처리한 건 숨기기(같은 status·updatedAt이면 숨김, updatedAt이 바뀌면 다시 보임), 다음 건 = 맨 위, 재시도 한도를 다 쓴 `FAILED` 제외, 200건 안내 판정, 키보드 무시 판정.
 - `useTaskActions` 단위: 각 동작이 성공 true·확인창 취소 false·실패 false를 돌려주는지, `onOk` 감싼 동작 포함.
-- `inbox` 페이지(`test/inbox-page.spec.ts`): 묶음 렌더, 고르기·쿼리 반영, 상태별 본문 표의 각 줄(대표 버튼이 보이고 공용 동작을 부르는지), 성공 → 다음 건 이동·토글 끄면 머무름, 확인창 취소 → 머무름, 다른 곳에서 처리됨 → “처리할 것이 없는 상태”, `INTERVIEWING`이면 패널 유지, 쓰던 답변이 건 전환 뒤에도 남음, 입력칸 안의 `j`/`k` 무시, 폰 폭(`setViewportWidth`)에서 창 열기·자동 이동·마지막 건 뒤 창 닫힘, 200건 안내.
+- `inbox` 페이지(`test/inbox-page.spec.ts`): 묶음 렌더, 고르기·쿼리 반영, 상태별 본문 표의 각 줄(대표 버튼이 보이고 공용 동작을 부르는지), 성공 → 다음 건 이동·토글 끄면 머무름, 확인창 취소 → 머무름, 다른 곳에서 처리됨 → “처리할 것이 없는 상태”, `INTERVIEWING`이면 패널 유지, 쓰던 답변과 보내지 않은 참조 변경이 건 전환 뒤에도 남음, 쿼리 규칙(목록에 없는 작업도 조회되면 보임·404면 맨 위·`replace`), 배포중단됨의 배포 중지, 입력칸 안의 `j`/`k` 무시, 폰 폭(`setViewportWidth`)에서 창 열기·자동 이동·마지막 건 뒤 창 닫힘, 200건 안내.
 - 기존 시험 무수정 통과: `test/task-detail-*.spec.ts` 전부, `ApproveDialog.spec.ts`, `InterviewPanel.spec.ts`.
 - `layout-default.spec.ts`: 관리자 위 탭·5칸 하단 바·배지 위치, 관리자 아닌 사람은 그대로. `auth-middleware.spec.ts`: `/inbox` 관리자 검사.
-- 하이드레이션 스모크: `npm run build && npm run test:hydration` 통과(새 경로 포함, “목 응답이 없어 null로 답한 API” 없음).
+- 하이드레이션 스모크: `npm run build && npm run test:hydration` 통과(새 경로 포함, “목 응답이 없어 null로 답한 API” 없음). `node_modules`를 라이브에서 정션으로 빌린 worktree에서는 돌리지 않고(playwright-core 설치가 라이브 `node_modules`를 바꾼다) CI frontend 잡의 “Hydration smoke” 스텝으로 확인한다.
 - 린트: `npm run lint` 경고를 늘리지 않는다.
 
 ## 9. 배포

@@ -169,6 +169,31 @@ describe('InboxTaskPane — 승인·실패 본문', () => {
     expect(wr.emitted('done')).toHaveLength(1)
   })
 
+  it('재시도_한도를_다_쓴_FAILED는_처리할_것이_없는_상태다', async () => {
+    const wr = await mountPane(task('FAILED', { retryCount: 3, maxRetry: 3, failureReason: '사유' }))
+    expect(wr.find('[data-test="inbox-body-idle"]').exists()).toBe(true)
+    expect(wr.find('[data-test="inbox-act-retry"]').exists()).toBe(false)
+  })
+
+  it('INTERVIEWING은_대화_패널을_계속_보인다', async () => {
+    const wr = await mountPane(task('INTERVIEWING', { interviewSessionId: 55 }))
+    expect(wr.find('[data-test="inbox-agent-working"]').exists()).toBe(true)
+    expect(wr.find('[data-test="inbox-body-idle"]').exists()).toBe(false)
+  })
+
+  it('DESIGN_REVIEW_카드_refresh_뒤_작업을_다시_읽는다', async () => {
+    const design = {
+      designMarkdown: '# d', mockupFilesJson: '[]', designProjectId: null, designUrl: null, rejectCount: 0,
+      feedbackHistoryJson: '[]', approved: false, approvedBy: null, approvedAt: null,
+    }
+    const wr = await mountPane(task('DESIGN_REVIEW', { design }), { DesignReviewCard: true })
+    const reads = () => useApiMock.mock.calls.filter((c) => c[0] === '/api/tasks/42').length
+    const before = reads()
+    wr.findComponent(DesignReviewCard).vm.$emit('refresh')
+    await flushPromises()
+    expect(reads()).toBeGreaterThan(before)
+  })
+
   it('확인_필요_상태마다_본문이_있다', async () => {
     const design = {
       designMarkdown: '# d', mockupFilesJson: '[]', designProjectId: null, designUrl: null, rejectCount: 0,

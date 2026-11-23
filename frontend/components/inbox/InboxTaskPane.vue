@@ -150,6 +150,7 @@ const body = computed<Body | null>(() => {
   if (!t) return null
   if (isInterviewPhase.value && t.interviewSessionId != null) return 'interview'
   if (t.status === 'AWAITING_APPROVAL') return 'approve'
+  if (!isInboxCandidate(t)) return 'idle' // 재시도 한도를 다 쓴 실패 등 — 처리할 것이 없는 상태(스펙 §5.2)
   if (GATE_STATUSES.includes(t.status)) return 'gate'
   if (FAILURE_STATUSES.includes(t.status)) return 'failure'
   return 'idle'
@@ -292,7 +293,7 @@ async function downloadAttachment(att: Pick<AttachmentMeta, 'id' | 'fileName'>) 
           />
         </template>
 
-        <InboxGateActions v-else-if="body === 'gate'" :task="task" :actions="actions" data-test="inbox-body-gate" @done="emitDone()" />
+        <InboxGateActions v-else-if="body === 'gate'" :task="task" :actions="actions" data-test="inbox-body-gate" @done="onFormDone" />
 
         <InboxFailureActions
           v-else-if="body === 'failure'"

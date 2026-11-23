@@ -53,6 +53,13 @@ describe('middleware/auth.global — 첫 로드(SSR 하이드레이션 전)', ()
     expect(navigateToMock).toHaveBeenCalledExactlyOnceWith('/tasks', HARD)
   })
 
+  // 라우터는 끝 슬래시·대소문자를 가리지 않아(strict·sensitive 끔) 같은 처리함 페이지로 간다 — 검사도 같은 경로로 본다
+  it.each(['/inbox/', '/INBOX', '/Inbox/'])('비관리자가_%s(같은_처리함)로_가도_/tasks로', (path) => {
+    Object.assign(auth, { isAuthenticated: true, isAdmin: false })
+    middleware({ path })
+    expect(navigateToMock).toHaveBeenCalledExactlyOnceWith('/tasks', HARD)
+  })
+
   it('관리자는_/inbox_통과', () => {
     Object.assign(auth, { isAuthenticated: true, isAdmin: true })
     expect(middleware({ path: '/inbox' })).toBeUndefined()

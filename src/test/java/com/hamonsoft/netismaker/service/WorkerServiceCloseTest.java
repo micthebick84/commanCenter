@@ -14,6 +14,7 @@ import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.data.domain.Limit;
+import org.springframework.http.HttpStatus;
 import org.springframework.test.util.ReflectionTestUtils;
 
 import java.math.BigDecimal;
@@ -207,6 +208,39 @@ class WorkerServiceCloseTest {
         assertThat(h.getValue().getTaskId()).isEqualTo(25L);
         assertThat(h.getValue().getReason()).isEqualTo("기준 브랜치 변경: netismaker/task-7 → main (작업 #7 종료로 병합·삭제)");
         assertThat(t.getCloseProgress()).endsWith("BRANCH_DELETED");
+    }
+
+    @Test
+    void progress_브랜치유지_MERGED_409() {
+        Task t = task(TaskStatus.CLOSING);
+        t.setWorkerId("w1");
+        t.setCloseKeepBranch(true);
+        when(taskRepo.findActiveByIdForUpdate(7L)).thenReturn(Optional.of(t));
+        assertThatThrownBy(() -> service.recordCloseProgress(7L, new CloseProgressRequest("w1", CloseStep.MERGED, "abc", null)))
+                .isInstanceOfSatisfying(TaskException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT));
+        assertThat(t.getCloseProgress()).isNull();
+    }
+
+    @Test
+    void progress_브랜치유지_BRANCH_DELETED_409() {
+        Task t = task(TaskStatus.CLOSING);
+        t.setWorkerId("w1");
+        t.setCloseKeepBranch(true);
+        when(taskRepo.findActiveByIdForUpdate(7L)).thenReturn(Optional.of(t));
+        assertThatThrownBy(() -> service.recordCloseProgress(7L, new CloseProgressRequest("w1", CloseStep.BRANCH_DELETED, null, null)))
+                .isInstanceOfSatisfying(TaskException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT));
+        verify(taskRepo, never()).findActiveByBaseBranch(any(), any(), any());
+    }
+
+    @Test
+    void closed_브랜치유지_병합없이_완료() {
+        Task t = task(TaskStatus.CLOSING);
+        t.setWorkerId("w1");
+        t.setCloseKeepBranch(true);
+        t.setCloseProgress("UNDEPLOYED,NOTE_WRITTEN");
+        when(taskRepo.findActiveByIdForUpdate(7L)).thenReturn(Optional.of(t));
+        service.recordResult(7L, WorkerResultRequest.closed("w1", null));
+        assertThat(t.getStatus()).isEqualTo(TaskStatus.CLOSED);
     }
 
     @Test

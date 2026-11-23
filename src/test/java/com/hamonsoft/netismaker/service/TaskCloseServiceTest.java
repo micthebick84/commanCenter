@@ -278,6 +278,86 @@ class TaskCloseServiceTest {
         assertThat(u.getRequesterEmail()).isEqualTo("keep@hamonsoft.co.kr");
     }
 
+    // ── 병합하지 않고 종료 (스펙 2026-11-23) ──
+
+    @Test
+    void approve_바디없음_병합종료() {
+        Task t = task(TaskStatus.CLOSE_REVIEW);
+        Task r = service.approve(42L, "admin");
+        assertThat(r.isCloseKeepBranch()).isFalse();
+        assertThat(r.getClosePatchMode()).isNull();
+        ArgumentCaptor<TaskStatusHistory> h = ArgumentCaptor.forClass(TaskStatusHistory.class);
+        verify(historyRepo).save(h.capture());
+        assertThat(h.getValue().getReason()).doesNotContain("병합 안 함");
+    }
+
+    @Test
+    void approve_브랜치유지() {
+        Task t = reviewTaskWithCatalog(patchCatalog(true, "mvn package"));
+        RepoCatalogEntry e = patchCatalog(true, "mvn package");
+        e.setArtifactEnabled(true);
+        when(catalogRepo.findById(5L)).thenReturn(Optional.of(e));
+        TaskCloseService svc = new TaskCloseService(taskRepo, historyRepo, catalogRepo,
+                new CloseArtifactProperties(true, null), new ClosePatchProperties(true, null),
+                mock(TaskFixRequestRepository.class), 3);
+
+        Task r = svc.approve(42L, "admin", true);
+
+        assertThat(r.isCloseKeepBranch()).isTrue();
+        assertThat(r.getClosePatchMode()).isNull();
+        assertThat(r.getCloseArtifactMode()).isEqualTo("REQUIRED");
+        ArgumentCaptor<TaskStatusHistory> h = ArgumentCaptor.forClass(TaskStatusHistory.class);
+        verify(historyRepo).save(h.capture());
+        assertThat(h.getValue().getReason()).endsWith(" (병합 안 함·브랜치 유지)");
+    }
+
+    @Test
+    void cancel_브랜치유지_진행없음_허용() {
+        Task t = task(TaskStatus.CLOSE_FAILED);
+        t.setCloseKeepBranch(true);
+        t.setCloseProgress(null);
+        when(historyRepo.findByTaskIdOrderByAtDescIdDesc(eq(42L), any())).thenReturn(List.of(
+                TaskStatusHistory.log(42L, TaskStatus.DEPLOYED, TaskStatus.CLOSE_REVIEW, "user", "user1", "종료 요청")));
+        Task r = service.cancel(42L, "admin");
+        assertThat(r.getStatus()).isEqualTo(TaskStatus.DEPLOYED);
+        assertThat(r.isCloseKeepBranch()).isFalse();
+    }
+
+    @Test
+    void cancel_브랜치유지_단계있음_409() {
+        Task t = task(TaskStatus.CLOSE_FAILED);
+        t.setCloseKeepBranch(true);
+        t.setCloseProgress("UNDEPLOYED");
+        assertThatThrownBy(() -> service.cancel(42L, "admin"))
+                .isInstanceOf(TaskException.class)
+                .hasMessage("이미 진행된 단계가 있어 종료를 취소할 수 없습니다 — 재시도로 마무리하세요")
+                .satisfies(e -> assertThat(((TaskException) e).getStatus()).isEqualTo(HttpStatus.CONFLICT));
+        assertThat(t.getStatus()).isEqualTo(TaskStatus.CLOSE_FAILED);
+        assertThat(t.isCloseKeepBranch()).isTrue();
+        verify(historyRepo, never()).save(any());
+    }
+
+    @Test
+    void skipArtifact_브랜치유지_병합없이_허용() {
+        Task t = task(TaskStatus.CLOSE_FAILED);
+        t.setCloseKeepBranch(true);
+        t.setCloseArtifactMode("REQUIRED");
+        t.setCloseProgress("UNDEPLOYED");
+        Task r = service.skipArtifact(42L, "admin", null);
+        assertThat(r.getStatus()).isEqualTo(TaskStatus.CLOSE_PENDING);
+        assertThat(r.getCloseArtifactMode()).isEqualTo("SKIPPED");
+    }
+
+    @Test
+    void retry_브랜치유지_모드유지() {
+        Task t = task(TaskStatus.CLOSE_FAILED);
+        t.setCloseKeepBranch(true);
+        t.setCloseProgress("UNDEPLOYED");
+        Task r = service.retry(42L, "admin");
+        assertThat(r.getStatus()).isEqualTo(TaskStatus.CLOSE_PENDING);
+        assertThat(r.isCloseKeepBranch()).isTrue();
+    }
+
     // ── 부분 패치 (스펙 2026-11-10) ──
 
     private TaskCloseService patchService(boolean switchOn) {

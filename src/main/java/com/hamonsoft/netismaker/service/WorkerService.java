@@ -1080,6 +1080,10 @@ public class WorkerService {
             throw new TaskException(HttpStatus.CONFLICT,
                     "다른 워커가 잡은 작업입니다 (소유: " + t.getWorkerId() + ")");
         }
+        if (t.isCloseKeepBranch() && (req.step() == CloseStep.MERGED || req.step() == CloseStep.BRANCH_DELETED)) {
+            throw new TaskException(HttpStatus.CONFLICT,
+                    "병합하지 않는 종료입니다 — " + req.step() + " 보고를 받지 않습니다");
+        }
         switch (req.step()) {
             case MERGED -> {
                 if (req.mergeCommitSha() != null && !req.mergeCommitSha().isBlank()) {
@@ -1188,7 +1192,8 @@ public class WorkerService {
         String reason;
         switch (req.status()) {
             case CLOSED -> {
-                if (!CloseStep.allDone(t.getCloseProgress(), t.getCloseArtifactMode(), t.getClosePatchMode())) {
+                if (!CloseStep.allDone(t.getCloseProgress(), t.getCloseArtifactMode(), t.getClosePatchMode(),
+                        t.isCloseKeepBranch())) {
                     throw new TaskException(HttpStatus.BAD_REQUEST,
                             "종료 단계가 모두 끝나지 않았습니다 (끝난 단계: "
                                     + (t.getCloseProgress() == null ? "없음" : t.getCloseProgress()) + ")");

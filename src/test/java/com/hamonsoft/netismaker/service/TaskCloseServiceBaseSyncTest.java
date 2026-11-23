@@ -89,6 +89,13 @@ class TaskCloseServiceBaseSyncTest {
     }
 
     @Test
+    void syncBase_브랜치유지_409() {
+        Task t = failedTask();
+        t.setCloseKeepBranch(true);
+        assertConflict(() -> service.syncBase(42L, "admin"), "병합하지 않는 종료에는 기준 브랜치 반영이 필요 없습니다");
+    }
+
+    @Test
     void 종료실패_병합전이면_회차를_열고_구현대기로() {
         failedTask();
         when(fixRepo.countByTaskIdAndKind(42L, FixRequestKind.BASE_SYNC)).thenReturn(0L);

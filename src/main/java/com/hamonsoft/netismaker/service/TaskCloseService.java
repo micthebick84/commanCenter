@@ -119,15 +119,23 @@ public class TaskCloseService {
 
     @Transactional
     public Task approve(Long taskId, String adminId) {
+        return approve(taskId, adminId, false);
+    }
+
+    /** keepBranch=true: 병합·브랜치 삭제 없이 종료 — 부분 패치는 병합 뒤 단계라 대상에서 뺀다(스펙 2026-11-23 §4.2). */
+    @Transactional
+    public Task approve(Long taskId, String adminId, boolean keepBranch) {
         Task t = taskRepo.findActiveByIdForUpdate(taskId).orElseThrow(TaskException::notFound);
         requireReview(t, "승인");
         t.setFailureReason(null);
         // 산출물 모드는 승인 때 한 번 정한다 — 재시도·stale 재큐는 바꾸지 않는다 (스펙 2026-10-14 §3)
         t.setCloseArtifactMode(artifactRequired(t) ? CloseStep.ARTIFACT_REQUIRED : null);
-        t.setClosePatchMode(patchRequired(t) ? CloseStep.PATCH_REQUIRED : null);
+        t.setCloseKeepBranch(keepBranch);
+        t.setClosePatchMode(keepBranch ? null : (patchRequired(t) ? CloseStep.PATCH_REQUIRED : null));
         return move(t, TaskStatus.CLOSE_PENDING, "user", adminId, "관리자 종료 승인 → 종료 큐 진입"
                 + (t.getCloseArtifactMode() == null ? "" : " (산출물 보관)")
-                + (t.getClosePatchMode() == null ? "" : " (부분 패치)"));
+                + (t.getClosePatchMode() == null ? "" : " (부분 패치)")
+                + (keepBranch ? " (병합 안 함·브랜치 유지)" : ""));
     }
 
     /**
@@ -180,12 +188,18 @@ public class TaskCloseService {
         if (t.getStatus() != TaskStatus.CLOSE_FAILED) {
             throw TaskException.conflict("종료실패 상태에서만 종료를 취소할 수 있습니다 (현재: " + t.getStatus().dbValue() + ")");
         }
-        if (CloseStep.parse(t.getCloseProgress()).contains(CloseStep.MERGED)) {
+        if (t.isCloseKeepBranch()) {
+            // 병합 없는 종료는 MERGED가 없으므로 진행이 조금이라도 있으면(배포 중지 등) 되돌릴 수 없다
+            if (!CloseStep.parse(t.getCloseProgress()).isEmpty()) {
+                throw TaskException.conflict("이미 진행된 단계가 있어 종료를 취소할 수 없습니다 — 재시도로 마무리하세요");
+            }
+        } else if (CloseStep.parse(t.getCloseProgress()).contains(CloseStep.MERGED)) {
             throw TaskException.conflict("이미 병합되어 종료를 취소할 수 없습니다 — 재시도로 마무리하세요");
         }
         t.setFailureReason(null);
         t.setCloseProgress(null);
         t.setClosePatchMode(null); // 다음 승인 때 다시 정한다
+        t.setCloseKeepBranch(false); // 다음 승인 때 다시 고른다
         return move(t, statusBeforeReview(t), "user", adminId, "종료 취소(병합 전)");
     }
 
@@ -199,6 +213,9 @@ public class TaskCloseService {
         Task t = taskRepo.findActiveByIdForUpdate(taskId).orElseThrow(TaskException::notFound);
         if (t.getStatus() != TaskStatus.CLOSE_FAILED) {
             throw TaskException.conflict("종료실패 상태에서만 기준 브랜치를 반영할 수 있습니다 (현재: " + t.getStatus().dbValue() + ")");
+        }
+        if (t.isCloseKeepBranch()) {
+            throw TaskException.conflict("병합하지 않는 종료에는 기준 브랜치 반영이 필요 없습니다");
         }
         if (CloseStep.parse(t.getCloseProgress()).contains(CloseStep.MERGED)) {
             throw TaskException.conflict("이미 병합되어 기준 브랜치를 반영할 수 없습니다 — 재시도로 마무리하세요");
@@ -243,7 +260,7 @@ public class TaskCloseService {
         }
         EnumSet<CloseStep> done = CloseStep.parse(t.getCloseProgress());
         if (!CloseStep.ARTIFACT_REQUIRED.equals(t.getCloseArtifactMode())
-                || !done.contains(CloseStep.MERGED) || !done.contains(CloseStep.UNDEPLOYED)
+                || (!t.isCloseKeepBranch() && !done.contains(CloseStep.MERGED)) || !done.contains(CloseStep.UNDEPLOYED)
                 || done.contains(CloseStep.ARTIFACT_UPLOADED)) {
             throw TaskException.conflict("산출물 단계에서 멈춘 종료만 산출물 없이 마무리할 수 있습니다");
         }

@@ -201,6 +201,21 @@ public class RepoCatalogService {
         return List.copyOf(resolved);
     }
 
+    /**
+     * 참조로 고를 수 있는 항목인가 — {@code resolveReferences(대상, [new RefRepoInput(id, null)])}가 통과할 조건과 같다
+     * (켜짐, 지원하는 호스트, 기본 브랜치가 비어 있지 않음). 판정이 어긋나지 않게 같은 reparse·refBranch를 쓴다.
+     */
+    public boolean isReferenceable(RepoCatalogEntry e) {
+        if (e == null || !e.isEnabled()) return false;
+        try {
+            reparse(e);
+            refBranch(null, new ResolvedRepo(e.getId(), e.getAlias(), null, null, null, e.getDefaultBranch()));
+            return true;
+        } catch (TaskException ex) {
+            return false;
+        }
+    }
+
     /** 참조 브랜치 — 입력(앞뒤 공백 제거) → 카탈로그 기본 브랜치 → 둘 다 비면 400. */
     private static String refBranch(String requested, ResolvedRepo r) {
         String branch = blankToNull(requested);

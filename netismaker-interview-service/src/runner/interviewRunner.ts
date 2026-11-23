@@ -7,6 +7,7 @@ import type {
   RateLimitInfo,
   RefRepoClaim,
   RefState,
+  SuggestCandidates,
   WorkerMockupRequest,
 } from '../types.js';
 import { ActivityPoster } from './activityPoster.js';
@@ -39,6 +40,7 @@ import { maskSecrets, type GitTokens } from '../sdk/gitRemote.js';
 import { buildWritingPlansSplice, buildPlanReformatSplice, detectHandoff, detectPlanIntent } from './skillDispatch.js';
 import { HeartbeatTicker } from './heartbeat.js';
 import { createDbMcp, type PreparedDbMcp } from '../sdk/dbMcp.js';
+import { createSuggestMcp, suggestSection, type PreparedSuggestMcp } from '../sdk/suggestMcp.js';
 import { createMockupMcp, type PreparedMockupMcp } from '../sdk/mockupMcp.js';
 import { MAX_TIMER_MS } from '../config.js';
 
@@ -84,6 +86,8 @@ export interface RunnerDeps {
   gitTokens?: GitTokens;
   /** 테스트용 주입 — 기본 dbMcp.createDbMcp (질문 세션 내장 DB 도구, 스펙 2026-10-02 §6). */
   createDbMcp?: (claim: InterviewClaimResponse) => PreparedDbMcp;
+  /** 테스트용 주입 — 기본 suggestMcp.createSuggestMcp (질문 세션 제안 도구, 후보가 없으면 null). */
+  createSuggestMcp?: (candidates: SuggestCandidates | null | undefined) => PreparedSuggestMcp | null;
   /**
    * 테스트용 주입 — 기본 mockupMcp.createMockupMcp (켬 인터뷰의 `show_mockup` 도구, 스펙 2026-11-03 인터뷰 목업 §4).
    * `post`는 이 세션 id로 `client.postMockup`을 부르는 함수다.
@@ -855,9 +859,11 @@ export class InterviewRunner {
     // 내장 DB MCP(스펙 2026-10-02 §6.4): 서버는 턴마다 새로 만들고(DB 접속은 첫 도구 호출 때),
     // 성공·실패와 무관하게 finally에서 열린 커넥션을 닫는다.
     const db = (this.deps.createDbMcp ?? createDbMcp)(claim);
+    // 제안 서버(2026-11-22): 후보가 있을 때만 서버·절·보고 키가 생긴다 — 없으면(구 API·기능 꺼짐) null이라 모두 지금과 같다.
+    const suggest = (this.deps.createSuggestMcp ?? createSuggestMcp)(claim.suggest);
     try {
       const stream: AsyncIterable<SdkMessage> = this.query({
-        prompt: questionPromptFor(claim, refSection(refs) + dbSection(db)),
+        prompt: questionPromptFor(claim, refSection(refs) + dbSection(db) + (suggest ? suggestSection(claim.suggest) : '')),
         options: buildOptions({
           superpowersPluginPath: this.deps.superpowersPluginPath,
           workDir: claim.workDir,
@@ -875,12 +881,14 @@ export class InterviewRunner {
           refRoots,
           dbMcpServers: db.servers,
           dbDialects: db.dialects,
+          ...(suggest ? { suggestMcpServers: suggest.servers } : {}),
         }),
       });
       const result = await relay(stream, { onActivity, onRateLimit, workDir: claim.workDir });
       const costUsd = meter.ownCost(result.costUsd);
       // trailing 활동 배치가 답변보다 늦게 도착하지 않도록 확정 POST 전에 큐를 비운다 (인터뷰 경로와 동일).
       await poster.stop();
+      const suggested = suggest ? suggest.collected() : [];
       await this.client.postQuestion(claim.sessionId, {
         content: result.assistantText,
         claudeSessionId: result.sessionId ?? claim.claudeSessionId ?? '',
@@ -896,6 +904,8 @@ export class InterviewRunner {
         // 참조 준비 결과 (스펙 2026-10-22 §4.5·§5.4) — 이번 턴에 참조를 준비했을 때만 싣는다. 참조 없는 질문의 바디는 지금과 같다
         // (키 자체를 생략). 턴이 실패해 fail로 끝나면 이 줄에 닿지 않으므로 보고하지 않는다.
         ...(refs.length > 0 ? { refStates: refStatesOf(refs) } : {}),
+        // 도구가 받은 제안 — 하나라도 있을 때만 싣는다(없으면 키 생략, 바디는 지금과 같다).
+        ...(suggested.length > 0 ? { suggestions: suggested } : {}),
       });
     } finally {
       await db.close();

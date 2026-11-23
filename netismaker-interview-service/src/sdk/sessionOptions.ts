@@ -62,6 +62,12 @@ export interface SessionOptionsInput {
    * 미지정·빈 객체 = 지금 동작 그대로.
    */
   mockupMcpServers?: Record<string, unknown>;
+  /**
+   * 이번 턴의 내장 제안 MCP 서버(suggestMcp.createSuggestMcp의 `servers`) — 제안할 후보가 있는 QUESTION 턴만 넘긴다.
+   * merge의 **맨 끝**이라 같은 이름(`suggest`)의 베이스·추가 서버를 이긴다. QUESTION의 allowedTools는 어차피 []라 영향이 없고,
+   * INTERVIEW는 넘기지 않는다. 미지정·빈 객체 = 지금 동작 그대로.
+   */
+  suggestMcpServers?: Record<string, unknown>;
 }
 
 /**
@@ -99,7 +105,8 @@ function toMcpServers(mcpsExtra: unknown): Record<string, { type: string; url: s
  *   명시 주입 — 디자인/구현 워커(--mcp-config + --strict-mcp-config + --allowedTools mcp__*)와 동일 목록.
  *   플러그인 격리(superpowers만 로드)는 그대로 유지된다.
  *   질문 세션 내장 DB 서버(dbMcpServers, type:'sdk')는 베이스·추가 서버 뒤에 머지 — SDK가 CLI에 이름만 넘기므로 --mcp-config 명령줄에 접속정보가 실리지 않는다. stdio 서버에 접속정보를 넣지 말 것.
- *   켬 인터뷰의 내장 목업 서버(mockupMcpServers, type:'sdk')는 맨 마지막에 머지하고 `mcp__mockup`으로 사전 승인한다(스펙 2026-11-03 인터뷰 목업 §4).
+ *   켬 인터뷰의 내장 목업 서버(mockupMcpServers, type:'sdk')는 db 다음에 머지하고 `mcp__mockup`으로 사전 승인한다(스펙 2026-11-03 인터뷰 목업 §4).
+ *   질문 세션의 내장 제안 서버(suggestMcpServers, type:'sdk')는 맨 마지막에 머지한다 — merge 순서 base → extras → db → mockup → suggest. QUESTION은 사전 승인이 없어 게이트(canUseTool)를 거친다.
  * - PERMISSIONS: Write/Bash/Edit MUST NOT be in allowedTools. Tools listed in allowedTools are
  *   PRE-APPROVED by the CLI and skip the canUseTool callback entirely — so listing Write/Bash there
  *   made buildCanUseTool's confinement (Write→docs/superpowers, Bash read-only) dead code and let the
@@ -120,13 +127,14 @@ function toMcpServers(mcpsExtra: unknown): Record<string, { type: string; url: s
  *   beyond the read-only whitelist, still repoDir-only (see permissions.ts).
  */
 export function buildOptions(input: SessionOptionsInput): Record<string, unknown> {
-  // 베이스(글로벌+프로젝트 합본) + 작업별 extras — 충돌 시 extras 우선 (워커 패리티). 그 뒤 내장 DB 서버, 맨 끝에 내장 목업 서버.
+  // 베이스(글로벌+프로젝트 합본) + 작업별 extras — 충돌 시 extras 우선 (워커 패리티). 그 뒤 내장 DB 서버 → 내장 목업 서버 → 맨 끝에 내장 제안 서버.
   // settingSources:[] + strictMcpConfig라 여기 명시한 것 외 다른 MCP 소스는 안 붙는다 (워커 --strict-mcp-config 패리티).
   const merged: Record<string, unknown> = {
     ...(input.mcpsBase ?? {}),
     ...(toMcpServers(input.mcpsExtra) ?? {}),
     ...(input.dbMcpServers ?? {}),
     ...(input.mockupMcpServers ?? {}),
+    ...(input.suggestMcpServers ?? {}),
   };
   const mcpServers = Object.keys(merged).length > 0 ? merged : undefined;
   const question = input.sessionKind === 'QUESTION';

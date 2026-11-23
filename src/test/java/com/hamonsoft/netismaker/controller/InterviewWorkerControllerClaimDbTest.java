@@ -21,8 +21,10 @@ class InterviewWorkerControllerClaimDbTest {
 
     private final InterviewService interviewService = mock(InterviewService.class);
     private final DbConnectionService db = mock(DbConnectionService.class);
+    private final com.hamonsoft.netismaker.service.suggest.QuestionSuggestService suggest =
+            mock(com.hamonsoft.netismaker.service.suggest.QuestionSuggestService.class);
     private final InterviewWorkerController controller =
-            new InterviewWorkerController(interviewService, mock(InterviewStreamService.class), db);
+            new InterviewWorkerController(interviewService, mock(InterviewStreamService.class), db, suggest);
 
     private static InterviewClaimResponse claimOf(boolean question, List<Long> dbIds) {
         InterviewSession s = question
@@ -185,5 +187,28 @@ class InterviewWorkerControllerClaimDbTest {
         when(db.resolveForClaim(any())).thenThrow(new RuntimeException("db down"));
 
         assertThat(controller.claim("w1").getBody().superpowersEnabled()).isTrue();
+    }
+
+    // ── 대화 중 제안 후보는 DB 보강처럼 claim을 깨지 않는다 ──────────────────────────────────
+
+    @Test
+    void 제안_후보_조회가_예외를_던져도_claim은_그대로_돌려준다() {
+        InterviewClaimResponse claim = claimOf(true, List.of());
+        when(interviewService.claim("w1")).thenReturn(Optional.of(claim));
+        when(suggest.claimCandidates(7L)).thenThrow(new RuntimeException("boom"));
+
+        var body = controller.claim("w1").getBody();
+
+        assertThat(body).isEqualTo(claim);
+        assertThat(body.suggest()).isNull();
+    }
+
+    @Test
+    void 제안_후보가_있으면_claim에_싣는다() {
+        when(interviewService.claim("w1")).thenReturn(Optional.of(claimOf(true, List.of())));
+        var s = new InterviewClaimResponse.Suggest(List.of(new InterviewClaimResponse.DbCandidate(4L, "기본 DB", "MARIADB")), List.of());
+        when(suggest.claimCandidates(7L)).thenReturn(Optional.of(s));
+
+        assertThat(controller.claim("w1").getBody().suggest()).isEqualTo(s);
     }
 }

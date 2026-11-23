@@ -184,6 +184,8 @@ app:
   question:
     max-active-per-user: 3          # 사용자당 활성(QUEUED/RUNNING/AWAITING_INPUT) 질문 세션 상한 → 초과 시 429
     max-qa-turns: 10                # 세션당 assistant 답변 상한 → ask 시 초과면 400. 불변식: < 러너 INTERVIEW_MAX_TURNS(20)
+    suggest:
+      enabled: ${APP_QUESTION_SUGGEST_ENABLED:true}   # false면 질문 claim에 제안 후보를 싣지 않는다(대화 중 DB·참조 repo 제안 끄기)
   app-log:                          # 배포된 앱 컨테이너 로그 실시간 보기 — API가 docker logs --follow를 읽어 SSE로 중계 (스펙 2026-11-03-deploy-app-log-stream)
     enabled: ${APP_LOG_ENABLED:true}      # false면 구독이 end(disabled)로 끝난다
     docker-path: ${APP_LOG_DOCKER_PATH:}  # 비우면 PATH → Windows 기본 설치 위치 순으로 docker를 찾는다(못 찾으면 기능만 꺼짐)

@@ -425,7 +425,42 @@ class InterviewClaimResponseTest {
                 r.claudeSessionId(), r.currentPhase(), r.workDir(), r.lastAnswer(), r.replyToSeq(), r.mcpsExtra(),
                 r.turns(), r.model(), r.effort(), r.totalCostUsd(), r.attachments(), r.kind(), r.attachmentRoot(),
                 r.gitUrl(), r.repoHost(), r.dbConnectionIds(), r.dbConnections(), r.dbNotices(), r.refRepos(),
-                r.refsCleared(), r.taskType(), r.writableDbConnections(), null);
+                r.refsCleared(), r.taskType(), r.writableDbConnections(), null, null);
+    }
+
+    // ── 대화 중 제안 후보 ──────────────────────────────────────────────────
+
+    @Test
+    void suggest_없이_만든_claim은_suggest가_null이고_with들이_그대로_실어_나른다() {
+        InterviewClaimResponse base = InterviewClaimResponse.of(session(), List.of(), List.of());
+        assertThat(base.suggest()).isNull();
+
+        var suggest = new InterviewClaimResponse.Suggest(
+                List.of(new InterviewClaimResponse.DbCandidate(4L, "기본 DB", "MARIADB")),
+                List.of(new InterviewClaimResponse.RefCandidate(11L, "Netis7.0", "7.0")));
+        InterviewClaimResponse r = base.withSuggest(suggest)
+                .withDb(List.of(), List.of("참고"))
+                .withRefRepos(List.of())
+                .withRefsCleared(false)
+                .withTaskType(null)
+                .withWritableDbConnections(List.of());
+        assertThat(r.suggest()).isEqualTo(suggest);
+    }
+
+    @Test
+    void suggest는_JSON에_dbCandidates와_refCandidates로_나간다() {
+        var suggest = new InterviewClaimResponse.Suggest(
+                List.of(new InterviewClaimResponse.DbCandidate(4L, "기본 DB", "MARIADB")),
+                List.of(new InterviewClaimResponse.RefCandidate(11L, "Netis7.0", "7.0")));
+        JsonNode json = new ObjectMapper().findAndRegisterModules()
+                .valueToTree(InterviewClaimResponse.of(session(), List.of(), List.of()).withSuggest(suggest));
+
+        JsonNode s = json.get("suggest");
+        assertThat(s.get("dbCandidates").get(0).get("id").asLong()).isEqualTo(4L);
+        assertThat(s.get("dbCandidates").get(0).get("dbType").asText()).isEqualTo("MARIADB");
+        assertThat(s.get("refCandidates").get(0).get("catalogId").asLong()).isEqualTo(11L);
+        assertThat(s.get("refCandidates").get(0).get("hint").asText()).isEqualTo("7.0");
+        assertThat(s.get("refCandidates").get(0).has("defaultBranch")).isFalse();
     }
 
     @Test

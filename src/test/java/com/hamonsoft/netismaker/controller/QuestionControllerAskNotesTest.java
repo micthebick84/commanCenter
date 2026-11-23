@@ -32,7 +32,16 @@ class QuestionControllerAskNotesTest {
     private final QuestionService questionService = mock(QuestionService.class);
     private final InterviewStreamService stream = mock(InterviewStreamService.class);
     private final QuestionController controller = new QuestionController(questionService, stream,
-            mock(com.hamonsoft.netismaker.service.route.QuestionRouteService.class));
+            mock(com.hamonsoft.netismaker.service.route.QuestionRouteService.class),
+            mock(com.hamonsoft.netismaker.service.suggest.QuestionSuggestService.class));
+
+    {
+        // ask 끝의 스냅샷 재조회 - 컨트롤러가 제안을 붙이므로 null이 아니어야 한다
+        InterviewSession snap = InterviewSession.createQuestion("a/b", "main", "t", "q", "user1", java.util.List.of(), "claude-opus-5", "high");
+        org.springframework.test.util.ReflectionTestUtils.setField(snap, "id", 5L);
+        when(questionService.get(any(), any(), org.mockito.ArgumentMatchers.anyBoolean()))
+                .thenReturn(com.hamonsoft.netismaker.dto.InterviewResponse.of(snap, java.util.List.of(), null));
+    }
 
     private static JwtAuthenticationToken user() {
         return new JwtAuthenticationToken(

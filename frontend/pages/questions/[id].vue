@@ -9,6 +9,14 @@ import McpPicker from '~/components/McpPicker.vue'
 import DbConnectionPicker from '~/components/DbConnectionPicker.vue'
 import RefRepoChips from '~/components/RefRepoChips.vue'
 import RefRepoAddForm from '~/components/RefRepoAddForm.vue'
+import SessionSuggestCard from '~/components/chat/SessionSuggestCard.vue'
+import {
+  followUpText,
+  mergeDbIds,
+  mergeRefInputs,
+  type SessionSuggestion,
+  type SuggestPicks,
+} from '~/composables/sessionSuggest'
 import { interviewStatusLabel, interviewStatusChip } from '~/composables/interviewLabels'
 import { contextPercent, EXPIRED_ATTACHMENT_TIP, type QuestionDetail, type AttachmentView } from '~/composables/questions'
 import { dbTypeLabel, fetchDbConnections, type DbConnectionView } from '~/composables/dbConnections'
@@ -87,22 +95,58 @@ type SendFn = (extra: {
   mcpCatalogIds: number[]
   dbConnectionIds?: number[]
   refRepos?: RefRepoInput[]
-  files: File[]
+  files?: File[]
+  text?: string
+  acceptSuggestionIds?: number[]
 }) => Promise<boolean>
+// 참조 repo는 초안이 서버 값과 다른 집합일 때만 싣는다 — 참조를 안 건드린 질문의 ask 바디는 예전과 똑같다(서버도 같은 집합이면 no-op).
+// 시드 전의 빈 초안(model이 없어 시드 블록을 건너뛴 세션)은 사용자가 비운 것이 아니므로 싣지 않는다 — 서버 참조가 전부 해제되지 않게.
+function refsChanged(): boolean {
+  return pickedSeeded.value && !sameRefSet(toInputs(pickedRefs.value), toInputs(detail.value?.refRepos ?? []))
+}
 async function onSend(send: SendFn) {
-  // 참조 repo는 초안이 서버 값과 다른 집합일 때만 싣는다 — 참조를 안 건드린 질문의 ask 바디는 예전과 똑같다(서버도 같은 집합이면 no-op).
-  // 시드 전의 빈 초안(model이 없어 시드 블록을 건너뛴 세션)은 사용자가 비운 것이 아니므로 싣지 않는다 — 서버 참조가 전부 해제되지 않게.
-  const refInputs = toInputs(pickedRefs.value)
-  const refsChanged = pickedSeeded.value && !sameRefSet(refInputs, toInputs(detail.value?.refRepos ?? []))
   const ok = await send({
     model: picked.model,
     effort: picked.effort,
     mcpCatalogIds: pickedMcp.value,
     ...(dbState.enabled ? { dbConnectionIds: pickedDb.value } : {}),
-    ...(refsChanged ? { refRepos: refInputs } : {}),
+    ...(refsChanged() ? { refRepos: toInputs(pickedRefs.value) } : {}),
     files: files.value,
   })
   if (ok) files.value = []
+}
+
+// 제안 받아들이기(스펙 2026-11-22 §5.3·§8) — 보통 전송과 같은 바디에 고른 연결·참조를 더하고, 글만 고정 이어 묻기 문장으로 바꾼다.
+// 입력창에 쓰던 글과 대기 첨부는 보내지도 비우지도 않는다(send의 text 경로). 성공하면 DB·참조 초안을 보낸 값에 맞춘다.
+// 초안을 아직 시드하지 못한 세션(model 없는 옛 세션)은 빈 초안 대신 서버 값 위에 더한다 — 고른 것만 보내 기존 연결·참조가 풀리지 않게.
+async function onAcceptSuggestion(send: SendFn, picks: SuggestPicks, shown: SessionSuggestion[]) {
+  // 카드는 패널 스냅샷으로 먼저 뜰 수 있다 — 상세(세션의 지금 연결·참조)가 오기 전에 보내면 그것들이 고른 것만으로 바뀐다(카드도 꺼 둔다)
+  if (!detail.value) return
+  const dbBase = pickedSeeded.value ? pickedDb.value : (detail.value?.dbConnectionIds ?? [])
+  const refBase = pickedSeeded.value ? pickedRefs.value : (detail.value?.refRepos ?? [])
+  const dbIds = mergeDbIds(dbBase, picks.dbConnectionIds)
+  const refInputs = mergeRefInputs(toInputs(refBase), picks.refs)
+  const ok = await send({
+    model: picked.model,
+    effort: picked.effort,
+    mcpCatalogIds: pickedMcp.value,
+    // DB를 골랐으면 늘 싣는다 — 서버가 선택지를 줬으니 기능은 켜져 있고 ask가 id를 검증한다.
+    // dbState.enabled는 목록 조회가 끝나야(실패하면 영영) true라, 그것에 걸면 고른 연결 없이 '받아들임'만 기록된다.
+    ...(picks.dbConnectionIds.length > 0 || dbState.enabled ? { dbConnectionIds: dbIds } : {}),
+    ...(picks.refs.length > 0 || refsChanged() ? { refRepos: refInputs } : {}),
+    text: followUpText(picks.dbConnectionIds.length > 0, picks.refs.length > 0),
+    acceptSuggestionIds: picks.suggestionIds,
+  })
+  if (!ok) return
+  pickedDb.value = dbIds
+  // 참조 초안에도 더한다 — "참조 변경" 메뉴가 보낸 값과 같게. 모양은 추가 폼이 내는 것과 같다(커밋 없는 대기 칩).
+  const added: RefRepoView[] = []
+  for (const r of picks.refs) {
+    if (refBase.some((v) => v.catalogId === r.repoCatalogId)) continue
+    const s = shown.find((x) => x.repoCatalogId === r.repoCatalogId)
+    added.push({ catalogId: r.repoCatalogId, alias: s?.repoAlias ?? String(r.repoCatalogId), branch: r.branch })
+  }
+  pickedRefs.value = [...refBase, ...added]
 }
 
 // "✎ 참조 변경" 메뉴(스펙 2026-10-22 §7.3). 후보 카탈로그는 메뉴를 처음 열 때 한 번만 불러온다 — 페이지를 여는 시점의 API 호출은 늘리지 않는다.
@@ -361,6 +405,15 @@ function goToTask() {
       @status="liveStatus = $event"
       @close="onPanelClose"
     >
+      <template #suggest="{ suggestions, send, dismiss, awaiting, sending }">
+        <SessionSuggestCard
+          :suggestions="suggestions"
+          :disabled="!detail || !awaiting || sending"
+          :busy="sending"
+          @accept="(p: SuggestPicks) => onAcceptSuggestion(send, p, suggestions)"
+          @dismiss="dismiss"
+        />
+      </template>
       <template #composer="{ answer, setAnswer, canSend, sending, send, awaiting }">
         <div class="composer-wrap">
           <QuestionComposer

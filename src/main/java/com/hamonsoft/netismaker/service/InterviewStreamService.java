@@ -6,6 +6,7 @@ import com.hamonsoft.netismaker.dto.DesignEvent;
 import com.hamonsoft.netismaker.dto.InterviewMockupSummary;
 import com.hamonsoft.netismaker.dto.PlanReadyEvent;
 import com.hamonsoft.netismaker.dto.QuestionEvent;
+import com.hamonsoft.netismaker.dto.SuggestionView;
 import com.hamonsoft.netismaker.dto.WorkerActivityRequest;
 import com.hamonsoft.netismaker.entity.InterviewStatus;
 import com.hamonsoft.netismaker.entity.InterviewTurn;
@@ -29,7 +30,7 @@ import java.util.concurrent.CopyOnWriteArrayList;
 /**
  * 인터뷰 SSE 스트리밍 (api 프로파일).
  *
- *  이벤트: question | design | plan_ready | status | done | activity | note | mockup
+ *  이벤트: question | design | plan_ready | status | done | activity | note | mockup | suggestion
  *  - subscribe: 접속 시 keepalive ping + 기존 turn replay + 목업 replay 후 live 구독 (system 턴은 note로 replay).
  *  - pushQuestion/pushDesign/pushPlanReady/pushStatus/pushNote/pushMockup: 라이브 fan-out.
  *  - finish: done 이벤트 + emitter complete (세션 terminal 시).
@@ -168,6 +169,11 @@ public class InterviewStreamService {
      */
     public void pushMockup(Long sessionId, InterviewMockupSummary m) {
         sendJson(sessionId, "mockup", m);
+    }
+
+    /** suggestion 페이로드 = SuggestionView JSON (스펙 2026-11-22 §6.2) — 저장 뒤 그 턴의 제안마다 한 번. replay는 스냅샷(suggestions)이 맡는다. */
+    public void pushSuggestion(Long sessionId, SuggestionView v) {
+        sendJson(sessionId, "suggestion", v);
     }
 
     /**

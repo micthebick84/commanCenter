@@ -1,5 +1,6 @@
 package com.hamonsoft.netismaker.service;
 
+import com.hamonsoft.netismaker.service.suggest.QuestionSuggestService;
 import com.hamonsoft.netismaker.dto.DbConnectionDto;
 import com.hamonsoft.netismaker.dto.InterviewResponse;
 import com.hamonsoft.netismaker.dto.QuestionAskRequest;
@@ -102,13 +103,22 @@ public class QuestionService {
      * ask 결과 (스펙 2026-09-13 §5.2, 2026-10-02 §5.3, 2026-10-22 §4.2). mcpNote/dbNote/refNote = MCP·DB·참조 repo
      * 선택이 실제로 바뀌었을 때의 system note 턴, 아니면 null.
      */
-    public record AskResult(InterviewSession session, InterviewTurn mcpNote, InterviewTurn dbNote, InterviewTurn refNote) {
+    public record AskResult(InterviewSession session, InterviewTurn mcpNote, InterviewTurn dbNote, InterviewTurn refNote,
+                            List<Long> changedSuggestionIds) {
+        public AskResult {
+            if (changedSuggestionIds == null) changedSuggestionIds = List.of();
+        }
+
+        public AskResult(InterviewSession session, InterviewTurn mcpNote, InterviewTurn dbNote, InterviewTurn refNote) {
+            this(session, mcpNote, dbNote, refNote, List.of());
+        }
+
         public AskResult(InterviewSession session, InterviewTurn mcpNote) {
-            this(session, mcpNote, null, null);
+            this(session, mcpNote, null, null, List.of());
         }
 
         public AskResult(InterviewSession session, InterviewTurn mcpNote, InterviewTurn dbNote) {
-            this(session, mcpNote, dbNote, null);
+            this(session, mcpNote, dbNote, null, List.of());
         }
     }
 
@@ -168,11 +178,29 @@ public class QuestionService {
         return rows.stream().map(QuestionSummaryResponse::of).toList();
     }
 
+    /** 대화 중 제안 처리(받기·정리)용 (스펙 2026-11-22 §6.3, ask에서 쓴다). 생성자를 바꾸지 않으려고 setter 주입 - 없는 구성(단위 시험)에서는 건너뛴다. 화면용 조회는 여기서 하지 않는다(컨트롤러가 트랜잭션 밖에서 붙인다). */
+    private QuestionSuggestService suggestService;
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    void setQuestionSuggestService(QuestionSuggestService suggestService) {
+        this.suggestService = suggestService;
+    }
+
     @Transactional(readOnly = true)
     public InterviewResponse get(Long id, String viewerId, boolean isAdmin) {
         interviewService.requireKind(id, InterviewKind.QUESTION);
         InterviewResponse r = interviewService.getResponse(id, viewerId, isAdmin);
         return r.withDbConnections(dbConnectionService.chipsFor(r.dbConnectionIds()));
+    }
+
+    /**
+     * 제안 닫기(스펙 2026-11-22 §6.3). 볼 수 있는 사람(소유자·관리자)만 - kind 404 → 403. 이 메서드는 트랜잭션이 아니다:
+     * 제안 서비스의 dismiss가 자기 트랜잭션으로 커밋되고, 화면용 뷰는 컨트롤러가 그 뒤에 만든다.
+     */
+    public long dismissSuggestion(Long id, Long suggestionId, String actorId, boolean isAdmin) {
+        requireViewable(id, actorId, isAdmin);
+        if (suggestService == null) throw new TaskException(HttpStatus.NOT_FOUND, "제안을 찾을 수 없습니다");
+        return suggestService.dismiss(id, suggestionId, actorId);
     }
 
     /** SSE 구독·첨부 다운로드 전 ACL 검증 (kind 404 → 소유자/관리자 403). */
@@ -220,10 +248,16 @@ public class QuestionService {
         InterviewTurn note = applyMcpChange(s, req.mcpCatalogIds());
         InterviewTurn dbNote = applyDbChange(s, req.dbConnectionIds());
         InterviewTurn refNote = applyRefChange(s, req.refRepos());
+        // 새 턴이 생겼을 때만 제안을 정리한다 - 중복 제출(turnSeq null)은 아무것도 바꾸지 않는다. 같은 트랜잭션이라 위 변경이 400이면 같이 롤백되고,
+        // 받아들임은 ask의 일부라 실패하면 ask도 실패한다(일부러 try/catch 없음). 제안 서비스가 없는 구성(단위 시험)은 건너뛴다.
+        List<Long> changedSuggestions = List.of();
+        if (outcome.turnSeq() != null && suggestService != null) {
+            changedSuggestions = suggestService.onAsk(id, req.acceptSuggestionIds(), actorId);
+        }
         if (outcome.turnSeq() != null) {
             writeAttachments(id, outcome.turnSeq(), attached, actorId);
         }
-        return new AskResult(s, note, dbNote, refNote);
+        return new AskResult(s, note, dbNote, refNote, changedSuggestions);
     }
 
     /**

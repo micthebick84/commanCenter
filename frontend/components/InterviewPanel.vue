@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { useSlots } from 'vue'
 import { failMsg } from '~/composables/failMessage'
 import { useQuasar } from 'quasar'
 import { useInterviewStream } from '~/composables/useInterviewStream'
@@ -22,6 +23,13 @@ import {
   type MockupSummary,
 } from '~/composables/interviewMockups'
 import { canRequestPlanFix, PLAN_FIX_PLACEHOLDER, PLAN_FIX_SEND } from '~/composables/interviewMode'
+import {
+  decidedForTurn,
+  decidedLine,
+  pendingForTurn,
+  upsertSuggestion,
+  type SessionSuggestion,
+} from '~/composables/sessionSuggest'
 // defineProps 타입이므로 상대 경로 — vitest는 .nuxt 없이 돌아 SFC 매크로 타입의 `~/` import를 못 푼다.
 import { splitConfirmRefs, type RefRepoInput, type RefRepoView } from '../composables/refRepos'
 
@@ -84,8 +92,16 @@ const ui = computed(() =>
       },
 )
 
-const stream = useInterviewStream()
-const { connState, status, turns, designSections, plan, error, pending, mockups } = stream
+// 질문 세션: 끊긴 사이에 온 제안·상태 변경은 서버 replay에 없다 → 다시 열리면 스냅샷을 받아 제안만 채운다(실패는 무시, 스트림은 계속).
+const stream = useInterviewStream({
+  onReconnected: () => {
+    if (!isQuestion.value) return
+    useApi<InterviewSnapshot>(`${apiBase.value}/${props.sessionId}`)
+      .then((snapshot) => stream.hydrateSuggestions(snapshot))
+      .catch(() => {})
+  },
+})
+const { connState, status, turns, designSections, plan, error, pending, mockups, suggestions } = stream
 
 // 질문 턴에 묶인 목업 — turnSeq별로 n 순. 말풍선 아래 카드로 그린다(계획 턴 목업은 목록에만).
 const cardsBySeq = computed(() => {
@@ -116,6 +132,52 @@ const lastQuestionSeq = computed(() => {
   }
   return null
 })
+
+// 대화 중 제안(스펙 2026-11-22 §5·§8) — 질문 세션만. 누를 수 있는 것은 가장 최근 답변의 PENDING뿐이고,
+// 지난 답변의 제안은 상태와 무관하게(남은 PENDING도 '연결하지 않음'으로) 한 줄로만 남는다.
+const slots = useSlots()
+function suggestPending(seq: number): SessionSuggestion[] {
+  if (!isQuestion.value || seq !== lastQuestionSeq.value || !slots.suggest) return []
+  return pendingForTurn(suggestions.value, seq)
+}
+function suggestLines(seq: number): string[] {
+  if (!isQuestion.value) return []
+  const list =
+    seq === lastQuestionSeq.value
+      ? decidedForTurn(suggestions.value, seq)
+      : suggestions.value.filter((s) => s.turnSeq === seq)
+  return list.map(decidedLine)
+}
+// footer 슬롯은 쓸 것이 있을 때만 — 있으면 ChatBubble이 말풍선 마크업을 감싸므로 INTERVIEW는 목업 카드 조건 그대로다.
+function hasFooter(seq: number, role: string): boolean {
+  if (cardsBySeq.value.get(seq)?.length) return true
+  if (role !== 'assistant') return false
+  return suggestPending(seq).length > 0 || suggestLines(seq).length > 0
+}
+
+// 제안 닫기 — 제안마다 POST하고 응답으로 바꾼다. 409(이미 처리됨)는 조용히 넘긴다(실제 상태는 SSE가 가져온다),
+// 그 밖의 실패는 한 번만 알린다.
+async function dismissSuggestions(ids: number[]): Promise<void> {
+  let failed: unknown = null
+  for (const id of ids) {
+    try {
+      const res = await useApi<SessionSuggestion>(`${apiBase.value}/${props.sessionId}/suggestions/${id}/dismiss`, {
+        method: 'POST',
+      })
+      if (res && typeof res === 'object' && typeof res.id === 'number') {
+        suggestions.value = upsertSuggestion(suggestions.value, res)
+      }
+    } catch (e: unknown) {
+      const err = e as { statusCode?: number; status?: number; response?: { status?: number } } | null
+      const st = err?.statusCode ?? err?.response?.status ?? err?.status
+      if (st !== 409 && failed == null) failed = e
+    }
+  }
+  if (failed != null) {
+    const e = failed as { data?: { message?: string } }
+    $q.notify({ type: 'negative', message: e?.data?.message ?? failMsg('제안 닫기') })
+  }
+}
 
 // 계획 고쳐 달라기의 낙관적 턴 seq — 지금까지의 모든 턴 뒤에 놓는다. turns에는 design 턴이 없어 길이로 잡으면 뒤의 답변 앞으로 밀리고,
 // 정수 seq(서버 턴)와 겹치면 pushTurn이 그 턴을 중복으로 버리므로, 마지막 턴과 다음 정수의 중간(여러 번 고쳐도 서로 다른 소수)으로 잡는다.
@@ -263,17 +325,31 @@ watch(
  * 참조 repo(`refRepos`)는 페이지가 바꿨을 때만 넘긴다 — 있으면 그대로 싣고(JSON·multipart meta 같다), 없으면 필드 자체를 생략한다.
  * 작업 인터뷰(INTERVIEW)의 answer 바디는 참조만 같은 규칙으로 싣는다(작업 스펙 2026-10-24 §4.3) — 슬롯이 넘긴 값, 없으면 answerRefRepos prop.
  */
-type AskExtra = { model?: string; effort?: string; mcpCatalogIds?: number[]; dbConnectionIds?: number[]; refRepos?: RefRepoInput[]; files?: File[] }
+/**
+ * `text`가 문자열이면(제안 받아들이기, 스펙 2026-11-22 §8) 입력창 대신 그 글을 보낸다 — 입력창(answer)은 비우지 않고
+ * 대기 첨부(files)도 보내지 않는다(JSON 바디). `acceptSuggestionIds`는 비지 않은 배열일 때만 질문 ask 바디에 싣는다.
+ */
+type AskExtra = {
+  model?: string
+  effort?: string
+  mcpCatalogIds?: number[]
+  dbConnectionIds?: number[]
+  refRepos?: RefRepoInput[]
+  files?: File[]
+  text?: string
+  acceptSuggestionIds?: number[]
+}
 
 async function sendAnswer(extra?: AskExtra): Promise<boolean> {
-  const text = answer.value.trim()
+  const fixedText = typeof extra?.text === 'string'
+  const text = fixedText ? extra!.text!.trim() : answer.value.trim()
   if (!text || !canInput.value) return false
   // 계획 고쳐 달라기는 어느 질문에 대한 답이 아니다 — replyToSeq를 null로 보낸다. 마지막 question seq를 싣으면 이미 답한 질문과
   // 겹쳐 서버가 중복 답변 no-op으로 받고(InterviewService), 세션은 PLAN_READY 그대로인데 화면만 QUEUED에 머문다.
   const fixingPlan = planFix.value
   const replyToSeq = fixingPlan ? null : lastQuestionSeq.value
   const body: Record<string, unknown> = { answer: text, replyToSeq }
-  const files = isQuestion.value ? (extra?.files ?? []) : []
+  const files = isQuestion.value && !fixedText ? (extra?.files ?? []) : []
   // 질문 세션만: 서버가 검증 후 세션 값을 갱신해 다음 claim부터 적용한다. 인터뷰 answer 바디는 참조만(아래 else).
   if (isQuestion.value) {
     if (typeof extra?.model === 'string') body.model = extra.model
@@ -284,6 +360,10 @@ async function sendAnswer(extra?: AskExtra): Promise<boolean> {
     if (Array.isArray(extra?.dbConnectionIds)) body.dbConnectionIds = extra.dbConnectionIds
     // 참조 repo는 같은 규칙에 "바뀌었을 때만"을 더한다 — []는 "전부 해제", 생략은 "유지" (스펙 2026-10-22 §7.3, 서버 QuestionAskRequest)
     if (Array.isArray(extra?.refRepos)) body.refRepos = extra.refRepos
+    // 받아들인 제안 — 서버가 ACCEPTED로 바꾸고 같은 답변의 나머지 PENDING은 SUPERSEDED로 SSE가 알린다
+    if (Array.isArray(extra?.acceptSuggestionIds) && extra.acceptSuggestionIds.length > 0) {
+      body.acceptSuggestionIds = extra.acceptSuggestionIds
+    }
   } else {
     // 작업 인터뷰: 모델·effort·MCP·DB는 승인 때 정한 값 그대로이고 참조만 답변 때 바꿀 수 있다(서버 AnswerRequest, 관리자) —
     // 작업 상세는 기본 입력창을 쓰므로 바뀐 참조를 prop으로 받는다. 참조를 안 건드린 답변 바디는 예전과 같다.
@@ -293,15 +373,18 @@ async function sendAnswer(extra?: AskExtra): Promise<boolean> {
   sending.value = true
   try {
     const url = `${apiBase.value}/${props.sessionId}/${isQuestion.value ? 'ask' : 'answer'}`
+    let res: InterviewSnapshot | null | undefined
     if (files.length > 0) {
       // Content-Type을 명시하지 않는다 — $fetch가 FormData boundary를 스스로 설정 (pages/tasks/index.vue와 동일)
       const form = new FormData()
       form.append('meta', new Blob([JSON.stringify(body)], { type: 'application/json' }))
       for (const f of files) form.append('files', f, f.name)
-      await useApi(url, { method: 'POST', body: form })
+      res = await useApi<InterviewSnapshot>(url, { method: 'POST', body: form })
     } else {
-      await useApi(url, { method: 'POST', body })
+      res = await useApi<InterviewSnapshot>(url, { method: 'POST', body })
     }
+    // 질문 ask 응답은 스냅샷이다 — 받아들인 제안·밀려난 제안의 새 상태로 카드를 SSE를 기다리지 않고 정리한다(칸이 없으면 무시: 구 API)
+    if (isQuestion.value) stream.hydrateSuggestions(res)
     // 낙관적 추가: 서버 재큐 후 다음 질문이 새 seq로 도착한다. 첨부는 id 없이(서버 확정 전 — 클릭 불가) 이름·크기만.
     turns.value = [
       ...turns.value,
@@ -315,7 +398,7 @@ async function sendAnswer(extra?: AskExtra): Promise<boolean> {
           : {}),
       },
     ]
-    answer.value = ''
+    if (!fixedText) answer.value = '' // 받아들이기로 보낸 글은 입력창 글이 아니다 — 쓰던 글은 남긴다
     status.value = 'QUEUED'
     await nextTick()
     scrollToBottom() // 내가 보낸 답변은 항상 하단으로
@@ -513,8 +596,8 @@ defineExpose({
             :attachments="t.attachments"
             @download="downloadAttachment"
           >
-            <template v-if="cardsBySeq.get(t.seq)?.length" #footer>
-              <div class="mockup-card-grid">
+            <template v-if="hasFooter(t.seq, t.role)" #footer>
+              <div v-if="cardsBySeq.get(t.seq)?.length" class="mockup-card-grid">
                 <MockupCard
                   v-for="m in cardsBySeq.get(t.seq)"
                   :key="m.id"
@@ -522,6 +605,22 @@ defineExpose({
                   :mockup="m"
                 />
               </div>
+              <!-- 대화 중 제안 카드(질문 세션의 가장 최근 답변, PENDING이 있을 때만) — 페이지가 카드를 그린다 -->
+              <slot
+                v-if="suggestPending(t.seq).length"
+                name="suggest"
+                :suggestions="suggestPending(t.seq)"
+                :send="sendAnswer"
+                :dismiss="dismissSuggestions"
+                :awaiting="status === 'AWAITING_INPUT'"
+                :sending="sending"
+              />
+              <div
+                v-for="(line, i) in suggestLines(t.seq)"
+                :key="`suggest-line-${i}`"
+                class="suggest-decided"
+                data-test="suggest-decided"
+              >{{ line }}</div>
             </template>
           </ChatBubble>
           <PendingBubble
@@ -746,6 +845,10 @@ defineExpose({
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 6px;
   width: 100%;
+}
+.suggest-decided {
+  font-size: 11px;
+  color: #5b6b7d;
 }
 .mockup-tab-badge {
   margin-left: 6px;

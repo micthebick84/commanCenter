@@ -27,7 +27,7 @@ class InterviewWorkerControllerStartupTest {
     private final InterviewService interviewService = mock(InterviewService.class);
     private final InterviewStreamService stream = mock(InterviewStreamService.class);
     private final InterviewWorkerController controller =
-            new InterviewWorkerController(interviewService, stream, mock(DbConnectionService.class));
+            new InterviewWorkerController(interviewService, stream, mock(DbConnectionService.class), mock(com.hamonsoft.netismaker.service.suggest.QuestionSuggestService.class));
 
     private static InterviewTurn note(long sid, int seq, String content) {
         return InterviewTurn.of(sid, seq, "system", "note", content, null);

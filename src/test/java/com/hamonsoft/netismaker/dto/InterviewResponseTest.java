@@ -179,7 +179,8 @@ class InterviewResponseTest {
     void direct_construction_normalizes_null_ref_repos_to_an_empty_list() {
         // 컴팩트 생성자가 "항상 non-null"을 지킨다 — of()를 거치지 않는 호출처도 null을 못 내보낸다
         InterviewResponse r = new InterviewResponse(1L, "o/r", "main", "t", "d", "큐", "QUEUED", null, null, null,
-                "m", "e", List.of(), null, null, null, "QUESTION", null, null, null, null, null, null, null, null, null, null, null);
+                "m", "e", List.of(), null, null, null, "QUESTION", null, null, null, null, null, null, null, null, null, null, null, null);
+        assertThat(r.suggestions()).isNotNull().isEmpty();
         assertThat(r.refRepos()).isNotNull().isEmpty();
         assertThat(r.mcpCatalogIds()).isEmpty();
         assertThat(r.mockups()).isNotNull().isEmpty();   // 끝 컴포넌트(mockups)도 같은 규칙

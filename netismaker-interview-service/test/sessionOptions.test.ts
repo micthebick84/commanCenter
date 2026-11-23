@@ -488,3 +488,51 @@ describe('buildOptions — 목업 MCP (스펙 2026-11-03 인터뷰 목업 §4)',
     expect(buildOptions({ ...base, claudeSessionId: null, mockupMcpServers: undefined })).not.toHaveProperty('mcpServers');
   });
 });
+
+describe('buildOptions — 제안 MCP (질문 세션 제안)', () => {
+  // canUseTool은 호출마다 새 함수이고 env는 process.env 사본이라 값 비교에서 뺀다.
+  const comparable = (o: Record<string, unknown>) => {
+    const { canUseTool: _gate, env: _env, ...rest } = o;
+    return rest;
+  };
+  const suggestServer = { type: 'sdk', name: 'suggest', instance: {} };
+
+  it('suggestMcpServers를 안 주면 옵션이 지금과 같다', () => {
+    const inputs = [
+      { ...base, claudeSessionId: null },
+      { ...base, claudeSessionId: null, sessionKind: 'QUESTION' as const },
+      {
+        ...base,
+        claudeSessionId: 'sess-abc',
+        mcpsBase: { obsidian: { command: 'o' } },
+        dbMcpServers: { 'db-7': { type: 'sdk', name: 'db-7', instance: {} } },
+        dbDialects: { 'db-7': 'mysql' as const },
+      },
+    ];
+    for (const input of inputs) {
+      expect(comparable(buildOptions({ ...input, suggestMcpServers: undefined }))).toEqual(comparable(buildOptions(input)));
+      expect(comparable(buildOptions({ ...input, suggestMcpServers: {} }))).toEqual(comparable(buildOptions(input)));
+    }
+    expect(buildOptions({ ...base, claudeSessionId: null, suggestMcpServers: undefined })).not.toHaveProperty('mcpServers');
+  });
+
+  it('suggestMcpServers는 맨 끝에 합쳐져 같은 이름의 베이스·추가 서버를 이긴다', () => {
+    const o = buildOptions({
+      ...base,
+      claudeSessionId: null,
+      sessionKind: 'QUESTION',
+      mcpsBase: { suggest: 'base', obsidian: { command: 'o' } },
+      mcpsExtra: [{ name: 'suggest', url: 'http://extra', transport: 'http' }],
+      suggestMcpServers: { suggest: suggestServer },
+    });
+    const servers = o.mcpServers as Record<string, unknown>;
+    expect(servers.suggest).toBe(suggestServer);
+    expect(servers).toHaveProperty('obsidian');
+  });
+
+  it('QUESTION에서 suggest 서버를 붙여도 allowedTools는 빈 배열이다', () => {
+    const o = buildOptions({ ...base, claudeSessionId: null, sessionKind: 'QUESTION', suggestMcpServers: { suggest: suggestServer } });
+    expect(o.allowedTools).toEqual([]);
+    expect(o.mcpServers).toHaveProperty('suggest');
+  });
+});

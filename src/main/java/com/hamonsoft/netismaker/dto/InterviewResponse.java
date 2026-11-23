@@ -56,7 +56,9 @@ public record InterviewResponse(
          * 인터뷰 목업 요약 (스펙 2026-11-03 §5) — 버린 것 제외, n 순, html 없음(본문은 단건 조회로만). 패널이 스트림이 늦거나 끊겨도
          * 목록·확정 체크 목록을 채우는 스냅샷이다. 질문 세션과 목업 서비스가 없는 구성은 []. 항상 non-null.
          */
-        List<InterviewMockupSummary> mockups
+        List<InterviewMockupSummary> mockups,
+        /** 대화 중 제안 (스펙 2026-11-22 §6.2) — id 순. QuestionController가 응답 직전에 withSuggestions로 붙인다(조회 트랜잭션 밖). 항상 non-null. */
+        List<SuggestionView> suggestions
 ) {
     public InterviewResponse {
         mcpCatalogIds = mcpCatalogIds == null ? List.of() : List.copyOf(mcpCatalogIds);
@@ -67,6 +69,7 @@ public record InterviewResponse(
         dbConnections = dbConnections == null ? List.of() : List.copyOf(dbConnections);
         refRepos = refRepos == null ? List.of() : List.copyOf(refRepos);
         mockups = mockups == null ? List.of() : List.copyOf(mockups);
+        suggestions = suggestions == null ? List.of() : List.copyOf(suggestions);
     }
 
     /** 칩만 바꾼 사본 (QuestionService.get이 DbConnectionService.chipsFor 결과로 채운다). */
@@ -74,7 +77,7 @@ public record InterviewResponse(
         return new InterviewResponse(id, githubRepo, githubBranch, title, description, status, statusName, currentPhase,
                 workDir, taskId, model, effort, turns, plan, createdAt, updatedAt, kind, totalCostUsd, contextTokens,
                 contextWindow, mcpCatalogIds, attachments, repoCatalogId, dbConnectionIds, chips, refRepos,
-                superpowersEnabled, mockups);
+                superpowersEnabled, mockups, suggestions);
     }
 
     /** 목업 요약만 바꾼 사본 (InterviewService.getResponse가 INTERVIEW 세션에 채운다). withDbConnections가 그대로 실어 나른다. */
@@ -82,7 +85,15 @@ public record InterviewResponse(
         return new InterviewResponse(id, githubRepo, githubBranch, title, description, status, statusName, currentPhase,
                 workDir, taskId, model, effort, turns, plan, createdAt, updatedAt, kind, totalCostUsd, contextTokens,
                 contextWindow, mcpCatalogIds, attachments, repoCatalogId, dbConnectionIds, dbConnections, refRepos,
-                superpowersEnabled, mockups);
+                superpowersEnabled, mockups, suggestions);
+    }
+
+    /** 제안 뷰만 바꾼 사본 (QuestionController가 붙인다 — QuestionService.get은 제안을 건드리지 않는다). */
+    public InterviewResponse withSuggestions(List<SuggestionView> suggestions) {
+        return new InterviewResponse(id, githubRepo, githubBranch, title, description, status, statusName, currentPhase,
+                workDir, taskId, model, effort, turns, plan, createdAt, updatedAt, kind, totalCostUsd, contextTokens,
+                contextWindow, mcpCatalogIds, attachments, repoCatalogId, dbConnectionIds, dbConnections, refRepos,
+                superpowersEnabled, mockups, suggestions);
     }
 
     /** attachments = 이 턴(user answer)에 첨부된 파일. 항상 non-null. */
@@ -145,7 +156,7 @@ public record InterviewResponse(
                 s.getModel(), s.getEffort(), tvs, pv, s.getCreatedAt(), s.getUpdatedAt(),
                 s.getKind().name(), s.getTotalCostUsd(), s.getContextTokens(), s.getContextWindow(),
                 s.getMcpCatalogIds(), attachments,
-                s.getRepoCatalogId(), s.getDbConnectionIds(), List.of(), refViews(s), s.isSuperpowersEnabled(), List.of());
+                s.getRepoCatalogId(), s.getDbConnectionIds(), List.of(), refViews(s), s.isSuperpowersEnabled(), List.of(), List.of());
     }
 
     /** 세션의 참조 repo → 칩 뷰. 세션 쪽 값이 null이어도 []. */

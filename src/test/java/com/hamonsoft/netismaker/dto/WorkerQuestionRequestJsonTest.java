@@ -65,4 +65,22 @@ class WorkerQuestionRequestJsonTest {
 
         assertThat(back).isEqualTo(req);
     }
+
+    @Test
+    void suggestions가_없는_바디는_null로_읽힌다() throws Exception {
+        WorkerQuestionRequest req = json.readValue("{\"content\":\"답변\",\"kind\":\"question\"}", WorkerQuestionRequest.class);
+
+        assertThat(req.suggestions()).isNull();
+    }
+
+    @Test
+    void suggestions를_읽는다() throws Exception {
+        WorkerQuestionRequest req = json.readValue("""
+                {"content":"답변","kind":"question",
+                 "suggestions":[{"kind":"DB","reason":"r","targets":["t"],"dbConnectionId":4}]}
+                """, WorkerQuestionRequest.class);
+
+        assertThat(req.suggestions()).containsExactly(
+                new WorkerQuestionRequest.Suggestion("DB", 4L, null, "r", List.of("t")));
+    }
 }

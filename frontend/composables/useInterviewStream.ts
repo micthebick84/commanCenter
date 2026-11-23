@@ -3,6 +3,7 @@
 // adds reconnect + typed handlers for question/design/plan_ready/status/note/done.
 import type { AttachmentView } from '~/composables/questions'
 import { dropUnbound, upsertMockup, type MockupSummary } from '~/composables/interviewMockups'
+import { upsertSuggestion, type SessionSuggestion } from '~/composables/sessionSuggest'
 
 export type InterviewStatus =
   | 'QUEUED'
@@ -62,6 +63,8 @@ export interface InterviewSnapshot {
   plan?: { designMarkdown?: string; planMarkdown?: string; planJson?: unknown } | null
   /** 인터뷰 목업 요약(html 없음). 칸이 없거나 null이면 무시한다(구 API·질문 세션). */
   mockups?: MockupSummary[] | null
+  /** 질문 세션의 대화 중 제안(DB 연결·참조 레포). 칸이 없거나 null이면 무시한다(구 API·인터뷰 세션). */
+  suggestions?: SessionSuggestion[] | null
 }
 
 export interface InterviewPlan {
@@ -86,7 +89,15 @@ const KNOWN_STATUSES: InterviewStatus[] = [
   'FAILED',
 ]
 
-export function useInterviewStream() {
+export interface InterviewStreamOptions {
+  /**
+   * 끊겼다가(reconnecting) 다시 열렸을 때만 부른다 — 첫 연결은 아니다. 서버 replay는 턴·목업만 다시 보내므로
+   * 끊긴 사이에 온 제안·상태 변경은 호출자가 스냅샷을 다시 받아 hydrateSuggestions로 채운다.
+   */
+  onReconnected?: () => void
+}
+
+export function useInterviewStream(options: InterviewStreamOptions = {}) {
   const auth = useAuthStore()
 
   const connState = ref<ConnState>('idle')
@@ -96,6 +107,7 @@ export function useInterviewStream() {
   const plan = ref<InterviewPlan | null>(null)
   const pending = ref<PendingActivity | null>(null)
   const mockups = ref<MockupSummary[]>([])
+  const suggestions = ref<SessionSuggestion[]>([])
   const error = ref<string | null>(null)
 
   let es: EventSource | null = null
@@ -132,8 +144,10 @@ export function useInterviewStream() {
     connState.value = attempts === 0 ? 'connecting' : 'reconnecting'
     es = new EventSource(streamUrl(sessionId as number))
     es.onopen = () => {
+      const reconnected = connState.value === 'reconnecting'
       attempts = 0
       connState.value = 'open'
+      if (reconnected) options.onReconnected?.()
     }
     es.addEventListener('status', (e) => onStatus(e as MessageEvent))
     es.addEventListener('question', (e) => onQuestion(e as MessageEvent))
@@ -142,6 +156,7 @@ export function useInterviewStream() {
     es.addEventListener('plan_ready', (e) => onPlanReady(e as MessageEvent))
     es.addEventListener('note', (e) => onNote(e as MessageEvent))
     es.addEventListener('mockup', (e) => onMockup(e as MessageEvent))
+    es.addEventListener('suggestion', (e) => onSuggestion(e as MessageEvent))
     es.addEventListener('done', () => close())
     es.onerror = () => onError()
   }
@@ -190,6 +205,14 @@ export function useInterviewStream() {
     const data = parse(e)
     if (!data || typeof data.id !== 'number') return
     mockups.value = upsertMockup(mockups.value, data as MockupSummary)
+  }
+
+  // `suggestion` 페이로드 = SuggestionView 하나. 상태가 바뀔 때마다(PENDING → ACCEPTED 등) 다시 오므로 id로 덮어쓴다.
+  // 재연결 replay와 스냅샷이 겹쳐도 중복 없이 합쳐지고, 모양이 틀린 페이로드는 버린다.
+  function onSuggestion(e: MessageEvent) {
+    const data = parse(e)
+    if (!data || typeof data !== 'object' || typeof data.id !== 'number') return
+    suggestions.value = upsertSuggestion(suggestions.value, data as SessionSuggestion)
   }
 
   function onDesign(e: MessageEvent) {
@@ -303,6 +326,20 @@ export function useInterviewStream() {
     if (Array.isArray(snapshot.mockups)) {
       for (const m of snapshot.mockups) mockups.value = upsertMockup(mockups.value, m)
     }
+    hydrateSuggestions(snapshot)
+  }
+
+  // 스냅샷(또는 ask 응답)의 제안만 id로 덮어쓴다. 재연결·ask 응답에서 hydrate 전체를 다시 부르지 않는 이유:
+  // 낙관적 내 말풍선(seq x.5)이 서버의 실제 user 턴(정수 seq)과 dedup되지 않아 두 번 보이고, status·plan도 스트림보다 늦은 값으로 덮일 수 있다.
+  function hydrateSuggestions(snapshot: InterviewSnapshot | null | undefined) {
+    if (!snapshot || !Array.isArray(snapshot.suggestions)) return
+    for (const g of snapshot.suggestions) {
+      if (!g || typeof g !== 'object' || typeof g.id !== 'number') continue
+      // 상태는 PENDING에서 벗어나기만 한다 — GET이 도는 사이 SSE로 먼저 온 결정을 늦게 온 옛 PENDING이 되돌리지 않게
+      const have = suggestions.value.find((x) => x.id === g.id)
+      if (g.status === 'PENDING' && have && have.status !== 'PENDING') continue
+      suggestions.value = upsertSuggestion(suggestions.value, g)
+    }
   }
 
   // Dedup by seq so SSE replay-on-reconnect does not duplicate turns.
@@ -359,9 +396,11 @@ export function useInterviewStream() {
     plan,
     pending,
     mockups,
+    suggestions,
     error,
     open,
     close,
     hydrate,
+    hydrateSuggestions,
   }
 }

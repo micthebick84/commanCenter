@@ -1339,3 +1339,257 @@ describe('InterviewPanel 구현에 넘길 목업 (스펙 2026-11-03 인터뷰 �
     w.unmount()
   })
 })
+
+describe('InterviewPanel 대화 중 제안 (스펙 2026-11-22 §5·§8)', () => {
+  type SlotProps = {
+    answer: string
+    setAnswer: (v: string) => void
+  }
+  type SuggestSlotProps = {
+    suggestions: Array<{ id: number }>
+    send: (extra: Record<string, unknown>) => Promise<boolean>
+    dismiss: (ids: number[]) => Promise<void>
+    awaiting: boolean
+    sending: boolean
+  }
+  const sg = (over: Record<string, unknown> = {}) => ({
+    id: 1,
+    turnSeq: 3,
+    kind: 'DB',
+    status: 'PENDING',
+    reason: '실제 값을 봐야 합니다',
+    targets: [],
+    dbConnectionId: 4,
+    repoCatalogId: null,
+    repoAlias: null,
+    defaultBranch: null,
+    dbOptions: [{ id: 4, name: '개발 DB', dbType: 'POSTGRESQL' }],
+    dbSlotsLeft: 3,
+    refSlotsLeft: 3,
+    ...over,
+  })
+  const turns = [
+    { seq: 1, role: 'assistant', kind: 'question', content: '첫 답변' },
+    { seq: 2, role: 'user', kind: 'answer', content: '추가 질문' },
+    { seq: 3, role: 'assistant', kind: 'question', content: '둘째 답변' },
+  ]
+  const snap = (suggestions: unknown[], statusName = 'AWAITING_INPUT') => ({ statusName, turns, plan: null, suggestions })
+
+  async function mountWithSlots(snapshot: unknown, props: Record<string, unknown> = { kind: 'QUESTION' }) {
+    authStub.accessToken = 'jwt'
+    useApiMock.mockResolvedValueOnce(snapshot)
+    const w = mount(InterviewPanel, {
+      props: { sessionId: 9, ...props },
+      slots: {
+        composer: (p: SlotProps) => [
+          h('input', {
+            'data-test': 'slot-input',
+            value: p.answer,
+            onInput: (e: Event) => p.setAnswer((e.target as HTMLInputElement).value),
+          }),
+          h('span', { 'data-test': 'slot-answer' }, p.answer),
+        ],
+        suggest: (p: SuggestSlotProps) =>
+          h('div', { 'data-test': 'slot-suggest' }, [
+            h('span', { 'data-test': 'slot-ids' }, p.suggestions.map((s: { id: number }) => s.id).join(',')),
+            h('span', { 'data-test': 'slot-awaiting' }, String(p.awaiting)),
+            h('span', { 'data-test': 'slot-sending' }, String(p.sending)),
+            h('button', {
+              'data-test': 'slot-accept',
+              onClick: () => p.send({ text: '고정 문장', files: [new File(['x'], '메모.txt')], acceptSuggestionIds: [1] }),
+            }),
+            h('button', { 'data-test': 'slot-plain', onClick: () => p.send({}) }),
+            h('button', {
+              'data-test': 'slot-dismiss',
+              onClick: () => p.dismiss(p.suggestions.map((s: { id: number }) => s.id)),
+            }),
+          ]),
+      },
+    })
+    await flushPromises()
+    return w
+  }
+  const askCall = () => useApiMock.mock.calls.find((c: unknown[]) => c[0] === '/api/questions/9/ask')
+
+  it('text를 넘기면 입력창을 건드리지 않고 첨부도 보내지 않는다', async () => {
+    const w = await mountWithSlots(snap([sg()]))
+    await w.find('[data-test="slot-input"]').setValue('쓰던 글')
+    await w.find('[data-test="slot-accept"]').trigger('click')
+    await flushPromises()
+    const call = askCall()!
+    expect(call[1].body).not.toBeInstanceOf(FormData)
+    expect(call[1]).toEqual({
+      method: 'POST',
+      body: { answer: '고정 문장', replyToSeq: 3, acceptSuggestionIds: [1] },
+    })
+    expect(w.find('[data-test="slot-answer"]').text()).toBe('쓰던 글')
+    // 낙관적 내 말풍선은 보낸 고정 문장이고 첨부 칩이 없다
+    const mine = w.findAll('.bubble-row.user')
+    expect(mine[mine.length - 1]!.text()).toContain('고정 문장')
+    expect(mine[mine.length - 1]!.find('.bubble-attachments').exists()).toBe(false)
+    w.unmount()
+  })
+
+  it('text 없이 보내면 지금처럼 입력창의 글을 보내고 비운다', async () => {
+    const w = await mountWithSlots(snap([sg()]))
+    await w.find('[data-test="slot-input"]').setValue('쓰던 글')
+    await w.find('[data-test="slot-plain"]').trigger('click')
+    await flushPromises()
+    expect(askCall()![1]).toEqual({ method: 'POST', body: { answer: '쓰던 글', replyToSeq: 3 } })
+    expect(w.find('[data-test="slot-answer"]').text()).toBe('')
+    w.unmount()
+  })
+
+  it('가장 최근 답변의 PENDING 제안만 suggest 슬롯으로 나간다', async () => {
+    const w = await mountWithSlots(
+      snap([
+        sg({ id: 1, turnSeq: 1 }),
+        sg({ id: 2, turnSeq: 3 }),
+        sg({ id: 3, turnSeq: 3, kind: 'REF_REPO', status: 'DISMISSED', repoAlias: '공통 UI', repoCatalogId: 11 }),
+        sg({ id: 4, turnSeq: 3, kind: 'REF_REPO', repoAlias: '배치 서버', repoCatalogId: 12 }),
+      ]),
+    )
+    expect(w.findAll('[data-test="slot-suggest"]')).toHaveLength(1)
+    expect(w.find('[data-test="slot-ids"]').text()).toBe('2,4')
+    const bubbles = w.findAll('.bubble-row.assistant')
+    expect(bubbles[1]!.find('[data-test="slot-suggest"]').exists()).toBe(true) // 가장 최근 답변 아래
+    expect(bubbles[0]!.find('[data-test="slot-suggest"]').exists()).toBe(false)
+    // 같은 턴의 결정된 제안은 한 줄로
+    expect(bubbles[1]!.findAll('[data-test="suggest-decided"]').map((n) => n.text())).toEqual([
+      '제안: 참조 레포 공통 UI — 닫음',
+    ])
+    w.unmount()
+  })
+
+  it('지난 답변의 제안은 한 줄로만 보이고 슬롯이 없다', async () => {
+    const w = await mountWithSlots(
+      snap([
+        sg({ id: 1, turnSeq: 1 }),
+        sg({ id: 2, turnSeq: 1, kind: 'REF_REPO', status: 'ACCEPTED', repoAlias: '공통 UI', repoCatalogId: 11 }),
+      ]),
+    )
+    expect(w.find('[data-test="slot-suggest"]').exists()).toBe(false)
+    const first = w.findAll('.bubble-row.assistant')[0]!
+    expect(first.findAll('[data-test="suggest-decided"]').map((n) => n.text())).toEqual([
+      '제안: DB 연결 — 연결하지 않음',
+      '제안: 참조 레포 공통 UI — 연결함',
+    ])
+    expect(first.find('button').exists()).toBe(false)
+    w.unmount()
+  })
+
+  it('입력 대기가 아니면 슬롯의 awaiting이 false다', async () => {
+    const w = await mountWithSlots(snap([sg()]))
+    expect(w.find('[data-test="slot-awaiting"]').text()).toBe('true')
+    expect(w.find('[data-test="slot-sending"]').text()).toBe('false')
+    FakeEventSource.last().emit('status', 'RUNNING')
+    await flushPromises()
+    expect(w.find('[data-test="slot-awaiting"]').text()).toBe('false')
+    w.unmount()
+  })
+
+  it('dismiss는 제안마다 POST하고 응답으로 상태를 바꾼다', async () => {
+    const w = await mountWithSlots(snap([sg({ id: 1 }), sg({ id: 2, kind: 'REF_REPO', repoAlias: '공통 UI', repoCatalogId: 11 })]))
+    const vm = w.vm as unknown as { $q: { notify: (opts: unknown) => void } }
+    const notifySpy = vi.spyOn(vm.$q, 'notify')
+    useApiMock.mockImplementation((url: string) => {
+      if (url === '/api/questions/9/suggestions/1/dismiss') return Promise.resolve(sg({ id: 1, status: 'DISMISSED' }))
+      if (url === '/api/questions/9/suggestions/2/dismiss') return Promise.reject({ statusCode: 409 })
+      return Promise.resolve(null)
+    })
+    await w.find('[data-test="slot-dismiss"]').trigger('click')
+    await flushPromises()
+    expect(useApiMock).toHaveBeenCalledWith('/api/questions/9/suggestions/1/dismiss', { method: 'POST' })
+    expect(useApiMock).toHaveBeenCalledWith('/api/questions/9/suggestions/2/dismiss', { method: 'POST' })
+    expect(w.find('[data-test="slot-ids"]').text()).toBe('2') // 409는 조용히 넘긴다 — 실제 상태는 SSE가 가져온다
+    expect(w.findAll('[data-test="suggest-decided"]').map((n) => n.text())).toEqual(['제안: DB 연결 — 닫음'])
+    expect(notifySpy).not.toHaveBeenCalled()
+
+    useApiMock.mockImplementation(() => Promise.reject({ statusCode: 500, data: { message: '서버 오류' } }))
+    await w.find('[data-test="slot-dismiss"]').trigger('click')
+    await flushPromises()
+    expect(notifySpy).toHaveBeenCalledTimes(1)
+    expect(notifySpy).toHaveBeenCalledWith(expect.objectContaining({ type: 'negative' }))
+    notifySpy.mockRestore()
+    w.unmount()
+  })
+
+  // 스트림을 끊었다가 다시 연다. 재연결 타이머(1초)만 페이크로 돌리고 flushPromises 전에 되돌린다.
+  async function reconnectWith(snapshot: unknown) {
+    vi.useFakeTimers()
+    FakeEventSource.last().triggerError()
+    vi.advanceTimersByTime(1000)
+    vi.useRealTimers()
+    useApiMock.mockResolvedValueOnce(snapshot)
+    FakeEventSource.last().triggerOpen()
+    await flushPromises()
+  }
+
+  it('재연결되면 스냅샷을 다시 받아 놓친 제안을 채운다', async () => {
+    const w = await mountWithSlots(snap([]))
+    FakeEventSource.last().triggerOpen()
+    expect(w.find('[data-test="slot-suggest"]').exists()).toBe(false)
+    const before = FakeEventSource.instances.length
+    await reconnectWith(snap([sg()]))
+    expect(FakeEventSource.instances.length).toBe(before + 1)
+    expect(useApiMock.mock.calls.filter((c: unknown[]) => c[0] === '/api/questions/9')).toHaveLength(2)
+    expect(w.find('[data-test="slot-ids"]').text()).toBe('1')
+    // 재연결 스냅샷의 턴으로 말풍선이 늘지 않는다(제안만 반영)
+    expect(w.findAll('.bubble-row.assistant')).toHaveLength(2)
+    w.unmount()
+  })
+
+  it('재연결 스냅샷이 놓친 상태 변경을 반영한다', async () => {
+    const w = await mountWithSlots(snap([sg()]))
+    expect(w.find('[data-test="slot-ids"]').text()).toBe('1')
+    await reconnectWith(snap([sg({ status: 'ACCEPTED' })]))
+    expect(w.find('[data-test="slot-suggest"]').exists()).toBe(false)
+    expect(w.findAll('[data-test="suggest-decided"]').map((n) => n.text())).toEqual(['제안: DB 연결 — 연결함'])
+    w.unmount()
+  })
+
+  it('재연결 스냅샷을 못 받아도 스트림은 그대로다', async () => {
+    const w = await mountWithSlots(snap([sg()]))
+    vi.useFakeTimers()
+    FakeEventSource.last().triggerError()
+    vi.advanceTimersByTime(1000)
+    vi.useRealTimers()
+    useApiMock.mockRejectedValueOnce(new Error('500'))
+    FakeEventSource.last().triggerOpen()
+    await flushPromises()
+    expect(w.find('[data-test="slot-ids"]').text()).toBe('1')
+    FakeEventSource.last().emit('suggestion', sg({ status: 'DISMISSED' }))
+    await flushPromises()
+    expect(w.find('[data-test="slot-suggest"]').exists()).toBe(false)
+    w.unmount()
+  })
+
+  it('ask 응답의 제안 상태로 카드를 바로 정리한다', async () => {
+    const w = await mountWithSlots(snap([sg()]))
+    useApiMock.mockResolvedValueOnce(snap([sg({ status: 'ACCEPTED' })], 'QUEUED'))
+    await w.find('[data-test="slot-accept"]').trigger('click')
+    await flushPromises()
+    expect(askCall()).toBeTruthy()
+    expect(w.find('[data-test="slot-suggest"]').exists()).toBe(false)
+    expect(w.findAll('[data-test="suggest-decided"]').map((n) => n.text())).toEqual(['제안: DB 연결 — 연결함'])
+    w.unmount()
+  })
+
+  it('삭제된 레포의 참조 제안만 있으면 카드를 그리지 않고 한 줄만 보인다', async () => {
+    const w = await mountWithSlots(snap([sg({ id: 7, kind: 'REF_REPO', repoCatalogId: null, repoAlias: null, dbOptions: [] })]))
+    expect(w.find('[data-test="slot-suggest"]').exists()).toBe(false)
+    const last = w.findAll('.bubble-row.assistant')[1]!
+    expect(last.findAll('[data-test="suggest-decided"]').map((n) => n.text())).toEqual([
+      '제안: 참조 레포 (삭제된 레포) — 연결하지 않음',
+    ])
+    w.unmount()
+  })
+
+  it('작업 인터뷰(INTERVIEW) 패널에는 제안 슬롯이 없다', async () => {
+    const w = await mountWithSlots(snap([sg({ id: 1, turnSeq: 3 }), sg({ id: 2, turnSeq: 1, status: 'DISMISSED' })]), {})
+    expect(w.find('[data-test="slot-suggest"]').exists()).toBe(false)
+    expect(w.find('[data-test="suggest-decided"]').exists()).toBe(false)
+    expect(w.find('.bubble-stack-assistant').exists()).toBe(false) // 말풍선 마크업도 예전 그대로
+    w.unmount()
+  })
+})

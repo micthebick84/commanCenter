@@ -22,4 +22,20 @@ class McpCatalogNameReservationTest {
         assertThat(v.validate(req("mydb-1"))).isEmpty();
         assertThat(v.validate(req("dbtools"))).isEmpty();
     }
+
+    @Test
+    void 이름이_suggest면_거절한다() {
+        assertThat(v.validate(req("suggest"))).isNotEmpty();
+    }
+
+    @Test
+    void suggest로_시작하는_다른_이름은_받는다() {
+        assertThat(v.validate(req("suggest-tools"))).isEmpty();
+        assertThat(v.validate(req("mysuggest"))).isEmpty();
+    }
+
+    @Test
+    void db_로_시작하면_거절한다() {
+        assertThat(v.validate(req("db-x"))).isNotEmpty();
+    }
 }

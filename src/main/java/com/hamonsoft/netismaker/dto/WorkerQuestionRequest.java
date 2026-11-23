@@ -22,7 +22,9 @@ public record WorkerQuestionRequest(
         /** 주 모델의 컨텍스트 창 크기. null = 미보고. */
         Long contextWindow,
         /** 참조 repo 준비 결과 (스펙 2026-10-22 §4.5). null/빈 목록이면 세션의 참조를 바꾸지 않는다. */
-        List<RefState> refStates
+        List<RefState> refStates,
+        /** 답변과 함께 보고한 대화 중 제안 (스펙 2026-11-22 §6.2). 구버전 러너·제안 없는 답변은 null. 저장 전에 API가 정규화한다. */
+        List<Suggestion> suggestions
 ) {
     /**
      * refStates 도입 전 10개 인자 생성자 — 구버전 러너·기존 호출부 호환.
@@ -32,7 +34,16 @@ public record WorkerQuestionRequest(
                                  Long inputTokens, Long outputTokens, Long cacheCreationTokens,
                                  Long cacheReadTokens, Long contextTokens, Long contextWindow) {
         this(content, claudeSessionId, kind, costUsd, inputTokens, outputTokens, cacheCreationTokens,
-                cacheReadTokens, contextTokens, contextWindow, null);
+                cacheReadTokens, contextTokens, contextWindow, null, null);
+    }
+
+    /** suggestions 도입 전 11개 인자 생성자 — 기존 호출부 호환. */
+    public WorkerQuestionRequest(String content, String claudeSessionId, String kind, BigDecimal costUsd,
+                                 Long inputTokens, Long outputTokens, Long cacheCreationTokens,
+                                 Long cacheReadTokens, Long contextTokens, Long contextWindow,
+                                 List<RefState> refStates) {
+        this(content, claudeSessionId, kind, costUsd, inputTokens, outputTokens, cacheCreationTokens,
+                cacheReadTokens, contextTokens, contextWindow, refStates, null);
     }
 
     /**
@@ -40,4 +51,7 @@ public record WorkerQuestionRequest(
      * sha = 이번 턴에 확인한 HEAD 커밋(성공), error = 자격증명을 가린 실패 사유(실패). error가 있으면 sha는 무시한다.
      */
     public record RefState(Long catalogId, String branch, String sha, String error) {}
+
+    /** Claude가 남긴 제안 하나. kind = DB | REF_REPO. 믿지 않고 QuestionSuggestService.record가 후보와 대조해 거른다. */
+    public record Suggestion(String kind, Long dbConnectionId, Long repoCatalogId, String reason, List<String> targets) {}
 }

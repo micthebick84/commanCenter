@@ -186,7 +186,22 @@ export interface InterviewClaimResponse {
    * 질문 세션은 이 값과 무관하다(원래 superpowers가 없다).
    */
   superpowersEnabled?: boolean | null;
+  /**
+   * 질문 세션 제안 후보 (대화 중 DB 연결·참조 repo 제안). 후보가 없으면 API가 칸을 비우고, 구버전 API는 칸이 없다 →
+   * 없거나 두 목록이 모두 비면 제안 도구·절을 만들지 않는다.
+   */
+  suggest?: SuggestCandidates | null;
 }
+
+/** 제안할 수 있는 DB 연결 — id·이름·종류만 온다(접속정보 없음). */
+export interface SuggestDbCandidate { id: number; name: string; dbType: string }
+/** 제안할 수 있는 참조 repo — 카탈로그 id·별칭·추천 키워드만 온다(description 없음). */
+export interface SuggestRefCandidate { catalogId: number; alias: string; hint?: string | null }
+export interface SuggestCandidates { dbCandidates?: SuggestDbCandidate[]; refCandidates?: SuggestRefCandidate[] }
+/** 답변 보고에 싣는 제안 한 건 — Claude는 제안만 하고, 붙이는 일은 사용자가 API에서 한다. */
+export type QuestionSuggestionInput =
+  | { kind: 'DB'; reason: string; targets?: string[]; dbConnectionId?: number }
+  | { kind: 'REF_REPO'; reason: string; repoCatalogId: number };
 
 /** 작업 타입의 와이어 값 — Java `TaskType` enum 이름. */
 export type TaskTypeWire = 'NEW_FEATURE' | 'FEATURE_CHANGE' | 'BUG_FIX' | 'DB_WORK';
@@ -250,6 +265,8 @@ export interface WorkerQuestionRequest {
    * 구버전 API·참조 없는 질문·인터뷰의 바디는 지금과 같다. API는 catalogId+branch가 같은 원소에만 반영하고, sha는 처음 한 번만 고정한다.
    */
   refStates?: RefState[];
+  /** 이번 턴에 Claude가 남긴 제안(받은 순서). 없으면 키를 생략한다 — 구버전 API·제안 없는 답변의 바디는 지금과 같다. */
+  suggestions?: QuestionSuggestionInput[];
 }
 
 /**

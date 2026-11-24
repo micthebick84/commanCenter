@@ -139,6 +139,7 @@ let originalDbMigrationManaged = false
 let originalDbScriptDir = ''
 // 배포 설정도 바꿨을 때만 보낸다(서버는 키 없음·null이면 그대로 둔다)
 const deployConfig = ref<DeployConfig>(emptyDeployConfig())
+const deployConfigProblems = ref<string[]>([])
 let originalDeployConfig: DeployConfig | null = null
 const deployCopySources = computed(() =>
   entries.value
@@ -166,6 +167,7 @@ function openCreate() {
   form.dbMigrationManaged = false
   form.dbScriptDir = ''
   deployConfig.value = emptyDeployConfig()
+  deployConfigProblems.value = [] // 편집기가 다시 마운트되며 새로 알리지만, 닫힌 창의 문제가 남지 않게 먼저 비운다
   originalDeployConfig = null
   showForm.value = true
 }
@@ -192,11 +194,17 @@ function openEdit(e: RepoEntry) {
   originalDbMigrationManaged = form.dbMigrationManaged
   originalDbScriptDir = form.dbScriptDir
   deployConfig.value = cloneDeployConfig(e.deployConfig)
+  deployConfigProblems.value = []
   originalDeployConfig = cloneDeployConfig(e.deployConfig)
   showForm.value = true
 }
 
 async function submit() {
+  // 편집기가 알린 문제(같은 항목 키 두 행 등)가 있으면 보내지 않는다 — 보내면 같은 키의 뒤 값만 남는다
+  if (deployConfigProblems.value.length) {
+    $q.notify({ type: 'negative', message: deployConfigProblems.value[0] })
+    return
+  }
   submitting.value = true
   try {
     const body: Record<string, unknown> = {
@@ -691,7 +699,12 @@ const canSubmit = computed(
           종료 때 병합 전·후 빌드 결과를 비교해 바뀐 파일만 담은 패치 파일(zip)을 만들어 보관합니다.
           <span v-if="patchBlocked" data-test="form-patch-hint">미리 빌드 명령이 있어야 켤 수 있습니다</span>
         </div>
-        <DeployConfigEditor v-model="deployConfig" :mobile="mobile" :copy-sources="deployCopySources" />
+        <DeployConfigEditor
+          v-model="deployConfig"
+          v-model:problems="deployConfigProblems"
+          :mobile="mobile"
+          :copy-sources="deployCopySources"
+        />
       </template>
     </AdminFormDialog>
 

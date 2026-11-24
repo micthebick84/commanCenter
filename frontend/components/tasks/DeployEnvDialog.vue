@@ -6,12 +6,14 @@ import {
   NO_DB_LABEL,
   blankRow,
   choiceCaption,
+  configNote,
   dbModelFromSuggestion,
   isSuggestion,
   missingRequired,
   noEnvNotice,
   rowsFromEnvVars,
   rowsFromSuggestion,
+  showPreviousDbBadge,
   splitFormat,
   suggestionCaption,
   toWireDbSelection,
@@ -39,6 +41,7 @@ const databases = ref<DeployDbSlotView[]>([])
 const dbModel = ref<Record<string, number | null>>({})
 const caption = ref<string | null>(null)
 const notice = ref<string | null>(null)
+const configNoteText = ref<string | null>(null)
 const loading = ref(false)
 const submitting = ref(false)
 let rowSeq = 0
@@ -59,11 +62,13 @@ async function load() {
   dbModel.value = {}
   caption.value = null
   notice.value = null
+  configNoteText.value = null
   let nextDatabases: DeployDbSlotView[] = []
   let nextDbModel: Record<string, number | null> = {}
   let next: EnvRow[] = []
   let nextCaption: string | null = null
   let nextNotice: string | null = null
+  let nextConfigNote: string | null = null
   let failed = false
   try {
     const res = await useApi(`/api/tasks/${props.taskId}/deploy-env`)
@@ -73,6 +78,7 @@ async function load() {
     nextDbModel = dbModelFromSuggestion(res)
     nextCaption = suggestionCaption(res)
     nextNotice = noEnvNotice(res)
+    nextConfigNote = configNote(res)
   } catch {
     failed = true
   }
@@ -86,6 +92,7 @@ async function load() {
   dbModel.value = nextDbModel
   caption.value = nextCaption
   notice.value = nextNotice
+  configNoteText.value = nextConfigNote
   loading.value = false
 }
 
@@ -158,11 +165,7 @@ const fullscreen = useFullscreenDialog()
         <q-card-section class="q-pt-none text-caption text-grey-7">
           <div v-if="caption" class="text-primary q-mb-xs" data-test="deploy-env-caption">{{ caption }}</div>
           <div v-if="notice" class="text-deep-orange-10 q-mb-xs" data-test="deploy-env-no-env-notice">{{ notice }}</div>
-          <div v-if="databases.length" data-test="deploy-env-note-config">
-            DB 비밀번호는 저장하지 않고 배포할 때 서버가 적용합니다. 설정 파일이 대상이면 컨테이너 안 사본으로 적용되고,
-            환경변수가 대상이면 컨테이너에 주입됩니다. 아래 변수 중 값이 빈 것은 보내지 않으며, 비밀 변수 값은
-            마스킹 표시되지만 평문 저장됩니다.
-          </div>
+          <div v-if="configNoteText" data-test="deploy-env-note-config">{{ configNoteText }}</div>
           <div v-else data-test="deploy-env-note-plain">
             컨테이너에 <code>-e KEY=VALUE</code>로 주입됩니다. 값이 빈 변수는 보내지 않습니다.
             비밀 값은 마스킹 표시되지만 평문 저장됩니다.
@@ -177,7 +180,13 @@ const fullscreen = useFullscreenDialog()
             <div v-for="d in databases" :key="d.slot" class="q-mb-sm" data-test="deploy-db-slot">
               <div class="row items-center q-gutter-x-sm">
                 <span class="text-weight-medium">{{ d.label }}</span>
-                <q-badge v-if="d.selected?.from === 'PREVIOUS'" outline color="grey-7" label="직전 배포 값" />
+                <q-badge
+                  v-if="showPreviousDbBadge(d, dbModel)"
+                  outline
+                  color="grey-7"
+                  label="직전 배포 값"
+                  data-test="deploy-db-previous"
+                />
               </div>
               <div v-if="d.targetSummary" class="text-caption text-grey-7">{{ d.targetSummary }}</div>
               <q-select

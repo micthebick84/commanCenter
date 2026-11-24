@@ -203,6 +203,44 @@ describe('DeployEnvDialog (스펙 2026-10-07 §8)', () => {
       w.unmount()
     })
 
+    it('DB 자리가 있으면 변수가 없어도 빨간 안내를 띄우지 않는다', async () => {
+      useApiMock.mockResolvedValueOnce({ ...withDb, rows: [], templateCount: 0 })
+      const w = mountDialog()
+      await flushPromises()
+      expect(body().querySelector('[data-test="deploy-env-no-env-notice"]')).toBeNull()
+      expect(body().querySelector('[data-test="deploy-env-note-config"]')?.textContent).toContain('DB 비밀번호')
+      w.unmount()
+    })
+
+    it('변수만 있는 배포 설정은 설정 안내(DB 문장 없이)를 보이고 -e 안내는 숨긴다', async () => {
+      useApiMock.mockResolvedValueOnce({ rows: [withDb.rows[0]], templateCount: 0, previousTaskId: null, databases: [] })
+      const w = mountDialog()
+      await flushPromises()
+      const note = body().querySelector('[data-test="deploy-env-note-config"]')?.textContent ?? ''
+      expect(note).toContain('설정 파일이 대상이면')
+      expect(note).not.toContain('DB 비밀번호')
+      expect(body().querySelector('[data-test="deploy-env-note-plain"]')).toBeNull()
+      w.unmount()
+    })
+
+    it('직전 배포 배지는 선택을 바꾸면 사라지고 되돌리면 다시 보인다', async () => {
+      const other = { ...choice, id: 7, name: '다른 DB' }
+      useApiMock.mockResolvedValueOnce({
+        ...withDb,
+        databases: [{ ...withDb.databases[0], selected: { connectionId: 43, from: 'PREVIOUS' }, choices: [choice, other] }],
+      })
+      const w = mountDialog()
+      await flushPromises()
+      expect(body().querySelector('[data-test="deploy-db-previous"]')).not.toBeNull()
+      ;(w.vm as any).dbModel.main = 7
+      await flushPromises()
+      expect(body().querySelector('[data-test="deploy-db-previous"]')).toBeNull()
+      ;(w.vm as any).dbModel.main = 43
+      await flushPromises()
+      expect(body().querySelector('[data-test="deploy-db-previous"]')).not.toBeNull()
+      w.unmount()
+    })
+
     it('format_행은_앞뒤_글자를_보인다', async () => {
       useApiMock.mockResolvedValueOnce(withDb)
       const w = mountDialog()

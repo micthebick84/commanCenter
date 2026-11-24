@@ -99,6 +99,8 @@ public class WorkerMainLoop {
 
     /** 기동 알림이 성공(또는 구 API의 404)한 뒤에만 claim한다. 스케줄러 스레드와 테스트가 함께 읽는다. */
     private volatile boolean startupReported;
+    /** 남은 배포 덮어쓰기 사본 청소가 한 번 성공했는가(성공할 때까지 폴링마다 다시 한다). */
+    private volatile boolean staleOverridesCleaned;
 
     /** 참조 repo 준비 시간을 재는 시계(나노초) — 테스트가 바꾼다. */
     LongSupplier nanoClock = System::nanoTime;
@@ -179,9 +181,28 @@ public class WorkerMainLoop {
         }
     }
 
+    /**
+     * 이전 프로세스가 배포 도중 끝나 남긴 설정 파일 사본(평문 DB 비밀번호)을 지운다 — 기동 정합 뒤, 한 번 성공할 때까지
+     * 폴링마다(사본 폴더가 없으면 API도 부르지 않고 바로 성공). 기동 정합이 이 워커의 배포중을 배포실패로 정리한 뒤라
+     * 그 작업은 보호 목록에 없다. 실패해도 claim은 막지 않는다.
+     */
+    private boolean cleanStaleDeployOverrides() {
+        try {
+            int n = deployService.cleanStaleOverrides(() -> http.activeWorktreeTasks().stream()
+                    .map(com.hamonsoft.netismaker.dto.ActiveWorktreeTaskSummary::id)
+                    .collect(java.util.stream.Collectors.toSet()));
+            if (n > 0) log.warn("이전 프로세스가 남긴 배포 덮어쓰기 사본 {}개를 지웠다", n);
+            return true;
+        } catch (RuntimeException e) {
+            log.warn("남은 배포 덮어쓰기 사본 청소 실패(다음 폴링에 다시): {}", e.getMessage());
+            return false;
+        }
+    }
+
     @Scheduled(fixedRateString = "#{${netis-maker.worker.poll-interval-seconds:5} * 1000}")
     public void pollAndProcess() {
         if (!ensureStartupReported()) return;
+        if (!staleOverridesCleaned) staleOverridesCleaned = cleanStaleDeployOverrides();
         Optional<WorkerTaskResponse> maybeTask;
         try {
             maybeTask = http.nextTask();

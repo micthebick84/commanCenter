@@ -280,6 +280,49 @@ public class DeployService {
         return Paths.get(props.reposDir()).resolveSibling("deploy-override");
     }
 
+    // 자릿수 상한 — 엉뚱하게 긴 이름이 parseLong에서 터져 청소 전체가 멈추지 않게(WorktreeCleanupJob과 같은 규칙)
+    private static final java.util.regex.Pattern OVERRIDE_TASK_DIR = java.util.regex.Pattern.compile("task-([1-9][0-9]{0,17})");
+
+    /**
+     * 워커가 배포 도중 끝나(크래시·강제 종료) deploy()의 finally가 돌지 못해 남은 설정 파일 사본(평문 DB 비밀번호)을 지운다 —
+     * 기동 정합 뒤 한 번. 진행 중 작업(API 보호 목록 — 같은 PC의 다른 워커 프로세스가 배포 중일 수 있다)의 폴더는 둔다.
+     * 지운 폴더 수를 돌려준다. 보호 목록 조회가 실패하면 아무것도 지우지 않고 예외를 그대로 올린다(fail-closed).
+     */
+    public int cleanStaleOverrides(java.util.function.Supplier<java.util.Set<Long>> activeTaskIds) {
+        return cleanStaleOverrides(overrideRoot(), activeTaskIds);
+    }
+
+    /** 순수 판정 seam — 폴더가 없거나 task-N 폴더가 없으면 보호 목록을 묻지 않는다(배포를 안 받는 워커는 API를 부르지 않음). */
+    static int cleanStaleOverrides(Path root, java.util.function.Supplier<java.util.Set<Long>> activeTaskIds) {
+        if (!Files.isDirectory(root, java.nio.file.LinkOption.NOFOLLOW_LINKS)) return 0;
+        Map<Long, Path> candidates = new LinkedHashMap<>();
+        try (java.util.stream.Stream<Path> children = Files.list(root)) {
+            children.filter(p -> Files.isDirectory(p, java.nio.file.LinkOption.NOFOLLOW_LINKS)).forEach(p -> {
+                java.util.regex.Matcher m = OVERRIDE_TASK_DIR.matcher(p.getFileName().toString());
+                if (m.matches()) candidates.put(Long.parseLong(m.group(1)), p);
+            });
+        } catch (java.io.IOException e) {
+            log.warn("배포 덮어쓰기 사본 폴더를 읽지 못함: {} — {}", root, e.getMessage());
+            return 0;
+        }
+        if (candidates.isEmpty()) return 0;
+        java.util.Set<Long> active = activeTaskIds.get();
+        int removed = 0;
+        for (Map.Entry<Long, Path> c : candidates.entrySet()) {
+            if (active.contains(c.getKey())) continue;
+            RepoCacheCleanupJob.DeleteResult d = RepoCacheCleanupJob.deleteTree(c.getValue());
+            if (d.failures() > 0) {
+                log.warn("남은 배포 덮어쓰기 사본 정리 실패 {}건: {}", d.failures(), c.getValue());
+            } else {
+                removed++;
+            }
+        }
+        try {
+            Files.deleteIfExists(root);   // 비어 있을 때만 지워진다
+        } catch (java.io.IOException ignore) { /* 비어 있지 않음 — best-effort */ }
+        return removed;
+    }
+
     /**
      * deploy worktree가 실제로 체크아웃한 커밋(origin/{head} 끝) — 이미지 태그와 배포완료 보고의 빌드 커밋(스펙 2026-11-03 §7).
      * API가 이 값으로 head_sha(VARCHAR(40))를 바꾸고 종료 병합이 전체 sha로 비교하므로 40자 sha만 받는다. 기록된 head_sha와 다르면

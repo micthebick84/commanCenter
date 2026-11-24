@@ -1,6 +1,8 @@
 package com.hamonsoft.netismaker.workerdaemon;
 
+import com.hamonsoft.netismaker.dto.ActiveWorktreeTaskSummary;
 import com.hamonsoft.netismaker.dto.WorkerResultRequest;
+import com.hamonsoft.netismaker.entity.TaskStatus;
 import com.hamonsoft.netismaker.dto.WorkerStartupResponse;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -34,9 +36,13 @@ class WorkerMainLoopStartupTest {
     }
 
     private WorkerMainLoop loop() {
+        return loop(mock(DeployService.class));
+    }
+
+    private WorkerMainLoop loop(DeployService deploy) {
         return new WorkerMainLoop(props(), http, mock(GitRepoCache.class), mock(ClaudeExecAdapter.class),
                 mock(PromptResultParser.class), mock(WorkerMcpSupport.class), mock(WorktreeService.class),
-                mock(GitOpsService.class), mock(DeployService.class), mock(ResultReporter.class),
+                mock(GitOpsService.class), deploy, mock(ResultReporter.class),
                 tracker, mock(DesignResultHarvester.class), mock(TaskCloser.class),
                 new SuperpowersPlugin(""), mock(ClaudeAuthProbe.class), mock(BaseSyncMerger.class));
     }
@@ -69,6 +75,59 @@ class WorkerMainLoopStartupTest {
         loop().pollAndProcess();
 
         verify(http, times(1)).nextTask();
+    }
+
+    @Test
+    void cleans_leftover_deploy_overrides_once_after_startup_with_active_task_ids() {
+        when(http.startup(any())).thenReturn(Optional.of(new WorkerStartupResponse(List.of(), List.of())));
+        when(http.activeWorktreeTasks()).thenReturn(List.of(new ActiveWorktreeTaskSummary(60L, TaskStatus.DEPLOYING)));
+        DeployService deploy = mock(DeployService.class);
+        WorkerMainLoop loop = loop(deploy);
+
+        loop.pollAndProcess();
+        loop.pollAndProcess();
+
+        @SuppressWarnings("unchecked")
+        org.mockito.ArgumentCaptor<java.util.function.Supplier<java.util.Set<Long>>> ids =
+                org.mockito.ArgumentCaptor.forClass(java.util.function.Supplier.class);
+        verify(deploy, times(1)).cleanStaleOverrides(ids.capture());
+        org.assertj.core.api.Assertions.assertThat(ids.getValue().get()).containsExactly(60L);
+    }
+
+    @Test
+    void leftover_cleanup_failure_does_not_block_polling_and_retries_until_it_succeeds() {
+        when(http.startup(any())).thenReturn(Optional.of(new WorkerStartupResponse(List.of(), List.of())));
+        DeployService deploy = mock(DeployService.class);
+        when(deploy.cleanStaleOverrides(any()))
+                .thenThrow(new ResourceAccessException("down"))
+                .thenReturn(0);
+        WorkerMainLoop loop = loop(deploy);
+
+        loop.pollAndProcess();   // 실패 — claim은 계속
+        verify(http, times(1)).nextTask();
+        loop.pollAndProcess();   // 다시 시도해 성공
+        loop.pollAndProcess();   // 성공 뒤에는 다시 하지 않는다
+
+        verify(deploy, times(2)).cleanStaleOverrides(any());
+        verify(http, times(3)).nextTask();
+    }
+
+    @Test
+    void leftover_cleanup_waits_for_startup_report() {
+        when(http.startup(any()))
+                .thenThrow(new ResourceAccessException("down"))
+                .thenReturn(Optional.of(new WorkerStartupResponse(List.of(), List.of())));
+        DeployService deploy = mock(DeployService.class);
+        WorkerMainLoop loop = loop(deploy);
+
+        loop.pollAndProcess();
+        verify(deploy, never()).cleanStaleOverrides(any());   // 기동 정합 전에는 이 워커의 배포중이 아직 보호 목록에 있다
+
+        loop.pollAndProcess();
+        org.mockito.InOrder order = inOrder(http, deploy);
+        order.verify(http, times(2)).startup(any());
+        order.verify(deploy).cleanStaleOverrides(any());
+        order.verify(http).nextTask();
     }
 
     @Test

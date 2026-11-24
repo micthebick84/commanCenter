@@ -71,8 +71,10 @@ class DeployDbSelectionMigrationTest {
         try {
             RepoCatalogEntry back = catalogRepo.findById(id).orElseThrow();
             assertThat(back.getDeployConfig()).isEqualTo(config);
+            // JSONB는 객체 키 순서를 보존하지 않는다(길이 → 바이트 순으로 다시 정렬). 항목 키는 서로 달라
+            // 덮어쓰기 결과(Properties 마지막 값·env)에는 순서가 영향을 주지 않으므로 집합만 확인한다.
             assertThat(back.getDeployConfig().databases().get(0).target().entries().keySet())
-                    .containsExactly("jdbc.url", "jdbc.username", "jdbc.password");
+                    .containsExactlyInAnyOrder("jdbc.url", "jdbc.username", "jdbc.password");
         } finally {
             catalogRepo.deleteById(id);
         }

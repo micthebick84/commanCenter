@@ -30,6 +30,7 @@ export interface DetailTask {
   totalTokens: number | null
   mcpsExtra: { name: string; transport: string }[]
   dbConnectionIds?: number[]
+  deployDbSelection?: { slot: string; connectionId: number | null }[]
   implementationMode?: string
   implementationAttempt?: number
   attachments: { id: number; fileName: string; sizeBytes: number }[]
@@ -61,6 +62,8 @@ const props = defineProps<{
   appLogViewable?: boolean
   /** 고른 DB 연결 중 구현 단계 쓰기가 열릴 수 있는 것이 있는가(스펙 2026-11-03 §6.1) — 정보 영역 "읽기 전용" 문구를 바꾼다. 없으면 읽기 전용 그대로. */
   dbWritable?: boolean
+  /** 배포 때 고른 DB 연결 칩 라벨(스펙 2026-11-24) — 부모가 연결 목록으로 만들어 넘긴다. 비면 칩을 안 그린다. */
+  deployDbChips?: string[]
 }>()
 const emit = defineEmits<{
   (e: 'retry'): void
@@ -227,6 +230,9 @@ const deployCaption = computed(() => {
         </q-item>
         <q-slide-transition>
           <div v-if="open.deploy" class="q-expansion-item__content" :id="contentId('deploy')">
+            <q-card-section v-if="deployDbChips?.length">
+              <q-chip v-for="(label, idx) in deployDbChips" :key="`${idx}-${label}`" dense color="teal-1" text-color="teal-9" icon="storage" data-test="task-deploy-db-chip">배포 DB: {{ label }}</q-chip>
+            </q-card-section>
             <q-card-section v-if="task.deployment?.deployUrl" class="kv">
               <div><span class="k">URL</span><a :href="task.deployment.deployUrl" target="_blank" rel="noopener">{{ task.deployment.deployUrl }}</a></div>
               <div><span class="k">포트</span><code>{{ task.deployment.deployHostPort }}</code></div>

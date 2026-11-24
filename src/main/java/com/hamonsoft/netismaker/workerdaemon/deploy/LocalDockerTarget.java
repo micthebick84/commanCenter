@@ -78,8 +78,31 @@ public class LocalDockerTarget implements DeployTarget {
     static List<String> buildRunArgs(DeployTarget.DeploySpec spec, int hostPort,
                                      boolean publicMode, String network, String baseDomain,
                                      String slugSuffix) {
-        List<String> run = new ArrayList<>(List.of(
-                DOCKER, "run", "-d",
+        return buildContainerArgs(List.of(DOCKER, "run", "-d"), spec, hostPort, publicMode, network, baseDomain, slugSuffix);
+    }
+
+    /** docker create 인자 — buildRunArgs와 같고 `run -d` 대신 `create`(설정 사본을 cp한 뒤 start하는 경로). */
+    static List<String> buildCreateArgs(DeployTarget.DeploySpec spec, int hostPort,
+                                        boolean publicMode, String network, String baseDomain,
+                                        String slugSuffix) {
+        return buildContainerArgs(List.of(DOCKER, "create"), spec, hostPort, publicMode, network, baseDomain, slugSuffix);
+    }
+
+    /** 컨테이너 안 설정 사본 위치(끝의 /가 있어야 cp가 폴더 안으로 넣는다). */
+    static final String OVERRIDE_CONTAINER_DIR = "/opt/netis-override/";
+
+    /** docker cp 인자 — 끝 `<구분자>.`는 폴더 자체가 아니라 그 내용을 복사한다는 뜻. */
+    static List<String> buildCopyArgs(java.nio.file.Path overrideDir, String containerName) {
+        return List.of(DOCKER, "cp",
+                overrideDir.toAbsolutePath() + File.separator + ".",
+                containerName + ":" + OVERRIDE_CONTAINER_DIR);
+    }
+
+    private static List<String> buildContainerArgs(List<String> head, DeployTarget.DeploySpec spec, int hostPort,
+                                                   boolean publicMode, String network, String baseDomain,
+                                                   String slugSuffix) {
+        List<String> run = new ArrayList<>(head);
+        run.addAll(List.of(
                 "--name", spec.containerName(),
                 "-p", hostPort + ":" + spec.containerPort()));
         spec.labels().forEach((k, v) -> { run.add("--label"); run.add(k + "=" + v); });
@@ -133,11 +156,14 @@ public class LocalDockerTarget implements DeployTarget {
         String pubNetwork = cfg.publicAccess().network();
         String pubBaseDomain = cfg.publicAccess().baseDomain();
         String pubSuffix = cfg.publicAccess().slugSuffix();
-        List<String> run = buildRunArgs(spec, hostPort, publicMode, pubNetwork, pubBaseDomain, pubSuffix);
+        boolean withOverride = spec.overrideDir() != null;
+        List<String> run = withOverride
+                ? buildCreateArgs(spec, hostPort, publicMode, pubNetwork, pubBaseDomain, pubSuffix)
+                : buildRunArgs(spec, hostPort, publicMode, pubNetwork, pubBaseDomain, pubSuffix);
 
         // run 명령 echo는 env 시크릿 값이 로그/SSE 스트림에 노출되지 않도록 -e 값을 마스킹한다.
         // (정책: 주입 env 값은 출력하지 않고 키만 노출 — UI 마스킹과 일관). 실행 커맨드 run은 실제 값 유지.
-        StringBuilder runEcho = new StringBuilder(DOCKER + " run -d --name " + spec.containerName()
+        StringBuilder runEcho = new StringBuilder(DOCKER + (withOverride ? " create" : " run -d") + " --name " + spec.containerName()
                 + " -p " + hostPort + ":" + spec.containerPort());
         spec.labels().forEach((k, v) -> runEcho.append(" --label ").append(k).append('=').append(v));
         spec.env().forEach((k, v) -> runEcho.append(" -e ").append(k).append("=•••"));
@@ -153,6 +179,35 @@ public class LocalDockerTarget implements DeployTarget {
         logBuf.append(runOut);
         sink.accept(runOut);
         String containerId = runOut.trim();
+        if (withOverride) {
+            // 설정 사본: create(위) → cp → start. 이미지·WAR는 건드리지 않는다.
+            File dir = spec.contextDir().toFile();
+            List<String> cp = buildCopyArgs(spec.overrideDir(), spec.containerName());
+            logBuf.append("$ ").append(String.join(" ", cp)).append('\n');
+            sink.accept("$ " + String.join(" ", cp));
+            String cpFail = null;
+            try {
+                ProcessRunner.Result cpRes = ProcessRunner.run(dir, cp, 120);
+                if (cpRes.exitCode() != 0) cpFail = cpRes.stdout() == null ? "" : cpRes.stdout();
+            } catch (Exception e) {
+                cpFail = String.valueOf(e.getMessage());
+            }
+            if (cpFail != null) {
+                try {
+                    ProcessRunner.run(dir, List.of(DOCKER, "rm", "-f", spec.containerName()), 60);
+                } catch (Exception ignore) { /* best-effort */ }
+                logBuf.append(cpFail).append('\n');
+                sink.accept(cpFail);
+                throw new DeployFailedException("설정 파일 사본을 컨테이너에 넣지 못했습니다",
+                        tail(logBuf.toString(), 8000));
+            }
+            List<String> start = List.of(DOCKER, "start", spec.containerName());
+            logBuf.append("$ ").append(String.join(" ", start)).append('\n');
+            sink.accept("$ " + String.join(" ", start));
+            String startOut = ProcessRunner.requireSuccess(dir, start, 120);
+            logBuf.append(startOut);
+            sink.accept(startOut);
+        }
 
         // 5. 헬스체크: (a) 컨테이너 생존(크래시 감지) + (b) HTTP readiness(실제 서빙 확인).
         //    매초 컨테이너 생존을 확인하다 기동 직후 종료되면 배포실패로 간주하고 로그를 첨부한다.

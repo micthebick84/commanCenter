@@ -145,4 +145,72 @@ describe('DeployEnvDialog (스펙 2026-10-07 §8)', () => {
     w.unmount()
     await setViewportWidth(1024)
   })
+
+  describe('DB 연결 고르기·짧은 값', () => {
+    const choice = { id: 43, name: '개발 DB', dbType: 'POSTGRESQL', scope: 'REPO', host: 'h', port: 5432, database: 'd' }
+    const withDb = {
+      rows: [
+        { key: 'APP_URL', value: 'a', secret: false, description: '', required: false, source: 'CATALOG', valueFromPrevious: false, format: 'https://{값}.x' },
+        { key: 'PLAIN', value: 'p', secret: false, description: '', required: false, source: 'TEMPLATE', valueFromPrevious: false, format: null },
+      ],
+      templateCount: 1,
+      previousTaskId: null,
+      databases: [
+        { slot: 'main', label: '메인', dbTypes: ['POSTGRESQL'], targetSummary: 'x', selected: { connectionId: null, from: 'SAVED' }, choices: [choice] },
+      ],
+    }
+
+    it('배포설정이_없으면_DB묶음이_없고_바디에_dbSelection이_없다', async () => {
+      useApiMock.mockResolvedValueOnce(suggestion).mockResolvedValueOnce({})
+      const w = mountDialog()
+      await flushPromises()
+      expect(body().querySelector('[data-test="deploy-db-select"]')).toBeNull()
+      expect(body().querySelector('[data-test="deploy-env-note-plain"]')?.textContent).toContain('-e KEY=VALUE')
+      expect(body().querySelector('[data-test="deploy-env-note-config"]')).toBeNull()
+      await (w.vm as any).submit()
+      const call = useApiMock.mock.calls[1]
+      expect(Object.keys(call[1].body)).toEqual(['envVars'])
+      w.unmount()
+    })
+
+    it('DB를_고르면_바디에_dbSelection', async () => {
+      useApiMock.mockResolvedValueOnce(withDb).mockResolvedValueOnce({})
+      const w = mountDialog()
+      await flushPromises()
+      expect(body().querySelectorAll('[data-test="deploy-db-select"]').length).toBe(1)
+      expect(body().querySelector('[data-test="deploy-env-note-config"]')?.textContent).toContain('저장하지 않고')
+      expect(body().querySelector('[data-test="deploy-env-note-plain"]')).toBeNull()
+      ;(w.vm as any).dbModel.main = 43
+      await flushPromises()
+      expect(body().textContent).toContain('h:5432/d · 공용')
+      await (w.vm as any).submit()
+      expect(useApiMock.mock.calls[1][1].body).toEqual({
+        envVars: [
+          { key: 'APP_URL', value: 'a', secret: false },
+          { key: 'PLAIN', value: 'p', secret: false },
+        ],
+        dbSelection: [{ slot: 'main', connectionId: 43 }],
+      })
+      w.unmount()
+    })
+
+    it('고르지_않음을_보내면_null', async () => {
+      useApiMock.mockResolvedValueOnce(withDb).mockResolvedValueOnce({})
+      const w = mountDialog()
+      await flushPromises()
+      await (w.vm as any).submit()
+      expect(useApiMock.mock.calls[1][1].body.dbSelection).toEqual([{ slot: 'main', connectionId: null }])
+      w.unmount()
+    })
+
+    it('format_행은_앞뒤_글자를_보인다', async () => {
+      useApiMock.mockResolvedValueOnce(withDb)
+      const w = mountDialog()
+      await flushPromises()
+      const row = body().querySelectorAll('[data-test="env-row"]')[0]
+      expect(row.textContent).toContain('https://')
+      expect(row.textContent).toContain('.x')
+      w.unmount()
+    })
+  })
 })

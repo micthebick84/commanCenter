@@ -5,6 +5,7 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Optional;
+import java.util.OptionalInt;
 import java.util.Set;
 
 /**
@@ -90,22 +91,118 @@ public final class DockerfileSupport {
         if (dockerfileContent == null) return images;
         Set<String> stages = new HashSet<>();
         for (String raw : dockerfileContent.split("\\R")) {
-            String line = raw.trim();
-            if (line.startsWith("#")) continue;
-            String[] tokens = line.split("\\s+");
-            if (tokens.length < 2 || !tokens[0].equalsIgnoreCase("FROM")) continue;
-            int i = 1;
-            while (i < tokens.length && tokens[i].startsWith("--")) i++;
-            if (i >= tokens.length) continue;
-            String image = tokens[i];
+            String[] from = parseFrom(raw);
+            if (from == null) continue;
+            String image = from[0];
             String key = image.toLowerCase(Locale.ROOT);
             // 이 줄의 AS 이름보다 먼저 본다 — 앞 단계만 단계 참조다(FROM alpine AS alpine은 레지스트리 이미지).
             boolean registryImage = !key.equals("scratch") && !image.contains("$") && !stages.contains(key);
             if (registryImage && !images.contains(image)) images.add(image);
-            if (i + 2 < tokens.length && tokens[i + 1].equalsIgnoreCase("AS")) {
-                stages.add(tokens[i + 2].toLowerCase(Locale.ROOT));
-            }
+            if (from[1] != null) stages.add(from[1].toLowerCase(Locale.ROOT));
         }
         return images;
+    }
+
+    /** 한 줄이 FROM이면 {이미지 토큰, AS 이름(없으면 null)}, 주석·다른 지시어면 null. --platform 같은 플래그는 건너뛴다. */
+    private static String[] parseFrom(String raw) {
+        String line = raw.trim();
+        if (line.startsWith("#")) return null;
+        String[] tokens = line.split("\\s+");
+        if (tokens.length < 2 || !tokens[0].equalsIgnoreCase("FROM")) return null;
+        int i = 1;
+        while (i < tokens.length && tokens[i].startsWith("--")) i++;
+        if (i >= tokens.length) return null;
+        String alias = i + 2 < tokens.length && tokens[i + 1].equalsIgnoreCase("AS") ? tokens[i + 2] : null;
+        return new String[] {tokens[i], alias};
+    }
+
+    /**
+     * 마지막 FROM(최종 단계)의 이미지. 앞 단계 이름이면 그 단계의 FROM까지 거슬러 올라간다.
+     * FROM이 없으면 empty. scratch·변수가 든 이름은 그대로 돌려준다(tomcatMajor가 empty로 거른다).
+     */
+    public static Optional<String> finalStageImage(String dockerfileContent) {
+        if (dockerfileContent == null) return Optional.empty();
+        java.util.Map<String, String> stageImages = new java.util.HashMap<>();
+        String last = null;
+        for (String raw : dockerfileContent.split("\\R")) {
+            String[] from = parseFrom(raw);
+            if (from == null) continue;
+            String resolved = stageImages.getOrDefault(from[0].toLowerCase(Locale.ROOT), from[0]);
+            if (from[1] != null) stageImages.put(from[1].toLowerCase(Locale.ROOT), resolved);
+            last = resolved;
+        }
+        return Optional.ofNullable(last);
+    }
+
+    /**
+     * 공식 tomcat 이미지의 주 버전. 이름 끝 경로 조각이 정확히 tomcat이고 태그가 숫자로 시작해야 한다
+     * (태그 없음·latest·다른 이미지는 empty). 레지스트리 포트(host:5000/…)와 다이제스트(@sha256)는 태그로 보지 않는다.
+     */
+    public static OptionalInt tomcatMajor(String image) {
+        if (image == null) return OptionalInt.empty();
+        String ref = image.trim();
+        int at = ref.indexOf('@');
+        if (at >= 0) ref = ref.substring(0, at);
+        int slash = ref.lastIndexOf('/');
+        String last = ref.substring(slash + 1);
+        int colon = last.indexOf(':');
+        if (colon < 0) return OptionalInt.empty();
+        if (!last.substring(0, colon).equalsIgnoreCase("tomcat")) return OptionalInt.empty();
+        String tag = last.substring(colon + 1);
+        int end = 0;
+        while (end < tag.length() && Character.isDigit(tag.charAt(end))) end++;
+        if (end == 0 || end > 3) return OptionalInt.empty();
+        return OptionalInt.of(Integer.parseInt(tag.substring(0, end)));
+    }
+
+    private static final String OVERRIDE_DIR = "/opt/netis-override/WEB-INF/classes";
+    private static final String SED_TOMCAT7 = "s#</Context>#<Loader className=\"org.apache.catalina.loader.VirtualWebappLoader\""
+            + " virtualClasspath=\"" + OVERRIDE_DIR + "\" searchVirtualFirst=\"true\"/></Context>#";
+    private static final String SED_TOMCAT8 = "s#</Context>#<Resources><PreResources className=\"org.apache.catalina.webresources.DirResourceSet\""
+            + " base=\"" + OVERRIDE_DIR + "\" webAppMount=\"/WEB-INF/classes\"/></Resources></Context>#";
+
+    /**
+     * 설정 파일 덮어쓰기 블록(스펙 2026-11-24 §14)을 끝에 붙인 내용 — Tomcat이 /opt/netis-override/WEB-INF/classes를
+     * WAR의 classes보다 먼저 읽게 context.xml을 고친다(7 = VirtualWebappLoader, 8 이상 = PreResources).
+     * root로 바꿔 쓰고, 최종 단계의 마지막 USER가 있으면 그 USER로 되돌린다. BuildKit 전용 문법은 쓰지 않는다.
+     */
+    public static String appendConfigOverride(String dockerfileContent, int tomcatMajor) {
+        String content = dockerfileContent == null ? "" : dockerfileContent;
+        String sep = content.isEmpty() || content.endsWith("\n") ? "" : "\n";
+        String sed = tomcatMajor <= 7 ? SED_TOMCAT7 : SED_TOMCAT8;
+        StringBuilder block = new StringBuilder()
+                .append("# Symphony 배포 덮어쓰기 (설정 파일)\n")
+                .append("USER root\n")
+                .append("RUN mkdir -p ").append(OVERRIDE_DIR).append(" && chmod -R a+rX /opt/netis-override && sed -i '")
+                .append(sed).append("' \"$CATALINA_HOME/conf/context.xml\"\n");
+        finalStageLastUser(content).ifPresent(u -> block.append("USER ").append(u).append('\n'));
+        return content + sep + block;
+    }
+
+    /** 최종 단계(마지막 FROM 뒤)의 마지막 USER 값. */
+    private static Optional<String> finalStageLastUser(String dockerfileContent) {
+        String user = null;
+        for (String raw : dockerfileContent.split("\\R")) {
+            String line = raw.trim();
+            if (line.startsWith("#")) continue;
+            if (parseFrom(raw) != null) {
+                user = null;
+            } else if (line.regionMatches(true, 0, "USER", 0, 4) && line.length() > 4 && Character.isWhitespace(line.charAt(4))) {
+                String value = line.substring(4).trim();
+                if (!value.isEmpty()) user = value;
+            }
+        }
+        return Optional.ofNullable(user);
+    }
+
+    /** 주석이 아닌 줄에 Tomcat context 설정(VirtualWebappLoader·PreResources·context.xml)을 직접 건드린 흔적이 있는지. */
+    public static boolean touchesTomcatContext(String dockerfileContent) {
+        if (dockerfileContent == null) return false;
+        for (String raw : dockerfileContent.split("\\R")) {
+            String line = raw.trim();
+            if (line.startsWith("#")) continue;
+            if (line.contains("VirtualWebappLoader") || line.contains("PreResources") || line.contains("context.xml")) return true;
+        }
+        return false;
     }
 }

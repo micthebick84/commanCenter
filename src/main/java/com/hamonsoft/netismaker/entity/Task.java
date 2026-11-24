@@ -121,6 +121,12 @@ public class Task {
     @Setter
     private Long sourceRequestId;
 
+    /** 배포 때 DB 슬롯마다 고른 연결 (스펙 2026-11-24). 기본 빈 목록. */
+    @JdbcTypeCode(SqlTypes.JSON)
+    @Column(name = "deploy_db_selection", nullable = false, columnDefinition = "jsonb")
+    @Setter
+    private List<DeployDbChoice> deployDbSelection = new ArrayList<>();
+
     /** 작업 등록 시 선택된 Claude 모델. 워커가 claude --model에 사용.
      *  기본값은 ModelEffortPolicy.DEFAULT_MODEL과 반드시 일치해야 한다(둘 다 바꿀 것). */
     @Column(name = "model", nullable = false, length = 64)

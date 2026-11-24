@@ -1,7 +1,9 @@
 package com.hamonsoft.netismaker.service.applog;
 
 import com.hamonsoft.netismaker.config.AppLogProperties;
+import com.hamonsoft.netismaker.entity.EnvVar;
 import com.hamonsoft.netismaker.entity.Task;
+import com.hamonsoft.netismaker.service.deployconfig.DeployOverrideService;
 import jakarta.annotation.PreDestroy;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -47,6 +49,10 @@ public class AppLogStreamService {
     private final Map<String, String> processEnv;
     private final Duration timeLimit;
     private final ScheduledExecutorService timer;
+
+    /** 배포에 고른 DB 연결의 비밀번호를 가리기 위한 목록 제공자. 테스트 생성자에서는 null — 그때는 추가 비밀 없음. */
+    @Autowired(required = false)
+    private DeployOverrideService deployOverrideService;
 
     /** 열린 스트림 — 이 목록의 크기가 곧 동시 상한 자리 수다. 자기 자신을 잠금으로 쓴다. */
     private final List<AppLogStream> active = new ArrayList<>();
@@ -122,9 +128,21 @@ public class AppLogStreamService {
             stream.close(AppLogEndReason.DOCKER_ERROR);
             return stream;
         }
-        stream.start(process, SecretMasker.of(task.getEnvVars(), processEnv), timer, timeLimit);
+        stream.start(process, SecretMasker.of(maskEnvVars(task), processEnv), timer, timeLimit);
         log.info("앱 로그 스트림 시작 task={} (열린 스트림 {}개)", taskId, activeCount());
         return stream;
+    }
+
+    /** 작업 env + 배포 DB 비밀번호. 새 목록이라 작업의 목록은 바뀌지 않는다. */
+    private List<EnvVar> maskEnvVars(Task task) {
+        List<EnvVar> all = new ArrayList<>();
+        if (task.getEnvVars() != null) {
+            all.addAll(task.getEnvVars());
+        }
+        if (deployOverrideService != null) {
+            all.addAll(deployOverrideService.secretsForMasking(task));
+        }
+        return all;
     }
 
     /** 열린 스트림 수(전체). */

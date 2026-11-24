@@ -70,12 +70,12 @@ class WorkerControllerSupportsTest {
         assertThat(WorkerController.SUPPORTS_BASE_SYNC).isEqualTo("baseSync");
         when(workerService.claimNextTask(anyString(), any(WorkerCapabilities.class), any())).thenReturn(Optional.empty());
 
-        controller.nextTask("new", "refRepos,fixRounds,dbWrite,mockups,baseSync,closeKeepBranch", null);
+        controller.nextTask("new", "refRepos,fixRounds,dbWrite,mockups,baseSync,closeKeepBranch,deployOverrides", null);
         controller.nextTask("old", "refRepos,fixRounds,dbWrite,mockups", null);
         controller.nextTask("none", null, null);
 
         verify(workerService).claimNextTask("new", WorkerCapabilities.ALL, null);
-        verify(workerService).claimNextTask("new", new WorkerCapabilities(true, true, true, true, true, true), null);
+        verify(workerService).claimNextTask("new", new WorkerCapabilities(true, true, true, true, true, true, true), null);
         verify(workerService).claimNextTask("old", new WorkerCapabilities(true, true, true, true, false, false), null);
         verify(workerService).claimNextTask("none", new WorkerCapabilities(false, false, false, false, false, false), null);
     }
@@ -98,5 +98,47 @@ class WorkerControllerSupportsTest {
 
         verify(workerService).claimNextTask("remote-1", new WorkerCapabilities(true, true),
                 EnumSet.of(WorkerTaskResponse.Kind.IMPLEMENTATION, WorkerTaskResponse.Kind.DESIGN));
+    }
+
+    @Test
+    void supports에_deployOverrides가_있으면_일곱째_true() {
+        assertThat(WorkerController.SUPPORTS_DEPLOY_OVERRIDES).isEqualTo("deployOverrides");
+        when(workerService.claimNextTask(anyString(), any(WorkerCapabilities.class), any())).thenReturn(Optional.empty());
+
+        controller.nextTask("prev", "refRepos,fixRounds,dbWrite,mockups,baseSync,closeKeepBranch", null);
+        controller.nextTask("new", "refRepos,fixRounds,dbWrite,mockups,baseSync,closeKeepBranch,deployOverrides", null);
+
+        verify(workerService).claimNextTask("prev", new WorkerCapabilities(true, true, true, true, true, true, false), null);
+        verify(workerService).claimNextTask("new", WorkerCapabilities.ALL, null);
+    }
+
+    @Test
+    void DEPLOY_claim에만_덮어쓰기를_싣는다() {
+        var service = mock(com.hamonsoft.netismaker.service.deployconfig.DeployOverrideService.class);
+        org.springframework.test.util.ReflectionTestUtils.setField(controller, "deployOverrideService", service);
+        var overrides = com.hamonsoft.netismaker.dto.DeployOverrides.failed("x");
+        when(service.forClaim(7L)).thenReturn(overrides);
+        var task = com.hamonsoft.netismaker.entity.Task.create("a/b", "main", "T", "d", "u", 3, java.util.List.of(), "m", "high");
+        org.springframework.test.util.ReflectionTestUtils.setField(task, "id", 7L);
+        when(workerService.claimNextTask(anyString(), any(WorkerCapabilities.class), any()))
+                .thenReturn(Optional.of(WorkerTaskResponse.forDeploy(task)), Optional.of(WorkerTaskResponse.forClose(task, null)));
+
+        assertThat(controller.nextTask("w", "deployOverrides", null).getBody().deployOverrides()).isEqualTo(overrides);
+        assertThat(controller.nextTask("w", "deployOverrides", null).getBody().deployOverrides()).isNull();
+    }
+
+    @Test
+    void forClaim이_던지면_failed_덮어쓰기를_싣는다() {
+        var service = mock(com.hamonsoft.netismaker.service.deployconfig.DeployOverrideService.class);
+        org.springframework.test.util.ReflectionTestUtils.setField(controller, "deployOverrideService", service);
+        when(service.forClaim(7L)).thenThrow(new IllegalStateException("boom"));
+        var task = com.hamonsoft.netismaker.entity.Task.create("a/b", "main", "T", "d", "u", 3, java.util.List.of(), "m", "high");
+        org.springframework.test.util.ReflectionTestUtils.setField(task, "id", 7L);
+        when(workerService.claimNextTask(anyString(), any(WorkerCapabilities.class), any()))
+                .thenReturn(Optional.of(WorkerTaskResponse.forDeploy(task)));
+
+        var o = controller.nextTask("w", "deployOverrides", null).getBody().deployOverrides();
+
+        assertThat(o.error()).isEqualTo("배포 덮어쓰기 준비 실패: IllegalStateException");
     }
 }

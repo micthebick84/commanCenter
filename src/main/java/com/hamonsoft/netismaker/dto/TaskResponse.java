@@ -85,7 +85,9 @@ public record TaskResponse(
          */
         Boolean interviewSuperpowersEnabled,
         /** 확정 때 구현에 넘기기로 한 인터뷰 목업 id (스펙 2026-11-03 §7) — 항상 non-null(없으면 []). */
-        List<Long> implementationMockupIds
+        List<Long> implementationMockupIds,
+        /** 배포 때 DB 자리마다 고른 연결(스펙 2026-11-24). 항상 non-null, 접속정보 없음. */
+        List<com.hamonsoft.netismaker.entity.DeployDbChoice> deployDbSelection
 ) {
     public record AnalysisView(
             String markdownResult,
@@ -277,7 +279,8 @@ public record TaskResponse(
                 r.fix(),
                 r.taskType(),
                 r.interviewSuperpowersEnabled(),
-                r.implementationMockupIds()
+                r.implementationMockupIds(),
+                r.deployDbSelection()
         );
     }
 
@@ -288,7 +291,7 @@ public record TaskResponse(
                 model, effort, designRequested, analysis, design, implementation, deployment, interviewSessionId,
                 attachments, stageUsage, totalCostUsd, totalTokens, close, repoCatalogId, dbConnectionIds,
                 implementationMode, implementationAttempt, claimedAt, implementationTimeoutMinutes,
-                refViews(refs), sourceQuestionId, sourceRequestId, fix, taskType, interviewSuperpowersEnabled, implementationMockupIds);
+                refViews(refs), sourceQuestionId, sourceRequestId, fix, taskType, interviewSuperpowersEnabled, implementationMockupIds, deployDbSelection);
     }
 
     /** 수정 요청 회차 현황만 바꾼 사본 — 작업 상세 응답이 싣는다(목록은 null). */
@@ -298,7 +301,7 @@ public record TaskResponse(
                 model, effort, designRequested, analysis, design, implementation, deployment, interviewSessionId,
                 attachments, stageUsage, totalCostUsd, totalTokens, close, repoCatalogId, dbConnectionIds,
                 implementationMode, implementationAttempt, claimedAt, implementationTimeoutMinutes,
-                refRepos, sourceQuestionId, sourceRequestId, fixView, taskType, interviewSuperpowersEnabled, implementationMockupIds);
+                refRepos, sourceQuestionId, sourceRequestId, fixView, taskType, interviewSuperpowersEnabled, implementationMockupIds, deployDbSelection);
     }
 
     /**
@@ -311,7 +314,7 @@ public record TaskResponse(
                 model, effort, designRequested, analysis, design, implementation, deployment, interviewSessionId,
                 attachments, stageUsage, totalCostUsd, totalTokens, close, repoCatalogId, dbConnectionIds,
                 implementationMode, implementationAttempt, claimedAt, implementationTimeoutMinutes,
-                refRepos, sourceQuestionId, sourceRequestId, fix, taskType, enabled, implementationMockupIds);
+                refRepos, sourceQuestionId, sourceRequestId, fix, taskType, enabled, implementationMockupIds, deployDbSelection);
     }
 
     /** JSONB로 읽은 List<Long>은 Integer를 담아 올 수 있다(코드베이스 선례) — Number로 받아 Long으로 바꾼다. */
@@ -341,7 +344,7 @@ public record TaskResponse(
                 model, effort, designRequested, analysis, design, implementation, deployment, interviewSessionId,
                 attachments, stageUsage, totalCostUsd, totalTokens, close, repoCatalogId, dbConnectionIds,
                 implementationMode, implementationAttempt, claimedAt, implementationTimeoutMinutes,
-                refRepos, sourceQuestionId, sourceRequestId, fix, taskType, interviewSuperpowersEnabled, implementationMockupIds);
+                refRepos, sourceQuestionId, sourceRequestId, fix, taskType, interviewSuperpowersEnabled, implementationMockupIds, deployDbSelection);
     }
 
     private static TaskResponse build(Task t, TaskAnalysis a, TaskDesign d, Long interviewSessionId,
@@ -425,7 +428,8 @@ public record TaskResponse(
                 null,
                 t.getTaskType() == null ? null : t.getTaskType().name(),
                 null,
-                mockupIdsOf(t)
+                mockupIdsOf(t),
+                t.getDeployDbSelection() == null ? List.of() : List.copyOf(t.getDeployDbSelection())
         );
     }
 }

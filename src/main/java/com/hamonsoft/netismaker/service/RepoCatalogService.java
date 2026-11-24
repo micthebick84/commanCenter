@@ -6,6 +6,7 @@ import com.hamonsoft.netismaker.entity.RefRepo;
 import com.hamonsoft.netismaker.entity.RepoCatalogEntry;
 import com.hamonsoft.netismaker.git.RepoRef;
 import com.hamonsoft.netismaker.repository.RepoCatalogRepository;
+import com.hamonsoft.netismaker.service.deployconfig.DeployConfigValidator;
 import com.hamonsoft.netismaker.util.DbScriptDir;
 import com.hamonsoft.netismaker.util.NoteFolderPath;
 import com.hamonsoft.netismaker.util.RepoUrlParser;
@@ -92,6 +93,7 @@ public class RepoCatalogService {
         applyNoteFolder(e, req, true);
         applyDbWrite(e, req);
         applyRouteHint(e, req, true);
+        applyDeployConfig(e, req, true);
         return repo.save(e);
     }
 
@@ -123,6 +125,7 @@ public class RepoCatalogService {
         applyNoteFolder(e, req, false);
         applyDbWrite(e, req);
         applyRouteHint(e, req, false);
+        applyDeployConfig(e, req, false);
         e.setUpdatedAt(OffsetDateTime.now());
         return e;
     }
@@ -351,6 +354,16 @@ public class RepoCatalogService {
     private static void applyRouteHint(RepoCatalogEntry e, RepoCatalogDto.UpsertRequest req, boolean creating) {
         if (!creating && req.routeHint() == null) return;
         e.setRouteHint(blankToNull(req.routeHint()));
+    }
+
+    /** 배포 설정 (스펙 2026-11-24 §9). 수정 때 null이면 그대로, 비어 있으면 비움, 그 밖은 검증·정규화한 값. */
+    private static void applyDeployConfig(RepoCatalogEntry e, RepoCatalogDto.UpsertRequest req, boolean creating) {
+        if (!creating && req.deployConfig() == null) return;
+        try {
+            e.setDeployConfig(DeployConfigValidator.normalize(req.deployConfig()));
+        } catch (IllegalArgumentException ex) {
+            throw badRequest("배포 설정: " + ex.getMessage());
+        }
     }
 
     private static final Pattern PREBUILD_TOOLCHAIN = Pattern.compile("^[A-Za-z0-9._-]{1,50}$");

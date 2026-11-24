@@ -38,7 +38,8 @@ public class RepoCatalogController {
     @PreAuthorize("isAuthenticated()")
     public List<RepoCatalogDto.View> listForUsers() {
         return service.listEnabled().stream().map(service::toView)
-                .map(RepoCatalogDto.View::withoutRouteHint).toList();
+                .map(RepoCatalogDto.View::withoutRouteHint)
+                .map(RepoCatalogDto.View::withoutDeployConfig).toList();
     }
 
     @GetMapping("/api/admin/repo-catalog")

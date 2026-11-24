@@ -2,9 +2,11 @@ package com.hamonsoft.netismaker.service;
 
 import com.hamonsoft.netismaker.dbmcp.DbWriteProperties;
 import com.hamonsoft.netismaker.dto.DbConnectionDto;
+import com.hamonsoft.netismaker.dto.DeployEnvSuggestionResponse;
 import com.hamonsoft.netismaker.dto.InterviewClaimResponse;
 import com.hamonsoft.netismaker.entity.DbConnection;
 import com.hamonsoft.netismaker.entity.DbConnectionScope;
+import com.hamonsoft.netismaker.entity.DbType;
 import com.hamonsoft.netismaker.repository.DbConnectionRepository;
 import com.hamonsoft.netismaker.repository.RepoCatalogRepository;
 import com.hamonsoft.netismaker.repository.TaskDbObjectRepository;
@@ -22,6 +24,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.Set;
 
 /**
  * DB 접속정보 (스펙 2026-10-02 §5). 보이는 범위: REPO = 그 레포를 고르는 모든 사용자(비활성은 관리자만),
@@ -225,6 +228,27 @@ public class DbConnectionService {
                 .filter(c -> c.isEnabled() && (c.getScope() == DbConnectionScope.REPO || c.isOwnedBy(ownerId)))
                 .map(c -> new DbConnectionDto.Chip(c.getId(), c.getName(), c.getDbType().name()))
                 .toList();
+    }
+
+    /**
+     * 배포 창의 DB 자리 선택지 — {@link #selectableChips} 규칙(공용 + 요청 관리자 본인, 켜짐, 암호 기능 켜짐) 중 종류가 types에 드는 것.
+     * alsoIncludeId(이 작업에 이미 저장된 선택)는 목록 밖이어도 같은 카탈로그·켜짐이면 덧붙인다. 비밀번호는 담지 않는다.
+     */
+    @Transactional(readOnly = true)
+    public List<DeployEnvSuggestionResponse.Choice> deployChoices(Long repoCatalogId, String adminId,
+                                                                  Set<DbType> types, Long alsoIncludeId) {
+        if (!cipher.isEnabled() || repoCatalogId == null) return List.of();
+        List<DeployEnvSuggestionResponse.Choice> out = new ArrayList<>();
+        for (DbConnection c : repo.findByRepoCatalogIdOrderByScopeAscNameAsc(repoCatalogId)) {
+            boolean listed = c.isEnabled() && (c.getScope() == DbConnectionScope.REPO || c.isOwnedBy(adminId))
+                    && types != null && types.contains(c.getDbType());
+            boolean extra = !listed && c.isEnabled() && alsoIncludeId != null && alsoIncludeId.equals(c.getId());
+            if (listed || extra) {
+                out.add(new DeployEnvSuggestionResponse.Choice(c.getId(), c.getName(), c.getDbType().name(),
+                        c.getScope().name(), c.getHost(), c.getPort(), c.getDatabaseName()));
+            }
+        }
+        return out;
     }
 
     @Transactional(readOnly = true)

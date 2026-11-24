@@ -7,6 +7,8 @@ import AdminFormDialog from '~/components/AdminFormDialog.vue'
 import AdminCatalogCard from '~/components/AdminCatalogCard.vue'
 import AdminInfoBanner from '~/components/AdminInfoBanner.vue'
 import DbConnectionAdminDialog from '~/components/DbConnectionAdminDialog.vue'
+import DeployConfigEditor from '~/components/admin/DeployConfigEditor.vue'
+import { cloneDeployConfig, deployConfigChanged, emptyDeployConfig, isEmptyDeployConfig, toWireDeployConfig, type DeployConfig } from '~/composables/deployConfig'
 
 definePageMeta({ layout: 'default' })
 
@@ -35,6 +37,8 @@ interface RepoEntry {
   noteFolder: string | null
   dbMigrationManaged: boolean
   dbScriptDir: string | null
+  /** 배포 설정(DB 자리·변수) — 관리자 목록에서만 채워진다, 없으면 null */
+  deployConfig?: DeployConfig | null
 }
 
 const $q = useQuasar()
@@ -133,6 +137,14 @@ let originalNoteFolder = ''
 // DB 쓰기 두 칸도 같은 이유로 바꿨을 때만 보낸다(스펙 2026-11-03 task-type-db-write §6.6·§6.8 — 서버는 null이면 그대로 둔다)
 let originalDbMigrationManaged = false
 let originalDbScriptDir = ''
+// 배포 설정도 바꿨을 때만 보낸다(서버는 키 없음·null이면 그대로 둔다)
+const deployConfig = ref<DeployConfig>(emptyDeployConfig())
+let originalDeployConfig: DeployConfig | null = null
+const deployCopySources = computed(() =>
+  entries.value
+    .filter((r) => r.id !== editingId.value && r.deployConfig)
+    .map((r) => ({ id: r.id, alias: r.alias, deployConfig: r.deployConfig as DeployConfig })),
+)
 const submitting = ref(false)
 
 function openCreate() {
@@ -153,6 +165,8 @@ function openCreate() {
   form.noteFolder = ''
   form.dbMigrationManaged = false
   form.dbScriptDir = ''
+  deployConfig.value = emptyDeployConfig()
+  originalDeployConfig = null
   showForm.value = true
 }
 
@@ -177,6 +191,8 @@ function openEdit(e: RepoEntry) {
   form.dbScriptDir = e.dbScriptDir ?? ''
   originalDbMigrationManaged = form.dbMigrationManaged
   originalDbScriptDir = form.dbScriptDir
+  deployConfig.value = cloneDeployConfig(e.deployConfig)
+  originalDeployConfig = cloneDeployConfig(e.deployConfig)
   showForm.value = true
 }
 
@@ -209,6 +225,12 @@ async function submit() {
     } else {
       if (form.dbMigrationManaged !== originalDbMigrationManaged) body.dbMigrationManaged = form.dbMigrationManaged
       if (form.dbScriptDir.trim() !== originalDbScriptDir.trim()) body.dbScriptDir = form.dbScriptDir.trim()
+    }
+    // 배포 설정: 등록은 비어 있지 않을 때만, 수정은 바뀌었을 때만(비우면 빈 설정을 보내 지운다)
+    if (!editingId.value) {
+      if (!isEmptyDeployConfig(deployConfig.value)) body.deployConfig = toWireDeployConfig(deployConfig.value)
+    } else if (deployConfigChanged(originalDeployConfig, deployConfig.value)) {
+      body.deployConfig = toWireDeployConfig(deployConfig.value)
     }
     if (editingId.value) {
       await useApi(`/api/admin/repo-catalog/${editingId.value}`, { method: 'PUT', body })
@@ -669,6 +691,7 @@ const canSubmit = computed(
           종료 때 병합 전·후 빌드 결과를 비교해 바뀐 파일만 담은 패치 파일(zip)을 만들어 보관합니다.
           <span v-if="patchBlocked" data-test="form-patch-hint">미리 빌드 명령이 있어야 켤 수 있습니다</span>
         </div>
+        <DeployConfigEditor v-model="deployConfig" :mobile="mobile" :copy-sources="deployCopySources" />
       </template>
     </AdminFormDialog>
 

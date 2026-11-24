@@ -56,4 +56,9 @@ class DeployServiceDockerfilePromptTest {
         String prompt = DeployService.buildDockerfilePrompt(workerYmlTemplate(), "acme/widgets", "netismaker/task-9");
         assertThat(prompt).contains("acme/widgets").contains("netismaker/task-9");
     }
+
+    @Test
+    void 덮어쓰기_규칙_상수에_핵심문구() {
+        assertThat(DeployService.CONFIG_OVERRIDE_RULE).contains("/opt/netis-override").contains("tomcat");
+    }
 }

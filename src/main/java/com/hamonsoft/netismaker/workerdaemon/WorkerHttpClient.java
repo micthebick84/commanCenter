@@ -142,7 +142,7 @@ public class WorkerHttpClient {
      * 구버전은 회차 종류를 몰라 일반 수정으로 돌린다), closeKeepBranch가 없는 요청에게는 병합하지 않고 종료하는 종료 작업을 넘기지 않는다
      * (스펙 2026-11-23 — 구버전은 이 칸을 버리고 병합해 버린다).
      */
-    static final String SUPPORTS = "refRepos,fixRounds,dbWrite,mockups,baseSync,closeKeepBranch";
+    static final String SUPPORTS = "refRepos,fixRounds,dbWrite,mockups,baseSync,closeKeepBranch,deployOverrides";
 
     public Optional<WorkerTaskResponse> nextTask() {
         try {

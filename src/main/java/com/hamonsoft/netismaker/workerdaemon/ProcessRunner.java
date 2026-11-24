@@ -41,9 +41,34 @@ public final class ProcessRunner {
 
     private ProcessRunner() {}
 
-    /** 로그·예외 메시지에 실을 명령 문자열. 자격증명은 항상 가린다. */
+    /**
+     * 로그·예외 메시지에 실을 명령 문자열. git URL 자격증명과 docker `-e`/`--env` 값(배포 DB 비밀번호 등)을 항상 가린다 —
+     * 키는 남기고 값만 {@code •••}로.
+     */
     static String describe(List<String> command) {
-        return GitRemotes.mask(String.join(" ", command));
+        List<String> shown = new java.util.ArrayList<>(command.size());
+        boolean nextIsEnv = false;
+        for (String arg : command) {
+            if (nextIsEnv) {
+                shown.add(maskEnvAssignment(arg));
+                nextIsEnv = false;
+            } else if (arg.equals("-e") || arg.equals("--env")) {
+                shown.add(arg);
+                nextIsEnv = true;
+            } else if (arg.startsWith("--env=")) {
+                shown.add("--env=" + maskEnvAssignment(arg.substring("--env=".length())));
+            } else if (arg.startsWith("-e") && arg.length() > 2 && arg.indexOf('=') > 2) {
+                shown.add("-e" + maskEnvAssignment(arg.substring(2)));
+            } else {
+                shown.add(arg);
+            }
+        }
+        return GitRemotes.mask(String.join(" ", shown));
+    }
+
+    private static String maskEnvAssignment(String assignment) {
+        int eq = assignment.indexOf('=');
+        return eq < 0 ? assignment : assignment.substring(0, eq + 1) + "•••";
     }
 
     public static Result run(File workingDir, List<String> command, long timeoutSeconds)

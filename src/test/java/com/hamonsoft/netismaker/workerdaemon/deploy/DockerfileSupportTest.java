@@ -122,6 +122,84 @@ class DockerfileSupportTest {
     }
 
     @Test
+    void 최종단계_이미지() {
+        String df = "FROM maven AS b\nRUN mvn package\nFROM tomcat:7.0.109-jdk8-openjdk-slim\nCOPY --from=b /a.war /x\n";
+        assertThat(DockerfileSupport.finalStageImage(df)).hasValue("tomcat:7.0.109-jdk8-openjdk-slim");
+    }
+
+    @Test
+    void 별칭을_거슬러_올라간다() {
+        String df = "FROM tomcat:8.5-jre8-temurin AS base\nFROM base\n";
+        assertThat(DockerfileSupport.finalStageImage(df)).hasValue("tomcat:8.5-jre8-temurin");
+    }
+
+    @Test
+    void 최종단계_플래그를_건너뛴다() {
+        assertThat(DockerfileSupport.finalStageImage("FROM --platform=linux/amd64 tomcat:9-jdk11 AS x\n"))
+                .hasValue("tomcat:9-jdk11");
+        assertThat(DockerfileSupport.finalStageImage("RUN echo\n")).isEmpty();
+        assertThat(DockerfileSupport.finalStageImage(null)).isEmpty();
+    }
+
+    @Test
+    void tomcatMajor_판별() {
+        assertThat(DockerfileSupport.tomcatMajor("tomcat:7.0.109-jdk8-openjdk")).hasValue(7);
+        assertThat(DockerfileSupport.tomcatMajor("docker.io/library/tomcat:8.5-jre8-temurin")).hasValue(8);
+        assertThat(DockerfileSupport.tomcatMajor("library/tomcat:10.1-jdk17")).hasValue(10);
+        assertThat(DockerfileSupport.tomcatMajor("tomcat:9-jdk11")).hasValue(9);
+        assertThat(DockerfileSupport.tomcatMajor("tomcat")).isEmpty();
+        assertThat(DockerfileSupport.tomcatMajor("tomcat:latest")).isEmpty();
+        assertThat(DockerfileSupport.tomcatMajor("openjdk:8")).isEmpty();
+        assertThat(DockerfileSupport.tomcatMajor("example.com:5000/mytomcat:9")).isEmpty();
+        assertThat(DockerfileSupport.tomcatMajor(null)).isEmpty();
+    }
+
+    @Test
+    void 블록은_root로_돌고_USER를_되돌린다() {
+        String df = "FROM tomcat:7.0.109-jdk8-openjdk-slim\nRUN useradd netis\nUSER netis\n";
+        String out = DockerfileSupport.appendConfigOverride(df, 7);
+        String[] lines = out.stripTrailing().split("\n");
+        assertThat(lines[lines.length - 3]).isEqualTo("USER root");
+        assertThat(lines[lines.length - 2])
+                .startsWith("RUN mkdir -p /opt/netis-override/WEB-INF/classes && chmod -R a+rX /opt/netis-override && sed -i '")
+                .contains("VirtualWebappLoader").contains("searchVirtualFirst=\"true\"")
+                .endsWith("\"$CATALINA_HOME/conf/context.xml\"");
+        assertThat(lines[lines.length - 1]).isEqualTo("USER netis");
+        assertThat(out).startsWith(df).contains("# Symphony 배포 덮어쓰기 (설정 파일)").endsWith("\n");
+    }
+
+    @Test
+    void USER가_없으면_되돌리지_않는다() {
+        String out = DockerfileSupport.appendConfigOverride("FROM tomcat:9\nEXPOSE 8080", 9);
+        String[] lines = out.stripTrailing().split("\n");
+        assertThat(lines[lines.length - 1]).startsWith("RUN mkdir -p");
+        assertThat(out).contains("FROM tomcat:9\nEXPOSE 8080\n# Symphony");
+        assertThat(out.lines().filter(l -> l.startsWith("USER")).toList()).containsExactly("USER root");
+    }
+
+    @Test
+    void 앞단계의_USER는_되돌리지_않는다() {
+        String out = DockerfileSupport.appendConfigOverride("FROM maven AS b\nUSER builder\nFROM tomcat:9\n", 9);
+        assertThat(out.lines().filter(l -> l.startsWith("USER")).toList()).containsExactly("USER builder", "USER root");
+    }
+
+    @Test
+    void 여덟_이상은_PreResources() {
+        String out = DockerfileSupport.appendConfigOverride("FROM tomcat:8.5\n", 8);
+        assertThat(out).contains("PreResources").contains("DirResourceSet")
+                .contains("webAppMount=\"/WEB-INF/classes\"").doesNotContain("VirtualWebappLoader");
+        assertThat(DockerfileSupport.appendConfigOverride("FROM tomcat:7\n", 7)).doesNotContain("PreResources");
+    }
+
+    @Test
+    void context_xml을_건드리면_true() {
+        assertThat(DockerfileSupport.touchesTomcatContext("FROM tomcat:9\nRUN sed -i x $CATALINA_HOME/conf/context.xml\n")).isTrue();
+        assertThat(DockerfileSupport.touchesTomcatContext("RUN echo '<PreResources/>'")).isTrue();
+        assertThat(DockerfileSupport.touchesTomcatContext("# VirtualWebappLoader\nFROM tomcat:9\n")).isFalse();
+        assertThat(DockerfileSupport.touchesTomcatContext(null)).isFalse();
+    }
+
+    @Test
     void base_images_of_null_or_empty_dockerfile() {
         assertThat(DockerfileSupport.parseBaseImages(null)).isEmpty();
         assertThat(DockerfileSupport.parseBaseImages("RUN echo hi\n")).isEmpty();

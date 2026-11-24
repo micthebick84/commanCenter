@@ -574,4 +574,79 @@ describe('admin/repo-catalog', () => {
       w.unmount()
     })
   })
+
+  describe('배포 설정', () => {
+    const deployRow = { ...noteRow, deployConfig: null as any }
+    const withSlot = {
+      databases: [{
+        slot: 'main', label: '주 DB', dbTypes: ['MARIADB'],
+        target: { kind: 'FILE', path: 'WEB-INF/classes/config/jdbc_maria.properties', entries: { 'jdbc.url': '' } },
+      }],
+      variables: [],
+    }
+
+    it('배포설정을_안바꾸면_PUT에_키가_없다', async () => {
+      const w = await mountPage([{ ...deployRow, deployConfig: withSlot }])
+      await openEditOf(w)
+      const body = await submitAndBody()
+      expect(body).not.toHaveProperty('deployConfig')
+      w.unmount()
+    })
+
+    it('자리를_추가하면_PUT에_deployConfig', async () => {
+      const w = await mountPage([deployRow])
+      await openEditOf(w)
+      ;(document.querySelector('[data-test="deploy-add-db"]') as HTMLElement).click()
+      await flushPromises()
+      const body = await submitAndBody()
+      expect(body.deployConfig.databases).toHaveLength(1)
+      expect(body.deployConfig.databases[0].slot).toBe('main')
+      w.unmount()
+    })
+
+    it('비우면_빈_설정을_보낸다', async () => {
+      const w = await mountPage([{ ...deployRow, deployConfig: withSlot }])
+      await openEditOf(w)
+      ;(document.querySelector('[data-test="deploy-remove-db"]') as HTMLElement).click()
+      await flushPromises()
+      const body = await submitAndBody()
+      expect(body.deployConfig).toEqual({ databases: [], variables: [] })
+      w.unmount()
+    })
+
+    it('등록은_비어있으면_키가_없다', async () => {
+      const w = await mountPage([])
+      await w.find('[data-test="open-create"]').trigger('click')
+      await flushPromises()
+      await fillRequired()
+      expect(await submitAndBody()).not.toHaveProperty('deployConfig')
+      w.unmount()
+    })
+
+    it('활성_토글_바디에는_deployConfig가_없다', async () => {
+      const w = await mountPage([{ ...deployRow, deployConfig: withSlot }])
+      useApiMock.mockClear()
+      useApiMock.mockResolvedValueOnce({})
+      useApiMock.mockResolvedValueOnce([])
+      await w.find('.q-toggle').trigger('click')
+      await flushPromises()
+      const put = useApiMock.mock.calls.find((c: any[]) => c[1]?.method === 'PUT')!
+      expect(put[1].body).not.toHaveProperty('deployConfig')
+      w.unmount()
+    })
+
+    it('다른레포에서_복사', async () => {
+      const other = { ...noteRow, id: 12, alias: '다른 레포', deployConfig: withSlot }
+      const w = await mountPage([deployRow, other])
+      await openEditOf(w)
+      const sel = w.findAllComponents({ name: 'QSelect' }).find((c) => c.props('label') === '다른 레포에서 복사')
+      expect(sel).toBeTruthy()
+      await sel!.vm.$emit('update:modelValue', 12)
+      await flushPromises()
+      const body = await submitAndBody()
+      expect(body.deployConfig).toEqual(withSlot)
+      expect(body.deployConfig).not.toBe(other.deployConfig)
+      w.unmount()
+    })
+  })
 })

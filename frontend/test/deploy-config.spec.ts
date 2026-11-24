@@ -1,7 +1,13 @@
 import { describe, it, expect } from 'vitest'
-import { deployConfigChanged, emptyDeployConfig, newDbSlot, toWireDeployConfig } from '../composables/deployConfig'
+import { deployConfigChanged, duplicateEntryKeys, emptyDeployConfig, newDbSlot, toWireDeployConfig } from '../composables/deployConfig'
 
 describe('deployConfig', () => {
+  it('duplicateEntryKeys는 앞뒤 공백을 뗀 키가 두 번 이상인 것만 처음 나온 순서로', () => {
+    expect(duplicateEntryKeys(['a', 'b', 'c'])).toEqual([])
+    expect(duplicateEntryKeys(['b', 'a', 'b', ' a ', 'b'])).toEqual(['b', 'a'])
+    expect(duplicateEntryKeys(['', '  ', ''])).toEqual([]) // 빈 키 행은 내보내지 않으므로 겹쳐도 문제없다
+  })
+
   it('newDbSlot_기본값', () => {
     const s = newDbSlot([])
     expect(s).toEqual({

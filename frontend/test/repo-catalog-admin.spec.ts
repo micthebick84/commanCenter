@@ -1,5 +1,5 @@
 import { mount, flushPromises } from '@vue/test-utils'
-import { describe, it, expect, afterEach } from 'vitest'
+import { describe, it, expect, afterEach, vi } from 'vitest'
 import { defineComponent, h } from 'vue'
 import { QLayout, QPageContainer } from 'quasar'
 import RepoCatalog from '../pages/admin/repo-catalog.vue'
@@ -632,6 +632,26 @@ describe('admin/repo-catalog', () => {
       await flushPromises()
       const put = useApiMock.mock.calls.find((c: any[]) => c[1]?.method === 'PUT')!
       expect(put[1].body).not.toHaveProperty('deployConfig')
+      w.unmount()
+    })
+
+    it('같은 항목 키가 두 행이면 저장하지 않고 알린다', async () => {
+      const twoKeys = {
+        ...withSlot,
+        databases: [{ ...withSlot.databases[0], target: { ...withSlot.databases[0].target, entries: { 'jdbc.url': 'u', 'jdbc.user': 'x' } } }],
+      }
+      const w = await mountPage([{ ...deployRow, deployConfig: twoKeys }])
+      await openEditOf(w)
+      const second = document.querySelectorAll('[data-test="deploy-entry-key"]')[1] as HTMLInputElement
+      second.value = 'jdbc.url'
+      second.dispatchEvent(new Event('input'))
+      await flushPromises()
+      const notify = vi.spyOn((w.findComponent(RepoCatalog).vm as any).$q, 'notify')
+      useApiMock.mockClear()
+      ;(document.querySelector('[data-test="form-submit"]') as HTMLElement).click()
+      await flushPromises()
+      expect(useApiMock.mock.calls.find((c: any[]) => c[1]?.method === 'PUT')).toBeUndefined()
+      expect(notify).toHaveBeenCalledWith({ type: 'negative', message: "DB 자리 'main'에 같은 항목 키가 두 번 있습니다: jdbc.url" })
       w.unmount()
     })
 

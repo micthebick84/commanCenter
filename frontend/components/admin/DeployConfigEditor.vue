@@ -5,6 +5,7 @@ import {
   MAX_DEPLOY_VARIABLES,
   PLACEHOLDER_HINT,
   cloneDeployConfig,
+  duplicateEntryKeys,
   newDbSlot,
   newDeployVariable,
   type DeployConfig,
@@ -17,6 +18,8 @@ const props = defineProps<{
   copySources?: Array<{ id: number; alias: string; deployConfig: DeployConfig }>
 }>()
 const emit = defineEmits<{ 'update:modelValue': [DeployConfig] }>()
+/** 저장하면 안 되는 이유(지금은 한 자리 안의 같은 항목 키) — 화면이 저장 전에 보고 막는다 */
+const problems = defineModel<string[]>('problems', { default: () => [] })
 
 const copyFrom = ref<number | null>(null)
 const copyOptions = computed(() => (props.copySources ?? []).map((s) => ({ label: s.alias, value: s.id })))
@@ -77,6 +80,30 @@ function removeEntry(i: number, row: EntryRow) {
   entryRowsBySlot.value[i] = entryRows(i).filter((r) => r.id !== row.id)
   commitEntries(i)
 }
+// 자리를 지울 때는 행 배열도 같은 자리에서 함께 뺀다 — 안 그러면 뒤 자리가 앞 자리의 행과 비교돼 다시 만들어지면서
+// 아직 내보내지 않은 빈 키 행이 사라진다
+function removeSlot(i: number) {
+  entryRowsBySlot.value.splice(i, 1)
+  update((c) => c.databases.splice(i, 1))
+}
+
+const duplicateKeysBySlot = computed(() => entryRowsBySlot.value.map((rs) => duplicateEntryKeys(rs.map((r) => r.key))))
+function isDuplicateRow(i: number, row: EntryRow): boolean {
+  return (duplicateKeysBySlot.value[i] ?? []).includes(row.key.trim())
+}
+const problemList = computed(() =>
+  duplicateKeysBySlot.value.flatMap((keys, i) =>
+    keys.map((k) => `DB 자리 '${props.modelValue.databases[i]?.slot ?? ''}'에 같은 항목 키가 두 번 있습니다: ${k}`),
+  ),
+)
+watch(
+  problemList,
+  (next) => {
+    if (JSON.stringify(next) !== JSON.stringify(problems.value)) problems.value = next
+  },
+  { immediate: true },
+)
+
 function setKind(i: number, kind: 'ENV' | 'FILE') {
   update((c) => {
     c.databases[i].target.kind = kind
@@ -174,13 +201,25 @@ const str = (v: unknown) => String(v ?? '')
         @update:model-value="(v) => update((c) => (c.databases[i].target.path = str(v)))"
       />
       <div v-for="row in entryRows(i)" :key="row.id" class="row q-col-gutter-xs items-center no-wrap" data-test="deploy-entry-row">
-        <q-input class="col" :model-value="row.key" label="항목 키" outlined dense autocapitalize="off" spellcheck="false" data-test="deploy-entry-key" @update:model-value="(nv) => setEntryKey(i, row, str(nv))" />
+        <q-input
+          class="col"
+          :model-value="row.key"
+          label="항목 키"
+          outlined
+          dense
+          autocapitalize="off"
+          spellcheck="false"
+          :error="isDuplicateRow(i, row)"
+          error-message="같은 항목 키가 이 자리에 이미 있습니다"
+          data-test="deploy-entry-key"
+          @update:model-value="(nv) => setEntryKey(i, row, str(nv))"
+        />
         <q-input class="col" :model-value="row.value" label="값" outlined dense autocapitalize="off" spellcheck="false" data-test="deploy-entry-value" @update:model-value="(nv) => setEntryValue(i, row, str(nv))" />
         <q-btn flat dense round icon="close" aria-label="항목 삭제" @click="removeEntry(i, row)" />
       </div>
       <div class="row justify-between">
         <q-btn flat dense no-caps icon="add" label="항목 추가" data-test="deploy-add-entry" @click="addEntry(i)" />
-        <q-btn flat dense no-caps color="negative" icon="delete" label="자리 삭제" data-test="deploy-remove-db" @click="update((c) => c.databases.splice(i, 1))" />
+        <q-btn flat dense no-caps color="negative" icon="delete" label="자리 삭제" data-test="deploy-remove-db" @click="removeSlot(i)" />
       </div>
     </q-card>
     <div>

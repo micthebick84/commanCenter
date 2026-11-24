@@ -154,8 +154,27 @@ export function suggestionCaption(s: DeployEnvSuggestion): string | null {
  * 레포 안 설정 파일로 도는 경우 구현 세션이 빈 목록을 남긴다 — 그 이유는 구현 로그에 있다.
  */
 export function noEnvNotice(s: DeployEnvSuggestion): string | null {
-  if (s.rows.length > 0 || s.templateCount > 0) return null
+  // DB 자리가 있으면 DB는 고른 연결로 들어가므로 "설정 파일 값으로 실행될 수 있다"는 경고가 틀린 말이 된다
+  if (s.rows.length > 0 || s.templateCount > 0 || (s.databases?.length ?? 0) > 0) return null
   return '구현 단계에서 찾은 배포 환경변수가 없습니다. 이 앱은 레포 안 설정 파일 값으로 실행될 수 있으니, 근거는 작업의 구현 로그에서 확인하세요.'
+}
+
+/**
+ * 배포 설정(레포 카탈로그)이 있는 레포의 안내. 설정이 없으면 null(화면은 `-e KEY=VALUE` 안내). 카탈로그 변수(CATALOG 행)는
+ * 파일 대상일 수 있으므로 DB 자리가 없어도 `-e` 안내 대신 이 안내를 쓰고, DB 비밀번호 문장은 DB 자리가 있을 때만 붙인다.
+ */
+export function configNote(s: DeployEnvSuggestion): string | null {
+  const hasDb = (s.databases?.length ?? 0) > 0
+  if (!hasDb && !s.rows.some((r) => r.source === 'CATALOG')) return null
+  const common =
+    '설정 파일이 대상이면 컨테이너 안 사본으로 적용되고, 환경변수가 대상이면 컨테이너에 주입됩니다. 아래 변수 중 값이 빈 것은 보내지 않으며, 비밀 변수 값은 마스킹 표시되지만 평문 저장됩니다.'
+  return hasDb ? `DB 비밀번호는 저장하지 않고 배포할 때 서버가 적용합니다. ${common}` : common
+}
+
+/** "직전 배포 값" 배지 — 서버가 직전 배포에서 가져온 선택이 지금도 그대로일 때만(바꾸면 사라지고 되돌리면 다시 보인다). */
+export function showPreviousDbBadge(d: DeployDbSlotView, model: Record<string, number | null>): boolean {
+  if (d.selected?.from !== 'PREVIOUS') return false
+  return (model[d.slot] ?? null) === (d.selected.connectionId ?? null)
 }
 
 export const NO_DB_LABEL = '고르지 않음(WAR 기본값)'

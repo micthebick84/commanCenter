@@ -3,12 +3,14 @@ import {
   NO_DB_LABEL,
   blankRow,
   choiceCaption,
+  configNote,
   dbModelFromSuggestion,
   isSuggestion,
   missingRequired,
   noEnvNotice,
   rowsFromEnvVars,
   rowsFromSuggestion,
+  showPreviousDbBadge,
   splitFormat,
   stripFormat,
   suggestionCaption,
@@ -150,5 +152,34 @@ describe('deployEnvForm — DB 고르기·짧은 값', () => {
     expect(NO_DB_LABEL).toBe('고르지 않음(WAR 기본값)')
     expect(choiceCaption({ id: 1, name: 'n', dbType: 'POSTGRESQL', scope: 'REPO', host: 'h', port: 5432, database: 'd' })).toBe('h:5432/d · 공용')
     expect(choiceCaption({ id: 1, name: 'n', dbType: 'POSTGRESQL', scope: 'USER', host: 'h', port: 5432, database: 'd' })).toBe('h:5432/d · 개인')
+  })
+
+  it('DB 자리가 있으면 변수 없음 안내를 띄우지 않는다(DB는 고른 연결로 들어간다)', () => {
+    expect(noEnvNotice({ rows: [], templateCount: 0, previousTaskId: null, databases: slots })).toBeNull()
+    expect(noEnvNotice({ rows: [], templateCount: 0, previousTaskId: null, databases: [] })).toContain('구현 로그')
+  })
+
+  it('설정 안내 — 배포 설정이 없으면 null, DB 문장은 DB 자리가 있을 때만', () => {
+    expect(configNote(suggestion)).toBeNull()
+    expect(configNote({ ...suggestion, databases: [] })).toBeNull()
+    const withDb = configNote({ rows: [], templateCount: 0, previousTaskId: null, databases: slots })
+    expect(withDb).toContain('DB 비밀번호는 저장하지 않고')
+    expect(withDb).toContain('설정 파일이 대상이면')
+    const catalogRow = { key: 'APP_URL', value: '', secret: false, description: '', required: false, source: 'CATALOG' as const, valueFromPrevious: false, format: null }
+    const varsOnly = configNote({ rows: [catalogRow], templateCount: 0, previousTaskId: null })
+    expect(varsOnly).toContain('설정 파일이 대상이면')
+    expect(varsOnly).not.toContain('DB 비밀번호')
+  })
+
+  it('직전 배포 배지는 그 연결이 지금도 골라져 있을 때만', () => {
+    const prev = slots[1] // 직전 배포에서 43
+    expect(showPreviousDbBadge(prev, { sub: 43 })).toBe(true)
+    expect(showPreviousDbBadge(prev, { sub: 7 })).toBe(false)
+    expect(showPreviousDbBadge(prev, { sub: null })).toBe(false)
+    expect(showPreviousDbBadge(slots[0], { main: null })).toBe(false) // 저장값(SAVED)은 배지 없음
+    expect(showPreviousDbBadge(slots[2], {})).toBe(false) // 선택 없음
+    const prevNone = { ...slots[1], selected: { connectionId: null, from: 'PREVIOUS' as const } }
+    expect(showPreviousDbBadge(prevNone, {})).toBe(true) // 직전 배포가 '고르지 않음'이었고 지금도 그대로
+    expect(showPreviousDbBadge(prevNone, { sub: 43 })).toBe(false)
   })
 })

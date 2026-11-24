@@ -65,6 +65,25 @@ export function newDeployVariable(): DeployVariable {
   return { key: '', description: '', secret: false, required: false, format: null, filePath: null, fileEntry: null }
 }
 
+/**
+ * 한 DB 자리 안에서 겹치는 항목 키(앞뒤 공백을 뗀 값, 빈 키 제외) — 처음 나온 순서로. 편집기는 행을 객체로 바꿀 때 같은 키의
+ * 뒤 값만 남기고(서버는 공백을 떼고 겹치면 거부한다), 그래서 저장 전에 화면이 막는다.
+ */
+export function duplicateEntryKeys(keys: string[]): string[] {
+  const seen = new Set<string>()
+  const dup: string[] = []
+  for (const raw of keys) {
+    const k = raw.trim()
+    if (k === '') continue
+    if (seen.has(k)) {
+      if (!dup.includes(k)) dup.push(k)
+    } else {
+      seen.add(k)
+    }
+  }
+  return dup
+}
+
 export function cloneDeployConfig(c: DeployConfig | null | undefined): DeployConfig {
   return c ? (JSON.parse(JSON.stringify(c)) as DeployConfig) : emptyDeployConfig()
 }

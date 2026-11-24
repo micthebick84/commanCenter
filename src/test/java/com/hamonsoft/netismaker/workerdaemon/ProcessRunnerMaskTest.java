@@ -31,6 +31,27 @@ class ProcessRunnerMaskTest {
     }
 
     @Test
+    void describe_masks_docker_env_values_and_keeps_keys() {
+        String described = ProcessRunner.describe(List.of("docker", "run", "-e", "SPRING_DATASOURCE_PASSWORD=hunter2zz",
+                "--env", "A=b", "--env=C=d", "-eE=f", "-p", "80:80", "img"));
+
+        assertThat(described)
+                .isEqualTo("docker run -e SPRING_DATASOURCE_PASSWORD=••• --env A=••• --env=C=••• -eE=••• -p 80:80 img")
+                .doesNotContain("hunter2zz");
+    }
+
+    @Test
+    void process_exception_message_masks_env_values_in_the_failed_command() {
+        List<String> cmd = List.of("git", "no-such-subcommand-zz", "-e", "SECRET=hunter2zz");
+
+        assertThatThrownBy(() -> ProcessRunner.requireSuccess(new File("."), cmd, 60))
+                .isInstanceOf(ProcessRunner.ProcessException.class)
+                .satisfies(e -> assertThat(e.getMessage())
+                        .doesNotContain("hunter2zz")
+                        .contains("SECRET=•••"));
+    }
+
+    @Test
     void describe_leaves_a_command_without_credentials_alone() {
         assertThat(ProcessRunner.describe(List.of("git", "status", "--porcelain")))
                 .isEqualTo("git status --porcelain");

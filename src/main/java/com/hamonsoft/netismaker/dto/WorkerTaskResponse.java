@@ -94,7 +94,12 @@ public record WorkerTaskResponse(
          * CLOSE 전용: 병합하지 않고 종료 — 브랜치·PR 유지 (스펙 2026-11-23). true면 워커가 병합·브랜치 삭제 없이 종료한다.
          * 구버전 API·다른 kind는 null(= 일반 종료). 모드를 모르는 구버전 워커는 claim 쿼리 가드로 받지 못한다.
          */
-        Boolean closeKeepBranch
+        Boolean closeKeepBranch,
+        /**
+         * DEPLOY 전용: 배포 때 고른 DB 연결·배포 설정으로 조립한 env·파일 덮어쓰기 (스펙 2026-11-24). claim 트랜잭션이 커밋된 뒤
+         * 컨트롤러가 채운다. 배포 설정도 고른 연결도 없으면 null(= 지금과 같음).
+         */
+        DeployOverrides deployOverrides
 ) {
     public WorkerTaskResponse {
         if (refRepos == null) refRepos = List.of();
@@ -116,6 +121,25 @@ public record WorkerTaskResponse(
 
     /** 미리 빌드 지시. toolchain은 워커 설정의 도구 이름(null이면 워커 환경 그대로). */
     public record PrebuildSpec(String command, String artifact, String toolchain) {}
+
+    /** 배포 덮어쓰기(deployOverrides) 도입 전 36개 인자 정규 생성자 — 기존 팩토리·테스트 호환(deployOverrides=null). */
+    public WorkerTaskResponse(Long id, String githubRepo, String githubBranch, String title, String description,
+                              Kind kind, List<TaskMcpSpec> mcpsExtra, String analysisMarkdown, String subtasksJson,
+                              String headBranch, String headSha, List<EnvVar> envVars, String model, String effort,
+                              String designMarkdown, String mockupFilesJson, String feedbackHistoryJson,
+                              String designUrl, String designSystemProjectId, String designOutputProjectId,
+                              String gitUrl, String repoHost, String planMarkdown,
+                              Integer prNumber, String prUrl, String closeProgress, CloseContext closeContext,
+                              CloseArtifactSpec closeArtifact, DbMcpGrant dbMcp, ImplementationSpec implementation,
+                              List<TaskRefRepo> refRepos, PrebuildSpec prebuild,
+                              List<InterviewMockupFile> interviewMockups, List<Integer> excludedMockupNumbers,
+                              ClosePatchSpec closePatch, Boolean closeKeepBranch) {
+        this(id, githubRepo, githubBranch, title, description, kind, mcpsExtra, analysisMarkdown, subtasksJson,
+                headBranch, headSha, envVars, model, effort, designMarkdown, mockupFilesJson, feedbackHistoryJson,
+                designUrl, designSystemProjectId, designOutputProjectId, gitUrl, repoHost, planMarkdown,
+                prNumber, prUrl, closeProgress, closeContext, closeArtifact, dbMcp, implementation, refRepos, prebuild,
+                interviewMockups, excludedMockupNumbers, closePatch, closeKeepBranch, null);
+    }
 
     /** 종료 브랜치 유지(closeKeepBranch) 도입 전 35개 인자 정규 생성자 — 기존 팩토리·테스트 호환(closeKeepBranch=null). */
     public WorkerTaskResponse(Long id, String githubRepo, String githubBranch, String title, String description,
@@ -320,6 +344,16 @@ public record WorkerTaskResponse(
                 headBranch, headSha, envVars, model, effort, designMarkdown, mockupFilesJson, feedbackHistoryJson,
                 designUrl, designSystemProjectId, designOutputProjectId, gitUrl, repoHost, planMarkdown,
                 prNumber, prUrl, closeProgress, closeContext, closeArtifact, null);
+    }
+
+    /** 배포 덮어쓰기만 채운 사본 — 나머지 칸은 그대로 보존한다. */
+    public WorkerTaskResponse withDeployOverrides(DeployOverrides o) {
+        return new WorkerTaskResponse(id, githubRepo, githubBranch, title, description, kind, mcpsExtra,
+                analysisMarkdown, subtasksJson, headBranch, headSha, envVars, model, effort, designMarkdown,
+                mockupFilesJson, feedbackHistoryJson, designUrl, designSystemProjectId, designOutputProjectId,
+                gitUrl, repoHost, planMarkdown, prNumber, prUrl, closeProgress, closeContext, closeArtifact, dbMcp,
+                implementation, refRepos, prebuild, interviewMockups, excludedMockupNumbers, closePatch,
+                closeKeepBranch, o);
     }
 
     /** DB MCP 지시만 채운 사본. */

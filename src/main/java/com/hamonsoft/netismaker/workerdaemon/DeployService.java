@@ -1,11 +1,13 @@
 package com.hamonsoft.netismaker.workerdaemon;
 
+import com.hamonsoft.netismaker.dto.DeployOverrides;
 import com.hamonsoft.netismaker.dto.WorkerTaskResponse;
 import com.hamonsoft.netismaker.entity.EnvVar;
 import com.hamonsoft.netismaker.git.GitRemotes;
 import com.hamonsoft.netismaker.util.ArtifactNames;
 import com.hamonsoft.netismaker.workerdaemon.deploy.DeployTarget;
 import com.hamonsoft.netismaker.workerdaemon.deploy.DockerfileSupport;
+import com.hamonsoft.netismaker.workerdaemon.deploy.WarPropertiesOverride;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.annotation.Profile;
@@ -13,7 +15,9 @@ import org.springframework.stereotype.Component;
 
 import java.io.File;
 import java.nio.file.Files;
+import java.nio.file.NoSuchFileException;
 import java.nio.file.Path;
+import java.nio.file.Paths;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -73,6 +77,13 @@ public class DeployService {
             throw new DeployException("head 브랜치 정보 없음 (PR생성 안 된 task?)", null);
         }
         StringBuilder log = new StringBuilder();
+        DeployOverrides overrides = task.deployOverrides();
+        // 배포 설정·고른 연결에 문제가 있으면 fetch 전에 멈춘다(스펙 2026-11-24 §10 1)
+        if (overrides != null && overrides.error() != null) {
+            throw new DeployException(overrides.error(), log.toString());
+        }
+        boolean hasFiles = overrides != null && !overrides.files().isEmpty();
+        Path overrideDir = null;
         try {
             // fetch만 — head 브랜치 checkout은 구현 worktree와 충돌하므로 금지.
             // createForDeploy가 origin/{head}를 --detach로 분리 체크아웃한다.
@@ -102,12 +113,29 @@ public class DeployService {
                 }
             }
 
-            if (!Files.exists(dockerfile)) {
+            // 미리 빌드가 루트에 남긴 Dockerfile도 레포의 것으로 센다(옛 동작과 같게) — 생성 전에 기록, 아래 검사·분기가 같은 값을 쓴다
+            boolean repoDockerfile = Files.exists(dockerfile);
+
+            if (hasFiles) {
+                if (staged == null) {
+                    throw new DeployException("설정 파일 덮어쓰기는 미리 빌드가 켜진 레포에서만 됩니다", log.toString());
+                }
+                if (!staged.fileName().endsWith(".war")) {
+                    throw new DeployException("설정 파일 덮어쓰기는 WAR 산출물에만 됩니다: " + staged.fileName(), log.toString());
+                }
+                if (repoDockerfile) {
+                    throw new DeployException("레포에 Dockerfile이 있어 설정 파일 덮어쓰기를 붙이지 않습니다 — "
+                            + "배포 DB를 '고르지 않음'으로 바꾸거나 레포 Dockerfile을 빼세요", log.toString());
+                }
+            }
+
+            if (!repoDockerfile) {
                 log.append("[Dockerfile 없음 → claude 생성]\n");
                 String section = staged == null ? null
                         : DeployPrebuilder.promptSection(staged.fileName(), prebuild.artifact());
                 String prompt = buildDockerfilePrompt(props.deploy().dockerfilePromptTemplate(),
-                        task.githubRepo(), task.headBranch(), section);
+                        task.githubRepo(), task.headBranch(), section)
+                        + (hasFiles ? CONFIG_OVERRIDE_RULE : "");
                 // 재생성까지 합쳐 dockerfile-timeout 한 번 — API 배포중 회수 판정(70분)이 이 상한을 한 번만 센다.
                 Duration budget = props.deploy().dockerfileTimeout();
                 long started = System.nanoTime();
@@ -135,6 +163,19 @@ public class DeployService {
                     log.append("[로케일] JAVA_TOOL_OPTIONS=-Duser.language=ko -Duser.country=KR 추가\n");
                 } else {
                     log.append("[로케일] Dockerfile이 이미 정함 — 그대로 둠\n");
+                }
+                if (hasFiles) {
+                    String generated = Files.readString(dockerfile);
+                    if (DockerfileSupport.touchesTomcatContext(generated)) {
+                        throw new DeployException("생성한 Dockerfile이 Tomcat 설정을 직접 바꿨습니다 — 다시 배포하세요", log.toString());
+                    }
+                    String image = DockerfileSupport.finalStageImage(generated).orElse("");
+                    var major = DockerfileSupport.tomcatMajor(image);
+                    if (major.isEmpty()) {
+                        throw new DeployException("설정 파일 덮어쓰기는 tomcat 이미지에서만 됩니다: " + image, log.toString());
+                    }
+                    Files.writeString(dockerfile, DockerfileSupport.appendConfigOverride(generated, major.getAsInt()));
+                    log.append("[설정 덮어쓰기] tomcat ").append(major.getAsInt()).append(" 블록 추가\n");
                 }
                 if (staged != null && staged.deliveryName() != null) {
                     Files.writeString(dockerfile, DockerfileSupport.appendArtifactCopy(Files.readString(dockerfile)));
@@ -166,14 +207,33 @@ public class DeployService {
                     .orElse(props.deploy().defaultContainerPort());
             log.append("[containerPort=").append(containerPort).append("]\n");
 
+            // 설정 파일 사본 — 빌드 컨텍스트 밖(Dockerfile COPY로 이미지에 안 들어가고 create → cp → start로만 넣는다).
+            // 폴더는 아래 finally에서 성공·실패 모두 지운다.
+            if (hasFiles) {
+                overrideDir = overrideRoot().resolve("task-" + task.id());
+                RepoCacheCleanupJob.deleteTree(overrideDir);
+                Files.createDirectories(overrideDir);
+                try {
+                    WarPropertiesOverride.writeOverrides(wt.toPath().resolve(DeployPrebuilder.STAGE_DIR)
+                            .resolve(staged.fileName()), overrides.files(), overrideDir);
+                } catch (NoSuchFileException e) {
+                    throw new DeployException("WAR에 설정 파일이 없습니다: " + e.getMessage(), log.toString());
+                }
+            }
+
             // env_vars → docker -e 주입용 Map. 빈 key는 제외. LocalDockerTarget이 spec.env()를 -e로 푼다.
+            // 배포 덮어쓰기가 있으면 그 목록이 최종 env다.
             Map<String, String> env = new LinkedHashMap<>();
-            if (task.envVars() != null) {
-                for (EnvVar ev : task.envVars()) {
+            List<EnvVar> envSource = overrides != null ? overrides.env() : task.envVars();
+            if (envSource != null) {
+                for (EnvVar ev : envSource) {
                     if (ev.key() != null && !ev.key().isBlank()) env.put(ev.key(), ev.value());
                 }
             }
             log.append("[env 주입: ").append(env.size()).append("개 키]\n");
+            if (overrides != null && overrides.summary() != null) {
+                log.append("[DB 연결] ").append(overrides.summary()).append('\n');
+            }
 
             // 이미지 태그와 NETIS_GIT_SHA는 같은 커밋 — 실제로 빌드한 커밋, 못 읽으면 기록된 head_sha
             String imageSha = builtSha != null ? builtSha : task.headSha();
@@ -185,7 +245,8 @@ public class DeployService {
                     containerPort,
                     env,
                     Map.of("netis-maker.task", String.valueOf(task.id())),
-                    imageSha == null || imageSha.isBlank() ? Map.of() : Map.of("NETIS_GIT_SHA", imageSha));
+                    imageSha == null || imageSha.isBlank() ? Map.of() : Map.of("NETIS_GIT_SHA", imageSha),
+                    hasFiles ? overrideDir : null);
 
             DeployTarget.DeployResult r = target.deploy(spec, logSink);
             // 컨테이너는 이미지로 돈다 — 빌드 컨텍스트(worktree)는 더 쓰지 않는다. 재배포는 createForDeploy가 새로 만든다.
@@ -201,7 +262,22 @@ public class DeployService {
         } catch (Exception e) {
             throw new DeployException(e.getClass().getSimpleName() + ": " + e.getMessage(),
                     log.toString());
+        } finally {
+            if (overrideDir != null) {
+                RepoCacheCleanupJob.DeleteResult d = RepoCacheCleanupJob.deleteTree(overrideDir);
+                if (d.failures() > 0) {
+                    DeployService.log.warn("배포 덮어쓰기 사본 정리 실패 {}건: {}", d.failures(), overrideDir);
+                }
+                try {
+                    Files.deleteIfExists(overrideDir.getParent());   // 비어 있을 때만 지워진다(다른 배포의 폴더가 있으면 남음)
+                } catch (java.io.IOException ignore) { /* 비어 있지 않거나 이미 없음 — best-effort */ }
+            }
         }
+    }
+
+    /** 설정 파일 사본의 부모 폴더 — repos-dir 옆(빌드 컨텍스트 밖). */
+    private Path overrideRoot() {
+        return Paths.get(props.reposDir()).resolveSibling("deploy-override");
     }
 
     /**
@@ -268,6 +344,20 @@ public class DeployService {
             - FROM의 이미지:태그는 레지스트리에 실제로 있는 것만 쓰세요. 버전 번호를 조합해 태그를 지어내지 말고
               (예: 없는 태그 `tomcat:7.0.109-jre8`), 확실하지 않으면 위 명령으로 확인하세요.
             - 워커가 빌드 전에 FROM 이미지를 확인합니다. 없으면 한 번 다시 만들게 하고, 그래도 없으면 배포가 실패합니다.
+            """;
+
+    /**
+     * 설정 파일 덮어쓰기가 있는 배포의 Dockerfile 생성 프롬프트에 덧붙일 절(연결은 별도 작업) —
+     * 워커가 Dockerfile 끝에 /opt/netis-override를 읽게 하는 블록을 붙이므로 Claude가 같은 장치를 만들면 겹친다.
+     */
+    static final String CONFIG_OVERRIDE_RULE = """
+
+            ## 설정 파일 덮어쓰기 (필수)
+            - 최종 런타임 단계는 공식 `tomcat` 이미지를 쓰고 `tomcat:<버전>` 태그를 명시하세요(예: `tomcat:7.0.109-jdk8-openjdk-slim`).
+              태그 없이 `tomcat`이나 `latest`를 쓰면 안 됩니다. 워커가 태그에서 Tomcat 주 버전을 읽습니다.
+            - 설정 파일 덮어쓰기 장치를 직접 만들지 마세요: 엔트리포인트 스크립트, `context.xml`의 Loader·Resources 수정
+              (VirtualWebappLoader·PreResources), `/opt/netis-override` 디렉터리 생성이 모두 해당합니다.
+              워커가 Dockerfile 끝에 `/opt/netis-override/WEB-INF/classes`를 WAR의 classes보다 먼저 읽게 하는 블록을 붙입니다.
             """;
 
     private static final String DEFAULT_DOCKERFILE_PROMPT = """

@@ -1,12 +1,18 @@
 import { describe, it, expect } from 'vitest'
 import {
+  NO_DB_LABEL,
   blankRow,
+  choiceCaption,
+  dbModelFromSuggestion,
   isSuggestion,
   missingRequired,
   noEnvNotice,
   rowsFromEnvVars,
   rowsFromSuggestion,
+  splitFormat,
+  stripFormat,
   suggestionCaption,
+  toWireDbSelection,
   toWireEnvVars,
   type DeployEnvSuggestion,
   type EnvRow,
@@ -83,5 +89,66 @@ describe('deployEnvForm (스펙 2026-10-07 §8)', () => {
     expect(noEnvNotice({ rows: [saved], templateCount: 0, previousTaskId: null })).toBeNull() // 저장값 있음
     const prev = { ...saved, source: 'PREVIOUS' as const, valueFromPrevious: true }
     expect(noEnvNotice({ rows: [prev], templateCount: 0, previousTaskId: 41 })).toBeNull() // 직전 배포 있음
+  })
+})
+
+describe('deployEnvForm — DB 고르기·짧은 값', () => {
+  const slots = [
+    { slot: 'main', label: '메인 DB', dbTypes: ['POSTGRESQL'], targetSummary: 'jdbc', selected: { connectionId: null, from: 'SAVED' as const }, choices: [] },
+    { slot: 'sub', label: '보조 DB', dbTypes: ['MYSQL'], targetSummary: 'jdbc', selected: { connectionId: 43, from: 'PREVIOUS' as const }, choices: [] },
+    { slot: 'etc', label: '기타', dbTypes: [], targetSummary: '', selected: null, choices: [] },
+  ]
+
+  it('splitFormat은 {값} 기준으로 앞뒤를 나눈다', () => {
+    expect(splitFormat('https://{값}.x')).toEqual({ prefix: 'https://', suffix: '.x' })
+    expect(splitFormat(null)).toBeNull()
+    expect(splitFormat(undefined)).toBeNull()
+    expect(splitFormat('no-token')).toBeNull()
+  })
+
+  it('stripFormat은 앞뒤가 맞을 때만 가운데를 돌려준다', () => {
+    expect(stripFormat('https://{값}.x', 'https://a.x')).toBe('a')
+    expect(stripFormat('https://{값}.x', 'a')).toBe('a')
+    expect(stripFormat(null, 'https://a.x')).toBe('https://a.x')
+    expect(stripFormat('{값}', 'a')).toBe('a')
+  })
+
+  it('rowsFromSuggestion이_format을_싣는다', () => {
+    const s: DeployEnvSuggestion = {
+      rows: [{ key: 'U', value: 'a', secret: false, description: '', required: false, source: 'CATALOG', valueFromPrevious: false, format: 'https://{값}.x' }],
+      templateCount: 0,
+      previousTaskId: null,
+    }
+    expect(rowsFromSuggestion(s, seq())[0].format).toBe('https://{값}.x')
+    expect(rowsFromSuggestion(suggestion, seq())[0].format).toBeNull()
+  })
+
+  it('예전_전체값은_가운데만_보인다', () => {
+    const mk = (value: string): DeployEnvSuggestion => ({
+      rows: [{ key: 'U', value, secret: false, description: '', required: false, source: 'PREVIOUS', valueFromPrevious: true, format: 'https://{값}.x' }],
+      templateCount: 0,
+      previousTaskId: 1,
+    })
+    expect(rowsFromSuggestion(mk('https://a.x'), seq())[0].value).toBe('a')
+    expect(rowsFromSuggestion(mk('a'), seq())[0].value).toBe('a')
+  })
+
+  it('dbModelFromSuggestion은 자리마다 선택값 또는 null', () => {
+    expect(dbModelFromSuggestion({ ...suggestion, databases: slots })).toEqual({ main: null, sub: 43, etc: null })
+    expect(dbModelFromSuggestion(suggestion)).toEqual({})
+  })
+
+  it('toWireDbSelection은 자리 순서대로', () => {
+    expect(toWireDbSelection(slots, { sub: 43, main: null })).toEqual([
+      { slot: 'main', connectionId: null },
+      { slot: 'sub', connectionId: 43 },
+      { slot: 'etc', connectionId: null },
+    ])
+  })
+
+  it('라벨과 캡션', () => {
+    expect(NO_DB_LABEL).toBe('고르지 않음(WAR 기본값)')
+    expect(choiceCaption({ id: 1, name: 'n', dbType: 'POSTGRESQL', scope: 'REPO', host: 'h', port: 5432, database: 'd' })).toBe('h:5432/d · 공용')
+    expect(choiceCaption({ id: 1, name: 'n', dbType: 'POSTGRESQL', scope: 'USER', host: 'h', port: 5432, database: 'd' })).toBe('h:5432/d · 개인')
   })
 })

@@ -247,7 +247,8 @@ public class TaskController {
                                @Valid @RequestBody(required = false) DeployRequest body,
                                JwtAuthenticationToken auth) {
         String adminId = AuthContext.requireUserId(auth);
-        taskService.deploy(id, adminId, body == null ? null : body.envVars());
+        taskService.deploy(id, adminId, body == null ? null : body.envVars(),
+                body == null ? null : body.dbSelection());
         Task t = taskService.getForView(id, adminId, true);
         return TaskResponse.of(t, taskService.getAnalysis(id).orElse(null));
     }
@@ -258,7 +259,8 @@ public class TaskController {
                                  @Valid @RequestBody(required = false) DeployRequest body,
                                  JwtAuthenticationToken auth) {
         String adminId = AuthContext.requireUserId(auth);
-        taskService.redeploy(id, adminId, body == null ? null : body.envVars());
+        taskService.redeploy(id, adminId, body == null ? null : body.envVars(),
+                body == null ? null : body.dbSelection());
         Task t = taskService.getForView(id, adminId, true);
         return TaskResponse.of(t, taskService.getAnalysis(id).orElse(null));
     }
@@ -275,8 +277,8 @@ public class TaskController {
     /** 배포 다이얼로그 미리 채움 — 구현 시 추출한 이름 + 직전 배포 값(비밀 포함, 평문)이라 관리자 한정 (스펙 2026-10-07 §6). */
     @GetMapping("/{id}/deploy-env")
     @PreAuthorize("hasAuthority('ROLE_ADMIN')")
-    public DeployEnvSuggestionResponse deployEnv(@PathVariable Long id) {
-        return taskService.deployEnvSuggestion(id);
+    public DeployEnvSuggestionResponse deployEnv(@PathVariable Long id, JwtAuthenticationToken auth) {
+        return taskService.deployEnvSuggestion(id, AuthContext.requireUserId(auth));
     }
 
     @GetMapping(value = "/{id}/logs/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)

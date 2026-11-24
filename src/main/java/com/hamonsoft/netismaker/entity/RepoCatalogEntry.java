@@ -1,6 +1,8 @@
 package com.hamonsoft.netismaker.entity;
 
 import jakarta.persistence.*;
+import org.hibernate.annotations.JdbcTypeCode;
+import org.hibernate.type.SqlTypes;
 import lombok.AccessLevel;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
@@ -104,6 +106,11 @@ public class RepoCatalogEntry {
     /** 질문 레포 추천 때 모델에 함께 보낼 관리자 입력 키워드 (스펙 2026-11-20 §6.4). null 가능. */
     @Column(name = "route_hint", columnDefinition = "TEXT")
     private String routeHint;
+
+    /** 배포 설정(DB 슬롯·변수 목록, 스펙 2026-11-24). null이면 설정 없음. */
+    @JdbcTypeCode(SqlTypes.JSON)
+    @Column(name = "deploy_config", columnDefinition = "jsonb")
+    private DeployConfig deployConfig;
 
     @Column(name = "created_by", length = 20)
     private String createdBy;

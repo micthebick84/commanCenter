@@ -87,8 +87,8 @@ class TaskControllerSecretRedactionTest {
     @Test
     void deploy_env_returns_the_service_suggestion() {
         var suggestion = new DeployEnvSuggestionResponse(List.of(), 0, null);
-        when(taskService.deployEnvSuggestion(5L)).thenReturn(suggestion);
+        when(taskService.deployEnvSuggestion(5L, "admin")).thenReturn(suggestion);
 
-        assertThat(controller.deployEnv(5L)).isSameAs(suggestion);
+        assertThat(controller.deployEnv(5L, auth("admin", "ROLE_ADMIN"))).isSameAs(suggestion);
     }
 }

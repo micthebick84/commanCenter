@@ -72,6 +72,8 @@ export interface TaskResponse {
   repoAlias: string | null
   repoCatalogId?: number | null
   dbConnectionIds?: number[]
+  /** 배포 때 고른 DB 연결 (스펙 2026-11-24) — 슬롯별 connectionId, 고르지 않은 슬롯은 null. 서버는 늘 배열로 준다. */
+  deployDbSelection?: { slot: string; connectionId: number | null }[]
   githubBranch: string
   title: string
   description: string

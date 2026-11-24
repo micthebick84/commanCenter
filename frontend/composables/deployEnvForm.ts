@@ -6,13 +6,34 @@ export interface EnvVar {
   secret: boolean
 }
 
-export type EnvRowSource = 'SAVED' | 'TEMPLATE' | 'PREVIOUS'
+export type EnvRowSource = 'SAVED' | 'TEMPLATE' | 'PREVIOUS' | 'CATALOG'
 
 export interface SuggestedRow extends EnvVar {
   description: string
   required: boolean
   source: EnvRowSource
   valueFromPrevious: boolean
+  /** 고정 앞뒤가 있는 변수의 형식(`{값}` 자리에 입력) — 없으면 null */
+  format?: string | null
+}
+
+export interface DeployDbChoiceView {
+  id: number
+  name: string
+  dbType: string
+  scope: 'REPO' | 'USER'
+  host: string
+  port: number
+  database: string
+}
+
+export interface DeployDbSlotView {
+  slot: string
+  label: string
+  dbTypes: string[]
+  targetSummary: string
+  selected: { connectionId: number | null; from: 'SAVED' | 'PREVIOUS' } | null
+  choices: DeployDbChoiceView[]
 }
 
 /** GET /api/tasks/{id}/deploy-env 응답 (스펙 §6.1). */
@@ -20,6 +41,7 @@ export interface DeployEnvSuggestion {
   rows: SuggestedRow[]
   templateCount: number
   previousTaskId: number | null
+  databases?: DeployDbSlotView[]
 }
 
 /** 편집용 행 — fixedKey면 KEY를 라벨로만 보여 준다(서버가 채운 행). id는 v-for의 안정 키. */
@@ -30,16 +52,38 @@ export interface EnvRow extends EnvVar {
   description: string
   required: boolean
   valueFromPrevious: boolean
+  format: string | null
 }
 
 export function isSuggestion(v: unknown): v is DeployEnvSuggestion {
   return !!v && typeof v === 'object' && Array.isArray((v as DeployEnvSuggestion).rows)
 }
 
+const FORMAT_TOKEN = '{값}'
+
+/** `https://{값}.x` → 앞·뒤 글자. 형식이 없거나 `{값}`이 없으면 null. */
+export function splitFormat(format: string | null | undefined): { prefix: string; suffix: string } | null {
+  if (!format) return null
+  const i = format.indexOf(FORMAT_TOKEN)
+  if (i < 0) return null
+  return { prefix: format.slice(0, i), suffix: format.slice(i + FORMAT_TOKEN.length) }
+}
+
+/** 예전에 전체 값을 저장한 경우 앞뒤를 떼고 가운데만 — 서버가 다시 감싸므로 두 번 감싸이지 않게. */
+export function stripFormat(format: string | null | undefined, value: string): string {
+  const parts = splitFormat(format)
+  if (!parts || (parts.prefix === '' && parts.suffix === '')) return value
+  const { prefix, suffix } = parts
+  if (value.length >= prefix.length + suffix.length && value.startsWith(prefix) && value.endsWith(suffix)) {
+    return value.slice(prefix.length, value.length - suffix.length)
+  }
+  return value
+}
+
 export function rowsFromSuggestion(s: DeployEnvSuggestion, nextId: () => number): EnvRow[] {
   return s.rows.map((r) => ({
     key: r.key,
-    value: r.value ?? '',
+    value: r.format ? stripFormat(r.format, r.value ?? '') : (r.value ?? ''),
     secret: !!r.secret,
     id: nextId(),
     reveal: false,
@@ -47,6 +91,7 @@ export function rowsFromSuggestion(s: DeployEnvSuggestion, nextId: () => number)
     description: r.description ?? '',
     required: !!r.required,
     valueFromPrevious: !!r.valueFromPrevious,
+    format: r.format ?? null,
   }))
 }
 
@@ -62,6 +107,7 @@ export function rowsFromEnvVars(envVars: EnvVar[] | null | undefined, nextId: ()
     description: '',
     required: false,
     valueFromPrevious: false,
+    format: null,
   }))
 }
 
@@ -76,6 +122,7 @@ export function blankRow(nextId: () => number): EnvRow {
     description: '',
     required: false,
     valueFromPrevious: false,
+    format: null,
   }
 }
 
@@ -109,4 +156,24 @@ export function suggestionCaption(s: DeployEnvSuggestion): string | null {
 export function noEnvNotice(s: DeployEnvSuggestion): string | null {
   if (s.rows.length > 0 || s.templateCount > 0) return null
   return '구현 단계에서 찾은 배포 환경변수가 없습니다. 이 앱은 레포 안 설정 파일 값으로 실행될 수 있으니, 근거는 작업의 구현 로그에서 확인하세요.'
+}
+
+export const NO_DB_LABEL = '고르지 않음(WAR 기본값)'
+
+export function choiceCaption(c: DeployDbChoiceView): string {
+  return `${c.host}:${c.port}/${c.database} · ${c.scope === 'REPO' ? '공용' : '개인'}`
+}
+
+/** 자리마다 서버가 미리 고른 연결(없으면 null) — 화면 모델의 초기값. */
+export function dbModelFromSuggestion(s: DeployEnvSuggestion): Record<string, number | null> {
+  const model: Record<string, number | null> = {}
+  for (const d of s.databases ?? []) model[d.slot] = d.selected?.connectionId ?? null
+  return model
+}
+
+export function toWireDbSelection(
+  slots: DeployDbSlotView[],
+  model: Record<string, number | null>,
+): { slot: string; connectionId: number | null }[] {
+  return slots.map((d) => ({ slot: d.slot, connectionId: model[d.slot] ?? null }))
 }

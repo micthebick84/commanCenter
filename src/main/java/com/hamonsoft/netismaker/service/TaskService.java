@@ -5,7 +5,12 @@ import com.hamonsoft.netismaker.dto.ApproveRequest;
 import com.hamonsoft.netismaker.dto.DeployEnvSuggestionResponse;
 import com.hamonsoft.netismaker.dto.TaskCreateRequest;
 import com.hamonsoft.netismaker.entity.AttachmentRendition;
+import com.hamonsoft.netismaker.entity.DeployConfig;
+import com.hamonsoft.netismaker.service.deployconfig.DeployConfigValidator;
+import com.hamonsoft.netismaker.service.deployconfig.DeployDbSelectionValidator;
+import com.hamonsoft.netismaker.entity.DeployDbChoice;
 import com.hamonsoft.netismaker.entity.EnvVar;
+import com.hamonsoft.netismaker.entity.RepoCatalogEntry;
 import com.hamonsoft.netismaker.entity.RenderStatus;
 import com.hamonsoft.netismaker.entity.ImplementationMode;
 import com.hamonsoft.netismaker.entity.QuestionAttachment;
@@ -23,6 +28,7 @@ import com.hamonsoft.netismaker.entity.TaskStageUsage;
 import com.hamonsoft.netismaker.entity.TaskType;
 import com.hamonsoft.netismaker.git.RepoRef;
 import com.hamonsoft.netismaker.repository.QuestionAttachmentRepository;
+import com.hamonsoft.netismaker.repository.RepoCatalogRepository;
 import com.hamonsoft.netismaker.repository.TaskAnalysisRepository;
 import com.hamonsoft.netismaker.repository.TaskAttachmentRepository;
 import com.hamonsoft.netismaker.repository.TaskDesignRepository;
@@ -49,6 +55,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 import java.time.OffsetDateTime;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -120,6 +127,25 @@ public class TaskService {
     @Autowired
     void setRequestBoardService(RequestBoardService requestBoardService) {
         this.requestBoardService = requestBoardService;
+    }
+
+    /**
+     * 배포 창 미리 채움이 읽는 레포 카탈로그 (스펙 2026-11-24). 생성자를 바꾸지 않으려고 setter 주입 —
+     * 배포 설정 없는 단위 테스트에서는 null(= 배포 설정 없음으로 취급).
+     */
+    private RepoCatalogRepository repoCatalogRepo;
+
+    @Autowired
+    void setRepoCatalogRepository(RepoCatalogRepository repoCatalogRepo) {
+        this.repoCatalogRepo = repoCatalogRepo;
+    }
+
+    /** 배포 요청의 DB 선택 검증이 읽는 연결 (스펙 2026-11-24). setter 주입 — 없으면 비지 않은 선택은 400. */
+    private com.hamonsoft.netismaker.repository.DbConnectionRepository dbConnectionRepo;
+
+    @Autowired
+    void setDbConnectionRepository(com.hamonsoft.netismaker.repository.DbConnectionRepository dbConnectionRepo) {
+        this.dbConnectionRepo = dbConnectionRepo;
     }
 
     public TaskService(TaskRepository taskRepo,
@@ -904,19 +930,30 @@ public class TaskService {
     /** PR생성 → 배포대기. admin 한정. 워커가 다음 폴링에 claim해 배포 수행. */
     @Transactional
     public Task deploy(Long taskId, String adminId, List<EnvVar> envVars) {
+        return deploy(taskId, adminId, envVars, null);
+    }
+
+    /** dbSelection==null이면 저장된 DB 선택 유지, 아니면 검증 뒤 그대로 저장 (스펙 2026-11-24). */
+    @Transactional
+    public Task deploy(Long taskId, String adminId, List<EnvVar> envVars, List<DeployDbChoice> dbSelection) {
         // 비관적 락(FOR UPDATE) — 더블클릭 이중 배포 큐 진입 방지 + env_vars 덮어쓰기 직렬화.
         Task t = taskRepo.findActiveByIdForUpdate(taskId).orElseThrow(TaskException::notFound);
         if (t.getStatus() != TaskStatus.PR_CREATED) {
             throw TaskException.conflict("PR생성 상태에서만 배포할 수 있습니다 (현재: "
                     + t.getStatus().dbValue() + ")");
         }
-        if (envVars != null) t.setEnvVars(new ArrayList<>(envVars));
+        applyDeployInputs(t, adminId, envVars, dbSelection);
         return toDeployPending(t, adminId, "관리자 배포 요청 → 배포 큐 진입");
     }
 
     /** 배포완료/배포실패/배포중단됨 → 배포대기 (기존 컨테이너는 배포 시 stop 후 교체). */
     @Transactional
     public Task redeploy(Long taskId, String adminId, List<EnvVar> envVars) {
+        return redeploy(taskId, adminId, envVars, null);
+    }
+
+    @Transactional
+    public Task redeploy(Long taskId, String adminId, List<EnvVar> envVars, List<DeployDbChoice> dbSelection) {
         // 비관적 락(FOR UPDATE) — 재배포 vs 중지/reconcile 경합 시 갱신된 상태를 재판정.
         Task t = taskRepo.findActiveByIdForUpdate(taskId).orElseThrow(TaskException::notFound);
         if (t.getStatus() != TaskStatus.DEPLOYED && t.getStatus() != TaskStatus.DEPLOY_FAILED
@@ -924,8 +961,44 @@ public class TaskService {
             throw TaskException.conflict("배포완료/배포실패/배포중단됨 상태에서만 재배포할 수 있습니다 (현재: "
                     + t.getStatus().dbValue() + ")");
         }
-        if (envVars != null) t.setEnvVars(new ArrayList<>(envVars));
+        applyDeployInputs(t, adminId, envVars, dbSelection);
         return toDeployPending(t, adminId, "관리자 재배포 요청 → 배포 큐 진입");
+    }
+
+    /** 검증을 모두 끝낸 뒤에만 작업을 바꾼다 — 위반이면 아무것도 바뀌지 않는다. */
+    private void applyDeployInputs(Task t, String adminId, List<EnvVar> envVars, List<DeployDbChoice> dbSelection) {
+        boolean selecting = dbSelection != null;
+        DeployConfig cfg = null;
+        Long catalogId = null;
+        if (repoCatalogRepo != null && (envVars != null || selecting)) {
+            RepoCatalogEntry cat = RepoCatalogRepository.findForTask(repoCatalogRepo, t.getRepoCatalogId(), t.getGitUrl())
+                    .orElse(null);
+            cfg = cat == null ? null : cat.getDeployConfig();
+            catalogId = cat == null ? null : cat.getId();
+        }
+        if (envVars != null && cfg != null) {
+            Set<String> dbNames = DeployConfigValidator.dbEnvNames(cfg);
+            for (EnvVar v : envVars) {
+                if (v != null && v.key() != null && dbNames.contains(v.key())) {
+                    throw new TaskException(HttpStatus.BAD_REQUEST,
+                            "배포 DB가 정하는 변수는 따로 넣을 수 없습니다: " + v.key());
+                }
+            }
+        }
+        List<DeployDbChoice> validated = null;
+        if (selecting) {
+            if (dbConnectionRepo == null && !dbSelection.isEmpty()) {
+                throw new TaskException(HttpStatus.BAD_REQUEST, "DB 선택을 처리할 수 없습니다");
+            }
+            try {
+                validated = DeployDbSelectionValidator.validate(cfg, t, catalogId, adminId, dbSelection,
+                        id -> dbConnectionRepo == null ? Optional.empty() : dbConnectionRepo.findById(id));
+            } catch (IllegalArgumentException e) {
+                throw new TaskException(HttpStatus.BAD_REQUEST, e.getMessage());
+            }
+        }
+        if (envVars != null) t.setEnvVars(new ArrayList<>(envVars));
+        if (validated != null) t.setDeployDbSelection(new ArrayList<>(validated));
     }
 
     /**
@@ -934,19 +1007,82 @@ public class TaskService {
      */
     @Transactional(readOnly = true)
     public DeployEnvSuggestionResponse deployEnvSuggestion(Long taskId) {
+        return deployEnvSuggestion(taskId, null);
+    }
+
+    /**
+     * adminId = 요청 관리자(DB 선택지의 "본인 개인 연결" 기준). 레포 카탈로그에 배포 설정이 있으면 카탈로그 변수·DB 자리를 싣는다
+     * (스펙 2026-11-24 §7.2·§9). 없으면 예전과 같고 databases만 빈 목록.
+     */
+    @Transactional(readOnly = true)
+    public DeployEnvSuggestionResponse deployEnvSuggestion(Long taskId, String adminId) {
         Task t = taskRepo.findActiveById(taskId).orElseThrow(TaskException::notFound);
         List<EnvVar> saved = t.getEnvVars() == null ? List.of() : t.getEnvVars();
         boolean hasSaved = saved.stream().anyMatch(v -> v != null && !v.key().isBlank());
-        Task previous = hasSaved ? null : findPreviousDeploy(t);
+        RepoCatalogEntry cat = repoCatalogRepo == null ? null
+                : RepoCatalogRepository.findForTask(repoCatalogRepo, t.getRepoCatalogId(), t.getGitUrl()).orElse(null);
+        DeployConfig cfg = cat == null ? null : cat.getDeployConfig();
+        if (cfg == null) {
+            Task previous = hasSaved ? null : findPreviousDeploy(t, false);
+            return DeployEnvSuggester.suggest(saved, t.getEnvTemplate(),
+                    previous == null ? List.of() : previous.getEnvVars(),
+                    previous == null ? null : previous.getId());
+        }
+
+        List<DeployDbChoice> savedSelection = t.getDeployDbSelection() == null ? List.of() : t.getDeployDbSelection();
+        boolean needDbPrevious = savedSelection.isEmpty() && !cfg.databases().isEmpty();
+        Task previous = (!hasSaved || needDbPrevious) ? findPreviousDeploy(t, true) : null;
+        List<DeployDbChoice> prevSelection = previous == null || previous.getDeployDbSelection() == null
+                ? List.of() : previous.getDeployDbSelection();
+
+        List<DeployEnvSuggestionResponse.DbSlotView> views = new ArrayList<>();
+        for (DeployConfig.DbSlot slot : cfg.databases()) {
+            DeployDbChoice savedChoice = findSlot(savedSelection, slot.slot());
+            Long savedId = savedChoice == null ? null : savedChoice.connectionId();
+            List<DeployEnvSuggestionResponse.Choice> choices = dbConnectionService.deployChoices(
+                    cat.getId(), adminId, new HashSet<>(slot.dbTypes()), savedId);
+            DeployEnvSuggestionResponse.Selected selected = null;
+            if (!savedSelection.isEmpty()) {
+                if (savedChoice != null) {
+                    selected = new DeployEnvSuggestionResponse.Selected(savedId, DeployEnvSuggestionResponse.Source.SAVED);
+                }
+            } else {
+                DeployDbChoice p = findSlot(prevSelection, slot.slot());
+                if (p != null && p.connectionId() != null
+                        && choices.stream().anyMatch(c -> c.id() == p.connectionId())) {
+                    selected = new DeployEnvSuggestionResponse.Selected(p.connectionId(),
+                            DeployEnvSuggestionResponse.Source.PREVIOUS);
+                }
+            }
+            views.add(new DeployEnvSuggestionResponse.DbSlotView(slot.slot(), slot.label(),
+                    slot.dbTypes().stream().map(Enum::name).toList(), targetSummary(slot.target()), selected, choices));
+        }
         return DeployEnvSuggester.suggest(saved, t.getEnvTemplate(),
                 previous == null ? List.of() : previous.getEnvVars(),
-                previous == null ? null : previous.getId());
+                previous == null ? null : previous.getId(), cfg, views);
     }
 
-    private Task findPreviousDeploy(Task t) {
+    private static DeployDbChoice findSlot(List<DeployDbChoice> selection, String slot) {
+        for (DeployDbChoice c : selection) {
+            if (c != null && slot.equals(c.slot())) return c;
+        }
+        return null;
+    }
+
+    private static String targetSummary(DeployConfig.Target target) {
+        if (target == null) return "";
+        if (target.kind() == DeployConfig.TargetKind.FILE) {
+            return target.path() + " (" + String.join(", ", target.entries().keySet()) + ")";
+        }
+        return "env " + String.join(", ", target.entries().keySet());
+    }
+
+    private Task findPreviousDeploy(Task t, boolean withInput) {
         String host = RepoRef.fromSnapshot(t.getGithubRepo(), t.getGitUrl()).host();
-        return taskRepo.findRecentlyDeployedWithEnv(t.getGithubRepo(), t.getId(),
-                        TaskStatus.DEPLOY_PENDING.dbValue()).stream()
+        List<Task> candidates = withInput
+                ? taskRepo.findRecentlyDeployedWithInput(t.getGithubRepo(), t.getId(), TaskStatus.DEPLOY_PENDING.dbValue())
+                : taskRepo.findRecentlyDeployedWithEnv(t.getGithubRepo(), t.getId(), TaskStatus.DEPLOY_PENDING.dbValue());
+        return candidates.stream()
                 .filter(c -> host.equals(RepoRef.fromSnapshot(c.getGithubRepo(), c.getGitUrl()).host()))
                 .findFirst()
                 .orElse(null);

@@ -549,6 +549,26 @@ class AppLogStreamServiceTest {
         assertThat(sink.events(AppLogStream.EVENT_INFO)).containsExactly(Map.of("message", "connect pw=••••"));
     }
 
+    @Test
+    void 배포DB_비밀번호를_가린다() {
+        AppLogStreamService s = service();
+        com.hamonsoft.netismaker.service.deployconfig.DeployOverrideService override =
+                org.mockito.Mockito.mock(com.hamonsoft.netismaker.service.deployconfig.DeployOverrideService.class);
+        org.mockito.Mockito.when(override.secretsForMasking(org.mockito.ArgumentMatchers.any()))
+                .thenReturn(List.of(new EnvVar("deploy-db:main", "Secr3t!", true)));
+        ReflectionTestUtils.setField(s, "deployOverrideService", override);
+        RecordingSink sink = sink();
+        Task t = task(42, TaskStatus.DEPLOYED, List.of(new EnvVar("DB_PASSWORD", "dbPassw0rd", true)));
+        s.open(t, sink);
+        FakeDockerProcess proc = processes.get(0);
+
+        proc.writeOut(TS + " jdbc.password=Secr3t! other=dbPassw0rd\n");
+        await().atMost(2, SECONDS).until(() -> sink.lines().size() == 1);
+
+        assertThat(sink.lines().get(0).text()).isEqualTo("jdbc.password=•••• other=••••");
+        assertThat(t.getEnvVars()).hasSize(1); // 작업의 목록은 바뀌지 않는다
+    }
+
     // ---- API 종료 ----
 
     @Test

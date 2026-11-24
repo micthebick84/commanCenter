@@ -24,3 +24,15 @@ export function hasWritableSelection(
   if (list.writeEnabled !== true) return false
   return ids.some((id) => list.items.some((c) => c.id === id && c.scope === 'REPO' && c.enabled && c.allowWrite))
 }
+
+/**
+ * 작업 상세 "배포 DB" 칩 라벨 — 배포 때 고른 연결(`deployDbSelection`) 중 `connectionId`가 있는 것만 `dbChipLabels` 규칙으로.
+ * 보이지 않는 연결은 `DB #id`.
+ */
+export function deployDbChipLabels(
+  selection: { slot: string; connectionId: number | null }[],
+  items: Pick<DbConnectionView, 'id' | 'name' | 'dbType'>[],
+): string[] {
+  const ids = selection.map((s) => s.connectionId).filter((id): id is number => id != null)
+  return dbChipLabels(ids, items)
+}

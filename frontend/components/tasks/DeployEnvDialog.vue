@@ -3,14 +3,20 @@
 // 직전 배포 값)을 새로 불러오고, 실패하면 저장된 env로 채운다. 판정은 composables/deployEnvForm.ts 순수 함수.
 import { useQuasar } from 'quasar'
 import {
+  NO_DB_LABEL,
   blankRow,
+  choiceCaption,
+  dbModelFromSuggestion,
   isSuggestion,
   missingRequired,
   noEnvNotice,
   rowsFromEnvVars,
   rowsFromSuggestion,
+  splitFormat,
   suggestionCaption,
+  toWireDbSelection,
   toWireEnvVars,
+  type DeployDbSlotView,
   type EnvRow,
   type EnvVar,
 } from '~/composables/deployEnvForm'
@@ -29,6 +35,8 @@ const emit = defineEmits<{
 
 const $q = useQuasar()
 const rows = ref<EnvRow[]>([])
+const databases = ref<DeployDbSlotView[]>([])
+const dbModel = ref<Record<string, number | null>>({})
 const caption = ref<string | null>(null)
 const notice = ref<string | null>(null)
 const loading = ref(false)
@@ -47,8 +55,12 @@ async function load() {
   const token = ++loadSeq
   loading.value = true
   rows.value = []
+  databases.value = []
+  dbModel.value = {}
   caption.value = null
   notice.value = null
+  let nextDatabases: DeployDbSlotView[] = []
+  let nextDbModel: Record<string, number | null> = {}
   let next: EnvRow[] = []
   let nextCaption: string | null = null
   let nextNotice: string | null = null
@@ -57,6 +69,8 @@ async function load() {
     const res = await useApi(`/api/tasks/${props.taskId}/deploy-env`)
     if (!isSuggestion(res)) throw new Error('unexpected deploy-env response')
     next = rowsFromSuggestion(res, nextId)
+    nextDatabases = res.databases ?? []
+    nextDbModel = dbModelFromSuggestion(res)
     nextCaption = suggestionCaption(res)
     nextNotice = noEnvNotice(res)
   } catch {
@@ -68,6 +82,8 @@ async function load() {
     $q.notify({ type: 'warning', message: '추천 값을 불러오지 못해 저장된 값으로 채웠습니다' })
   }
   rows.value = next
+  databases.value = nextDatabases
+  dbModel.value = nextDbModel
   caption.value = nextCaption
   notice.value = nextNotice
   loading.value = false
@@ -94,7 +110,13 @@ async function submit() {
   try {
     await useApi(`/api/tasks/${props.taskId}/${props.mode}`, {
       method: 'POST',
-      body: { envVars: toWireEnvVars(rows.value) },
+      body: {
+        envVars: toWireEnvVars(rows.value),
+        // 배포 설정이 없는 레포는 예전 바디 그대로(키 자체를 넣지 않는다)
+        ...(databases.value.length > 0
+          ? { dbSelection: toWireDbSelection(databases.value, dbModel.value) }
+          : {}),
+      },
     })
     $q.notify({ type: 'positive', message: `${actionLabel.value} 큐 등록` })
     emit('update:modelValue', false)
@@ -104,6 +126,17 @@ async function submit() {
   } finally {
     submitting.value = false
   }
+}
+function dbOptions(d: DeployDbSlotView) {
+  return [
+    { label: NO_DB_LABEL, value: null as number | null },
+    ...d.choices.map((c) => ({ label: `${c.name} (${c.dbType})`, value: c.id as number | null })),
+  ]
+}
+
+function selectedChoice(d: DeployDbSlotView) {
+  const id = dbModel.value[d.slot]
+  return id == null ? null : (d.choices.find((c) => c.id === id) ?? null)
 }
 // 폰에서만 전체화면 — 태블릿은 일반 너비 (composables/dialogLayout.ts)
 const fullscreen = useFullscreenDialog()
@@ -125,7 +158,12 @@ const fullscreen = useFullscreenDialog()
         <q-card-section class="q-pt-none text-caption text-grey-7">
           <div v-if="caption" class="text-primary q-mb-xs" data-test="deploy-env-caption">{{ caption }}</div>
           <div v-if="notice" class="text-deep-orange-10 q-mb-xs" data-test="deploy-env-no-env-notice">{{ notice }}</div>
-          <div>
+          <div v-if="databases.length" data-test="deploy-env-note-config">
+            DB 비밀번호는 저장하지 않고 배포할 때 서버가 적용합니다. 설정 파일이 대상이면 컨테이너 안 사본으로 적용되고,
+            환경변수가 대상이면 컨테이너에 주입됩니다. 아래 변수 중 값이 빈 것은 보내지 않으며, 비밀 변수 값은
+            마스킹 표시되지만 평문 저장됩니다.
+          </div>
+          <div v-else data-test="deploy-env-note-plain">
             컨테이너에 <code>-e KEY=VALUE</code>로 주입됩니다. 값이 빈 변수는 보내지 않습니다.
             비밀 값은 마스킹 표시되지만 평문 저장됩니다.
           </div>
@@ -134,6 +172,29 @@ const fullscreen = useFullscreenDialog()
           <q-spinner size="28px" color="primary" />
         </q-card-section>
         <q-card-section v-else class="q-gutter-y-md">
+          <div v-if="databases.length" data-test="deploy-db-section">
+            <div class="text-subtitle2 q-mb-xs">DB</div>
+            <div v-for="d in databases" :key="d.slot" class="q-mb-sm" data-test="deploy-db-slot">
+              <div class="row items-center q-gutter-x-sm">
+                <span class="text-weight-medium">{{ d.label }}</span>
+                <q-badge v-if="d.selected?.from === 'PREVIOUS'" outline color="grey-7" label="직전 배포 값" />
+              </div>
+              <div v-if="d.targetSummary" class="text-caption text-grey-7">{{ d.targetSummary }}</div>
+              <q-select
+                v-model="dbModel[d.slot]"
+                :options="dbOptions(d)"
+                :dense="!fullscreen"
+                outlined
+                emit-value
+                map-options
+                :aria-label="`${d.label} DB 연결`"
+                data-test="deploy-db-select"
+              />
+              <div v-if="selectedChoice(d)" class="text-caption text-grey-7" data-test="deploy-db-caption">
+                {{ choiceCaption(selectedChoice(d)!) }}
+              </div>
+            </div>
+          </div>
           <div v-for="row in rows" :key="row.id" data-test="env-row">
             <div v-if="row.fixedKey" class="row items-center q-gutter-x-sm">
               <code class="env-key" data-test="env-key-label">{{ row.key }}</code>
@@ -162,6 +223,8 @@ const fullscreen = useFullscreenDialog()
                 :dense="!fullscreen"
                 outlined
                 :placeholder="row.fixedKey ? '값' : 'value'"
+                :prefix="splitFormat(row.format)?.prefix || undefined"
+                :suffix="splitFormat(row.format)?.suffix || undefined"
                 style="flex: 2"
                 :type="row.secret && !row.reveal ? 'password' : 'text'"
                 data-test="env-value-input"

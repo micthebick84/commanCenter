@@ -67,6 +67,7 @@ const task = (id, status, statusLabel, extra = {}) => ({
   effort: 'medium', designRequested: false, analysis: null, design: null, implementation: null, deployment: null, close: null,
   interviewSessionId: null, attachments: [], stageUsage: [], totalCostUsd: null, totalTokens: null,
   implementationMode: 'DIRECT', implementationAttempt: 1, claimedAt: null, implementationTimeoutMinutes: null,
+  deployDbSelection: [], // 배포 때 고른 DB 연결 (스펙 2026-11-24) — 서버는 늘 배열로 준다, 칩은 고른 연결이 있을 때만
   sourceRequestId: null, // 요청 게시판에서 이어진 작업이 아니면 null — 출처 요청 줄은 값이 있을 때만 그린다
   ...extra,
 })
@@ -139,9 +140,9 @@ const QUESTION = {
 }
 // 2·3은 질문의 참조 — 5(인증 서버)는 일부러 빼서 등록 창 프리필의 "카탈로그에 없는 참조" 알림 경로도 지난다
 const REPOS = [
-  { id: 1, alias: 'Widgets', gitUrl: 'https://github.com/acme/widgets', host: 'github', ownerRepo: 'acme/widgets', defaultBranch: 'main', description: null, enabled: true, createdBy: 'admin', createdAt: NOW, updatedAt: NOW },
-  { id: 2, alias: '옛앱', gitUrl: 'https://gitlab.example/legacy/app', host: 'gitlab', ownerRepo: null, defaultBranch: 'release/6.5', description: null, enabled: true, createdBy: 'admin', createdAt: NOW, updatedAt: NOW },
-  { id: 3, alias: '공통 UI', gitUrl: 'https://gitlab.example/shared/ui', host: 'gitlab', ownerRepo: null, defaultBranch: 'main', description: null, enabled: true, createdBy: 'admin', createdAt: NOW, updatedAt: NOW },
+  { id: 1, alias: 'Widgets', gitUrl: 'https://github.com/acme/widgets', host: 'github', ownerRepo: 'acme/widgets', defaultBranch: 'main', description: null, enabled: true, createdBy: 'admin', createdAt: NOW, updatedAt: NOW, deployConfig: null },
+  { id: 2, alias: '옛앱', gitUrl: 'https://gitlab.example/legacy/app', host: 'gitlab', ownerRepo: null, defaultBranch: 'release/6.5', description: null, enabled: true, createdBy: 'admin', createdAt: NOW, updatedAt: NOW, deployConfig: null },
+  { id: 3, alias: '공통 UI', gitUrl: 'https://gitlab.example/shared/ui', host: 'gitlab', ownerRepo: null, defaultBranch: 'main', description: null, enabled: true, createdBy: 'admin', createdAt: NOW, updatedAt: NOW, deployConfig: null },
 ]
 const MCPS = [{ id: 1, name: 'docs', displayName: 'Docs', url: 'https://mcp.example/sse', transport: 'sse', description: null, enabled: true, createdBy: 'admin', createdAt: NOW, updatedAt: NOW, lastCheckAt: null, lastCheckStatus: null, lastCheckError: null }]
 const REQUESTS = [{ id: 1, kind: 'REPO', kindLabel: 'REPO 추가', title: '스모크 요청', status: 'RECEIVED', statusLabel: '접수', requesterId: 'admin', unread: true, createdAt: NOW, updatedAt: NOW }]
@@ -180,6 +181,8 @@ function apiResponse(path) {
   const t = path.match(/^\/api\/tasks\/(\d+)$/)
   if (t) return TASKS.find((x) => x.id === Number(t[1])) ?? null
   if (/^\/api\/tasks\/\d+\/(history|interviews)$/.test(path)) return []
+  // 배포 환경변수·DB 연결 선택 제안 (스펙 2026-11-24) — 배포 다이얼로그가 열 때 부른다
+  if (/^\/api\/tasks\/\d+\/deploy-env$/.test(path)) return { rows: [], templateCount: 0, previousTaskId: null, databases: [] }
   // 수정 요청 기록(최신순) — 작업 상세 카드
   if (/^\/api\/tasks\/\d+\/fix-requests$/.test(path)) {
     return [{

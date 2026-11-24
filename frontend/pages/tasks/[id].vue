@@ -3,7 +3,7 @@ import { failMsg } from '~/composables/failMessage'
 import { useQuasar } from 'quasar'
 import ApproveDialog from '~/components/ApproveDialog.vue'
 import { fetchDbConnections } from '~/composables/dbConnections'
-import { dbChipLabels, hasWritableSelection } from '~/composables/taskDbChips'
+import { dbChipLabels, deployDbChipLabels, hasWritableSelection } from '~/composables/taskDbChips'
 import { useTaskActions } from '~/composables/useTaskActions'
 import { useInterviewRefDraft } from '~/composables/useInterviewRefDraft'
 import type { AttachmentMeta, StageUsageView, TaskResponse } from '~/composables/taskDetailTypes'
@@ -77,22 +77,28 @@ const {
 } = actions
 
 const dbChips = ref<string[]>([])
+// 배포 때 고른 DB 연결 칩 (스펙 2026-11-24) — 같은 연결 목록 조회를 같이 쓴다.
+const deployDbChips = ref<string[]>([])
 // 고른 연결 중 구현 단계 쓰기가 열릴 수 있는 것이 있는가(스펙 2026-11-03 §6.1) — 있을 때만 "읽기 전용" 문구를 바꾼다. 응답에 칸이 없으면 false(옛 API).
 const dbWritable = ref(false)
+const deployDbKey = () => (task.value?.deployDbSelection ?? []).map((s) => s.connectionId ?? '').join(',')
 // 폴링이 5초마다 task 객체를 통째로 교체하므로, 값(repo·ids 키)이 바뀔 때만 다시 조회한다.
 watch(
-  [() => task.value?.repoCatalogId, () => task.value?.dbConnectionIds?.join(',') ?? ''],
-  async ([repoId, key]) => {
+  [() => task.value?.repoCatalogId, () => task.value?.dbConnectionIds?.join(',') ?? '', deployDbKey],
+  async ([repoId, key, dKey]) => {
     const ids = task.value?.dbConnectionIds ?? []
-    if (!ids.length) {
+    const selection = task.value?.deployDbSelection ?? []
+    if (!ids.length && !selection.some((s) => s.connectionId != null)) {
       dbChips.value = []
+      deployDbChips.value = []
       dbWritable.value = false
       return
     }
     const r = repoId ? await fetchDbConnections(repoId) : { enabled: false, items: [] }
     // 대기 중에 repo/ids가 바뀌었으면 이 응답은 버린다
-    if (repoId !== task.value?.repoCatalogId || key !== (task.value?.dbConnectionIds?.join(',') ?? '')) return
+    if (repoId !== task.value?.repoCatalogId || key !== (task.value?.dbConnectionIds?.join(',') ?? '') || dKey !== deployDbKey()) return
     dbChips.value = dbChipLabels(ids, r.items)
+    deployDbChips.value = deployDbChipLabels(selection, r.items)
     dbWritable.value = hasWritableSelection(ids, r)
   },
   { immediate: true },
@@ -617,6 +623,7 @@ function onAction(kind: NextActionKind) {
           :live-log="liveLog"
           :app-log-viewable="appLogVisible"
           :db-writable="dbWritable"
+          :deploy-db-chips="deployDbChips"
           @retry="retry"
           @download="downloadAttachment"
         >
@@ -1171,6 +1178,21 @@ function onAction(kind: NextActionKind) {
               {{ new Date(task.deployment.deployedAt).toLocaleString() }}</span
             >
           </div>
+        </q-card-section>
+
+        <q-separator v-if="deployDbChips.length" />
+        <q-card-section v-if="deployDbChips.length">
+          <q-chip
+            v-for="(label, idx) in deployDbChips"
+            :key="`${idx}-${label}`"
+            dense
+            color="teal-1"
+            text-color="teal-9"
+            icon="storage"
+            data-test="task-deploy-db-chip"
+          >
+            배포 DB: {{ label }}
+          </q-chip>
         </q-card-section>
 
         <q-separator v-if="task.envVars && task.envVars.length" />

@@ -54,10 +54,18 @@ public interface DeployTarget {
             int containerPort,
             Map<String, String> env,
             Map<String, String> labels,
-            Map<String, String> buildArgs   // docker build --build-arg (스펙 2026-11-04 §7, 예: NETIS_GIT_SHA)
+            Map<String, String> buildArgs,  // docker build --build-arg (스펙 2026-11-04 §7, 예: NETIS_GIT_SHA)
+            Path overrideDir                // 설정 파일 사본 폴더(null 허용) — 있으면 create → cp → start로 /opt/netis-override/에 넣는다
     ) {
         public DeploySpec {
             buildArgs = buildArgs == null ? Map.of() : buildArgs;
+        }
+
+        /** 설정 파일 사본 없는 스펙 — 기존 호출부. */
+        public DeploySpec(long taskId, Path contextDir, String imageName, String containerName,
+                          int containerPort, Map<String, String> env, Map<String, String> labels,
+                          Map<String, String> buildArgs) {
+            this(taskId, contextDir, imageName, containerName, containerPort, env, labels, buildArgs, null);
         }
     }
 

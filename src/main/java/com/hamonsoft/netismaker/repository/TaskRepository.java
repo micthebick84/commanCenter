@@ -143,6 +143,25 @@ public interface TaskRepository extends JpaRepository<Task, Long> {
                                            @Param("deployPending") String deployPending);
 
     /**
+     * {@link #findRecentlyDeployedWithEnv}와 같되 env 또는 배포 때 고른 DB 연결이 하나라도 있으면 후보 —
+     * DB만 고르고 env는 비운 배포도 "배포 요청된 적 있음"이다 (스펙 2026-11-24).
+     */
+    @Query(value = """
+        SELECT t.* FROM com.task t
+        WHERE t.github_repo = :githubRepo
+          AND t.id <> :excludeId
+          AND t.deleted_at IS NULL
+          AND (t.env_vars <> CAST('[]' AS jsonb) OR t.deploy_db_selection <> CAST('[]' AS jsonb))
+        ORDER BY (SELECT MAX(h.at) FROM com.task_status_history h
+                  WHERE h.task_id = t.id AND h.to_status = :deployPending) DESC NULLS LAST,
+                 t.id DESC
+        LIMIT 20
+        """, nativeQuery = true)
+    List<Task> findRecentlyDeployedWithInput(@Param("githubRepo") String githubRepo,
+                                             @Param("excludeId") Long excludeId,
+                                             @Param("deployPending") String deployPending);
+
+    /**
      * 워커가 다음에 처리할 작업 1건을 atomic claim.
      * SELECT FOR UPDATE SKIP LOCKED. 동시 워커가 있어도 1개만 잡음.
      *
@@ -215,6 +234,11 @@ public interface TaskRepository extends JpaRepository<Task, Long> {
                    WHERE r.id = t.active_fix_request_id AND r.kind = 'BASE_SYNC')))
           AND (CAST(:includeCloseKeepBranch AS boolean)
                OR NOT (t.status = :closePending AND t.close_keep_branch))
+          AND (CAST(:includeDeployOverrides AS boolean)
+               OR NOT (t.status = :deployPending AND (t.deploy_db_selection <> CAST('[]' AS jsonb)
+                    OR EXISTS (SELECT 1 FROM com.repo_catalog rc WHERE rc.deploy_config IS NOT NULL
+                               AND (rc.id = t.repo_catalog_id
+                                    OR (t.repo_catalog_id IS NULL AND rc.git_url = t.git_url))))))
         ORDER BY t.created_at ASC
         LIMIT 1
         FOR UPDATE SKIP LOCKED
@@ -223,11 +247,13 @@ public interface TaskRepository extends JpaRepository<Task, Long> {
                                   @Param("approved") String approved,
                                   @Param("designPending") String designPending,
                                   @Param("closePending") String closePending,
+                                  @Param("deployPending") String deployPending,
                                   @Param("includeRefImplementations") boolean includeRefImplementations,
                                   @Param("includeFixRounds") boolean includeFixRounds,
                                   @Param("includeMockupWork") boolean includeMockupWork,
                                   @Param("includeBaseSync") boolean includeBaseSync,
-                                  @Param("includeCloseKeepBranch") boolean includeCloseKeepBranch);
+                                  @Param("includeCloseKeepBranch") boolean includeCloseKeepBranch,
+                                  @Param("includeDeployOverrides") boolean includeDeployOverrides);
 
     /**
      * 위 네이티브 claim 1건 — 후보 상태는 {@link #CLAIMABLE_STATUSES} 중에서만 고른다(종류를 고르지 않은 워커는 그 전체를 넘긴다).
@@ -244,11 +270,21 @@ public interface TaskRepository extends JpaRepository<Task, Long> {
                                                              boolean supportsRefRepos, boolean supportsFixRounds,
                                                              boolean supportsMockups, boolean supportsBaseSync,
                                                              boolean supportsCloseKeepBranch) {
+        return findClaimableAmongForUpdateSkipLocked(statuses, supportsRefRepos, supportsFixRounds, supportsMockups,
+                supportsBaseSync, supportsCloseKeepBranch, false);
+    }
+
+    default List<Task> findClaimableAmongForUpdateSkipLocked(Collection<TaskStatus> statuses,
+                                                             boolean supportsRefRepos, boolean supportsFixRounds,
+                                                             boolean supportsMockups, boolean supportsBaseSync,
+                                                             boolean supportsCloseKeepBranch,
+                                                             boolean supportsDeployOverrides) {
         List<String> claimable = statuses.stream().filter(CLAIMABLE_STATUSES::contains).map(TaskStatus::dbValue).toList();
         if (claimable.isEmpty()) return List.of();
         return findClaimableAmong(claimable, TaskStatus.APPROVED.dbValue(), TaskStatus.DESIGN_PENDING.dbValue(),
-                TaskStatus.CLOSE_PENDING.dbValue(), supportsRefRepos, supportsFixRounds, supportsMockups,
-                supportsBaseSync, supportsCloseKeepBranch);
+                TaskStatus.CLOSE_PENDING.dbValue(), TaskStatus.DEPLOY_PENDING.dbValue(), supportsRefRepos,
+                supportsFixRounds, supportsMockups, supportsBaseSync, supportsCloseKeepBranch,
+                supportsDeployOverrides);
     }
 
     /** 호환 alias. 기존 호출처 단계적 마이그레이션 위함. */

@@ -9,8 +9,8 @@ class WorkerCapabilitiesTest {
 
     @Test
     void dbWrite는_큐를_거르지_않는다() {
-        assertThat(new WorkerCapabilities(true, true, false, true, true, true).needsFilteredQueue()).isFalse();
-        assertThat(new WorkerCapabilities(true, true, true, true, true, true).needsFilteredQueue()).isFalse();
+        assertThat(new WorkerCapabilities(true, true, false, true, true, true, true).needsFilteredQueue()).isFalse();
+        assertThat(new WorkerCapabilities(true, true, true, true, true, true, true).needsFilteredQueue()).isFalse();
         assertThat(new WorkerCapabilities(false, true, true, true, true, true).needsFilteredQueue()).isTrue();
         assertThat(new WorkerCapabilities(true, false, true, true, true, true).needsFilteredQueue()).isTrue();
     }
@@ -31,7 +31,7 @@ class WorkerCapabilitiesTest {
         assertThat(fourArgs.baseSync()).isFalse();
         assertThat(fourArgs.needsFilteredQueue()).isTrue();
         assertThat(new WorkerCapabilities(true, true, true, true, false, true).needsFilteredQueue()).isTrue();
-        assertThat(new WorkerCapabilities(true, true, true, true, true, true).needsFilteredQueue()).isFalse();
+        assertThat(new WorkerCapabilities(true, true, true, true, true, true, true).needsFilteredQueue()).isFalse();
     }
 
     @Test
@@ -45,11 +45,21 @@ class WorkerCapabilitiesTest {
     }
 
     @Test
-    void 호환_생성자는_뒤_칸을_false로_ALL은_여섯_다_true() {
+    void 호환_생성자는_뒤_칸을_false로_ALL은_일곱_다_true() {
         assertThat(new WorkerCapabilities(true, true)).isEqualTo(new WorkerCapabilities(true, true, false, false, false));
         assertThat(new WorkerCapabilities(true, true, true)).isEqualTo(new WorkerCapabilities(true, true, true, false, false));
         assertThat(new WorkerCapabilities(true, true, true, true)).isEqualTo(new WorkerCapabilities(true, true, true, true, false));
-        assertThat(WorkerCapabilities.ALL).isEqualTo(new WorkerCapabilities(true, true, true, true, true, true));
+        assertThat(WorkerCapabilities.ALL).isEqualTo(new WorkerCapabilities(true, true, true, true, true, true, true));
         assertThat(WorkerCapabilities.ALL.needsFilteredQueue()).isFalse();
+    }
+
+    @Test
+    void deployOverrides가_없으면_필터큐() {
+        assertThat(new WorkerCapabilities(true, true, true, true, true, true, false).needsFilteredQueue()).isTrue();
+        // 6인자 호환 생성자는 deployOverrides=false
+        WorkerCapabilities sixArgs = new WorkerCapabilities(true, true, true, true, true, true);
+        assertThat(sixArgs.deployOverrides()).isFalse();
+        assertThat(sixArgs.needsFilteredQueue()).isTrue();
+        assertThat(WorkerCapabilities.ALL.deployOverrides()).isTrue();
     }
 }

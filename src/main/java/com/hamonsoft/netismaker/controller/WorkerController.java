@@ -12,6 +12,7 @@ import com.hamonsoft.netismaker.dto.WorkerHeartbeatRequest;
 import com.hamonsoft.netismaker.dto.WorkerResultRequest;
 import com.hamonsoft.netismaker.dto.WorkerRuntimeStatusRequest;
 import com.hamonsoft.netismaker.dto.WorkerTaskResponse;
+import com.hamonsoft.netismaker.service.deployconfig.DeployOverrideService;
 import com.hamonsoft.netismaker.service.TaskException;
 import com.hamonsoft.netismaker.service.WorkerCapabilities;
 import com.hamonsoft.netismaker.service.WorkerService;
@@ -71,9 +72,15 @@ public class WorkerController {
     /** 없으면(구버전 워커) 병합하지 않고 종료(close_keep_branch)하는 종료대기를 넘기지 않는다 — 구버전은 모드를 몰라 병합해 버린다 (스펙 2026-11-23 §4.4). */
     static final String SUPPORTS_CLOSE_KEEP_BRANCH = "closeKeepBranch";
 
+    /** 없으면(구버전 워커) 배포 설정이 있는 레포·고른 배포 DB가 있는 배포대기를 넘기지 않는다 — 구버전은 덮어쓰기를 버린다 (스펙 2026-11-24). */
+    static final String SUPPORTS_DEPLOY_OVERRIDES = "deployOverrides";
+
     private final WorkerService workerService;
     private final DbMcpGrantService dbMcpGrantService;
     private final DbWriteService dbWriteService;
+    /** 시험이 3인자 생성자로 만들 수 있게 필드 주입 — 없으면 덮어쓰기를 싣지 않는다. */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private DeployOverrideService deployOverrideService;
 
     public WorkerController(WorkerService workerService, DbMcpGrantService dbMcpGrantService,
                             DbWriteService dbWriteService) {
@@ -105,9 +112,10 @@ public class WorkerController {
         WorkerCapabilities caps = new WorkerCapabilities(supports(supports, SUPPORTS_REF_REPOS),
                 supports(supports, SUPPORTS_FIX_ROUNDS), supports(supports, SUPPORTS_DB_WRITE),
                 supports(supports, SUPPORTS_MOCKUPS), supports(supports, SUPPORTS_BASE_SYNC),
-                supports(supports, SUPPORTS_CLOSE_KEEP_BRANCH));
+                supports(supports, SUPPORTS_CLOSE_KEEP_BRANCH), supports(supports, SUPPORTS_DEPLOY_OVERRIDES));
         Optional<WorkerTaskResponse> claimed = workerService.claimNextTask(workerId, caps, parseKinds(kinds))
-                .map(r -> withDbMcp(r, caps));
+                .map(r -> withDbMcp(r, caps))
+                .map(this::withDeployOverrides);
         return claimed.map(ResponseEntity::ok)
                       .orElseGet(() -> ResponseEntity.noContent().build());
     }
@@ -160,6 +168,22 @@ public class WorkerController {
         } catch (RuntimeException e) {
             log.warn("claim DB MCP 준비 실패 task={}: {}", r.id(), e.getClass().getSimpleName());
             return r.withDbMcp(new DbMcpGrant(null, List.of(), List.of("DB 연결을 준비하지 못해 DB 도구 없이 진행합니다")));
+        }
+    }
+
+    /**
+     * DEPLOY claim에 배포 덮어쓰기(DB 연결 복호화 결과 포함)를 붙인다 (스펙 2026-11-24). claim 트랜잭션이 이미 커밋된 뒤라
+     * 비밀번호는 커밋 전 경로에 나오지 않는다. forClaim은 던지지 않지만 만일을 위해 여기서도 막는다.
+     */
+    private WorkerTaskResponse withDeployOverrides(WorkerTaskResponse r) {
+        if (r.kind() != WorkerTaskResponse.Kind.DEPLOY || deployOverrideService == null) return r;
+        try {
+            com.hamonsoft.netismaker.dto.DeployOverrides o = deployOverrideService.forClaim(r.id());
+            return o == null ? r : r.withDeployOverrides(o);
+        } catch (RuntimeException e) {
+            log.warn("claim 배포 덮어쓰기 준비 실패 task={}: {}", r.id(), e.getClass().getSimpleName());
+            return r.withDeployOverrides(com.hamonsoft.netismaker.dto.DeployOverrides
+                    .failed("배포 덮어쓰기 준비 실패: " + e.getClass().getSimpleName()));
         }
     }
 

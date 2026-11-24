@@ -40,7 +40,8 @@ class TaskRepositoryClaimableStatusesTest {
     void the_native_claim_queue_keeps_the_jpql_order_and_lock_and_both_filters() throws Exception {
         String sql = TaskRepository.class
                 .getMethod("findClaimableAmong", java.util.Collection.class, String.class, String.class,
-                        String.class, boolean.class, boolean.class, boolean.class, boolean.class, boolean.class)
+                        String.class, String.class, boolean.class, boolean.class, boolean.class, boolean.class, boolean.class,
+                        boolean.class)
                 .getAnnotation(Query.class).value();
 
         assertThat(sql)
@@ -55,6 +56,10 @@ class TaskRepositoryClaimableStatusesTest {
                 .contains(":includeFixRounds")
                 .contains(":includeBaseSync")
                 .contains(":includeCloseKeepBranch")
+                .contains(":includeDeployOverrides")
+                .contains("t.status = :deployPending")
+                .contains("t.deploy_db_selection <> CAST('[]' AS jsonb)")
+                .contains("rc.git_url = t.git_url")
                 .contains("t.close_keep_branch")
                 .contains("r.kind = 'BASE_SYNC'");
         // 거름은 구현대기(:approved)에만 — 회차 안의 자동 재배포(배포대기 등)는 막지 않는다

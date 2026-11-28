@@ -23,6 +23,11 @@
 - 공개 저장소다: 실제 고객·현장 이름, 사내 IP, 토큰을 코드·시험·문서에 넣지 않는다. 예시는 `acme/widgets` 같은 가짜 이름.
 - 작업 폴더는 이 worktree뿐. 라이브 체크아웃(`C:\Users\mic\NetisMaker\commanCenter`)과 라이브 `.run`·`%USERPROFILE%\netis-maker`의 파일·프로세스를 건드리지 않는다. 시험은 임시 폴더만 쓴다.
 - 명령 환경: Git Bash에서 `export PATH="$HOME/.cargo/bin:$PATH"` 뒤 `worker-rs/`에서 cargo. Gradle은 worktree 루트에서 `./gradlew test --tests '<패턴>' --no-daemon`(`gradlew --stop` 금지). PowerShell 시험은 `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\tests\public-proc.test.ps1`.
+- **문자열 길이·자르기는 Java와 같은 단위(UTF-16 코드 유닛)**: "끝 2000자", 50자·100자 한도는 UTF-16 단위로 세고, 문자 경계에서만 자른다(바이트 인덱스로 자르면 한글·이모지에서 패닉). 서로게이트 쌍 중간이면 한 유닛 덜 자른다.
+- **정규식은 Java 의미에 맞춘다**: Java의 `\s`·`\d`는 ASCII만이고 MULTILINE `^`·`$`와 `.`은 `\r`도 줄 끝으로 본다. Rust `regex`는 기본이 유니코드 `\s`·`\d`, 줄 끝은 `\n`뿐이다. 계약 사례(Task 1)가 Java 출력을 고정하므로 사례가 통과하도록 ASCII 클래스(`(?-u:\s)` 등)와 줄 끝 처리를 맞춘다.
+- **시험은 실제 홈을 읽지 않는다**: `home`·`REPOS_DIR`·`DEAD_LETTER_DIR`·`~/.claude.json`·`.credentials.json`은 모두 시험이 만든 임시 폴더를 넘긴다. 이 PC의 실제 `~/.claude*` 파일을 읽거나 복사하지 않는다.
+- 로그 시각의 로컬 오프셋을 얻지 못하면(리눅스 다중 스레드 등) 패닉하지 않고 UTC로 찍는다.
+- 푸시·PR 열기·라이브에서 켜기는 이 계획의 범위 밖이다(사용자에게 따로 묻는다).
 - 커밋 메시지 끝: `Co-Authored-By: Claude Fable 5.2 <noreply@anthropic.com>`.
 
 ## Review Focus
@@ -33,6 +38,8 @@
 - 유실 보고 줄에 사용량·한글·줄바꿈이 들어 있을 때 다시 읽혀 재전송된다. 5xx면 그 회차를 멈추고 줄을 지우지 않는다. 4xx 3회면 dead 파일로(Task 6 시험).
 - 다른 프로세스가 레포 잠금을 쥐고 있을 때: 대기 뒤 `repo lock timeout (…): <키>`로 실패하고 캐시를 건드리지 않는다(Task 4 시험).
 - 한글이 든 프롬프트(stdin)와 결과(stdout)가 Windows에서 UTF-8 그대로 오간다(Task 5 시험).
+- 자식은 끝났는데 손자가 stdout을 쥐고 있을 때: 실행이 상한 없이 막히지 않는다(Task 4 시험).
+- 한도를 넘는 한글·이모지 문자열을 자를 때 패닉하지 않고 Java와 같은 길이로 자른다(Task 5·7 시험).
 - 서버가 `ANALYSIS`가 아닌 종류나 모르는 필드를 돌려줄 때: 역직렬화는 성공하고 처리하지 않는다(Task 7 시험).
 
 ---
@@ -63,6 +70,7 @@ scripts/public-proc.ps1  start-public.ps1  stop-public.ps1  tests/public-proc.te
 **Files:**
 - Create: `src/test/java/com/hamonsoft/netismaker/contract/WorkerRsContractTest.java`
 - Modify: `build.gradle`(test 태스크가 `contract.update` 시스템 속성을 넘기게 한 줄)
+- Create 또는 Modify: `.gitattributes` — `worker-rs/contract/** text eol=lf`(이 PC는 `core.autocrlf=true`라 없으면 체크아웃 때 CRLF가 되어 Windows 빌드에만 `\r`이 내장된다). 시험은 파일을 바이트로 읽고 LF로만 쓴다.
 - Create: `worker-rs/contract/{constants.json, analysis-prompt.txt, claim-analysis.json, result-analysis-ok.json, result-analysis-failed.json, heartbeat.json, startup-request.json, startup-response.json, parser-cases.json, mask-cases.json}`
 
 **Interfaces:**
@@ -72,8 +80,8 @@ scripts/public-proc.ps1  start-public.ps1  stop-public.ps1  tests/public-proc.te
   - `claim-analysis.json`: `WorkerTaskResponse.forAnalysis(...)`를 API와 같은 매퍼로 직렬화한 것(null 칸 포함). 값: id 1, repo `acme/widgets`, branch `main`, 제목·설명은 한글 포함, `mcpsExtra` 1개(`{"name":"docs","url":"http://localhost:9/mcp","transport":"http"}`), model `sonnet`, effort `high`, gitUrl null.
   - `result-analysis-ok.json` / `result-analysis-failed.json` / `heartbeat.json` / `startup-request.json`: null 칸 없는 최소 모양, `usage`에 `empty` 없음. `heartbeat.json`의 `claudeAuthExpiresAt`은 `"2026-12-31T00:00:00Z"` 문자열.
   - `startup-response.json`: `{"recovered":[{"taskId":3,"from":"IN_PROGRESS","to":"PENDING"}],"skipped":[7]}`.
-  - `parser-cases.json`: `[{"name","input","ok":true,"subtasksJson","warnings":[...]} | {"name","input","ok":false,"error"}]` — 최소 8건: 정상(섹션 1~5, subtask 2개 + 대상 파일·LoC·위험도), 섹션 4 없음, 섹션 4 본문 비어 있음, 섹션 5 없음, 섹션 2 누락(오류), 빈 입력(오류), 같은 번호 섹션 중복, 한글 비율 50% 미만.
-  - `mask-cases.json`: `[{"input","output"}]` — 최소 5건: `https://oauth2:tok@host/x`, `http://user:pw@h:8080/a`, 자격증명 없음, 한 줄에 두 URL, `://user@host`(비밀 없음 → 그대로).
+  - `parser-cases.json`: `[{"name","input","ok":true,"subtasksJson","warnings":[...]} | {"name","input","ok":false,"error"}]` — 최소 8건: 정상(섹션 1~5, subtask 2개 + 대상 파일·LoC·위험도), 섹션 4 없음, 섹션 4 본문 비어 있음, 섹션 5 없음, 섹션 2 누락(오류), 빈 입력(오류), 같은 번호 섹션 중복, 한글 비율 50% 미만, **CRLF 줄 끝 입력**, **`##` 뒤가 전각 공백(U+3000)·NBSP(U+00A0)인 헤더**, **전각 숫자 섹션 번호**, **subtask 줄의 콜론 뒤 공백이 NBSP**. 뒤 네 건은 Java 파서가 내놓는 결과를 그대로 기준으로 삼는다(성공이든 오류든).
+  - `mask-cases.json`: `[{"input","output"}]` — 최소 5건: `https://oauth2:tok@host/x`, `http://user:pw@h:8080/a`, 자격증명 없음, 한 줄에 두 URL, `://user@host`(비밀 없음 → 그대로), 자격증명 바로 뒤에 NBSP가 오는 문자열, 여러 줄 텍스트.
 
 - [ ] **Step 1: 시험 작성** — 시험마다 "실제 클래스에서 만든 내용 == 파일"을 단언한다. 시스템 속성 `contract.update=true`면 파일을 다시 쓰고 통과. 다르면 실패 메시지에 `./gradlew test --tests '*WorkerRsContractTest' -Dcontract.update=true --no-daemon` 안내(Gradle test 태스크가 이 속성을 넘기도록 `build.gradle`의 `test { systemProperty ... }` 한 줄 추가).
   - `constantsMatchJavaSources`: `StackSecretEnv.NAMES`, `TaskStatus.values()`(이름 → `dbValue`), `WorkerTaskResponse.Kind.values()`, `WorkerHttpClient`의 supports 상수.
@@ -106,7 +114,7 @@ scripts/public-proc.ps1  start-public.ps1  stop-public.ps1  tests/public-proc.te
 
 - [ ] **Step 1: 실패하는 시험 작성** (`#[cfg(test)]` 모듈)
   - `config`: `empty_kinds_default_to_implemented_set`(`WORKER_KINDS` 없음/`""` → `["ANALYSIS"]`), `unknown_kind_is_fatal`(`"ANALYSIS,BOGUS"` → Err에 `BOGUS`), `unimplemented_kind_is_fatal`(`"DEPLOY"` → Err), `kinds_are_trimmed_and_uppercased`(`" analysis "` → `["ANALYSIS"]`), `https_base_url_is_fatal`, `missing_required_is_fatal`(셋 각각), `worker_id_over_50_is_fatal`, `version_over_50_is_fatal`, `claude_cli_missing_is_fatal`, `claude_cli_resolution`(`CLAUDE_CLI`가 있는 파일 → 그것, 없으면 `home/.local/bin/claude.exe`·`claude` 순), `defaults`(repos `home/netis-maker/repos`, dead-letter `home/netis-maker/dead-letter`, version `0.1.0`, 주기 300초).
-  - `contract`: `secret_names_include_worker_api_key`, `status_ko_completed_is_분석완료`, `prompt_has_all_placeholders`(다섯 자리표시자).
+  - `contract`: `secret_names_include_worker_api_key`, `status_ko_completed_is_분석완료`, `prompt_has_all_placeholders`(다섯 자리표시자), `embedded_contract_text_has_no_carriage_return`(프롬프트·constants 원문에 `\r` 없음).
   - `mask`: `mask_cases_from_contract`(`mask-cases.json` 전부).
   - `dto`: `claim_analysis_deserializes`(`claim-analysis.json` → id 1, kind `ANALYSIS`, mcps 1개, git_url None), `unknown_kind_and_fields_still_deserialize`, `result_ok_matches_contract`·`result_failed_matches_contract`·`heartbeat_matches_contract`·`startup_request_matches_contract`(직렬화 → `serde_json::Value`로 파일과 같음), `masked_hides_credentials_in_all_text_fields`.
 - [ ] **Step 2: 실패 확인** — `cargo test --locked` (처음은 `cargo generate-lockfile` 뒤) → 컴파일 실패/FAIL.
@@ -144,11 +152,11 @@ scripts/public-proc.ps1  start-public.ps1  stop-public.ps1  tests/public-proc.te
   - `repo::GitCache { repos_dir: PathBuf, github_pat: Option<String>, gitlab_token: Option<String>, lock_wait: Duration, lock_poll: Duration, git_timeout: Duration }`, `GitCache::ensure_fresh(&self, r: &RepoRef, branch: &str) -> Result<CheckedOut, String>`.
 
 - [ ] **Step 1: 실패하는 시험**
-  - `proc`: `captures_stdout_and_stderr_separately`, `writes_stdin_then_closes`, `utf8_roundtrip_korean`(한글 stdin → 그대로 stdout; 시험용 자식은 `git hash-object --stdin` 같은 실제 도구나 자기 자신 재실행 중 편한 쪽), `timeout_kills_process_tree`(자식이 손자를 띄우고 둘 다 오래 자는 경우 → `timed_out`, 반환 뒤 손자 pid가 살아 있지 않음), `nonzero_exit_is_reported`.
+  - `proc`: `captures_stdout_and_stderr_separately`, `writes_stdin_then_closes`, `utf8_roundtrip_korean`(한글 stdin → 그대로 stdout; 시험용 자식은 `git hash-object --stdin` 같은 실제 도구나 자기 자신 재실행 중 편한 쪽), `timeout_kills_process_tree`(자식이 손자를 띄우고 둘 다 오래 자는 경우 → `timed_out`, 반환 뒤 손자 pid가 살아 있지 않음), `nonzero_exit_is_reported`, `returns_when_child_exits_but_grandchild_holds_stdout`(자식이 오래 자는 손자를 띄우고 즉시 종료 → `run`이 상한(예: 30초)보다 훨씬 전에, 읽기 유예(2초) 안팎으로 돌아오고 그때까지의 출력을 돌려준다; 시험 끝에 손자를 정리).
   - `repo` 순수: `from_snapshot_defaults_to_github`(`("acme/widgets", None)` → Github, `https://github.com/acme/widgets.git`), `from_snapshot_gitlab_by_host`(`https://git.example.test:8443/g/sub/p.git` → Gitlab), `github_host_case_insensitive`, `local_key_github`·`local_key_gitlab`(`_gitlab/g+sub+p`), `authenticated_url_inserts_oauth2`·`authenticated_url_without_token_is_plain`.
   - `repo` 통합(임시 폴더의 로컬 bare 저장소를 `git_url`로): `first_call_clones_and_returns_head_sha`, `second_call_fetches_new_commit`(원격에 커밋 추가 → 새 sha), `origin_url_has_no_credentials`(`.git/config`에 `oauth2:` 없음), `writes_lock_and_last_used_files`(`<키>.lock`·`<키>.last-used` 존재, last-used 내용이 ISO 시각), `lock_held_elsewhere_times_out`(시험이 같은 `.lock`을 먼저 잡고 `lock_wait=300ms` → Err `repo lock timeout` 포함, 체크아웃 폴더 미생성), `git_failure_message_is_masked`(없는 브랜치 + `git_url`에 `https://oauth2:secret@127.0.0.1:1/x.git` → Err에 `secret` 없음·`***@` 있음), `rev_parse_failure_is_error`.
 - [ ] **Step 2: 실패 확인** — `cargo test --locked proc repo` → FAIL.
-- [ ] **Step 3: 구현** — git 명령·인자·순서·오류 문구(`git failed (<코드>): <가린 출력>`, `process timeout (600s): <가린 명령>`, `repo lock timeout (60s): <키>`)는 Java와 같게. 잠금은 `std::fs::File::try_lock`(2026-11-28 이 PC에서 Java `FileChannel.tryLock`과 서로 배타임을 실측). 잠금은 `ensure_fresh`가 끝나면 푼다.
+- [ ] **Step 3: 구현** — `proc::run`은 Java와 같은 구조다: 읽기 스레드가 stdout·stderr를 비우고, 호출 스레드는 **프로세스 종료**를 상한까지 기다린다(EOF를 기다리지 않는다). 종료 뒤 읽기 스레드는 최대 2초만 기다리고 그때까지 읽은 것을 돌려준다(`ProcessRunner.execute`·`ClaudeExecAdapter.run` 참고). git 명령·인자·순서·오류 문구(`git failed (<코드>): <가린 출력>`, `process timeout (600s): <가린 명령>`, `repo lock timeout (60s): <키>`)는 Java와 같게. 잠금은 `std::fs::File::try_lock`(2026-11-28 이 PC에서 Java `FileChannel.tryLock`과 서로 배타임을 실측). 잠금은 `ensure_fresh`가 끝나면 푼다.
 - [ ] **Step 4: 통과 확인** — fmt·clippy·test.
 - [ ] **Step 5: Commit** — `feat(worker-rs): process runner and shared git cache`
 
@@ -170,7 +178,7 @@ scripts/public-proc.ps1  start-public.ps1  stop-public.ps1  tests/public-proc.te
 
 - [ ] **Step 1: 실패하는 시험** (`cargo test --locked --features test-bins`; fake는 `env!("CARGO_BIN_EXE_fake-claude")`)
   - `claude` 순수: `args_minimal`(`["-p","--output-format","json","--setting-sources","project"]`), `args_with_model_effort_and_mcp_in_java_order`, `blank_model_is_omitted`, `envelope_result_and_model_usage_sum`, `envelope_falls_back_to_usage_fields`, `envelope_without_cost_or_usage_is_raw`, `envelope_result_not_string_is_raw`, `non_json_is_raw_without_usage`, `child_env_drops_secret_names_case_insensitively_and_keeps_claude_vars`, `iso_duration_10min_is_PT10M`(+ `PT30S`, `PT1H`).
-  - `claude` 통합: `prompt_goes_to_stdin_utf8`(한글 프롬프트 == 기록된 stdin, cwd == 넘긴 폴더, 인자 == `build_args`), `secret_env_not_visible_to_child`(부모 env에 `WORKER_API_KEY`·`gitlab_token` 넣고 기록된 envKeys에 없음), `nonzero_exit_appends_stderr_tail`(`\n[stderr]\n` + 끝 2000자, 넘으면 `…` 접두), `timeout_returns_err_and_kills_grandchild`, `extras_temp_file_is_deleted_after_exec`.
+  - `claude` 통합: `prompt_goes_to_stdin_utf8`(한글 프롬프트 == 기록된 stdin, cwd == 넘긴 폴더, 인자 == `build_args`), `secret_env_not_visible_to_child`(부모 env에 `WORKER_API_KEY`·`gitlab_token` 넣고 기록된 envKeys에 없음), `nonzero_exit_appends_stderr_tail`(`\n[stderr]\n` + 끝 2000자, 넘으면 `…` 접두; stderr는 한글 3000자 + 이모지 하나로 — 패닉 없이 UTF-16 2000유닛 꼬리), `timeout_returns_err_and_kills_grandchild`, `extras_temp_file_is_deleted_after_exec`.
   - `mcp`: `merges_top_level_and_project_servers_last_wins`, `no_servers_means_no_args`, `base_only_args`(`--mcp-config <out> --strict-mcp-config --allowedTools mcp__a,mcp__b`), `extras_overlay_uses_transport_as_type_and_optional_headers`, `missing_claude_json_is_empty_not_error`.
   - `auth_probe`: `env_token_wins`(`ENV_TOKEN`, ok true, 만료 None), `credentials_file_gives_expiry_iso`(`claudeAiOauth.expiresAt` epoch ms → `…Z`), `cli_status_logged_in`(fake `{"loggedIn":true}` → `CLI`), `undetermined_is_all_none`. Java와 필드 해석이 다르면 Java를 따른다.
 - [ ] **Step 2: 실패 확인** — FAIL.
@@ -215,7 +223,7 @@ scripts/public-proc.ps1  start-public.ps1  stop-public.ps1  tests/public-proc.te
   - `main.rs`: env → `Config::from_env` → `worker-rs started: …` → `runner::run`.
 
 - [ ] **Step 1: 실패하는 시험**
-  - `analysis`(로컬 bare 저장소 + fake-claude): `success_fills_markdown_subtasks_log_duration_usage`, `prompt_substitutes_all_five_placeholders`(기록된 stdin에 repo·branch·sha·제목·설명 포함, `{`자리표시자`}` 없음), `fetch_failure_reason_prefix`(`레포 fetch 실패: `), `exec_failure_reason_prefix`(없는 claude 경로 → `claude exec 실패: `), `nonzero_exit_reason_has_tail_and_usage`(`claude exit=3\n…`), `parse_failure_reason_prefix_keeps_usage`(`파싱 실패: 섹션 ## 2. 누락`), `null_title_or_description_does_not_panic`.
+  - `analysis`(로컬 bare 저장소 + fake-claude): `success_fills_markdown_subtasks_log_duration_usage`, `prompt_substitutes_all_five_placeholders`(기록된 stdin에 repo·branch·sha·제목·설명 포함, `{`자리표시자`}` 없음), `fetch_failure_reason_prefix`(`레포 fetch 실패: `), `exec_failure_reason_prefix`(없는 claude 경로 → `claude exec 실패: `), `nonzero_exit_reason_has_tail_and_usage`(`claude exit=3\n…`; 출력은 한글 3000자 + 이모지 — UTF-16 2000유닛 꼬리, `…` 접두), `hostname_is_cut_to_100_utf16_units`, `parse_failure_reason_prefix_keeps_usage`(`파싱 실패: 섹션 ## 2. 누락`), `null_title_or_description_does_not_panic`.
   - `tests/fake_api.rs`(프로세스 안 tiny_http 서버 + `runner::run`을 짧은 `Timings`로): `startup_is_retried_until_ok_and_no_claim_before`(첫 두 번 500 → 그동안 `/worker/next-task` 요청 0건), `heartbeat_carries_counts_mcps_and_auth`(본문에 `workerId`·`lostReportCount`·`deadReportCount`·`mcps` 배열), `claims_processes_and_reports_completed`(서버가 계약 claim을 한 번 주면 `/worker/tasks/1/result`에 `status=COMPLETED`·`markdownResult` 비어 있지 않음), `non_analysis_claim_is_not_processed`(`kind=DEPLOY` 응답 → result 요청 없음, 프로세스 계속), `result_5xx_is_dead_lettered_then_replayed`(result에 500을 계속 주다가 200으로 바꾸면 재전송으로 도착하고 파일이 빈다), `no_polling_while_processing`(fake-claude가 자는 동안 next-task 요청이 늘지 않음).
 - [ ] **Step 2: 실패 확인** — FAIL.
 - [ ] **Step 3: 구현** — 하트비트의 `hostname`은 OS 호스트 이름(실패 시 `unknown`, 100자 절단), 로그인 세 칸은 관리 스레드가 갱신한 공유 상태(첫 판정 전 None). 폴링은 처리 뒤 `poll`만큼 쉰다. 스레드 하나가 패닉해도 다른 스레드가 조용히 계속 돌지 않게, 패닉은 `worker-rs fatal: …`을 찍고 프로세스를 끝낸다(재기동은 운영자·예약 작업 몫).
@@ -268,6 +276,8 @@ scripts/public-proc.ps1  start-public.ps1  stop-public.ps1  tests/public-proc.te
 
 - [ ] **Step 1:** worktree에서 API jar 빌드(`./gradlew bootJar --no-daemon`), `cargo build --release --locked`.
 - [ ] **Step 2:** 로컬 PostgreSQL에 임시 데이터베이스를 만들고 `com` 스키마·`com."user"` 준비(`src/test/resources/init-test-schema.sql` 참고) → API jar를 다른 포트·임시 DB·시험용 워커 키로 띄운다. 스펙 §12.4의 다섯 격리 조건(네 속성 끔, stale 상한 > 10분, 임시 `REPOS_DIR`·`DEAD_LETTER_DIR`)을 모두 건다.
+   - 격리 API의 env는 **필요한 값만 명시**해 준다(`public.env`를 통째로 싣지 않는다 — 라이브 DB 주소·비밀이 딸려 온다).
+   - 워커를 붙이거나 SQL을 넣기 **전에** 기동 로그의 Flyway `Database: jdbc:…` 줄이 임시 데이터베이스인지 확인한다. 아니면 즉시 끈다(라이브 DB에 두 번째 API가 붙으면 회수 잡이 라이브 데이터에 돈다).
 - [ ] **Step 3:** `작업대기` 작업 한 건을 SQL로 넣고(작은 공개 레포) Rust 워커를 붙인다 → `분석완료`, `task_analysis` 행, 사용량 누적, 하트비트 행 확인. 실패 경로 한 건(없는 브랜치)도 `분석실패` + 가려진 사유 확인.
 - [ ] **Step 4:** 측정(메모리·exe 크기·빌드 시간·줄 수·단계별 시간)을 `phase1-results.md`에 적고, 임시 DB·임시 폴더·프로세스를 정리한다.
 - [ ] **Step 5:** Commit `docs: worker-rs phase 1 isolated e2e results`

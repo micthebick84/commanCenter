@@ -2,8 +2,8 @@
 #   1) per service: kills the real JVM / node process recorded in .run\<name>.json (checked by pid + start time)
 #      and the cmd wrapper of .run\<name>.pid (checked by its command line); see scripts/public-proc.ps1
 #   2) frees ports 9000 / 8090 / 3001 of the selected services if something is still listening
-#      (safety net: the JVM of a run started before bootRun used --no-daemon sits under a shared
-#      Gradle daemon, outside its wrapper's process tree)
+#      (safety net for a JVM that ended up outside its wrapper's process tree, e.g. a very old run that
+#      sat under a shared Gradle daemon; since 2026-11-28 the services run as java -jar under the wrapper)
 #   3) lists claude.exe processes of this stack whose parent is gone (never kills them)
 # cloudflared and PostgreSQL are left alone.
 #

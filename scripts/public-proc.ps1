@@ -154,26 +154,95 @@ function Test-ServiceAlive([string]$RunDir, [string]$Name) {
     }
 }
 
-# Pure. The newest java.exe that runs the worker profile from $Root's own build output
-# (worktree test JVMs have a different classpath path) and started at/after $NotBefore.
-function Select-WorkerJvm($Processes, [string]$Root, [datetime]$NotBefore) {
-    $classes = (Join-Path $Root 'build\classes\java\main')
+# Pure. The newest java.exe that is a direct child of the worker's cmd wrapper and runs the worker
+# profile from $JarPath (start-public runs: cmd /c "java ... -jar <jar> --spring.profiles.active=worker").
+# Other JVMs (worktree test runs, a previous worker still running an older jar) never match.
+function Select-WorkerJvm($Processes, [int]$WrapperPid, [string]$JarPath) {
+    if (-not $JarPath) { return $null }
     $best = $null
     foreach ($p in @($Processes)) {
         if (-not $p) { continue }
         if ($p.Name -ne 'java.exe') { continue }
+        if ($null -eq $p.ParentProcessId -or ([int]$p.ParentProcessId) -ne $WrapperPid) { continue }
         $cl = [string]$p.CommandLine
         if (-not $cl) { continue }
-        if ($cl.IndexOf($classes, [StringComparison]::OrdinalIgnoreCase) -lt 0) { continue }
+        if ($cl.IndexOf($JarPath, [StringComparison]::OrdinalIgnoreCase) -lt 0) { continue }
         if ($cl.IndexOf('--spring.profiles.active=worker', [StringComparison]::OrdinalIgnoreCase) -lt 0) { continue }
-        if ($null -eq $p.CreationDate -or ([datetime]$p.CreationDate) -lt $NotBefore) { continue }
-        if ($null -eq $best -or ([datetime]$p.CreationDate) -gt ([datetime]$best.CreationDate)) { $best = $p }
+        if ($null -eq $best) { $best = $p; continue }
+        $pc = if ($p.CreationDate) { [datetime]$p.CreationDate } else { [datetime]::MinValue }
+        $bc = if ($best.CreationDate) { [datetime]$best.CreationDate } else { [datetime]::MinValue }
+        if ($pc -gt $bc) { $best = $p }
     }
     if ($null -eq $best) { return $null }
     return [int]$best.ProcessId
 }
 
+# ---- jar run files (spec docs/superpowers/specs/2026-11-28-live-run-jar-design.md) ----------------
+
+# Pure. Name of the jar copy that start-public runs: <prefix>-<sha7>.jar for a clean tree (reused while
+# it exists), <prefix>-<sha7>-<tag>-<yyyyMMddHHmmss>.jar otherwise: tag 'dirty' = the tree has uncommitted
+# changes (always rebuilt), 'rebuild' = forced rebuild of a commit whose copy may still be running
+# (a running jar is never overwritten).
+function Get-JarName([string]$Prefix, [string]$Sha, [string]$Tag, [datetime]$Now) {
+    $short = $Sha
+    if ($short.Length -gt 7) { $short = $short.Substring(0, 7) }
+    if ($Tag) { return "$Prefix-$short-$Tag-$($Now.ToString('yyyyMMddHHmmss')).jar" }
+    return "$Prefix-$short.jar"
+}
+
+# Pure. The boot jar a bootJar run just produced: the only *.jar (not *-plain.jar) written at/after
+# $NotBefore. Zero or several candidates -> $null (the caller fails the service instead of guessing).
+function Select-BootJar($Files, [datetime]$NotBefore) {
+    $hits = @()
+    foreach ($f in @($Files)) {
+        if (-not $f) { continue }
+        $n = [string]$f.Name
+        if (-not $n.EndsWith('.jar', [StringComparison]::OrdinalIgnoreCase)) { continue }
+        if ($n.EndsWith('-plain.jar', [StringComparison]::OrdinalIgnoreCase)) { continue }
+        if (([datetime]$f.LastWriteTime) -lt $NotBefore) { continue }
+        $hits += $f
+    }
+    if ($hits.Count -ne 1) { return $null }
+    return [string]$hits[0].FullName
+}
+
+# Pure. Full paths of <prefix>-*.jar copies to delete: everything except the $Keep newest
+# (LastWriteTime) and the ones in $InUse (paths a running java.exe has on its command line).
+function Select-JarsToPrune($Files, [string]$Prefix, [int]$Keep, [string[]]$InUse) {
+    $mine = @(@($Files) | Where-Object {
+            $_ -and ([string]$_.Name).StartsWith("$Prefix-", [StringComparison]::OrdinalIgnoreCase) -and
+            ([string]$_.Name).EndsWith('.jar', [StringComparison]::OrdinalIgnoreCase)
+        } | Sort-Object { [datetime]$_.LastWriteTime } -Descending)
+    $out = @()
+    for ($i = $Keep; $i -lt $mine.Count; $i++) {
+        $path = [string]$mine[$i].FullName
+        $used = $false
+        foreach ($u in @($InUse)) { if ($u -and [string]::Equals($u, $path, [StringComparison]::OrdinalIgnoreCase)) { $used = $true } }
+        if (-not $used) { $out += $path }
+    }
+    return $out
+}
+
+# Pure. Jar paths of $JarDir that appear on running java.exe command lines (kept by the pruning).
+function Select-JarsInUse($Processes, [string]$JarDir) {
+    $out = @()
+    foreach ($p in @($Processes)) {
+        if (-not $p -or $p.Name -ne 'java.exe') { continue }
+        $cl = [string]$p.CommandLine
+        if (-not $cl) { continue }
+        foreach ($m in [regex]::Matches($cl, '[^\s"]+\.jar', 'IgnoreCase')) {
+            $path = $m.Value
+            if ([System.IO.Path]::GetDirectoryName($path) -and
+                [string]::Equals([System.IO.Path]::GetDirectoryName($path).TrimEnd('\'), $JarDir.TrimEnd('\'), [StringComparison]::OrdinalIgnoreCase)) {
+                $out += $path
+            }
+        }
+    }
+    return $out
+}
+
 # Spec 5.2: the process that really does the work, or $null.
+# $Root: the app's folder; for 'worker' it is the jar path that start-public ran.
 function Find-AppPid([string]$Name, [int]$WrapperPid, [string]$Root) {
     try {
         switch ($Name) {
@@ -185,10 +254,8 @@ function Find-AppPid([string]$Name, [int]$WrapperPid, [string]$Root) {
                 return $null
             }
             'worker' {
-                $ticks = Get-ProcStartTicks $WrapperPid
-                if ($null -eq $ticks) { return $null }
-                $since = [datetime]::FromFileTimeUtc($ticks).ToLocalTime()
-                return (Select-WorkerJvm (Get-CimInstance Win32_Process -ErrorAction SilentlyContinue) $Root $since)
+                $kids = Get-CimInstance Win32_Process -Filter "ParentProcessId=$WrapperPid" -ErrorAction SilentlyContinue
+                return (Select-WorkerJvm $kids $WrapperPid $Root)
             }
             'interview' {
                 $node = Get-CimInstance Win32_Process -Filter "ParentProcessId=$WrapperPid" -ErrorAction SilentlyContinue |
@@ -237,11 +304,10 @@ function Stop-ProcTree([int]$ProcessId) {
 #  2) pid-file wrapper that is our cmd (Test-WrapperPid) -> kill the wrapper tree; otherwise leave it
 #  3) remove the pid file and json (only when nothing we meant to kill is still alive)
 # Steps 1 and 2 are independent: a failure in one never skips the other or the reporting.
-# Gradle services: start-public runs bootRun with --no-daemon, so the JVM sits under its own single-use
-# daemon inside the wrapper's tree (cmd -> gradle client -> daemon -> java). Killing the JVM (step 1)
-# fails the build and the daemon, client and wrapper exit by themselves within about a second; killing
-# the wrapper tree (step 2) reaches the daemon and the JVM too. A run started before --no-daemon may sit
-# on a shared daemon outside the tree: only its JVM is stopped and that daemon is left alone.
+# Java services: start-public runs java -jar directly, so the JVM is the wrapper's child (cmd -> java).
+# Killing the JVM (step 1) makes the wrapper exit by itself; killing the wrapper tree (step 2) reaches
+# the JVM too. (Before 2026-11-28 they ran under gradlew bootRun --no-daemon: cmd -> gradle client ->
+# single-use daemon -> java; killing either end still stopped the whole chain.)
 function Stop-ServiceRecord([string]$RunDir, [string]$Name) {
     $rec = $null; $wrapperId = $null; $appId = $null
     $wrapperMatched = $false; $appMatched = $false

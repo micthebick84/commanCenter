@@ -256,20 +256,62 @@ try {
     Stop-Spawned $f.Wrapper; Stop-Spawned $f.App; Clear-Run
 
     # ---- Select-WorkerJvm --------------------------------------------------
-    $root = 'C:\Users\x\commanCenter'
+    $jarDir = 'C:\Users\x\netis-maker\run\jars'
+    $jar = "$jarDir\netis-maker-1a2b3c4.jar"
+    $oldJar = "$jarDir\netis-maker-0f0f0f0.jar"
     $t0 = [datetime]'2026-10-23 10:00:00'
-    $jvm = 'C:\jdk\bin\java.exe -cp "{0}\build\classes\java\main;{0}\build\resources\main;x.jar" com.netismaker.NetisMakerApplication {1}'
+    $jvm = 'C:\jdk\bin\java.exe -Dfile.encoding=UTF-8 -jar "{0}" {1}'
     $procs = @(
-        [pscustomobject]@{ ProcessId = 10; Name = 'java.exe'; CommandLine = ($jvm -f $root, '--spring.profiles.active=worker'); CreationDate = $t0.AddMinutes(5) },
-        [pscustomobject]@{ ProcessId = 11; Name = 'java.exe'; CommandLine = ($jvm -f $root, '--spring.profiles.active=api'); CreationDate = $t0.AddMinutes(9) },
-        [pscustomobject]@{ ProcessId = 12; Name = 'java.exe'; CommandLine = ($jvm -f "$root\.claude\worktrees\wt1", '--spring.profiles.active=worker'); CreationDate = $t0.AddMinutes(8) },
-        [pscustomobject]@{ ProcessId = 13; Name = 'java.exe'; CommandLine = ($jvm -f $root, '--spring.profiles.active=worker'); CreationDate = $t0.AddMinutes(-30) }
+        [pscustomobject]@{ ProcessId = 10; ParentProcessId = 500; Name = 'java.exe'; CommandLine = ($jvm -f $jar, '--spring.profiles.active=worker'); CreationDate = $t0.AddMinutes(5) },
+        [pscustomobject]@{ ProcessId = 11; ParentProcessId = 500; Name = 'java.exe'; CommandLine = ($jvm -f $jar, ''); CreationDate = $t0.AddMinutes(9) },
+        [pscustomobject]@{ ProcessId = 12; ParentProcessId = 777; Name = 'java.exe'; CommandLine = ($jvm -f $jar, '--spring.profiles.active=worker'); CreationDate = $t0.AddMinutes(8) },
+        [pscustomobject]@{ ProcessId = 13; ParentProcessId = 500; Name = 'java.exe'; CommandLine = ($jvm -f $oldJar, '--spring.profiles.active=worker'); CreationDate = $t0.AddMinutes(9) },
+        [pscustomobject]@{ ProcessId = 15; ParentProcessId = 500; Name = 'cmd.exe'; CommandLine = ($jvm -f $jar, '--spring.profiles.active=worker'); CreationDate = $t0.AddMinutes(9) }
     )
-    $sel = Select-WorkerJvm $procs $root $t0
-    Assert-Equal 10 $sel 'Select-WorkerJvm picks main checkout worker only'
-    Assert-True ((Select-WorkerJvm $procs $root $t0.AddMinutes(60)) -eq $null) 'Select-WorkerJvm: nothing new enough gives null'
-    $two = $procs + @([pscustomobject]@{ ProcessId = 14; Name = 'java.exe'; CommandLine = ($jvm -f $root, '--spring.profiles.active=worker'); CreationDate = $t0.AddMinutes(7) })
-    Assert-Equal 14 (Select-WorkerJvm $two $root $t0) 'Select-WorkerJvm: most recent wins'
+    Assert-Equal 10 (Select-WorkerJvm $procs 500 $jar) 'Select-WorkerJvm: wrapper child running this jar with the worker profile'
+    Assert-True ((Select-WorkerJvm $procs 501 $jar) -eq $null) 'Select-WorkerJvm: other wrapper gives null'
+    Assert-True ((Select-WorkerJvm $procs 500 '') -eq $null) 'Select-WorkerJvm: no jar path gives null'
+    $two = $procs + @([pscustomobject]@{ ProcessId = 14; ParentProcessId = 500; Name = 'java.exe'; CommandLine = ($jvm -f $jar, '--spring.profiles.active=worker'); CreationDate = $t0.AddMinutes(7) })
+    Assert-Equal 14 (Select-WorkerJvm $two 500 $jar) 'Select-WorkerJvm: most recent wins'
+
+    # ---- Get-JarName ---------------------------------------------------------
+    $now = [datetime]'2026-11-28 15:30:05'
+    Assert-Equal 'netis-maker-1a2b3c4.jar' (Get-JarName 'netis-maker' '1a2b3c4d5e6f' '' $now) 'Get-JarName: clean tree uses sha7'
+    Assert-Equal 'netis-auth-1a2b3c4-dirty-20261128153005.jar' (Get-JarName 'netis-auth' '1a2b3c4d5e6f' 'dirty' $now) 'Get-JarName: dirty tree adds a timestamp'
+    Assert-Equal 'netis-maker-1a2b3c4-rebuild-20261128153005.jar' (Get-JarName 'netis-maker' '1a2b3c4d5e6f' 'rebuild' $now) 'Get-JarName: forced rebuild gets its own name'
+    Assert-Equal 'netis-maker-abc.jar' (Get-JarName 'netis-maker' 'abc' '' $now) 'Get-JarName: short sha kept as is'
+
+    # ---- Select-BootJar --------------------------------------------------------
+    $b0 = [datetime]'2026-11-28 15:00:00'
+    $libs = @(
+        [pscustomobject]@{ Name = 'netis-maker-0.1.0-SNAPSHOT.jar'; FullName = 'C:\r\build\libs\netis-maker-0.1.0-SNAPSHOT.jar'; LastWriteTime = $b0.AddSeconds(30) },
+        [pscustomobject]@{ Name = 'netis-maker-0.1.0-SNAPSHOT-plain.jar'; FullName = 'C:\r\build\libs\netis-maker-0.1.0-SNAPSHOT-plain.jar'; LastWriteTime = $b0.AddSeconds(31) },
+        [pscustomobject]@{ Name = 'netis-maker-0.0.9.jar'; FullName = 'C:\r\build\libs\netis-maker-0.0.9.jar'; LastWriteTime = $b0.AddDays(-3) },
+        [pscustomobject]@{ Name = 'notes.txt'; FullName = 'C:\r\build\libs\notes.txt'; LastWriteTime = $b0.AddSeconds(40) }
+    )
+    Assert-Equal 'C:\r\build\libs\netis-maker-0.1.0-SNAPSHOT.jar' (Select-BootJar $libs $b0) 'Select-BootJar: the boot jar of this build (plain and old jars ignored)'
+    Assert-True ((Select-BootJar $libs $b0.AddMinutes(5)) -eq $null) 'Select-BootJar: nothing written by this build gives null'
+    $twoLibs = $libs + @([pscustomobject]@{ Name = 'other-1.0.jar'; FullName = 'C:\r\build\libs\other-1.0.jar'; LastWriteTime = $b0.AddSeconds(35) })
+    Assert-True ((Select-BootJar $twoLibs $b0) -eq $null) 'Select-BootJar: two candidates give null'
+
+    # ---- Select-JarsToPrune / Select-JarsInUse ---------------------------------
+    $files = @()
+    for ($i = 0; $i -lt 8; $i++) {
+        $files += [pscustomobject]@{ Name = "netis-maker-00000$i.jar"; FullName = "$jarDir\netis-maker-00000$i.jar"; LastWriteTime = $b0.AddHours($i) }
+    }
+    $files += [pscustomobject]@{ Name = 'netis-auth-aaaaaaa.jar'; FullName = "$jarDir\netis-auth-aaaaaaa.jar"; LastWriteTime = $b0.AddDays(-30) }
+    $prune = @(Select-JarsToPrune $files 'netis-maker' 5 @("$jarDir\NETIS-MAKER-000001.jar"))
+    Assert-Equal 2 $prune.Count 'Select-JarsToPrune: keeps 5 newest and the one in use'
+    Assert-True (($prune -contains "$jarDir\netis-maker-000000.jar") -and ($prune -contains "$jarDir\netis-maker-000002.jar")) 'Select-JarsToPrune: oldest not-in-use ones go' ($prune -join ',')
+    Assert-Equal 0 (@(Select-JarsToPrune $files 'netis-auth' 5 @())).Count 'Select-JarsToPrune: other prefix untouched / under the limit'
+    $running = @(
+        [pscustomobject]@{ Name = 'java.exe'; CommandLine = "C:\jdk\bin\java.exe -Dx=1 -jar `"$jarDir\netis-maker-000001.jar`" --spring.profiles.active=worker" },
+        [pscustomobject]@{ Name = 'java.exe'; CommandLine = 'C:\jdk\bin\java.exe -cp C:\elsewhere\lib\a.jar;C:\elsewhere\lib\b.jar Main' },
+        [pscustomobject]@{ Name = 'node.exe'; CommandLine = "node $jarDir\netis-maker-000002.jar" }
+    )
+    $inUse = @(Select-JarsInUse $running $jarDir)
+    Assert-Equal 1 $inUse.Count 'Select-JarsInUse: only java.exe jars inside the run folder'
+    Assert-Equal "$jarDir\netis-maker-000001.jar" $inUse[0] 'Select-JarsInUse: quoted path read without quotes'
 
     # ---- Select-OrphanClaude -----------------------------------------------
     $claude = 'C:\Users\x\.local\bin\claude.exe'

@@ -18,7 +18,15 @@
 # Usage:
 #   .\scripts\start-public.ps1 -AuthOrigin https://auth.example.com -AppOrigin https://app.example.com
 #   .\scripts\start-public.ps1 -WithWorkers
+#   .\scripts\start-public.ps1 -Rebuild        rebuild the auth/api/worker jars even if this commit's jar exists
 #   .\scripts\stop-public.ps1
+# Java services (auth, api, worker) run as java -jar (since 2026-11-28, spec
+# docs/superpowers/specs/2026-11-28-live-run-jar-design.md): right before starting one, its source folder
+# (this checkout / netis-auth) is built with gradlew bootJar unless %USERPROFILE%\netis-maker\run\jars
+# already has <prefix>-<sha7>.jar for a clean tree. The copy there is what runs, so a running jar is never
+# overwritten; a tree with uncommitted changes is rebuilt every time. A failed build fails the service
+# (it never falls back to an older jar). Build logs: .run\<name>-build.log. Roll back = check out the
+# previous commit and restart (its jar is reused when still kept: 5 newest per prefix + running ones).
 # Logs / pids: .run\{auth,api,front,worker,interview}.log|.pid
 # Previous runs' logs: .run\logs\<name>-<yyyyMMdd-HHmmss-fff>.log (newest 20 of each, see Save-PreviousLog)|.json
 #   .pid  = the cmd wrapper's pid (unchanged); .json = the real JVM / node process (scripts/public-proc.ps1)
@@ -46,7 +54,8 @@ param(
     [string]$JavaHome,
     [string]$EnvFile = (Join-Path $env:USERPROFILE 'netis-maker\public.env'),
     [switch]$WithWorkers,
-    [switch]$RebuildFront
+    [switch]$RebuildFront,
+    [switch]$Rebuild
 )
 
 $ErrorActionPreference = 'Stop'
@@ -67,8 +76,10 @@ $Root     = Split-Path -Parent $PSScriptRoot
 $FrontDir = Join-Path $Root 'frontend'
 $IvDir    = Join-Path $Root 'netismaker-interview-service'
 $RunDir   = Join-Path $Root '.run'
+$JarDir   = Join-Path $env:USERPROFILE 'netis-maker\run\jars'
 if (-not $AuthDir) { $AuthDir = Join-Path (Split-Path -Parent $Root) 'netis-auth' }
 New-Item -ItemType Directory -Force $RunDir | Out-Null
+New-Item -ItemType Directory -Force $JarDir | Out-Null
 
 $AuthOrigin = $AuthOrigin.TrimEnd('/')
 $AppOrigin  = $AppOrigin.TrimEnd('/')
@@ -148,14 +159,18 @@ function Invoke-Logged([string]$WorkDir, [string]$CommandLine, [string]$LogName)
     return $p.ExitCode
 }
 
-function Wait-Log([string]$Name, [string]$OkPattern, [string]$FailPattern, [int]$TimeoutSec = 180) {
+# $ProcessId (optional, the cmd wrapper): once it has exited without the ok line, stop waiting -
+# a java -jar service that dies on startup (DB down, bad migration) prints no Gradle FAILURE line.
+function Wait-Log([string]$Name, [string]$OkPattern, [string]$FailPattern, [int]$TimeoutSec = 180, [int]$ProcessId = 0) {
     $log = Join-Path $RunDir "$Name.log"
     $deadline = (Get-Date).AddSeconds($TimeoutSec)
     while ((Get-Date) -lt $deadline) {
+        $exited = ($ProcessId -gt 0) -and -not (Get-Process -Id $ProcessId -ErrorAction SilentlyContinue)
         if (Test-Path $log) {
             if (Select-String -Path $log -Pattern $OkPattern -Quiet)   { return $true }
             if (Select-String -Path $log -Pattern $FailPattern -Quiet) { return $false }
         }
+        if ($exited) { return $false }
         Start-Sleep -Seconds 2
     }
     return $false
@@ -171,8 +186,80 @@ function Wait-Port([int]$Port, [int]$TimeoutSec = 90) {
 }
 
 $SpringOk   = 'Started .*Application'
-$SpringFail = 'APPLICATION FAILED|BUILD FAILED|FAILURE:'
+$SpringFail = 'APPLICATION FAILED|Application run failed|BUILD FAILED|FAILURE:'
 $failed = @()
+
+# ---- jar build / run (auth, api, worker) -------------------------------------
+$JavaExe = Join-Path $JavaHome 'bin\java.exe'
+# What gradlew bootRun used to pass (logs are UTF-8, locale ko/KR); bootRun's -XX:TieredStopAtLevel=1
+# (fast-start only) is left out on purpose.
+$JavaOpts = '-Dfile.encoding=UTF-8 -Dstdout.encoding=UTF-8 -Dstderr.encoding=UTF-8 -Duser.language=ko -Duser.country=KR'
+$script:jarCache = @{}
+
+# The jar copy to run for $SrcDir's current state, building it when needed; $null on any failure
+# (already reported as [FAIL]). api and worker share one build per run of this script.
+function Get-ServiceJar([string]$Prefix, [string]$SrcDir, [string]$Name) {
+    $cacheKey = "$Prefix|$SrcDir"
+    if ($script:jarCache.ContainsKey($cacheKey)) { return $script:jarCache[$cacheKey] }
+    # git writes to stderr on failure; under 'Stop' that would throw instead of being reported
+    $ErrorActionPreference = 'Continue'
+    $sha = [string](& git -C $SrcDir rev-parse HEAD 2>$null)
+    if ($LASTEXITCODE -ne 0 -or $sha -notmatch '^[0-9a-f]{7,}$') {
+        Write-Host "[FAIL] ${Name}: cannot read the commit of $SrcDir (git rev-parse HEAD)"; return $null
+    }
+    $porcelain = @(& git -C $SrcDir status --porcelain 2>$null)
+    if ($LASTEXITCODE -ne 0) { Write-Host "[FAIL] ${Name}: git status failed in $SrcDir"; return $null }
+    $dirty = $porcelain.Count -gt 0
+    $target = Join-Path $JarDir (Get-JarName $Prefix $sha '' (Get-Date))
+    if ($dirty) {
+        $target = Join-Path $JarDir (Get-JarName $Prefix $sha 'dirty' (Get-Date))
+        Write-Host "[warn] ${Name}: $SrcDir has uncommitted changes - building them into $(Split-Path -Leaf $target)"
+    } elseif (Test-Path -LiteralPath $target) {
+        if (-not $Rebuild) { $script:jarCache[$cacheKey] = $target; return $target }
+        # forced rebuild: never overwrite a copy that may be running
+        $target = Join-Path $JarDir (Get-JarName $Prefix $sha 'rebuild' (Get-Date))
+    }
+    Write-Host "[..]   $Name building $(Split-Path -Leaf $target) (gradlew bootJar)"
+    $tasks = if ($Rebuild) { 'clean bootJar' } else { 'bootJar --rerun' }
+    $since = (Get-Date).AddSeconds(-2)
+    $savedJavaHome = $env:JAVA_HOME
+    $env:JAVA_HOME = $JavaHome
+    try {
+        $exit = Invoke-Logged $SrcDir "`"$(Join-Path $SrcDir 'gradlew.bat')`" $tasks -q --no-daemon" "$Name-build.log"
+    } finally { $env:JAVA_HOME = $savedJavaHome }
+    if ($exit -ne 0) { Write-Host "[FAIL] $Name build - see .run\$Name-build.log"; return $null }
+    $built = Select-BootJar (Get-ChildItem (Join-Path $SrcDir 'build\libs') -File -ErrorAction SilentlyContinue) $since
+    if (-not $built) { Write-Host "[FAIL] $Name build - no single new boot jar in $SrcDir\build\libs"; return $null }
+    # Copy to .part, then rename: a copy cut short (reboot, task time limit) must never leave a truncated
+    # <sha7>.jar that every later clean start would reuse. An existing target is never overwritten.
+    $tmp = "$target.part"
+    try {
+        if (Test-Path -LiteralPath $tmp) { Remove-Item -LiteralPath $tmp -Force -ErrorAction Stop }
+        [System.IO.File]::Copy($built, $tmp, $false)
+        Move-Item -LiteralPath $tmp -Destination $target -ErrorAction Stop
+    } catch {
+        Remove-Item -LiteralPath $tmp -Force -ErrorAction SilentlyContinue
+        Write-Host "[FAIL] $Name - cannot copy the jar to ${target}: $($_.Exception.Message)"; return $null
+    }
+    $script:jarCache[$cacheKey] = $target
+    return $target
+}
+
+# Keep the 5 newest copies per prefix and every copy a running java.exe uses; never throws.
+function Remove-OldJars {
+    try {
+        $files = Get-ChildItem $JarDir -File -Filter '*.jar' -ErrorAction SilentlyContinue
+        $inUse = @(Select-JarsInUse (Get-CimInstance Win32_Process -Filter "Name='java.exe'" -ErrorAction SilentlyContinue) $JarDir)
+        foreach ($prefix in @('netis-maker', 'netis-auth')) {
+            foreach ($path in @(Select-JarsToPrune $files $prefix 5 $inUse)) {
+                try { Remove-Item -LiteralPath $path -Force -ErrorAction Stop }
+                catch { Write-Host "[warn] old jar not removed: $path ($($_.Exception.Message))" }
+            }
+        }
+    } catch {
+        Write-Host "[warn] old jar cleanup skipped: $($_.Exception.Message)"
+    }
+}
 
 Write-Host "netisMaker public stack"
 Write-Host "  auth = $AuthOrigin"
@@ -220,29 +307,33 @@ if ($env:PG_DIR -and -not (Test-PortListening 5432)) {
     }
 }
 
-# Every gradlew bootRun below (auth, api, worker) runs with --no-daemon, so Gradle never hands the
-# build to an idle daemon that was started somewhere else. A daemon started from a Claude Code tool
-# shell lives in the Claude app's Windows Job object and dies with the app: on 2026-11-07 the API ran
-# on such a daemon and went down with a Claude app update (about 55 h). With --no-daemon Gradle forks
-# a single-use daemon (the build's JVM args differ from the client's) as a child of the client, so the
-# whole chain cmd wrapper -> gradle client -> daemon -> app JVM stays in this script's process tree;
-# that daemon is never offered to other builds and exits with the build.
+# auth, api and worker run as java -jar (Get-ServiceJar): the chain is cmd wrapper -> app JVM, inside this
+# script's process tree. Gradle only runs to build the jar, with --no-daemon so it never hands the build to
+# an idle daemon started somewhere else (a daemon started from a Claude Code tool shell lives in the Claude
+# app's Job object and dies with the app - 2026-11-07, the API was down about 55 h when it ran on one);
+# that single-use daemon exits with the build. Until 2026-11-28 the services ran under gradlew bootRun,
+# which kept a Gradle client + daemon (about 0.6-0.8 GB) next to every app JVM.
 
 # ---- 1) netis-auth (:9000) --------------------------------------------------
 if (Test-PortListening 9000) {
     Write-Host "[skip] auth: port 9000 already listening"
 } else {
     if (-not (Test-Path (Join-Path $AuthDir 'gradlew.bat'))) { throw "netis-auth not found at $AuthDir (pass -AuthDir)" }
-    Write-Host "[..]   auth starting (:9000)"
-    $authPid = Start-Service-Proc 'auth' $AuthDir "`"$(Join-Path $AuthDir 'gradlew.bat')`" bootRun -q --no-daemon" @{
-        JAVA_HOME                       = $JavaHome
-        AUTH_ISSUER_URI                 = $AuthOrigin
-        SERVER_FORWARD_HEADERS_STRATEGY = 'framework'
-        CORS_ALLOWED_ORIGINS            = "$AppOrigin,http://localhost:9000,http://localhost:3001,http://localhost:3000,http://localhost:8080"
+    $authJar = Get-ServiceJar 'netis-auth' $AuthDir 'auth'
+    if (-not $authJar) {
+        $failed += 'auth'
+    } else {
+        Write-Host "[..]   auth starting (:9000) - $(Split-Path -Leaf $authJar)"
+        $authPid = Start-Service-Proc 'auth' $AuthDir "`"$JavaExe`" $JavaOpts -jar `"$authJar`"" @{
+            JAVA_HOME                       = $JavaHome
+            AUTH_ISSUER_URI                 = $AuthOrigin
+            SERVER_FORWARD_HEADERS_STRATEGY = 'framework'
+            CORS_ALLOWED_ORIGINS            = "$AppOrigin,http://localhost:9000,http://localhost:3001,http://localhost:3000,http://localhost:8080"
+        }
+        # The API fetches JWKS from auth at startup, so wait for auth first.
+        if (Wait-Log 'auth' $SpringOk $SpringFail 240 $authPid) { Write-Host "[ok]   auth ready"; Register-Service 'auth' $authPid $AuthDir }
+        else { Write-Host "[FAIL] auth - see .run\auth.log"; $failed += 'auth' }
     }
-    # The API fetches JWKS from auth at startup, so wait for auth first.
-    if (Wait-Log 'auth' $SpringOk $SpringFail 240) { Write-Host "[ok]   auth ready"; Register-Service 'auth' $authPid $AuthDir }
-    else { Write-Host "[FAIL] auth - see .run\auth.log"; $failed += 'auth' }
 }
 
 # ---- 2) netisMaker API (:8090) ----------------------------------------------
@@ -251,14 +342,19 @@ $apiPid = 0
 if (Test-PortListening 8090) {
     Write-Host "[skip] api: port 8090 already listening"
 } else {
-    Write-Host "[..]   api starting (:8090)"
-    $apiPid = Start-Service-Proc 'api' $Root "`"$(Join-Path $Root 'gradlew.bat')`" bootRun -q --no-daemon" @{
-        JAVA_HOME                                             = $JavaHome
-        SPRING_SECURITY_OAUTH2_RESOURCESERVER_JWT_JWK_SET_URI = 'http://localhost:9000/oauth2/jwks'
-        SPRING_SECURITY_OAUTH2_RESOURCESERVER_JWT_ISSUER_URI  = $AuthOrigin
-        CORS_ALLOWED_ORIGINS                                  = "$AppOrigin,http://localhost:3001,http://localhost:3000"
+    $apiJar = Get-ServiceJar 'netis-maker' $Root 'api'
+    if (-not $apiJar) {
+        $failed += 'api'
+    } else {
+        Write-Host "[..]   api starting (:8090) - $(Split-Path -Leaf $apiJar)"
+        $apiPid = Start-Service-Proc 'api' $Root "`"$JavaExe`" $JavaOpts -jar `"$apiJar`"" @{
+            JAVA_HOME                                             = $JavaHome
+            SPRING_SECURITY_OAUTH2_RESOURCESERVER_JWT_JWK_SET_URI = 'http://localhost:9000/oauth2/jwks'
+            SPRING_SECURITY_OAUTH2_RESOURCESERVER_JWT_ISSUER_URI  = $AuthOrigin
+            CORS_ALLOWED_ORIGINS                                  = "$AppOrigin,http://localhost:3001,http://localhost:3000"
+        }
+        $apiStarted = $true
     }
-    $apiStarted = $true
 }
 
 # ---- 3) frontend (:3001) - production build ---------------------------------
@@ -291,7 +387,7 @@ if (Test-PortListening 3001) {
 }
 
 if ($apiStarted) {
-    if (Wait-Log 'api' $SpringOk $SpringFail 240) { Write-Host "[ok]   api ready"; Register-Service 'api' $apiPid $Root }
+    if (Wait-Log 'api' $SpringOk $SpringFail 240 $apiPid) { Write-Host "[ok]   api ready"; Register-Service 'api' $apiPid $Root }
     else { Write-Host "[FAIL] api - see .run\api.log"; $failed += 'api' }
 }
 if ($frontStarted) {
@@ -333,9 +429,15 @@ if ($WithWorkers) {
         }
         if ($sp) { $workerEnv['SUPERPOWERS_PLUGIN_PATH'] = $sp }
         else { Write-Host "[warn] superpowers plugin not found - SDD implementation requests fall back to REVIEW (set SUPERPOWERS_PLUGIN_PATH)" }
-        $workerPid = Start-Service-Proc 'worker' $Root "`"$(Join-Path $Root 'gradlew.bat')`" bootRun -q --no-daemon --args=--spring.profiles.active=worker" $workerEnv
-        if (Wait-Log 'worker' $SpringOk $SpringFail 240) { Write-Host "[ok]   worker ready"; Register-Service 'worker' $workerPid $Root }
-        else { Write-Host "[FAIL] worker - see .run\worker.log"; $failed += 'worker' }
+        $workerJar = Get-ServiceJar 'netis-maker' $Root 'worker'
+        if (-not $workerJar) {
+            $failed += 'worker'
+        } else {
+            $workerPid = Start-Service-Proc 'worker' $Root "`"$JavaExe`" $JavaOpts -jar `"$workerJar`" --spring.profiles.active=worker" $workerEnv
+            # Find-AppPid's worker lookup takes the jar path (the JVM is the wrapper's child running it)
+            if (Wait-Log 'worker' $SpringOk $SpringFail 240 $workerPid) { Write-Host "[ok]   worker ready"; Register-Service 'worker' $workerPid $workerJar }
+            else { Write-Host "[FAIL] worker - see .run\worker.log"; $failed += 'worker' }
+        }
     }
 
     if (Test-ServiceAlive $RunDir 'interview') {
@@ -360,6 +462,8 @@ if ($WithWorkers) {
         }
     }
 }
+
+Remove-OldJars
 
 Write-Host ""
 if ($failed.Count -gt 0) {

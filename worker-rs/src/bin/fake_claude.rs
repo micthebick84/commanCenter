@@ -12,6 +12,8 @@
 //! |                               | sleeps `FAKE_CLAUDE_CHILD_SLEEP_MS` (default 60000), and      |
 //! |                               | print `child_pid=<pid>` on stdout                             |
 //! | `FAKE_CLAUDE_SLEEP_MS`        | sleep this long before exiting                                |
+//! | `FAKE_CLAUDE_CHILD_PID_FILE`  | with SPAWN_CHILD: also write the spawned child's pid to that file |
+//! | `FAKE_CLAUDE_AUTH_JSON`       | when args are `auth status --json`: print this text, then exit |
 //! | `FAKE_CLAUDE_EXIT`            | exit code (default 0)                                         |
 //!
 //! Stdin is only read when `ECHO_STDIN` or `RECORD` is set, so a caller that never
@@ -49,6 +51,17 @@ fn main() {
     }
 
     let mut stdout = std::io::stdout();
+    let argv: Vec<String> = std::env::args().skip(1).collect();
+    if argv == ["auth", "status", "--json"]
+        && let Some(json) = var("FAKE_CLAUDE_AUTH_JSON")
+    {
+        let _ = stdout.write_all(json.as_bytes());
+        let _ = stdout.flush();
+        let code = var("FAKE_CLAUDE_EXIT")
+            .and_then(|v| v.parse::<i32>().ok())
+            .unwrap_or(0);
+        std::process::exit(code);
+    }
     if echo {
         let _ = stdout.write_all(&stdin_bytes);
     }
@@ -69,6 +82,8 @@ fn main() {
             .env_remove("FAKE_CLAUDE_RECORD")
             .env_remove("FAKE_CLAUDE_ECHO_STDIN")
             .env_remove("FAKE_CLAUDE_EXIT")
+            .env_remove("FAKE_CLAUDE_CHILD_PID_FILE")
+            .env_remove("FAKE_CLAUDE_AUTH_JSON")
             .env("FAKE_CLAUDE_SLEEP_MS", child_sleep)
             .stdin(Stdio::null())
             .stdout(Stdio::inherit())
@@ -76,6 +91,9 @@ fn main() {
             .spawn()
             .expect("spawn child");
         let _ = writeln!(stdout, "child_pid={}", child.id());
+        if let Some(path) = var("FAKE_CLAUDE_CHILD_PID_FILE") {
+            std::fs::write(path, child.id().to_string()).expect("write child pid file");
+        }
     }
     let _ = stdout.flush();
 

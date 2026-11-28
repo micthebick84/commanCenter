@@ -119,7 +119,8 @@ fn parse_logged_in(output: &str) -> Option<bool> {
 }
 
 /// `claude auth status --json` (exit code 1 when logged out, so only the JSON counts).
-/// The child gets `env` as its whole environment, secrets stripped.
+/// The child inherits the real process environment, with `env` overlaid on top (its
+/// entries win); stack-secret names are stripped from both.
 fn cli_logged_in(env: &HashMap<String, String>, home: &Path, claude: &Path) -> Option<bool> {
     if claude.as_os_str().is_empty() {
         return None;
@@ -127,8 +128,11 @@ fn cli_logged_in(env: &HashMap<String, String>, home: &Path, claude: &Path) -> O
     let mut cmd = Command::new(claude);
     cmd.args(["auth", "status", "--json"])
         .current_dir(home)
-        .env_clear()
-        .envs(child_env(env.iter().map(|(k, v)| (k.clone(), v.clone()))));
+        .envs(child_env(
+            std::env::vars_os()
+                .filter_map(|(k, v)| Some((k.into_string().ok()?, v.into_string().ok()?)))
+                .chain(env.iter().map(|(k, v)| (k.clone(), v.clone()))),
+        ));
     match proc::run(&mut cmd, None, CLI_TIMEOUT) {
         Ok(out) if !out.timed_out => {
             let parsed = parse_logged_in(&out.stdout);

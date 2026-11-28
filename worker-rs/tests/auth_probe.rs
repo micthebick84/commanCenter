@@ -199,3 +199,43 @@ mod cli {
         );
     }
 }
+
+#[cfg(feature = "test-bins")]
+mod cli_env {
+    use super::*;
+
+    #[test]
+    fn child_inherits_process_env_overlays_map_and_strips_secrets() {
+        let dir = TempDir::new("auth-cli-env");
+        let record = dir.path().join("rec.json");
+        let mut env = HashMap::new();
+        env.insert(
+            "FAKE_CLAUDE_AUTH_JSON".to_string(),
+            r#"{"loggedIn":true}"#.to_string(),
+        );
+        env.insert(
+            "FAKE_CLAUDE_RECORD".to_string(),
+            record.to_string_lossy().into_owned(),
+        );
+        env.insert("FAKE_ONLY_IN_MAP".to_string(), "1".to_string());
+        env.insert("worker_api_key".to_string(), "secret".to_string());
+        let st = probe(
+            &env,
+            dir.path(),
+            Path::new(env!("CARGO_BIN_EXE_fake-claude")),
+        );
+        assert_eq!(st.ok, Some(true));
+        let rec: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&record).unwrap()).unwrap();
+        let keys: Vec<String> = rec["envKeys"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|k| k.as_str().unwrap().to_ascii_lowercase())
+            .collect();
+        assert!(keys.contains(&"fake_only_in_map".to_string()), "{keys:?}");
+        assert!(!keys.contains(&"worker_api_key".to_string()), "{keys:?}");
+        // the map is only partial, yet the real process env (PATH / SystemRoot) is inherited
+        assert!(keys.contains(&"path".to_string()), "{keys:?}");
+    }
+}

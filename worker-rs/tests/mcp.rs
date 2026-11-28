@@ -170,3 +170,31 @@ fn unreadable_claude_json_is_empty_not_error() {
     let m = McpSupport::init(&cj, &dir.path().join("o.json"));
     assert!(m.server_names().is_empty());
 }
+
+#[cfg(unix)]
+#[test]
+fn temp_and_base_files_are_owner_only() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = TempDir::new("mcp-mode");
+    let cj = write_json(
+        &dir,
+        "claude.json",
+        &json!({"mcpServers": {"a": {"url":"u"}}}),
+    );
+    let out = dir.path().join("worker-mcp.json");
+    // a pre-existing, too-open base file is tightened as well
+    std::fs::write(&out, "{}").unwrap();
+    std::fs::set_permissions(&out, std::fs::Permissions::from_mode(0o644)).unwrap();
+    let m = McpSupport::init(&cj, &out).with_temp_dir(dir.path());
+    let mode = |p: &std::path::Path| std::fs::metadata(p).unwrap().permissions().mode() & 0o777;
+    assert_eq!(mode(&out), 0o600);
+    let extras = vec![McpSpec {
+        name: "x".into(),
+        url: "https://x".into(),
+        transport: "http".into(),
+        headers: None,
+    }];
+    let a = m.args_for(&extras).unwrap();
+    assert_eq!(mode(a.temp_file.as_ref().unwrap()), 0o600);
+    std::fs::remove_file(a.temp_file.unwrap()).unwrap();
+}

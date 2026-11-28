@@ -235,8 +235,29 @@ fn assemble_args(config: &Path, names: &[String]) -> Vec<String> {
 
 fn write_pretty(path: &Path, value: &Value) -> std::io::Result<()> {
     let text = serde_json::to_string_pretty(value).map_err(std::io::Error::other)?;
-    std::fs::write(path, text)
+    let mut opts = std::fs::OpenOptions::new();
+    opts.write(true).create(true).truncate(true);
+    private_mode(&mut opts);
+    let mut file = opts.open(path)?;
+    #[cfg(unix)]
+    {
+        // `mode` only applies when the file is created; fix a pre-existing file too
+        use std::os::unix::fs::PermissionsExt;
+        file.set_permissions(std::fs::Permissions::from_mode(0o600))?;
+    }
+    std::io::Write::write_all(&mut file, text.as_bytes())
 }
+
+/// Owner-only (0600) on unix, like Java `Files.createTempFile`; the files can carry
+/// per-task credentials in `headers`. Windows keeps the default (per-user temp ACL).
+#[cfg(unix)]
+fn private_mode(opts: &mut std::fs::OpenOptions) {
+    use std::os::unix::fs::OpenOptionsExt;
+    opts.mode(0o600);
+}
+
+#[cfg(not(unix))]
+fn private_mode(_opts: &mut std::fs::OpenOptions) {}
 
 fn build_merged(claude_json: &Path, out_file: &Path) -> std::io::Result<Option<Servers>> {
     if !claude_json.exists() {
@@ -373,11 +394,10 @@ fn create_temp(dir: &Path) -> std::io::Result<(PathBuf, std::fs::File)> {
             std::process::id(),
             N.fetch_add(1, Ordering::Relaxed)
         ));
-        match std::fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&path)
-        {
+        let mut opts = std::fs::OpenOptions::new();
+        opts.write(true).create_new(true);
+        private_mode(&mut opts);
+        match opts.open(&path) {
             Ok(f) => return Ok((path, f)),
             Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
             Err(e) => return Err(e),

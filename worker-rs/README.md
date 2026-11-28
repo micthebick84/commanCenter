@@ -7,7 +7,7 @@ Rust pilot of the NetisMaker worker daemon (analysis tasks only). Pure-Rust depe
 ```bash
 export PATH="$HOME/.cargo/bin:$PATH"   # Git Bash
 cd worker-rs
-cargo fmt --check && cargo clippy --all-targets -- -D warnings && cargo test --locked
+cargo fmt --check && cargo clippy --all-targets --features test-bins -- -D warnings && cargo test --locked --features test-bins
 cargo build --release --locked         # target/release/netis-worker-rs(.exe)
 ```
 

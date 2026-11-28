@@ -281,14 +281,33 @@ impl GitCache {
         }
         if out.exit_code != 0 {
             // Java merges stderr into stdout for these calls; do the same for the message.
-            let mut text = out.stdout;
-            text.push_str(&out.stderr);
-            return Err(format!(
-                "git failed ({}): {}",
-                out.exit_code,
-                mask::mask(text.trim_end())
-            ));
+            return Err(git_failure_message(out.exit_code, &out.stdout, &out.stderr));
         }
         Ok(out.stdout)
+    }
+}
+
+/// `git failed (<code>): <masked output>`. Java merges stderr into stdout for these calls;
+/// the message does the same, then hides `user:secret@` in URLs.
+fn git_failure_message(exit_code: i32, stdout: &str, stderr: &str) -> String {
+    let mut text = String::from(stdout);
+    text.push_str(stderr);
+    format!("git failed ({exit_code}): {}", mask::mask(text.trim_end()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn failure_message_masks_credentials_in_output() {
+        let msg = git_failure_message(
+            128,
+            "Cloning into 'x'...\n",
+            "fatal: unable to access 'https://oauth2:secret@h/x.git/'\n",
+        );
+        assert!(msg.starts_with("git failed (128): "), "{msg}");
+        assert!(msg.contains("https://***@h/x.git/"), "{msg}");
+        assert!(!msg.contains("secret"), "{msg}");
     }
 }

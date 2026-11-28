@@ -24,30 +24,53 @@ pub struct Output {
     pub duration_ms: u64,
 }
 
-type Sink = Arc<Mutex<Vec<u8>>>;
+/// Output collected by a reader thread. `closed` mirrors Java `OutputDrain.close()`: once
+/// `run` has taken its final snapshot the thread discards anything it still reads, so a
+/// grandchild that keeps writing cannot grow memory after the call returned.
+#[derive(Clone, Default)]
+struct Sink(Arc<Mutex<SinkState>>);
+
+#[derive(Default)]
+struct SinkState {
+    buf: Vec<u8>,
+    closed: bool,
+}
+
+impl Sink {
+    fn push(&self, data: &[u8]) {
+        if let Ok(mut s) = self.0.lock()
+            && !s.closed
+        {
+            s.buf.extend_from_slice(data);
+        }
+    }
+
+    /// Final snapshot as lossy UTF-8; later `push` calls are ignored.
+    fn take_and_close(&self) -> String {
+        let bytes = match self.0.lock() {
+            Ok(mut s) => {
+                s.closed = true;
+                std::mem::take(&mut s.buf)
+            }
+            Err(_) => Vec::new(),
+        };
+        String::from_utf8_lossy(&bytes).into_owned()
+    }
+}
 
 fn drain<R: Read + Send + 'static>(mut src: R) -> (Sink, JoinHandle<()>) {
-    let sink: Sink = Arc::new(Mutex::new(Vec::new()));
-    let target = Arc::clone(&sink);
+    let sink = Sink::default();
+    let target = sink.clone();
     let handle = std::thread::spawn(move || {
         let mut buf = [0u8; 8192];
         loop {
             match src.read(&mut buf) {
                 Ok(0) | Err(_) => break,
-                Ok(n) => {
-                    if let Ok(mut v) = target.lock() {
-                        v.extend_from_slice(&buf[..n]);
-                    }
-                }
+                Ok(n) => target.push(&buf[..n]),
             }
         }
     });
     (sink, handle)
-}
-
-fn text(sink: &Sink) -> String {
-    let bytes = sink.lock().map(|v| v.clone()).unwrap_or_default();
-    String::from_utf8_lossy(&bytes).into_owned()
 }
 
 /// Runs `cmd` with piped stdout/stderr. `stdin` (if any) is written on its own thread and
@@ -82,8 +105,13 @@ pub fn run(cmd: &mut Command, stdin: Option<&[u8]>, timeout: Duration) -> std::i
     let deadline = started + timeout;
     let mut timed_out = false;
     let status = loop {
-        if let Some(status) = child.try_wait()? {
-            break status;
+        match child.try_wait() {
+            Ok(Some(status)) => break status,
+            Ok(None) => {}
+            Err(e) => {
+                kill_tree(&mut child);
+                return Err(e);
+            }
         }
         if Instant::now() >= deadline {
             timed_out = true;
@@ -103,8 +131,8 @@ pub fn run(cmd: &mut Command, stdin: Option<&[u8]>, timeout: Duration) -> std::i
 
     Ok(Output {
         exit_code: status.code().unwrap_or(-1),
-        stdout: text(&out_sink),
-        stderr: text(&err_sink),
+        stdout: out_sink.take_and_close(),
+        stderr: err_sink.take_and_close(),
         timed_out,
         duration_ms,
     })
@@ -130,4 +158,48 @@ fn kill_tree(child: &mut Child) {
             .status();
     }
     let _ = child.kill(); // fallback: at least the direct child
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::mpsc;
+
+    /// A reader fed from a channel, so the test decides when data arrives.
+    struct ChannelReader(mpsc::Receiver<Vec<u8>>);
+
+    impl Read for ChannelReader {
+        fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+            match self.0.recv() {
+                Ok(data) => {
+                    buf[..data.len()].copy_from_slice(&data);
+                    Ok(data.len())
+                }
+                Err(_) => Ok(0),
+            }
+        }
+    }
+
+    #[test]
+    fn drain_discards_data_after_close() {
+        let (tx, rx) = mpsc::channel();
+        let (sink, handle) = drain(ChannelReader(rx));
+        tx.send(b"before".to_vec()).unwrap();
+        // Wait (bounded) until the thread has collected the first chunk.
+        let t0 = Instant::now();
+        while sink.0.lock().unwrap().buf.is_empty() && t0.elapsed() < Duration::from_secs(5) {
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert_eq!(sink.take_and_close(), "before");
+        // The "grandchild" keeps writing after run returned: nothing may be kept.
+        tx.send(b"after-after-after".to_vec()).unwrap();
+        drop(tx);
+        handle.join().unwrap();
+        let state = sink.0.lock().unwrap();
+        assert!(
+            state.buf.is_empty(),
+            "collected after close: {:?}",
+            state.buf
+        );
+    }
 }

@@ -50,6 +50,15 @@ fn force_kill(pid: u32) {
     }
 }
 
+/// Kills the grandchild when dropped, so a failing assertion cannot leak it.
+struct KillOnDrop(u32);
+
+impl Drop for KillOnDrop {
+    fn drop(&mut self) {
+        force_kill(self.0);
+    }
+}
+
 #[test]
 fn captures_stdout_and_stderr_separately() {
     let dir = TempDir::new("proc-out");
@@ -108,12 +117,10 @@ fn timeout_kills_process_tree() {
     let out = proc::run(&mut cmd, None, Duration::from_secs(3)).unwrap();
     let elapsed = started.elapsed();
     let grandchild = parse_child_pid(&out.stdout);
+    let _guard = KillOnDrop(grandchild);
     // Give the OS a moment to finish tearing the process down before looking.
     std::thread::sleep(Duration::from_millis(300));
     let alive = pid_alive(grandchild);
-    if alive {
-        force_kill(grandchild);
-    }
     assert!(out.timed_out, "expected timed_out");
     assert!(!alive, "grandchild {grandchild} survived the timeout");
     assert!(elapsed < Duration::from_secs(15), "took {elapsed:?}");
@@ -128,8 +135,7 @@ fn returns_when_child_exits_but_grandchild_holds_stdout() {
     let started = Instant::now();
     let out = proc::run(&mut cmd, None, Duration::from_secs(30)).unwrap();
     let elapsed = started.elapsed();
-    let grandchild = parse_child_pid(&out.stdout);
-    force_kill(grandchild);
+    let _guard = KillOnDrop(parse_child_pid(&out.stdout));
     assert!(!out.timed_out);
     assert_eq!(out.exit_code, 0);
     assert!(elapsed < Duration::from_secs(10), "took {elapsed:?}");

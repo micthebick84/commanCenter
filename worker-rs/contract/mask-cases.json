@@ -1,0 +1,34 @@
+[
+  {
+    "input": "https://oauth2:tok@host/x",
+    "output": "https://***@host/x"
+  },
+  {
+    "input": "http://user:pw@h:8080/a",
+    "output": "http://***@h:8080/a"
+  },
+  {
+    "input": "https://host/plain/path.git",
+    "output": "https://host/plain/path.git"
+  },
+  {
+    "input": "clone https://oauth2:aaa@h1/x.git and http://u:bbb@h2/y.git done",
+    "output": "clone https://***@h1/x.git and http://***@h2/y.git done"
+  },
+  {
+    "input": "://user@host",
+    "output": "://user@host"
+  },
+  {
+    "input": "https://oauth2:tok@\u00a0host/x",
+    "output": "https://***@\u00a0host/x"
+  },
+  {
+    "input": "https://u:pw\u00a0x@h/x",
+    "output": "https://***@h/x"
+  },
+  {
+    "input": "line one https://oauth2:tok@h/x\nline two no secret\nline three http://a:b@c/d\n",
+    "output": "line one https://***@h/x\nline two no secret\nline three http://***@c/d\n"
+  }
+]

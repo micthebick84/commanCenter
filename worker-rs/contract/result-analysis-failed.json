@@ -1,0 +1,6 @@
+{
+  "workerId": "w-1",
+  "status": "FAILED",
+  "durationMs": 500,
+  "failureReason": "분석 시간 초과"
+}

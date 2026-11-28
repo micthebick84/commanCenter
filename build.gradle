@@ -79,6 +79,10 @@ dependencies {
 tasks.named('test') {
     useJUnitPlatform()
 
+    // worker-rs 계약 골든 파일 다시 쓰기(WorkerRsContractTest) — -Dcontract.update=true
+    systemProperty 'contract.update', System.getProperty('contract.update', 'false')
+    inputs.dir('worker-rs/contract').optional()   // 계약 파일만 바뀌어도 시험을 다시 돈다
+
     // 시스템 Java 26과 Testcontainers/docker-java 호환성 이슈 회피용 launcher 강제
     javaLauncher = javaToolchains.launcherFor {
         languageVersion = JavaLanguageVersion.of(21)

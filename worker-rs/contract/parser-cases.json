@@ -1,0 +1,96 @@
+[
+  {
+    "name": "normal",
+    "input": "## 1. 요구사항 요약\n목록 화면에 검색 상자를 추가한다.\n\n## 2. 영향 범위\n- 수정 예상 파일: 목록 화면\n\n## 3. 접근 방법\n입력값으로 서버 쪽 조회를 거른다.\n\n## 4. Subtask 분해\n- **검색 API 추가**: 조회 조건을 받는다\n  - 대상 파일: `src/api/search.ts`, `src/api/index.ts`\n  - 예상 LoC: 약 30줄\n  - 위험도: M\n  - 설명: 쿼리 매개변수를 추가한다\n- **검색 상자 화면**: 입력 상자를 붙인다\n  - 대상 파일: `src/ui/List.vue`\n  - 예상 LoC: 약 20줄\n  - 위험도: L\n  - 설명: 입력 지연을 둔다\n\n## 5. 위험 요소 및 미해결 질문\n- 없음\n",
+    "ok": true,
+    "subtasksJson": "[{\"title\":\"검색 API 추가\",\"summary\":\"조회 조건을 받는다\",\"files\":\"`src/api/search.ts`, `src/api/index.ts`\",\"estimatedLoc\":\"약 30줄\",\"risk\":\"M\"},{\"title\":\"검색 상자 화면\",\"summary\":\"입력 상자를 붙인다\",\"files\":\"`src/ui/List.vue`\",\"estimatedLoc\":\"약 20줄\",\"risk\":\"L\"}]",
+    "warnings": [ ]
+  },
+  {
+    "name": "no-section-4",
+    "input": "## 1. 요구사항 요약\n목록 화면에 검색 상자를 추가한다.\n\n## 2. 영향 범위\n- 수정 예상 파일: 목록 화면\n\n## 3. 접근 방법\n입력값으로 서버 쪽 조회를 거른다.\n\n## 5. 위험 요소 및 미해결 질문\n- 없음\n",
+    "ok": true,
+    "subtasksJson": "[]",
+    "warnings": [
+      "섹션 ## 4. 누락 — subtasks 0개로 처리"
+    ]
+  },
+  {
+    "name": "section-4-empty-body",
+    "input": "## 1. 요구사항 요약\n목록 화면에 검색 상자를 추가한다.\n\n## 2. 영향 범위\n- 수정 예상 파일: 목록 화면\n\n## 3. 접근 방법\n입력값으로 서버 쪽 조회를 거른다.\n\n## 4. Subtask 분해\n본문이 비어 있다\n\n## 5. 위험 요소 및 미해결 질문\n- 없음\n",
+    "ok": true,
+    "subtasksJson": "[]",
+    "warnings": [
+      "섹션 ## 4. 본문에 subtask 0개"
+    ]
+  },
+  {
+    "name": "no-section-5",
+    "input": "## 1. 요구사항 요약\n목록 화면에 검색 상자를 추가한다.\n\n## 2. 영향 범위\n- 수정 예상 파일: 목록 화면\n\n## 3. 접근 방법\n입력값으로 서버 쪽 조회를 거른다.\n\n## 4. Subtask 분해\n- **검색 API 추가**: 조회 조건을 받는다\n  - 대상 파일: `src/api/search.ts`, `src/api/index.ts`\n  - 예상 LoC: 약 30줄\n  - 위험도: M\n  - 설명: 쿼리 매개변수를 추가한다\n- **검색 상자 화면**: 입력 상자를 붙인다\n  - 대상 파일: `src/ui/List.vue`\n  - 예상 LoC: 약 20줄\n  - 위험도: L\n  - 설명: 입력 지연을 둔다\n\n",
+    "ok": true,
+    "subtasksJson": "[{\"title\":\"검색 API 추가\",\"summary\":\"조회 조건을 받는다\",\"files\":\"`src/api/search.ts`, `src/api/index.ts`\",\"estimatedLoc\":\"약 30줄\",\"risk\":\"M\"},{\"title\":\"검색 상자 화면\",\"summary\":\"입력 상자를 붙인다\",\"files\":\"`src/ui/List.vue`\",\"estimatedLoc\":\"약 20줄\",\"risk\":\"L\"}]",
+    "warnings": [
+      "섹션 ## 5. 누락"
+    ]
+  },
+  {
+    "name": "missing-section-2",
+    "input": "## 1. 요구사항 요약\n목록 화면에 검색 상자를 추가한다.\n\n## 3. 접근 방법\n입력값으로 서버 쪽 조회를 거른다.\n\n## 4. Subtask 분해\n- **검색 API 추가**: 조회 조건을 받는다\n  - 대상 파일: `src/api/search.ts`, `src/api/index.ts`\n  - 예상 LoC: 약 30줄\n  - 위험도: M\n  - 설명: 쿼리 매개변수를 추가한다\n- **검색 상자 화면**: 입력 상자를 붙인다\n  - 대상 파일: `src/ui/List.vue`\n  - 예상 LoC: 약 20줄\n  - 위험도: L\n  - 설명: 입력 지연을 둔다\n\n## 5. 위험 요소 및 미해결 질문\n- 없음\n",
+    "ok": false,
+    "error": "섹션 ## 2. 누락"
+  },
+  {
+    "name": "empty-input",
+    "input": "",
+    "ok": false,
+    "error": "출력이 비어있음"
+  },
+  {
+    "name": "duplicate-section-number",
+    "input": "## 1. 요구사항 요약\n목록 화면에 검색 상자를 추가한다.\n\n## 2. 영향 범위\n- 수정 예상 파일: 목록 화면\n\n## 3. 접근 방법\n입력값으로 서버 쪽 조회를 거른다.\n\n## 4. Subtask 분해\n- **검색 API 추가**: 조회 조건을 받는다\n  - 대상 파일: `src/api/search.ts`, `src/api/index.ts`\n  - 예상 LoC: 약 30줄\n  - 위험도: M\n  - 설명: 쿼리 매개변수를 추가한다\n- **검색 상자 화면**: 입력 상자를 붙인다\n  - 대상 파일: `src/ui/List.vue`\n  - 예상 LoC: 약 20줄\n  - 위험도: L\n  - 설명: 입력 지연을 둔다\n\n## 4. Subtask 분해\n- **뒤쪽 항목**: 나중 것이 이긴다\n\n## 5. 위험 요소 및 미해결 질문\n- 없음\n",
+    "ok": true,
+    "subtasksJson": "[{\"title\":\"뒤쪽 항목\",\"summary\":\"나중 것이 이긴다\"}]",
+    "warnings": [ ]
+  },
+  {
+    "name": "low-korean-ratio",
+    "input": "## 1. Summary\nAdd a search box to the list screen.\n\n## 2. Scope\n- files: list view\n\n## 3. Approach\nFilter on the server side.\n\n## 4. Subtasks\n- **Search API**: accept a filter\n  - 위험도: L\n\n## 5. Risks\n- none\n",
+    "ok": true,
+    "subtasksJson": "[{\"title\":\"Search API\",\"summary\":\"accept a filter\",\"risk\":\"L\"}]",
+    "warnings": [
+      "한국어 비율 50% 미만 (3/125)"
+    ]
+  },
+  {
+    "name": "crlf-line-endings",
+    "input": "## 1. 요구사항 요약\r\n목록 화면에 검색 상자를 추가한다.\r\n\r\n## 2. 영향 범위\r\n- 수정 예상 파일: 목록 화면\r\n\r\n## 3. 접근 방법\r\n입력값으로 서버 쪽 조회를 거른다.\r\n\r\n## 4. Subtask 분해\r\n- **검색 API 추가**: 조회 조건을 받는다\r\n  - 대상 파일: `src/api/search.ts`, `src/api/index.ts`\r\n  - 예상 LoC: 약 30줄\r\n  - 위험도: M\r\n  - 설명: 쿼리 매개변수를 추가한다\r\n- **검색 상자 화면**: 입력 상자를 붙인다\r\n  - 대상 파일: `src/ui/List.vue`\r\n  - 예상 LoC: 약 20줄\r\n  - 위험도: L\r\n  - 설명: 입력 지연을 둔다\r\n\r\n## 5. 위험 요소 및 미해결 질문\r\n- 없음\r\n",
+    "ok": true,
+    "subtasksJson": "[{\"title\":\"검색 API 추가\",\"summary\":\"조회 조건을 받는다\",\"files\":\"`src/api/search.ts`, `src/api/index.ts`\",\"estimatedLoc\":\"약 30줄\",\"risk\":\"M\"},{\"title\":\"검색 상자 화면\",\"summary\":\"입력 상자를 붙인다\",\"files\":\"`src/ui/List.vue`\",\"estimatedLoc\":\"약 20줄\",\"risk\":\"L\"}]",
+    "warnings": [ ]
+  },
+  {
+    "name": "ideographic-space-after-hashes",
+    "input": "## 1. 요구사항 요약\n목록 화면에 검색 상자를 추가한다.\n\n##\u30002. 영향 범위\n- 수정 예상 파일: 목록 화면\n\n## 3. 접근 방법\n입력값으로 서버 쪽 조회를 거른다.\n\n## 4. Subtask 분해\n- **검색 API 추가**: 조회 조건을 받는다\n  - 대상 파일: `src/api/search.ts`, `src/api/index.ts`\n  - 예상 LoC: 약 30줄\n  - 위험도: M\n  - 설명: 쿼리 매개변수를 추가한다\n- **검색 상자 화면**: 입력 상자를 붙인다\n  - 대상 파일: `src/ui/List.vue`\n  - 예상 LoC: 약 20줄\n  - 위험도: L\n  - 설명: 입력 지연을 둔다\n\n## 5. 위험 요소 및 미해결 질문\n- 없음\n",
+    "ok": false,
+    "error": "섹션 ## 2. 누락"
+  },
+  {
+    "name": "nbsp-after-hashes",
+    "input": "## 1. 요구사항 요약\n목록 화면에 검색 상자를 추가한다.\n\n## 2. 영향 범위\n- 수정 예상 파일: 목록 화면\n\n##\u00a03. 접근 방법\n입력값으로 서버 쪽 조회를 거른다.\n\n## 4. Subtask 분해\n- **검색 API 추가**: 조회 조건을 받는다\n  - 대상 파일: `src/api/search.ts`, `src/api/index.ts`\n  - 예상 LoC: 약 30줄\n  - 위험도: M\n  - 설명: 쿼리 매개변수를 추가한다\n- **검색 상자 화면**: 입력 상자를 붙인다\n  - 대상 파일: `src/ui/List.vue`\n  - 예상 LoC: 약 20줄\n  - 위험도: L\n  - 설명: 입력 지연을 둔다\n\n## 5. 위험 요소 및 미해결 질문\n- 없음\n",
+    "ok": false,
+    "error": "섹션 ## 3. 누락"
+  },
+  {
+    "name": "fullwidth-section-number",
+    "input": "## \uff11. 요구사항 요약\n목록 화면에 검색 상자를 추가한다.\n\n## 2. 영향 범위\n- 수정 예상 파일: 목록 화면\n\n## 3. 접근 방법\n입력값으로 서버 쪽 조회를 거른다.\n\n## 4. Subtask 분해\n- **검색 API 추가**: 조회 조건을 받는다\n  - 대상 파일: `src/api/search.ts`, `src/api/index.ts`\n  - 예상 LoC: 약 30줄\n  - 위험도: M\n  - 설명: 쿼리 매개변수를 추가한다\n- **검색 상자 화면**: 입력 상자를 붙인다\n  - 대상 파일: `src/ui/List.vue`\n  - 예상 LoC: 약 20줄\n  - 위험도: L\n  - 설명: 입력 지연을 둔다\n\n## 5. 위험 요소 및 미해결 질문\n- 없음\n",
+    "ok": false,
+    "error": "섹션 ## 1. 누락"
+  },
+  {
+    "name": "nbsp-after-subtask-colon",
+    "input": "## 1. 요구사항 요약\n목록 화면에 검색 상자를 추가한다.\n\n## 2. 영향 범위\n- 수정 예상 파일: 목록 화면\n\n## 3. 접근 방법\n입력값으로 서버 쪽 조회를 거른다.\n\n## 4. Subtask 분해\n- **검색 API 추가**:\u00a0조회 조건을 받는다\n  - 대상 파일: `src/api/search.ts`, `src/api/index.ts`\n  - 예상 LoC: 약 30줄\n  - 위험도: M\n  - 설명: 쿼리 매개변수를 추가한다\n- **검색 상자 화면**: 입력 상자를 붙인다\n  - 대상 파일: `src/ui/List.vue`\n  - 예상 LoC: 약 20줄\n  - 위험도: L\n  - 설명: 입력 지연을 둔다\n\n## 5. 위험 요소 및 미해결 질문\n- 없음\n",
+    "ok": true,
+    "subtasksJson": "[{\"title\":\"검색 API 추가\",\"summary\":\"\u00a0조회 조건을 받는다\",\"files\":\"`src/api/search.ts`, `src/api/index.ts`\",\"estimatedLoc\":\"약 30줄\",\"risk\":\"M\"},{\"title\":\"검색 상자 화면\",\"summary\":\"입력 상자를 붙인다\",\"files\":\"`src/ui/List.vue`\",\"estimatedLoc\":\"약 20줄\",\"risk\":\"L\"}]",
+    "warnings": [ ]
+  }
+]

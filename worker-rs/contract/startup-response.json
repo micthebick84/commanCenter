@@ -1,0 +1,12 @@
+{
+  "recovered": [
+    {
+      "taskId": 3,
+      "from": "IN_PROGRESS",
+      "to": "PENDING"
+    }
+  ],
+  "skipped": [
+    7
+  ]
+}

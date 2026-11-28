@@ -1,0 +1,14 @@
+{
+  "workerId": "w-1",
+  "status": "COMPLETED",
+  "markdownResult": "## 1. 요구사항 요약\n내용",
+  "subtasksJson": "[]",
+  "durationMs": 1234,
+  "usage": {
+    "costUsd": 0.12,
+    "inputTokens": 100,
+    "outputTokens": 50,
+    "cacheCreationTokens": 0,
+    "cacheReadTokens": 0
+  }
+}

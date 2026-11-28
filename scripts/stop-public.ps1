@@ -8,10 +8,10 @@
 # cloudflared and PostgreSQL are left alone.
 #
 # Usage:  .\scripts\stop-public.ps1                       stop everything
-#         .\scripts\stop-public.ps1 -KeepWorkers          leave worker + interview running
+#         .\scripts\stop-public.ps1 -KeepWorkers          leave worker + worker-rs + interview running
 #         .\scripts\stop-public.ps1 -Only worker          stop only the worker (restart it with start-public.ps1 -WithWorkers)
 #         .\scripts\stop-public.ps1 -Only worker,interview
-#   -Only takes interview, worker, front, api, auth; it cannot be combined with -KeepWorkers.
+#   -Only takes interview, worker-rs, worker, front, api, auth; it cannot be combined with -KeepWorkers.
 # ASCII only on purpose: Windows PowerShell 5.1 misreads BOM-less UTF-8 scripts.
 
 [CmdletBinding()]
@@ -24,7 +24,7 @@ $Root   = Split-Path -Parent $PSScriptRoot
 $RunDir = Join-Path $Root '.run'
 
 # Stop order: workers first, then front, api, auth.
-$allNames = @('interview', 'worker', 'front', 'api', 'auth')
+$allNames = @('interview', 'worker-rs', 'worker', 'front', 'api', 'auth')
 $names = $allNames
 if ($KeepWorkers) { $names = @('front', 'api', 'auth') }
 

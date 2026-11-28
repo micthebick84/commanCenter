@@ -206,12 +206,13 @@ function Select-BootJar($Files, [datetime]$NotBefore) {
     return [string]$hits[0].FullName
 }
 
-# Pure. Full paths of <prefix>-*.jar copies to delete: everything except the $Keep newest
-# (LastWriteTime) and the ones in $InUse (paths a running java.exe has on its command line).
-function Select-JarsToPrune($Files, [string]$Prefix, [int]$Keep, [string[]]$InUse) {
+# Pure. Full paths of <prefix>-*<extension> copies to delete: everything except the $Keep newest
+# (LastWriteTime) and the ones in $InUse (paths a running process has as its image / on its command line).
+# Only names that END with the extension count, so '<name>.exe.part' leftovers are never touched.
+function Select-FilesToPrune($Files, [string]$Prefix, [string]$Extension, [int]$Keep, [string[]]$InUse) {
     $mine = @(@($Files) | Where-Object {
             $_ -and ([string]$_.Name).StartsWith("$Prefix-", [StringComparison]::OrdinalIgnoreCase) -and
-            ([string]$_.Name).EndsWith('.jar', [StringComparison]::OrdinalIgnoreCase)
+            ([string]$_.Name).EndsWith($Extension, [StringComparison]::OrdinalIgnoreCase)
         } | Sort-Object { [datetime]$_.LastWriteTime } -Descending)
     $out = @()
     for ($i = $Keep; $i -lt $mine.Count; $i++) {
@@ -221,6 +222,11 @@ function Select-JarsToPrune($Files, [string]$Prefix, [int]$Keep, [string[]]$InUs
         if (-not $used) { $out += $path }
     }
     return $out
+}
+
+# Pure. Jar flavour of Select-FilesToPrune.
+function Select-JarsToPrune($Files, [string]$Prefix, [int]$Keep, [string[]]$InUse) {
+    return (Select-FilesToPrune $Files $Prefix '.jar' $Keep $InUse)
 }
 
 # Pure. Jar paths of $JarDir that appear on running java.exe command lines (kept by the pruning).
@@ -241,8 +247,57 @@ function Select-JarsInUse($Processes, [string]$JarDir) {
     return $out
 }
 
+# ---- native exe run files (worker-rs; spec 2026-11-28-rust-worker-skeleton-design.md section 10) ----
+
+# Pure. Name of the exe copy start-public runs: <prefix>-<sha7>.exe for a clean tree, otherwise
+# <prefix>-<sha7>-<tag>-<yyyyMMddHHmmss>.exe (same rules as Get-JarName).
+function Get-ExeName([string]$Prefix, [string]$Sha, [string]$Tag, [datetime]$Now) {
+    $short = $Sha
+    if ($short.Length -gt 7) { $short = $short.Substring(0, 7) }
+    if ($Tag) { return "$Prefix-$short-$Tag-$($Now.ToString('yyyyMMddHHmmss')).exe" }
+    return "$Prefix-$short.exe"
+}
+
+# Pure. The newest direct child of the cmd wrapper whose image is $ExePath (ExecutablePath, or the
+# command line when the image path is not readable). Other children (conhost.exe) and other copies
+# of the exe never match. $null when none.
+function Select-NativeApp($Processes, [int]$WrapperPid, [string]$ExePath) {
+    if (-not $ExePath) { return $null }
+    $best = $null
+    foreach ($p in @($Processes)) {
+        if (-not $p) { continue }
+        if ($null -eq $p.ParentProcessId -or ([int]$p.ParentProcessId) -ne $WrapperPid) { continue }
+        $where = [string]$p.ExecutablePath
+        if (-not $where) { $where = [string]$p.CommandLine }
+        if (-not $where) { continue }
+        if ($where.IndexOf($ExePath, [StringComparison]::OrdinalIgnoreCase) -lt 0) { continue }
+        if ($null -eq $best) { $best = $p; continue }
+        $pc = if ($p.CreationDate) { [datetime]$p.CreationDate } else { [datetime]::MinValue }
+        $bc = if ($best.CreationDate) { [datetime]$best.CreationDate } else { [datetime]::MinValue }
+        if ($pc -gt $bc) { $best = $p }
+    }
+    if ($null -eq $best) { return $null }
+    return [int]$best.ProcessId
+}
+
+# Pure. Image paths of the processes that run directly from $BinDir (kept by the pruning).
+function Select-ExesInUse($Processes, [string]$BinDir) {
+    $out = @()
+    if (-not $BinDir) { return $out }
+    foreach ($p in @($Processes)) {
+        if (-not $p) { continue }
+        $path = [string]$p.ExecutablePath
+        if (-not $path) { continue }
+        $dir = [System.IO.Path]::GetDirectoryName($path)
+        if ($dir -and [string]::Equals($dir.TrimEnd('\'), $BinDir.TrimEnd('\'), [StringComparison]::OrdinalIgnoreCase)) {
+            $out += $path
+        }
+    }
+    return $out
+}
+
 # Spec 5.2: the process that really does the work, or $null.
-# $Root: the app's folder; for 'worker' it is the jar path that start-public ran.
+# $Root: the app's folder; for 'worker' it is the jar path, for 'worker-rs' the exe path that start-public ran.
 function Find-AppPid([string]$Name, [int]$WrapperPid, [string]$Root) {
     try {
         switch ($Name) {
@@ -256,6 +311,10 @@ function Find-AppPid([string]$Name, [int]$WrapperPid, [string]$Root) {
             'worker' {
                 $kids = Get-CimInstance Win32_Process -Filter "ParentProcessId=$WrapperPid" -ErrorAction SilentlyContinue
                 return (Select-WorkerJvm $kids $WrapperPid $Root)
+            }
+            'worker-rs' {
+                $kids = Get-CimInstance Win32_Process -Filter "ParentProcessId=$WrapperPid" -ErrorAction SilentlyContinue
+                return (Select-NativeApp $kids $WrapperPid $Root)
             }
             'interview' {
                 $node = Get-CimInstance Win32_Process -Filter "ParentProcessId=$WrapperPid" -ErrorAction SilentlyContinue |

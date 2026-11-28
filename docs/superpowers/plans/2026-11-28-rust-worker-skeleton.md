@@ -21,7 +21,7 @@
 - PowerShell 스크립트는 ASCII만(확인: `grep -nP '[^\x00-\x7F]' scripts/*.ps1 scripts/tests/*.ps1`이 빈 출력). `public-proc.ps1` 함수는 throw하지 않고 `$null`/`$false`를 돌려준다.
 - 스위치가 꺼져 있으면(`WORKER_RS_ENABLED`가 `true`가 아니면) 시작 스크립트는 worker-rs에 대해 한 줄도 찍지 않고 아무것도 하지 않는다.
 - 공개 저장소다: 실제 고객·현장 이름, 사내 IP, 토큰을 코드·시험·문서에 넣지 않는다. 예시는 `acme/widgets` 같은 가짜 이름.
-- 작업 폴더는 이 worktree뿐. 라이브 체크아웃(`C:\Users\mic\NetisMaker\commanCenter`)과 라이브 `.run`·`%USERPROFILE%\netis-maker`의 파일·프로세스를 건드리지 않는다. 시험은 임시 폴더만 쓴다.
+- 작업 폴더는 이 worktree뿐. 이 worktree 밖의 라이브 체크아웃과 라이브 `.run`·`%USERPROFILE%\netis-maker`의 파일·프로세스를 건드리지 않는다. 시험은 임시 폴더만 쓴다.
 - 명령 환경: Git Bash에서 `export PATH="$HOME/.cargo/bin:$PATH"` 뒤 `worker-rs/`에서 cargo. Gradle은 worktree 루트에서 `./gradlew test --tests '<패턴>' --no-daemon`(`gradlew --stop` 금지). PowerShell 시험은 `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\tests\public-proc.test.ps1`.
 - **문자열 길이·자르기는 Java와 같은 단위(UTF-16 코드 유닛)**: "끝 2000자", 50자·100자 한도는 UTF-16 단위로 세고, 문자 경계에서만 자른다(바이트 인덱스로 자르면 한글·이모지에서 패닉). 서로게이트 쌍 중간이면 한 유닛 덜 자른다.
 - **정규식은 Java 의미에 맞춘다**: Java의 `\s`·`\d`는 ASCII만이고 MULTILINE `^`·`$`와 `.`은 `\r`도 줄 끝으로 본다. Rust `regex`는 기본이 유니코드 `\s`·`\d`, 줄 끝은 `\n`뿐이다. 계약 사례(Task 1)가 Java 출력을 고정하므로 사례가 통과하도록 ASCII 클래스(`(?-u:\s)` 등)와 줄 끝 처리를 맞춘다.

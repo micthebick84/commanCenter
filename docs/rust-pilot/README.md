@@ -21,7 +21,7 @@
 
 ## 켜고 끄기
 
-- 켜기: `public.env`에 `WORKER_RS_ENABLED=true`(선택: `WORKER_RS_ID`, `WORKER_RS_KINDS`, 기본 `win-rs-worker-1`·`ANALYSIS`) 추가 → `scripts\stop-public.ps1 -Only worker-rs` → 작업 스케줄러로 기동. 스위치가 꺼져 있으면 시작 스크립트는 worker-rs에 대해 아무것도 하지 않는다.
+- 켜기: `public.env`에 `WORKER_RS_ENABLED=true`(선택: `WORKER_RS_ID`, `WORKER_RS_KINDS`, 기본 `win-rs-worker-1`·`ANALYSIS`) 추가 → `scripts\stop-public.ps1 -Only worker-rs` → 작업 스케줄러로 기동. worker-rs는 스위치에 더해 `start-public.ps1 -WithWorkers`일 때만 뜬다(작업 스케줄러 `netisMaker-public`은 이미 `-WithWorkers`를 넘긴다 — 손으로 띄울 때 빠뜨리지 말 것). 인터뷰 서비스 다음에 뜨고, 첫 빌드는 900초 안에 끝나야 하며, `WORKER_RS_ID`가 Java 워커의 `WORKER_ID`(기본 `win-worker-1`)와 같으면 띄우지 않는다. 스위치가 꺼져 있으면 시작 스크립트는 worker-rs에 대해 아무것도 하지 않는다.
 - 끄기: 스위치를 지우고 `stop-public.ps1 -Only worker-rs`. Java 워커는 손대지 않으므로 그것으로 원래 상태다. 하트비트 행은 "끊김"으로 남으니 필요하면 지운다.
 - 워커 DTO·비밀 env 목록·상태 이름·분석 프롬프트를 바꾸면 Java `WorkerRsContractTest`가 `worker-rs/contract/`와 달라 실패한다. 갱신: `./gradlew test --tests '*WorkerRsContractTest' -Dcontract.update=true --no-daemon`.
 
@@ -31,7 +31,7 @@
 
 1. 상주 메모리 30MB 이하.
 2. 계약 시험이 양쪽 CI(Java Backend 잡, `Worker RS (cargo test)` 잡)에서 통과.
-3. Java와 Rust의 레포 잠금 호환 확인(구현 초기에 실측해 성립을 확인함).
+3. Java와 Rust의 레포 잠금 호환 확인(구현 초기에 실측해 성립을 확인함). 실측은 Windows에서만 했다 — 유닉스에서는 두 쪽이 서로 다른 잠금 방식을 쓰므로 같은 레포 캐시를 함께 써도 된다는 보장이 없다(아래 "후속으로 남긴 것").
 4. 격리 끝-끝 성공(임시 API·임시 DB·실제 claude로 작은 공개 레포 분석 → `분석완료`와 결과·사용량 저장).
 5. 라이브에서 기동·정지 3회 이상 문제 없음.
 
@@ -79,6 +79,6 @@ Get-ChildItem src\main\java\com\hamonsoft\netismaker\workerdaemon -Filter *.java
 ## 후속으로 남긴 것 (이 단계에서 고치지 않음)
 
 - Java: 사용량이 든 유실 보고 줄을 다시 읽지 못할 가능성(확인 필요), `git rev-parse` 종료 코드 미검사, API의 분석 정체 회수 5분과 워커 분석 상한 10분의 불일치.
-- 유닉스에서의 Java·Rust 레포 잠금 호환(원격 macOS 워커로 넓힐 때).
+- 유닉스에서의 Java·Rust 레포 잠금 호환(원격 macOS 워커로 넓힐 때). 호환 실측은 Windows에서만 했고, 유닉스에서는 두 쪽의 잠금 방식이 달라 캐시 공유가 보장되지 않는다.
 - 2단계 설계: 배포·배포 중지, `supports` 토큰, PC 단위 주기 작업(사용량 수집·worktree 정리·레포 캐시 정리·Docker GC·배포 정합)의 소유.
 - `Worker RS (cargo test)`를 main 브랜치 보호의 필수 체크로 넣을지(저장소 설정, 사용자 결정).

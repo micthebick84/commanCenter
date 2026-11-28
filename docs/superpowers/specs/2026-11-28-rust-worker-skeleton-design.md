@@ -75,7 +75,9 @@ Java 워커와 같은 이름을 쓴다: `WORKER_ID`, `API_BASE_URL`, `WORKER_API
 | `GET /worker/next-task?workerId=&kinds=ANALYSIS` | 204면 일감 없음. `supports`는 1단계에서 보내지 않는다(분석 큐에는 걸리지 않는다) |
 | `POST /worker/tasks/{id}/result` | 성공: `workerId, status=COMPLETED, markdownResult, subtasksJson, claudeLog, durationMs, usage`. 실패: `workerId, status=FAILED, failureReason, usage(있으면)` |
 
-받은 작업의 `kind`가 `ANALYSIS`가 아니면(서버가 걸러 주므로 생기지 않아야 한다) 처리하지 않고 오류 로그만 남긴다 — 서버의 정체 회수가 되돌린다.
+받은 작업의 `kind`가 `ANALYSIS`가 아니면(서버가 걸러 주므로 생기지 않아야 한다) 처리·보고하지 않고 오류 로그를 남긴 뒤 `worker-rs fatal: …`로 멈춘다(종료 코드 1). 계속 폴링하면 `kinds`를 무시하는 서버에서 폴링마다 남의 작업을 하나씩 잡게 되므로, 멈추고 서버의 워커 정지 회수가 되돌리게 한다.
+
+리다이렉트(3xx)는 따라가지 않고 서버 오류로 본다 — 결과 보고가 다른 주소에 "전달"되거나 POST가 GET으로 바뀌는 일을 막고 재시도·유실 보고로 넘긴다.
 
 ### 4. 분석 처리(Java `processAnalysis`와 같은 순서·같은 문구)
 
@@ -150,13 +152,13 @@ Java 워커와 **같은 캐시 폴더를 같이 쓴다**. 그래서 아래를 �
 
 ### 10. 기동·정지 통합(스크립트는 ASCII만)
 
-- **스위치**: `public.env`(또는 env)에 `WORKER_RS_ENABLED=true`이고 `-WithWorkers`일 때만. 꺼져 있으면 한 줄도 찍지 않고 건너뛴다.
-- **빌드**: `worker-rs/`에서 `cargo build --release --locked`(cargo는 `%USERPROFILE%\.cargo\bin\cargo.exe`, 없으면 `[FAIL] worker-rs`이고 다른 서비스에는 영향 없음). 로그 `.run\worker-rs-build.log`.
+- **스위치**: `public.env`(또는 env)에 `WORKER_RS_ENABLED=true`이고 `-WithWorkers`일 때만. 꺼져 있으면 한 줄도 찍지 않고 건너뛴다. 켜져 있으면 인터뷰 서비스 **다음에** 띄우고 전체를 try/catch로 감싸(`[FAIL] worker-rs - <사유>`) 느린 빌드나 예외가 인터뷰 서비스를 늦추거나 막지 않게 한다. `WORKER_RS_ID`(기본 `win-rs-worker-1`)가 Java 워커의 `WORKER_ID`(기본 `win-worker-1`)와 같으면(대소문자 무시) 빌드·기동하지 않고 `[FAIL]` — 같은 id면 기동 알림이 Java 워커의 진행 중 작업을 되돌리고 유실 보고·MCP 파일이 겹친다.
+- **빌드**: `worker-rs/`에서 `cargo build --release --locked`(cargo는 `%USERPROFILE%\.cargo\bin\cargo.exe`, 없으면 `[FAIL] worker-rs`이고 다른 서비스에는 영향 없음). 로그 `.run\worker-rs-build.log`. `cargo build`·`cargo clean`은 각각 900초 상한이고 넘으면 프로세스 트리를 끝내고 `[FAIL] worker-rs build - timed out after 900s`.
 - **실행 파일**: jar와 같은 규칙으로 `%USERPROFILE%\netis-maker\run\bin\netis-worker-rs-<sha7>[-dirty-<시각>].exe`에 `.part`로 복사한 뒤 이름을 바꿔 그 사본을 실행. 깨끗한 트리에 같은 이름이 있으면 빌드하지 않는다. 최근 5개와 실행 중인 것만 남긴다. 빌드 실패 시 이전 사본으로 띄우지 않는다.
 - **env**: `API_BASE_URL=http://localhost:8090`, `WORKER_API_KEY`, `CLAUDE_CLI`, `WORKER_ID=<WORKER_RS_ID, 기본 win-rs-worker-1>`, `WORKER_KINDS=<WORKER_RS_KINDS, 기본 ANALYSIS>`, `WORKER_VERSION=rs-<sha7>`.
 - **준비 확인**: 설정 검사와 MCP 파일 준비가 끝나면 `worker-rs started: id=… kinds=…`를 찍는다. 실패 패턴은 `worker-rs fatal`과 래퍼 종료. 대기 60초.
 - **프로세스 찾기**: 래퍼(cmd)의 자식 중 실행 파일 경로가 그 사본인 것(순수 함수로 만들고 시험 추가). 기록은 `.run\worker-rs.json`, 로그는 `.run\worker-rs.log`(이전 로그 보관 규칙 그대로).
-- **정지**: `stop-public.ps1`의 전체 이름 목록(`$allNames`, `-Only` 검증 겸용)에 `worker-rs`를 `worker` 앞에 추가. `-KeepWorkers`가 멈추는 목록(`front, api, auth`)은 그대로 둔다 — 워커를 남기는 스위치이므로 `worker-rs`도 남는다. `-Only worker-rs`로 단건 정지.
+- **정지**: `stop-public.ps1`의 전체 이름 목록(`$allNames`, `-Only` 검증 겸용)에 `worker-rs`를 `worker` 앞에 추가. `-KeepWorkers`가 멈추는 목록(`front, api, auth`)은 그대로 둔다 — 워커를 남기는 스위치이므로 `worker-rs`도 남는다. `-Only worker-rs`로 단건 정지. `.run\worker-rs.pid`·`.json`이 둘 다 없으면(켠 적 없음) `-Only worker-rs`가 아닌 한 한 줄도 찍지 않는다.
 - 로그 줄은 `<ISO 시각> <수준> <메시지>` UTF-8. 비밀값·인증 URL은 찍지 않는다.
 
 ### 11. CI

@@ -230,8 +230,17 @@ function Get-ServiceJar([string]$Prefix, [string]$SrcDir, [string]$Name) {
     if ($exit -ne 0) { Write-Host "[FAIL] $Name build - see .run\$Name-build.log"; return $null }
     $built = Select-BootJar (Get-ChildItem (Join-Path $SrcDir 'build\libs') -File -ErrorAction SilentlyContinue) $since
     if (-not $built) { Write-Host "[FAIL] $Name build - no single new boot jar in $SrcDir\build\libs"; return $null }
-    try { Copy-Item -LiteralPath $built -Destination $target -ErrorAction Stop }
-    catch { Write-Host "[FAIL] $Name - cannot copy the jar to ${target}: $($_.Exception.Message)"; return $null }
+    # Copy to .part, then rename: a copy cut short (reboot, task time limit) must never leave a truncated
+    # <sha7>.jar that every later clean start would reuse. An existing target is never overwritten.
+    $tmp = "$target.part"
+    try {
+        if (Test-Path -LiteralPath $tmp) { Remove-Item -LiteralPath $tmp -Force -ErrorAction Stop }
+        [System.IO.File]::Copy($built, $tmp, $false)
+        Move-Item -LiteralPath $tmp -Destination $target -ErrorAction Stop
+    } catch {
+        Remove-Item -LiteralPath $tmp -Force -ErrorAction SilentlyContinue
+        Write-Host "[FAIL] $Name - cannot copy the jar to ${target}: $($_.Exception.Message)"; return $null
+    }
     $script:jarCache[$cacheKey] = $target
     return $target
 }

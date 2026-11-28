@@ -159,14 +159,18 @@ function Invoke-Logged([string]$WorkDir, [string]$CommandLine, [string]$LogName)
     return $p.ExitCode
 }
 
-function Wait-Log([string]$Name, [string]$OkPattern, [string]$FailPattern, [int]$TimeoutSec = 180) {
+# $ProcessId (optional, the cmd wrapper): once it has exited without the ok line, stop waiting -
+# a java -jar service that dies on startup (DB down, bad migration) prints no Gradle FAILURE line.
+function Wait-Log([string]$Name, [string]$OkPattern, [string]$FailPattern, [int]$TimeoutSec = 180, [int]$ProcessId = 0) {
     $log = Join-Path $RunDir "$Name.log"
     $deadline = (Get-Date).AddSeconds($TimeoutSec)
     while ((Get-Date) -lt $deadline) {
+        $exited = ($ProcessId -gt 0) -and -not (Get-Process -Id $ProcessId -ErrorAction SilentlyContinue)
         if (Test-Path $log) {
             if (Select-String -Path $log -Pattern $OkPattern -Quiet)   { return $true }
             if (Select-String -Path $log -Pattern $FailPattern -Quiet) { return $false }
         }
+        if ($exited) { return $false }
         Start-Sleep -Seconds 2
     }
     return $false
@@ -182,7 +186,7 @@ function Wait-Port([int]$Port, [int]$TimeoutSec = 90) {
 }
 
 $SpringOk   = 'Started .*Application'
-$SpringFail = 'APPLICATION FAILED|BUILD FAILED|FAILURE:'
+$SpringFail = 'APPLICATION FAILED|Application run failed|BUILD FAILED|FAILURE:'
 $failed = @()
 
 # ---- jar build / run (auth, api, worker) -------------------------------------
@@ -318,7 +322,7 @@ if (Test-PortListening 9000) {
             CORS_ALLOWED_ORIGINS            = "$AppOrigin,http://localhost:9000,http://localhost:3001,http://localhost:3000,http://localhost:8080"
         }
         # The API fetches JWKS from auth at startup, so wait for auth first.
-        if (Wait-Log 'auth' $SpringOk $SpringFail 240) { Write-Host "[ok]   auth ready"; Register-Service 'auth' $authPid $AuthDir }
+        if (Wait-Log 'auth' $SpringOk $SpringFail 240 $authPid) { Write-Host "[ok]   auth ready"; Register-Service 'auth' $authPid $AuthDir }
         else { Write-Host "[FAIL] auth - see .run\auth.log"; $failed += 'auth' }
     }
 }
@@ -374,7 +378,7 @@ if (Test-PortListening 3001) {
 }
 
 if ($apiStarted) {
-    if (Wait-Log 'api' $SpringOk $SpringFail 240) { Write-Host "[ok]   api ready"; Register-Service 'api' $apiPid $Root }
+    if (Wait-Log 'api' $SpringOk $SpringFail 240 $apiPid) { Write-Host "[ok]   api ready"; Register-Service 'api' $apiPid $Root }
     else { Write-Host "[FAIL] api - see .run\api.log"; $failed += 'api' }
 }
 if ($frontStarted) {
@@ -422,7 +426,7 @@ if ($WithWorkers) {
         } else {
             $workerPid = Start-Service-Proc 'worker' $Root "`"$JavaExe`" $JavaOpts -jar `"$workerJar`" --spring.profiles.active=worker" $workerEnv
             # Find-AppPid's worker lookup takes the jar path (the JVM is the wrapper's child running it)
-            if (Wait-Log 'worker' $SpringOk $SpringFail 240) { Write-Host "[ok]   worker ready"; Register-Service 'worker' $workerPid $workerJar }
+            if (Wait-Log 'worker' $SpringOk $SpringFail 240 $workerPid) { Write-Host "[ok]   worker ready"; Register-Service 'worker' $workerPid $workerJar }
             else { Write-Host "[FAIL] worker - see .run\worker.log"; $failed += 'worker' }
         }
     }

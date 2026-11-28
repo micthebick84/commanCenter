@@ -365,6 +365,29 @@ try {
     Assert-Equal "$binDir\netis-worker-rs-000001.exe" $einUse[0] 'Select-ExesInUse: returns the image path'
     Assert-Equal 1 (@(Select-ExesInUse $erun ($binDir + '\'))).Count 'Select-ExesInUse: trailing backslash on the folder is fine'
 
+    # ---- Get-EffectiveWorkerId / Find-WorkerIdCollision -------------------------
+    Assert-Equal 'win-rs-worker-1' (Get-EffectiveWorkerId $null 'win-rs-worker-1') 'Get-EffectiveWorkerId: unset -> default'
+    Assert-Equal 'win-rs-worker-1' (Get-EffectiveWorkerId '' 'win-rs-worker-1') 'Get-EffectiveWorkerId: empty -> default'
+    Assert-Equal 'rs-2' (Get-EffectiveWorkerId 'rs-2' 'win-rs-worker-1') 'Get-EffectiveWorkerId: set value wins'
+    Assert-True ($null -eq (Find-WorkerIdCollision $null $null)) 'Find-WorkerIdCollision: both defaults differ'
+    Assert-True ($null -eq (Find-WorkerIdCollision 'rs-1' 'java-1')) 'Find-WorkerIdCollision: different ids'
+    Assert-Equal 'win-worker-1' (Find-WorkerIdCollision 'win-worker-1' $null) 'Find-WorkerIdCollision: rs id equals the Java default'
+    Assert-Equal 'win-rs-worker-1' (Find-WorkerIdCollision $null 'win-rs-worker-1') 'Find-WorkerIdCollision: Java id equals the rs default'
+    Assert-Equal 'Same-ID' (Find-WorkerIdCollision 'Same-ID' 'same-id') 'Find-WorkerIdCollision: case-insensitive'
+    Assert-Equal 'w-1' (Find-WorkerIdCollision ' w-1 ' 'w-1') 'Find-WorkerIdCollision: surrounding spaces ignored'
+
+    # ---- Test-QuietSkip ------------------------------------------------------------
+    $qdir = Join-Path $RunDir 'quiet'
+    New-Item -ItemType Directory -Force $qdir | Out-Null
+    Assert-True (Test-QuietSkip $qdir 'worker-rs' $false) 'Test-QuietSkip: worker-rs never started -> silent'
+    Assert-True (-not (Test-QuietSkip $qdir 'worker-rs' $true)) 'Test-QuietSkip: -Only worker-rs -> normal message'
+    Assert-True (-not (Test-QuietSkip $qdir 'worker' $false)) 'Test-QuietSkip: other services unchanged'
+    Set-Content -Path (Join-Path $qdir 'worker-rs.pid') -Value '1' -Encoding ascii
+    Assert-True (-not (Test-QuietSkip $qdir 'worker-rs' $false)) 'Test-QuietSkip: pid file present -> stopped normally'
+    Remove-Item (Join-Path $qdir 'worker-rs.pid')
+    Set-Content -Path (Join-Path $qdir 'worker-rs.json') -Value '{}' -Encoding ascii
+    Assert-True (-not (Test-QuietSkip $qdir 'worker-rs' $false)) 'Test-QuietSkip: json record present -> stopped normally'
+
     # ---- Select-OrphanClaude -----------------------------------------------
     $claude = 'C:\Users\x\.local\bin\claude.exe'
     $all = @(

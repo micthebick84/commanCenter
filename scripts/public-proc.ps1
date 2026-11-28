@@ -296,6 +296,37 @@ function Select-ExesInUse($Processes, [string]$BinDir) {
     return $out
 }
 
+# Pure. The WORKER_ID start-public gives a worker: $Value, or $Default when it is unset or empty.
+function Get-EffectiveWorkerId([string]$Value, [string]$Default) {
+    if ([string]::IsNullOrEmpty($Value)) { return $Default }
+    return $Value
+}
+
+# Pure. The id both workers would use, or $null when they differ. Effective ids: WORKER_RS_ID
+# (default win-rs-worker-1) for worker-rs and WORKER_ID (default win-worker-1) for the Java
+# worker, compared trimmed and case-insensitively. Equal ids would let worker-rs's startup
+# notice requeue the Java worker's tasks and share its dead-letter and MCP files.
+function Find-WorkerIdCollision([string]$RsId, [string]$JavaId) {
+    try {
+        $rs = (Get-EffectiveWorkerId $RsId 'win-rs-worker-1').Trim()
+        $java = (Get-EffectiveWorkerId $JavaId 'win-worker-1').Trim()
+        if ([string]::Equals($rs, $java, [StringComparison]::OrdinalIgnoreCase)) { return $rs }
+    } catch { }
+    return $null
+}
+
+# Pure (reads two file names). True when stop-public should skip $Name without a line: only for
+# worker-rs, only when it was not asked for by name (-Only), and only when neither .run\worker-rs.pid
+# nor .run\worker-rs.json exists - so a stack that never enabled worker-rs prints nothing new.
+function Test-QuietSkip([string]$RunDir, [string]$Name, [bool]$Explicit) {
+    try {
+        if ($Name -ne 'worker-rs' -or $Explicit) { return $false }
+        if (Test-Path -LiteralPath (Join-Path $RunDir "$Name.pid")) { return $false }
+        if (Test-Path -LiteralPath (Join-Path $RunDir "$Name.json")) { return $false }
+        return $true
+    } catch { return $false }
+}
+
 # Spec 5.2: the process that really does the work, or $null.
 # $Root: the app's folder; for 'worker' it is the jar path, for 'worker-rs' the exe path that start-public ran.
 function Find-AppPid([string]$Name, [int]$WrapperPid, [string]$Root) {

@@ -5,7 +5,8 @@
 #   2) netisMaker API  (:8090)  JWKS from localhost, iss validated against the public issuer
 #   3) frontend        (:3001)  production build (Nitro), public NUXT_PUBLIC_* values
 #   4) worker + interview service (only with -WithWorkers; they consume claude quota)
-#      + worker-rs, a native Rust worker (only with -WithWorkers AND WORKER_RS_ENABLED=true; off by default)
+#      + worker-rs, a native Rust worker (only with -WithWorkers AND WORKER_RS_ENABLED=true; off by default;
+#        started last, after the interview service; build limit 900 s; WORKER_RS_ID must differ from WORKER_ID)
 #
 # The tunnel (cloudflared) is NOT managed here. Expected ingress in
 # %USERPROFILE%\.cloudflared\config.yml:
@@ -154,15 +155,28 @@ function Start-Service-Proc([string]$Name, [string]$WorkDir, [string]$CommandLin
 # Run a command line to completion through cmd with all output in a log file.
 # (Calling npm directly would turn its stderr lines into terminating errors under
 # $ErrorActionPreference = 'Stop' on Windows PowerShell 5.1.)
-function Invoke-Logged([string]$WorkDir, [string]$CommandLine, [string]$LogName) {
+# Exit code Invoke-Logged returns when -TimeoutSec ran out (258 = WAIT_TIMEOUT).
+$InvokeTimedOut = 258
+
+# $TimeoutSec: 0 = wait forever (default). Otherwise the process tree is killed once the limit has
+# passed and $InvokeTimedOut is returned.
+function Invoke-Logged([string]$WorkDir, [string]$CommandLine, [string]$LogName, [int]$TimeoutSec = 0) {
     $log = Join-Path $RunDir $LogName
     Reset-Log $LogName
     $p = Start-Process -FilePath $env:ComSpec -ArgumentList "/c `"$CommandLine > `"$log`" 2>&1`"" `
         -WorkingDirectory $WorkDir -WindowStyle Hidden -PassThru
     # Not -Wait: that also waits for descendants, and pg_ctl leaves postgres.exe running.
     $null = $p.Handle   # cache the handle so ExitCode is available after exit
-    $p.WaitForExit()
-    return $p.ExitCode
+    if ($TimeoutSec -le 0) {
+        $p.WaitForExit()
+        return $p.ExitCode
+    }
+    if ($p.WaitForExit($TimeoutSec * 1000)) { return $p.ExitCode }
+    # Start-Process, not '& taskkill 2>...': under 'Stop' a native stderr line would throw here.
+    $k = Start-Process -FilePath 'taskkill.exe' -ArgumentList "/PID $($p.Id) /T /F" -WindowStyle Hidden -PassThru
+    $null = $k.WaitForExit(15000)
+    $null = $p.WaitForExit(10000)
+    return $InvokeTimedOut
 }
 
 # $ProcessId (optional, the cmd wrapper): once it has exited without the ok line, stop waiting -
@@ -299,11 +313,15 @@ function Get-ServiceExe([string]$Prefix, [string]$SrcDir, [string]$Name) {
     $cargo = Join-Path $env:USERPROFILE '.cargo\bin\cargo.exe'
     if (-not (Test-Path -LiteralPath $cargo)) { Write-Host "[FAIL] ${Name}: cargo not found ($cargo)"; return $null }
     Write-Host "[..]   $Name building $(Split-Path -Leaf $target) (cargo build --release)"
+    # 900 s each: a first build may download crates or install a toolchain, but a stuck cargo
+    # (lock held elsewhere) must not hold up the rest of the start.
     if ($Rebuild) {
-        $cleanExit = Invoke-Logged $SrcDir "`"$cargo`" clean" "$Name-clean.log"
+        $cleanExit = Invoke-Logged $SrcDir "`"$cargo`" clean" "$Name-clean.log" 900
+        if ($cleanExit -eq $InvokeTimedOut) { Write-Host "[FAIL] $Name cargo clean - timed out after 900s (see .run\$Name-clean.log)"; return $null }
         if ($cleanExit -ne 0) { Write-Host "[FAIL] $Name cargo clean - see .run\$Name-clean.log"; return $null }
     }
-    $exit = Invoke-Logged $SrcDir "`"$cargo`" build --release --locked" "$Name-build.log"
+    $exit = Invoke-Logged $SrcDir "`"$cargo`" build --release --locked" "$Name-build.log" 900
+    if ($exit -eq $InvokeTimedOut) { Write-Host "[FAIL] $Name build - timed out after 900s (see .run\$Name-build.log)"; return $null }
     if ($exit -ne 0) { Write-Host "[FAIL] $Name build - see .run\$Name-build.log"; return $null }
     $built = Join-Path $SrcDir 'target\release\netis-worker-rs.exe'
     if (-not (Test-Path -LiteralPath $built)) { Write-Host "[FAIL] $Name build - $built not found"; return $null }
@@ -514,31 +532,6 @@ if ($WithWorkers) {
         }
     }
 
-    # worker-rs (native exe, opt-in): chain is cmd wrapper -> netis-worker-rs-<sha7>.exe
-    if ($env:WORKER_RS_ENABLED -eq 'true') {
-        if (Test-ServiceAlive $RunDir 'worker-rs') {
-            Write-Host "[skip] worker-rs: already running"
-        } else {
-            $rsExe = Get-ServiceExe 'netis-worker-rs' (Join-Path $Root 'worker-rs') 'worker-rs'
-            if (-not $rsExe) {
-                $failed += 'worker-rs'
-            } else {
-                Write-Host "[..]   worker-rs starting - $(Split-Path -Leaf $rsExe)"
-                $rsPid = Start-Service-Proc 'worker-rs' $Root "`"$rsExe`"" @{
-                    API_BASE_URL   = 'http://localhost:8090'
-                    WORKER_API_KEY = $workerKey
-                    CLAUDE_CLI     = $claudeCli
-                    WORKER_ID      = $(if ($env:WORKER_RS_ID) { $env:WORKER_RS_ID } else { 'win-rs-worker-1' })
-                    WORKER_KINDS   = $(if ($env:WORKER_RS_KINDS) { $env:WORKER_RS_KINDS } else { 'ANALYSIS' })
-                    WORKER_VERSION = "rs-$($script:workerRsSha7)"
-                }
-                # Find-AppPid's worker-rs lookup takes the exe path (the process is the wrapper's child running it)
-                if (Wait-Log 'worker-rs' 'worker-rs started:' 'worker-rs fatal' 60 $rsPid) { Write-Host "[ok]   worker-rs ready"; Register-Service 'worker-rs' $rsPid $rsExe }
-                else { Write-Host "[FAIL] worker-rs - see .run\worker-rs.log"; $failed += 'worker-rs' }
-            }
-        }
-    }
-
     if (Test-ServiceAlive $RunDir 'interview') {
         Write-Host "[skip] interview: already running"
     } else {
@@ -558,6 +551,42 @@ if ($WithWorkers) {
             }
             if (Wait-Log 'interview' '\[interview-service\].*polling' 'Missing required env|Error:' 60) { Write-Host "[ok]   interview ready"; Register-Service 'interview' $interviewPid $IvDir }
             else { Write-Host "[FAIL] interview - see .run\interview.log"; $failed += 'interview' }
+        }
+    }
+
+    # worker-rs (native exe, opt-in): chain is cmd wrapper -> netis-worker-rs-<sha7>.exe
+    # Last on purpose: a slow first cargo build (900 s limit) or an unexpected error here never delays
+    # or stops the interview service. Switch off = nothing at all, not even a line.
+    if ($env:WORKER_RS_ENABLED -eq 'true') {
+        try {
+            $rsId = Get-EffectiveWorkerId $env:WORKER_RS_ID 'win-rs-worker-1'
+            $sameId = Find-WorkerIdCollision $env:WORKER_RS_ID $env:WORKER_ID
+            if ($sameId) {
+                # same id = its startup notice would requeue the Java worker's tasks; shared dead-letter/MCP files
+                Write-Host "[FAIL] worker-rs: WORKER_RS_ID must differ from WORKER_ID ($sameId)"; $failed += 'worker-rs'
+            } elseif (Test-ServiceAlive $RunDir 'worker-rs') {
+                Write-Host "[skip] worker-rs: already running"
+            } else {
+                $rsExe = Get-ServiceExe 'netis-worker-rs' (Join-Path $Root 'worker-rs') 'worker-rs'
+                if (-not $rsExe) {
+                    $failed += 'worker-rs'
+                } else {
+                    Write-Host "[..]   worker-rs starting - $(Split-Path -Leaf $rsExe)"
+                    $rsPid = Start-Service-Proc 'worker-rs' $Root "`"$rsExe`"" @{
+                        API_BASE_URL   = 'http://localhost:8090'
+                        WORKER_API_KEY = $workerKey
+                        CLAUDE_CLI     = $claudeCli
+                        WORKER_ID      = $rsId
+                        WORKER_KINDS   = $(if ($env:WORKER_RS_KINDS) { $env:WORKER_RS_KINDS } else { 'ANALYSIS' })
+                        WORKER_VERSION = "rs-$($script:workerRsSha7)"
+                    }
+                    # Find-AppPid's worker-rs lookup takes the exe path (the process is the wrapper's child running it)
+                    if (Wait-Log 'worker-rs' 'worker-rs started:' 'worker-rs fatal' 60 $rsPid) { Write-Host "[ok]   worker-rs ready"; Register-Service 'worker-rs' $rsPid $rsExe }
+                    else { Write-Host "[FAIL] worker-rs - see .run\worker-rs.log"; $failed += 'worker-rs' }
+                }
+            }
+        } catch {
+            Write-Host "[FAIL] worker-rs - $($_.Exception.Message)"; $failed += 'worker-rs'
         }
     }
 }

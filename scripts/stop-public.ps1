@@ -39,7 +39,10 @@ if ($PSBoundParameters.ContainsKey('Only')) {
     $names = @($allNames | Where-Object { $wanted -contains $_ })
 }
 
+$explicit = $PSBoundParameters.ContainsKey('Only')
 foreach ($name in $names) {
+    # worker-rs that never ran (no .pid/.json) is skipped without a line unless asked for with -Only
+    if (Test-QuietSkip $RunDir $name $explicit) { continue }
     foreach ($line in @(Stop-ServiceRecord $RunDir $name)) { Write-Host $line }
 }
 

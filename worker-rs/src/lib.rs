@@ -5,3 +5,4 @@ pub mod contract;
 pub mod dto;
 pub mod log;
 pub mod mask;
+pub mod parser;

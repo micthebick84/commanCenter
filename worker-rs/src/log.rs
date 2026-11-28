@@ -37,14 +37,14 @@ pub fn error(msg: &str) {
     emit("ERROR", msg);
 }
 
-/// The line the panic hook logs: `worker-rs panic: <masked message> at <location>`.
-/// Not `worker-rs fatal:` - the hook also runs for panics that are then caught (an analysis
-/// panic becomes a FAILED result); a panic that ends the process gets its own fatal line.
+/// The line the panic hook logs: `worker-rs fatal: panic: <masked message> at <location>`.
+/// The hook also runs for panics that are then caught (an analysis panic becomes a FAILED
+/// result and the worker keeps running); such a line is followed by the task's report.
 pub fn panic_line(message: &str, location: Option<&str>) -> String {
     let message = crate::mask::mask(message);
     match location {
-        Some(at) => format!("worker-rs panic: {message} at {at}"),
-        None => format!("worker-rs panic: {message}"),
+        Some(at) => format!("worker-rs fatal: panic: {message} at {at}"),
+        None => format!("worker-rs fatal: panic: {message}"),
     }
 }
 
@@ -84,9 +84,9 @@ mod tests {
         );
         assert_eq!(
             line,
-            "worker-rs panic: clone of https://***@h/x.git failed at src/repo.rs:10"
+            "worker-rs fatal: panic: clone of https://***@h/x.git failed at src/repo.rs:10"
         );
-        assert_eq!(panic_line("boom", None), "worker-rs panic: boom");
+        assert_eq!(panic_line("boom", None), "worker-rs fatal: panic: boom");
     }
 
     #[test]

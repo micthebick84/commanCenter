@@ -21,7 +21,7 @@ fn main() -> ExitCode {
     match std::panic::catch_unwind(run_main) {
         Ok(code) => code,
         Err(_) => {
-            log::error("worker-rs fatal: panic on the main thread (see the worker-rs panic line)");
+            log::error("worker-rs fatal: the main thread panicked (see the panic line above)");
             ExitCode::from(1)
         }
     }

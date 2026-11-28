@@ -169,8 +169,8 @@ class WorkerRsContractTest {
             + "  - 위험도: L\n"
             + "  - 설명: 입력 지연을 둔다\n\n";
     private static final String S5 = "## 5. 위험 요소 및 미해결 질문\n- 없음\n";
-    private static final String NBSP = " ";
-    private static final String IDEOGRAPHIC_SPACE = "　";
+    private static final String NBSP = "\u00a0";
+    private static final String IDEOGRAPHIC_SPACE = "\u3000";
 
     @Test
     void parserCasesMatchJavaParser() throws Exception {
@@ -190,7 +190,7 @@ class WorkerRsContractTest {
         inputs.put("crlf-line-endings", full.replace("\n", "\r\n"));
         inputs.put("ideographic-space-after-hashes", full.replace("## 2.", "##" + IDEOGRAPHIC_SPACE + "2."));
         inputs.put("nbsp-after-hashes", full.replace("## 3.", "##" + NBSP + "3."));
-        inputs.put("fullwidth-section-number", full.replace("## 1.", "## １."));
+        inputs.put("fullwidth-section-number", full.replace("## 1.", "## \uff11."));
         inputs.put("nbsp-after-subtask-colon", full.replace("**검색 API 추가**: ", "**검색 API 추가**:" + NBSP));
 
         PromptResultParser parser = new PromptResultParser();
@@ -211,10 +211,10 @@ class WorkerRsContractTest {
             }
         });
         // 시험 입력이 의도한 분기를 지나가는지 최소한만 본다 (나머지 결과는 Java 파서가 기준)
-        assertThat(cases.get(0).get("ok").asBoolean()).isTrue();
-        assertThat(api.readTree(cases.get(0).get("subtasksJson").asText())).hasSize(2);
-        assertThat(cases.get(4).get("ok").asBoolean()).isFalse();
-        assertThat(cases.get(5).get("ok").asBoolean()).isFalse();
+        assertThat(caseWhere(cases, "name", "normal").get("ok").asBoolean()).isTrue();
+        assertThat(api.readTree(caseWhere(cases, "name", "normal").get("subtasksJson").asText())).hasSize(2);
+        assertThat(caseWhere(cases, "name", "missing-section-2").get("ok").asBoolean()).isFalse();
+        assertThat(caseWhere(cases, "name", "empty-input").get("ok").asBoolean()).isFalse();
         checkJson("parser-cases.json", cases);
     }
 
@@ -235,12 +235,26 @@ class WorkerRsContractTest {
             c.put("input", in);
             c.put("output", GitRemotes.mask(in));
         }
-        assertThat(cases.get(0).get("output").asText()).isEqualTo("https://***@host/x");
-        assertThat(cases.get(4).get("output").asText()).isEqualTo("://user@host");
+        // mask cases have no name field (adding one would change the golden file): looked up by input
+        assertThat(caseWhere(cases, "input", "https://oauth2:tok@host/x").get("output").asText()).isEqualTo("https://***@host/x");
+        assertThat(caseWhere(cases, "input", "://user@host").get("output").asText()).isEqualTo("://user@host");
         checkJson("mask-cases.json", cases);
     }
 
     // ---------- file helpers ----------
+
+    /** The one case whose {@code field} equals {@code value} - by content, not by position. */
+    private static JsonNode caseWhere(ArrayNode cases, String field, String value) {
+        JsonNode found = null;
+        for (JsonNode c : cases) {
+            if (value.equals(c.path(field).asText(null))) {
+                assertThat(found).as("two cases with " + field + "=" + value).isNull();
+                found = c;
+            }
+        }
+        assertThat(found).as("no case with " + field + "=" + value).isNotNull();
+        return found;
+    }
 
     private void checkText(String file, String expected) throws IOException {
         Path p = DIR.resolve(file);
@@ -277,7 +291,7 @@ class WorkerRsContractTest {
         StringBuilder sb = new StringBuilder(json.length() + 16);
         for (int i = 0; i < json.length(); i++) {
             char ch = json.charAt(i);
-            if (ch == ' ' || ch == '　' || (ch >= '０' && ch <= '９')) {
+            if (ch == '\u00a0' || ch == '\u3000' || (ch >= '\uff10' && ch <= '\uff19')) {
                 sb.append(String.format("\\u%04x", (int) ch));
             } else {
                 sb.append(ch);

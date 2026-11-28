@@ -7,7 +7,7 @@
 //!
 //! Token strings are only checked for being blank; they never reach a log or a result.
 
-use crate::claude::child_env;
+use crate::contract::secret_env_names;
 use crate::log;
 use crate::proc;
 use serde_json::Value;
@@ -118,9 +118,17 @@ fn parse_logged_in(output: &str) -> Option<bool> {
     v.get("loggedIn")?.as_bool()
 }
 
+fn is_secret_name(name: &str) -> bool {
+    secret_env_names()
+        .iter()
+        .any(|n| n.eq_ignore_ascii_case(name))
+}
+
 /// `claude auth status --json` (exit code 1 when logged out, so only the JSON counts).
 /// The child inherits the real process environment, with `env` overlaid on top (its
-/// entries win); stack-secret names are stripped from both.
+/// entries win); stack-secret names are stripped from both. Done as `env_clear` plus
+/// re-adding the filtered real env as OS strings (non-Unicode values survive, names are
+/// matched case-insensitively), because a `Command` otherwise inherits everything.
 fn cli_logged_in(env: &HashMap<String, String>, home: &Path, claude: &Path) -> Option<bool> {
     if claude.as_os_str().is_empty() {
         return None;
@@ -128,11 +136,16 @@ fn cli_logged_in(env: &HashMap<String, String>, home: &Path, claude: &Path) -> O
     let mut cmd = Command::new(claude);
     cmd.args(["auth", "status", "--json"])
         .current_dir(home)
-        .envs(child_env(
+        .env_clear()
+        .envs(
             std::env::vars_os()
-                .filter_map(|(k, v)| Some((k.into_string().ok()?, v.into_string().ok()?)))
-                .chain(env.iter().map(|(k, v)| (k.clone(), v.clone()))),
-        ));
+                .filter(|(k, _)| !is_secret_name(&k.to_string_lossy()))
+                .chain(
+                    env.iter()
+                        .filter(|(k, _)| !is_secret_name(k))
+                        .map(|(k, v)| (k.into(), v.into())),
+                ),
+        );
     match proc::run(&mut cmd, None, CLI_TIMEOUT) {
         Ok(out) if !out.timed_out => {
             let parsed = parse_logged_in(&out.stdout);

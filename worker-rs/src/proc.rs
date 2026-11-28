@@ -5,8 +5,9 @@
 //! [`READER_GRACE`] to finish, so a grandchild that keeps the pipes open cannot block
 //! the call. On timeout the whole process tree is killed.
 
+use crate::log;
 use std::io::{Read, Write};
-use std::process::{Child, Command, Stdio};
+use std::process::{Child, Command, ExitStatus, Stdio};
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
@@ -14,6 +15,8 @@ use std::time::{Duration, Instant};
 /// How long to wait for the output readers once the process has exited (or was killed).
 const READER_GRACE: Duration = Duration::from_secs(2);
 const EXIT_POLL: Duration = Duration::from_millis(15);
+/// Upper bound for the kill helper, and for the child's exit after the kill.
+const KILL_WAIT: Duration = Duration::from_secs(10);
 
 #[derive(Debug, Clone)]
 pub struct Output {
@@ -102,6 +105,11 @@ pub fn run(cmd: &mut Command, stdin: Option<&[u8]>, timeout: Duration) -> std::i
         });
     }
 
+    // Every early return closes both sinks, so detached readers stop collecting output.
+    let close_sinks = || {
+        out_sink.take_and_close();
+        err_sink.take_and_close();
+    };
     let deadline = started + timeout;
     let mut timed_out = false;
     let status = loop {
@@ -109,14 +117,20 @@ pub fn run(cmd: &mut Command, stdin: Option<&[u8]>, timeout: Duration) -> std::i
             Ok(Some(status)) => break status,
             Ok(None) => {}
             Err(e) => {
-                kill_tree(&mut child);
+                let _ = kill_tree(&mut child);
+                close_sinks();
                 return Err(e);
             }
         }
         if Instant::now() >= deadline {
             timed_out = true;
-            kill_tree(&mut child);
-            break child.wait()?;
+            match kill_tree(&mut child) {
+                Ok(status) => break status,
+                Err(e) => {
+                    close_sinks();
+                    return Err(e);
+                }
+            }
         }
         std::thread::sleep(EXIT_POLL);
     };
@@ -138,26 +152,69 @@ pub fn run(cmd: &mut Command, stdin: Option<&[u8]>, timeout: Duration) -> std::i
     })
 }
 
-/// Kills the child and everything it started.
-fn kill_tree(child: &mut Child) {
-    let pid = child.id().to_string();
+/// Polls `poll` every [`EXIT_POLL`] until it yields a value or `limit` has passed.
+/// `Ok(None)` = still nothing after `limit`; an error from `poll` ends the wait at once.
+fn wait_bounded<T>(
+    limit: Duration,
+    mut poll: impl FnMut() -> std::io::Result<Option<T>>,
+) -> std::io::Result<Option<T>> {
+    let end = Instant::now() + limit;
+    loop {
+        if let Some(v) = poll()? {
+            return Ok(Some(v));
+        }
+        if Instant::now() >= end {
+            return Ok(None);
+        }
+        std::thread::sleep(EXIT_POLL);
+    }
+}
+
+/// Runs a kill helper (`taskkill` / `kill`) and waits for it at most [`KILL_WAIT`]; a helper
+/// that hangs is killed itself. Never blocks longer than that.
+fn run_kill_helper(cmd: &mut Command) {
+    let Ok(mut helper) = cmd
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+    else {
+        return;
+    };
+    if !matches!(wait_bounded(KILL_WAIT, || helper.try_wait()), Ok(Some(_))) {
+        log::warn(&format!(
+            "kill helper (pid {}) did not finish in {}s - killing it",
+            helper.id(),
+            KILL_WAIT.as_secs()
+        ));
+        let _ = helper.kill();
+        let _ = wait_bounded(KILL_WAIT, || helper.try_wait());
+    }
+}
+
+/// Kills the child and everything it started, then waits (bounded) for the child's exit.
+/// `Err` when the child is still alive after [`KILL_WAIT`] - logged with its pid; the caller
+/// gets the error instead of hanging (the process is not ended here).
+fn kill_tree(child: &mut Child) -> std::io::Result<ExitStatus> {
+    let pid = child.id();
     #[cfg(windows)]
-    {
-        let _ = Command::new("taskkill")
-            .args(["/PID", &pid, "/T", "/F"])
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status();
-    }
+    run_kill_helper(Command::new("taskkill").args(["/PID", &pid.to_string(), "/T", "/F"]));
     #[cfg(unix)]
-    {
-        let _ = Command::new("kill")
-            .args(["-KILL", "--", &format!("-{pid}")])
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status();
-    }
+    run_kill_helper(Command::new("kill").args(["-KILL", "--", &format!("-{pid}")]));
     let _ = child.kill(); // fallback: at least the direct child
+    match wait_bounded(KILL_WAIT, || child.try_wait()) {
+        Ok(Some(status)) => Ok(status),
+        Ok(None) => {
+            log::error(&format!(
+                "process {pid} could not be killed (still running {}s after the kill)",
+                KILL_WAIT.as_secs()
+            ));
+            Err(std::io::Error::other(format!(
+                "process {pid} could not be killed"
+            )))
+        }
+        Err(e) => Err(e),
+    }
 }
 
 #[cfg(test)]
@@ -178,6 +235,42 @@ mod tests {
                 Err(_) => Ok(0),
             }
         }
+    }
+
+    #[test]
+    fn wait_bounded_gives_up_on_a_condition_that_never_holds() {
+        let t0 = Instant::now();
+        let mut polls = 0;
+        let got = wait_bounded::<()>(Duration::from_millis(120), || {
+            polls += 1;
+            Ok(None)
+        })
+        .unwrap();
+        assert_eq!(got, None);
+        let took = t0.elapsed();
+        assert!(took >= Duration::from_millis(120), "{took:?}");
+        assert!(took < Duration::from_secs(5), "{took:?}");
+        assert!(polls >= 2, "polled {polls} times");
+    }
+
+    #[test]
+    fn wait_bounded_returns_as_soon_as_the_value_appears() {
+        let mut polls = 0;
+        let got = wait_bounded(Duration::from_secs(30), || {
+            polls += 1;
+            Ok((polls == 3).then_some(42))
+        })
+        .unwrap();
+        assert_eq!(got, Some(42));
+        assert_eq!(polls, 3);
+    }
+
+    #[test]
+    fn wait_bounded_passes_a_poll_error_through() {
+        let got = wait_bounded::<()>(Duration::from_secs(30), || {
+            Err(std::io::Error::other("try_wait failed"))
+        });
+        assert_eq!(got.unwrap_err().to_string(), "try_wait failed");
     }
 
     #[test]

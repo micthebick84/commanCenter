@@ -198,3 +198,24 @@ fn temp_and_base_files_are_owner_only() {
     assert_eq!(mode(a.temp_file.as_ref().unwrap()), 0o600);
     std::fs::remove_file(a.temp_file.unwrap()).unwrap();
 }
+
+#[test]
+fn debug_never_prints_server_headers_or_env() {
+    let dir = TempDir::new("mcp-debug");
+    let cj = write_json(
+        &dir,
+        "claude.json",
+        &json!({"mcpServers": {
+            "alpha": {"type": "http", "url": "https://example.test/a",
+                      "headers": {"Authorization": "Bearer mcp-debug-header-secret"}},
+            "beta": {"command": "x", "env": {"TOKEN": "mcp-debug-env-secret"}}
+        }}),
+    );
+    let m = McpSupport::init(&cj, &dir.path().join("out.json"));
+    assert_eq!(names(&m), ["alpha", "beta"]);
+    for text in [format!("{m:?}"), format!("{m:#?}")] {
+        assert!(!text.contains("mcp-debug-header-secret"), "{text}");
+        assert!(!text.contains("mcp-debug-env-secret"), "{text}");
+        assert!(text.contains("alpha"), "{text}");
+    }
+}

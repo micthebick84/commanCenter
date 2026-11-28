@@ -23,7 +23,7 @@ pub struct McpArgs {
     pub temp_file: Option<PathBuf>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct McpSupport {
     out_file: Option<PathBuf>,
     servers: Servers,
@@ -292,6 +292,17 @@ fn build_merged(claude_json: &Path, out_file: &Path) -> std::io::Result<Option<S
     }
     write_pretty(out_file, &wrapper(&merged))?;
     Ok(Some(merged))
+}
+
+/// Hand-written: server definitions carry headers and env (tokens). Only names are printed.
+impl fmt::Debug for McpSupport {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("McpSupport")
+            .field("out_file", &self.out_file)
+            .field("server_names", &self.names)
+            .field("temp_dir", &self.temp_dir)
+            .finish_non_exhaustive()
+    }
 }
 
 impl McpSupport {

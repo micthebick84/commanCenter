@@ -14,6 +14,7 @@ use crate::api::ApiError;
 use crate::contract::status_ko;
 use crate::dto::ResultRequest;
 use crate::log;
+use crate::mask::mask;
 use serde::Serialize;
 use serde_json::Value;
 use std::fs;
@@ -352,7 +353,8 @@ impl DeadLetter {
                 Err(err) => {
                     deferred = total - i;
                     log::warn(&format!(
-                        "dead-letter replay cycle stopped (server unreachable, next cycle retries): {err}"
+                        "dead-letter replay cycle stopped (server unreachable, next cycle retries): {}",
+                        mask(&err.to_string())
                     ));
                     break;
                 }
@@ -385,11 +387,12 @@ pub fn report_terminal(
                 return lost(dl, task_id, &req, true, &format!("4xx {status}"));
             }
             Err(e) => {
+                // The server's error body is persisted in the dead-letter reason: mask it first.
+                last = mask(&e.to_string());
                 log::warn(&format!(
-                    "result report failed (attempt {}/{attempts}) task={task_id}: {e}",
+                    "result report failed (attempt {}/{attempts}) task={task_id}: {last}",
                     attempt + 1
                 ));
-                last = e.to_string();
                 if let Some(gap) = gap {
                     std::thread::sleep(*gap);
                 }

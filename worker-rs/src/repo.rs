@@ -124,7 +124,7 @@ pub struct CheckedOut {
     pub commit_sha: String,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct GitCache {
     pub repos_dir: PathBuf,
     pub github_pat: Option<String>,
@@ -135,6 +135,21 @@ pub struct GitCache {
     pub lock_poll: Duration,
     /// Production: 600 s.
     pub git_timeout: Duration,
+}
+
+/// Hand-written so the PAT and the GitLab token are never printed (`***` when set).
+impl std::fmt::Debug for GitCache {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let hidden = |v: &Option<String>| v.as_ref().map(|_| "***");
+        f.debug_struct("GitCache")
+            .field("repos_dir", &self.repos_dir)
+            .field("github_pat", &hidden(&self.github_pat))
+            .field("gitlab_token", &hidden(&self.gitlab_token))
+            .field("lock_wait", &self.lock_wait)
+            .field("lock_poll", &self.lock_poll)
+            .field("git_timeout", &self.git_timeout)
+            .finish()
+    }
 }
 
 impl GitCache {
@@ -309,5 +324,22 @@ mod tests {
         assert!(msg.starts_with("git failed (128): "), "{msg}");
         assert!(msg.contains("https://***@h/x.git/"), "{msg}");
         assert!(!msg.contains("secret"), "{msg}");
+    }
+
+    #[test]
+    fn debug_never_prints_tokens() {
+        let cache = GitCache {
+            repos_dir: PathBuf::from("repos"),
+            github_pat: Some("pat-secret-value".into()),
+            gitlab_token: Some("gitlab-secret-value".into()),
+            lock_wait: Duration::from_secs(1),
+            lock_poll: Duration::from_millis(1),
+            git_timeout: Duration::from_secs(1),
+        };
+        for text in [format!("{cache:?}"), format!("{cache:#?}")] {
+            assert!(!text.contains("pat-secret-value"), "{text}");
+            assert!(!text.contains("gitlab-secret-value"), "{text}");
+            assert!(text.contains("***"), "{text}");
+        }
     }
 }

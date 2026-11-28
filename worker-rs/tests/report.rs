@@ -454,3 +454,32 @@ fn replay_with_nothing_pending_is_quiet() {
     assert_eq!(sink.call_count(), 0);
     assert!(!env.main_path().exists());
 }
+
+#[test]
+fn dead_letter_reason_from_server_body_is_masked() {
+    let env = Env::new();
+    let dl = env.dl();
+    let leaky = || ApiError::Server {
+        status: 502,
+        body: "upstream https://oauth2:secret@h/x failed".into(),
+    };
+    let sink = ScriptedSink::always(leaky, 100);
+    assert!(!report_terminal(&sink, &dl, 9, result("FAILED"), &fast()));
+    let lines = env.lines(env.main_path());
+    assert_eq!(lines.len(), 1);
+    assert!(!lines[0].contains("secret"), "{}", lines[0]);
+    let v: Value = serde_json::from_str(&lines[0]).unwrap();
+    let reason = v["reason"].as_str().unwrap();
+    assert!(reason.contains("https://***@h/x"), "{reason}");
+}
+
+#[test]
+fn dead_letter_reason_from_transport_error_is_masked() {
+    let env = Env::new();
+    let dl = env.dl();
+    let leaky = || ApiError::Transport("connect https://u:transport-secret@h/x refused".into());
+    let sink = ScriptedSink::always(leaky, 100);
+    assert!(!report_terminal(&sink, &dl, 10, result("FAILED"), &fast()));
+    let lines = env.lines(env.main_path());
+    assert!(!lines[0].contains("transport-secret"), "{}", lines[0]);
+}

@@ -4,6 +4,8 @@
 //! No error value or log line ever contains the API key.
 
 use crate::dto::{Heartbeat, ResultRequest, StartupRequest, TaskClaim};
+use crate::log;
+use crate::mask::mask;
 use std::fmt;
 use std::time::Duration;
 
@@ -72,8 +74,12 @@ fn encode_component(s: &str) -> String {
 
 impl ApiClient {
     pub fn new(base_url: &str, api_key: &str, worker_id: &str, kinds: &[String]) -> ApiClient {
+        // Redirects are never followed: a 3xx comes back as a response and is classified as a
+        // server error, so a result is retried / dead-lettered instead of being "delivered" to
+        // another host (with the API key header) or turned from POST into GET.
         let config = ureq::Agent::config_builder()
             .http_status_as_error(false)
+            .max_redirects(0)
             .timeout_connect(Some(CONNECT_TIMEOUT))
             .timeout_global(Some(REQUEST_TIMEOUT))
             .build();
@@ -134,7 +140,8 @@ impl ApiClient {
     }
 
     fn classify(status: u16, body: String) -> ApiError {
-        let body = truncate_chars(&body, MAX_ERROR_BODY_CHARS);
+        // Masked here so no log line or dead-letter reason built from it can carry credentials.
+        let body = truncate_chars(&mask(&body), MAX_ERROR_BODY_CHARS);
         if (400..500).contains(&status) {
             ApiError::Client { status, body }
         } else {
@@ -159,13 +166,23 @@ impl ApiClient {
         };
         let reply = self.post_json(&path, &body)?;
         if reply.status == 404 {
+            log::warn(
+                "startup notice: the API does not know /worker/startup (404, older API) - continuing",
+            );
             return Ok(());
         }
         Self::require_success(reply).map(|_| ())
     }
 
     /// Next claimable task, or `None` when there is nothing to do (204 or an empty body).
+    /// An empty kind list is refused before anything is sent: a request without a `kinds`
+    /// filter would let the server hand out a task of any kind.
     pub fn next_task(&self) -> Result<Option<TaskClaim>, ApiError> {
+        if self.kinds.is_empty() {
+            return Err(ApiError::Transport(
+                "refusing to poll without a kind filter (no kinds configured)".to_string(),
+            ));
+        }
         let kinds = self
             .kinds
             .iter()

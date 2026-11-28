@@ -178,6 +178,30 @@ fn tail_utf16_counts_units_and_never_splits_surrogates() {
     assert_eq!(tail_utf16("😀", 2), ("😀".to_string(), false));
 }
 
+#[test]
+fn claude_exec_debug_never_prints_mcp_secrets() {
+    use netis_worker_rs::claude::ClaudeExec;
+    use netis_worker_rs::mcp::McpSupport;
+    let dir = common::TempDir::new("claude-debug");
+    let cj = dir.path().join("claude.json");
+    std::fs::write(
+        &cj,
+        r#"{"mcpServers": {"alpha": {"type": "http", "url": "https://example.test/a",
+            "headers": {"Authorization": "Bearer exec-debug-header-secret"}},
+            "beta": {"command": "x", "env": {"TOKEN": "exec-debug-env-secret"}}}}"#,
+    )
+    .unwrap();
+    let exec = ClaudeExec {
+        cli: "claude".into(),
+        mcp: McpSupport::init(&cj, &dir.path().join("out.json")),
+    };
+    for text in [format!("{exec:?}"), format!("{exec:#?}")] {
+        assert!(!text.contains("exec-debug-header-secret"), "{text}");
+        assert!(!text.contains("exec-debug-env-secret"), "{text}");
+        assert!(text.contains("alpha"), "{text}");
+    }
+}
+
 #[cfg(feature = "test-bins")]
 mod integration {
     use super::common::TempDir;

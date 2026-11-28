@@ -22,10 +22,21 @@ pub struct ExecResult {
     pub usage: Option<Usage>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct ClaudeExec {
     pub cli: PathBuf,
     pub mcp: McpSupport,
+}
+
+/// Hand-written so a future change to `McpSupport` cannot leak MCP headers through here:
+/// only the CLI path and the MCP server names are printed.
+impl std::fmt::Debug for ClaudeExec {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ClaudeExec")
+            .field("cli", &self.cli)
+            .field("mcp_servers", &self.mcp.server_names())
+            .finish()
+    }
 }
 
 /// Command-line arguments after the program name, in the order pinned by the Java
@@ -235,8 +246,13 @@ impl ClaudeExec {
         model: Option<&str>,
         effort: Option<&str>,
     ) -> Result<ExecResult, String> {
-        let parent = std::env::vars_os()
-            .filter_map(|(k, v)| Some((k.into_string().ok()?, v.into_string().ok()?)));
+        // Lossy like the rest of the program: a non-Unicode entry is kept, not dropped.
+        let parent = std::env::vars_os().map(|(k, v)| {
+            (
+                k.to_string_lossy().into_owned(),
+                v.to_string_lossy().into_owned(),
+            )
+        });
         self.exec_with_env(prompt, dir, timeout, mcps_extra, model, effort, parent)
     }
 

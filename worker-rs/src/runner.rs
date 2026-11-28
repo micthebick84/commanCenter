@@ -3,6 +3,9 @@
 //!
 //! A panic in a thread's own loop code ends the whole process (`worker-rs fatal: ...`,
 //! exit code 1) so a half-dead daemon never keeps heartbeating while it no longer polls.
+//! A claim of a kind this worker does not implement is fatal too (fail-stop): [`run_with`]
+//! stops every thread and returns the reason, and `main` ends the process with exit code 1 -
+//! the server's dead-worker recovery then requeues what was captured.
 
 use crate::analysis::{self, Deps};
 use crate::api::ApiClient;
@@ -53,10 +56,20 @@ impl Default for Timings {
 }
 
 /// Pieces tests replace so they never touch the real environment.
-#[derive(Debug, Clone, Default)]
+/// No `Default`: an empty environment would start claude without `PATH`/`SystemRoot`.
+#[derive(Clone)]
 pub struct RunOptions {
     /// The environment the claude child starts from and the login probe decides on.
     pub env: HashMap<String, String>,
+}
+
+/// Hand-written: the environment holds every secret of the process. Only the count is printed.
+impl std::fmt::Debug for RunOptions {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RunOptions")
+            .field("env_vars", &self.env.len())
+            .finish()
+    }
 }
 
 impl RunOptions {
@@ -120,13 +133,17 @@ fn sleep_unless_stopped(stop: &AtomicBool, total: Duration) {
 }
 
 /// Runs a thread body; a panic in it ends the process instead of leaving a half-dead daemon.
-fn guarded(name: &str, f: impl FnOnce()) {
-    if let Err(payload) = catch_unwind(AssertUnwindSafe(f)) {
-        log::error(&format!(
-            "worker-rs fatal: {name} thread panicked: {}",
-            analysis::panic_message(payload.as_ref())
-        ));
-        std::process::exit(1);
+/// (`panic_message` masks credentials in the message.)
+fn guarded<T>(name: &str, f: impl FnOnce() -> T) -> T {
+    match catch_unwind(AssertUnwindSafe(f)) {
+        Ok(v) => v,
+        Err(payload) => {
+            log::error(&format!(
+                "worker-rs fatal: {name} thread panicked: {}",
+                analysis::panic_message(payload.as_ref())
+            ));
+            std::process::exit(1);
+        }
     }
 }
 
@@ -139,12 +156,21 @@ fn mcp_out_file(config: &Config) -> PathBuf {
     dir.join(format!("worker-mcp-{}.json", config.worker_id))
 }
 
-/// Production entry point: returns only when `stop` is set (tests); `main` never sets it.
-pub fn run(config: Config, timings: Timings, stop: Arc<AtomicBool>) {
-    run_with(config, timings, stop, RunOptions::from_process());
+/// Production entry point. `Err` = a fatal condition (the reason, without the `worker-rs fatal:`
+/// prefix), returned after every thread has stopped; `main` logs it and exits with code 1.
+/// `Ok` only when `stop` was set from outside (tests); `main` never sets it.
+pub fn run(config: Config, timings: Timings, stop: Arc<AtomicBool>) -> Result<(), String> {
+    run_with(config, timings, stop, RunOptions::from_process())
 }
 
-pub fn run_with(config: Config, timings: Timings, stop: Arc<AtomicBool>, opts: RunOptions) {
+/// [`run`] with injected options. On a fatal condition the stop flag is set, all three threads
+/// are joined, and the reason is returned.
+pub fn run_with(
+    config: Config,
+    timings: Timings,
+    stop: Arc<AtomicBool>,
+    opts: RunOptions,
+) -> Result<(), String> {
     let mcp = McpSupport::init(&config.home.join(".claude.json"), &mcp_out_file(&config));
     log::info(&format!(
         "worker-rs started: id={} kinds={}",
@@ -193,10 +219,17 @@ pub fn run_with(config: Config, timings: Timings, stop: Arc<AtomicBool>, opts: R
         parent_env: &parent_env,
     };
     std::thread::scope(|s| {
-        s.spawn(|| guarded("polling", || shared.poll_loop()));
+        let polling = s.spawn(|| guarded("polling", || shared.poll_loop()));
         s.spawn(|| guarded("heartbeat", || shared.heartbeat_loop()));
         s.spawn(|| guarded("admin", || shared.admin_loop()));
-    });
+        // `guarded` exits the process on a panic, so a join error is not expected here.
+        let outcome = polling
+            .join()
+            .unwrap_or_else(|_| Err("polling thread ended abnormally".to_string()));
+        // Whatever ended the polling thread ends the other two as well.
+        stop.store(true, Ordering::Relaxed);
+        outcome
+    })
 }
 
 struct Shared<'a> {
@@ -225,7 +258,8 @@ impl Shared<'_> {
                 worker_id: self.config.worker_id.clone(),
                 hostname: self.hostname.to_string(),
                 version: self.config.version.clone(),
-                claude_session_ok: auth.ok.unwrap_or(false),
+                // undetermined stays undetermined (the key is left out), never `false`
+                claude_session_ok: auth.ok,
                 vpn_status: None,
                 mcps: self.claude.mcp.server_names().to_vec(),
                 lost_report_count: self.dead_letter.pending_count() as i64,
@@ -275,9 +309,10 @@ impl Shared<'_> {
         false
     }
 
-    fn poll_loop(&self) {
+    /// `Err` = fatal (a claim of a kind this worker does not implement); `Ok` when stopped.
+    fn poll_loop(&self) -> Result<(), String> {
         if !self.report_startup() {
-            return;
+            return Ok(());
         }
         let deps = Deps {
             worker_id: &self.config.worker_id,
@@ -296,10 +331,13 @@ impl Shared<'_> {
                         task.id, task.kind, task.github_repo, task.github_branch
                     ));
                     if !IMPLEMENTED_KINDS.contains(&task.kind.as_str()) {
+                        // Fail-stop: a server that ignored `kinds` would otherwise hand this
+                        // worker one foreign task per poll. Not processed, not reported.
                         log::error(&format!(
-                            "task {} has kind {} which this worker does not process - left for the server's stale recovery",
+                            "task {} has kind {} which this worker does not process - stopping; the server's dead-worker recovery requeues it",
                             task.id, task.kind
                         ));
+                        return Err(fatal_wrong_kind(&task.kind, task.id));
                     } else {
                         let result = analysis::process(&task, &deps);
                         let delivered = report::report_terminal(
@@ -318,12 +356,40 @@ impl Shared<'_> {
             }
             sleep_unless_stopped(self.stop, self.timings.poll);
         }
+        Ok(())
     }
+}
+
+/// Reason for the fatal stop after a claim of a kind this worker does not implement.
+pub fn fatal_wrong_kind(kind: &str, task_id: i64) -> String {
+    format!("claimed a task of a kind this worker does not implement: {kind} (task {task_id})")
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn run_options_debug_prints_no_env_values() {
+        let opts = RunOptions {
+            env: HashMap::from([(
+                "WORKER_API_KEY".to_string(),
+                "run-options-secret".to_string(),
+            )]),
+        };
+        for text in [format!("{opts:?}"), format!("{opts:#?}")] {
+            assert!(!text.contains("run-options-secret"), "{text}");
+            assert!(!text.contains("WORKER_API_KEY"), "{text}");
+        }
+    }
+
+    #[test]
+    fn wrong_kind_reason_names_kind_and_task() {
+        assert_eq!(
+            fatal_wrong_kind("DEPLOY", 7),
+            "claimed a task of a kind this worker does not implement: DEPLOY (task 7)"
+        );
+    }
 
     #[test]
     fn hostname_is_cut_to_100_utf16_units() {

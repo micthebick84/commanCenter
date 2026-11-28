@@ -35,7 +35,7 @@ fn timings() -> Timings {
 /// Stops and joins the runner thread on drop, so an assertion failure cannot leak it.
 struct RunGuard {
     stop: Arc<AtomicBool>,
-    handle: Option<JoinHandle<()>>,
+    handle: Option<JoinHandle<Result<(), String>>>,
 }
 
 impl Drop for RunGuard {
@@ -127,9 +127,8 @@ fn start(
     let stop = Arc::new(AtomicBool::new(false));
     let stop2 = stop.clone();
     let timings = setup.timings;
-    let handle = std::thread::spawn(move || {
-        runner::run_with(config, timings, stop2, RunOptions { env });
-    });
+    let handle =
+        std::thread::spawn(move || runner::run_with(config, timings, stop2, RunOptions { env }));
     Harness {
         _runner: RunGuard {
             stop,
@@ -166,6 +165,21 @@ impl Harness {
             }
             std::thread::sleep(Duration::from_millis(10));
         }
+    }
+
+    /// Waits (bounded) for the runner to return on its own - without setting `stop` - and
+    /// gives back what it returned.
+    fn runner_outcome(&mut self) -> Result<(), String> {
+        let deadline = Instant::now() + Duration::from_secs(30);
+        let handle = self._runner.handle.take().expect("runner still owned");
+        while !handle.is_finished() {
+            if Instant::now() > deadline {
+                self._runner.handle = Some(handle);
+                panic!("the runner did not stop by itself");
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        handle.join().expect("runner thread panicked")
     }
 
     fn dead_dir(&self) -> std::path::PathBuf {
@@ -321,16 +335,52 @@ fn claims_processes_and_reports_completed() {
 }
 
 #[test]
-fn non_analysis_claim_is_not_processed() {
-    let h = start(Remote::new(), Setup::new(), claim_once("DEPLOY"));
-    h.wait("polls after the foreign claim", |reqs| {
-        let first = reqs.iter().position(is_next_task);
-        match first {
-            Some(i) => reqs[i..].iter().filter(|r| is_next_task(r)).count() >= 4,
-            None => false,
+fn non_analysis_claim_stops_the_worker() {
+    let mut h = start(Remote::new(), Setup::new(), claim_once("DEPLOY"));
+    let outcome = h.runner_outcome();
+    assert_eq!(
+        outcome,
+        Err("claimed a task of a kind this worker does not implement: DEPLOY (task 1)".into())
+    );
+    // let any request still in flight land before counting (the runner already returned)
+    std::thread::sleep(Duration::from_millis(200));
+    let reqs = h.requests();
+    assert_eq!(
+        reqs.iter().filter(|r| is_next_task(r)).count(),
+        1,
+        "polled again after the foreign claim"
+    );
+    assert_eq!(reqs.iter().filter(|r| is_result(r)).count(), 0);
+    assert!(
+        !h.dead_dir().join(format!("{WORKER_ID}.jsonl")).exists(),
+        "the foreign task must not be reported or dead-lettered"
+    );
+}
+
+#[test]
+fn heartbeat_omits_session_state_while_undetermined() {
+    // No token, no credentials file, and fake-claude's `auth status` prints no `loggedIn`:
+    // the probe cannot decide, so no heartbeat may say `claudeSessionOk: false`.
+    let mut setup = Setup::new();
+    setup.timings.auth_check = Duration::from_millis(100);
+    let h = start(Remote::new(), setup, |r, _| {
+        if is_next_task(r) {
+            return (204, String::new());
         }
+        (200, "{}".into())
     });
-    assert_eq!(h.requests().iter().filter(|r| is_result(r)).count(), 0);
+    h.wait("twenty heartbeats", |reqs| {
+        reqs.iter().filter(|r| r.url == "/worker/heartbeat").count() >= 20
+    });
+    for hb in h
+        .requests()
+        .iter()
+        .filter(|r| r.url == "/worker/heartbeat")
+        .map(body)
+    {
+        assert!(hb.get("claudeSessionOk").is_none(), "{hb}");
+        assert!(hb.get("claudeAuthMethod").is_none(), "{hb}");
+    }
 }
 
 #[test]

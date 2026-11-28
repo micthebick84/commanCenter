@@ -15,6 +15,19 @@ fn home_dir(env: &HashMap<String, String>) -> Option<PathBuf> {
 }
 
 fn main() -> ExitCode {
+    // First: every panic (also one later caught) is logged as one masked line, never raw.
+    log::install_panic_hook();
+    // A panic on the main thread itself (outside the runner's guarded threads) is fatal.
+    match std::panic::catch_unwind(run_main) {
+        Ok(code) => code,
+        Err(_) => {
+            log::error("worker-rs fatal: panic on the main thread (see the worker-rs panic line)");
+            ExitCode::from(1)
+        }
+    }
+}
+
+fn run_main() -> ExitCode {
     // vars_os + lossy conversion: a non-Unicode variable must not panic the process.
     let env: HashMap<String, String> = std::env::vars_os()
         .map(|(k, v)| {
@@ -35,9 +48,15 @@ fn main() -> ExitCode {
                 ..Timings::default()
             };
             // `run` prints `worker-rs started: ...` once the MCP file is prepared, then
-            // starts the threads; nothing ever sets `stop` in a real run.
-            runner::run(cfg, timings, Arc::new(AtomicBool::new(false)));
-            ExitCode::SUCCESS
+            // starts the threads; nothing ever sets `stop` in a real run, so it only returns
+            // with a fatal reason (all threads already stopped).
+            match runner::run(cfg, timings, Arc::new(AtomicBool::new(false))) {
+                Ok(()) => ExitCode::SUCCESS,
+                Err(reason) => {
+                    log::error(&format!("worker-rs fatal: {reason}"));
+                    ExitCode::from(1)
+                }
+            }
         }
         Err(reason) => {
             log::error(&format!("worker-rs fatal: {reason}"));

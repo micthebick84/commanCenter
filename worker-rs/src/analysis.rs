@@ -35,7 +35,12 @@ fn failed(worker_id: &str, reason: String, exec: Option<&ExecResult>) -> ResultR
     }
 }
 
+/// The panic payload as text, with `user:secret@` in URLs masked.
 pub(crate) fn panic_message(payload: &(dyn std::any::Any + Send)) -> String {
+    crate::mask::mask(&panic_payload_text(payload))
+}
+
+pub(crate) fn panic_payload_text(payload: &(dyn std::any::Any + Send)) -> String {
     if let Some(s) = payload.downcast_ref::<&str>() {
         (*s).to_string()
     } else if let Some(s) = payload.downcast_ref::<String>() {
@@ -141,5 +146,21 @@ fn run(task: &TaskClaim, deps: &Deps) -> ResultRequest {
         duration_ms: Some(i64::try_from(exec.duration_ms).unwrap_or(i64::MAX)),
         failure_reason: None,
         usage: exec.usage,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn caught_panic_message_is_masked() {
+        let r = catch_panic("w-1", || {
+            panic!("fetch https://oauth2:caught-secret@h/x.git failed")
+        });
+        assert_eq!(r.status, "FAILED");
+        let reason = r.failure_reason.unwrap();
+        assert!(!reason.contains("caught-secret"), "{reason}");
+        assert!(reason.contains("https://***@h/x.git"), "{reason}");
     }
 }

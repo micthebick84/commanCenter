@@ -24,7 +24,10 @@ impl Recorded {
     }
 }
 
-type Handler = dyn Fn(&Recorded) -> (u16, String) + Send + Sync;
+/// A response: status, body and extra headers (e.g. `Location` for a redirect).
+pub type Reply = (u16, String, Vec<(String, String)>);
+
+type Handler = dyn Fn(&Recorded) -> Reply + Send + Sync;
 
 pub struct FakeServer {
     pub base_url: String,
@@ -36,6 +39,16 @@ pub struct FakeServer {
 impl FakeServer {
     pub fn start(
         handler: impl Fn(&Recorded) -> (u16, String) + Send + Sync + 'static,
+    ) -> FakeServer {
+        FakeServer::start_with_headers(move |r| {
+            let (status, body) = handler(r);
+            (status, body, Vec::new())
+        })
+    }
+
+    /// Like [`FakeServer::start`], but the handler also returns extra response headers.
+    pub fn start_with_headers(
+        handler: impl Fn(&Recorded) -> Reply + Send + Sync + 'static,
     ) -> FakeServer {
         let server = tiny_http::Server::http("127.0.0.1:0").expect("bind fake server");
         let port = server.server_addr().to_ip().expect("ip addr").port();
@@ -60,13 +73,18 @@ impl FakeServer {
                         .collect(),
                     body,
                 };
-                let (status, resp_body) = handler(&rec);
+                let (status, resp_body, extra) = handler(&rec);
                 reqs.lock().unwrap().push(rec);
-                let resp = tiny_http::Response::from_string(resp_body)
+                let mut resp = tiny_http::Response::from_string(resp_body)
                     .with_status_code(status)
                     .with_header(
                         tiny_http::Header::from_bytes("Content-Type", "application/json").unwrap(),
                     );
+                for (k, v) in extra {
+                    resp.add_header(
+                        tiny_http::Header::from_bytes(k.as_bytes(), v.as_bytes()).unwrap(),
+                    );
+                }
                 let _ = req.respond(resp);
             }
         });

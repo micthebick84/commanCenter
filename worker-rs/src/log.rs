@@ -37,6 +37,28 @@ pub fn error(msg: &str) {
     emit("ERROR", msg);
 }
 
+/// The line the panic hook logs: `worker-rs panic: <masked message> at <location>`.
+/// Not `worker-rs fatal:` - the hook also runs for panics that are then caught (an analysis
+/// panic becomes a FAILED result); a panic that ends the process gets its own fatal line.
+pub fn panic_line(message: &str, location: Option<&str>) -> String {
+    let message = crate::mask::mask(message);
+    match location {
+        Some(at) => format!("worker-rs panic: {message} at {at}"),
+        None => format!("worker-rs panic: {message}"),
+    }
+}
+
+/// Replaces the default panic output (raw message on stderr) with one masked log line.
+pub fn install_panic_hook() {
+    std::panic::set_hook(Box::new(|info| {
+        let message = info.payload_as_str().unwrap_or("unknown panic");
+        let location = info
+            .location()
+            .map(|l| format!("{}:{}", l.file(), l.line()));
+        error(&panic_line(message, location.as_deref()));
+    }));
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -52,6 +74,19 @@ mod tests {
     fn utc_is_written_as_z() {
         let line = format_line(datetime!(2026-11-28 00:00:00 UTC), "WARN", "x");
         assert_eq!(line, "2026-11-28T00:00:00Z WARN x");
+    }
+
+    #[test]
+    fn panic_line_masks_credentials() {
+        let line = panic_line(
+            "clone of https://oauth2:panic-secret@h/x.git failed",
+            Some("src/repo.rs:10"),
+        );
+        assert_eq!(
+            line,
+            "worker-rs panic: clone of https://***@h/x.git failed at src/repo.rs:10"
+        );
+        assert_eq!(panic_line("boom", None), "worker-rs panic: boom");
     }
 
     #[test]

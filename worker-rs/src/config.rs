@@ -9,7 +9,7 @@ use std::time::Duration;
 const MAX_ID_LEN: usize = 50;
 const DEFAULT_VERSION: &str = "0.1.0";
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Clone, PartialEq)]
 pub struct Config {
     pub worker_id: String,
     pub api_base_url: String,
@@ -23,6 +23,27 @@ pub struct Config {
     pub gitlab_token: Option<String>,
     pub auth_check_interval: Duration,
     pub home: PathBuf,
+}
+
+/// Hand-written so the API key and repo tokens are never printed (`***` when set).
+impl std::fmt::Debug for Config {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let hidden = |v: &Option<String>| v.as_ref().map(|_| "***");
+        f.debug_struct("Config")
+            .field("worker_id", &self.worker_id)
+            .field("api_base_url", &crate::mask::mask(&self.api_base_url))
+            .field("api_key", &"***")
+            .field("kinds", &self.kinds)
+            .field("version", &self.version)
+            .field("repos_dir", &self.repos_dir)
+            .field("dead_letter_dir", &self.dead_letter_dir)
+            .field("claude_cli", &self.claude_cli)
+            .field("github_pat", &hidden(&self.github_pat))
+            .field("gitlab_token", &hidden(&self.gitlab_token))
+            .field("auth_check_interval", &self.auth_check_interval)
+            .field("home", &self.home)
+            .finish()
+    }
 }
 
 /// Value of `key`, trimmed; `None` when missing or blank.
@@ -181,6 +202,26 @@ mod tests {
     impl Drop for Fixture {
         fn drop(&mut self) {
             let _ = fs::remove_dir_all(&self.home);
+        }
+    }
+
+    #[test]
+    fn debug_never_prints_secrets() {
+        let f = Fixture::new("debug-redacted");
+        let mut env = f.env();
+        env.insert("WORKER_API_KEY".into(), "api-key-secret-1".into());
+        env.insert("GITHUB_PAT".into(), "github-pat-secret-2".into());
+        env.insert("GITLAB_TOKEN".into(), "gitlab-token-secret-3".into());
+        let cfg = f.load(&env).unwrap();
+        for text in [format!("{cfg:?}"), format!("{cfg:#?}")] {
+            for secret in [
+                "api-key-secret-1",
+                "github-pat-secret-2",
+                "gitlab-token-secret-3",
+            ] {
+                assert!(!text.contains(secret), "{secret} leaked: {text}");
+            }
+            assert!(text.contains("w-1"), "{text}");
         }
     }
 

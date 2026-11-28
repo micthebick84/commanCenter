@@ -5,6 +5,7 @@
 use crate::mask::mask;
 use serde::{Deserialize, Deserializer, Serialize};
 use std::collections::BTreeMap;
+use std::fmt;
 
 fn null_as_default<'de, D, T>(d: D) -> Result<T, D::Error>
 where
@@ -14,7 +15,7 @@ where
     Ok(Option::<T>::deserialize(d)?.unwrap_or_default())
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct McpSpec {
     pub name: String,
@@ -24,8 +25,25 @@ pub struct McpSpec {
     pub headers: Option<BTreeMap<String, String>>,
 }
 
+/// Header names only: header values (tokens) are never printed.
+pub(crate) fn header_names(h: &Option<BTreeMap<String, String>>) -> Option<Vec<&str>> {
+    h.as_ref().map(|m| m.keys().map(String::as_str).collect())
+}
+
+// Hand-written: `headers` may carry tokens and `url` may carry `user:secret@`.
+impl fmt::Debug for McpSpec {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("McpSpec")
+            .field("name", &self.name)
+            .field("url", &mask(&self.url))
+            .field("transport", &self.transport)
+            .field("header_names", &header_names(&self.headers))
+            .finish()
+    }
+}
+
 /// A claimed task. `kind` stays a plain string so an unknown kind still deserializes.
-#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[derive(Clone, PartialEq, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TaskClaim {
     pub id: i64,
@@ -48,6 +66,24 @@ pub struct TaskClaim {
     pub effort: Option<String>,
     #[serde(default)]
     pub git_url: Option<String>,
+}
+
+// Hand-written: the per-task MCP headers (via `McpSpec`) and `git_url` must not be printed raw.
+impl fmt::Debug for TaskClaim {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("TaskClaim")
+            .field("id", &self.id)
+            .field("github_repo", &self.github_repo)
+            .field("github_branch", &self.github_branch)
+            .field("title", &self.title)
+            .field("description", &self.description.as_ref().map(|d| d.len()))
+            .field("kind", &self.kind)
+            .field("mcps_extra", &self.mcps_extra)
+            .field("model", &self.model)
+            .field("effort", &self.effort)
+            .field("git_url", &self.git_url.as_deref().map(mask))
+            .finish()
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -103,7 +139,10 @@ pub struct Heartbeat {
     pub worker_id: String,
     pub hostname: String,
     pub version: String,
-    pub claude_session_ok: bool,
+    /// `None` = not determined yet (before the first probe, or the probe could not decide):
+    /// the key is then left out, never sent as `false` (the UI shows `false` as an alarm).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub claude_session_ok: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub vpn_status: Option<String>,
     pub mcps: Vec<String>,
@@ -225,7 +264,7 @@ mod tests {
             worker_id: "w-1".into(),
             hostname: "host-a".into(),
             version: "0.1.0".into(),
-            claude_session_ok: true,
+            claude_session_ok: Some(true),
             vpn_status: Some("UP".into()),
             mcps: vec!["docs".into()],
             lost_report_count: 0,
@@ -235,6 +274,67 @@ mod tests {
         };
         let got = serde_json::to_value(hb).unwrap();
         assert_eq!(got, contract(include_str!("../contract/heartbeat.json")));
+    }
+
+    #[test]
+    fn heartbeat_omits_undetermined_session_state() {
+        let hb = Heartbeat {
+            worker_id: "w-1".into(),
+            hostname: "host-a".into(),
+            version: "0.1.0".into(),
+            claude_session_ok: None,
+            vpn_status: None,
+            mcps: vec![],
+            lost_report_count: 0,
+            claude_auth_method: None,
+            claude_auth_expires_at: None,
+            dead_report_count: 0,
+        };
+        let got = serde_json::to_value(&hb).unwrap();
+        assert!(got.get("claudeSessionOk").is_none(), "{got}");
+        let hb = Heartbeat {
+            claude_session_ok: Some(false),
+            ..hb
+        };
+        assert_eq!(
+            serde_json::to_value(&hb).unwrap()["claudeSessionOk"],
+            json!(false)
+        );
+    }
+
+    fn secret_spec() -> McpSpec {
+        McpSpec {
+            name: "docs".into(),
+            url: "https://user:mcp-url-secret@example.test/mcp".into(),
+            transport: "http".into(),
+            headers: Some(BTreeMap::from([(
+                "Authorization".to_string(),
+                "Bearer mcp-header-secret".to_string(),
+            )])),
+        }
+    }
+
+    #[test]
+    fn mcp_spec_debug_hides_header_values_and_url_credentials() {
+        let spec = secret_spec();
+        for text in [format!("{spec:?}"), format!("{spec:#?}")] {
+            assert!(!text.contains("mcp-header-secret"), "{text}");
+            assert!(!text.contains("mcp-url-secret"), "{text}");
+            assert!(text.contains("Authorization"), "{text}");
+        }
+    }
+
+    #[test]
+    fn task_claim_debug_hides_secrets() {
+        let mut claim: TaskClaim =
+            serde_json::from_str(include_str!("../contract/claim-analysis.json")).unwrap();
+        claim.mcps_extra = vec![secret_spec()];
+        claim.git_url = Some("https://oauth2:claim-git-secret@example.test/a/b.git".into());
+        for text in [format!("{claim:?}"), format!("{claim:#?}")] {
+            assert!(!text.contains("mcp-header-secret"), "{text}");
+            assert!(!text.contains("mcp-url-secret"), "{text}");
+            assert!(!text.contains("claim-git-secret"), "{text}");
+        }
     }
 
     #[test]

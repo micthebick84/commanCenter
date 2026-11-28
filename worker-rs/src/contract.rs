@@ -55,6 +55,13 @@ mod tests {
         assert_eq!(status_ko("NOPE"), None);
     }
 
+    /// `analysis.rs` hard-codes these two status names in every result it builds.
+    #[test]
+    fn status_names_used_by_analysis_exist() {
+        assert!(status_ko("FAILED").is_some());
+        assert!(status_ko("COMPLETED").is_some());
+    }
+
     #[test]
     fn prompt_has_all_placeholders() {
         for p in [

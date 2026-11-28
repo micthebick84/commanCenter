@@ -18,7 +18,7 @@ fn heartbeat() -> Heartbeat {
         worker_id: "w1".into(),
         hostname: "h".into(),
         version: "0.1.0".into(),
-        claude_session_ok: true,
+        claude_session_ok: Some(true),
         vpn_status: Some("UP".into()),
         mcps: vec![],
         lost_report_count: 0,
@@ -183,7 +183,7 @@ fn heartbeat_body_matches_contract() {
         worker_id: "w-1".into(),
         hostname: "host-a".into(),
         version: "0.1.0".into(),
-        claude_session_ok: true,
+        claude_session_ok: Some(true),
         vpn_status: Some("UP".into()),
         mcps: vec!["docs".into()],
         lost_report_count: 0,
@@ -272,4 +272,74 @@ fn errors_never_contain_the_api_key() {
     for t in texts {
         assert!(!t.contains(KEY), "{t}");
     }
+}
+
+/// A server that answers every request with 302 to a second local server.
+fn redirecting_pair(status: u16) -> (FakeServer, FakeServer) {
+    let target = FakeServer::start(|r| {
+        if r.url.contains("next-task") {
+            (204, String::new())
+        } else {
+            (200, "{}".into())
+        }
+    });
+    let location = format!("{}/elsewhere", target.base_url);
+    let redirector = FakeServer::start_with_headers(move |_| {
+        (
+            status,
+            String::new(),
+            vec![("Location".to_string(), location.clone())],
+        )
+    });
+    (redirector, target)
+}
+
+#[test]
+fn redirects_are_not_followed_and_count_as_server_errors() {
+    for status in [301, 302, 303, 307, 308] {
+        let (redirector, target) = redirecting_pair(status);
+        let c = client(&redirector.base_url);
+        let res = c.post_result(5, &failed_result());
+        assert!(
+            matches!(res, Err(ApiError::Server { status: s, .. }) if s == status),
+            "{status}: {res:?}"
+        );
+        assert!(
+            matches!(c.next_task(), Err(ApiError::Server { .. })),
+            "{status}: next_task"
+        );
+        assert!(
+            matches!(c.heartbeat(&heartbeat()), Err(ApiError::Server { .. })),
+            "{status}: heartbeat"
+        );
+        assert!(
+            matches!(c.startup(&[1]), Err(ApiError::Server { .. })),
+            "{status}: startup"
+        );
+        assert_eq!(redirector.requests().len(), 4, "{status}");
+        assert!(
+            target.requests().is_empty(),
+            "{status}: the redirect target was contacted: {:?}",
+            target.requests()
+        );
+    }
+}
+
+#[test]
+fn empty_kinds_never_poll_without_a_filter() {
+    let srv = FakeServer::start(|_| (204, String::new()));
+    let c = ApiClient::new(&srv.base_url, KEY, "w1", &[]);
+    assert!(matches!(c.next_task(), Err(ApiError::Transport(_))));
+    assert!(srv.requests().is_empty(), "{:?}", srv.requests());
+}
+
+#[test]
+fn error_bodies_are_masked() {
+    let srv = FakeServer::start(|_| (500, "boom https://oauth2:body-secret@h/x".into()));
+    let err = client(&srv.base_url)
+        .post_result(1, &failed_result())
+        .unwrap_err();
+    let text = err.to_string();
+    assert!(!text.contains("body-secret"), "{text}");
+    assert!(text.contains("https://***@h/x"), "{text}");
 }

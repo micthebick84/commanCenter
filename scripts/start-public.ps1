@@ -5,6 +5,8 @@
 #   2) netisMaker API  (:8090)  JWKS from localhost, iss validated against the public issuer
 #   3) frontend        (:3001)  production build (Nitro), public NUXT_PUBLIC_* values
 #   4) worker + interview service (only with -WithWorkers; they consume claude quota)
+#      + worker-rs, a native Rust worker (only with -WithWorkers AND WORKER_RS_ENABLED=true; off by default;
+#        started last, after the interview service; build limit 900 s; WORKER_RS_ID must differ from WORKER_ID)
 #
 # The tunnel (cloudflared) is NOT managed here. Expected ingress in
 # %USERPROFILE%\.cloudflared\config.yml:
@@ -27,7 +29,10 @@
 # overwritten; a tree with uncommitted changes is rebuilt every time. A failed build fails the service
 # (it never falls back to an older jar). Build logs: .run\<name>-build.log. Roll back = check out the
 # previous commit and restart (its jar is reused when still kept: 5 newest per prefix + running ones).
-# Logs / pids: .run\{auth,api,front,worker,interview}.log|.pid
+# worker-rs (native exe, spec docs/superpowers/specs/2026-11-28-rust-worker-skeleton-design.md section 10): built with
+# cargo build --release --locked in worker-rs\ and run from %USERPROFILE%\netis-maker\run\bin\netis-worker-rs-<sha7>[-dirty-<time>].exe
+# by the same copy-then-run rules as the jars (5 newest + running ones kept). Build log: .run\worker-rs-build.log.
+# Logs / pids: .run\{auth,api,front,worker,worker-rs,interview}.log|.pid
 # Previous runs' logs: .run\logs\<name>-<yyyyMMdd-HHmmss-fff>.log (newest 20 of each, see Save-PreviousLog)|.json
 #   .pid  = the cmd wrapper's pid (unchanged); .json = the real JVM / node process (scripts/public-proc.ps1)
 #
@@ -36,6 +41,8 @@
 #   AUTH_ORIGIN / APP_ORIGIN    public origins
 #   PG_DIR                      zip-installed PostgreSQL root; started if :5432 is not listening
 #   INTERVIEW_CONCURRENCY       interview service: question/interview turns run at once (default 1 = serial)
+#   WORKER_RS_ENABLED           true = also start worker-rs with -WithWorkers (WORKER_RS_ID default win-rs-worker-1,
+#                               WORKER_RS_KINDS default ANALYSIS); anything else = worker-rs is not touched at all
 # Secrets are read from there too, never stored in this file:
 #   SPRING_DATASOURCE_PASSWORD  DB password (both Spring apps; falls back to application.yml)
 #   WORKER_API_KEY              shared secret for API <-> worker/interview (dev default if unset)
@@ -148,15 +155,28 @@ function Start-Service-Proc([string]$Name, [string]$WorkDir, [string]$CommandLin
 # Run a command line to completion through cmd with all output in a log file.
 # (Calling npm directly would turn its stderr lines into terminating errors under
 # $ErrorActionPreference = 'Stop' on Windows PowerShell 5.1.)
-function Invoke-Logged([string]$WorkDir, [string]$CommandLine, [string]$LogName) {
+# Exit code Invoke-Logged returns when -TimeoutSec ran out (258 = WAIT_TIMEOUT).
+$InvokeTimedOut = 258
+
+# $TimeoutSec: 0 = wait forever (default). Otherwise the process tree is killed once the limit has
+# passed and $InvokeTimedOut is returned.
+function Invoke-Logged([string]$WorkDir, [string]$CommandLine, [string]$LogName, [int]$TimeoutSec = 0) {
     $log = Join-Path $RunDir $LogName
     Reset-Log $LogName
     $p = Start-Process -FilePath $env:ComSpec -ArgumentList "/c `"$CommandLine > `"$log`" 2>&1`"" `
         -WorkingDirectory $WorkDir -WindowStyle Hidden -PassThru
     # Not -Wait: that also waits for descendants, and pg_ctl leaves postgres.exe running.
     $null = $p.Handle   # cache the handle so ExitCode is available after exit
-    $p.WaitForExit()
-    return $p.ExitCode
+    if ($TimeoutSec -le 0) {
+        $p.WaitForExit()
+        return $p.ExitCode
+    }
+    if ($p.WaitForExit($TimeoutSec * 1000)) { return $p.ExitCode }
+    # Start-Process, not '& taskkill 2>...': under 'Stop' a native stderr line would throw here.
+    $k = Start-Process -FilePath 'taskkill.exe' -ArgumentList "/PID $($p.Id) /T /F" -WindowStyle Hidden -PassThru
+    $null = $k.WaitForExit(15000)
+    $null = $p.WaitForExit(10000)
+    return $InvokeTimedOut
 }
 
 # $ProcessId (optional, the cmd wrapper): once it has exited without the ok line, stop waiting -
@@ -258,6 +278,78 @@ function Remove-OldJars {
         }
     } catch {
         Write-Host "[warn] old jar cleanup skipped: $($_.Exception.Message)"
+    }
+}
+
+# ---- native exe build / run (worker-rs; only used when WORKER_RS_ENABLED=true) -----------------------
+# Same idea as Get-ServiceJar: cargo builds in the source folder, the exe is copied to
+# %USERPROFILE%\netis-maker\run\bin under a commit-named file and that copy is run.
+$BinDir = Join-Path $env:USERPROFILE 'netis-maker\run\bin'
+$script:workerRsSha7 = ''
+
+# The exe copy to run for $SrcDir's current state, building it when needed; $null on any failure
+# (already reported as [FAIL]). Never falls back to an older copy. Sets $script:workerRsSha7.
+function Get-ServiceExe([string]$Prefix, [string]$SrcDir, [string]$Name) {
+    # git / cargo write to stderr; under 'Stop' that would throw instead of being reported
+    $ErrorActionPreference = 'Continue'
+    $sha = [string](& git -C $SrcDir rev-parse HEAD 2>$null)
+    if ($LASTEXITCODE -ne 0 -or $sha -notmatch '^[0-9a-f]{7,}$') {
+        Write-Host "[FAIL] ${Name}: cannot read the commit of $SrcDir (git rev-parse HEAD)"; return $null
+    }
+    $script:workerRsSha7 = $sha.Substring(0, 7)
+    $porcelain = @(& git -C $SrcDir status --porcelain 2>$null)
+    if ($LASTEXITCODE -ne 0) { Write-Host "[FAIL] ${Name}: git status failed in $SrcDir"; return $null }
+    $dirty = $porcelain.Count -gt 0
+    New-Item -ItemType Directory -Force $BinDir | Out-Null
+    $target = Join-Path $BinDir (Get-ExeName $Prefix $sha '' (Get-Date))
+    if ($dirty) {
+        $target = Join-Path $BinDir (Get-ExeName $Prefix $sha 'dirty' (Get-Date))
+        Write-Host "[warn] ${Name}: $SrcDir has uncommitted changes - building them into $(Split-Path -Leaf $target)"
+    } elseif (Test-Path -LiteralPath $target) {
+        if (-not $Rebuild) { return $target }
+        # forced rebuild: never overwrite a copy that may be running
+        $target = Join-Path $BinDir (Get-ExeName $Prefix $sha 'rebuild' (Get-Date))
+    }
+    $cargo = Join-Path $env:USERPROFILE '.cargo\bin\cargo.exe'
+    if (-not (Test-Path -LiteralPath $cargo)) { Write-Host "[FAIL] ${Name}: cargo not found ($cargo)"; return $null }
+    Write-Host "[..]   $Name building $(Split-Path -Leaf $target) (cargo build --release)"
+    # 900 s each: a first build may download crates or install a toolchain, but a stuck cargo
+    # (lock held elsewhere) must not hold up the rest of the start.
+    if ($Rebuild) {
+        $cleanExit = Invoke-Logged $SrcDir "`"$cargo`" clean" "$Name-clean.log" 900
+        if ($cleanExit -eq $InvokeTimedOut) { Write-Host "[FAIL] $Name cargo clean - timed out after 900s (see .run\$Name-clean.log)"; return $null }
+        if ($cleanExit -ne 0) { Write-Host "[FAIL] $Name cargo clean - see .run\$Name-clean.log"; return $null }
+    }
+    $exit = Invoke-Logged $SrcDir "`"$cargo`" build --release --locked" "$Name-build.log" 900
+    if ($exit -eq $InvokeTimedOut) { Write-Host "[FAIL] $Name build - timed out after 900s (see .run\$Name-build.log)"; return $null }
+    if ($exit -ne 0) { Write-Host "[FAIL] $Name build - see .run\$Name-build.log"; return $null }
+    $built = Join-Path $SrcDir 'target\release\netis-worker-rs.exe'
+    if (-not (Test-Path -LiteralPath $built)) { Write-Host "[FAIL] $Name build - $built not found"; return $null }
+    # Copy to .part, then rename: a copy cut short must never leave a truncated <sha7>.exe that every
+    # later clean start would reuse. An existing target is never overwritten.
+    $tmp = "$target.part"
+    try {
+        if (Test-Path -LiteralPath $tmp) { Remove-Item -LiteralPath $tmp -Force -ErrorAction Stop }
+        [System.IO.File]::Copy($built, $tmp, $false)
+        Move-Item -LiteralPath $tmp -Destination $target -ErrorAction Stop
+    } catch {
+        Remove-Item -LiteralPath $tmp -Force -ErrorAction SilentlyContinue
+        Write-Host "[FAIL] $Name - cannot copy the exe to ${target}: $($_.Exception.Message)"; return $null
+    }
+    return $target
+}
+
+# Keep the 5 newest worker-rs copies and every copy a running process uses; never throws.
+function Remove-OldExes {
+    try {
+        $files = Get-ChildItem $BinDir -File -Filter '*.exe' -ErrorAction SilentlyContinue
+        $inUse = @(Select-ExesInUse (Get-CimInstance Win32_Process -ErrorAction SilentlyContinue) $BinDir)
+        foreach ($path in @(Select-FilesToPrune $files 'netis-worker-rs' '.exe' 5 $inUse)) {
+            try { Remove-Item -LiteralPath $path -Force -ErrorAction Stop }
+            catch { Write-Host "[warn] old exe not removed: $path ($($_.Exception.Message))" }
+        }
+    } catch {
+        Write-Host "[warn] old exe cleanup skipped: $($_.Exception.Message)"
     }
 }
 
@@ -461,9 +553,46 @@ if ($WithWorkers) {
             else { Write-Host "[FAIL] interview - see .run\interview.log"; $failed += 'interview' }
         }
     }
+
+    # worker-rs (native exe, opt-in): chain is cmd wrapper -> netis-worker-rs-<sha7>.exe
+    # Last on purpose: a slow first cargo build (900 s limit) or an unexpected error here never delays
+    # or stops the interview service. Switch off = nothing at all, not even a line.
+    if ($env:WORKER_RS_ENABLED -eq 'true') {
+        try {
+            $rsId = Get-EffectiveWorkerId $env:WORKER_RS_ID 'win-rs-worker-1'
+            $sameId = Find-WorkerIdCollision $env:WORKER_RS_ID $env:WORKER_ID
+            if ($sameId) {
+                # same id = its startup notice would requeue the Java worker's tasks; shared dead-letter/MCP files
+                Write-Host "[FAIL] worker-rs: WORKER_RS_ID must differ from WORKER_ID ($sameId)"; $failed += 'worker-rs'
+            } elseif (Test-ServiceAlive $RunDir 'worker-rs') {
+                Write-Host "[skip] worker-rs: already running"
+            } else {
+                $rsExe = Get-ServiceExe 'netis-worker-rs' (Join-Path $Root 'worker-rs') 'worker-rs'
+                if (-not $rsExe) {
+                    $failed += 'worker-rs'
+                } else {
+                    Write-Host "[..]   worker-rs starting - $(Split-Path -Leaf $rsExe)"
+                    $rsPid = Start-Service-Proc 'worker-rs' $Root "`"$rsExe`"" @{
+                        API_BASE_URL   = 'http://localhost:8090'
+                        WORKER_API_KEY = $workerKey
+                        CLAUDE_CLI     = $claudeCli
+                        WORKER_ID      = $rsId
+                        WORKER_KINDS   = $(if ($env:WORKER_RS_KINDS) { $env:WORKER_RS_KINDS } else { 'ANALYSIS' })
+                        WORKER_VERSION = "rs-$($script:workerRsSha7)"
+                    }
+                    # Find-AppPid's worker-rs lookup takes the exe path (the process is the wrapper's child running it)
+                    if (Wait-Log 'worker-rs' 'worker-rs started:' 'worker-rs fatal' 60 $rsPid) { Write-Host "[ok]   worker-rs ready"; Register-Service 'worker-rs' $rsPid $rsExe }
+                    else { Write-Host "[FAIL] worker-rs - see .run\worker-rs.log"; $failed += 'worker-rs' }
+                }
+            }
+        } catch {
+            Write-Host "[FAIL] worker-rs - $($_.Exception.Message)"; $failed += 'worker-rs'
+        }
+    }
 }
 
 Remove-OldJars
+if ($env:WORKER_RS_ENABLED -eq 'true') { Remove-OldExes }
 
 Write-Host ""
 if ($failed.Count -gt 0) {

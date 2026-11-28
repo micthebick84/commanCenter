@@ -313,6 +313,81 @@ try {
     Assert-Equal 1 $inUse.Count 'Select-JarsInUse: only java.exe jars inside the run folder'
     Assert-Equal "$jarDir\netis-maker-000001.jar" $inUse[0] 'Select-JarsInUse: quoted path read without quotes'
 
+    # ---- Get-ExeName -----------------------------------------------------------
+    Assert-Equal 'netis-worker-rs-1a2b3c4.exe' (Get-ExeName 'netis-worker-rs' '1a2b3c4d5e6f' '' $now) 'Get-ExeName: clean tree uses sha7'
+    Assert-Equal 'netis-worker-rs-1a2b3c4-dirty-20261128153005.exe' (Get-ExeName 'netis-worker-rs' '1a2b3c4d5e6f' 'dirty' $now) 'Get-ExeName: tagged name adds a timestamp'
+    Assert-Equal 'netis-worker-rs-abc.exe' (Get-ExeName 'netis-worker-rs' 'abc' '' $now) 'Get-ExeName: short sha kept as is'
+
+    # ---- Select-NativeApp ------------------------------------------------------
+    $binDir = 'C:\Users\x\netis-maker\run\bin'
+    $exe = "$binDir\netis-worker-rs-1a2b3c4.exe"
+    $oldExe = "$binDir\netis-worker-rs-0f0f0f0.exe"
+    $nprocs = @(
+        [pscustomobject]@{ ProcessId = 20; ParentProcessId = 500; Name = 'netis-worker-rs-1a2b3c4.exe'; ExecutablePath = $exe; CommandLine = "`"$exe`""; CreationDate = $t0.AddMinutes(5) },
+        [pscustomobject]@{ ProcessId = 21; ParentProcessId = 500; Name = 'conhost.exe'; ExecutablePath = 'C:\Windows\System32\conhost.exe'; CommandLine = '\??\C:\Windows\system32\conhost.exe 0x4'; CreationDate = $t0.AddMinutes(9) },
+        [pscustomobject]@{ ProcessId = 22; ParentProcessId = 777; Name = 'netis-worker-rs-1a2b3c4.exe'; ExecutablePath = $exe; CommandLine = "`"$exe`""; CreationDate = $t0.AddMinutes(8) },
+        [pscustomobject]@{ ProcessId = 23; ParentProcessId = 500; Name = 'netis-worker-rs-0f0f0f0.exe'; ExecutablePath = $oldExe; CommandLine = "`"$oldExe`""; CreationDate = $t0.AddMinutes(9) }
+    )
+    Assert-Equal 20 (Select-NativeApp $nprocs 500 $exe) 'Select-NativeApp: wrapper child running this exe (conhost, other copy, other parent ignored)'
+    Assert-Equal 20 (Select-NativeApp $nprocs 500 $exe.ToUpper()) 'Select-NativeApp: path case differences are fine'
+    Assert-True ((Select-NativeApp $nprocs 501 $exe) -eq $null) 'Select-NativeApp: other wrapper gives null'
+    Assert-True ((Select-NativeApp $nprocs 500 '') -eq $null) 'Select-NativeApp: no exe path gives null'
+    Assert-True ((Select-NativeApp @($nprocs[1]) 500 $exe) -eq $null) 'Select-NativeApp: only a conhost child gives null'
+    $ntwo = $nprocs + @([pscustomobject]@{ ProcessId = 24; ParentProcessId = 500; Name = 'netis-worker-rs-1a2b3c4.exe'; ExecutablePath = $exe; CommandLine = "`"$exe`""; CreationDate = $t0.AddMinutes(7) })
+    Assert-Equal 24 (Select-NativeApp $ntwo 500 $exe) 'Select-NativeApp: most recent wins'
+    $noPath = @([pscustomobject]@{ ProcessId = 25; ParentProcessId = 500; Name = 'netis-worker-rs-1a2b3c4.exe'; ExecutablePath = $null; CommandLine = "`"$exe`""; CreationDate = $t0 })
+    Assert-Equal 25 (Select-NativeApp $noPath 500 $exe) 'Select-NativeApp: falls back to the command line when the image path is unreadable'
+    Assert-True ((Select-NativeApp @() 500 $exe) -eq $null) 'Select-NativeApp: no processes gives null'
+
+    # ---- Select-FilesToPrune ---------------------------------------------------
+    $efiles = @()
+    for ($i = 0; $i -lt 8; $i++) {
+        $efiles += [pscustomobject]@{ Name = "netis-worker-rs-00000$i.exe"; FullName = "$binDir\netis-worker-rs-00000$i.exe"; LastWriteTime = $b0.AddHours($i) }
+    }
+    $efiles += [pscustomobject]@{ Name = 'netis-worker-rs-0000000.exe.part'; FullName = "$binDir\netis-worker-rs-0000000.exe.part"; LastWriteTime = $b0.AddDays(-30) }
+    $efiles += [pscustomobject]@{ Name = 'other-tool-aaaaaaa.exe'; FullName = "$binDir\other-tool-aaaaaaa.exe"; LastWriteTime = $b0.AddDays(-30) }
+    $eprune = @(Select-FilesToPrune $efiles 'netis-worker-rs' '.exe' 5 @("$binDir\NETIS-WORKER-RS-000001.exe"))
+    Assert-Equal 2 $eprune.Count 'Select-FilesToPrune: keeps 5 newest exes and the one in use'
+    Assert-True (($eprune -contains "$binDir\netis-worker-rs-000000.exe") -and ($eprune -contains "$binDir\netis-worker-rs-000002.exe")) 'Select-FilesToPrune: oldest not-in-use exes go' ($eprune -join ',')
+    Assert-True (-not ($eprune -like '*.part') -and -not ($eprune -like '*other-tool*')) 'Select-FilesToPrune: .part files and other prefixes are left alone'
+    Assert-Equal 0 (@(Select-FilesToPrune $efiles 'netis-worker-rs' '.jar' 5 @())).Count 'Select-FilesToPrune: extension must match'
+    Assert-Equal 2 (@(Select-FilesToPrune $files 'netis-maker' '.jar' 5 @("$jarDir\NETIS-MAKER-000001.jar"))).Count 'Select-FilesToPrune: the jar case still works'
+
+    # ---- Select-ExesInUse ------------------------------------------------------
+    $erun = @(
+        [pscustomobject]@{ Name = 'netis-worker-rs-000001.exe'; ExecutablePath = "$binDir\netis-worker-rs-000001.exe" },
+        [pscustomobject]@{ Name = 'netis-worker-rs-000002.exe'; ExecutablePath = "$binDir\sub\netis-worker-rs-000002.exe" },
+        [pscustomobject]@{ Name = 'node.exe'; ExecutablePath = 'C:\elsewhere\node.exe' },
+        [pscustomobject]@{ Name = 'System'; ExecutablePath = $null }
+    )
+    $einUse = @(Select-ExesInUse $erun $binDir)
+    Assert-Equal 1 $einUse.Count 'Select-ExesInUse: only images directly inside the bin folder'
+    Assert-Equal "$binDir\netis-worker-rs-000001.exe" $einUse[0] 'Select-ExesInUse: returns the image path'
+    Assert-Equal 1 (@(Select-ExesInUse $erun ($binDir + '\'))).Count 'Select-ExesInUse: trailing backslash on the folder is fine'
+
+    # ---- Get-EffectiveWorkerId / Find-WorkerIdCollision -------------------------
+    Assert-Equal 'win-rs-worker-1' (Get-EffectiveWorkerId $null 'win-rs-worker-1') 'Get-EffectiveWorkerId: unset -> default'
+    Assert-Equal 'win-rs-worker-1' (Get-EffectiveWorkerId '' 'win-rs-worker-1') 'Get-EffectiveWorkerId: empty -> default'
+    Assert-Equal 'rs-2' (Get-EffectiveWorkerId 'rs-2' 'win-rs-worker-1') 'Get-EffectiveWorkerId: set value wins'
+    Assert-True ($null -eq (Find-WorkerIdCollision $null $null)) 'Find-WorkerIdCollision: both defaults differ'
+    Assert-True ($null -eq (Find-WorkerIdCollision 'rs-1' 'java-1')) 'Find-WorkerIdCollision: different ids'
+    Assert-Equal 'win-worker-1' (Find-WorkerIdCollision 'win-worker-1' $null) 'Find-WorkerIdCollision: rs id equals the Java default'
+    Assert-Equal 'win-rs-worker-1' (Find-WorkerIdCollision $null 'win-rs-worker-1') 'Find-WorkerIdCollision: Java id equals the rs default'
+    Assert-Equal 'Same-ID' (Find-WorkerIdCollision 'Same-ID' 'same-id') 'Find-WorkerIdCollision: case-insensitive'
+    Assert-Equal 'w-1' (Find-WorkerIdCollision ' w-1 ' 'w-1') 'Find-WorkerIdCollision: surrounding spaces ignored'
+
+    # ---- Test-QuietSkip ------------------------------------------------------------
+    $qdir = Join-Path $RunDir 'quiet'
+    New-Item -ItemType Directory -Force $qdir | Out-Null
+    Assert-True (Test-QuietSkip $qdir 'worker-rs' $false) 'Test-QuietSkip: worker-rs never started -> silent'
+    Assert-True (-not (Test-QuietSkip $qdir 'worker-rs' $true)) 'Test-QuietSkip: -Only worker-rs -> normal message'
+    Assert-True (-not (Test-QuietSkip $qdir 'worker' $false)) 'Test-QuietSkip: other services unchanged'
+    Set-Content -Path (Join-Path $qdir 'worker-rs.pid') -Value '1' -Encoding ascii
+    Assert-True (-not (Test-QuietSkip $qdir 'worker-rs' $false)) 'Test-QuietSkip: pid file present -> stopped normally'
+    Remove-Item (Join-Path $qdir 'worker-rs.pid')
+    Set-Content -Path (Join-Path $qdir 'worker-rs.json') -Value '{}' -Encoding ascii
+    Assert-True (-not (Test-QuietSkip $qdir 'worker-rs' $false)) 'Test-QuietSkip: json record present -> stopped normally'
+
     # ---- Select-OrphanClaude -----------------------------------------------
     $claude = 'C:\Users\x\.local\bin\claude.exe'
     $all = @(

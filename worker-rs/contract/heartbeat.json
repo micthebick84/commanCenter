@@ -1,0 +1,14 @@
+{
+  "workerId": "w-1",
+  "hostname": "host-a",
+  "version": "0.1.0",
+  "claudeSessionOk": true,
+  "vpnStatus": "UP",
+  "mcps": [
+    "docs"
+  ],
+  "lostReportCount": 0,
+  "claudeAuthMethod": "env-token",
+  "claudeAuthExpiresAt": "2026-12-31T00:00:00Z",
+  "deadReportCount": 0
+}

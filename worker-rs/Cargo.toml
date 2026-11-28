@@ -1,0 +1,39 @@
+[package]
+name = "netis-worker-rs"
+version = "0.1.0"
+edition = "2024"
+description = "Rust pilot of the NetisMaker worker daemon (analysis tasks only)"
+publish = false
+
+[lib]
+name = "netis_worker_rs"
+path = "src/lib.rs"
+
+[[bin]]
+name = "netis-worker-rs"
+path = "src/main.rs"
+
+# Test-only helper program (see src/bin/fake_claude.rs). Built only with `--features test-bins`.
+[[bin]]
+name = "fake-claude"
+path = "src/bin/fake_claude.rs"
+required-features = ["test-bins"]
+
+[features]
+test-bins = []
+
+[dependencies]
+regex = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+time = { version = "0.3", features = ["formatting", "parsing", "macros", "local-offset"] }
+ureq = { version = "3", default-features = false, features = ["json"] }
+
+[dev-dependencies]
+tiny_http = "0.12"
+
+[profile.release]
+opt-level = "s"
+lto = true
+codegen-units = 1
+strip = true

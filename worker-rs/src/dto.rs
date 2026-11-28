@@ -29,8 +29,13 @@ pub struct McpSpec {
 #[serde(rename_all = "camelCase")]
 pub struct TaskClaim {
     pub id: i64,
+    // A missing or null text field becomes "" (the analysis rail turns an empty repo or
+    // branch into a failed result instead of the program refusing the claim).
+    #[serde(default, deserialize_with = "null_as_default")]
     pub github_repo: String,
+    #[serde(default, deserialize_with = "null_as_default")]
     pub github_branch: String,
+    #[serde(default, deserialize_with = "null_as_default")]
     pub title: String,
     #[serde(default)]
     pub description: Option<String>,
@@ -99,7 +104,8 @@ pub struct Heartbeat {
     pub hostname: String,
     pub version: String,
     pub claude_session_ok: bool,
-    pub vpn_status: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vpn_status: Option<String>,
     pub mcps: Vec<String>,
     pub lost_report_count: i64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -153,6 +159,17 @@ mod tests {
             claim.git_url.as_deref(),
             Some("https://example.com/a/b.git")
         );
+    }
+
+    #[test]
+    fn null_or_missing_text_fields_become_empty() {
+        let claim: TaskClaim = serde_json::from_value(json!({
+            "id": 9, "githubRepo": null, "title": null, "kind": "ANALYSIS"
+        }))
+        .unwrap();
+        assert_eq!(claim.github_repo, "");
+        assert_eq!(claim.github_branch, "");
+        assert_eq!(claim.title, "");
     }
 
     fn ok_request() -> ResultRequest {
@@ -209,7 +226,7 @@ mod tests {
             hostname: "host-a".into(),
             version: "0.1.0".into(),
             claude_session_ok: true,
-            vpn_status: "UP".into(),
+            vpn_status: Some("UP".into()),
             mcps: vec!["docs".into()],
             lost_report_count: 0,
             claude_auth_method: Some("env-token".into()),

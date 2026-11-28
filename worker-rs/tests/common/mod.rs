@@ -34,4 +34,5 @@ impl Drop for TempDir {
     }
 }
 
+pub mod git;
 pub mod http;

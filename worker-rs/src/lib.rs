@@ -1,5 +1,6 @@
 //! NetisMaker worker daemon, Rust pilot (analysis tasks only).
 
+pub mod analysis;
 pub mod api;
 pub mod auth_probe;
 pub mod claude;
@@ -13,3 +14,4 @@ pub mod parser;
 pub mod proc;
 pub mod repo;
 pub mod report;
+pub mod runner;

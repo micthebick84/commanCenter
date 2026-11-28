@@ -13,6 +13,15 @@ path = "src/lib.rs"
 name = "netis-worker-rs"
 path = "src/main.rs"
 
+# Test-only helper program (see src/bin/fake_claude.rs). Built only with `--features test-bins`.
+[[bin]]
+name = "fake-claude"
+path = "src/bin/fake_claude.rs"
+required-features = ["test-bins"]
+
+[features]
+test-bins = []
+
 [dependencies]
 regex = "1"
 serde = { version = "1", features = ["derive"] }
